@@ -1,0 +1,970 @@
+// Package compute implements the EC2 and VPC provider (ComputeProvider).
+package compute
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
+	"jaiscloud/internal/store"
+)
+
+// ComputeProvider handles EC2 instances, VPC networking, security groups, and key pairs.
+type ComputeProvider struct {
+	resources store.ResourceStore
+}
+
+func New(resources store.ResourceStore) *ComputeProvider {
+	return &ComputeProvider{resources: resources}
+}
+
+func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
+	return map[string]provider.HandlerFunc{
+		// Instances
+		"Compute.RunInstances":       p.RunInstances,
+		"Compute.DescribeInstances":  p.DescribeInstances,
+		"Compute.TerminateInstances": p.TerminateInstances,
+		"Compute.StartInstances":     p.StartInstances,
+		"Compute.StopInstances":      p.StopInstances,
+		// AMIs
+		"Compute.DescribeImages": p.DescribeImages,
+		// Security Groups
+		"Compute.CreateSecurityGroup":            p.CreateSecurityGroup,
+		"Compute.DescribeSecurityGroups":         p.DescribeSecurityGroups,
+		"Compute.DeleteSecurityGroup":            p.DeleteSecurityGroup,
+		"Compute.AuthorizeSecurityGroupIngress":  p.AuthorizeSecurityGroupIngress,
+		"Compute.AuthorizeSecurityGroupEgress":   p.AuthorizeSecurityGroupEgress,
+		"Compute.RevokeSecurityGroupIngress":     p.RevokeSecurityGroupIngress,
+		// Key Pairs
+		"Compute.CreateKeyPair":   p.CreateKeyPair,
+		"Compute.DescribeKeyPairs": p.DescribeKeyPairs,
+		"Compute.DeleteKeyPair":   p.DeleteKeyPair,
+		"Compute.ImportKeyPair":   p.ImportKeyPair,
+		// VPC
+		"Compute.CreateVpc":       p.CreateVpc,
+		"Compute.DescribeVpcs":    p.DescribeVpcs,
+		"Compute.DeleteVpc":       p.DeleteVpc,
+		"Compute.ModifyVpcAttribute": p.ModifyVpcAttribute,
+		// Subnets
+		"Compute.CreateSubnet":    p.CreateSubnet,
+		"Compute.DescribeSubnets": p.DescribeSubnets,
+		"Compute.DeleteSubnet":    p.DeleteSubnet,
+		// Internet Gateways
+		"Compute.CreateInternetGateway":  p.CreateInternetGateway,
+		"Compute.DescribeInternetGateways": p.DescribeInternetGateways,
+		"Compute.DeleteInternetGateway":  p.DeleteInternetGateway,
+		"Compute.AttachInternetGateway":  p.AttachInternetGateway,
+		"Compute.DetachInternetGateway":  p.DetachInternetGateway,
+		// Route Tables
+		"Compute.CreateRouteTable":    p.CreateRouteTable,
+		"Compute.DescribeRouteTables": p.DescribeRouteTables,
+		"Compute.DeleteRouteTable":    p.DeleteRouteTable,
+		"Compute.CreateRoute":         p.CreateRoute,
+		"Compute.DeleteRoute":         p.DeleteRoute,
+		"Compute.AssociateRouteTable": p.AssociateRouteTable,
+		// NAT Gateways
+		"Compute.CreateNatGateway":    p.CreateNatGateway,
+		"Compute.DescribeNatGateways": p.DescribeNatGateways,
+		"Compute.DeleteNatGateway":    p.DeleteNatGateway,
+	}
+}
+
+// ─── Resource types ───────────────────────────────────────────────────────────
+
+const (
+	rtInstance      = "ec2_instance"
+	rtSecurityGroup = "ec2_security_group"
+	rtKeyPair       = "ec2_key_pair"
+	rtVpc           = "ec2_vpc"
+	rtSubnet        = "ec2_subnet"
+	rtIGW           = "ec2_igw"
+	rtRouteTable    = "ec2_route_table"
+	rtNatGateway    = "ec2_nat_gateway"
+)
+
+// ─── ID generators ────────────────────────────────────────────────────────────
+
+func newID(prefix string) string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return fmt.Sprintf("%s-%08x", prefix, b)
+}
+
+// ─── Instance metadata ────────────────────────────────────────────────────────
+
+type ec2Instance struct {
+	InstanceId       string            `json:"InstanceId"`
+	ImageId          string            `json:"ImageId"`
+	InstanceType     string            `json:"InstanceType"`
+	KeyName          string            `json:"KeyName"`
+	SubnetId         string            `json:"SubnetId"`
+	VpcId            string            `json:"VpcId"`
+	SecurityGroupIds []string          `json:"SecurityGroupIds"`
+	PrivateIpAddress string            `json:"PrivateIpAddress"`
+	PrivateDnsName   string            `json:"PrivateDnsName"`
+	State            string            `json:"State"` // pending, running, stopping, stopped, terminated
+	Tags             map[string]string `json:"Tags"`
+	LaunchTime       time.Time         `json:"LaunchTime"`
+}
+
+func (p *ComputeProvider) saveInstance(ctx context.Context, inst ec2Instance) error {
+	data, _ := json.Marshal(inst)
+	entry := store.ResourceEntry{Type: rtInstance, ID: inst.InstanceId, Data: data}
+	err := p.resources.Create(ctx, entry)
+	if err == store.ErrAlreadyExists {
+		return p.resources.Update(ctx, entry)
+	}
+	return err
+}
+
+func (p *ComputeProvider) loadInstance(ctx context.Context, id string) (ec2Instance, error) {
+	e, err := p.resources.Get(ctx, rtInstance, id)
+	if err == store.ErrNotFound {
+		return ec2Instance{}, &model.ProviderError{Code: "InvalidInstanceID.NotFound", Message: fmt.Sprintf("The instance ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
+	}
+	if err != nil {
+		return ec2Instance{}, err
+	}
+	var inst ec2Instance
+	json.Unmarshal(e.Data, &inst)
+	return inst, nil
+}
+
+func instanceToWire(inst ec2Instance) map[string]any {
+	return map[string]any{
+		"InstanceId":       inst.InstanceId,
+		"ImageId":          inst.ImageId,
+		"InstanceType":     inst.InstanceType,
+		"KeyName":          inst.KeyName,
+		"SubnetId":         inst.SubnetId,
+		"VpcId":            inst.VpcId,
+		"PrivateIpAddress": inst.PrivateIpAddress,
+		"PrivateDnsName":   inst.PrivateDnsName,
+		"State":            map[string]any{"Code": stateCode(inst.State), "Name": inst.State},
+		"LaunchTime":       inst.LaunchTime.Format(time.RFC3339),
+	}
+}
+
+func stateCode(state string) string {
+	switch state {
+	case "pending":
+		return "0"
+	case "running":
+		return "16"
+	case "stopping":
+		return "64"
+	case "stopped":
+		return "80"
+	case "terminated":
+		return "48"
+	}
+	return "0"
+}
+
+// ─── Instance operations ──────────────────────────────────────────────────────
+
+func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	imageId := strParam(nr.Params, "ImageId")
+	instanceType := strParam(nr.Params, "InstanceType")
+	if instanceType == "" {
+		instanceType = "t3.micro"
+	}
+	minCount := intParam(nr.Params, "MinCount", 1)
+	keyName := strParam(nr.Params, "KeyName")
+	subnetId := strParam(nr.Params, "SubnetId")
+
+	instances := make([]map[string]any, 0, minCount)
+	reservationId := newID("r")
+	for i := 0; i < minCount; i++ {
+		inst := ec2Instance{
+			InstanceId:       newID("i"),
+			ImageId:          imageId,
+			InstanceType:     instanceType,
+			KeyName:          keyName,
+			SubnetId:         subnetId,
+			PrivateIpAddress: fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
+			State:            "running",
+			LaunchTime:       time.Now(),
+		}
+		inst.PrivateDnsName = fmt.Sprintf("ip-%s.ec2.internal", strings.ReplaceAll(inst.PrivateIpAddress, ".", "-"))
+		if err := p.saveInstance(ctx, inst); err != nil {
+			return nil, err
+		}
+		instances = append(instances, instanceToWire(inst))
+	}
+	return provider.OK(map[string]any{
+		"ReservationId": reservationId,
+		"OwnerId":       nr.AccountID,
+		"Instances":     instances,
+	}), nil
+}
+
+func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "InstanceId")
+	entries, err := p.resources.List(ctx, rtInstance, "")
+	if err != nil {
+		return nil, err
+	}
+	reservations := []map[string]any{}
+	for _, e := range entries {
+		var inst ec2Instance
+		json.Unmarshal(e.Data, &inst)
+		if inst.State == "terminated" {
+			continue
+		}
+		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {
+			continue
+		}
+		reservations = append(reservations, map[string]any{
+			"ReservationId": newID("r"),
+			"OwnerId":       nr.AccountID,
+			"Instances":     []map[string]any{instanceToWire(inst)},
+		})
+	}
+	return provider.OK(map[string]any{"Reservations": reservations}), nil
+}
+
+func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ids := extractIndexedParam(nr.Params, "InstanceId")
+	result := []map[string]any{}
+	for _, id := range ids {
+		inst, err := p.loadInstance(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		prev := inst.State
+		inst.State = "terminated"
+		p.saveInstance(ctx, inst)
+		result = append(result, map[string]any{
+			"InstanceId":   id,
+			"CurrentState": map[string]any{"Code": "48", "Name": "terminated"},
+			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
+		})
+	}
+	return provider.OK(map[string]any{"TerminatingInstances": result}), nil
+}
+
+func (p *ComputeProvider) StartInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ids := extractIndexedParam(nr.Params, "InstanceId")
+	result := []map[string]any{}
+	for _, id := range ids {
+		inst, err := p.loadInstance(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		prev := inst.State
+		inst.State = "running"
+		p.saveInstance(ctx, inst)
+		result = append(result, map[string]any{
+			"InstanceId":   id,
+			"CurrentState": map[string]any{"Code": "16", "Name": "running"},
+			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
+		})
+	}
+	return provider.OK(map[string]any{"TerminatingInstances": result}), nil
+}
+
+func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ids := extractIndexedParam(nr.Params, "InstanceId")
+	result := []map[string]any{}
+	for _, id := range ids {
+		inst, err := p.loadInstance(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		prev := inst.State
+		inst.State = "stopped"
+		p.saveInstance(ctx, inst)
+		result = append(result, map[string]any{
+			"InstanceId":   id,
+			"CurrentState": map[string]any{"Code": "80", "Name": "stopped"},
+			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
+		})
+	}
+	return provider.OK(map[string]any{"TerminatingInstances": result}), nil
+}
+
+func (p *ComputeProvider) DescribeImages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Return a set of canned AMIs useful for testing
+	images := []map[string]any{
+		{"ImageId": "ami-0abcdef1234567890", "Name": "amzn2-ami-hvm-2.0", "State": "available", "Architecture": "x86_64", "ImageType": "machine", "OwnerId": "137112412989"},
+		{"ImageId": "ami-0123456789abcdef0", "Name": "ubuntu-22.04-lts", "State": "available", "Architecture": "x86_64", "ImageType": "machine", "OwnerId": "099720109477"},
+	}
+	filterIds := extractIndexedParam(nr.Params, "ImageId")
+	if len(filterIds) > 0 {
+		filtered := []map[string]any{}
+		for _, img := range images {
+			if containsStr(filterIds, str(img["ImageId"])) {
+				filtered = append(filtered, img)
+			}
+		}
+		images = filtered
+	}
+	return provider.OK(map[string]any{"Images": images}), nil
+}
+
+// ─── Security Group operations ────────────────────────────────────────────────
+
+type securityGroup struct {
+	GroupId     string            `json:"GroupId"`
+	GroupName   string            `json:"GroupName"`
+	Description string            `json:"Description"`
+	VpcId       string            `json:"VpcId"`
+	OwnerId     string            `json:"OwnerId"`
+	IngressRules []map[string]any `json:"IngressRules"`
+	EgressRules  []map[string]any `json:"EgressRules"`
+	Tags        map[string]string `json:"Tags"`
+}
+
+func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "GroupName")
+	desc := strParam(nr.Params, "GroupDescription")
+	vpcId := strParam(nr.Params, "VpcId")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "MissingParameter", Message: "GroupName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	sg := securityGroup{
+		GroupId:     newID("sg"),
+		GroupName:   name,
+		Description: desc,
+		VpcId:       vpcId,
+		OwnerId:     nr.AccountID,
+	}
+	data, _ := json.Marshal(sg)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: sg.GroupId, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"GroupId": sg.GroupId}), nil
+}
+
+func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "GroupId")
+	entries, err := p.resources.List(ctx, rtSecurityGroup, "")
+	if err != nil {
+		return nil, err
+	}
+	groups := []map[string]any{}
+	for _, e := range entries {
+		var sg securityGroup
+		json.Unmarshal(e.Data, &sg)
+		if len(filterIds) > 0 && !containsStr(filterIds, sg.GroupId) {
+			continue
+		}
+		groups = append(groups, map[string]any{
+			"GroupId":     sg.GroupId,
+			"GroupName":   sg.GroupName,
+			"Description": sg.Description,
+			"VpcId":       sg.VpcId,
+			"OwnerId":     sg.OwnerId,
+		})
+	}
+	return provider.OK(map[string]any{"SecurityGroups": groups}), nil
+}
+
+func (p *ComputeProvider) DeleteSecurityGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "GroupId")
+	if err := p.resources.Delete(ctx, rtSecurityGroup, id); err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: fmt.Sprintf("The security group '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
+	}
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) AuthorizeSecurityGroupIngress(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.addSGRule(ctx, nr, true)
+}
+
+func (p *ComputeProvider) AuthorizeSecurityGroupEgress(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.addSGRule(ctx, nr, false)
+}
+
+func (p *ComputeProvider) RevokeSecurityGroupIngress(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) addSGRule(ctx context.Context, nr *model.NormalizedRequest, ingress bool) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "GroupId")
+	e, err := p.resources.Get(ctx, rtSecurityGroup, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: "security group not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var sg securityGroup
+	json.Unmarshal(e.Data, &sg)
+	rule := map[string]any{
+		"IpProtocol": strParam(nr.Params, "IpPermissions.1.IpProtocol"),
+		"FromPort":   strParam(nr.Params, "IpPermissions.1.FromPort"),
+		"ToPort":     strParam(nr.Params, "IpPermissions.1.ToPort"),
+	}
+	if ingress {
+		sg.IngressRules = append(sg.IngressRules, rule)
+	} else {
+		sg.EgressRules = append(sg.EgressRules, rule)
+	}
+	data, _ := json.Marshal(sg)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
+	return provider.OK(nil), nil
+}
+
+// ─── Key Pair operations ──────────────────────────────────────────────────────
+
+type keyPair struct {
+	KeyPairId      string `json:"KeyPairId"`
+	KeyName        string `json:"KeyName"`
+	KeyFingerprint string `json:"KeyFingerprint"`
+	KeyMaterial    string `json:"KeyMaterial,omitempty"`
+}
+
+func (p *ComputeProvider) CreateKeyPair(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "KeyName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "MissingParameter", Message: "KeyName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	kp := keyPair{
+		KeyPairId:      newID("key"),
+		KeyName:        name,
+		KeyFingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+		KeyMaterial:    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...(mock)...\n-----END RSA PRIVATE KEY-----",
+	}
+	data, _ := json.Marshal(kp)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"KeyPairId":      kp.KeyPairId,
+		"KeyName":        kp.KeyName,
+		"KeyFingerprint": kp.KeyFingerprint,
+		"KeyMaterial":    kp.KeyMaterial,
+	}), nil
+}
+
+func (p *ComputeProvider) DescribeKeyPairs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterNames := extractIndexedParam(nr.Params, "KeyName")
+	entries, err := p.resources.List(ctx, rtKeyPair, "")
+	if err != nil {
+		return nil, err
+	}
+	pairs := []map[string]any{}
+	for _, e := range entries {
+		var kp keyPair
+		json.Unmarshal(e.Data, &kp)
+		if len(filterNames) > 0 && !containsStr(filterNames, kp.KeyName) {
+			continue
+		}
+		pairs = append(pairs, map[string]any{
+			"KeyPairId":      kp.KeyPairId,
+			"KeyName":        kp.KeyName,
+			"KeyFingerprint": kp.KeyFingerprint,
+		})
+	}
+	return provider.OK(map[string]any{"KeyPairs": pairs}), nil
+}
+
+func (p *ComputeProvider) DeleteKeyPair(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Accept either KeyName or KeyPairId
+	id := strParam(nr.Params, "KeyPairId")
+	if id == "" {
+		// Look up by name
+		name := strParam(nr.Params, "KeyName")
+		entries, _ := p.resources.List(ctx, rtKeyPair, "")
+		for _, e := range entries {
+			var kp keyPair
+			json.Unmarshal(e.Data, &kp)
+			if kp.KeyName == name {
+				id = kp.KeyPairId
+				break
+			}
+		}
+	}
+	p.resources.Delete(ctx, rtKeyPair, id)
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) ImportKeyPair(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "KeyName")
+	kp := keyPair{
+		KeyPairId:      newID("key"),
+		KeyName:        name,
+		KeyFingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+	}
+	data, _ := json.Marshal(kp)
+	p.resources.Create(ctx, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data})
+	return provider.OK(map[string]any{
+		"KeyPairId":      kp.KeyPairId,
+		"KeyName":        kp.KeyName,
+		"KeyFingerprint": kp.KeyFingerprint,
+	}), nil
+}
+
+// ─── VPC operations ───────────────────────────────────────────────────────────
+
+type ec2Vpc struct {
+	VpcId     string            `json:"VpcId"`
+	State     string            `json:"State"`
+	CidrBlock string            `json:"CidrBlock"`
+	IsDefault bool              `json:"IsDefault"`
+	OwnerId   string            `json:"OwnerId"`
+	Tags      map[string]string `json:"Tags"`
+}
+
+func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	cidr := strParam(nr.Params, "CidrBlock")
+	if cidr == "" {
+		return nil, &model.ProviderError{Code: "MissingParameter", Message: "CidrBlock is required", HTTPStatus: http.StatusBadRequest}
+	}
+	vpc := ec2Vpc{
+		VpcId:     newID("vpc"),
+		State:     "available",
+		CidrBlock: cidr,
+		IsDefault: false,
+		OwnerId:   nr.AccountID,
+	}
+	data, _ := json.Marshal(vpc)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtVpc, ID: vpc.VpcId, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"Vpc": vpcToWire(vpc)}), nil
+}
+
+func (p *ComputeProvider) DescribeVpcs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "VpcId")
+	entries, err := p.resources.List(ctx, rtVpc, "")
+	if err != nil {
+		return nil, err
+	}
+	vpcs := []map[string]any{}
+	for _, e := range entries {
+		var vpc ec2Vpc
+		json.Unmarshal(e.Data, &vpc)
+		if len(filterIds) > 0 && !containsStr(filterIds, vpc.VpcId) {
+			continue
+		}
+		vpcs = append(vpcs, vpcToWire(vpc))
+	}
+	return provider.OK(map[string]any{"Vpcs": vpcs}), nil
+}
+
+func (p *ComputeProvider) DeleteVpc(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "VpcId")
+	if err := p.resources.Delete(ctx, rtVpc, id); err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "InvalidVpcID.NotFound", Message: fmt.Sprintf("The vpc ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
+	}
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) ModifyVpcAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(nil), nil
+}
+
+func vpcToWire(vpc ec2Vpc) map[string]any {
+	isDefault := "false"
+	if vpc.IsDefault {
+		isDefault = "true"
+	}
+	return map[string]any{
+		"VpcId":     vpc.VpcId,
+		"State":     vpc.State,
+		"CidrBlock": vpc.CidrBlock,
+		"IsDefault": isDefault,
+		"OwnerId":   vpc.OwnerId,
+	}
+}
+
+// ─── Subnet operations ────────────────────────────────────────────────────────
+
+type ec2Subnet struct {
+	SubnetId                string            `json:"SubnetId"`
+	State                   string            `json:"State"`
+	VpcId                   string            `json:"VpcId"`
+	CidrBlock               string            `json:"CidrBlock"`
+	AvailabilityZone        string            `json:"AvailabilityZone"`
+	AvailableIpAddressCount int               `json:"AvailableIpAddressCount"`
+	Tags                    map[string]string `json:"Tags"`
+}
+
+func (p *ComputeProvider) CreateSubnet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	vpcId := strParam(nr.Params, "VpcId")
+	cidr := strParam(nr.Params, "CidrBlock")
+	az := strParam(nr.Params, "AvailabilityZone")
+	if az == "" {
+		az = nr.Region + "a"
+	}
+	sn := ec2Subnet{
+		SubnetId:                newID("subnet"),
+		State:                   "available",
+		VpcId:                   vpcId,
+		CidrBlock:               cidr,
+		AvailabilityZone:        az,
+		AvailableIpAddressCount: 251,
+	}
+	data, _ := json.Marshal(sn)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnet, ID: sn.SubnetId, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"Subnet": subnetToWire(sn)}), nil
+}
+
+func (p *ComputeProvider) DescribeSubnets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "SubnetId")
+	entries, err := p.resources.List(ctx, rtSubnet, "")
+	if err != nil {
+		return nil, err
+	}
+	subnets := []map[string]any{}
+	for _, e := range entries {
+		var sn ec2Subnet
+		json.Unmarshal(e.Data, &sn)
+		if len(filterIds) > 0 && !containsStr(filterIds, sn.SubnetId) {
+			continue
+		}
+		subnets = append(subnets, subnetToWire(sn))
+	}
+	return provider.OK(map[string]any{"Subnets": subnets}), nil
+}
+
+func (p *ComputeProvider) DeleteSubnet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "SubnetId")
+	p.resources.Delete(ctx, rtSubnet, id)
+	return provider.OK(nil), nil
+}
+
+func subnetToWire(sn ec2Subnet) map[string]any {
+	return map[string]any{
+		"SubnetId":                sn.SubnetId,
+		"State":                   sn.State,
+		"VpcId":                   sn.VpcId,
+		"CidrBlock":               sn.CidrBlock,
+		"AvailabilityZone":        sn.AvailabilityZone,
+		"AvailableIpAddressCount": strconv.Itoa(sn.AvailableIpAddressCount),
+	}
+}
+
+// ─── Internet Gateway operations ──────────────────────────────────────────────
+
+type ec2IGW struct {
+	InternetGatewayId string              `json:"InternetGatewayId"`
+	OwnerId           string              `json:"OwnerId"`
+	Attachments       []map[string]string `json:"Attachments"`
+}
+
+func (p *ComputeProvider) CreateInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	igw := ec2IGW{
+		InternetGatewayId: newID("igw"),
+		OwnerId:           nr.AccountID,
+	}
+	data, _ := json.Marshal(igw)
+	p.resources.Create(ctx, store.ResourceEntry{Type: rtIGW, ID: igw.InternetGatewayId, Data: data})
+	return provider.OK(map[string]any{"InternetGateway": map[string]any{
+		"InternetGatewayId": igw.InternetGatewayId,
+		"OwnerId":           igw.OwnerId,
+	}}), nil
+}
+
+func (p *ComputeProvider) DescribeInternetGateways(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "InternetGatewayId")
+	entries, _ := p.resources.List(ctx, rtIGW, "")
+	igws := []map[string]any{}
+	for _, e := range entries {
+		var igw ec2IGW
+		json.Unmarshal(e.Data, &igw)
+		if len(filterIds) > 0 && !containsStr(filterIds, igw.InternetGatewayId) {
+			continue
+		}
+		atts := []map[string]any{}
+		for _, att := range igw.Attachments {
+			atts = append(atts, map[string]any{"VpcId": att["VpcId"], "State": "available"})
+		}
+		igws = append(igws, map[string]any{
+			"InternetGatewayId": igw.InternetGatewayId,
+			"OwnerId":           igw.OwnerId,
+			"Attachments":       atts,
+		})
+	}
+	return provider.OK(map[string]any{"InternetGateways": igws}), nil
+}
+
+func (p *ComputeProvider) DeleteInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "InternetGatewayId")
+	p.resources.Delete(ctx, rtIGW, id)
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) AttachInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	igwId := strParam(nr.Params, "InternetGatewayId")
+	vpcId := strParam(nr.Params, "VpcId")
+	e, err := p.resources.Get(ctx, rtIGW, igwId)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidInternetGatewayID.NotFound", Message: "igw not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var igw ec2IGW
+	json.Unmarshal(e.Data, &igw)
+	igw.Attachments = append(igw.Attachments, map[string]string{"VpcId": vpcId, "State": "available"})
+	data, _ := json.Marshal(igw)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) DetachInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	igwId := strParam(nr.Params, "InternetGatewayId")
+	vpcId := strParam(nr.Params, "VpcId")
+	e, err := p.resources.Get(ctx, rtIGW, igwId)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidInternetGatewayID.NotFound", Message: "igw not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var igw ec2IGW
+	json.Unmarshal(e.Data, &igw)
+	filtered := []map[string]string{}
+	for _, att := range igw.Attachments {
+		if att["VpcId"] != vpcId {
+			filtered = append(filtered, att)
+		}
+	}
+	igw.Attachments = filtered
+	data, _ := json.Marshal(igw)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
+	return provider.OK(nil), nil
+}
+
+// ─── Route Table operations ───────────────────────────────────────────────────
+
+type ec2RouteTable struct {
+	RouteTableId string            `json:"RouteTableId"`
+	VpcId        string            `json:"VpcId"`
+	OwnerId      string            `json:"OwnerId"`
+	Routes       []map[string]any  `json:"Routes"`
+	Tags         map[string]string `json:"Tags"`
+}
+
+func (p *ComputeProvider) CreateRouteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	vpcId := strParam(nr.Params, "VpcId")
+	rt := ec2RouteTable{
+		RouteTableId: newID("rtb"),
+		VpcId:        vpcId,
+		OwnerId:      nr.AccountID,
+		Routes: []map[string]any{
+			{"DestinationCidrBlock": "local", "GatewayId": "local", "State": "active"},
+		},
+	}
+	data, _ := json.Marshal(rt)
+	p.resources.Create(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rt.RouteTableId, Data: data})
+	return provider.OK(map[string]any{"RouteTable": rtToWire(rt)}), nil
+}
+
+func (p *ComputeProvider) DescribeRouteTables(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "RouteTableId")
+	entries, _ := p.resources.List(ctx, rtRouteTable, "")
+	rts := []map[string]any{}
+	for _, e := range entries {
+		var rt ec2RouteTable
+		json.Unmarshal(e.Data, &rt)
+		if len(filterIds) > 0 && !containsStr(filterIds, rt.RouteTableId) {
+			continue
+		}
+		rts = append(rts, rtToWire(rt))
+	}
+	return provider.OK(map[string]any{"RouteTables": rts}), nil
+}
+
+func (p *ComputeProvider) DeleteRouteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "RouteTableId")
+	p.resources.Delete(ctx, rtRouteTable, id)
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) CreateRoute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	rtId := strParam(nr.Params, "RouteTableId")
+	dest := strParam(nr.Params, "DestinationCidrBlock")
+	gwId := strParam(nr.Params, "GatewayId")
+	e, err := p.resources.Get(ctx, rtRouteTable, rtId)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRouteTableID.NotFound", Message: "route table not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var rt ec2RouteTable
+	json.Unmarshal(e.Data, &rt)
+	rt.Routes = append(rt.Routes, map[string]any{
+		"DestinationCidrBlock": dest,
+		"GatewayId":            gwId,
+		"State":                "active",
+	})
+	data, _ := json.Marshal(rt)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) DeleteRoute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	rtId := strParam(nr.Params, "RouteTableId")
+	dest := strParam(nr.Params, "DestinationCidrBlock")
+	e, err := p.resources.Get(ctx, rtRouteTable, rtId)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRouteTableID.NotFound", Message: "route table not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var rt ec2RouteTable
+	json.Unmarshal(e.Data, &rt)
+	filtered := []map[string]any{}
+	for _, r := range rt.Routes {
+		if str(r["DestinationCidrBlock"]) != dest {
+			filtered = append(filtered, r)
+		}
+	}
+	rt.Routes = filtered
+	data, _ := json.Marshal(rt)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) AssociateRouteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{"AssociationId": newID("rtbassoc")}), nil
+}
+
+func rtToWire(rt ec2RouteTable) map[string]any {
+	return map[string]any{
+		"RouteTableId": rt.RouteTableId,
+		"VpcId":        rt.VpcId,
+		"OwnerId":      rt.OwnerId,
+		"Routes":       rt.Routes,
+	}
+}
+
+// ─── NAT Gateway operations ───────────────────────────────────────────────────
+
+type ec2NatGateway struct {
+	NatGatewayId string    `json:"NatGatewayId"`
+	VpcId        string    `json:"VpcId"`
+	SubnetId     string    `json:"SubnetId"`
+	State        string    `json:"State"`
+	CreateTime   time.Time `json:"CreateTime"`
+}
+
+func (p *ComputeProvider) CreateNatGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	subnetId := strParam(nr.Params, "SubnetId")
+	ngw := ec2NatGateway{
+		NatGatewayId: newID("nat"),
+		SubnetId:     subnetId,
+		State:        "available",
+		CreateTime:   time.Now(),
+	}
+	// Look up VPC from subnet
+	entries, _ := p.resources.List(ctx, rtSubnet, "")
+	for _, e := range entries {
+		var sn ec2Subnet
+		json.Unmarshal(e.Data, &sn)
+		if sn.SubnetId == subnetId {
+			ngw.VpcId = sn.VpcId
+			break
+		}
+	}
+	data, _ := json.Marshal(ngw)
+	p.resources.Create(ctx, store.ResourceEntry{Type: rtNatGateway, ID: ngw.NatGatewayId, Data: data})
+	return provider.OK(map[string]any{"NatGateway": ngwToWire(ngw)}), nil
+}
+
+func (p *ComputeProvider) DescribeNatGateways(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "NatGatewayId")
+	entries, _ := p.resources.List(ctx, rtNatGateway, "")
+	ngws := []map[string]any{}
+	for _, e := range entries {
+		var ngw ec2NatGateway
+		json.Unmarshal(e.Data, &ngw)
+		if ngw.State == "deleted" {
+			continue
+		}
+		if len(filterIds) > 0 && !containsStr(filterIds, ngw.NatGatewayId) {
+			continue
+		}
+		ngws = append(ngws, ngwToWire(ngw))
+	}
+	return provider.OK(map[string]any{"NatGateways": ngws}), nil
+}
+
+func (p *ComputeProvider) DeleteNatGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "NatGatewayId")
+	e, err := p.resources.Get(ctx, rtNatGateway, id)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "NatGatewayNotFound", Message: "nat gateway not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var ngw ec2NatGateway
+	json.Unmarshal(e.Data, &ngw)
+	ngw.State = "deleted"
+	data, _ := json.Marshal(ngw)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtNatGateway, ID: id, Data: data})
+	return provider.OK(map[string]any{"NatGatewayId": id}), nil
+}
+
+func ngwToWire(ngw ec2NatGateway) map[string]any {
+	return map[string]any{
+		"NatGatewayId": ngw.NatGatewayId,
+		"VpcId":        ngw.VpcId,
+		"SubnetId":     ngw.SubnetId,
+		"State":        ngw.State,
+		"CreateTime":   ngw.CreateTime.Format(time.RFC3339),
+	}
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+func strParam(params map[string]any, key string) string {
+	if v, ok := params[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func intParam(params map[string]any, key string, def int) int {
+	if v, ok := params[key]; ok {
+		switch n := v.(type) {
+		case string:
+			i, _ := strconv.Atoi(n)
+			return i
+		case float64:
+			return int(n)
+		}
+	}
+	return def
+}
+
+func str(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return s
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// extractIndexedParam collects EC2-style indexed params: "InstanceId.1", "InstanceId.2", ...
+func extractIndexedParam(params map[string]any, prefix string) []string {
+	result := []string{}
+	for i := 1; ; i++ {
+		key := fmt.Sprintf("%s.%d", prefix, i)
+		v, ok := params[key]
+		if !ok {
+			break
+		}
+		if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func containsStr(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Suppress unused import warning for strings package
+var _ = strings.TrimSpace

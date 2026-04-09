@@ -136,6 +136,18 @@ func serviceToProvider(service string) string {
 		return "Object"
 	case "lambda":
 		return "Function"
+	case "glue":
+		return "Glue"
+	case "ec2":
+		return "Compute"
+	case "route53":
+		return "DNS"
+	case "rds":
+		return "RDS"
+	case "elasticache":
+		return "ElastiCache"
+	case "ecs":
+		return "ECS"
 	default:
 		return service
 	}

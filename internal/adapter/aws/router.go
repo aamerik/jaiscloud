@@ -18,7 +18,7 @@ const (
 
 // DetectService identifies the AWS service from the HTTP request and body.
 func DetectService(r *http.Request, body []byte) (service string, source DetectionSource) {
-	// Priority 1: X-Amz-Target header (JSON protocol — SQS and DynamoDB)
+	// Priority 1: X-Amz-Target header (JSON protocol — SQS, DynamoDB, Glue, ECS, EMR, Streams)
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
 		if strings.HasPrefix(target, "AmazonSQS.") {
 			return "sqs", SourceXAmzTarget
@@ -26,13 +26,27 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 		if strings.HasPrefix(target, "DynamoDB_20120810.") {
 			return "dynamodb", SourceXAmzTarget
 		}
+		if strings.HasPrefix(target, "AWSGlue.") {
+			return "glue", SourceXAmzTarget
+		}
+		if strings.HasPrefix(target, "AmazonEC2ContainerServiceV20141113.") {
+			return "ecs", SourceXAmzTarget
+		}
+		if strings.HasPrefix(target, "ElasticMapReduce.") {
+			return "emr", SourceXAmzTarget
+		}
+		if strings.HasPrefix(target, "DynamoDBStreams_20120810.") {
+			return "dynamodbstreams", SourceXAmzTarget
+		}
 	}
 
 	// Priority 2: SigV4 Authorization scope — covers all signed services
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		if svc := extractSigV4Service(auth); svc != "" {
 			switch svc {
-			case "sqs", "dynamodb", "s3", "iam", "sts", "sns", "lambda":
+			case "sqs", "dynamodb", "s3", "iam", "sts", "sns", "lambda",
+				"glue", "ecs", "emr", "ec2", "rds", "elasticache",
+				"cloudformation", "route53", "dynamodbstreams":
 				return svc, SourceSigV4
 			}
 		}

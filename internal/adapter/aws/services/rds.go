@@ -1,0 +1,209 @@
+package services
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"jaiscloud/internal/adapter"
+	"jaiscloud/internal/model"
+)
+
+// RDSCodec handles the RDS Query/XML wire protocol.
+type RDSCodec struct{}
+
+var _ adapter.Codec = (*RDSCodec)(nil)
+
+func (c *RDSCodec) ServiceName() string { return "rds" }
+
+func (c *RDSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+	values := mergeQueryAndForm(r, body)
+	action := values.Get("Action")
+	if action == "" {
+		return nil, fmt.Errorf("missing Action parameter for RDS request")
+	}
+	params := flattenQueryValues(values)
+	return &model.NormalizedRequest{
+		Service: "rds",
+		Action:  action,
+		Params:  params,
+		Raw:     r,
+	}, nil
+}
+
+func (c *RDSCodec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+	h := http.Header{}
+	h.Set("Content-Type", "text/xml")
+	body := buildRDSXML(resp.Data)
+	return resp.HTTPStatus, h, []byte(body)
+}
+
+func (c *RDSCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+	h := http.Header{}
+	h.Set("Content-Type", "text/xml")
+	body := fmt.Sprintf(
+		`<?xml version="1.0" encoding="UTF-8"?>`+
+			`<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/">`+
+			`<Error><Code>%s</Code><Message>%s</Message></Error>`+
+			`<RequestId>jaiscloud-rds</RequestId>`+
+			`</ErrorResponse>`,
+		xmlEscape(perr.Code), xmlEscape(perr.Message),
+	)
+	return perr.HTTPStatus, h, []byte(body)
+}
+
+const rdsNS = `xmlns="http://rds.amazonaws.com/doc/2014-10-31/"`
+
+func buildRDSXML(data map[string]any) string {
+	if data == nil {
+		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+	}
+
+	wrap := func(action, inner string) string {
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<` + action + `Response ` + rdsNS + `>` +
+			`<` + action + `Result>` + inner + `</` + action + `Result>` +
+			`<ResponseMetadata><RequestId>jaiscloud-rds</RequestId></ResponseMetadata>` +
+			`</` + action + `Response>`
+	}
+
+	if v, ok := data["DBInstance"]; ok {
+		return wrap("CreateDBInstance", encodeDBInstance(v))
+	}
+	if v, ok := data["DBInstanceModified"]; ok {
+		return wrap("ModifyDBInstance", encodeDBInstance(v))
+	}
+	if v, ok := data["DBInstanceDeleted"]; ok {
+		return wrap("DeleteDBInstance", encodeDBInstance(v))
+	}
+	if list, ok := data["DBInstances"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<DBInstances>`)
+		if items, ok := list.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeDBInstance(item))
+			}
+		}
+		sb.WriteString(`</DBInstances>`)
+		return wrap("DescribeDBInstances", sb.String())
+	}
+	if v, ok := data["DBCluster"]; ok {
+		return wrap("CreateDBCluster", encodeDBCluster(v))
+	}
+	if v, ok := data["DBClusterModified"]; ok {
+		return wrap("ModifyDBCluster", encodeDBCluster(v))
+	}
+	if v, ok := data["DBClusterDeleted"]; ok {
+		return wrap("DeleteDBCluster", encodeDBCluster(v))
+	}
+	if list, ok := data["DBClusters"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<DBClusters>`)
+		if items, ok := list.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeDBCluster(item))
+			}
+		}
+		sb.WriteString(`</DBClusters>`)
+		return wrap("DescribeDBClusters", sb.String())
+	}
+	if v, ok := data["DBSubnetGroup"]; ok {
+		return wrap("CreateDBSubnetGroup", encodeDBSubnetGroup(v))
+	}
+	if list, ok := data["DBSubnetGroups"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<DBSubnetGroups>`)
+		if items, ok := list.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeDBSubnetGroup(item))
+			}
+		}
+		sb.WriteString(`</DBSubnetGroups>`)
+		return wrap("DescribeDBSubnetGroups", sb.String())
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+}
+
+func encodeDBInstance(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<DBInstance>`)
+	sb.WriteString(xmlTag("DBInstanceIdentifier", str(m["DBInstanceIdentifier"])))
+	sb.WriteString(xmlTag("DBInstanceClass", str(m["DBInstanceClass"])))
+	sb.WriteString(xmlTag("Engine", str(m["Engine"])))
+	sb.WriteString(xmlTag("DBInstanceStatus", str(m["DBInstanceStatus"])))
+	sb.WriteString(xmlTag("MasterUsername", str(m["MasterUsername"])))
+	sb.WriteString(xmlTag("DBName", str(m["DBName"])))
+	sb.WriteString(xmlTag("Endpoint", encodeEndpoint(m["Endpoint"])))
+	sb.WriteString(xmlTag("AllocatedStorage", str(m["AllocatedStorage"])))
+	sb.WriteString(xmlTag("MultiAZ", str(m["MultiAZ"])))
+	sb.WriteString(xmlTag("EngineVersion", str(m["EngineVersion"])))
+	sb.WriteString(xmlTag("PubliclyAccessible", str(m["PubliclyAccessible"])))
+	if sg, ok := m["DBSubnetGroup"]; ok {
+		sb.WriteString(xmlTag("DBSubnetGroup", encodeDBSubnetGroup(sg)))
+	}
+	sb.WriteString(`</DBInstance>`)
+	return sb.String()
+}
+
+func encodeEndpoint(v any) string {
+	if v == nil {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return xmlTag("Address", str(m["Address"])) + xmlTag("Port", str(m["Port"]))
+}
+
+func encodeDBCluster(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<DBCluster>`)
+	sb.WriteString(xmlTag("DBClusterIdentifier", str(m["DBClusterIdentifier"])))
+	sb.WriteString(xmlTag("DBClusterArn", str(m["DBClusterArn"])))
+	sb.WriteString(xmlTag("Status", str(m["Status"])))
+	sb.WriteString(xmlTag("Engine", str(m["Engine"])))
+	sb.WriteString(xmlTag("EngineVersion", str(m["EngineVersion"])))
+	sb.WriteString(xmlTag("MasterUsername", str(m["MasterUsername"])))
+	sb.WriteString(xmlTag("DatabaseName", str(m["DatabaseName"])))
+	sb.WriteString(xmlTag("Endpoint", str(m["Endpoint"])))
+	sb.WriteString(xmlTag("ReaderEndpoint", str(m["ReaderEndpoint"])))
+	sb.WriteString(xmlTag("Port", str(m["Port"])))
+	sb.WriteString(`</DBCluster>`)
+	return sb.String()
+}
+
+func encodeDBSubnetGroup(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<DBSubnetGroup>`)
+	sb.WriteString(xmlTag("DBSubnetGroupName", str(m["DBSubnetGroupName"])))
+	sb.WriteString(xmlTag("DBSubnetGroupDescription", str(m["DBSubnetGroupDescription"])))
+	sb.WriteString(xmlTag("VpcId", str(m["VpcId"])))
+	sb.WriteString(xmlTag("SubnetGroupStatus", str(m["SubnetGroupStatus"])))
+	sb.WriteString(`</DBSubnetGroup>`)
+	return sb.String()
+}
+
+// flattenQueryValues converts url.Values to a flat map[string]any.
+func flattenQueryValues(values url.Values) map[string]any {
+	params := make(map[string]any, len(values))
+	for k, vs := range values {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
+	return params
+}
