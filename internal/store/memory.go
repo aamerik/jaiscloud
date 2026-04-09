@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -106,4 +107,21 @@ func (s *MemoryResourceStore) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = make(map[string]ResourceEntry)
+}
+
+func (s *MemoryResourceStore) Snapshot() (json.RawMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return json.Marshal(s.entries)
+}
+
+func (s *MemoryResourceStore) Restore(data json.RawMessage) error {
+	var entries map[string]ResourceEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = entries
+	return nil
 }

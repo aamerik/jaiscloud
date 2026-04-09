@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"jaiscloud/internal/adapter"
 	awsadapter "jaiscloud/internal/adapter/aws"
 	"jaiscloud/internal/admin"
@@ -46,11 +48,20 @@ func (s *Server) buildRouter() {
 	r.Use(middleware.Recovery)
 	r.Use(middleware.RequestID(s.cfg.RandSource))
 	r.Use(middleware.Logging(s.cfg.LogLevel))
+	if s.cfg.Metrics {
+		r.Use(middleware.Metrics)
+	}
 
 	r.Route("/_jaiscloud", func(r chi.Router) {
 		r.Get("/health", s.adminHandler.Health)
 		r.Post("/reset", s.adminHandler.Reset)
+		r.Get("/export", s.adminHandler.Export)
+		r.Post("/import", s.adminHandler.Import)
 	})
+
+	if s.cfg.Metrics {
+		r.Handle("/metrics", promhttp.Handler())
+	}
 
 	r.HandleFunc("/*", s.handleCloudRequest)
 
@@ -113,6 +124,18 @@ func serviceToProvider(service string) string {
 	switch service {
 	case "sqs":
 		return "Queue"
+	case "iam":
+		return "IAM"
+	case "sts":
+		return "STS"
+	case "sns":
+		return "Notification"
+	case "dynamodb":
+		return "Table"
+	case "s3":
+		return "Object"
+	case "lambda":
+		return "Function"
 	default:
 		return service
 	}
@@ -123,6 +146,9 @@ func writeResponse(w http.ResponseWriter, status int, headers http.Header, body 
 		for _, v := range vs {
 			w.Header().Set(k, v)
 		}
+	}
+	if w.Header().Get("Content-Length") == "" {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	}
 	w.WriteHeader(status)
 	w.Write(body)

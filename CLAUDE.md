@@ -2,10 +2,10 @@
 
 ## Project
 
-JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wire protocols (Query/XML and JSON/Target) so any AWS SDK can point at it without modification.
+JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wire protocols (Query/XML, JSON/Target, REST) so any AWS SDK can point at it without modification.
 
-**Phase 0 (complete):** SQS — all 32 MiniStack integration tests pass.  
-**Phase 1 (planned):** S3, IAM, DynamoDB, Lambda; PostgreSQL message store; OIDC auth.
+**Phase 0 (complete):** SQS — all 32 integration tests pass.  
+**Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.
 
 ---
 
@@ -13,7 +13,7 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 
 ```
 module jaiscloud   # go.mod
-go 1.24
+go 1.25
 ```
 
 ---
@@ -30,24 +30,40 @@ internal/
       aws.go            # AWSAdapter.DetectAndDecode
       router.go         # DetectService — X-Amz-Target / SigV4 / Action param
       services/
-        sqs.go          # SQSCodec: JSON decode, Query decode, XML encode
-  admin/                # /_jaiscloud/health and /_jaiscloud/reset endpoints
+        sqs.go          # SQSCodec: JSON + Query/XML
+        iam.go          # IAMCodec: Query/XML (handles STS too)
+        sns.go          # SNSCodec: Query/XML
+        dynamodb.go     # DynamoDBCodec: JSON/Target
+        s3.go           # S3Codec: REST path-style, XML responses
+        lambda.go       # LambdaCodec: REST JSON
+  admin/                # /_jaiscloud/* endpoints
+                        # Resetter, Snapshotter interfaces
+  blobfs/               # BlobStore interface: MemoryBlobStore, LocalFSBlobStore
   clock/                # Clock interface: RealClock, FixedClock, OffsetClock
   config/               # Config struct; Viper loading; env prefix JAISCLOUD_
   events/               # In-process EventBus (subscribe/publish)
   gateway/              # HTTP server (Chi), middleware, request dispatch
-    middleware/         # Recovery, RequestID, Logging
+    middleware/         # Recovery, RequestID, Logging, Metrics (Prometheus)
   model/                # Shared types: NormalizedRequest, ProviderResponse, ProviderError
   provider/             # Business logic layer
     provider.go         # HandlerFunc type, OK() helper
     registry.go         # Registry.Dispatch
-    queue/              # QueueProvider — all 17 SQS operations
-  store/                # Resource metadata (queues, topics, …)
+    function/           # FunctionProvider — Lambda (echo invoke mock)
+    iam/                # IAMProvider + STS (roles, policies, users, access keys)
+    notification/       # SNSProvider (topics, subscriptions, fan-out to SQS)
+    object/             # ObjectProvider — S3 (buckets, objects, multipart)
+    queue/              # QueueProvider — SQS (all 17 operations)
+    table/              # TableProvider — DynamoDB (tables, items, expressions)
+  store/                # Resource metadata
     store.go            # ResourceStore interface
-    memory.go           # MemoryResourceStore (sync.RWMutex)
-    aws/sqs/
-      store.go          # SQSMessageStore interface
-      memory.go         # MemoryMessageStore (per-queue slices, FIFO, DLQ)
+    memory.go           # MemoryResourceStore (sync.RWMutex, Snapshot/Restore)
+    postgres.go         # PostgresResourceStore (pgx/v5)
+    migrate.go          # RunMigrations — go:embed migrations/*.sql
+    migrations/         # SQL migration files (001–005)
+    aws/
+      dynamodb/         # DynamoDBItemStore interface + memory + postgres
+      s3/               # S3ObjectMetaStore interface + memory + postgres
+      sqs/              # SQSMessageStore interface + memory + postgres
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2
 ```
@@ -62,37 +78,73 @@ Request flow:
 HTTP request
   → gateway.Server.handleCloudRequest
       → AWSAdapter.DetectAndDecode   (detect protocol, decode params)
-          → SQSCodec.Decode
+          → <ServiceCodec>.Decode    (SQS/IAM/SNS → Query/XML; DynamoDB → JSON/Target;
+                                      S3/Lambda → REST)
       → Registry.Dispatch(service.Action, NormalizedRequest)
-          → QueueProvider.<action>
-              → MemoryResourceStore  (queue metadata)
-              → MemoryMessageStore   (message data plane)
-      → SQSCodec.Encode             (XML response)
+          → <ServiceProvider>.<action>
+              → ResourceStore        (control-plane metadata)
+              → <service>Store       (data-plane: messages, items, blobs)
+      → <ServiceCodec>.Encode        (XML or JSON or raw bytes)
   → HTTP response
 ```
 
-Key design rule: **no layer imports its caller**. The `model` package exists solely to break the cycle between `gateway` and `adapter` — both import `model`, neither imports the other.
+Key design rule: **no layer imports its caller**. The `model` package exists solely to break the cycle between `gateway` and `adapter`.
+
+### Service → Provider mapping
+
+| Wire service | Provider prefix | Codec |
+|---|---|---|
+| `sqs` | `Queue` | SQSCodec (JSON + Query) |
+| `iam` | `IAM` | IAMCodec (Query/XML) |
+| `sts` | `STS` | IAMCodec (Query/XML) |
+| `sns` | `Notification` | SNSCodec (Query/XML) |
+| `dynamodb` | `Table` | DynamoDBCodec (JSON/Target) |
+| `s3` | `Object` | S3Codec (REST/XML) |
+| `lambda` | `Function` | LambdaCodec (REST/JSON) |
 
 ---
 
 ## Build & run
 
 ```bash
-# Build binary
+# Build binary — always rebuild after code changes, never run a stale binary
 go build -o jaiscloud ./cmd/jaiscloud/
 
-# Run server (default port 4566)
+# Run server (default port 4566, lite mode)
 ./jaiscloud start
 
+# Run in full mode (PostgreSQL persistence)
+./jaiscloud start --mode full --dsn "postgres://user:pass@localhost:5432/jaiscloud"
+
 # Run with options
-./jaiscloud start --port 4566 --region us-east-1 --account-id 000000000000
+./jaiscloud start --port 4566 --region us-east-1 --metrics
+
+# Enable Prometheus metrics
+./jaiscloud start --metrics        # served at /metrics
 
 # Environment variables (all JAISCLOUD_ prefixed)
 JAISCLOUD_PORT=4566
+JAISCLOUD_MODE=lite          # or "full"
+JAISCLOUD_DSN=               # required when MODE=full
 JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
+JAISCLOUD_METRICS=true
 ```
+
+> **Config loading:** `config.Load()` reads from the global Viper instance. All `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not a local `viper.New()` instance) or flags will be silently ignored and defaults used.
+
+### CLI commands
+
+| Command | Description |
+|---|---|
+| `start` | Start the emulator |
+| `version` | Print version |
+| `env` | Print effective config as env vars |
+| `doctor` | Check emulator reachability |
+| `reset` | Wipe all emulator state via HTTP |
+| `export [-o file]` | Export state snapshot to JSON |
+| `import [-i file]` | Restore state from JSON snapshot |
 
 ---
 
@@ -102,8 +154,12 @@ JAISCLOUD_LOG_LEVEL=info
 # Unit + store tests (no server needed)
 go test -race ./internal/...
 
-# Integration tests (requires running server on localhost:4566)
+# Integration tests — lite mode (no external deps)
 ./jaiscloud start &
+go test -race ./tests/integration/
+
+# Integration tests — full mode (requires postgres)
+./jaiscloud start --mode full --dsn "postgres://..." &
 go test -race ./tests/integration/
 
 # Point at a different host
@@ -112,45 +168,112 @@ JAISCLOUD_HOST=http://localhost:9000 go test ./tests/integration/
 
 Integration tests call `POST /_jaiscloud/reset` between each test via `resetState(t)` in [tests/integration/helpers_test.go](tests/integration/helpers_test.go).
 
+Current integration test coverage: **SQS, IAM/STS, SNS, DynamoDB, S3, Lambda**.
+
+### Full mode reset behaviour
+
+`POST /_jaiscloud/reset` wipes all registered stores. In full mode this covers every postgres table:
+
+| Store | Table(s) wiped |
+|---|---|
+| `PostgresResourceStore` | `jc_resources` (queues, topics, tables, functions, IAM) |
+| `PostgresSQSMessageStore` | `jc_sqs_messages`, `jc_sqs_dedup` |
+| `PostgresDynamoDBItemStore` | `jc_dynamodb_items` |
+| `PostgresS3ObjectMetaStore` | `jc_s3_objects` |
+| `MemoryBlobStore` | in-memory blob bytes |
+
+All five are registered as `Resetter` in `main.go`.
+
+> **Note:** Even in full mode, blob bytes (`BlobStore`) use `MemoryBlobStore`. `LocalFSBlobStore` is implemented (its `Reset()` removes and recreates the base directory) but is not yet wired into `main.go`. Swap the `NewMemoryBlobStore()` call in `startCmd` for `NewLocalFSBlobStore(dir)` to enable on-disk blob persistence.
+
 ---
 
 ## Key conventions
 
-### SQS codec — dual protocol
+### Service detection order
 
-SQS clients send either:
-- **JSON**: `Content-Type: application/x-amz-json-1.0` + `X-Amz-Target: AmazonSQS.<Action>`
-- **Query/XML**: `Content-Type: application/x-www-form-urlencoded`, `Action=<Action>` in body or URL
+In [internal/adapter/aws/router.go](internal/adapter/aws/router.go):
+1. `X-Amz-Target` header (SQS JSON, DynamoDB)
+2. SigV4 `Authorization` scope (all services)
+3. `Action` param in query/body (SQS, IAM, STS, SNS Query protocol)
 
-Detection order in [internal/adapter/aws/router.go](internal/adapter/aws/router.go):
-1. `X-Amz-Target` header
-2. SigV4 `Authorization` scope
-3. `Action` param (URL query, then POST body)
+S3 and Lambda are always detected via SigV4 (they use REST, no `Action` param).
 
-### FIFO deduplication
+### S3 action detection
 
-`MemoryMessageStore.Send` returns `(dedupMessageID string, err error)`. A non-empty `dedupMessageID` means the message was a duplicate; the original MessageId is returned. Callers in `QueueProvider` use this to return the correct ID in send responses.
+`S3Codec.Decode` maps `(HTTP method, bucket, key, query params, headers)` to action names. Key rules:
+- No bucket → `ListBuckets`
+- No key, `GET ?list-type=2` → `ListObjectsV2`
+- `X-Amz-Copy-Source` header + `PUT` → `CopyObject`
+- `?uploads` on POST → `CreateMultipartUpload`, on GET → `ListMultipartUploads`
+- `?delete` on POST → `DeleteObjects` (XML body parsed for keys)
 
-### Visibility / DLQ
+### Lambda invoke
 
-`MemoryMessageStore.Receive` sets `VisibleAt = now + 30s` as a default. The provider immediately calls `ChangeVisibility` with the queue's configured timeout. When `ReceiveCount >= maxReceiveCount`, `checkDLQ` copies the message to the dead-letter queue, resetting `VisibleAt`, `DelayUntil`, and `ReceiveCount` to zero so the DLQ copy is immediately visible.
+`InvokeFunction` echoes the payload back unchanged — no subprocess is spawned. Useful for testing fan-out pipelines that invoke Lambda as a sink.
 
-### Admin reset
+### FIFO deduplication (SQS)
 
-Both `MemoryResourceStore` and `MemoryMessageStore` implement the `admin.Resetter` interface. They are registered with `admin.Handler.RegisterResetter` in `main.go`. `POST /_jaiscloud/reset` calls `Reset()` on all registered resetters — used by integration tests to isolate state.
+`MemoryMessageStore.Send` returns `(dedupMessageID string, err error)`. A non-empty `dedupMessageID` means duplicate; the original `MessageId` is returned.
+
+### Visibility / DLQ (SQS)
+
+`MemoryMessageStore.Receive` sets `VisibleAt = now + 30s`. The provider then calls `ChangeVisibility` with the queue's configured timeout. When `ReceiveCount >= maxReceiveCount`, `checkDLQ` copies the message to the dead-letter queue with zeroed timers.
+
+### SNS fan-out
+
+`SNSProvider.Publish` wraps the message in a JSON envelope and calls `SQSMessageStore.Send` for each SQS subscription. Each SQS delivery is assigned a **new unique `MessageID`**; the SNS notification ID is embedded in the envelope body only. Reusing the SNS ID as the SQS row key would conflict on the `(id, queue_url)` primary key when delivering to N queues.
+
+### DynamoDB pk hash
+
+`TableProvider` computes a stable hash from key attributes only (in schema-defined order) and passes it explicitly to `DynamoDBItemStore`. The store never auto-computes hashes — the provider is the sole authority.
+
+### DynamoDB wire protocol: x-amz-crc32
+
+Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK v2 validates this header; without it the SDK does not cleanly drain the response body, causing a "failed to close HTTP response body" warning and potential connection-reuse problems. `DynamoDBCodec.Encode` computes and sets this header on every response.
+
+### Postgres SQS: composite primary key
+
+`jc_sqs_messages` uses a composite primary key `(id, queue_url)` so the same `MessageID` can appear in multiple queues (e.g. SNS fan-out). Migration `005_sqs_fix_pk.sql` upgrades existing installs that have the old single-column `id` primary key.
+
+`MessageAttributes` are stored in the `msg_attributes JSONB` column. The postgres `Send` serialises them; `Receive` deserialises them. The column exists in migration 002 but was unused before Phase 1 fixes.
+
+### Postgres ResourceStore: prefix matching
+
+`PostgresResourceStore.List` uses `LIKE '%prefix%'` (contains) to match the behaviour of `MemoryResourceStore.List` (`strings.Contains`). Queue IDs are full URLs (`http://localhost:4566/000000000000/<name>`), so a queue-name prefix must be matched as a substring, not a prefix of the full URL.
+
+### Admin endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/_jaiscloud/health` | GET | Liveness check |
+| `/_jaiscloud/reset` | POST | Wipe all state (used by integration tests) |
+| `/_jaiscloud/export` | GET | JSON snapshot of all registered Snapshotter stores |
+| `/_jaiscloud/import` | POST | Restore state from JSON snapshot |
+| `/metrics` | GET | Prometheus metrics (requires `--metrics` flag) |
+
+### Snapshot / Restore
+
+Stores implement `admin.Snapshotter` (`Snapshot() (json.RawMessage, error)` + `Restore(json.RawMessage) error`) and are registered with `adminHandler.RegisterSnapshotter(name, store)`. Currently `MemoryResourceStore` is snapshotted under key `"resources"`.
+
+### HTTP response: Content-Length
+
+`gateway.writeResponse` explicitly sets `Content-Length` before calling `WriteHeader`. Without this, Go's HTTP server uses chunked transfer encoding, which can cause the AWS SDK's response body close to fail and log a connection-reuse warning.
 
 ### Clock abstraction
 
-All time-sensitive code receives a `clock.Clock` from `NormalizedRequest.Clock`. Integration tests use `RealClock`. Unit tests can use `FixedClock` or `OffsetClock` for deterministic time control.
+All time-sensitive code receives a `clock.Clock` from `NormalizedRequest.Clock`. Integration tests use `RealClock`. Unit tests can use `FixedClock` or `OffsetClock` for deterministic control.
 
 ---
 
 ## Dependencies
 
 | Package | Purpose |
-|---------|---------|
+|---|---|
 | `github.com/go-chi/chi/v5` | HTTP router + middleware |
 | `github.com/spf13/cobra` | CLI framework |
 | `github.com/spf13/viper` | Config / env loading |
+| `github.com/jackc/pgx/v5` | PostgreSQL driver (full mode) |
+| `github.com/prometheus/client_golang` | Prometheus metrics (opt-in) |
 | `github.com/aws/aws-sdk-go-v2` | Integration test client |
 | `github.com/stretchr/testify` | Test assertions |

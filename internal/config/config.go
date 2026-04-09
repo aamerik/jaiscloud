@@ -23,6 +23,11 @@ type Config struct {
 	LogLevel  string
 	Region    string
 	AccountID string
+	DSN       string // PostgreSQL DSN (required when Mode == full)
+
+	// Observability (opt-in)
+	Metrics bool // expose /metrics endpoint
+	Tracing bool // emit OTel traces to stdout
 
 	// Deterministic mode
 	Deterministic bool
@@ -36,30 +41,34 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	v := viper.New()
+	viper.SetDefault("port", 4566)
+	viper.SetDefault("mode", "lite")
+	viper.SetDefault("log_level", "info")
+	viper.SetDefault("region", "us-east-1")
+	viper.SetDefault("account_id", "000000000000")
+	viper.SetDefault("dsn", "")
+	viper.SetDefault("metrics", false)
+	viper.SetDefault("tracing", false)
+	viper.SetDefault("deterministic", false)
+	viper.SetDefault("seed", 0)
+	viper.SetDefault("time_mode", "offset")
 
-	v.SetDefault("port", 4566)
-	v.SetDefault("mode", "lite")
-	v.SetDefault("log_level", "info")
-	v.SetDefault("region", "us-east-1")
-	v.SetDefault("account_id", "000000000000")
-	v.SetDefault("deterministic", false)
-	v.SetDefault("seed", 0)
-	v.SetDefault("time_mode", "offset")
-
-	v.SetEnvPrefix("JAISCLOUD")
-	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-	v.AutomaticEnv()
+	viper.SetEnvPrefix("JAISCLOUD")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
 
 	cfg := &Config{
-		Port:          v.GetInt("port"),
-		Mode:          Mode(v.GetString("mode")),
-		LogLevel:      v.GetString("log_level"),
-		Region:        v.GetString("region"),
-		AccountID:     v.GetString("account_id"),
-		Deterministic: v.GetBool("deterministic"),
-		Seed:          v.GetInt64("seed"),
-		TimeMode:      v.GetString("time_mode"),
+		Port:          viper.GetInt("port"),
+		Mode:          Mode(viper.GetString("mode")),
+		LogLevel:      viper.GetString("log_level"),
+		Region:        viper.GetString("region"),
+		AccountID:     viper.GetString("account_id"),
+		DSN:           viper.GetString("dsn"),
+		Metrics:       viper.GetBool("metrics"),
+		Tracing:       viper.GetBool("tracing"),
+		Deterministic: viper.GetBool("deterministic"),
+		Seed:          viper.GetInt64("seed"),
+		TimeMode:      viper.GetString("time_mode"),
 	}
 
 	if cfg.Mode != ModeLite && cfg.Mode != ModeFull {
@@ -67,7 +76,7 @@ func Load() (*Config, error) {
 	}
 
 	// Parse base time for deterministic mode
-	if ts := v.GetString("time"); ts != "" {
+	if ts := viper.GetString("time"); ts != "" {
 		t, err := time.Parse(time.RFC3339, ts)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --time %q: %w", ts, err)

@@ -2,6 +2,7 @@
 
 # Ignore docs directory used for design/notes
 docs/
+plan_docs/
 
 # Ignore built binary
 jaiscloud

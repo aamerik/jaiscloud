@@ -17,31 +17,47 @@ const (
 )
 
 // DetectService identifies the AWS service from the HTTP request and body.
-// Phase 0: SQS only. Returns ("sqs", source) or ("", SourceUnknown).
 func DetectService(r *http.Request, body []byte) (service string, source DetectionSource) {
-	// Priority 1: X-Amz-Target header (JSON protocol)
+	// Priority 1: X-Amz-Target header (JSON protocol — SQS and DynamoDB)
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
 		if strings.HasPrefix(target, "AmazonSQS.") {
 			return "sqs", SourceXAmzTarget
 		}
-	}
-
-	// Priority 2: SigV4 Authorization scope
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		if svc := extractSigV4Service(auth); svc == "sqs" {
-			return "sqs", SourceSigV4
+		if strings.HasPrefix(target, "DynamoDB_20120810.") {
+			return "dynamodb", SourceXAmzTarget
 		}
 	}
 
-	// Priority 3: Action in URL query string or POST form body
+	// Priority 2: SigV4 Authorization scope — covers all signed services
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if svc := extractSigV4Service(auth); svc != "" {
+			switch svc {
+			case "sqs", "dynamodb", "s3", "iam", "sts", "sns", "lambda":
+				return svc, SourceSigV4
+			}
+		}
+	}
+
+	// Priority 3: Action in URL query string or POST form body (Query protocol)
 	action := r.URL.Query().Get("Action")
 	if action == "" && len(body) > 0 {
 		if form, err := url.ParseQuery(string(body)); err == nil {
 			action = form.Get("Action")
 		}
 	}
-	if action != "" && isKnownSQSAction(action) {
-		return "sqs", SourceAction
+	if action != "" {
+		if isKnownSQSAction(action) {
+			return "sqs", SourceAction
+		}
+		if isKnownIAMAction(action) {
+			return "iam", SourceAction
+		}
+		if isKnownSTSAction(action) {
+			return "sts", SourceAction
+		}
+		if isKnownSNSAction(action) {
+			return "sns", SourceAction
+		}
 	}
 
 	return "", SourceUnknown
@@ -77,6 +93,42 @@ func isKnownSQSAction(action string) bool {
 		"ChangeMessageVisibility", "PurgeQueue",
 		"SendMessageBatch", "DeleteMessageBatch", "ChangeMessageVisibilityBatch",
 		"TagQueue", "UntagQueue", "ListQueueTags":
+		return true
+	}
+	return false
+}
+
+func isKnownIAMAction(action string) bool {
+	switch action {
+	case "CreateRole", "GetRole", "DeleteRole", "ListRoles", "UpdateAssumeRolePolicy",
+		"CreatePolicy", "GetPolicy", "DeletePolicy", "ListPolicies",
+		"AttachRolePolicy", "DetachRolePolicy", "ListAttachedRolePolicies",
+		"PutRolePolicy", "GetRolePolicy", "DeleteRolePolicy", "ListRolePolicies",
+		"CreateUser", "GetUser", "DeleteUser", "ListUsers",
+		"CreateAccessKey", "DeleteAccessKey", "ListAccessKeys",
+		"TagRole", "UntagRole", "ListRoleTags":
+		return true
+	}
+	return false
+}
+
+func isKnownSTSAction(action string) bool {
+	switch action {
+	case "AssumeRole", "AssumeRoleWithSAML", "AssumeRoleWithWebIdentity",
+		"GetCallerIdentity", "GetSessionToken", "GetFederationToken",
+		"DecodeAuthorizationMessage":
+		return true
+	}
+	return false
+}
+
+func isKnownSNSAction(action string) bool {
+	switch action {
+	case "CreateTopic", "DeleteTopic", "GetTopicAttributes", "SetTopicAttributes", "ListTopics",
+		"Subscribe", "Unsubscribe", "ListSubscriptions", "ListSubscriptionsByTopic",
+		"GetSubscriptionAttributes", "SetSubscriptionAttributes",
+		"Publish", "PublishBatch",
+		"TagResource", "UntagResource", "ListTagsForResource":
 		return true
 	}
 	return false

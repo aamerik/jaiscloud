@@ -1,0 +1,418 @@
+package services
+
+import (
+	"encoding/xml"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"jaiscloud/internal/model"
+)
+
+// S3Codec handles S3 REST wire format (path-style URLs).
+type S3Codec struct{}
+
+func (c *S3Codec) ServiceName() string { return "s3" }
+
+// ─── Decode ───────────────────────────────────────────────────────────────────
+
+func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+	// Parse path-style: /{bucket}/{key...}
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	var bucket, key string
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		bucket = path[:idx]
+		key = path[idx+1:]
+	} else {
+		bucket = path
+	}
+
+	query := r.URL.Query()
+	action := s3DetectAction(r.Method, bucket, key, query, r.Header)
+
+	params := map[string]any{
+		"_bucket": bucket,
+		"_key":    key,
+		"_body":   body,
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		params["_content_type"] = ct
+	}
+	if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
+		params["_copy_source"] = cs
+	}
+	// Propagate all URL query params (prefix, delimiter, marker, max-keys, etc.)
+	for k, vs := range query {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
+
+	// DeleteObjects: parse XML body into params["Delete"]
+	if action == "DeleteObjects" && len(body) > 0 {
+		var deleteReq struct {
+			Objects []struct {
+				Key string `xml:"Key"`
+			} `xml:"Object"`
+		}
+		if xml.Unmarshal(body, &deleteReq) == nil {
+			objs := make([]any, 0, len(deleteReq.Objects))
+			for _, o := range deleteReq.Objects {
+				objs = append(objs, map[string]any{"Key": o.Key})
+			}
+			params["Delete"] = map[string]any{"Object": objs}
+		}
+	}
+
+	return &model.NormalizedRequest{
+		Service: "s3",
+		Action:  action,
+		Params:  params,
+		Raw:     r,
+	}, nil
+}
+
+func s3DetectAction(method, bucket, key string, query url.Values, headers http.Header) string {
+	hasCopySource := headers.Get("X-Amz-Copy-Source") != ""
+
+	if bucket == "" {
+		return "ListBuckets"
+	}
+
+	if key == "" {
+		// Bucket-level operations
+		switch method {
+		case http.MethodHead:
+			return "HeadBucket"
+		case http.MethodDelete:
+			return "DeleteBucket"
+		case http.MethodPut:
+			switch {
+			case query.Has("acl"):
+				return "PutBucketAcl"
+			case query.Has("tagging"):
+				return "PutBucketTagging"
+			case query.Has("versioning"):
+				return "PutBucketVersioning"
+			default:
+				return "CreateBucket"
+			}
+		case http.MethodGet:
+			switch {
+			case query.Has("location"):
+				return "GetBucketLocation"
+			case query.Has("uploads"):
+				return "ListMultipartUploads"
+			case query.Get("list-type") == "2":
+				return "ListObjectsV2"
+			case query.Has("acl"):
+				return "GetBucketAcl"
+			case query.Has("tagging"):
+				return "GetBucketTagging"
+			case query.Has("versioning"):
+				return "GetBucketVersioning"
+			default:
+				return "ListObjectsV1"
+			}
+		case http.MethodPost:
+			if query.Has("delete") {
+				return "DeleteObjects"
+			}
+		}
+		return "ListObjectsV1"
+	}
+
+	// Object-level operations
+	switch method {
+	case http.MethodGet:
+		switch {
+		case query.Has("uploadId") && !query.Has("partNumber"):
+			return "ListParts"
+		case query.Has("tagging"):
+			return "GetObjectTagging"
+		case query.Has("acl"):
+			return "GetObjectAcl"
+		default:
+			return "GetObject"
+		}
+	case http.MethodHead:
+		return "HeadObject"
+	case http.MethodPut:
+		switch {
+		case hasCopySource:
+			return "CopyObject"
+		case query.Has("partNumber"):
+			return "UploadPart"
+		case query.Has("tagging"):
+			return "PutObjectTagging"
+		case query.Has("acl"):
+			return "PutObjectAcl"
+		default:
+			return "PutObject"
+		}
+	case http.MethodDelete:
+		switch {
+		case query.Has("uploadId"):
+			return "AbortMultipartUpload"
+		case query.Has("tagging"):
+			return "DeleteObjectTagging"
+		default:
+			return "DeleteObject"
+		}
+	case http.MethodPost:
+		switch {
+		case query.Has("uploads"):
+			return "CreateMultipartUpload"
+		case query.Has("uploadId"):
+			return "CompleteMultipartUpload"
+		}
+	}
+	return "GetObject"
+}
+
+// ─── Encode ───────────────────────────────────────────────────────────────────
+
+func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+	// Raw body passthrough (GetObject)
+	if pass, _ := resp.Data["_passthrough"].(bool); pass {
+		h := http.Header{}
+		if ct, ok := resp.Data["_content_type"].(string); ok && ct != "" {
+			h.Set("Content-Type", ct)
+		} else {
+			h.Set("Content-Type", "application/octet-stream")
+		}
+		if etag, ok := resp.Data["ETag"].(string); ok {
+			h.Set("ETag", etag)
+		}
+		if lm, ok := resp.Data["LastModified"].(string); ok {
+			h.Set("Last-Modified", lm)
+		}
+		if cl, ok := resp.Data["ContentLength"]; ok {
+			h.Set("Content-Length", fmt.Sprintf("%v", cl))
+		}
+		body, _ := resp.Data["_raw_body"].([]byte)
+		return resp.HTTPStatus, h, body
+	}
+
+	// HeadObject / HeadBucket — headers only, no body
+	if nr.Action == "HeadObject" || nr.Action == "HeadBucket" {
+		h := s3MetaHeaders(resp.Data)
+		return resp.HTTPStatus, h, nil
+	}
+
+	// No-body responses
+	if resp.HTTPStatus == 204 || resp.HTTPStatus == 0 {
+		h := http.Header{}
+		if etag, ok := resp.Data["ETag"].(string); ok {
+			h.Set("ETag", etag)
+		}
+		return 204, h, nil
+	}
+
+	// PutObject / UploadPart — ETag header, empty body
+	if nr.Action == "PutObject" || nr.Action == "UploadPart" {
+		h := http.Header{}
+		if etag, ok := resp.Data["ETag"].(string); ok {
+			h.Set("ETag", etag)
+		}
+		return resp.HTTPStatus, h, nil
+	}
+
+	// CreateBucket — Location header
+	if nr.Action == "CreateBucket" {
+		h := http.Header{}
+		if loc, ok := resp.Data["Location"].(string); ok {
+			h.Set("Location", loc)
+		}
+		return resp.HTTPStatus, h, nil
+	}
+
+	// XML body for all other operations
+	body := s3BuildXML(nr.Action, resp.Data)
+	h := http.Header{}
+	if len(body) > 0 {
+		h.Set("Content-Type", "application/xml")
+	}
+	return resp.HTTPStatus, h, body
+}
+
+func s3MetaHeaders(data map[string]any) http.Header {
+	h := http.Header{}
+	if ct, ok := data["ContentType"].(string); ok {
+		h.Set("Content-Type", ct)
+	}
+	if etag, ok := data["ETag"].(string); ok {
+		h.Set("ETag", etag)
+	}
+	if lm, ok := data["LastModified"].(string); ok {
+		h.Set("Last-Modified", lm)
+	}
+	if cl, ok := data["ContentLength"]; ok {
+		h.Set("Content-Length", fmt.Sprintf("%v", cl))
+	}
+	return h
+}
+
+// ─── EncodeError ──────────────────────────────────────────────────────────────
+
+func (c *S3Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+	h := http.Header{}
+	h.Set("Content-Type", "application/xml")
+	body := fmt.Sprintf(
+		`<?xml version="1.0" encoding="UTF-8"?>`+
+			`<Error><Code>%s</Code><Message>%s</Message>`+
+			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId></Error>`,
+		xmlEscape(perr.Code), xmlEscape(perr.Message),
+	)
+	return perr.HTTPStatus, h, []byte(body)
+}
+
+// ─── XML builder ──────────────────────────────────────────────────────────────
+
+func s3BuildXML(action string, data map[string]any) []byte {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+
+	switch action {
+	case "ListBuckets":
+		sb.WriteString(`<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if owner, ok := data["Owner"].(map[string]any); ok {
+			sb.WriteString("<Owner>")
+			sb.WriteString(xmlTag("ID", str(owner["ID"])))
+			sb.WriteString(xmlTag("DisplayName", str(owner["DisplayName"])))
+			sb.WriteString("</Owner>")
+		}
+		sb.WriteString("<Buckets>")
+		if buckets, ok := data["Buckets"].([]map[string]any); ok {
+			for _, b := range buckets {
+				sb.WriteString("<Bucket>")
+				sb.WriteString(xmlTag("Name", str(b["Name"])))
+				sb.WriteString(xmlTag("CreationDate", str(b["CreationDate"])))
+				sb.WriteString("</Bucket>")
+			}
+		}
+		sb.WriteString("</Buckets>")
+		sb.WriteString("</ListAllMyBucketsResult>")
+
+	case "ListObjectsV1":
+		sb.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Name", str(data["Name"])))
+		sb.WriteString(xmlTag("Prefix", str(data["Prefix"])))
+		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
+		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
+		sb.WriteString(xmlTag("Marker", str(data["Marker"])))
+		if contents, ok := data["Contents"].([]map[string]any); ok {
+			for _, obj := range contents {
+				sb.WriteString("<Contents>")
+				sb.WriteString(xmlTag("Key", str(obj["Key"])))
+				sb.WriteString(xmlTag("LastModified", str(obj["LastModified"])))
+				sb.WriteString(xmlTag("ETag", str(obj["ETag"])))
+				sb.WriteString(xmlTag("Size", str(obj["Size"])))
+				sb.WriteString(xmlTag("StorageClass", str(obj["StorageClass"])))
+				sb.WriteString("</Contents>")
+			}
+		}
+		if cps, ok := data["CommonPrefixes"].([]string); ok {
+			for _, cp := range cps {
+				sb.WriteString("<CommonPrefixes>")
+				sb.WriteString(xmlTag("Prefix", cp))
+				sb.WriteString("</CommonPrefixes>")
+			}
+		}
+		sb.WriteString("</ListBucketResult>")
+
+	case "ListObjectsV2":
+		sb.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Name", str(data["Name"])))
+		sb.WriteString(xmlTag("Prefix", str(data["Prefix"])))
+		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
+		sb.WriteString(xmlTag("KeyCount", str(data["KeyCount"])))
+		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
+		if contents, ok := data["Contents"].([]map[string]any); ok {
+			for _, obj := range contents {
+				sb.WriteString("<Contents>")
+				sb.WriteString(xmlTag("Key", str(obj["Key"])))
+				sb.WriteString(xmlTag("LastModified", str(obj["LastModified"])))
+				sb.WriteString(xmlTag("ETag", str(obj["ETag"])))
+				sb.WriteString(xmlTag("Size", str(obj["Size"])))
+				sb.WriteString(xmlTag("StorageClass", str(obj["StorageClass"])))
+				sb.WriteString("</Contents>")
+			}
+		}
+		if cps, ok := data["CommonPrefixes"].([]string); ok {
+			for _, cp := range cps {
+				sb.WriteString("<CommonPrefixes>")
+				sb.WriteString(xmlTag("Prefix", cp))
+				sb.WriteString("</CommonPrefixes>")
+			}
+		}
+		sb.WriteString("</ListBucketResult>")
+
+	case "GetBucketLocation":
+		sb.WriteString(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlEscape(str(data["LocationConstraint"])))
+		sb.WriteString(`</LocationConstraint>`)
+
+	case "GetBucketVersioning":
+		sb.WriteString(`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
+
+	case "GetBucketAcl", "GetObjectAcl":
+		sb.WriteString(`<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString("<Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>")
+		sb.WriteString("<AccessControlList>")
+		sb.WriteString("<Grant><Grantee xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"CanonicalUser\">")
+		sb.WriteString("<ID>owner</ID><DisplayName>owner</DisplayName></Grantee>")
+		sb.WriteString("<Permission>FULL_CONTROL</Permission></Grant>")
+		sb.WriteString("</AccessControlList>")
+		sb.WriteString("</AccessControlPolicy>")
+
+	case "GetObjectTagging", "GetBucketTagging":
+		sb.WriteString(`<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet/></Tagging>`)
+
+	case "CreateMultipartUpload":
+		sb.WriteString(`<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Bucket", str(data["Bucket"])))
+		sb.WriteString(xmlTag("Key", str(data["Key"])))
+		sb.WriteString(xmlTag("UploadId", str(data["UploadId"])))
+		sb.WriteString("</InitiateMultipartUploadResult>")
+
+	case "CompleteMultipartUpload":
+		sb.WriteString(`<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Location", str(data["Location"])))
+		sb.WriteString(xmlTag("Bucket", str(data["Bucket"])))
+		sb.WriteString(xmlTag("Key", str(data["Key"])))
+		sb.WriteString(xmlTag("ETag", str(data["ETag"])))
+		sb.WriteString("</CompleteMultipartUploadResult>")
+
+	case "ListMultipartUploads":
+		sb.WriteString(`<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Bucket", str(data["Bucket"])))
+		sb.WriteString("</ListMultipartUploadsResult>")
+
+	case "ListParts":
+		sb.WriteString(`<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString("</ListPartsResult>")
+
+	case "DeleteObjects":
+		sb.WriteString(`<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if deleted, ok := data["Deleted"].([]map[string]any); ok {
+			for _, d := range deleted {
+				sb.WriteString("<Deleted>")
+				sb.WriteString(xmlTag("Key", str(d["Key"])))
+				sb.WriteString("</Deleted>")
+			}
+		}
+		sb.WriteString("</DeleteResult>")
+
+	case "CopyObject":
+		if result, ok := data["CopyObjectResult"].(map[string]any); ok {
+			sb.WriteString(`<CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+			sb.WriteString(xmlTag("ETag", str(result["ETag"])))
+			sb.WriteString(xmlTag("LastModified", str(result["LastModified"])))
+			sb.WriteString("</CopyObjectResult>")
+		}
+	}
+
+	return []byte(sb.String())
+}
