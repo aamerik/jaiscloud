@@ -12,6 +12,9 @@ import (
 	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsglue "github.com/aws/aws-sdk-go-v2/service/glue"
+	awsemr "github.com/aws/aws-sdk-go-v2/service/emr"
+	awscf "github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	awsdynamostreams "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	awsecs "github.com/aws/aws-sdk-go-v2/service/ecs"
 	awselasticache "github.com/aws/aws-sdk-go-v2/service/elasticache"
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
@@ -138,6 +141,34 @@ func newRoute53Client(t *testing.T) *awsroute53.Client {
 	})
 }
 
+func newCFClient(t *testing.T) *awscf.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awscf.NewFromConfig(cfg, func(o *awscf.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newDynamoStreamsClient(t *testing.T) *awsdynamostreams.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsdynamostreams.NewFromConfig(cfg, func(o *awsdynamostreams.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
 func newECSClient(t *testing.T) *awsecs.Client {
 	t.Helper()
 	cfg, err := config.LoadDefaultConfig(context.Background(),
@@ -190,6 +221,20 @@ func newGlueClient(t *testing.T) *awsglue.Client {
 		t.Fatalf("load config: %v", err)
 	}
 	return awsglue.NewFromConfig(cfg, func(o *awsglue.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newEMRClient(t *testing.T) *awsemr.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsemr.NewFromConfig(cfg, func(o *awsemr.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
 }

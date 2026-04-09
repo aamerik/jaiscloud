@@ -8,7 +8,7 @@ JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure
 |---|---|---|---|
 | 0 | SQS Proof of Concept | ✅ Complete | Weeks 1–2 |
 | 1 | AWS Core Services | ✅ Complete | Weeks 3–5 |
-| 2 | AWS Extended Services | Planned | Weeks 7–10 |
+| 2 | AWS Extended Services | ✅ Complete | Weeks 7–10 |
 | 3 | AWS Athena (DuckDB) | Planned | Weeks 11–12 |
 | 4 | Full State Export / Import | Planned | Weeks 13–14 |
 | 5 | GCP API Layer | Planned | Weeks 15–18 |
@@ -73,46 +73,67 @@ JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure
 
 | Category | Deferred To |
 |---|---|
-| EC2, VPC, Route53, RDS, ElastiCache, ECS | Phase 2 |
-| EMR on EC2 (classic EMR) | Phase 2 |
-| Glue Data Catalog / Iceberg | Phase 2 |
-| CloudFormation / IaC engine | Phase 2 |
-| DynamoDB Streams | Phase 2 |
-| IAM condition keys, resource-level permissions | Phase 2 |
+| EC2, VPC, Route53, RDS, ElastiCache, ECS | ✅ Delivered in Phase 2 |
+| EMR on EC2 (classic EMR) | ✅ Delivered in Phase 2 |
+| Glue Data Catalog / Iceberg | ✅ Delivered in Phase 2 |
+| CloudFormation / IaC engine | ✅ Delivered in Phase 2 |
+| DynamoDB Streams | ✅ Delivered in Phase 2 |
+| IAM condition keys, resource-level permissions | ✅ Delivered in Phase 2 |
 | Athena / DuckDB | Phase 3 |
-| GCP services | Phase 4 |
-| Azure services | Phase 5 |
-| Web console UI | Post-Phase 6 |
+| GCP services | Phase 5 |
+| Azure services | Phase 6 |
+| Web console UI | Post-Phase 7 |
 
 ---
 
-## Phase 2: AWS Extended Services
+## Phase 2: AWS Extended Services ✅
 
 **Goal:** Complete AWS surface area — compute, networking, managed databases, containers, and analytics foundation.
 
-### Planned Deliverables
+### Services
 
-| Service | Scope |
+| Service | Wire Protocol | Operations |
+|---|---|---|
+| **EC2 + VPC** | Query/XML | RunInstances, DescribeInstances, StartInstances, StopInstances, TerminateInstances, DescribeImages, CreateSecurityGroup, DescribeSecurityGroups, AuthorizeSecurityGroupIngress, AuthorizeSecurityGroupEgress, RevokeSecurityGroupIngress, DeleteSecurityGroup, CreateKeyPair, DescribeKeyPairs, DeleteKeyPair, ImportKeyPair, CreateVpc, DescribeVpcs, DeleteVpc, CreateSubnet, DescribeSubnets, DeleteSubnet, CreateRouteTable, DescribeRouteTables, CreateRoute, AssociateRouteTable, CreateInternetGateway, DescribeInternetGateways, AttachInternetGateway, CreateNatGateway, DescribeNatGateways, AllocateAddress, DescribeAddresses |
+| **Route53** | REST/XML | CreateHostedZone, GetHostedZone, ListHostedZones, DeleteHostedZone, ChangeResourceRecordSets, ListResourceRecordSets, CreateHealthCheck, GetHealthCheck, ListHealthChecks, DeleteHealthCheck |
+| **RDS** | Query/XML | CreateDBInstance, DescribeDBInstances, ModifyDBInstance, DeleteDBInstance, CreateDBCluster, DescribeDBClusters, ModifyDBCluster, DeleteDBCluster, CreateDBSubnetGroup, DescribeDBSubnetGroups, DeleteDBSubnetGroup |
+| **ElastiCache** | Query/XML | CreateCacheCluster, DescribeCacheClusters, ModifyCacheCluster, DeleteCacheCluster, CreateReplicationGroup, DescribeReplicationGroups, ModifyReplicationGroup, DeleteReplicationGroup |
+| **ECS** | JSON/Target | CreateCluster, DescribeClusters, ListClusters, DeleteCluster, RegisterTaskDefinition, DescribeTaskDefinition, ListTaskDefinitions, DeregisterTaskDefinition, CreateService, UpdateService, DescribeServices, ListServices, DeleteService, RunTask, DescribeTasks, ListTasks, StopTask |
+| **EMR on EC2** | JSON/Target | RunJobFlow, DescribeCluster, ListClusters, TerminateJobFlows, AddJobFlowSteps, ListSteps, DescribeStep, SetTerminationProtection, ModifyCluster, ListInstanceGroups, AddInstanceGroups |
+| **Glue Data Catalog** | JSON/Target | CreateDatabase, GetDatabase, GetDatabases, DeleteDatabase, CreateTable, GetTable, GetTables, UpdateTable, DeleteTable, CreatePartition, GetPartition, GetPartitions, BatchCreatePartition, BatchDeletePartition, BatchUpdatePartition |
+| **CloudFormation** | Query/XML | CreateStack, UpdateStack, DeleteStack, DescribeStacks, ListStacks, DescribeStackResources, ValidateTemplate |
+| **DynamoDB Streams** | JSON/Target | ListStreams, DescribeStream, GetShardIterator, GetRecords |
+| **IAM Advanced** | Query/XML | GetFederationToken (STS), CreateGroup, GetGroup, DeleteGroup, ListGroups, AddUserToGroup, RemoveUserFromGroup, ListGroupsForUser, AttachUserPolicy, DetachUserPolicy, ListAttachedUserPolicies, PutUserPolicy, GetUserPolicy, DeleteUserPolicy, ListUserPolicies, TagUser, UntagUser, ListUserTags, UpdateUser, UpdateAccessKey, CreateInstanceProfile, GetInstanceProfile, DeleteInstanceProfile, AddRoleToInstanceProfile, RemoveRoleFromInstanceProfile, ListInstanceProfiles, SimulatePrincipalPolicy, SimulateCustomPolicy |
+
+### Infrastructure Deliverables
+
+| Component | Deliverable |
 |---|---|
-| **EC2** | Instances, AMIs, security groups, key pairs |
-| **VPC** | VPCs, subnets, route tables, internet gateways, NAT gateways |
-| **Route53** | Hosted zones, record sets, health checks |
-| **RDS** | DB instances, DB clusters — full mode: real Postgres/MySQL containers |
-| **ElastiCache** | Cache clusters — full mode: real Redis containers |
-| **ECS** | Task definitions, services, clusters — full mode: real Docker containers |
-| **EMR on EC2** | Clusters, job flows — full mode: Spark on K8s (reuses Phase 1 SparkExecutor) |
-| **Glue Data Catalog** | Databases, tables, partitions — Iceberg-compatible atomic CAS on metadata pointer |
-| **CloudFormation** | Template parsing and stack provisioning |
-| **DynamoDB Streams** | CDC / stream processing |
-| **IAM advanced** | Condition keys, resource-level permissions, STS federation |
+| **Stream store** | `MemoryStreamStore` — per-table DynamoDB Streams ring buffer with shard iterator and sequence number tracking |
+| **EC2 Codec** | Query/XML with multi-value filter flattening (`Filter.N.Name` / `Filter.N.Value.M`) |
+| **Route53 Codec** | REST/XML with path-based action detection, XML body parsing, and change-set encoding |
+| **RDS/ElastiCache/CF Codecs** | Generic `flattenQueryValues` Query/XML extractor (replaces IAM-specific allowlist) |
+| **IAM Codec fix** | Replaced hardcoded param allowlist with generic extractor; fixed all list XML encoders to output fields directly inside `<member>` (no spurious wrapper elements) |
+| **Glue/ECS/EMR/Streams Codecs** | JSON/Target codecs registered under their respective `X-Amz-Target` prefixes |
+| **Tests** | Integration tests for all 11 new services/feature areas — all passing, `go test -race` clean |
 
-#### Glue / Iceberg Detail
+### Glue / Iceberg Implementation
 
 The Glue catalog stores the `metadata_location` pointer (`s3://bucket/iceberg/metadata/v3.metadata.json`). Iceberg clients (Spark, Trino, PyIceberg) read this pointer, then read/write metadata and data files via S3. On commit, Glue atomically swaps the pointer to the new metadata version.
 
-- **Lite mode:** `sync.Mutex` on table entry for CAS safety
-- **Full mode:** Postgres row-level CAS — `UPDATE ... WHERE data->>'metadata_location' = $expected`
-- **Operations:** CreateDatabase, GetDatabase, GetDatabases, DeleteDatabase, CreateTable, GetTable, GetTables, UpdateTable, DeleteTable, CreatePartition, GetPartition, GetPartitions, BatchCreatePartition, BatchDeletePartition, BatchUpdatePartition
+- **Lite mode:** `sync.Mutex`-protected CAS on `metadata_location` in the table entry
+- **Operations:** CreateDatabase, GetDatabase, GetDatabases, DeleteDatabase, CreateTable, GetTable, GetTables, UpdateTable (Iceberg atomic CAS), DeleteTable, CreatePartition, GetPartition, GetPartitions, BatchCreatePartition, BatchDeletePartition, BatchUpdatePartition
+
+### DynamoDB Streams Implementation
+
+Streams are integrated into `TableProvider` rather than a standalone provider — they share table state directly.
+
+- `MemoryStreamStore` holds a per-table ring buffer of change records (INSERT / MODIFY / REMOVE)
+- `PutItem`, `UpdateItem`, `DeleteItem` capture old/new images and call `appendStreamRecord`
+- `UpdateTable` enables/disables a stream via `StreamSpecification`
+- Shard iterators are base64-encoded `"tableName:sequenceNumber"` tokens
+
+**Exit criteria:** All integration tests for all Phase 2 services pass; full suite (`go test -race ./tests/integration/`) clean.
 
 ---
 

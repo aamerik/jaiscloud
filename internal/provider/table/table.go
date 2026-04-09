@@ -10,6 +10,7 @@ import (
 	"time"
 
 	dynamostore "jaiscloud/internal/store/aws/dynamodb"
+	streamstore "jaiscloud/internal/store/stream"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -20,10 +21,15 @@ import (
 type TableProvider struct {
 	resources store.ResourceStore
 	items     dynamostore.DynamoDBItemStore
+	streams   *streamstore.MemoryStreamStore
 }
 
 func New(resources store.ResourceStore, items dynamostore.DynamoDBItemStore) *TableProvider {
 	return &TableProvider{resources: resources, items: items}
+}
+
+func NewWithStreams(resources store.ResourceStore, items dynamostore.DynamoDBItemStore, streams *streamstore.MemoryStreamStore) *TableProvider {
+	return &TableProvider{resources: resources, items: items, streams: streams}
 }
 
 func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
@@ -68,6 +74,9 @@ type tableSchema struct {
 	TableSizeBytes         int                      `json:"TableSizeBytes"`
 	CreationDateTime       time.Time                `json:"CreationDateTime"`
 	Tags                   map[string]string        `json:"Tags"`
+	StreamEnabled          bool                     `json:"StreamEnabled"`
+	StreamViewType         string                   `json:"StreamViewType"`
+	LatestStreamArn        string                   `json:"LatestStreamArn"`
 }
 
 func tableArn(region, accountID, name string) string {
@@ -180,6 +189,23 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 	if billing := strParam(nr.Params, "BillingMode"); billing != "" {
 		ts.BillingMode = billing
 	}
+	// Handle StreamSpecification
+	if ss, ok := nr.Params["StreamSpecification"].(map[string]any); ok {
+		enabled, _ := ss["StreamEnabled"].(bool)
+		viewType, _ := ss["StreamViewType"].(string)
+		if viewType == "" {
+			viewType = "NEW_AND_OLD_IMAGES"
+		}
+		ts.StreamEnabled = enabled
+		ts.StreamViewType = viewType
+		if enabled && p.streams != nil {
+			streamArn := fmt.Sprintf("arn:aws:dynamodb:us-east-1:000000000000:table/%s/stream/%d", name, time.Now().UnixNano())
+			ts.LatestStreamArn = streamArn
+			p.streams.Enable(name, streamArn)
+		} else if !enabled && p.streams != nil {
+			p.streams.Disable(name)
+		}
+	}
 	_ = p.saveTable(ctx, ts)
 	return provider.OK(map[string]any{"TableDescription": tableDesc(ts)}), nil
 }
@@ -194,9 +220,15 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	}
 	ts, _ := p.loadTable(ctx, name)
 	pkHash := computePKHash(item, ts)
+	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
 	if err := p.items.PutItem(ctx, name, pkHash, item); err != nil {
 		return nil, err
 	}
+	eventName := "INSERT"
+	if oldItem != nil {
+		eventName = "MODIFY"
+	}
+	p.appendStreamRecord(name, eventName, pkHash, extractKeys(item, ts), item, oldItem)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -230,7 +262,12 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
 	}
 	pkHash := computePKHash(key, ts)
-	return provider.OK(map[string]any{}), p.items.DeleteItem(ctx, name, pkHash)
+	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
+	if err := p.items.DeleteItem(ctx, name, pkHash); err != nil {
+		return provider.OK(map[string]any{}), err
+	}
+	p.appendStreamRecord(name, "REMOVE", pkHash, key, nil, oldItem)
+	return provider.OK(map[string]any{}), nil
 }
 
 func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -249,10 +286,12 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
 	}
 
+	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
 	updated, err := p.items.UpdateItem(ctx, name, pkHash, key, spec)
 	if err != nil {
 		return nil, err
 	}
+	p.appendStreamRecord(name, "MODIFY", pkHash, key, updated, oldItem)
 	result := map[string]any{}
 	if spec.ReturnValues == "ALL_NEW" {
 		result["Attributes"] = updated
@@ -491,7 +530,7 @@ func (p *TableProvider) saveTable(ctx context.Context, ts tableSchema) error {
 }
 
 func tableDesc(ts tableSchema) map[string]any {
-	return map[string]any{
+	d := map[string]any{
 		"TableName":              ts.TableName,
 		"TableArn":               ts.TableArn,
 		"TableStatus":            ts.TableStatus,
@@ -503,6 +542,14 @@ func tableDesc(ts tableSchema) map[string]any {
 		"TableSizeBytes":         ts.TableSizeBytes,
 		"CreationDateTime":       ts.CreationDateTime.Unix(),
 	}
+	if ts.StreamEnabled {
+		d["StreamSpecification"] = map[string]any{
+			"StreamEnabled":  true,
+			"StreamViewType": ts.StreamViewType,
+		}
+		d["LatestStreamArn"] = ts.LatestStreamArn
+	}
+	return d
 }
 
 func parseKeySchema(v any) []map[string]string {
@@ -625,6 +672,21 @@ func exprValuesFrom(m map[string]any) map[string]any {
 		}
 	}
 	return nil
+}
+
+// extractKeys returns only the primary key attributes from an item.
+func extractKeys(item map[string]any, ts tableSchema) map[string]any {
+	if len(ts.KeySchema) == 0 {
+		return item
+	}
+	keys := make(map[string]any, len(ts.KeySchema))
+	for _, ks := range ts.KeySchema {
+		attr := ks["AttributeName"]
+		if v, ok := item[attr]; ok {
+			keys[attr] = v
+		}
+	}
+	return keys
 }
 
 func arnToTableName(arn string) string {

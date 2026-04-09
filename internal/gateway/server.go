@@ -148,6 +148,12 @@ func serviceToProvider(service string) string {
 		return "ElastiCache"
 	case "ecs":
 		return "ECS"
+	case "dynamodbstreams":
+		return "Streams"
+	case "cloudformation":
+		return "CloudFormation"
+	case "emr":
+		return "EMR"
 	default:
 		return service
 	}

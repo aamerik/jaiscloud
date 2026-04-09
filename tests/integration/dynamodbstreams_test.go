@@ -1,0 +1,209 @@
+package integration_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dyntype "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	awsstreams "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
+	streamtypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDynamoDBStreams_EnableAndListStreams(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	ddb := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	// Create table with streams enabled
+	_, err := ddb.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:   aws.String("StreamTable"),
+		BillingMode: dyntype.BillingModePayPerRequest,
+		KeySchema: []dyntype.KeySchemaElement{
+			{AttributeName: aws.String("PK"), KeyType: dyntype.KeyTypeHash},
+		},
+		AttributeDefinitions: []dyntype.AttributeDefinition{
+			{AttributeName: aws.String("PK"), AttributeType: dyntype.ScalarAttributeTypeS},
+		},
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	// Enable via UpdateTable (for tables created without streams)
+	_, err = ddb.UpdateTable(ctx, &awsdynamo.UpdateTableInput{
+		TableName: aws.String("StreamTable"),
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, err := streams.ListStreams(ctx, &awsstreams.ListStreamsInput{
+		TableName: aws.String("StreamTable"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut.Streams, 1)
+	assert.NotEmpty(t, aws.ToString(listOut.Streams[0].StreamArn))
+}
+
+func TestDynamoDBStreams_ReadWriteRecords(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	ddb := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	// Create + enable stream
+	_, err := ddb.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:   aws.String("Events"),
+		BillingMode: dyntype.BillingModePayPerRequest,
+		KeySchema: []dyntype.KeySchemaElement{
+			{AttributeName: aws.String("id"), KeyType: dyntype.KeyTypeHash},
+		},
+		AttributeDefinitions: []dyntype.AttributeDefinition{
+			{AttributeName: aws.String("id"), AttributeType: dyntype.ScalarAttributeTypeS},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = ddb.UpdateTable(ctx, &awsdynamo.UpdateTableInput{
+		TableName: aws.String("Events"),
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	// Get stream ARN
+	listOut, err := streams.ListStreams(ctx, &awsstreams.ListStreamsInput{
+		TableName: aws.String("Events"),
+	})
+	require.NoError(t, err)
+	require.Len(t, listOut.Streams, 1)
+	streamArn := aws.ToString(listOut.Streams[0].StreamArn)
+
+	// Describe stream → get shard
+	descOut, err := streams.DescribeStream(ctx, &awsstreams.DescribeStreamInput{
+		StreamArn: aws.String(streamArn),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.StreamDescription.Shards, 1)
+	shardId := aws.ToString(descOut.StreamDescription.Shards[0].ShardId)
+
+	// Get shard iterator at TRIM_HORIZON
+	iterOut, err := streams.GetShardIterator(ctx, &awsstreams.GetShardIteratorInput{
+		StreamArn:         aws.String(streamArn),
+		ShardId:           aws.String(shardId),
+		ShardIteratorType: streamtypes.ShardIteratorTypeTrimHorizon,
+	})
+	require.NoError(t, err)
+	iter := aws.ToString(iterOut.ShardIterator)
+	assert.NotEmpty(t, iter)
+
+	// Write items
+	for _, id := range []string{"a", "b", "c"} {
+		_, err = ddb.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("Events"),
+			Item: map[string]dyntype.AttributeValue{
+				"id":    &dyntype.AttributeValueMemberS{Value: id},
+				"value": &dyntype.AttributeValueMemberS{Value: "v-" + id},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	// Delete one
+	_, err = ddb.DeleteItem(ctx, &awsdynamo.DeleteItemInput{
+		TableName: aws.String("Events"),
+		Key: map[string]dyntype.AttributeValue{
+			"id": &dyntype.AttributeValueMemberS{Value: "b"},
+		},
+	})
+	require.NoError(t, err)
+
+	// GetRecords — should see 3 INSERTs + 1 REMOVE = 4 records
+	recOut, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{
+		ShardIterator: aws.String(iter),
+	})
+	require.NoError(t, err)
+	assert.Len(t, recOut.Records, 4)
+
+	eventNames := make([]string, 0, len(recOut.Records))
+	for _, r := range recOut.Records {
+		eventNames = append(eventNames, string(r.EventName))
+	}
+	assert.Contains(t, eventNames, "INSERT")
+	assert.Contains(t, eventNames, "REMOVE")
+}
+
+func TestDynamoDBStreams_NextShardIterator(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	ddb := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	_, err := ddb.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:   aws.String("T"),
+		BillingMode: dyntype.BillingModePayPerRequest,
+		KeySchema: []dyntype.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: dyntype.KeyTypeHash},
+		},
+		AttributeDefinitions: []dyntype.AttributeDefinition{
+			{AttributeName: aws.String("pk"), AttributeType: dyntype.ScalarAttributeTypeS},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = ddb.UpdateTable(ctx, &awsdynamo.UpdateTableInput{
+		TableName: aws.String("T"),
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, _ := streams.ListStreams(ctx, &awsstreams.ListStreamsInput{TableName: aws.String("T")})
+	streamArn := aws.ToString(listOut.Streams[0].StreamArn)
+	descOut, _ := streams.DescribeStream(ctx, &awsstreams.DescribeStreamInput{StreamArn: aws.String(streamArn)})
+	shardId := aws.ToString(descOut.StreamDescription.Shards[0].ShardId)
+	iterOut, _ := streams.GetShardIterator(ctx, &awsstreams.GetShardIteratorInput{
+		StreamArn: aws.String(streamArn), ShardId: aws.String(shardId),
+		ShardIteratorType: streamtypes.ShardIteratorTypeTrimHorizon,
+	})
+	iter := aws.ToString(iterOut.ShardIterator)
+
+	// Write item 1
+	_, err = ddb.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("T"),
+		Item:      map[string]dyntype.AttributeValue{"pk": &dyntype.AttributeValueMemberS{Value: "x"}},
+	})
+	require.NoError(t, err)
+
+	// Read — gets 1 record, advances iterator
+	r1, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{ShardIterator: aws.String(iter)})
+	require.NoError(t, err)
+	assert.Len(t, r1.Records, 1)
+	nextIter := aws.ToString(r1.NextShardIterator)
+	assert.NotEmpty(t, nextIter)
+
+	// Write item 2
+	_, err = ddb.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("T"),
+		Item:      map[string]dyntype.AttributeValue{"pk": &dyntype.AttributeValueMemberS{Value: "y"}},
+	})
+	require.NoError(t, err)
+
+	// Read with next iterator — should get only item 2
+	r2, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{ShardIterator: aws.String(nextIter)})
+	require.NoError(t, err)
+	assert.Len(t, r2.Records, 1)
+}

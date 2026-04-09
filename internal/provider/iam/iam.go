@@ -53,18 +53,51 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		"IAM.GetUser":                   p.GetUser,
 		"IAM.DeleteUser":                p.DeleteUser,
 		"IAM.ListUsers":                 p.ListUsers,
+		"IAM.UpdateUser":                p.UpdateUser,
+		// User policy attachments
+		"IAM.AttachUserPolicy":          p.AttachUserPolicy,
+		"IAM.DetachUserPolicy":          p.DetachUserPolicy,
+		"IAM.ListAttachedUserPolicies":  p.ListAttachedUserPolicies,
+		"IAM.PutUserPolicy":             p.PutUserPolicy,
+		"IAM.GetUserPolicy":             p.GetUserPolicy,
+		"IAM.DeleteUserPolicy":          p.DeleteUserPolicy,
+		"IAM.ListUserPolicies":          p.ListUserPolicies,
+		// User tags
+		"IAM.TagUser":                   p.TagUser,
+		"IAM.UntagUser":                 p.UntagUser,
+		"IAM.ListUserTags":              p.ListUserTags,
 		// Access keys
 		"IAM.CreateAccessKey":           p.CreateAccessKey,
 		"IAM.DeleteAccessKey":           p.DeleteAccessKey,
 		"IAM.ListAccessKeys":            p.ListAccessKeys,
+		"IAM.UpdateAccessKey":           p.UpdateAccessKey,
 		// Tags
 		"IAM.TagRole":                   p.TagRole,
 		"IAM.UntagRole":                 p.UntagRole,
 		"IAM.ListRoleTags":              p.ListRoleTags,
+		// Groups
+		"IAM.CreateGroup":               p.CreateGroup,
+		"IAM.GetGroup":                  p.GetGroup,
+		"IAM.DeleteGroup":               p.DeleteGroup,
+		"IAM.ListGroups":                p.ListGroups,
+		"IAM.AddUserToGroup":            p.AddUserToGroup,
+		"IAM.RemoveUserFromGroup":       p.RemoveUserFromGroup,
+		"IAM.ListGroupsForUser":         p.ListGroupsForUser,
+		// Instance profiles
+		"IAM.CreateInstanceProfile":         p.CreateInstanceProfile,
+		"IAM.GetInstanceProfile":            p.GetInstanceProfile,
+		"IAM.DeleteInstanceProfile":         p.DeleteInstanceProfile,
+		"IAM.AddRoleToInstanceProfile":      p.AddRoleToInstanceProfile,
+		"IAM.RemoveRoleFromInstanceProfile": p.RemoveRoleFromInstanceProfile,
+		"IAM.ListInstanceProfiles":          p.ListInstanceProfiles,
+		// Policy simulation (always-allow stub)
+		"IAM.SimulatePrincipalPolicy":   p.SimulatePrincipalPolicy,
+		"IAM.SimulateCustomPolicy":      p.SimulateCustomPolicy,
 		// STS
 		"STS.AssumeRole":                p.AssumeRole,
 		"STS.GetCallerIdentity":         p.GetCallerIdentity,
 		"STS.GetSessionToken":           p.GetSessionToken,
+		"STS.GetFederationToken":        p.GetFederationToken,
 	}
 }
 
@@ -657,4 +690,509 @@ func (p *IAMProvider) GetSessionToken(ctx context.Context, nr *model.NormalizedR
 			"Expiration":      expiry.Format(time.RFC3339),
 		},
 	}), nil
+}
+
+func (p *IAMProvider) GetFederationToken(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" {
+		name = "federation-user"
+	}
+	expiry := time.Now().UTC().Add(12 * time.Hour)
+	return provider.OK(map[string]any{
+		"Credentials": map[string]any{
+			"AccessKeyId":     "ASIA" + randID(16),
+			"SecretAccessKey": randID(20),
+			"SessionToken":    randID(32),
+			"Expiration":      expiry.Format(time.RFC3339),
+		},
+		"FederatedUser": map[string]any{
+			"FederatedUserId": fmt.Sprintf("%s:%s", nr.AccountID, name),
+			"Arn":             fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", nr.AccountID, name),
+		},
+		"PackedPolicySize": 0,
+	}), nil
+}
+
+// ─── UpdateUser ───────────────────────────────────────────────────────────────
+
+func (p *IAMProvider) UpdateUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "UserName")
+	arn := arnForUser(nr.AccountID, name)
+	var u userData
+	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+	}
+	if newName := strParam(nr.Params, "NewUserName"); newName != "" {
+		_ = p.resources.Delete(ctx, "iam_users", arn)
+		u.UserName = newName
+		u.Arn = arnForUser(nr.AccountID, newName)
+		_ = saveEntry(ctx, p.resources, "iam_users", u.Arn, u)
+	}
+	return provider.OK(nil), nil
+}
+
+// ─── User policy attachments ──────────────────────────────────────────────────
+
+func (p *IAMProvider) AttachUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	policyArn := strParam(nr.Params, "PolicyArn")
+	userArn := arnForUser(nr.AccountID, userName)
+	d := attachmentData{RoleArn: userArn, PolicyArn: policyArn}
+	_ = saveEntry(ctx, p.resources, "iam_user_attachments", attachKey(userArn, policyArn), d)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) DetachUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	policyArn := strParam(nr.Params, "PolicyArn")
+	userArn := arnForUser(nr.AccountID, userName)
+	_ = p.resources.Delete(ctx, "iam_user_attachments", attachKey(userArn, policyArn))
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) ListAttachedUserPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	userArn := arnForUser(nr.AccountID, userName)
+	entries, _ := p.resources.List(ctx, "iam_user_attachments", userArn)
+	var attached []map[string]any
+	for _, e := range entries {
+		var d attachmentData
+		if err := json.Unmarshal(e.Data, &d); err == nil {
+			parts := strings.Split(d.PolicyArn, "/")
+			attached = append(attached, map[string]any{
+				"PolicyName": parts[len(parts)-1],
+				"PolicyArn":  d.PolicyArn,
+			})
+		}
+	}
+	if attached == nil {
+		attached = []map[string]any{}
+	}
+	return provider.OK(map[string]any{"AttachedPolicies": attached, "IsTruncated": false}), nil
+}
+
+func (p *IAMProvider) PutUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	policyName := strParam(nr.Params, "PolicyName")
+	doc := strParam(nr.Params, "PolicyDocument")
+	d := inlinePolicyData{RoleName: userName, PolicyName: policyName, PolicyDocument: doc}
+	_ = saveEntry(ctx, p.resources, "iam_user_inline_policies", userName+"::"+policyName, d)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) GetUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	policyName := strParam(nr.Params, "PolicyName")
+	var d inlinePolicyData
+	if err := loadEntry(ctx, p.resources, "iam_user_inline_policies", userName+"::"+policyName, &d); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "Policy not found", 404)
+	}
+	return provider.OK(map[string]any{
+		"UserName":       userName,
+		"PolicyName":     policyName,
+		"PolicyDocument": d.PolicyDocument,
+	}), nil
+}
+
+func (p *IAMProvider) DeleteUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	policyName := strParam(nr.Params, "PolicyName")
+	_ = p.resources.Delete(ctx, "iam_user_inline_policies", userName+"::"+policyName)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) ListUserPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	entries, _ := p.resources.List(ctx, "iam_user_inline_policies", userName+"::")
+	var names []string
+	for _, e := range entries {
+		var d inlinePolicyData
+		if err := json.Unmarshal(e.Data, &d); err == nil {
+			names = append(names, d.PolicyName)
+		}
+	}
+	if names == nil {
+		names = []string{}
+	}
+	return provider.OK(map[string]any{"PolicyNames": names, "IsTruncated": false}), nil
+}
+
+// ─── User tags ────────────────────────────────────────────────────────────────
+
+func (p *IAMProvider) TagUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	arn := arnForUser(nr.AccountID, userName)
+	var u userData
+	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+	}
+	if tags, ok := nr.Params["Tags"].([]any); ok {
+		for _, t := range tags {
+			if tm, ok := t.(map[string]any); ok {
+				k, _ := tm["Key"].(string)
+				v, _ := tm["Value"].(string)
+				u.Tags[k] = v
+			}
+		}
+	}
+	return provider.OK(nil), saveEntry(ctx, p.resources, "iam_users", arn, u)
+}
+
+func (p *IAMProvider) UntagUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	arn := arnForUser(nr.AccountID, userName)
+	var u userData
+	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+	}
+	if keys, ok := nr.Params["TagKeys"].([]any); ok {
+		for _, k := range keys {
+			delete(u.Tags, fmt.Sprintf("%v", k))
+		}
+	}
+	return provider.OK(nil), saveEntry(ctx, p.resources, "iam_users", arn, u)
+}
+
+func (p *IAMProvider) ListUserTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	arn := arnForUser(nr.AccountID, userName)
+	var u userData
+	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+	}
+	var tags []map[string]any
+	for k, v := range u.Tags {
+		tags = append(tags, map[string]any{"Key": k, "Value": v})
+	}
+	if tags == nil {
+		tags = []map[string]any{}
+	}
+	return provider.OK(map[string]any{"Tags": tags, "IsTruncated": false}), nil
+}
+
+// ─── UpdateAccessKey ──────────────────────────────────────────────────────────
+
+func (p *IAMProvider) UpdateAccessKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID := strParam(nr.Params, "AccessKeyId")
+	status := strParam(nr.Params, "Status")
+	var ak accessKeyData
+	if err := loadEntry(ctx, p.resources, "iam_access_keys", keyID, &ak); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "AccessKey not found", 404)
+	}
+	if status != "" {
+		ak.Status = status
+	}
+	_ = saveEntry(ctx, p.resources, "iam_access_keys", keyID, ak)
+	return provider.OK(nil), nil
+}
+
+// ─── Groups ───────────────────────────────────────────────────────────────────
+
+type groupData struct {
+	GroupName  string    `json:"GroupName"`
+	GroupID    string    `json:"GroupId"`
+	Arn        string    `json:"Arn"`
+	Path       string    `json:"Path"`
+	CreateDate time.Time `json:"CreateDate"`
+}
+
+type groupMembershipData struct {
+	GroupName string `json:"GroupName"`
+	UserName  string `json:"UserName"`
+}
+
+func arnForGroup(accountID, name string) string {
+	return fmt.Sprintf("arn:aws:iam::%s:group/%s", accountID, name)
+}
+
+func (p *IAMProvider) CreateGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "GroupName")
+	if name == "" {
+		return nil, model.NewProviderError("ValidationError", "GroupName is required", 400)
+	}
+	arn := arnForGroup(nr.AccountID, name)
+	g := groupData{
+		GroupName:  name,
+		GroupID:    "AGPA" + randID(16),
+		Arn:        arn,
+		Path:       "/",
+		CreateDate: time.Now().UTC(),
+	}
+	if err := saveEntry(ctx, p.resources, "iam_groups", arn, g); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, model.NewProviderError("EntityAlreadyExists", "Group already exists", 409)
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"Group": groupMap(g)}), nil
+}
+
+func (p *IAMProvider) GetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "GroupName")
+	arn := arnForGroup(nr.AccountID, name)
+	var g groupData
+	if err := loadEntry(ctx, p.resources, "iam_groups", arn, &g); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "Group not found", 404)
+	}
+	// List members
+	entries, _ := p.resources.List(ctx, "iam_group_members", name+"::")
+	var users []map[string]any
+	for _, e := range entries {
+		var m groupMembershipData
+		if err := json.Unmarshal(e.Data, &m); err == nil {
+			userArn := arnForUser(nr.AccountID, m.UserName)
+			var u userData
+			if err := loadEntry(ctx, p.resources, "iam_users", userArn, &u); err == nil {
+				users = append(users, userMap(u))
+			}
+		}
+	}
+	if users == nil {
+		users = []map[string]any{}
+	}
+	return provider.OK(map[string]any{
+		"Group":       groupMap(g),
+		"Users":       users,
+		"IsTruncated": false,
+	}), nil
+}
+
+func (p *IAMProvider) DeleteGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "GroupName")
+	arn := arnForGroup(nr.AccountID, name)
+	_ = p.resources.Delete(ctx, "iam_groups", arn)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) ListGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, "iam_groups", "")
+	var groups []map[string]any
+	for _, e := range entries {
+		var g groupData
+		if err := json.Unmarshal(e.Data, &g); err == nil {
+			groups = append(groups, groupMap(g))
+		}
+	}
+	if groups == nil {
+		groups = []map[string]any{}
+	}
+	return provider.OK(map[string]any{"Groups": groups, "IsTruncated": false}), nil
+}
+
+func (p *IAMProvider) AddUserToGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	groupName := strParam(nr.Params, "GroupName")
+	userName := strParam(nr.Params, "UserName")
+	m := groupMembershipData{GroupName: groupName, UserName: userName}
+	_ = saveEntry(ctx, p.resources, "iam_group_members", groupName+"::"+userName, m)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) RemoveUserFromGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	groupName := strParam(nr.Params, "GroupName")
+	userName := strParam(nr.Params, "UserName")
+	_ = p.resources.Delete(ctx, "iam_group_members", groupName+"::"+userName)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) ListGroupsForUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	userName := strParam(nr.Params, "UserName")
+	// Scan all group memberships for this user
+	allEntries, _ := p.resources.List(ctx, "iam_group_members", "")
+	var groups []map[string]any
+	for _, e := range allEntries {
+		var m groupMembershipData
+		if err := json.Unmarshal(e.Data, &m); err == nil && m.UserName == userName {
+			groupArn := arnForGroup(nr.AccountID, m.GroupName)
+			var g groupData
+			if err := loadEntry(ctx, p.resources, "iam_groups", groupArn, &g); err == nil {
+				groups = append(groups, groupMap(g))
+			}
+		}
+	}
+	if groups == nil {
+		groups = []map[string]any{}
+	}
+	return provider.OK(map[string]any{"Groups": groups, "IsTruncated": false}), nil
+}
+
+func groupMap(g groupData) map[string]any {
+	return map[string]any{
+		"GroupName":  g.GroupName,
+		"GroupId":    g.GroupID,
+		"Arn":        g.Arn,
+		"Path":       g.Path,
+		"CreateDate": g.CreateDate.Format(time.RFC3339),
+	}
+}
+
+// ─── Instance profiles ────────────────────────────────────────────────────────
+
+type instanceProfileData struct {
+	InstanceProfileName string    `json:"InstanceProfileName"`
+	InstanceProfileID   string    `json:"InstanceProfileId"`
+	Arn                 string    `json:"Arn"`
+	Path                string    `json:"Path"`
+	RoleNames           []string  `json:"RoleNames"`
+	CreateDate          time.Time `json:"CreateDate"`
+}
+
+func arnForInstanceProfile(accountID, name string) string {
+	return fmt.Sprintf("arn:aws:iam::%s:instance-profile/%s", accountID, name)
+}
+
+func (p *IAMProvider) CreateInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "InstanceProfileName")
+	if name == "" {
+		return nil, model.NewProviderError("ValidationError", "InstanceProfileName is required", 400)
+	}
+	arn := arnForInstanceProfile(nr.AccountID, name)
+	ip := instanceProfileData{
+		InstanceProfileName: name,
+		InstanceProfileID:   "AIPA" + randID(16),
+		Arn:                 arn,
+		Path:                "/",
+		RoleNames:           []string{},
+		CreateDate:          time.Now().UTC(),
+	}
+	if err := saveEntry(ctx, p.resources, "iam_instance_profiles", arn, ip); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, model.NewProviderError("EntityAlreadyExists", "InstanceProfile already exists", 409)
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"InstanceProfile": instanceProfileMap(ip, nil)}), nil
+}
+
+func (p *IAMProvider) GetInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "InstanceProfileName")
+	arn := arnForInstanceProfile(nr.AccountID, name)
+	var ip instanceProfileData
+	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+	}
+	roles := p.loadProfileRoles(ctx, ip, nr.AccountID)
+	return provider.OK(map[string]any{"InstanceProfile": instanceProfileMap(ip, roles)}), nil
+}
+
+func (p *IAMProvider) DeleteInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "InstanceProfileName")
+	arn := arnForInstanceProfile(nr.AccountID, name)
+	_ = p.resources.Delete(ctx, "iam_instance_profiles", arn)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) AddRoleToInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	profileName := strParam(nr.Params, "InstanceProfileName")
+	roleName := strParam(nr.Params, "RoleName")
+	arn := arnForInstanceProfile(nr.AccountID, profileName)
+	var ip instanceProfileData
+	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+	}
+	for _, r := range ip.RoleNames {
+		if r == roleName {
+			return provider.OK(nil), nil // already attached
+		}
+	}
+	ip.RoleNames = append(ip.RoleNames, roleName)
+	_ = saveEntry(ctx, p.resources, "iam_instance_profiles", arn, ip)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) RemoveRoleFromInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	profileName := strParam(nr.Params, "InstanceProfileName")
+	roleName := strParam(nr.Params, "RoleName")
+	arn := arnForInstanceProfile(nr.AccountID, profileName)
+	var ip instanceProfileData
+	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
+		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+	}
+	filtered := ip.RoleNames[:0]
+	for _, r := range ip.RoleNames {
+		if r != roleName {
+			filtered = append(filtered, r)
+		}
+	}
+	ip.RoleNames = filtered
+	_ = saveEntry(ctx, p.resources, "iam_instance_profiles", arn, ip)
+	return provider.OK(nil), nil
+}
+
+func (p *IAMProvider) ListInstanceProfiles(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, "iam_instance_profiles", "")
+	var profiles []map[string]any
+	for _, e := range entries {
+		var ip instanceProfileData
+		if err := json.Unmarshal(e.Data, &ip); err == nil {
+			roles := p.loadProfileRoles(ctx, ip, nr.AccountID)
+			profiles = append(profiles, instanceProfileMap(ip, roles))
+		}
+	}
+	if profiles == nil {
+		profiles = []map[string]any{}
+	}
+	return provider.OK(map[string]any{"InstanceProfiles": profiles, "IsTruncated": false}), nil
+}
+
+func (p *IAMProvider) loadProfileRoles(ctx context.Context, ip instanceProfileData, accountID string) []map[string]any {
+	var roles []map[string]any
+	for _, roleName := range ip.RoleNames {
+		roleArn := arnForRole(accountID, roleName)
+		var r roleData
+		if err := loadEntry(ctx, p.resources, "iam_roles", roleArn, &r); err == nil {
+			roles = append(roles, roleMap(r))
+		}
+	}
+	if roles == nil {
+		roles = []map[string]any{}
+	}
+	return roles
+}
+
+func instanceProfileMap(ip instanceProfileData, roles []map[string]any) map[string]any {
+	if roles == nil {
+		roles = []map[string]any{}
+	}
+	return map[string]any{
+		"InstanceProfileName": ip.InstanceProfileName,
+		"InstanceProfileId":   ip.InstanceProfileID,
+		"Arn":                 ip.Arn,
+		"Path":                ip.Path,
+		"Roles":               roles,
+		"CreateDate":          ip.CreateDate.Format(time.RFC3339),
+	}
+}
+
+// ─── Policy simulation ────────────────────────────────────────────────────────
+
+func (p *IAMProvider) SimulatePrincipalPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return simulationAllow(nr.Params), nil
+}
+
+func (p *IAMProvider) SimulateCustomPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return simulationAllow(nr.Params), nil
+}
+
+func simulationAllow(params map[string]any) *model.ProviderResponse {
+	var actions []string
+	if v, ok := params["ActionNames"].([]any); ok {
+		for _, a := range v {
+			if s, ok := a.(string); ok {
+				actions = append(actions, s)
+			}
+		}
+	}
+	results := make([]map[string]any, len(actions))
+	for i, action := range actions {
+		results[i] = map[string]any{
+			"EvalActionName":   action,
+			"EvalDecision":     "allowed",
+			"MatchedStatements": []any{},
+			"MissingContextValues": []any{},
+		}
+	}
+	return provider.OK(map[string]any{
+		"EvaluationResults": results,
+		"IsTruncated":       false,
+	})
 }
