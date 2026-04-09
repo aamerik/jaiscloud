@@ -1,0 +1,32 @@
+# JaisCloud gitignore
+
+# Ignore docs directory used for design/notes
+docs/
+
+# Ignore built binary
+jaiscloud
+
+# Go build outputs
+bin/
+build/
+*.exe
+*.test
+coverage.out
+
+# Shared libraries / plugins
+*.so
+*.dylib
+*.dll
+
+# Go vendor directory (if used)
+vendor/
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+#Claude
+.claude/
