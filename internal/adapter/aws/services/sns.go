@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"jaiscloud/internal/adapter"
@@ -72,20 +73,98 @@ var snsErrorCodeMap = map[string]string{
 
 // ─── Params ───────────────────────────────────────────────────────────────────
 
-func flattenSNSParams(values interface{ Get(string) string }) map[string]any {
-	type getter interface{ Get(string) string }
-	v := values.(getter)
+func flattenSNSParams(values url.Values) map[string]any {
 	params := map[string]any{}
 	for _, k := range []string{
 		"TopicArn", "Name", "SubscriptionArn", "Protocol", "Endpoint",
 		"Message", "Subject", "MessageStructure", "PhoneNumber",
 		"AttributeName", "AttributeValue", "ResourceArn",
 	} {
-		if val := v.Get(k); val != "" {
+		if val := values.Get(k); val != "" {
 			params[k] = val
 		}
 	}
+	// Parse MessageAttributes.entry.N.{Name,Value.DataType,Value.StringValue}
+	attrs := extractSNSMessageAttributes(values)
+	if len(attrs) > 0 {
+		params["MessageAttributes"] = attrs
+	}
+	// Parse Tags.member.N.{Key,Value} for TagResource/ListTagsForResource.
+	if tags := extractSNSTags(values); len(tags) > 0 {
+		params["Tags"] = tags
+	}
+	// Parse TagKeys.member.N for UntagResource.
+	if keys := extractSNSTagKeys(values); len(keys) > 0 {
+		params["TagKeys"] = keys
+	}
+	// Parse PublishBatchRequestEntries.member.N.{Id,Message,...} for PublishBatch.
+	if entries := extractSNSBatchEntries(values); len(entries) > 0 {
+		params["PublishBatchRequestEntries"] = entries
+	}
 	return params
+}
+
+// extractSNSMessageAttributes parses SNS MessageAttributes from Query protocol form:
+// MessageAttributes.entry.1.Name, MessageAttributes.entry.1.Value.DataType, ...
+func extractSNSMessageAttributes(values url.Values) map[string]any {
+	result := map[string]any{}
+	for i := 1; ; i++ {
+		name := values.Get(fmt.Sprintf("MessageAttributes.entry.%d.Name", i))
+		if name == "" {
+			break
+		}
+		dt := values.Get(fmt.Sprintf("MessageAttributes.entry.%d.Value.DataType", i))
+		sv := values.Get(fmt.Sprintf("MessageAttributes.entry.%d.Value.StringValue", i))
+		result[name] = map[string]any{"DataType": dt, "StringValue": sv}
+	}
+	return result
+}
+
+// extractSNSTags parses Tags.member.N.{Key,Value} from SNS Query protocol.
+func extractSNSTags(values url.Values) []any {
+	var tags []any
+	for i := 1; ; i++ {
+		key := values.Get(fmt.Sprintf("Tags.member.%d.Key", i))
+		if key == "" {
+			break
+		}
+		val := values.Get(fmt.Sprintf("Tags.member.%d.Value", i))
+		tags = append(tags, map[string]any{"Key": key, "Value": val})
+	}
+	return tags
+}
+
+// extractSNSTagKeys parses TagKeys.member.N from SNS Query protocol.
+func extractSNSTagKeys(values url.Values) []any {
+	var keys []any
+	for i := 1; ; i++ {
+		k := values.Get(fmt.Sprintf("TagKeys.member.%d", i))
+		if k == "" {
+			break
+		}
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// extractSNSBatchEntries parses PublishBatchRequestEntries.member.N.{Id,Message,...}.
+func extractSNSBatchEntries(values url.Values) []any {
+	var entries []any
+	for i := 1; ; i++ {
+		id := values.Get(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Id", i))
+		if id == "" {
+			break
+		}
+		entry := map[string]any{"Id": id}
+		if msg := values.Get(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Message", i)); msg != "" {
+			entry["Message"] = msg
+		}
+		if subj := values.Get(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Subject", i)); subj != "" {
+			entry["Subject"] = subj
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // ─── XML builder ──────────────────────────────────────────────────────────────
@@ -94,10 +173,7 @@ func buildSNSXML(action string, data map[string]any) string {
 	xmlns := "http://sns.amazonaws.com/doc/2010-03-31/"
 	inner := buildSNSResult(action, data)
 
-	resultXML := ""
-	if inner != "" {
-		resultXML = "<" + action + "Result>" + inner + "</" + action + "Result>"
-	}
+	resultXML := "<" + action + "Result>" + inner + "</" + action + "Result>"
 
 	return `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<` + action + `Response xmlns="` + xmlns + `">` +
@@ -153,6 +229,18 @@ func buildSNSResult(action string, data map[string]any) string {
 		sb.WriteString("</Attributes>")
 	case "Publish":
 		sb.WriteString(xmlTag("MessageId", str(data["MessageId"])))
+	case "PublishBatch":
+		sb.WriteString("<Successful>")
+		if successful, ok := data["Successful"].([]map[string]any); ok {
+			for _, s := range successful {
+				sb.WriteString("<member>")
+				sb.WriteString(xmlTag("Id", str(s["Id"])))
+				sb.WriteString(xmlTag("MessageId", str(s["MessageId"])))
+				sb.WriteString("</member>")
+			}
+		}
+		sb.WriteString("</Successful>")
+		sb.WriteString("<Failed/>")
 	case "ListTagsForResource":
 		sb.WriteString("<Tags>")
 		if tags, ok := data["Tags"].([]map[string]any); ok {

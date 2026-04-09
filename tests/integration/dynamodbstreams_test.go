@@ -144,6 +144,77 @@ func TestDynamoDBStreams_ReadWriteRecords(t *testing.T) {
 	assert.Contains(t, eventNames, "REMOVE")
 }
 
+func TestDynamoDBStreams_ModifyEvent(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	ddb := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	_, err := ddb.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:   aws.String("Modify"),
+		BillingMode: dyntype.BillingModePayPerRequest,
+		KeySchema: []dyntype.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: dyntype.KeyTypeHash},
+		},
+		AttributeDefinitions: []dyntype.AttributeDefinition{
+			{AttributeName: aws.String("pk"), AttributeType: dyntype.ScalarAttributeTypeS},
+		},
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, err := streams.ListStreams(ctx, &awsstreams.ListStreamsInput{TableName: aws.String("Modify")})
+	require.NoError(t, err)
+	streamArn := aws.ToString(listOut.Streams[0].StreamArn)
+
+	descOut, _ := streams.DescribeStream(ctx, &awsstreams.DescribeStreamInput{StreamArn: aws.String(streamArn)})
+	shardId := aws.ToString(descOut.StreamDescription.Shards[0].ShardId)
+	iterOut, _ := streams.GetShardIterator(ctx, &awsstreams.GetShardIteratorInput{
+		StreamArn:         aws.String(streamArn),
+		ShardId:           aws.String(shardId),
+		ShardIteratorType: streamtypes.ShardIteratorTypeTrimHorizon,
+	})
+	iter := aws.ToString(iterOut.ShardIterator)
+
+	// INSERT
+	_, err = ddb.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("Modify"),
+		Item: map[string]dyntype.AttributeValue{
+			"pk":    &dyntype.AttributeValueMemberS{Value: "x"},
+			"value": &dyntype.AttributeValueMemberN{Value: "1"},
+		},
+	})
+	require.NoError(t, err)
+
+	// MODIFY via UpdateItem
+	_, err = ddb.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName: aws.String("Modify"),
+		Key: map[string]dyntype.AttributeValue{
+			"pk": &dyntype.AttributeValueMemberS{Value: "x"},
+		},
+		UpdateExpression: aws.String("SET #v = :two"),
+		ExpressionAttributeNames:  map[string]string{"#v": "value"},
+		ExpressionAttributeValues: map[string]dyntype.AttributeValue{
+			":two": &dyntype.AttributeValueMemberN{Value: "2"},
+		},
+	})
+	require.NoError(t, err)
+
+	recOut, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{ShardIterator: aws.String(iter)})
+	require.NoError(t, err)
+	require.Len(t, recOut.Records, 2)
+
+	eventNames := make([]string, 0, 2)
+	for _, r := range recOut.Records {
+		eventNames = append(eventNames, string(r.EventName))
+	}
+	assert.Contains(t, eventNames, "INSERT")
+	assert.Contains(t, eventNames, "MODIFY")
+}
+
 func TestDynamoDBStreams_NextShardIterator(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()

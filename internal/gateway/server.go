@@ -91,6 +91,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr.Region = s.cfg.Region
 	nr.AccountID = s.cfg.AccountID
 	nr.Port = s.cfg.Port
+	nr.ResourceID = config.AWSResourceID(s.cfg.Region, s.cfg.AccountID)
 
 	providerKey := serviceToProvider(nr.Service) + "." + nr.Action
 

@@ -23,6 +23,12 @@ type NormalizedRequest struct {
 	AccountID string
 	Port      int
 
+	// ResourceID constructs a cloud-specific resource identifier from an abstract
+	// resource type and logical name. Injected by the gateway; providers must call
+	// this instead of formatting cloud-specific IDs (ARNs, Azure resource IDs, etc.)
+	// directly. Example: nr.ResourceID("dynamodb-table", "my-table")
+	ResourceID func(resourceType, name string) string
+
 	// Per-request metadata (e.g. protocol variant)
 	meta map[string]string
 

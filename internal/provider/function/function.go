@@ -49,18 +49,37 @@ func strParam(params map[string]any, key string) string {
 }
 
 type functionConfig struct {
-	FunctionName string `json:"FunctionName"`
-	FunctionArn  string `json:"FunctionArn"`
-	Runtime      string `json:"Runtime"`
-	Role         string `json:"Role"`
-	Handler      string `json:"Handler"`
-	Description  string `json:"Description"`
-	Timeout      int    `json:"Timeout"`
-	MemorySize   int    `json:"MemorySize"`
-	State        string `json:"State"`
-	LastModified string `json:"LastModified"`
-	RevisionId   string `json:"RevisionId"`
-	CodeSize     int64  `json:"CodeSize"`
+	FunctionName string            `json:"FunctionName"`
+	FunctionArn  string            `json:"FunctionArn"`
+	Runtime      string            `json:"Runtime"`
+	Role         string            `json:"Role"`
+	Handler      string            `json:"Handler"`
+	Description  string            `json:"Description"`
+	Timeout      int               `json:"Timeout"`
+	MemorySize   int               `json:"MemorySize"`
+	State        string            `json:"State"`
+	LastModified string            `json:"LastModified"`
+	RevisionId   string            `json:"RevisionId"`
+	CodeSize     int64             `json:"CodeSize"`
+	Environment  map[string]string `json:"Environment,omitempty"`
+}
+
+// parseEnvVars extracts Environment.Variables from the Lambda request params.
+// AWS SDK sends: {"Environment": {"Variables": {"KEY": "val"}}}
+func parseEnvVars(params map[string]any) map[string]string {
+	env, ok := params["Environment"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	vars, ok := env["Variables"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	result := make(map[string]string, len(vars))
+	for k, v := range vars {
+		result[k] = fmt.Sprintf("%v", v)
+	}
+	return result
 }
 
 func (p *FunctionProvider) functionARN(nr *model.NormalizedRequest, name string) string {
@@ -137,16 +156,13 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		State:        "Active",
 		LastModified: time.Now().UTC().Format(time.RFC3339),
 		RevisionId:   "1",
+		Environment:  parseEnvVars(nr.Params),
 	}
 
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, model.NewProviderError("ResourceConflictException", "Function already exists", 409)
 	}
-
-	var data map[string]any
-	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &data)
-	return &model.ProviderResponse{HTTPStatus: 201, Data: data}, nil
+	return &model.ProviderResponse{HTTPStatus: 201, Data: cfgToWire(cfg)}, nil
 }
 
 func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -155,11 +171,8 @@ func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.Normalized
 	if err != nil {
 		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
 	}
-	var cfgMap map[string]any
-	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &cfgMap)
 	return provider.OK(map[string]any{
-		"Configuration": cfgMap,
+		"Configuration": cfgToWire(cfg),
 		"Code":          map[string]any{"Location": ""},
 		"Tags":          map[string]any{},
 	}), nil
@@ -171,10 +184,20 @@ func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *mod
 	if err != nil {
 		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
 	}
-	var data map[string]any
+	return provider.OK(cfgToWire(cfg)), nil
+}
+
+// cfgToWire converts a functionConfig to the wire map, shaping Environment as
+// {"Variables": {...}} so the AWS SDK deserialises it correctly.
+func cfgToWire(cfg functionConfig) map[string]any {
+	var m map[string]any
 	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &data)
-	return provider.OK(data), nil
+	json.Unmarshal(b, &m)
+	// Reshape Environment: stored as flat map, SDK expects {"Variables":{...}}
+	if cfg.Environment != nil {
+		m["Environment"] = map[string]any{"Variables": cfg.Environment}
+	}
+	return m
 }
 
 func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -194,10 +217,7 @@ func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.Normaliz
 	for _, e := range entries {
 		var cfg functionConfig
 		if json.Unmarshal(e.Data, &cfg) == nil {
-			var m map[string]any
-			b, _ := json.Marshal(cfg)
-			json.Unmarshal(b, &m)
-			functions = append(functions, m)
+			functions = append(functions, cfgToWire(cfg))
 		}
 	}
 	return provider.OK(map[string]any{"Functions": functions}), nil
@@ -218,15 +238,15 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 	if d := strParam(nr.Params, "Description"); d != "" {
 		cfg.Description = d
 	}
+	if env := parseEnvVars(nr.Params); env != nil {
+		cfg.Environment = env
+	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
 
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
-	var data map[string]any
-	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &data)
-	return provider.OK(data), nil
+	return provider.OK(cfgToWire(cfg)), nil
 }
 
 func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -239,10 +259,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
-	var data map[string]any
-	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &data)
-	return provider.OK(data), nil
+	return provider.OK(cfgToWire(cfg)), nil
 }
 
 // ─── Invoke ───────────────────────────────────────────────────────────────────

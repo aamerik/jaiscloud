@@ -264,6 +264,41 @@ Stores implement `admin.Snapshotter` (`Snapshot() (json.RawMessage, error)` + `R
 
 All time-sensitive code receives a `clock.Clock` from `NormalizedRequest.Clock`. Integration tests use `RealClock`. Unit tests can use `FixedClock` or `OffsetClock` for deterministic control.
 
+### Multi-cloud extensibility: dependency injection for cloud-specific formatting
+
+**Rule: providers must never hard-code cloud-specific resource identifier formats (AWS ARNs, Azure resource IDs, etc.).**
+
+When a provider needs a cloud-specific resource ID, it must use the injected function on `NormalizedRequest` rather than calling `fmt.Sprintf("arn:aws:...")` directly.
+
+**Pattern — use `NormalizedRequest.ResourceID`:**
+```go
+// WRONG — couples provider to AWS:
+arn := fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
+
+// CORRECT — delegate to injected formatter:
+arn := nr.ResourceID("dynamodb-table", name)
+```
+
+**Where each piece lives:**
+- `internal/model/model.go` — declares `ResourceID func(resourceType, name string) string` on `NormalizedRequest`
+- `internal/config/config.go` — `AWSResourceID(region, accountID)` returns the AWS ARN implementation
+- `internal/gateway/server.go` — injects `nr.ResourceID = config.AWSResourceID(...)` alongside `nr.Region`/`nr.AccountID`
+- `internal/provider/*/` — calls `nr.ResourceID("type", name)` only; no `"arn:aws:"` literals
+
+**Adding a new resource type:** add a `case "my-service-resource":` to `AWSResourceID` in `config.go`. A hypothetical Azure adapter would inject a different function that formats Azure resource IDs.
+
+**Fallback:** providers may include a nil-guard fallback for unit tests that don't go through the gateway:
+```go
+func myArn(nr *model.NormalizedRequest, name string) string {
+    if nr.ResourceID != nil {
+        return nr.ResourceID("my-resource", name)
+    }
+    return fmt.Sprintf("arn:aws:...", nr.Region, nr.AccountID, name) // test fallback only
+}
+```
+
+The same DI principle applies to any other cloud-specific customisation point: define an interface or function type in `internal/model/`, implement it per cloud in the adapter/config layer, and inject it via `NormalizedRequest` or the provider constructor.
+
 ---
 
 ## Dependencies

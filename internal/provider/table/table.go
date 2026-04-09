@@ -79,8 +79,18 @@ type tableSchema struct {
 	LatestStreamArn        string                   `json:"LatestStreamArn"`
 }
 
-func tableArn(region, accountID, name string) string {
-	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, name)
+func tableArn(nr *model.NormalizedRequest, name string) string {
+	if nr.ResourceID != nil {
+		return nr.ResourceID("dynamodb-table", name)
+	}
+	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
+}
+
+func streamResourceID(nr *model.NormalizedRequest, tableName, label string) string {
+	if nr.ResourceID != nil {
+		return nr.ResourceID("dynamodb-stream", tableName+"/stream/"+label)
+	}
+	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s/stream/%s", nr.Region, nr.AccountID, tableName, label)
 }
 
 func strParam(params map[string]any, key string) string {
@@ -112,7 +122,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 	if name == "" {
 		return nil, model.NewProviderError("ValidationException", "TableName is required", 400)
 	}
-	arn := tableArn(nr.Region, nr.AccountID, name)
+	arn := tableArn(nr, name)
 
 	// Parse KeySchema and AttributeDefinitions.
 	keySchema := parseKeySchema(nr.Params["KeySchema"])
@@ -133,6 +143,23 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 		BillingMode:            billing,
 		CreationDateTime:       time.Now().UTC(),
 		Tags:                   map[string]string{},
+	}
+
+	// Handle StreamSpecification at table creation time.
+	if ss, ok := nr.Params["StreamSpecification"].(map[string]any); ok {
+		enabled, _ := ss["StreamEnabled"].(bool)
+		viewType, _ := ss["StreamViewType"].(string)
+		if viewType == "" {
+			viewType = "NEW_AND_OLD_IMAGES"
+		}
+		ts.StreamEnabled = enabled
+		ts.StreamViewType = viewType
+		if enabled && p.streams != nil {
+			label := fmt.Sprintf("%d", time.Now().UnixNano())
+			streamArn := streamResourceID(nr, name, label)
+			ts.LatestStreamArn = streamArn
+			p.streams.Enable(name, streamArn)
+		}
 	}
 
 	raw, _ := json.Marshal(ts)
@@ -199,7 +226,7 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 		ts.StreamEnabled = enabled
 		ts.StreamViewType = viewType
 		if enabled && p.streams != nil {
-			streamArn := fmt.Sprintf("arn:aws:dynamodb:us-east-1:000000000000:table/%s/stream/%d", name, time.Now().UnixNano())
+			streamArn := streamResourceID(nr, name, fmt.Sprintf("%d", time.Now().UnixNano()))
 			ts.LatestStreamArn = streamArn
 			p.streams.Enable(name, streamArn)
 		} else if !enabled && p.streams != nil {
@@ -220,16 +247,31 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	}
 	ts, _ := p.loadTable(ctx, name)
 	pkHash := computePKHash(item, ts)
-	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
-	if err := p.items.PutItem(ctx, name, pkHash, item); err != nil {
+	// Peek at existing item for stream event type — before the conditional write.
+	existingForStream, _ := p.items.GetItem(ctx, name, pkHash)
+	cond := dynamostore.ConditionSpec{
+		ConditionExpression:       strParam(nr.Params, "ConditionExpression"),
+		ExpressionAttributeNames:  exprNames(nr.Params),
+		ExpressionAttributeValues: exprValues(nr.Params),
+		ReturnValues:              strParam(nr.Params, "ReturnValues"),
+	}
+	oldItem, err := p.items.PutItem(ctx, name, pkHash, item, cond)
+	if err != nil {
+		if isConditionFailed(err) {
+			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
+		}
 		return nil, err
 	}
 	eventName := "INSERT"
-	if oldItem != nil {
+	if existingForStream != nil {
 		eventName = "MODIFY"
 	}
-	p.appendStreamRecord(name, eventName, pkHash, extractKeys(item, ts), item, oldItem)
-	return provider.OK(map[string]any{}), nil
+	p.appendStreamRecord(name, eventName, pkHash, extractKeys(item, ts), item, existingForStream)
+	result := map[string]any{}
+	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
+		result["Attributes"] = oldItem
+	}
+	return provider.OK(result), nil
 }
 
 func (p *TableProvider) GetItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -262,12 +304,25 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
 	}
 	pkHash := computePKHash(key, ts)
-	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
-	if err := p.items.DeleteItem(ctx, name, pkHash); err != nil {
-		return provider.OK(map[string]any{}), err
+	cond := dynamostore.ConditionSpec{
+		ConditionExpression:       strParam(nr.Params, "ConditionExpression"),
+		ExpressionAttributeNames:  exprNames(nr.Params),
+		ExpressionAttributeValues: exprValues(nr.Params),
+		ReturnValues:              strParam(nr.Params, "ReturnValues"),
+	}
+	oldItem, err := p.items.DeleteItem(ctx, name, pkHash, cond)
+	if err != nil {
+		if isConditionFailed(err) {
+			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
+		}
+		return nil, err
 	}
 	p.appendStreamRecord(name, "REMOVE", pkHash, key, nil, oldItem)
-	return provider.OK(map[string]any{}), nil
+	result := map[string]any{}
+	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
+		result["Attributes"] = oldItem
+	}
+	return provider.OK(result), nil
 }
 
 func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -309,6 +364,7 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ScanIndexForward:          true,
 		Limit:                     intParam(nr.Params, "Limit", 0),
+		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
 	items, lastKey, err := p.items.Query(ctx, name, q)
 	if err != nil {
@@ -319,7 +375,7 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 		"Count": len(items),
 	}
 	if lastKey != "" {
-		result["LastEvaluatedKey"] = lastKey
+		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
 	}
 	return provider.OK(result), nil
 }
@@ -331,6 +387,7 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		Limit:                     intParam(nr.Params, "Limit", 0),
+		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
 	items, lastKey, err := p.items.Scan(ctx, name, sc)
 	if err != nil {
@@ -341,7 +398,7 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		"Count": len(items),
 	}
 	if lastKey != "" {
-		result["LastEvaluatedKey"] = lastKey
+		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
 	}
 	return provider.OK(result), nil
 }
@@ -410,7 +467,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			table := strParam(put, "TableName")
 			item := itemParam(put, "Item")
 			ts, _ := p.loadTable(ctx, table)
-			if err := p.items.PutItem(ctx, table, computePKHash(item, ts), item); err != nil {
+			if _, err := p.items.PutItem(ctx, table, computePKHash(item, ts), item, dynamostore.ConditionSpec{}); err != nil {
 				return nil, err
 			}
 		}
@@ -419,7 +476,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			key := itemParam(del, "Key")
 			ts, err := p.loadTable(ctx, table)
 			if err == nil {
-				_ = p.items.DeleteItem(ctx, table, computePKHash(key, ts))
+				_, _ = p.items.DeleteItem(ctx, table, computePKHash(key, ts), dynamostore.ConditionSpec{})
 			}
 		}
 		if upd, ok := m["Update"].(map[string]any); ok {
@@ -689,6 +746,18 @@ func extractKeys(item map[string]any, ts tableSchema) map[string]any {
 	return keys
 }
 
+// unmarshalKey parses a JSON-encoded key string back to a map for wire encoding.
+func unmarshalKey(s string) map[string]any {
+	var m map[string]any
+	json.Unmarshal([]byte(s), &m)
+	return m
+}
+
+// isConditionFailed returns true when err is a ConditionalCheckFailedException from the store.
+func isConditionFailed(err error) bool {
+	return err != nil && err.Error() == "ConditionalCheckFailedException"
+}
+
 func arnToTableName(arn string) string {
 	// arn:aws:dynamodb:region:accountID:table/tableName
 	parts := strings.Split(arn, "/")
@@ -696,4 +765,22 @@ func arnToTableName(arn string) string {
 		return parts[len(parts)-1]
 	}
 	return arn
+}
+
+// exclusiveStartKey returns a JSON-encoded ExclusiveStartKey from request params,
+// or an empty string when the param is absent or not a map.
+func exclusiveStartKey(params map[string]any) string {
+	v, ok := params["ExclusiveStartKey"]
+	if !ok {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

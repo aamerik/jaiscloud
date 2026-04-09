@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
+	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/require"
 )
@@ -207,4 +208,193 @@ func TestSNS_DeleteTopicRemovesSubscriptions(t *testing.T) {
 	listOut, err := snsClient.ListSubscriptions(ctx, &awssns.ListSubscriptionsInput{})
 	require.NoError(t, err)
 	require.Len(t, listOut.Subscriptions, 0)
+}
+
+func TestSNS_PublishBatch(t *testing.T) {
+	resetState(t)
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+	ctx := context.Background()
+
+	qOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("batch-q")})
+	require.NoError(t, err)
+
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("batch-topic")})
+	require.NoError(t, err)
+
+	_, err = snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: tOut.TopicArn,
+		Protocol: aws.String("sqs"),
+		Endpoint: qOut.QueueUrl,
+	})
+	require.NoError(t, err)
+
+	_, err = snsClient.PublishBatch(ctx, &awssns.PublishBatchInput{
+		TopicArn: tOut.TopicArn,
+		PublishBatchRequestEntries: []snstypes.PublishBatchRequestEntry{
+			{Id: aws.String("1"), Message: aws.String("msg-one")},
+			{Id: aws.String("2"), Message: aws.String("msg-two")},
+			{Id: aws.String("3"), Message: aws.String("msg-three")},
+		},
+	})
+	require.NoError(t, err)
+
+	// All 3 messages should have been delivered to the SQS queue.
+	rOut, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            qOut.QueueUrl,
+		MaxNumberOfMessages: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, rOut.Messages, 3)
+}
+
+func TestSNS_SubscriptionAttributes(t *testing.T) {
+	resetState(t)
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+	ctx := context.Background()
+
+	qOut, _ := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("attr-sub-q")})
+	tOut, _ := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("attr-sub-topic")})
+	sOut, err := snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: tOut.TopicArn,
+		Protocol: aws.String("sqs"),
+		Endpoint: qOut.QueueUrl,
+	})
+	require.NoError(t, err)
+	subArn := sOut.SubscriptionArn
+
+	// GetSubscriptionAttributes
+	getOut, err := snsClient.GetSubscriptionAttributes(ctx, &awssns.GetSubscriptionAttributesInput{
+		SubscriptionArn: subArn,
+	})
+	require.NoError(t, err)
+	require.Equal(t, aws.ToString(subArn), getOut.Attributes["SubscriptionArn"])
+
+	// SetSubscriptionAttributes
+	_, err = snsClient.SetSubscriptionAttributes(ctx, &awssns.SetSubscriptionAttributesInput{
+		SubscriptionArn: subArn,
+		AttributeName:   aws.String("RawMessageDelivery"),
+		AttributeValue:  aws.String("true"),
+	})
+	require.NoError(t, err)
+
+	getOut2, err := snsClient.GetSubscriptionAttributes(ctx, &awssns.GetSubscriptionAttributesInput{
+		SubscriptionArn: subArn,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", getOut2.Attributes["RawMessageDelivery"])
+}
+
+func TestSNS_ListSubscriptions(t *testing.T) {
+	resetState(t)
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+	ctx := context.Background()
+
+	// Create two topics, each with one subscriber.
+	for i, topicName := range []string{"topic-a", "topic-b"} {
+		qOut, _ := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{
+			QueueName: aws.String("ls-q-" + topicName),
+		})
+		tOut, _ := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String(topicName)})
+		_, err := snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+			TopicArn: tOut.TopicArn,
+			Protocol: aws.String("sqs"),
+			Endpoint: qOut.QueueUrl,
+		})
+		require.NoError(t, err, "topic %d", i)
+	}
+
+	// Global ListSubscriptions should return 2.
+	listOut, err := snsClient.ListSubscriptions(ctx, &awssns.ListSubscriptionsInput{})
+	require.NoError(t, err)
+	require.Len(t, listOut.Subscriptions, 2)
+}
+
+func TestSNS_TopicTags(t *testing.T) {
+	resetState(t)
+	snsClient := newSNSClient(t)
+	ctx := context.Background()
+
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("tags-topic")})
+	require.NoError(t, err)
+	topicArn := tOut.TopicArn
+
+	// Tag the topic.
+	_, err = snsClient.TagResource(ctx, &awssns.TagResourceInput{
+		ResourceArn: topicArn,
+		Tags: []snstypes.Tag{
+			{Key: aws.String("env"), Value: aws.String("prod")},
+			{Key: aws.String("team"), Value: aws.String("infra")},
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, err := snsClient.ListTagsForResource(ctx, &awssns.ListTagsForResourceInput{
+		ResourceArn: topicArn,
+	})
+	require.NoError(t, err)
+	require.Len(t, listOut.Tags, 2)
+
+	// Untag one.
+	_, err = snsClient.UntagResource(ctx, &awssns.UntagResourceInput{
+		ResourceArn: topicArn,
+		TagKeys:     []string{"env"},
+	})
+	require.NoError(t, err)
+
+	listOut2, err := snsClient.ListTagsForResource(ctx, &awssns.ListTagsForResourceInput{
+		ResourceArn: topicArn,
+	})
+	require.NoError(t, err)
+	require.Len(t, listOut2.Tags, 1)
+	require.Equal(t, "team", aws.ToString(listOut2.Tags[0].Key))
+}
+
+func TestSNS_MessageAttributes(t *testing.T) {
+	resetState(t)
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+	ctx := context.Background()
+
+	qOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("ma-q")})
+	require.NoError(t, err)
+
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("ma-topic")})
+	require.NoError(t, err)
+
+	_, err = snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: tOut.TopicArn,
+		Protocol: aws.String("sqs"),
+		Endpoint: qOut.QueueUrl,
+	})
+	require.NoError(t, err)
+
+	_, err = snsClient.Publish(ctx, &awssns.PublishInput{
+		TopicArn: tOut.TopicArn,
+		Message:  aws.String("hello with attrs"),
+		MessageAttributes: map[string]snstypes.MessageAttributeValue{
+			"event-type": {DataType: aws.String("String"), StringValue: aws.String("order-placed")},
+			"priority":   {DataType: aws.String("String"), StringValue: aws.String("high")},
+		},
+	})
+	require.NoError(t, err)
+
+	rOut, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            qOut.QueueUrl,
+		MaxNumberOfMessages: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, rOut.Messages, 1)
+
+	// The SNS envelope should contain MessageAttributes.
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal([]byte(aws.ToString(rOut.Messages[0].Body)), &envelope))
+	require.Equal(t, "hello with attrs", envelope["Message"])
+	attrs, ok := envelope["MessageAttributes"].(map[string]any)
+	require.True(t, ok, "expected MessageAttributes in SNS envelope")
+	eventType, ok := attrs["event-type"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "order-placed", eventType["StringValue"])
 }

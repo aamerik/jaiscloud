@@ -141,3 +141,104 @@ func TestLambda_UpdateFunctionConfiguration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new.handler", aws.ToString(updOut.Handler))
 }
+
+func TestLambda_UpdateFunctionCode(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	_, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("code-func"),
+		Runtime:      types.RuntimePython312,
+		Role:         aws.String("arn:aws:iam::000000000000:role/r"),
+		Handler:      aws.String("main.handler"),
+		Code:         &types.FunctionCode{ZipFile: []byte("original-zip")},
+	})
+	require.NoError(t, err)
+
+	// UpdateFunctionCode with a new zip.
+	updOut, err := c.UpdateFunctionCode(ctx, &awslambda.UpdateFunctionCodeInput{
+		FunctionName: aws.String("code-func"),
+		ZipFile:      []byte("new-zip-content-larger"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "code-func", aws.ToString(updOut.FunctionName))
+
+	// GetFunction should reflect the update.
+	getOut, err := c.GetFunction(ctx, &awslambda.GetFunctionInput{
+		FunctionName: aws.String("code-func"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "code-func", aws.ToString(getOut.Configuration.FunctionName))
+}
+
+func TestLambda_EnvironmentVariables(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	_, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("env-func"),
+		Runtime:      types.RuntimePython312,
+		Role:         aws.String("arn:aws:iam::000000000000:role/r"),
+		Handler:      aws.String("main.handler"),
+		Code:         &types.FunctionCode{ZipFile: []byte("x")},
+		Environment: &types.Environment{
+			Variables: map[string]string{
+				"DB_HOST": "localhost",
+				"DB_PORT": "5432",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	getOut, err := c.GetFunction(ctx, &awslambda.GetFunctionInput{
+		FunctionName: aws.String("env-func"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, getOut.Configuration.Environment)
+	assert.Equal(t, "localhost", getOut.Configuration.Environment.Variables["DB_HOST"])
+	assert.Equal(t, "5432", getOut.Configuration.Environment.Variables["DB_PORT"])
+
+	// UpdateFunctionConfiguration can replace env vars.
+	_, err = c.UpdateFunctionConfiguration(ctx, &awslambda.UpdateFunctionConfigurationInput{
+		FunctionName: aws.String("env-func"),
+		Environment: &types.Environment{
+			Variables: map[string]string{
+				"DB_HOST": "prod-db.example.com",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	cfgOut, err := c.GetFunctionConfiguration(ctx, &awslambda.GetFunctionConfigurationInput{
+		FunctionName: aws.String("env-func"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cfgOut.Environment)
+	assert.Equal(t, "prod-db.example.com", cfgOut.Environment.Variables["DB_HOST"])
+}
+
+func TestLambda_GetFunctionConfiguration(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	_, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("cfg-func"),
+		Runtime:      types.RuntimeNodejs18x,
+		Role:         aws.String("arn:aws:iam::000000000000:role/exec-role"),
+		Handler:      aws.String("index.handler"),
+		Code:         &types.FunctionCode{ZipFile: []byte("x")},
+	})
+	require.NoError(t, err)
+
+	cfgOut, err := c.GetFunctionConfiguration(ctx, &awslambda.GetFunctionConfigurationInput{
+		FunctionName: aws.String("cfg-func"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "cfg-func", aws.ToString(cfgOut.FunctionName))
+	assert.Equal(t, "index.handler", aws.ToString(cfgOut.Handler))
+	assert.Equal(t, "arn:aws:iam::000000000000:role/exec-role", aws.ToString(cfgOut.Role))
+	assert.Equal(t, types.StateActive, cfgOut.State)
+}

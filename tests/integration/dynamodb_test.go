@@ -2,11 +2,13 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -232,4 +234,470 @@ func TestDynamoDB_BatchWriteGetItem(t *testing.T) {
 	scanOut, err := client.Scan(ctx, &awsdynamo.ScanInput{TableName: aws.String("batch-table")})
 	require.NoError(t, err)
 	require.Equal(t, int32(2), scanOut.Count)
+}
+
+func TestDynamoDB_TransactWriteGetItems(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "txn-table")
+
+	// Seed an item to delete within the transaction.
+	_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("txn-table"),
+		Item: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "del"},
+			"SK": &types.AttributeValueMemberS{Value: "v0"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Transact: put two items, delete one.
+	_, err = client.TransactWriteItems(ctx, &awsdynamo.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{
+				TableName: aws.String("txn-table"),
+				Item: map[string]types.AttributeValue{
+					"PK":    &types.AttributeValueMemberS{Value: "a"},
+					"SK":    &types.AttributeValueMemberS{Value: "v1"},
+					"Value": &types.AttributeValueMemberS{Value: "alpha"},
+				},
+			}},
+			{Put: &types.Put{
+				TableName: aws.String("txn-table"),
+				Item: map[string]types.AttributeValue{
+					"PK":    &types.AttributeValueMemberS{Value: "b"},
+					"SK":    &types.AttributeValueMemberS{Value: "v1"},
+					"Value": &types.AttributeValueMemberS{Value: "beta"},
+				},
+			}},
+			{Delete: &types.Delete{
+				TableName: aws.String("txn-table"),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "del"},
+					"SK": &types.AttributeValueMemberS{Value: "v0"},
+				},
+			}},
+		},
+	})
+	require.NoError(t, err)
+
+	// TransactGetItems reads both written items.
+	getOut, err := client.TransactGetItems(ctx, &awsdynamo.TransactGetItemsInput{
+		TransactItems: []types.TransactGetItem{
+			{Get: &types.Get{
+				TableName: aws.String("txn-table"),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "a"},
+					"SK": &types.AttributeValueMemberS{Value: "v1"},
+				},
+			}},
+			{Get: &types.Get{
+				TableName: aws.String("txn-table"),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "b"},
+					"SK": &types.AttributeValueMemberS{Value: "v1"},
+				},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, getOut.Responses, 2)
+	valA, ok := getOut.Responses[0].Item["Value"].(*types.AttributeValueMemberS)
+	require.True(t, ok)
+	assert.Equal(t, "alpha", valA.Value)
+
+	// Deleted item should be gone.
+	deletedOut, err := client.GetItem(ctx, &awsdynamo.GetItemInput{
+		TableName: aws.String("txn-table"),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "del"},
+			"SK": &types.AttributeValueMemberS{Value: "v0"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, deletedOut.Item)
+}
+
+func TestDynamoDB_BatchGetItem(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "bget-table")
+
+	// Write 3 items.
+	for i := 1; i <= 3; i++ {
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("bget-table"),
+			Item: map[string]types.AttributeValue{
+				"PK":  &types.AttributeValueMemberS{Value: "pk"},
+				"SK":  &types.AttributeValueMemberS{Value: fmt.Sprintf("sk%d", i)},
+				"Num": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", i)},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	// BatchGetItem for sk1 and sk3 (skip sk2).
+	bgOut, err := client.BatchGetItem(ctx, &awsdynamo.BatchGetItemInput{
+		RequestItems: map[string]types.KeysAndAttributes{
+			"bget-table": {
+				Keys: []map[string]types.AttributeValue{
+					{"PK": &types.AttributeValueMemberS{Value: "pk"}, "SK": &types.AttributeValueMemberS{Value: "sk1"}},
+					{"PK": &types.AttributeValueMemberS{Value: "pk"}, "SK": &types.AttributeValueMemberS{Value: "sk3"}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Len(t, bgOut.Responses["bget-table"], 2)
+	assert.Empty(t, bgOut.UnprocessedKeys)
+}
+
+func TestDynamoDB_FilterExpression(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "filter-table")
+
+	// Insert items with different Status values.
+	for i, status := range []string{"active", "active", "inactive"} {
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("filter-table"),
+			Item: map[string]types.AttributeValue{
+				"PK":     &types.AttributeValueMemberS{Value: "pk"},
+				"SK":     &types.AttributeValueMemberS{Value: fmt.Sprintf("%s-%d", status, i)},
+				"Status": &types.AttributeValueMemberS{Value: status},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	// Scan with FilterExpression to get only "active" items.
+	scanOut, err := client.Scan(ctx, &awsdynamo.ScanInput{
+		TableName:        aws.String("filter-table"),
+		FilterExpression: aws.String("#s = :val"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "Status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":val": &types.AttributeValueMemberS{Value: "active"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), scanOut.Count)
+}
+
+func TestDynamoDB_LimitReturnsLastEvaluatedKey(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "limit-table")
+
+	// Insert 5 items under the same PK.
+	for i := 1; i <= 5; i++ {
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("limit-table"),
+			Item: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "partition"},
+				"SK": &types.AttributeValueMemberS{Value: fmt.Sprintf("item%d", i)},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	// Query with Limit=2 — should return 2 items and a LastEvaluatedKey.
+	qOut, err := client.Query(ctx, &awsdynamo.QueryInput{
+		TableName:              aws.String("limit-table"),
+		KeyConditionExpression: aws.String("PK = :pk"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "partition"},
+		},
+		Limit: aws.Int32(2),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), qOut.Count)
+	assert.NotNil(t, qOut.LastEvaluatedKey, "expected LastEvaluatedKey when Limit truncates results")
+}
+
+func TestDynamoDB_ConditionalPut(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "cond-table")
+
+	// First put — no existing item, condition "attribute_not_exists(PK)" should pass.
+	_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cond-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":    &types.AttributeValueMemberS{Value: "k1"},
+			"SK":    &types.AttributeValueMemberS{Value: "v1"},
+			"Count": &types.AttributeValueMemberN{Value: "1"},
+		},
+		ConditionExpression: aws.String("PK = :absent"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":absent": &types.AttributeValueMemberS{Value: "no-such-key"},
+		},
+	})
+	// Condition fails because item doesn't exist yet, so PK can't equal anything.
+	require.Error(t, err, "condition should fail on nonexistent item with equality check")
+
+	// Put without condition — must succeed.
+	_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cond-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":    &types.AttributeValueMemberS{Value: "k1"},
+			"SK":    &types.AttributeValueMemberS{Value: "v1"},
+			"Count": &types.AttributeValueMemberN{Value: "1"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Now condition "Count = :one" should pass.
+	_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cond-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":    &types.AttributeValueMemberS{Value: "k1"},
+			"SK":    &types.AttributeValueMemberS{Value: "v1"},
+			"Count": &types.AttributeValueMemberN{Value: "2"},
+		},
+		ConditionExpression: aws.String("Count = :one"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":one": &types.AttributeValueMemberN{Value: "1"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Condition "Count = :one" now fails (Count is 2).
+	_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cond-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":    &types.AttributeValueMemberS{Value: "k1"},
+			"SK":    &types.AttributeValueMemberS{Value: "v1"},
+			"Count": &types.AttributeValueMemberN{Value: "99"},
+		},
+		ConditionExpression: aws.String("Count = :one"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":one": &types.AttributeValueMemberN{Value: "1"},
+		},
+	})
+	require.Error(t, err, "condition should fail when Count != 1")
+}
+
+func TestDynamoDB_ConditionalDelete(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "cdel-table")
+
+	_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cdel-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: "row1"},
+			"SK":     &types.AttributeValueMemberS{Value: "v1"},
+			"Status": &types.AttributeValueMemberS{Value: "pending"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Delete with wrong condition — should fail.
+	_, err = client.DeleteItem(ctx, &awsdynamo.DeleteItemInput{
+		TableName: aws.String("cdel-table"),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "row1"},
+			"SK": &types.AttributeValueMemberS{Value: "v1"},
+		},
+		ConditionExpression: aws.String("Status = :done"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":done": &types.AttributeValueMemberS{Value: "done"},
+		},
+	})
+	require.Error(t, err, "condition should fail: Status is 'pending' not 'done'")
+
+	// Item should still exist.
+	getOut, err := client.GetItem(ctx, &awsdynamo.GetItemInput{
+		TableName: aws.String("cdel-table"),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "row1"},
+			"SK": &types.AttributeValueMemberS{Value: "v1"},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, getOut.Item)
+
+	// Delete with correct condition — should succeed.
+	_, err = client.DeleteItem(ctx, &awsdynamo.DeleteItemInput{
+		TableName: aws.String("cdel-table"),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "row1"},
+			"SK": &types.AttributeValueMemberS{Value: "v1"},
+		},
+		ConditionExpression: aws.String("Status = :pending"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pending": &types.AttributeValueMemberS{Value: "pending"},
+		},
+	})
+	require.NoError(t, err)
+}
+
+func TestDynamoDB_ReturnValuesAllOld(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "rv-table")
+
+	// Seed an item.
+	_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("rv-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":   &types.AttributeValueMemberS{Value: "item1"},
+			"SK":   &types.AttributeValueMemberS{Value: "v1"},
+			"Name": &types.AttributeValueMemberS{Value: "original"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Overwrite with ReturnValues=ALL_OLD — should get the original item back.
+	putOut, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("rv-table"),
+		Item: map[string]types.AttributeValue{
+			"PK":   &types.AttributeValueMemberS{Value: "item1"},
+			"SK":   &types.AttributeValueMemberS{Value: "v1"},
+			"Name": &types.AttributeValueMemberS{Value: "updated"},
+		},
+		ReturnValues: types.ReturnValueAllOld,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, putOut.Attributes)
+	nameAttr, ok := putOut.Attributes["Name"].(*types.AttributeValueMemberS)
+	require.True(t, ok)
+	assert.Equal(t, "original", nameAttr.Value)
+
+	// DeleteItem with ReturnValues=ALL_OLD — should return the item just written.
+	delOut, err := client.DeleteItem(ctx, &awsdynamo.DeleteItemInput{
+		TableName: aws.String("rv-table"),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "item1"},
+			"SK": &types.AttributeValueMemberS{Value: "v1"},
+		},
+		ReturnValues: types.ReturnValueAllOld,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, delOut.Attributes)
+	deletedName, ok := delOut.Attributes["Name"].(*types.AttributeValueMemberS)
+	require.True(t, ok)
+	assert.Equal(t, "updated", deletedName.Value)
+}
+
+func TestDynamoDB_QueryPagination(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "page-table")
+
+	// Insert 5 items under the same partition key.
+	for i := 1; i <= 5; i++ {
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("page-table"),
+			Item: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "tenant"},
+				"SK": &types.AttributeValueMemberS{Value: fmt.Sprintf("row%d", i)},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	// First page: limit 2.
+	p1, err := client.Query(ctx, &awsdynamo.QueryInput{
+		TableName:              aws.String("page-table"),
+		KeyConditionExpression: aws.String("PK = :pk"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "tenant"},
+		},
+		Limit: aws.Int32(2),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), p1.Count)
+	require.NotNil(t, p1.LastEvaluatedKey, "page 1 must have LastEvaluatedKey")
+
+	// Second page using ExclusiveStartKey.
+	p2, err := client.Query(ctx, &awsdynamo.QueryInput{
+		TableName:              aws.String("page-table"),
+		KeyConditionExpression: aws.String("PK = :pk"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "tenant"},
+		},
+		Limit:             aws.Int32(2),
+		ExclusiveStartKey: p1.LastEvaluatedKey,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), p2.Count)
+
+	// Third page — last 1 item, no more pages.
+	p3, err := client.Query(ctx, &awsdynamo.QueryInput{
+		TableName:              aws.String("page-table"),
+		KeyConditionExpression: aws.String("PK = :pk"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "tenant"},
+		},
+		Limit:             aws.Int32(2),
+		ExclusiveStartKey: p2.LastEvaluatedKey,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), p3.Count)
+	assert.Nil(t, p3.LastEvaluatedKey, "last page must not have LastEvaluatedKey")
+}
+
+func TestDynamoDB_TableTags(t *testing.T) {
+	resetState(t)
+	client := newDynamoClient(t)
+	ctx := context.Background()
+
+	makeTable(t, client, "tagged-table")
+
+	// Get the table ARN from DescribeTable.
+	desc, err := client.DescribeTable(ctx, &awsdynamo.DescribeTableInput{
+		TableName: aws.String("tagged-table"),
+	})
+	require.NoError(t, err)
+	tableArn := aws.ToString(desc.Table.TableArn)
+	require.NotEmpty(t, tableArn)
+
+	// Tag the table.
+	_, err = client.TagResource(ctx, &awsdynamo.TagResourceInput{
+		ResourceArn: aws.String(tableArn),
+		Tags: []types.Tag{
+			{Key: aws.String("env"), Value: aws.String("test")},
+			{Key: aws.String("owner"), Value: aws.String("team-a")},
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, err := client.ListTagsOfResource(ctx, &awsdynamo.ListTagsOfResourceInput{
+		ResourceArn: aws.String(tableArn),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut.Tags, 2)
+
+	// Untag one key.
+	_, err = client.UntagResource(ctx, &awsdynamo.UntagResourceInput{
+		ResourceArn: aws.String(tableArn),
+		TagKeys:     []string{"env"},
+	})
+	require.NoError(t, err)
+
+	listOut2, err := client.ListTagsOfResource(ctx, &awsdynamo.ListTagsOfResourceInput{
+		ResourceArn: aws.String(tableArn),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut2.Tags, 1)
+	assert.Equal(t, "owner", aws.ToString(listOut2.Tags[0].Key))
 }

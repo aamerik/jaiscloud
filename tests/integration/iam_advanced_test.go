@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const advTrustPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+
 func TestIAMAdvanced_GetFederationToken(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -287,4 +289,149 @@ func TestIAMAdvanced_InstanceProfiles(t *testing.T) {
 	listOut2, err := client.ListInstanceProfiles(ctx, &awsiam.ListInstanceProfilesInput{})
 	require.NoError(t, err)
 	assert.Len(t, listOut2.InstanceProfiles, 0)
+}
+
+func TestIAMAdvanced_GetSessionToken(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSTSClient(t)
+
+	out, err := client.GetSessionToken(ctx, &awssts.GetSessionTokenInput{})
+	require.NoError(t, err)
+	require.NotNil(t, out.Credentials)
+	assert.NotEmpty(t, aws.ToString(out.Credentials.AccessKeyId))
+	assert.NotEmpty(t, aws.ToString(out.Credentials.SecretAccessKey))
+	assert.NotEmpty(t, aws.ToString(out.Credentials.SessionToken))
+}
+
+func TestIAMAdvanced_RoleTags(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newIAMClient(t)
+
+	_, err := client.CreateRole(ctx, &awsiam.CreateRoleInput{
+		RoleName:                 aws.String("tagged-role"),
+		AssumeRolePolicyDocument: aws.String(advTrustPolicy),
+	})
+	require.NoError(t, err)
+
+	_, err = client.TagRole(ctx, &awsiam.TagRoleInput{
+		RoleName: aws.String("tagged-role"),
+		Tags: []iamtypes.Tag{
+			{Key: aws.String("env"), Value: aws.String("staging")},
+			{Key: aws.String("cost-center"), Value: aws.String("eng")},
+		},
+	})
+	require.NoError(t, err)
+
+	listOut, err := client.ListRoleTags(ctx, &awsiam.ListRoleTagsInput{
+		RoleName: aws.String("tagged-role"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut.Tags, 2)
+
+	_, err = client.UntagRole(ctx, &awsiam.UntagRoleInput{
+		RoleName: aws.String("tagged-role"),
+		TagKeys:  []string{"env"},
+	})
+	require.NoError(t, err)
+
+	listOut2, err := client.ListRoleTags(ctx, &awsiam.ListRoleTagsInput{
+		RoleName: aws.String("tagged-role"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut2.Tags, 1)
+	assert.Equal(t, "cost-center", aws.ToString(listOut2.Tags[0].Key))
+}
+
+func TestIAMAdvanced_RolePolicies(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newIAMClient(t)
+
+	_, err := client.CreateRole(ctx, &awsiam.CreateRoleInput{
+		RoleName:                 aws.String("policy-role"),
+		AssumeRolePolicyDocument: aws.String(advTrustPolicy),
+	})
+	require.NoError(t, err)
+
+	// Put two inline policies.
+	for _, name := range []string{"inline-one", "inline-two"} {
+		_, err = client.PutRolePolicy(ctx, &awsiam.PutRolePolicyInput{
+			RoleName:       aws.String("policy-role"),
+			PolicyName:     aws.String(name),
+			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
+		})
+		require.NoError(t, err)
+	}
+
+	listOut, err := client.ListRolePolicies(ctx, &awsiam.ListRolePoliciesInput{
+		RoleName: aws.String("policy-role"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut.PolicyNames, 2)
+	assert.Contains(t, listOut.PolicyNames, "inline-one")
+
+	// GetRolePolicy.
+	getOut, err := client.GetRolePolicy(ctx, &awsiam.GetRolePolicyInput{
+		RoleName:   aws.String("policy-role"),
+		PolicyName: aws.String("inline-one"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "inline-one", aws.ToString(getOut.PolicyName))
+
+	// UpdateAssumeRolePolicy.
+	newTrust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	_, err = client.UpdateAssumeRolePolicy(ctx, &awsiam.UpdateAssumeRolePolicyInput{
+		RoleName:       aws.String("policy-role"),
+		PolicyDocument: aws.String(newTrust),
+	})
+	require.NoError(t, err)
+
+	// Delete one inline policy.
+	_, err = client.DeleteRolePolicy(ctx, &awsiam.DeleteRolePolicyInput{
+		RoleName:   aws.String("policy-role"),
+		PolicyName: aws.String("inline-one"),
+	})
+	require.NoError(t, err)
+
+	listOut2, err := client.ListRolePolicies(ctx, &awsiam.ListRolePoliciesInput{
+		RoleName: aws.String("policy-role"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, listOut2.PolicyNames, 1)
+}
+
+func TestIAMAdvanced_ListUsers(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newIAMClient(t)
+
+	for _, name := range []string{"user-a", "user-b", "user-c"} {
+		_, err := client.CreateUser(ctx, &awsiam.CreateUserInput{UserName: aws.String(name)})
+		require.NoError(t, err)
+	}
+
+	listOut, err := client.ListUsers(ctx, &awsiam.ListUsersInput{})
+	require.NoError(t, err)
+	assert.Len(t, listOut.Users, 3)
+
+	// DeleteAccessKey is exercised here: create then delete.
+	akOut, err := client.CreateAccessKey(ctx, &awsiam.CreateAccessKeyInput{
+		UserName: aws.String("user-a"),
+	})
+	require.NoError(t, err)
+	keyID := aws.ToString(akOut.AccessKey.AccessKeyId)
+
+	_, err = client.DeleteAccessKey(ctx, &awsiam.DeleteAccessKeyInput{
+		UserName:    aws.String("user-a"),
+		AccessKeyId: aws.String(keyID),
+	})
+	require.NoError(t, err)
+
+	keysOut, err := client.ListAccessKeys(ctx, &awsiam.ListAccessKeysInput{
+		UserName: aws.String("user-a"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, keysOut.AccessKeyMetadata, 0)
 }

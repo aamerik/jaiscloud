@@ -40,6 +40,37 @@ type Config struct {
 	RandSource rand.Source
 }
 
+// AWSResourceID returns a ResourceID function that formats AWS ARNs.
+// The returned function maps abstract provider resource types to their AWS ARN format.
+// Inject this into NormalizedRequest.ResourceID at the gateway layer.
+func AWSResourceID(region, accountID string) func(resourceType, name string) string {
+	return func(resourceType, name string) string {
+		switch resourceType {
+		case "dynamodb-table":
+			return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, name)
+		case "dynamodb-stream":
+			// name is expected to be "tableName/stream/label"
+			return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, name)
+		case "lambda-function":
+			return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", region, accountID, name)
+		case "sns-topic", "sns-subscription":
+			return fmt.Sprintf("arn:aws:sns:%s:%s:%s", region, accountID, name)
+		case "sqs-queue":
+			return fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, accountID, name)
+		case "iam-role":
+			return fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, name)
+		case "iam-policy":
+			return fmt.Sprintf("arn:aws:iam::%s:policy/%s", accountID, name)
+		case "iam-user":
+			return fmt.Sprintf("arn:aws:iam::%s:user/%s", accountID, name)
+		case "s3-bucket":
+			return fmt.Sprintf("arn:aws:s3:::%s", name)
+		default:
+			return name
+		}
+	}
+}
+
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
 	viper.SetDefault("mode", "lite")

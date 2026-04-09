@@ -52,11 +52,20 @@ type BatchGetRequest struct {
 	Keys  []map[string]any
 }
 
+// ConditionSpec carries optional condition checking fields shared by PutItem and DeleteItem.
+type ConditionSpec struct {
+	ConditionExpression       string
+	ExpressionAttributeNames  map[string]string
+	ExpressionAttributeValues map[string]any
+	// ReturnValues for PutItem/DeleteItem: "" or "ALL_OLD"
+	ReturnValues string
+}
+
 // DynamoDBItemStore manages the DynamoDB item data plane.
 type DynamoDBItemStore interface {
-	PutItem(ctx context.Context, table, pkHash string, item map[string]any) error
+	PutItem(ctx context.Context, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error)
 	GetItem(ctx context.Context, table, pkHash string) (map[string]any, error)
-	DeleteItem(ctx context.Context, table, pkHash string) error
+	DeleteItem(ctx context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error)
 	UpdateItem(ctx context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error)
 	Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, string, error)
 	Scan(ctx context.Context, table string, s ScanSpec) ([]map[string]any, string, error)

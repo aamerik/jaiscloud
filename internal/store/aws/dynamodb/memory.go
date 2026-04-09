@@ -2,7 +2,9 @@ package dynamodb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -27,11 +29,27 @@ func (s *MemoryDynamoDBItemStore) tableMap(table string) map[string]map[string]a
 	return s.tables[table]
 }
 
-func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash string, item map[string]any) error {
+func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tableMap(table)[pkHash] = copyItem(item)
-	return nil
+	t := s.tableMap(table)
+	oldItem := t[pkHash]
+	if cond.ConditionExpression != "" {
+		// Condition is evaluated against the existing item (nil treated as empty map).
+		existing := oldItem
+		if existing == nil {
+			existing = map[string]any{}
+		}
+		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues) {
+			return nil, &conditionFailedError{}
+		}
+	}
+	var returnOld map[string]any
+	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
+		returnOld = copyItem(oldItem)
+	}
+	t[pkHash] = copyItem(item)
+	return returnOld, nil
 }
 
 func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, table, pkHash string) (map[string]any, error) {
@@ -48,15 +66,37 @@ func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, table, pkHash strin
 	return copyItem(item), nil
 }
 
-func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash string) error {
+func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tables[table]
+	var oldItem map[string]any
+	if t != nil {
+		oldItem = t[pkHash]
+	}
+	if cond.ConditionExpression != "" {
+		existing := oldItem
+		if existing == nil {
+			existing = map[string]any{}
+		}
+		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues) {
+			return nil, &conditionFailedError{}
+		}
+	}
+	var returnOld map[string]any
+	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
+		returnOld = copyItem(oldItem)
+	}
 	if t != nil {
 		delete(t, pkHash)
 	}
-	return nil
+	return returnOld, nil
 }
+
+// conditionFailedError is returned when a ConditionExpression is not satisfied.
+type conditionFailedError struct{}
+
+func (e *conditionFailedError) Error() string { return "ConditionalCheckFailedException" }
 
 func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
 	s.mu.Lock()
@@ -91,21 +131,27 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	if t == nil {
 		return []map[string]any{}, "", nil
 	}
-	var results []map[string]any
+
+	// Collect all matching items into a stable-ordered slice.
+	var all []map[string]any
 	for _, item := range t {
 		if matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues) {
 			if q.FilterExpression == "" || matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues) {
-				results = append(results, copyItem(item))
+				all = append(all, copyItem(item))
 			}
 		}
-		if q.Limit > 0 && len(results) >= q.Limit {
-			break
-		}
 	}
-	if results == nil {
-		results = []map[string]any{}
+	sort.Slice(all, func(i, j int) bool { return itemPKHash(all[i]) < itemPKHash(all[j]) })
+	all = paginateItems(all, q.ExclusiveStartKey, q.Limit)
+	var lastKey string
+	if q.Limit > 0 && len(all) == q.Limit {
+		b, _ := json.Marshal(all[len(all)-1])
+		lastKey = string(b)
 	}
-	return results, "", nil
+	if all == nil {
+		all = []map[string]any{}
+	}
+	return all, lastKey, nil
 }
 
 func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanSpec) ([]map[string]any, string, error) {
@@ -115,19 +161,47 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 	if t == nil {
 		return []map[string]any{}, "", nil
 	}
-	var results []map[string]any
+
+	var all []map[string]any
 	for _, item := range t {
 		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues) {
-			results = append(results, copyItem(item))
-		}
-		if sc.Limit > 0 && len(results) >= sc.Limit {
-			break
+			all = append(all, copyItem(item))
 		}
 	}
-	if results == nil {
-		results = []map[string]any{}
+	sort.Slice(all, func(i, j int) bool { return itemPKHash(all[i]) < itemPKHash(all[j]) })
+	all = paginateItems(all, sc.ExclusiveStartKey, sc.Limit)
+	var lastKey string
+	if sc.Limit > 0 && len(all) == sc.Limit {
+		b, _ := json.Marshal(all[len(all)-1])
+		lastKey = string(b)
 	}
-	return results, "", nil
+	if all == nil {
+		all = []map[string]any{}
+	}
+	return all, lastKey, nil
+}
+
+// paginateItems skips items up to and including the ExclusiveStartKey item,
+// then returns up to limit items (all items if limit is 0).
+func paginateItems(items []map[string]any, exclusiveStartKey string, limit int) []map[string]any {
+	start := 0
+	if exclusiveStartKey != "" {
+		var startKey map[string]any
+		if json.Unmarshal([]byte(exclusiveStartKey), &startKey) == nil {
+			startHash := itemPKHash(startKey)
+			for i, item := range items {
+				if itemPKHash(item) == startHash {
+					start = i + 1
+					break
+				}
+			}
+		}
+	}
+	items = items[start:]
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items
 }
 
 func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
@@ -143,6 +217,7 @@ func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []Batc
 	}
 	return nil, nil
 }
+
 
 func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
 	s.mu.RLock()

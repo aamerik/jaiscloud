@@ -308,6 +308,11 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, model.NewProviderError("InvalidParameter", "TopicArn is required", 400)
 	}
 
+	var msgAttrs map[string]any
+	if ma, ok := nr.Params["MessageAttributes"].(map[string]any); ok {
+		msgAttrs = ma
+	}
+
 	// Load subscriptions and deliver.
 	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
 	for _, e := range entries {
@@ -317,7 +322,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 		}
 		switch sd.Protocol {
 		case "sqs":
-			p.deliverToSQS(ctx, sd.Endpoint, topicArn, messageID, message, subject, nr.Region, nr.AccountID)
+			p.deliverToSQS(ctx, sd.Endpoint, topicArn, messageID, message, subject, nr.Region, nr.AccountID, msgAttrs)
 		// http/https: log and no-op for Phase 1
 		}
 	}
@@ -325,7 +330,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
-func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, messageID, message, subject, region, accountID string) {
+func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any) {
 	if p.messages == nil {
 		return
 	}
@@ -337,6 +342,9 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, mess
 		"Subject":   subject,
 		"Message":   message,
 		"Timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+	if len(msgAttrs) > 0 {
+		envelope["MessageAttributes"] = msgAttrs
 	}
 	body, _ := json.Marshal(envelope)
 	// Each SQS delivery gets its own unique MessageID — the SNS notification
