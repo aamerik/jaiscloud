@@ -3,8 +3,9 @@
 # Ignore docs directory used for design/notes
 plan_docs/
 
-# Ignore built binary
+# Ignore built binary not folder
 jaiscloud
+!jaiscloud/
 
 # Go build outputs
 bin/
