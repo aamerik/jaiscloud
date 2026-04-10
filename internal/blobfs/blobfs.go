@@ -90,7 +90,9 @@ func (s *MemoryBlobStore) Reset() {
 
 // LocalFSBlobStore is a filesystem-backed BlobStore for full mode.
 // Layout: {baseDir}/{bucket}/{key}
+// A RWMutex guards all operations so concurrent S3 requests are safe.
 type LocalFSBlobStore struct {
+	mu      sync.RWMutex
 	baseDir string
 }
 
@@ -108,6 +110,8 @@ func (s *LocalFSBlobStore) path(bucket, key string) string {
 }
 
 func (s *LocalFSBlobStore) Put(_ context.Context, bucket, key string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	p := s.path(bucket, key)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -116,6 +120,8 @@ func (s *LocalFSBlobStore) Put(_ context.Context, bucket, key string, data []byt
 }
 
 func (s *LocalFSBlobStore) Get(_ context.Context, bucket, key string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	b, err := os.ReadFile(s.path(bucket, key))
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("blob not found: %s/%s", bucket, key)
@@ -124,6 +130,8 @@ func (s *LocalFSBlobStore) Get(_ context.Context, bucket, key string) ([]byte, e
 }
 
 func (s *LocalFSBlobStore) Delete(_ context.Context, bucket, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	err := os.Remove(s.path(bucket, key))
 	if os.IsNotExist(err) {
 		return nil
@@ -132,6 +140,8 @@ func (s *LocalFSBlobStore) Delete(_ context.Context, bucket, key string) error {
 }
 
 func (s *LocalFSBlobStore) List(_ context.Context, bucket, prefix string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	bucketDir := filepath.Join(s.baseDir, bucket)
 	var keys []string
 	err := filepath.WalkDir(bucketDir, func(path string, d os.DirEntry, err error) error {
@@ -152,6 +162,8 @@ func (s *LocalFSBlobStore) List(_ context.Context, bucket, prefix string) ([]str
 }
 
 func (s *LocalFSBlobStore) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_ = os.RemoveAll(s.baseDir)
 	_ = os.MkdirAll(s.baseDir, 0o755)
 }

@@ -102,6 +102,9 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int64("seed", 0, "Random seed (requires --deterministic)")
 	cmd.Flags().String("time", "", "Base time RFC3339 (requires --deterministic)")
 	cmd.Flags().String("time-mode", "offset", "Time mode: frozen or offset")
+	cmd.Flags().String("blob-dir", "", `Directory for S3 blob bytes (full mode only).
+	Defaults to ~/.jaiscloud/blobs.
+	Env var: JAISCLOUD_BLOB_DIR`)
 
 	return cmd
 }
@@ -119,6 +122,7 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("seed", cmd.Flags().Lookup("seed"))
 	viper.BindPFlag("time", cmd.Flags().Lookup("time"))
 	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
+	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 }
 
 // appStores holds the five store instances that the server depends on.
@@ -142,12 +146,18 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
 		}
 		pool := pgStore.Pool()
+		blobs, err := blobfs.NewLocalFSBlobStore(cfg.BlobDir)
+		if err != nil {
+			pgStore.Close()
+			return appStores{}, fmt.Errorf("blobfs: %w", err)
+		}
+		slog.Info("blob storage", "dir", cfg.BlobDir)
 		return appStores{
 			resources: pgStore,
 			messages:  sqsstore.NewPostgresSQSMessageStore(pool),
 			dynamo:    dynamostore.NewPostgresDynamoDBItemStore(pool),
 			s3Meta:    s3store.NewPostgresS3ObjectMetaStore(pool),
-			blobs:     blobfs.NewMemoryBlobStore(), // blob bytes still in memory; swap LocalFS for persistence
+			blobs:     blobs,
 		}, nil
 	}
 

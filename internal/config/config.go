@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ type Config struct {
 	Region    string
 	AccountID string
 	DSN       string // PostgreSQL DSN (required when Mode == full)
+	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -78,6 +81,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
 	viper.SetDefault("dsn", "")
+	if home, err := os.UserHomeDir(); err == nil {
+		viper.SetDefault("blob_dir", filepath.Join(home, ".jaiscloud", "blobs"))
+	} else {
+		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
+	}
 	viper.SetDefault("metrics", false)
 	viper.SetDefault("tracing", false)
 	viper.SetDefault("deterministic", false)
@@ -95,6 +103,7 @@ func Load() (*Config, error) {
 		Region:        viper.GetString("region"),
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
+		BlobDir:       viper.GetString("blob_dir"),
 		Metrics:       viper.GetBool("metrics"),
 		Tracing:       viper.GetBool("tracing"),
 		Deterministic: viper.GetBool("deterministic"),
