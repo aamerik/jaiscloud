@@ -1,14 +1,26 @@
 package services
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
+	"hash/crc32"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"jaiscloud/internal/model"
 )
+
+// s3ChecksumCRC32 returns the base64-encoded IEEE CRC32 of body.
+// The AWS SDK v2 validates this on PutObject / CopyObject / CompleteMultipartUpload responses.
+func s3ChecksumCRC32(body []byte) string {
+	sum := crc32.ChecksumIEEE(body)
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, sum)
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 // S3Codec handles S3 REST wire format (path-style URLs).
 type S3Codec struct{}
@@ -192,6 +204,8 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			h.Set("Content-Length", fmt.Sprintf("%v", cl))
 		}
 		body, _ := resp.Data["_raw_body"].([]byte)
+		// SDK v2 validates CRC32 of the object data on GetObject responses
+		h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
 		return resp.HTTPStatus, h, body
 	}
 
@@ -216,6 +230,11 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 		if etag, ok := resp.Data["ETag"].(string); ok {
 			h.Set("ETag", etag)
 		}
+		if nr.Action == "PutObject" {
+			// Return CRC32 of the uploaded object data; SDK v2 validates this
+			uploadedBody, _ := nr.Params["_body"].([]byte)
+			h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(uploadedBody))
+		}
 		return resp.HTTPStatus, h, nil
 	}
 
@@ -233,6 +252,10 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 	h := http.Header{}
 	if len(body) > 0 {
 		h.Set("Content-Type", "application/xml")
+	}
+	// AWS SDK v2 validates CRC32 on these write operations
+	if nr.Action == "CopyObject" || nr.Action == "CompleteMultipartUpload" {
+		h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
 	}
 	return resp.HTTPStatus, h, body
 }
