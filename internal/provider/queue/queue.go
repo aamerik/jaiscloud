@@ -3,9 +3,11 @@ package queue
 import (
 	"context"
 	"crypto/md5"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -354,6 +356,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 			}
 			if len(filtered) > 0 {
 				wm["MessageAttributes"] = filtered
+				wm["MD5OfMessageAttributes"] = md5MessageAttributes(filtered)
 			}
 		}
 		wireMessages = append(wireMessages, wm)
@@ -785,6 +788,43 @@ func parseMessageAttributes(v any) map[string]sqsstore.MessageAttribute {
 		return m
 	}
 	return result
+}
+
+// md5MessageAttributes computes the AWS-compatible MD5 over message attributes.
+// The algorithm: for each attribute sorted by name, write:
+//
+//	4-byte big-endian len(name) + name bytes
+//	4-byte big-endian len(dataType) + dataType bytes
+//	1-byte transport type: 1 = String/Number, 2 = Binary
+//	4-byte big-endian len(value) + value bytes
+func md5MessageAttributes(attrs map[string]sqsstore.MessageAttribute) string {
+	names := make([]string, 0, len(attrs))
+	for k := range attrs {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	h := md5.New()
+	buf4 := make([]byte, 4)
+	writeBytes := func(b []byte) {
+		binary.BigEndian.PutUint32(buf4, uint32(len(b)))
+		h.Write(buf4)
+		h.Write(b)
+	}
+	for _, name := range names {
+		attr := attrs[name]
+		writeBytes([]byte(name))
+		writeBytes([]byte(attr.DataType))
+		if strings.HasPrefix(attr.DataType, "Binary") {
+			h.Write([]byte{2})
+			writeBytes(attr.BinaryValue)
+		} else {
+			// String or Number
+			h.Write([]byte{1})
+			writeBytes([]byte(attr.StringValue))
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func arnToURL(arn string, port int) string {
