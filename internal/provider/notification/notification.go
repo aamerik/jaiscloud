@@ -150,7 +150,7 @@ func (p *SNSProvider) GetTopicAttributes(ctx context.Context, nr *model.Normaliz
 	arn := strParam(nr.Params, "TopicArn")
 	var td topicData
 	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
-		return nil, model.NewProviderError("NotFound", "Topic not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	return provider.OK(map[string]any{"Attributes": td.Attributes}), nil
 }
@@ -161,7 +161,7 @@ func (p *SNSProvider) SetTopicAttributes(ctx context.Context, nr *model.Normaliz
 	val := strParam(nr.Params, "AttributeValue")
 	var td topicData
 	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
-		return nil, model.NewProviderError("NotFound", "Topic not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	td.Attributes[attr] = val
 	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_topics", arn, td)
@@ -249,7 +249,7 @@ func (p *SNSProvider) GetSubscriptionAttributes(ctx context.Context, nr *model.N
 	sArn := strParam(nr.Params, "SubscriptionArn")
 	var sd subscriptionData
 	if err := loadEntry(ctx, p.resources, "sns_subscriptions", sArn, &sd); err != nil {
-		return nil, model.NewProviderError("NotFound", "Subscription not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")
 	}
 	attrs := map[string]string{
 		"SubscriptionArn": sd.SubscriptionArn,
@@ -270,7 +270,7 @@ func (p *SNSProvider) SetSubscriptionAttributes(ctx context.Context, nr *model.N
 	val := strParam(nr.Params, "AttributeValue")
 	var sd subscriptionData
 	if err := loadEntry(ctx, p.resources, "sns_subscriptions", sArn, &sd); err != nil {
-		return nil, model.NewProviderError("NotFound", "Subscription not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")
 	}
 	sd.Attributes[attr] = val
 	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd)
@@ -388,7 +388,7 @@ func (p *SNSProvider) TagResource(ctx context.Context, nr *model.NormalizedReque
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
 	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
-		return nil, model.NewProviderError("NotFound", "Resource not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	if tags, ok := nr.Params["Tags"].([]any); ok {
 		for _, t := range tags {
@@ -406,7 +406,7 @@ func (p *SNSProvider) UntagResource(ctx context.Context, nr *model.NormalizedReq
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
 	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
-		return nil, model.NewProviderError("NotFound", "Resource not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
@@ -420,7 +420,7 @@ func (p *SNSProvider) ListTagsForResource(ctx context.Context, nr *model.Normali
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
 	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
-		return nil, model.NewProviderError("NotFound", "Resource not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	var tags []map[string]any
 	for k, v := range td.Tags {

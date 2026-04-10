@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -94,14 +95,7 @@ func (s *PostgresResourceStore) Create(ctx context.Context, entry ResourceEntry)
 		INSERT INTO jc_resources (resource_type, id, data, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return ErrAlreadyExists
-		}
-		return fmt.Errorf("Create: %w", err)
-	}
-	return nil
+	return wrapPgError("Create", err)
 }
 
 func (s *PostgresResourceStore) Get(ctx context.Context, resourceType, id string) (ResourceEntry, error) {
@@ -113,10 +107,7 @@ func (s *PostgresResourceStore) Get(ctx context.Context, resourceType, id string
 		WHERE resource_type=$1 AND id=$2
 	`, resourceType, id).Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ResourceEntry{}, ErrNotFound
-		}
-		return ResourceEntry{}, fmt.Errorf("Get: %w", err)
+		return ResourceEntry{}, wrapPgError("Get", err)
 	}
 	e.Data = json.RawMessage(data)
 	return e, nil
@@ -129,7 +120,7 @@ func (s *PostgresResourceStore) Update(ctx context.Context, entry ResourceEntry)
 		WHERE resource_type=$2 AND id=$3
 	`, json.RawMessage(entry.Data), entry.Type, entry.ID)
 	if err != nil {
-		return fmt.Errorf("Update: %w", err)
+		return wrapPgError("Update", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -142,7 +133,7 @@ func (s *PostgresResourceStore) Delete(ctx context.Context, resourceType, id str
 		DELETE FROM jc_resources WHERE resource_type=$1 AND id=$2
 	`, resourceType, id)
 	if err != nil {
-		return fmt.Errorf("Delete: %w", err)
+		return wrapPgError("Delete", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -158,7 +149,7 @@ func (s *PostgresResourceStore) List(ctx context.Context, resourceType, prefix s
 		ORDER BY created_at
 	`, resourceType, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("List: %w", err)
+		return nil, wrapPgError("List", err)
 	}
 	defer rows.Close()
 
@@ -167,20 +158,54 @@ func (s *PostgresResourceStore) List(ctx context.Context, resourceType, prefix s
 		var e ResourceEntry
 		var data []byte
 		if err := rows.Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("List scan: %w", err)
+			return nil, wrapPgError("List scan", err)
 		}
 		e.Data = json.RawMessage(data)
 		results = append(results, e)
 	}
-	return results, rows.Err()
+	return results, wrapPgError("List rows", rows.Err())
 }
 
 func (s *PostgresResourceStore) Purge(ctx context.Context, resourceType string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE resource_type=$1`, resourceType)
-	return err
+	return wrapPgError("Purge", err)
 }
 
 func (s *PostgresResourceStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_resources`)
+}
+
+// wrapPgError classifies a pgx error:
+//   - pgx.ErrNoRows          → ErrNotFound
+//   - unique-violation (23505) → ErrAlreadyExists
+//   - network / connectivity  → ErrStorageUnavailable (wraps original)
+//   - anything else           → fmt.Errorf wrapping original
+//
+// Callers should use this instead of raw error returns so that providers can
+// distinguish "not found" from "database is down" without importing pgx.
+func wrapPgError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		// Class 08 = connection errors; class 57 = operator intervention
+		if len(pgErr.Code) >= 2 && (pgErr.Code[:2] == "08" || pgErr.Code[:2] == "57") {
+			return fmt.Errorf("%s: %w: %w", op, ErrStorageUnavailable, err)
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	// pgxpool returns net.Error or context errors when the DB is unreachable
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%s: %w: %w", op, ErrStorageUnavailable, err)
+	}
+	return fmt.Errorf("%s: %w", op, err)
 }

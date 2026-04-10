@@ -83,6 +83,79 @@ Via environment variable: `JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhos
 
 ---
 
+## Running in full mode on local Kubernetes
+
+`deploy/deploy.sh` is a one-click script that builds the Docker image, deploys JaisCloud and PostgreSQL to a local Kubernetes cluster, and runs a smoke test.
+
+### Prerequisites
+
+- Docker Desktop with Kubernetes enabled (Settings → Kubernetes → Enable Kubernetes)
+- `kubectl` pointing at the `docker-desktop` context
+
+Verify:
+
+```bash
+kubectl config current-context   # should print: docker-desktop
+```
+
+### One-click deploy
+
+```bash
+./deploy/deploy.sh
+```
+
+The script:
+1. Builds the `jaiscloud:latest` Docker image from the repo root `Dockerfile`
+2. Creates the `jaiscloud` namespace
+3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim
+4. Deploys JaisCloud in full mode, wired to the postgres pod via cluster-internal DNS
+5. Waits for both rollouts to complete
+6. Smoke-tests `/_jaiscloud/health`
+
+When complete the server is reachable at:
+
+| URL | Description |
+|---|---|
+| `http://localhost:4566` | AWS-compatible endpoint |
+| `http://localhost:4566/_jaiscloud/health` | Liveness check |
+| `http://localhost:4566/metrics` | Prometheus metrics |
+
+### Tear down
+
+```bash
+./deploy/deploy.sh --delete
+```
+
+This deletes the entire `jaiscloud` namespace (all pods, services, the PVC and its data).
+
+### Configuration
+
+Default settings are in [deploy/k8s/jaiscloud.yaml](deploy/k8s/jaiscloud.yaml). Override via the `jaiscloud-config` ConfigMap (non-secret) or `postgres-secret` Secret (credentials and DSN). Edit those files before running `deploy.sh`, or patch them after:
+
+```bash
+kubectl set env deployment/jaiscloud -n jaiscloud JAISCLOUD_LOG_LEVEL=debug
+```
+
+### Port forwarding on non-Docker-Desktop clusters
+
+The Service uses `type: LoadBalancer`. Docker Desktop maps this directly to `localhost:4566`. On minikube or kind, the external IP stays `<pending>` — use port-forward instead:
+
+```bash
+kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
+```
+
+### Viewing logs
+
+```bash
+# JaisCloud logs
+kubectl logs -n jaiscloud deployment/jaiscloud -f
+
+# PostgreSQL logs
+kubectl logs -n jaiscloud deployment/postgres -f
+```
+
+---
+
 Run unit tests
 
 Unit tests do not require the server to be running. From the repository root run:

@@ -13,7 +13,7 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 
 ```
 module jaiscloud   # go.mod
-go 1.25
+go 1.26.2
 ```
 
 ---
@@ -224,9 +224,17 @@ S3 and Lambda are always detected via SigV4 (they use REST, no `Action` param).
 
 `SNSProvider.Publish` wraps the message in a JSON envelope and calls `SQSMessageStore.Send` for each SQS subscription. Each SQS delivery is assigned a **new unique `MessageID`**; the SNS notification ID is embedded in the envelope body only. Reusing the SNS ID as the SQS row key would conflict on the `(id, queue_url)` primary key when delivering to N queues.
 
+### SNS MessageAttributes pass-through
+
+`SNS.Publish` extracts `MessageAttributes` from the Query protocol form (`MessageAttributes.entry.N.{Name,Value.DataType,Value.StringValue}`) via `SNSCodec.Decode`. The provider passes them through in the SQS envelope JSON under `"MessageAttributes"` so downstream consumers can read them after receiving from SQS.
+
 ### DynamoDB pk hash
 
 `TableProvider` computes a stable hash from key attributes only (in schema-defined order) and passes it explicitly to `DynamoDBItemStore`. The store never auto-computes hashes — the provider is the sole authority.
+
+### DynamoDB pagination determinism
+
+Both `MemoryDynamoDBItemStore` and `PostgresDynamoDBItemStore` sort all matching items by `itemPKHash` (a stable string key derived from sorted attribute name=value pairs) before applying `ExclusiveStartKey` / `Limit`. This guarantees consistent cursor behaviour across requests regardless of map iteration order or Postgres heap scan order. The postgres implementation uses `ORDER BY pk_hash` in SQL and delegates page slicing to the same `paginateItems` helper used by the memory store.
 
 ### DynamoDB wire protocol: x-amz-crc32
 
@@ -237,6 +245,33 @@ Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK
 `jc_sqs_messages` uses a composite primary key `(id, queue_url)` so the same `MessageID` can appear in multiple queues (e.g. SNS fan-out). Migration `005_sqs_fix_pk.sql` upgrades existing installs that have the old single-column `id` primary key.
 
 `MessageAttributes` are stored in the `msg_attributes JSONB` column. The postgres `Send` serialises them; `Receive` deserialises them. The column exists in migration 002 but was unused before Phase 1 fixes.
+
+### Postgres connection pool (HikariCP equivalent)
+
+`NewPostgresResourceStore` configures `pgxpool` with production-ready defaults before the first ping:
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `MaxConns` | 40 | Hard cap on open connections |
+| `MinConns` | 2 | Keep-alive connections |
+| `MaxConnLifetime` | 30 min | Recycle connections to avoid server-side stale limits |
+| `MaxConnIdleTime` | 10 min | Release idle connections under low load |
+| `HealthCheckPeriod` | 30 s | Proactive dead-connection detection |
+| `ConnectTimeout` | 5 s | Per-attempt TCP timeout |
+
+**Startup retry:** the server retries the initial `Ping` up to 10 times with exponential backoff (500 ms → 8 s) and logs a `WARN` on each attempt. This lets JaisCloud start before the database is ready (e.g., `docker-compose` spin-up order, Kubernetes init ordering). Context cancellation (SIGINT during startup) stops the retry loop immediately.
+
+### Postgres error classification
+
+`wrapPgError` in `store/postgres.go` maps raw pgx errors to typed store sentinels:
+
+| pgx error | Store sentinel |
+|---|---|
+| `pgx.ErrNoRows` | `store.ErrNotFound` |
+| Unique violation (23505) | `store.ErrAlreadyExists` |
+| Connection class 08xx / 57xx, `net.Error` | `store.ErrStorageUnavailable` |
+
+Providers call `provider.StoreNotFoundError(err, code, msg)` after every store read. This helper returns a 400 `ProviderError` only when `errors.Is(err, store.ErrNotFound)` is true. Any other error (including `ErrStorageUnavailable`) is returned unwrapped so the gateway emits a **500 Internal Error** instead of a misleading 404.
 
 ### Postgres ResourceStore: prefix matching
 

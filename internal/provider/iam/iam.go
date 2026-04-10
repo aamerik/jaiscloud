@@ -202,7 +202,7 @@ func (p *IAMProvider) GetRole(ctx context.Context, nr *model.NormalizedRequest) 
 	var r roleData
 	if err := loadEntry(ctx, p.resources, "iam_roles", arn, &r); err != nil {
 		if err == store.ErrNotFound {
-			return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+			return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 		}
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (p *IAMProvider) DeleteRole(ctx context.Context, nr *model.NormalizedReques
 	arn := arnForRole(nr.AccountID, name)
 	if err := p.resources.Delete(ctx, "iam_roles", arn); err != nil {
 		if err == store.ErrNotFound {
-			return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+			return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 		}
 		return nil, err
 	}
@@ -244,7 +244,7 @@ func (p *IAMProvider) UpdateAssumeRolePolicy(ctx context.Context, nr *model.Norm
 	arn := arnForRole(nr.AccountID, name)
 	var r roleData
 	if err := loadEntry(ctx, p.resources, "iam_roles", arn, &r); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 	}
 	r.AssumeRolePolicyDocument = strParam(nr.Params, "PolicyDocument")
 	return provider.OK(nil), saveEntry(ctx, p.resources, "iam_roles", arn, r)
@@ -307,7 +307,7 @@ func (p *IAMProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRequest
 	arn := strParam(nr.Params, "PolicyArn")
 	var pol policyData
 	if err := loadEntry(ctx, p.resources, "iam_policies", arn, &pol); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Policy not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
 	return provider.OK(map[string]any{"Policy": policyMap(pol)}), nil
 }
@@ -315,7 +315,7 @@ func (p *IAMProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRequest
 func (p *IAMProvider) DeletePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PolicyArn")
 	if err := p.resources.Delete(ctx, "iam_policies", arn); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Policy not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
 	return provider.OK(nil), nil
 }
@@ -419,7 +419,7 @@ func (p *IAMProvider) GetRolePolicy(ctx context.Context, nr *model.NormalizedReq
 	policyName := strParam(nr.Params, "PolicyName")
 	var d inlinePolicyData
 	if err := loadEntry(ctx, p.resources, "iam_inline_policies", roleName+"::"+policyName, &d); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Policy not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
 	return provider.OK(map[string]any{
 		"RoleName":       roleName,
@@ -499,7 +499,7 @@ func (p *IAMProvider) GetUser(ctx context.Context, nr *model.NormalizedRequest) 
 	arn := arnForUser(nr.AccountID, name)
 	var u userData
 	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	return provider.OK(map[string]any{"User": userMap(u)}), nil
 }
@@ -603,7 +603,7 @@ func (p *IAMProvider) TagRole(ctx context.Context, nr *model.NormalizedRequest) 
 	arn := arnForRole(nr.AccountID, roleName)
 	var r roleData
 	if err := loadEntry(ctx, p.resources, "iam_roles", arn, &r); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 	}
 	if tags, ok := nr.Params["Tags"].([]any); ok {
 		for _, t := range tags {
@@ -622,7 +622,7 @@ func (p *IAMProvider) UntagRole(ctx context.Context, nr *model.NormalizedRequest
 	arn := arnForRole(nr.AccountID, roleName)
 	var r roleData
 	if err := loadEntry(ctx, p.resources, "iam_roles", arn, &r); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 	}
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
@@ -637,7 +637,7 @@ func (p *IAMProvider) ListRoleTags(ctx context.Context, nr *model.NormalizedRequ
 	arn := arnForRole(nr.AccountID, roleName)
 	var r roleData
 	if err := loadEntry(ctx, p.resources, "iam_roles", arn, &r); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Role not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 	}
 	var tags []map[string]any
 	for k, v := range r.Tags {
@@ -720,7 +720,7 @@ func (p *IAMProvider) UpdateUser(ctx context.Context, nr *model.NormalizedReques
 	arn := arnForUser(nr.AccountID, name)
 	var u userData
 	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	if newName := strParam(nr.Params, "NewUserName"); newName != "" {
 		_ = p.resources.Delete(ctx, "iam_users", arn)
@@ -785,7 +785,7 @@ func (p *IAMProvider) GetUserPolicy(ctx context.Context, nr *model.NormalizedReq
 	policyName := strParam(nr.Params, "PolicyName")
 	var d inlinePolicyData
 	if err := loadEntry(ctx, p.resources, "iam_user_inline_policies", userName+"::"+policyName, &d); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Policy not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
 	return provider.OK(map[string]any{
 		"UserName":       userName,
@@ -824,7 +824,7 @@ func (p *IAMProvider) TagUser(ctx context.Context, nr *model.NormalizedRequest) 
 	arn := arnForUser(nr.AccountID, userName)
 	var u userData
 	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	if tags, ok := nr.Params["Tags"].([]any); ok {
 		for _, t := range tags {
@@ -843,7 +843,7 @@ func (p *IAMProvider) UntagUser(ctx context.Context, nr *model.NormalizedRequest
 	arn := arnForUser(nr.AccountID, userName)
 	var u userData
 	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
@@ -858,7 +858,7 @@ func (p *IAMProvider) ListUserTags(ctx context.Context, nr *model.NormalizedRequ
 	arn := arnForUser(nr.AccountID, userName)
 	var u userData
 	if err := loadEntry(ctx, p.resources, "iam_users", arn, &u); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "User not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	var tags []map[string]any
 	for k, v := range u.Tags {
@@ -877,7 +877,7 @@ func (p *IAMProvider) UpdateAccessKey(ctx context.Context, nr *model.NormalizedR
 	status := strParam(nr.Params, "Status")
 	var ak accessKeyData
 	if err := loadEntry(ctx, p.resources, "iam_access_keys", keyID, &ak); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "AccessKey not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "AccessKey not found")
 	}
 	if status != "" {
 		ak.Status = status
@@ -932,7 +932,7 @@ func (p *IAMProvider) GetGroup(ctx context.Context, nr *model.NormalizedRequest)
 	arn := arnForGroup(nr.AccountID, name)
 	var g groupData
 	if err := loadEntry(ctx, p.resources, "iam_groups", arn, &g); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "Group not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Group not found")
 	}
 	// List members
 	entries, _ := p.resources.List(ctx, "iam_group_members", name+"::")
@@ -1068,7 +1068,7 @@ func (p *IAMProvider) GetInstanceProfile(ctx context.Context, nr *model.Normaliz
 	arn := arnForInstanceProfile(nr.AccountID, name)
 	var ip instanceProfileData
 	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "InstanceProfile not found")
 	}
 	roles := p.loadProfileRoles(ctx, ip, nr.AccountID)
 	return provider.OK(map[string]any{"InstanceProfile": instanceProfileMap(ip, roles)}), nil
@@ -1087,7 +1087,7 @@ func (p *IAMProvider) AddRoleToInstanceProfile(ctx context.Context, nr *model.No
 	arn := arnForInstanceProfile(nr.AccountID, profileName)
 	var ip instanceProfileData
 	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "InstanceProfile not found")
 	}
 	for _, r := range ip.RoleNames {
 		if r == roleName {
@@ -1105,7 +1105,7 @@ func (p *IAMProvider) RemoveRoleFromInstanceProfile(ctx context.Context, nr *mod
 	arn := arnForInstanceProfile(nr.AccountID, profileName)
 	var ip instanceProfileData
 	if err := loadEntry(ctx, p.resources, "iam_instance_profiles", arn, &ip); err != nil {
-		return nil, model.NewProviderError("NoSuchEntity", "InstanceProfile not found", 404)
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "InstanceProfile not found")
 	}
 	filtered := ip.RoleNames[:0]
 	for _, r := range ip.RoleNames {

@@ -169,7 +169,7 @@ func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.Normalized
 	name := strParam(nr.Params, "_function_name")
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	return provider.OK(map[string]any{
 		"Configuration": cfgToWire(cfg),
@@ -182,7 +182,7 @@ func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *mod
 	name := strParam(nr.Params, "_function_name")
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	return provider.OK(cfgToWire(cfg)), nil
 }
@@ -203,7 +203,7 @@ func cfgToWire(cfg functionConfig) map[string]any {
 func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "_function_name")
 	if err := p.resources.Delete(ctx, resourceType, name); err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
@@ -227,7 +227,7 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 	name := strParam(nr.Params, "_function_name")
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	if r := strParam(nr.Params, "Role"); r != "" {
 		cfg.Role = r
@@ -253,7 +253,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 	name := strParam(nr.Params, "_function_name")
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
 	if err := p.saveConfig(ctx, cfg); err != nil {
@@ -268,7 +268,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "_function_name")
 	if _, err := p.loadConfig(ctx, name); err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Function not found: "+name, 404)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	payload, _ := nr.Params["_payload"].([]byte)
 	return &model.ProviderResponse{
