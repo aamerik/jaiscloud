@@ -1,0 +1,89 @@
+---
+# ConfigMap — non-secret runtime settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jaiscloud-config
+  namespace: jaiscloud
+data:
+  JAISCLOUD_PORT: "4566"
+  JAISCLOUD_MODE: "full"
+  JAISCLOUD_REGION: "us-east-1"
+  JAISCLOUD_ACCOUNT_ID: "000000000000"
+  JAISCLOUD_LOG_LEVEL: "info"
+  JAISCLOUD_METRICS: "true"
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaiscloud
+  namespace: jaiscloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaiscloud
+  template:
+    metadata:
+      labels:
+        app: jaiscloud
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4566"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: jaiscloud
+          image: jaiscloud:latest
+          # Use local image built by deploy.sh — never pull from a registry
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 4566
+          envFrom:
+            - configMapRef:
+                name: jaiscloud-config
+          env:
+            - name: JAISCLOUD_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: dsn
+          readinessProbe:
+            httpGet:
+              path: /_jaiscloud/health
+              port: 4566
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_jaiscloud/health
+              port: 4566
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+# Service — LoadBalancer so `localhost:4566` works on Docker Desktop.
+# Docker Desktop's built-in cloud-provider controller binds the external port
+# directly to localhost, so no kubectl port-forward is needed.
+# On other local clusters (minikube, kind) run:
+#   kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaiscloud
+  namespace: jaiscloud
+spec:
+  type: LoadBalancer
+  selector:
+    app: jaiscloud
+  ports:
+    - port: 4566
+      targetPort: 4566

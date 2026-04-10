@@ -154,7 +154,7 @@ func (p *QueueProvider) GetQueueUrl(ctx context.Context, nr *model.NormalizedReq
 	}
 	queueURL := fmt.Sprintf("http://localhost:%d/000000000000/%s", nr.Port, name)
 	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
 }
@@ -166,7 +166,7 @@ func (p *QueueProvider) GetQueueAttributes(ctx context.Context, nr *model.Normal
 	}
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 
 	var state map[string]any
@@ -186,7 +186,7 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 	}
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 
 	var state map[string]any
@@ -218,7 +218,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
@@ -273,7 +273,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
@@ -394,7 +394,7 @@ func (p *QueueProvider) PurgeQueue(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
 	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	p.messages.Purge(ctx, queueURL)
 	return provider.OK(map[string]any{}), nil
@@ -417,7 +417,7 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 	}
 
 	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 
 	var successful []map[string]any
@@ -523,7 +523,7 @@ func (p *QueueProvider) TagQueue(ctx context.Context, nr *model.NormalizedReques
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
@@ -542,7 +542,7 @@ func (p *QueueProvider) UntagQueue(ctx context.Context, nr *model.NormalizedRequ
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
@@ -562,7 +562,7 @@ func (p *QueueProvider) ListQueueTags(ctx context.Context, nr *model.NormalizedR
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
 	if err != nil {
-		return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)

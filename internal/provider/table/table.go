@@ -176,7 +176,7 @@ func (p *TableProvider) DescribeTable(ctx context.Context, nr *model.NormalizedR
 	name := strParam(nr.Params, "TableName")
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	return provider.OK(map[string]any{"Table": tableDesc(ts)}), nil
 }
@@ -185,7 +185,7 @@ func (p *TableProvider) DeleteTable(ctx context.Context, nr *model.NormalizedReq
 	name := strParam(nr.Params, "TableName")
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	_ = p.resources.Delete(ctx, "dynamodb_tables", name)
 	p.items.Reset() // simplification: reset all items (acceptable for emulator)
@@ -211,7 +211,7 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 	name := strParam(nr.Params, "TableName")
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	if billing := strParam(nr.Params, "BillingMode"); billing != "" {
 		ts.BillingMode = billing
@@ -282,7 +282,7 @@ func (p *TableProvider) GetItem(ctx context.Context, nr *model.NormalizedRequest
 	}
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	pkHash := computePKHash(key, ts)
 	item, err := p.items.GetItem(ctx, name, pkHash)
@@ -301,7 +301,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 	key := itemParam(nr.Params, "Key")
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	pkHash := computePKHash(key, ts)
 	cond := dynamostore.ConditionSpec{
@@ -330,7 +330,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 	key := itemParam(nr.Params, "Key")
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	pkHash := computePKHash(key, ts)
 
@@ -524,7 +524,7 @@ func (p *TableProvider) TagResource(ctx context.Context, nr *model.NormalizedReq
 	name := arnToTableName(arn)
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	if tags, ok := nr.Params["Tags"].([]any); ok {
 		for _, t := range tags {
@@ -543,7 +543,7 @@ func (p *TableProvider) UntagResource(ctx context.Context, nr *model.NormalizedR
 	name := arnToTableName(arn)
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
@@ -558,7 +558,7 @@ func (p *TableProvider) ListTagsOfResource(ctx context.Context, nr *model.Normal
 	name := arnToTableName(arn)
 	ts, err := p.loadTable(ctx, name)
 	if err != nil {
-		return nil, model.NewProviderError("ResourceNotFoundException", "Table not found", 400)
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	var tags []map[string]any
 	for k, v := range ts.Tags {

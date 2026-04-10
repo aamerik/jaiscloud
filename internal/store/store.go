@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("resource not found")
-	ErrAlreadyExists = errors.New("resource already exists")
+	ErrNotFound           = errors.New("resource not found")
+	ErrAlreadyExists      = errors.New("resource already exists")
+	ErrStorageUnavailable = errors.New("storage unavailable")
 )
 
 // ResourceEntry is a single control-plane resource in the store.
