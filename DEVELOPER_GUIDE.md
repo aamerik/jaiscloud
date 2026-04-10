@@ -107,10 +107,11 @@ kubectl config current-context   # should print: docker-desktop
 The script:
 1. Builds the `jaiscloud:latest` Docker image from the repo root `Dockerfile`
 2. Creates the `jaiscloud` namespace
-3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim
-4. Deploys JaisCloud in full mode, wired to the postgres pod via cluster-internal DNS
-5. Waits for both rollouts to complete
-6. Smoke-tests `/_jaiscloud/health`
+3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim (`postgres-pvc`)
+4. Deploys JaisCloud in full mode with a 5 Gi PersistentVolumeClaim for S3 blob bytes (`jaiscloud-blobs-pvc`)
+5. Wires JaisCloud to the postgres pod via cluster-internal DNS
+6. Waits for both rollouts to complete
+7. Smoke-tests `/_jaiscloud/health`
 
 When complete the server is reachable at:
 
@@ -120,13 +121,44 @@ When complete the server is reachable at:
 | `http://localhost:4566/_jaiscloud/health` | Liveness check |
 | `http://localhost:4566/metrics` | Prometheus metrics |
 
-### Tear down
+### Persistent storage
+
+Two PersistentVolumeClaims (PVCs) hold data that survives pod restarts:
+
+| PVC | Size | Contents |
+|---|---|---|
+| `postgres-pvc` | 1 Gi | PostgreSQL data directory (all control-plane metadata, SQS messages, DynamoDB items, S3 object metadata) |
+| `jaiscloud-blobs-pvc` | 5 Gi | S3 object bytes (mounted at `/data/blobs` inside the container) |
+
+### Stopping and removing workloads
+
+To stop JaisCloud and Postgres without losing any data:
 
 ```bash
 ./deploy/deploy.sh --delete
 ```
 
-This deletes the entire `jaiscloud` namespace (all pods, services, the PVC and its data).
+This removes the Deployments, Services, ConfigMap and Secret — **PVCs are preserved**. Re-running `./deploy/deploy.sh` brings everything back with all data intact.
+
+### Wiping all persisted data
+
+To permanently delete all stored data (postgres database + S3 blobs) and remove all Kubernetes resources:
+
+```bash
+./deploy/deploy.sh --reset
+```
+
+This scales both deployments to zero (to release PVC bindings), deletes both PVCs, then deletes the entire namespace. Use this when you want a completely clean slate.
+
+> **Warning:** `--reset` is irreversible. All SQS queues, DynamoDB tables, S3 objects, SNS topics, IAM resources and their data will be permanently deleted.
+
+### Command reference
+
+| Command | Workloads | PVCs (data) |
+|---|---|---|
+| `./deploy/deploy.sh` | Created / updated | Created if absent, existing data kept |
+| `./deploy/deploy.sh --delete` | Removed | **Kept** — data survives |
+| `./deploy/deploy.sh --reset` | Removed | **Deleted** — all data wiped |
 
 ### Configuration
 

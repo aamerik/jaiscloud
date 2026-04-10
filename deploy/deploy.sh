@@ -7,7 +7,8 @@
 #
 # Usage:
 #   ./deploy/deploy.sh            # build image + apply manifests
-#   ./deploy/deploy.sh --delete   # tear everything down
+#   ./deploy/deploy.sh --delete   # remove all pods/services; keep PVCs (data survives)
+#   ./deploy/deploy.sh --reset    # wipe ALL persisted data (PVCs) AND remove everything
 
 set -euo pipefail
 
@@ -15,6 +16,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 K8S_DIR="$REPO_ROOT/deploy/k8s"
 IMAGE="jaiscloud:latest"
 NAMESPACE="jaiscloud"
+
+# PVCs that hold persisted data — these are NOT deleted by --delete
+PVCS=("postgres-pvc" "jaiscloud-blobs-pvc")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,12 +37,48 @@ wait_for_rollout() {
   kubectl rollout status "$resource" -n "$NAMESPACE" --timeout=120s
 }
 
-# ── delete mode ──────────────────────────────────────────────────────────────
+# ── --delete: remove workloads, keep PVCs ────────────────────────────────────
 
 if [[ "${1:-}" == "--delete" ]]; then
-  info "Deleting namespace $NAMESPACE (all resources inside will be removed)..."
+  info "Removing deployments and services (persisted data is preserved)..."
+  kubectl delete deployment postgres jaiscloud -n "$NAMESPACE" --ignore-not-found
+  kubectl delete service  postgres jaiscloud -n "$NAMESPACE" --ignore-not-found
+  kubectl delete configmap jaiscloud-config   -n "$NAMESPACE" --ignore-not-found
+  kubectl delete secret   postgres-secret     -n "$NAMESPACE" --ignore-not-found
+  ok "Workloads removed. PVCs retained:"
+  for pvc in "${PVCS[@]}"; do
+    kubectl get pvc "$pvc" -n "$NAMESPACE" --no-headers 2>/dev/null \
+      && echo "    pvc/$pvc" || true
+  done
+  echo ""
+  echo "  Data is still on disk. Re-deploy with: $0"
+  echo "  To wipe data too, run:                 $0 --reset"
+  exit 0
+fi
+
+# ── --reset: wipe PVCs AND remove everything ─────────────────────────────────
+
+if [[ "${1:-}" == "--reset" ]]; then
+  warn "This will permanently delete ALL persisted data (postgres DB + blob files)."
+  read -rp "Are you sure? [y/N] " yn
+  [[ "${yn,,}" == "y" ]] || { info "Aborted."; exit 0; }
+
+  info "Scaling deployments to zero (to release PVC bindings)..."
+  kubectl scale deployment postgres jaiscloud --replicas=0 -n "$NAMESPACE" \
+    --ignore-not-found 2>/dev/null || true
+  sleep 3
+
+  info "Deleting PVCs..."
+  for pvc in "${PVCS[@]}"; do
+    kubectl delete pvc "$pvc" -n "$NAMESPACE" --ignore-not-found
+  done
+
+  info "Deleting namespace $NAMESPACE..."
   kubectl delete namespace "$NAMESPACE" --ignore-not-found
-  ok "Deleted."
+
+  ok "All resources and persisted data deleted."
+  echo ""
+  echo "  Re-deploy with: $0"
   exit 0
 fi
 
@@ -105,7 +145,9 @@ echo "  Metrics  : http://localhost:4566/metrics"
 echo "  Health   : http://localhost:4566/_jaiscloud/health"
 echo ""
 echo "  Logs     : kubectl logs -n $NAMESPACE deployment/jaiscloud -f"
-echo "  Teardown : $0 --delete"
+echo ""
+echo "  Remove workloads (keep data) : $0 --delete"
+echo "  Wipe everything incl. data   : $0 --reset"
 echo ""
 echo "  NOTE: On non-Docker-Desktop clusters (minikube, kind) the LoadBalancer"
 echo "  external IP may stay <pending>. Use port-forward instead:"
