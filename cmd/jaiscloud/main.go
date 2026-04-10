@@ -29,6 +29,7 @@ import (
 	containerprovider "jaiscloud/internal/provider/container"
 	stackprovider "jaiscloud/internal/provider/stack"
 	emrprovider "jaiscloud/internal/provider/emr"
+	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	rdsprovider "jaiscloud/internal/provider/rds"
 	iamprovider "jaiscloud/internal/provider/iam"
 	"jaiscloud/internal/provider/notification"
@@ -196,6 +197,7 @@ func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *stream
 	registry.RegisterAll(containerprovider.New(s.resources).Routes())
 	registry.RegisterAll(stackprovider.New(s.resources).Routes())
 	registry.RegisterAll(emrprovider.New(s.resources).Routes())
+	registry.RegisterAll(emrcontainersprovider.New(s.resources).Routes())
 
 	return registry, streams
 }
@@ -219,7 +221,8 @@ func buildAdapter() *awsadapter.AWSAdapter {
 		"ecs":             &services.ECSCodec{},
 		"dynamodbstreams": &services.DynamoDBStreamsCodec{},
 		"cloudformation":  &services.CloudFormationCodec{},
-		"emr":             &services.EMRCodec{},
+		"emr":              &services.EMRCodec{},
+		"emr-containers":   &services.EMRContainersCodec{},
 	})
 }
 

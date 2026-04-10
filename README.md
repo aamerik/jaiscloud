@@ -109,6 +109,27 @@ s3.create_bucket(Bucket="my-bucket")
 
 > Lambda Invoke uses **echo mode**: the payload you send is returned as the response. No subprocess is spawned. This is intentional — it lets you test fan-out pipelines, event routing, and infrastructure wiring without needing real function code.
 
+### ✅ Amazon EMR (on EC2)
+| Operation | Supported |
+|---|---|
+| RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows | ✅ |
+| ModifyCluster / SetTerminationProtection / SetVisibleToAllUsers | ✅ |
+| AddJobFlowSteps / DescribeStep / ListSteps / CancelSteps | ✅ |
+| AddInstanceFleet / ListInstanceFleets / ModifyInstanceFleet | ✅ |
+| AddInstanceGroups / ListInstanceGroups / ModifyInstanceGroups | ✅ |
+| ListBootstrapActions | ✅ |
+| AddTags / RemoveTags | ✅ |
+| GetBlockPublicAccessConfiguration / PutBlockPublicAccessConfiguration | ✅ |
+| PutManagedScalingPolicy / GetManagedScalingPolicy / RemoveManagedScalingPolicy | ✅ |
+
+### ✅ Amazon EMR on EKS (EMR Containers)
+| Operation | Supported |
+|---|---|
+| CreateVirtualCluster / DescribeVirtualCluster / DeleteVirtualCluster / ListVirtualClusters | ✅ |
+| StartJobRun / DescribeJobRun / CancelJobRun / ListJobRuns | ✅ |
+| CreateManagedEndpoint / DescribeManagedEndpoint / DeleteManagedEndpoint / ListManagedEndpoints | ✅ |
+| TagResource / UntagResource / ListTagsForResource | ✅ |
+
 ---
 
 ## Fidelity Notes
@@ -350,6 +371,8 @@ go test -race -run TestS3 ./tests/integration/
 go test -race -run TestSQS ./tests/integration/
 go test -race -run TestDynamo ./tests/integration/
 go test -race -run TestLambda ./tests/integration/
+go test -race -run TestEMR ./tests/integration/
+go test -race -run TestEMRC ./tests/integration/
 ```
 
 ---

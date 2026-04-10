@@ -13,6 +13,7 @@ import (
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsglue "github.com/aws/aws-sdk-go-v2/service/glue"
 	awsemr "github.com/aws/aws-sdk-go-v2/service/emr"
+	awsemrc "github.com/aws/aws-sdk-go-v2/service/emrcontainers"
 	awscf "github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	awsdynamostreams "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	awsecs "github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -235,6 +236,20 @@ func newEMRClient(t *testing.T) *awsemr.Client {
 		t.Fatalf("load config: %v", err)
 	}
 	return awsemr.NewFromConfig(cfg, func(o *awsemr.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newEMRContainersClient(t *testing.T) *awsemrc.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsemrc.NewFromConfig(cfg, func(o *awsemrc.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
 }

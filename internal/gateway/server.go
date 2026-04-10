@@ -155,6 +155,8 @@ func serviceToProvider(service string) string {
 		return "CloudFormation"
 	case "emr":
 		return "EMR"
+	case "emrcontainers":
+		return "EMRContainers"
 	default:
 		return service
 	}

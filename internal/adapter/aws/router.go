@@ -45,7 +45,7 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 		if svc := extractSigV4Service(auth); svc != "" {
 			switch svc {
 			case "sqs", "dynamodb", "s3", "iam", "sts", "sns", "lambda",
-				"glue", "ecs", "emr", "ec2", "rds", "elasticache",
+				"glue", "ecs", "emr", "emr-containers", "ec2", "rds", "elasticache",
 				"cloudformation", "route53", "dynamodbstreams":
 				return svc, SourceSigV4
 			}
