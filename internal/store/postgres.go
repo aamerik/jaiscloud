@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,16 +19,62 @@ type PostgresResourceStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPostgresResourceStore opens a connection pool, runs migrations, and returns a ready store.
+// poolConfig returns a pgxpool.Config with sensible connection-pool defaults
+// similar to HikariCP: bounded pool size, health checks, and fast connection
+// acquisition timeouts.
+func poolConfig(dsn string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 40
+	cfg.MinConns = 2
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnIdleTime = 10 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	return cfg, nil
+}
+
+// NewPostgresResourceStore opens a connection pool with startup retry, runs
+// migrations, and returns a ready store.  It retries the initial ping up to
+// maxAttempts times with exponential backoff so that the server can be started
+// before the database is ready (e.g. docker-compose spin-up order).
 func NewPostgresResourceStore(ctx context.Context, dsn string) (*PostgresResourceStore, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := poolConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("pgxpool config: %w", err)
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pgxpool.New: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("postgres ping: %w", err)
+
+	const maxAttempts = 10
+	backoff := 500 * time.Millisecond
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		pingErr := pool.Ping(ctx)
+		if pingErr == nil {
+			break
+		}
+		if attempt == maxAttempts {
+			pool.Close()
+			return nil, fmt.Errorf("postgres ping: %w", pingErr)
+		}
+		slog.Warn("postgres not ready, retrying",
+			"attempt", attempt, "max", maxAttempts, "backoff", backoff, "err", pingErr)
+		select {
+		case <-ctx.Done():
+			pool.Close()
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 8*time.Second {
+			backoff *= 2
+		}
 	}
+
 	if err := RunMigrations(ctx, pool); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrations: %w", err)
