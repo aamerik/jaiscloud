@@ -409,6 +409,9 @@ func buildXMLResult(action string, data map[string]any) string {
 	case "SendMessage":
 		sb.WriteString(xmlTag("MessageId", str(data["MessageId"])))
 		sb.WriteString(xmlTag("MD5OfMessageBody", str(data["MD5OfMessageBody"])))
+		if v, ok := data["MD5OfMessageAttributes"]; ok && str(v) != "" {
+			sb.WriteString(xmlTag("MD5OfMessageAttributes", str(v)))
+		}
 	case "ReceiveMessage":
 		if msgs, ok := data["Messages"].([]map[string]any); ok {
 			for _, m := range msgs {
@@ -437,6 +440,9 @@ func buildXMLResult(action string, data map[string]any) string {
 			sb.WriteString(xmlTag("Id", str(s["Id"])))
 			sb.WriteString(xmlTag("MessageId", str(s["MessageId"])))
 			sb.WriteString(xmlTag("MD5OfMessageBody", str(s["MD5OfMessageBody"])))
+			if v, ok := s["MD5OfMessageAttributes"]; ok && str(v) != "" {
+				sb.WriteString(xmlTag("MD5OfMessageAttributes", str(v)))
+			}
 			sb.WriteString("</SendMessageBatchResultEntry>")
 		}
 		for _, f := range batchResultList(data["Failed"]) {

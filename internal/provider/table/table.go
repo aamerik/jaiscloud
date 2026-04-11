@@ -336,6 +336,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 
 	spec := dynamostore.UpdateSpec{
 		UpdateExpression:          strParam(nr.Params, "UpdateExpression"),
+		ConditionExpression:       strParam(nr.Params, "ConditionExpression"),
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
@@ -344,6 +345,9 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
 	updated, err := p.items.UpdateItem(ctx, name, pkHash, key, spec)
 	if err != nil {
+		if isConditionFailed(err) {
+			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
+		}
 		return nil, err
 	}
 	p.appendStreamRecord(name, "MODIFY", pkHash, key, updated, oldItem)

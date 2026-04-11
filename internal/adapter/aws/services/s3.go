@@ -8,10 +8,54 @@ import (
 	"hash/crc32"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"jaiscloud/internal/model"
 )
+
+// decodeAWSChunked strips AWS chunked-upload framing.
+// Each chunk: <hex-size>[;chunk-signature=...]\r\n<data>\r\n
+// Final chunk: 0[;...]\r\n
+// Returns body unchanged if it does not look like aws-chunked format.
+func decodeAWSChunked(body []byte) []byte {
+	var out []byte
+	remaining := body
+	for len(remaining) > 0 {
+		idx := strings.Index(string(remaining), "\r\n")
+		if idx < 0 {
+			break
+		}
+		sizeLine := string(remaining[:idx])
+		if semi := strings.IndexByte(sizeLine, ';'); semi >= 0 {
+			sizeLine = sizeLine[:semi]
+		}
+		sizeLine = strings.TrimSpace(sizeLine)
+		if sizeLine == "" {
+			return body
+		}
+		chunkLen, err := strconv.ParseInt(sizeLine, 16, 64)
+		if err != nil {
+			return body // not aws-chunked, pass through unchanged
+		}
+		remaining = remaining[idx+2:]
+		if chunkLen == 0 {
+			break // final chunk
+		}
+		if int64(len(remaining)) < chunkLen {
+			return body // truncated, pass through
+		}
+		out = append(out, remaining[:chunkLen]...)
+		remaining = remaining[chunkLen:]
+		if len(remaining) >= 2 && remaining[0] == '\r' && remaining[1] == '\n' {
+			remaining = remaining[2:]
+		}
+	}
+	if len(out) == 0 && len(body) > 0 {
+		return body
+	}
+	return out
+}
 
 // s3ChecksumCRC32 returns the base64-encoded IEEE CRC32 of body.
 // The AWS SDK v2 validates this on PutObject / CopyObject / CompleteMultipartUpload responses.
@@ -30,6 +74,13 @@ func (c *S3Codec) ServiceName() string { return "s3" }
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
 func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+	// Decode AWS chunked body so ETag/checksum are computed over actual content.
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Encoding")), "aws-chunked") ||
+		strings.HasPrefix(r.Header.Get("x-amz-content-sha256"), "STREAMING-") ||
+		r.Header.Get("x-amz-decoded-content-length") != "" {
+		body = decodeAWSChunked(body)
+	}
+
 	// Parse path-style: /{bucket}/{key...}
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	var bucket, key string
@@ -53,6 +104,14 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	}
 	if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
 		params["_copy_source"] = cs
+	}
+	// Capture inbound flexible checksum to echo back in response.
+	for _, algo := range []string{"crc32", "crc32c", "sha256", "sha1"} {
+		if v := r.Header.Get("x-amz-checksum-" + algo); v != "" {
+			params["_checksum_header"] = "x-amz-checksum-" + algo
+			params["_checksum_value"] = v
+			break
+		}
 	}
 	// Propagate all URL query params (prefix, delimiter, marker, max-keys, etc.)
 	for k, vs := range query {
@@ -231,9 +290,14 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			h.Set("ETag", etag)
 		}
 		if nr.Action == "PutObject" {
-			// Return CRC32 of the uploaded object data; SDK v2 validates this
-			uploadedBody, _ := nr.Params["_body"].([]byte)
-			h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(uploadedBody))
+			if hdr, ok := nr.Params["_checksum_header"].(string); ok {
+				if val, ok := nr.Params["_checksum_value"].(string); ok {
+					h.Set(hdr, val)
+				}
+			} else {
+				uploadedBody, _ := nr.Params["_body"].([]byte)
+				h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(uploadedBody))
+			}
 		}
 		return resp.HTTPStatus, h, nil
 	}

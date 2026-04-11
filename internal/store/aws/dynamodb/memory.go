@@ -103,6 +103,17 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 	defer s.mu.Unlock()
 	t := s.tableMap(table)
 	existing := t[pkHash]
+
+	if spec.ConditionExpression != "" {
+		check := existing
+		if check == nil {
+			check = map[string]any{}
+		}
+		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues) {
+			return nil, &conditionFailedError{}
+		}
+	}
+
 	if existing == nil {
 		existing = copyItem(item) // create new item from key
 	} else {
@@ -452,8 +463,23 @@ func splitAND(expr string) []string {
 
 func evalCondition(item map[string]any, cond string, names map[string]string, values map[string]any) bool {
 	// "attr = :val" or "attr begins_with :val" etc.
-	// Phase 1: support = and begins_with only.
-	upper := strings.ToUpper(cond)
+	upper := strings.ToUpper(strings.TrimSpace(cond))
+
+	if strings.HasPrefix(upper, "ATTRIBUTE_NOT_EXISTS(") {
+		inner := cond[len("attribute_not_exists("):]
+		inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
+		attr := resolveExprName(strings.TrimSpace(inner), names)
+		_, exists := item[attr]
+		return !exists
+	}
+
+	if strings.HasPrefix(upper, "ATTRIBUTE_EXISTS(") {
+		inner := cond[len("attribute_exists("):]
+		inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
+		attr := resolveExprName(strings.TrimSpace(inner), names)
+		_, exists := item[attr]
+		return exists
+	}
 
 	if strings.Contains(upper, " BEGINS_WITH ") || strings.Contains(upper, "BEGINS_WITH(") {
 		// begins_with(attr, :val)

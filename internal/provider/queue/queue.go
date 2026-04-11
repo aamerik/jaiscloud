@@ -261,10 +261,14 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	md5Body := fmt.Sprintf("%x", md5.Sum([]byte(body)))
-	return provider.OK(map[string]any{
+	resp := map[string]any{
 		"MessageId":        msgID,
 		"MD5OfMessageBody": md5Body,
-	}), nil
+	}
+	if len(msg.MessageAttributes) > 0 {
+		resp["MD5OfMessageAttributes"] = md5MessageAttributes(msg.MessageAttributes)
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -449,6 +453,9 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 				msg.DelayUntil = now.Add(time.Duration(sec) * time.Second)
 			}
 		}
+		if ma, ok := e["MessageAttributes"]; ok {
+			msg.MessageAttributes = parseMessageAttributes(ma)
+		}
 
 		origID, sendErr := p.messages.Send(ctx, msg)
 		if sendErr != nil {
@@ -459,11 +466,15 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 			msgID = origID
 		}
 		md5Body := fmt.Sprintf("%x", md5.Sum([]byte(body)))
-		successful = append(successful, map[string]any{
+		entry := map[string]any{
 			"Id":               id,
 			"MessageId":        msgID,
 			"MD5OfMessageBody": md5Body,
-		})
+		}
+		if len(msg.MessageAttributes) > 0 {
+			entry["MD5OfMessageAttributes"] = md5MessageAttributes(msg.MessageAttributes)
+		}
+		successful = append(successful, entry)
 	}
 
 	return provider.OK(map[string]any{

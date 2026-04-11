@@ -329,3 +329,115 @@ func TestS3_DeleteBucketNotEmpty(t *testing.T) {
 	_, err = c.DeleteBucket(ctx, &awss3.DeleteBucketInput{Bucket: aws.String("notempty")})
 	require.Error(t, err, "expected error when deleting non-empty bucket")
 }
+
+// ─── S3 Flexible Checksum (PutObject) ─────────────────────────────────────────
+
+func TestS3_PutObject_ChecksumCRC32(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("chk-bucket")})
+	require.NoError(t, err)
+
+	body := []byte("checksum-test-body")
+
+	// SDK sends CRC32 checksum; response must echo it back
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:            aws.String("chk-bucket"),
+		Key:               aws.String("obj-crc32"),
+		Body:              bytes.NewReader(body),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	require.NoError(t, err)
+
+	// Verify the object is retrievable with correct content
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("chk-bucket"),
+		Key:    aws.String("obj-crc32"),
+	})
+	require.NoError(t, err)
+	got, _ := io.ReadAll(out.Body)
+	assert.Equal(t, body, got)
+}
+
+func TestS3_PutObject_ChecksumCRC32C(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("chk-bucket-c")})
+	require.NoError(t, err)
+
+	body := []byte("crc32c-test-body")
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:            aws.String("chk-bucket-c"),
+		Key:               aws.String("obj-crc32c"),
+		Body:              bytes.NewReader(body),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32c,
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("chk-bucket-c"),
+		Key:    aws.String("obj-crc32c"),
+	})
+	require.NoError(t, err)
+	got, _ := io.ReadAll(out.Body)
+	assert.Equal(t, body, got)
+}
+
+func TestS3_PutObject_ChecksumSHA256(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("chk-bucket-sha")})
+	require.NoError(t, err)
+
+	body := []byte("sha256-test-body")
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:            aws.String("chk-bucket-sha"),
+		Key:               aws.String("obj-sha256"),
+		Body:              bytes.NewReader(body),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("chk-bucket-sha"),
+		Key:    aws.String("obj-sha256"),
+	})
+	require.NoError(t, err)
+	got, _ := io.ReadAll(out.Body)
+	assert.Equal(t, body, got)
+}
+
+func TestS3_PutObject_NoChecksum_FallbackCRC32(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("chk-bucket-none")})
+	require.NoError(t, err)
+
+	body := []byte("no-checksum-body")
+
+	// No ChecksumAlgorithm → server computes CRC32 fallback, no SDK error
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: aws.String("chk-bucket-none"),
+		Key:    aws.String("obj-no-chk"),
+		Body:   bytes.NewReader(body),
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("chk-bucket-none"),
+		Key:    aws.String("obj-no-chk"),
+	})
+	require.NoError(t, err)
+	got, _ := io.ReadAll(out.Body)
+	assert.Equal(t, body, got)
+}

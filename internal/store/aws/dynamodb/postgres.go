@@ -106,6 +106,17 @@ func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHas
 	if err != nil {
 		return nil, err
 	}
+
+	if spec.ConditionExpression != "" {
+		check := existing
+		if check == nil {
+			check = map[string]any{}
+		}
+		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues) {
+			return nil, &conditionFailedError{}
+		}
+	}
+
 	if existing == nil {
 		existing = copyItem(item)
 	}

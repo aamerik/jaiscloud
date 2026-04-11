@@ -8,6 +8,7 @@ import (
 // UpdateSpec describes a DynamoDB UpdateItem operation.
 type UpdateSpec struct {
 	UpdateExpression          string
+	ConditionExpression       string
 	ExpressionAttributeNames  map[string]string
 	ExpressionAttributeValues map[string]any
 	ReturnValues              string // "NONE", "ALL_OLD", "ALL_NEW", "UPDATED_OLD", "UPDATED_NEW"

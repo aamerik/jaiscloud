@@ -2,9 +2,12 @@ package integration_test
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -846,6 +849,130 @@ func TestSQS_QueryProtocolBatchLimit(t *testing.T) {
 	client.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: out.QueueUrl})
 }
 
+// ─── Test 34: SendMessage MD5OfMessageAttributes ──────────────────────────────
+
+func TestSQS_SendMessageWithAttributes(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("intg-send-attrs")})
+	require.NoError(t, err)
+
+	// Scenario 1: SendMessage with one String attribute — response has MD5OfMessageAttributes
+	sendOut, err := client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    out.QueueUrl,
+		MessageBody: aws.String("body-1"),
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			"color": {DataType: aws.String("String"), StringValue: aws.String("red")},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sendOut.MD5OfMessageAttributes)
+	assert.Equal(t, computeExpectedMD5(map[string]struct {
+		DataType    string
+		StringValue string
+	}{
+		"color": {"String", "red"},
+	}), *sendOut.MD5OfMessageAttributes)
+
+	// Scenario 2: Multiple attributes with different DataTypes — MD5 computed correctly
+	sendOut2, err := client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    out.QueueUrl,
+		MessageBody: aws.String("body-2"),
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			"color":  {DataType: aws.String("String"), StringValue: aws.String("blue")},
+			"count":  {DataType: aws.String("Number"), StringValue: aws.String("99")},
+			"region": {DataType: aws.String("String"), StringValue: aws.String("us-east-1")},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sendOut2.MD5OfMessageAttributes)
+	assert.Equal(t, computeExpectedMD5(map[string]struct {
+		DataType    string
+		StringValue string
+	}{
+		"color":  {"String", "blue"},
+		"count":  {"Number", "99"},
+		"region": {"String", "us-east-1"},
+	}), *sendOut2.MD5OfMessageAttributes)
+
+	// Scenario 3: SendMessage with no attributes — no MD5OfMessageAttributes in response
+	sendOut3, err := client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    out.QueueUrl,
+		MessageBody: aws.String("body-3"),
+	})
+	require.NoError(t, err)
+	assert.Nil(t, sendOut3.MD5OfMessageAttributes)
+}
+
+// ─── Test 35: SendMessageBatch MD5OfMessageAttributes ─────────────────────────
+
+func TestSQS_SendMessageBatchWithAttributes(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("intg-batch-attrs")})
+	require.NoError(t, err)
+
+	resp, err := client.SendMessageBatch(ctx, &sqs.SendMessageBatchInput{
+		QueueUrl: out.QueueUrl,
+		Entries: []types.SendMessageBatchRequestEntry{
+			// Scenario 4: entry with attributes → has MD5OfMessageAttributes
+			{
+				Id:          aws.String("m1"),
+				MessageBody: aws.String("batch-with-attrs"),
+				MessageAttributes: map[string]types.MessageAttributeValue{
+					"env": {DataType: aws.String("String"), StringValue: aws.String("prod")},
+				},
+			},
+			// Scenario 5: entry without attributes → no MD5OfMessageAttributes
+			{
+				Id:          aws.String("m2"),
+				MessageBody: aws.String("batch-no-attrs"),
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Successful, 2)
+
+	byID := map[string]types.SendMessageBatchResultEntry{}
+	for _, e := range resp.Successful {
+		byID[*e.Id] = e
+	}
+
+	require.Contains(t, byID, "m1")
+	require.NotNil(t, byID["m1"].MD5OfMessageAttributes)
+	assert.Equal(t, computeExpectedMD5(map[string]struct {
+		DataType    string
+		StringValue string
+	}{
+		"env": {"String", "prod"},
+	}), *byID["m1"].MD5OfMessageAttributes)
+
+	require.Contains(t, byID, "m2")
+	assert.Nil(t, byID["m2"].MD5OfMessageAttributes)
+
+	// Scenario 6: attributes stored and returned on ReceiveMessage
+	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:              out.QueueUrl,
+		MaxNumberOfMessages:   10,
+		MessageAttributeNames: []string{"All"},
+	})
+	require.NoError(t, err)
+
+	attrMsgs := 0
+	for _, m := range recv.Messages {
+		if _, ok := m.MessageAttributes["env"]; ok {
+			attrMsgs++
+			assert.Equal(t, "prod", aws.ToString(m.MessageAttributes["env"].StringValue))
+			require.NotNil(t, m.MD5OfMessageAttributes)
+		}
+	}
+	assert.Equal(t, 1, attrMsgs, "exactly one message should have 'env' attribute")
+}
+
 // ─── Test 33: event_source_mapping_to_lambda — deferred to Phase 1 ───────────
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -881,4 +1008,30 @@ func failIDs(entries []types.BatchResultErrorEntry) []string {
 		out[i] = *e.Id
 	}
 	return out
+}
+
+func computeExpectedMD5(attrs map[string]struct {
+	DataType    string
+	StringValue string
+}) string {
+	names := make([]string, 0, len(attrs))
+	for k := range attrs {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	h := md5.New()
+	buf4 := make([]byte, 4)
+	writeField := func(b []byte) {
+		binary.BigEndian.PutUint32(buf4, uint32(len(b)))
+		h.Write(buf4)
+		h.Write(b)
+	}
+	for _, name := range names {
+		attr := attrs[name]
+		writeField([]byte(name))
+		writeField([]byte(attr.DataType))
+		h.Write([]byte{1})
+		writeField([]byte(attr.StringValue))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

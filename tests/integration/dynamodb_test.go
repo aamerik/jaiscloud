@@ -701,3 +701,106 @@ func TestDynamoDB_TableTags(t *testing.T) {
 	assert.Len(t, listOut2.Tags, 1)
 	assert.Equal(t, "owner", aws.ToString(listOut2.Tags[0].Key))
 }
+
+// ─── UpdateItem ConditionExpression ───────────────────────────────────────────
+
+func TestDynamoDB_UpdateItem_ConditionExpression(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "update-cond-tbl")
+
+	// Scenario 1: attribute_exists on non-existent item → ConditionalCheckFailedException
+	_, err := client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET #n = :v"),
+		ConditionExpression: aws.String("attribute_exists(ownerName)"),
+		ExpressionAttributeNames:  map[string]string{"#n": "ownerName"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberS{Value: "alice"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ConditionalCheckFailedException")
+
+	// Scenario 2: attribute_not_exists on non-existent item → succeeds, creates item
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET ownerName = :v"),
+		ConditionExpression: aws.String("attribute_not_exists(ownerName)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberS{Value: "alice"}},
+	})
+	require.NoError(t, err)
+
+	item, err := client.GetItem(ctx, &awsdynamo.GetItemInput{
+		TableName: aws.String("update-cond-tbl"),
+		Key:       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "alice", item.Item["ownerName"].(*types.AttributeValueMemberS).Value)
+
+	// Scenario 3: attribute_exists on an item that has the attribute → succeeds
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET ownerName = :v"),
+		ConditionExpression: aws.String("attribute_exists(ownerName)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberS{Value: "bob"}},
+	})
+	require.NoError(t, err)
+
+	item, err = client.GetItem(ctx, &awsdynamo.GetItemInput{
+		TableName: aws.String("update-cond-tbl"),
+		Key:       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "bob", item.Item["ownerName"].(*types.AttributeValueMemberS).Value)
+
+	// Scenario 4: attribute_not_exists on an item that already has the attribute → fails
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET ownerName = :v"),
+		ConditionExpression: aws.String("attribute_not_exists(ownerName)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberS{Value: "carol"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ConditionalCheckFailedException")
+
+	// Scenario 5: no ConditionExpression on non-existent item → succeeds (unchanged behaviour)
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:        aws.String("update-cond-tbl"),
+		Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k2"}},
+		UpdateExpression: aws.String("SET score = :v"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberN{Value: "42"}},
+	})
+	require.NoError(t, err)
+
+	// Scenario 6: condition with ExpressionAttributeNames/#n = :v matching → succeeds, non-matching → fails
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET ownerName = :new"),
+		ConditionExpression: aws.String("#n = :expected"),
+		ExpressionAttributeNames:  map[string]string{"#n": "ownerName"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":expected": &types.AttributeValueMemberS{Value: "bob"},
+			":new":      &types.AttributeValueMemberS{Value: "dave"},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = client.UpdateItem(ctx, &awsdynamo.UpdateItemInput{
+		TableName:           aws.String("update-cond-tbl"),
+		Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}},
+		UpdateExpression:    aws.String("SET ownerName = :new"),
+		ConditionExpression: aws.String("#n = :expected"),
+		ExpressionAttributeNames:  map[string]string{"#n": "ownerName"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":expected": &types.AttributeValueMemberS{Value: "wrong"},
+			":new":      &types.AttributeValueMemberS{Value: "eve"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ConditionalCheckFailedException")
+}
