@@ -1,6 +1,10 @@
 # ─── Stage 1: build ───────────────────────────────────────────────────────────
 FROM golang:1.26-alpine AS builder
 
+# Build args injected by Docker Buildx for multi-platform builds
+ARG TARGETOS
+ARG TARGETARCH
+
 # ca-certificates needed for TLS to external registries during `go mod download`
 RUN apk add --no-cache ca-certificates git
 
@@ -12,7 +16,7 @@ RUN go mod download
 
 # Copy source and build a fully static binary
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /jaiscloud ./cmd/jaiscloud/
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
