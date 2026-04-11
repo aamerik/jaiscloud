@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/model"
@@ -265,10 +266,14 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 // ─── Invoke ───────────────────────────────────────────────────────────────────
 
 // InvokeFunction echoes the payload back — mock Lambda behaviour.
+// When InvocationType=Event (async), returns 202 with empty body.
 func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "_function_name")
 	if _, err := p.loadConfig(ctx, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	if strings.EqualFold(strParam(nr.Params, "_invocation_type"), "Event") {
+		return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 	}
 	payload, _ := nr.Params["_payload"].([]byte)
 	return &model.ProviderResponse{

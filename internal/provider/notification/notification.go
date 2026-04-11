@@ -322,7 +322,8 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 		}
 		switch sd.Protocol {
 		case "sqs":
-			p.deliverToSQS(ctx, sd.Endpoint, topicArn, messageID, message, subject, nr.Region, nr.AccountID, msgAttrs)
+			rawDelivery := sd.Attributes["RawMessageDelivery"] == "true"
+			p.deliverToSQS(ctx, sd.Endpoint, topicArn, messageID, message, subject, nr.Region, nr.AccountID, msgAttrs, rawDelivery)
 		// http/https: log and no-op for Phase 1
 		}
 	}
@@ -330,23 +331,31 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
-func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any) {
+func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any, rawDelivery bool) {
 	if p.messages == nil {
 		return
 	}
-	// SNS wraps the message in a JSON envelope when delivering to SQS.
-	envelope := map[string]any{
-		"Type":      "Notification",
-		"MessageId": messageID,
-		"TopicArn":  topicArn,
-		"Subject":   subject,
-		"Message":   message,
-		"Timestamp": time.Now().UTC().Format(time.RFC3339),
+
+	var bodyStr string
+	if rawDelivery {
+		// RawMessageDelivery: deliver the message body directly, no JSON envelope.
+		bodyStr = message
+	} else {
+		// SNS wraps the message in a JSON envelope when delivering to SQS.
+		envelope := map[string]any{
+			"Type":      "Notification",
+			"MessageId": messageID,
+			"TopicArn":  topicArn,
+			"Subject":   subject,
+			"Message":   message,
+			"Timestamp": time.Now().UTC().Format(time.RFC3339),
+		}
+		if len(msgAttrs) > 0 {
+			envelope["MessageAttributes"] = msgAttrs
+		}
+		b, _ := json.Marshal(envelope)
+		bodyStr = string(b)
 	}
-	if len(msgAttrs) > 0 {
-		envelope["MessageAttributes"] = msgAttrs
-	}
-	body, _ := json.Marshal(envelope)
 	// Each SQS delivery gets its own unique MessageID — the SNS notification
 	// messageID is preserved in the envelope body but must not be reused as the
 	// SQS row key, otherwise fan-out to N queues would conflict on the PK.
@@ -354,7 +363,7 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, mess
 	msg := sqsstore.SQSMessage{
 		MessageID: sqsMsgID,
 		QueueURL:  queueURL,
-		Body:      string(body),
+		Body:      bodyStr,
 		SentAt:    time.Now(),
 	}
 	_, _ = p.messages.Send(ctx, msg)

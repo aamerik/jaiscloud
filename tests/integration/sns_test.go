@@ -9,6 +9,7 @@ import (
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -397,4 +398,51 @@ func TestSNS_MessageAttributes(t *testing.T) {
 	eventType, ok := attrs["event-type"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "order-placed", eventType["StringValue"])
+}
+
+func TestSNS_RawMessageDelivery(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+
+	// Create topic and queue
+	topicOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("raw-topic")})
+	require.NoError(t, err)
+	topicArn := aws.ToString(topicOut.TopicArn)
+
+	qOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("raw-queue")})
+	require.NoError(t, err)
+	qURL := aws.ToString(qOut.QueueUrl)
+
+	// Subscribe with RawMessageDelivery=true
+	subOut, err := snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: aws.String(topicArn),
+		Protocol: aws.String("sqs"),
+		Endpoint: aws.String(qURL),
+	})
+	require.NoError(t, err)
+
+	_, err = snsClient.SetSubscriptionAttributes(ctx, &awssns.SetSubscriptionAttributesInput{
+		SubscriptionArn: subOut.SubscriptionArn,
+		AttributeName:   aws.String("RawMessageDelivery"),
+		AttributeValue:  aws.String("true"),
+	})
+	require.NoError(t, err)
+
+	// Publish
+	_, err = snsClient.Publish(ctx, &awssns.PublishInput{
+		TopicArn: aws.String(topicArn),
+		Message:  aws.String("raw-payload"),
+	})
+	require.NoError(t, err)
+
+	// Receive — body should be the raw string, not a JSON envelope
+	rOut, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(qURL),
+		MaxNumberOfMessages: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, rOut.Messages, 1)
+	assert.Equal(t, "raw-payload", aws.ToString(rOut.Messages[0].Body))
 }

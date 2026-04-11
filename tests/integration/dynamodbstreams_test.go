@@ -278,3 +278,80 @@ func TestDynamoDBStreams_NextShardIterator(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, r2.Records, 1)
 }
+
+func TestDynamoDB_Streams_ViewTypes(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	for _, tc := range []struct {
+		viewType string
+		wantNew  bool
+		wantOld  bool
+	}{
+		{"NEW_IMAGE", true, false},
+		{"OLD_IMAGE", false, true},
+		{"KEYS_ONLY", false, false},
+		{"NEW_AND_OLD_IMAGES", true, true},
+	} {
+		tc := tc
+		t.Run(tc.viewType, func(t *testing.T) {
+			tableName := "stream-view-" + tc.viewType
+			_, err := client.CreateTable(ctx, &awsdynamo.CreateTableInput{
+				TableName:            aws.String(tableName),
+				KeySchema:            []dyntype.KeySchemaElement{{AttributeName: aws.String("PK"), KeyType: dyntype.KeyTypeHash}},
+				AttributeDefinitions: []dyntype.AttributeDefinition{{AttributeName: aws.String("PK"), AttributeType: dyntype.ScalarAttributeTypeS}},
+				BillingMode:          dyntype.BillingModePayPerRequest,
+				StreamSpecification: &dyntype.StreamSpecification{
+					StreamEnabled:  aws.Bool(true),
+					StreamViewType: dyntype.StreamViewType(tc.viewType),
+				},
+			})
+			require.NoError(t, err)
+
+			// Write an item to generate an INSERT record.
+			_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+				TableName: aws.String(tableName),
+				Item: map[string]dyntype.AttributeValue{
+					"PK":   &dyntype.AttributeValueMemberS{Value: "k1"},
+					"data": &dyntype.AttributeValueMemberS{Value: "hello"},
+				},
+			})
+			require.NoError(t, err)
+
+			// Get stream ARN from table description.
+			descOut, err := client.DescribeTable(ctx, &awsdynamo.DescribeTableInput{TableName: aws.String(tableName)})
+			require.NoError(t, err)
+			streamArn := aws.ToString(descOut.Table.LatestStreamArn)
+			require.NotEmpty(t, streamArn)
+
+			dsOut, err := streams.DescribeStream(ctx, &awsstreams.DescribeStreamInput{StreamArn: aws.String(streamArn)})
+			require.NoError(t, err)
+			require.NotEmpty(t, dsOut.StreamDescription.Shards)
+
+			itOut, err := streams.GetShardIterator(ctx, &awsstreams.GetShardIteratorInput{
+				StreamArn:         aws.String(streamArn),
+				ShardId:           dsOut.StreamDescription.Shards[0].ShardId,
+				ShardIteratorType: streamtypes.ShardIteratorTypeTrimHorizon,
+			})
+			require.NoError(t, err)
+
+			recOut, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{
+				ShardIterator: itOut.ShardIterator,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, recOut.Records)
+
+			rec := recOut.Records[0]
+			if tc.wantNew {
+				assert.NotNil(t, rec.Dynamodb.NewImage, "expected NewImage for %s", tc.viewType)
+			} else {
+				assert.Nil(t, rec.Dynamodb.NewImage, "expected no NewImage for %s", tc.viewType)
+			}
+			// INSERT records never have OldImage (no prior version) — check it's absent
+			// regardless of view type (that is always correct for INSERT).
+			assert.Nil(t, rec.Dynamodb.OldImage, "INSERT records must not have OldImage")
+		})
+	}
+}

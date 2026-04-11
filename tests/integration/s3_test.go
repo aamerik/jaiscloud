@@ -441,3 +441,101 @@ func TestS3_PutObject_NoChecksum_FallbackCRC32(t *testing.T) {
 	got, _ := io.ReadAll(out.Body)
 	assert.Equal(t, body, got)
 }
+
+func TestS3_RangeRead(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("range-bucket")})
+	require.NoError(t, err)
+
+	body := []byte("Hello, World!")
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: aws.String("range-bucket"),
+		Key:    aws.String("obj"),
+		Body:   bytes.NewReader(body),
+	})
+	require.NoError(t, err)
+
+	// bytes=7-11 → "World"
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("range-bucket"),
+		Key:    aws.String("obj"),
+		Range:  aws.String("bytes=7-11"),
+	})
+	require.NoError(t, err)
+	got, _ := io.ReadAll(out.Body)
+	assert.Equal(t, []byte("World"), got)
+
+	// bytes=0-4 → "Hello"
+	out2, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("range-bucket"),
+		Key:    aws.String("obj"),
+		Range:  aws.String("bytes=0-4"),
+	})
+	require.NoError(t, err)
+	got2, _ := io.ReadAll(out2.Body)
+	assert.Equal(t, []byte("Hello"), got2)
+}
+
+func TestS3_ObjectUserMetadata(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("meta-bucket")})
+	require.NoError(t, err)
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:   aws.String("meta-bucket"),
+		Key:      aws.String("obj"),
+		Body:     strings.NewReader("payload"),
+		Metadata: map[string]string{"author": "alice", "version": "2"},
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("meta-bucket"),
+		Key:    aws.String("obj"),
+	})
+	require.NoError(t, err)
+	io.ReadAll(out.Body)
+	assert.Equal(t, "alice", out.Metadata["author"])
+	assert.Equal(t, "2", out.Metadata["version"])
+}
+
+func TestS3_BatchDeleteObjects(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("batch-del-bucket")})
+	require.NoError(t, err)
+
+	for _, key := range []string{"a", "b", "c"} {
+		_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: aws.String("batch-del-bucket"),
+			Key:    aws.String(key),
+			Body:   strings.NewReader("x"),
+		})
+		require.NoError(t, err)
+	}
+
+	delOut, err := c.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+		Bucket: aws.String("batch-del-bucket"),
+		Delete: &types.Delete{
+			Objects: []types.ObjectIdentifier{
+				{Key: aws.String("a")},
+				{Key: aws.String("c")},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Len(t, delOut.Deleted, 2)
+
+	listOut, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: aws.String("batch-del-bucket")})
+	require.NoError(t, err)
+	require.Len(t, listOut.Contents, 1)
+	assert.Equal(t, "b", aws.ToString(listOut.Contents[0].Key))
+}

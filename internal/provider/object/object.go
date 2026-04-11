@@ -195,11 +195,28 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		ContentType:  contentType,
 		LastModified: time.Now().UTC(),
 		StorageClass: "STANDARD",
+		Metadata:     extractUserMetadata(nr.Params),
 	}
 	if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"ETag": etagVal}}, nil
+}
+
+// extractUserMetadata collects x-amz-meta-* headers stored under "_meta_*" params.
+func extractUserMetadata(params map[string]any) map[string]string {
+	var m map[string]string
+	for k, v := range params {
+		if strings.HasPrefix(k, "_meta_") {
+			if s, ok := v.(string); ok {
+				if m == nil {
+					m = make(map[string]string)
+				}
+				m[strings.TrimPrefix(k, "_meta_")] = s
+			}
+		}
+	}
+	return m
 }
 
 func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -216,17 +233,87 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
 
+	status := 200
+	rangeHdr := strParam(nr.Params, "_range")
+	if rangeHdr != "" {
+		start, end, ok := parseByteRange(rangeHdr, int64(len(body)))
+		if !ok {
+			return nil, model.NewProviderError("InvalidRange", "The requested range is not satisfiable", 416)
+		}
+		body = body[start : end+1]
+		status = 206
+	}
+
+	data := map[string]any{
+		"_raw_body":     body,
+		"_passthrough":  true,
+		"_content_type": m.ContentType,
+		"ETag":          m.ETag,
+		"ContentLength": int64(len(body)),
+		"LastModified":  m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
+	}
+	if status == 206 {
+		data["_status"] = status
+	}
+	// Return user metadata so the codec can emit x-amz-meta-* headers.
+	if len(m.Metadata) > 0 {
+		data["_metadata"] = m.Metadata
+	}
+
 	return &model.ProviderResponse{
-		HTTPStatus: 200,
-		Data: map[string]any{
-			"_raw_body":     body,
-			"_passthrough":  true,
-			"_content_type": m.ContentType,
-			"ETag":          m.ETag,
-			"ContentLength": m.Size,
-			"LastModified":  m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
-		},
+		HTTPStatus: status,
+		Data:       data,
 	}, nil
+}
+
+// parseByteRange parses a "bytes=<start>-<end>" Range header.
+// Returns inclusive [start, end] indices and true on success.
+func parseByteRange(hdr string, size int64) (int64, int64, bool) {
+	hdr = strings.TrimSpace(hdr)
+	if !strings.HasPrefix(hdr, "bytes=") {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(hdr, "bytes=")
+	// Only handle single range (no multi-range)
+	if strings.Contains(spec, ",") {
+		return 0, 0, false
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	startStr, endStr := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	var start, end int64
+	if startStr == "" {
+		// Suffix range: bytes=-N (last N bytes)
+		n, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || n <= 0 {
+			return 0, 0, false
+		}
+		start = size - n
+		if start < 0 {
+			start = 0
+		}
+		end = size - 1
+	} else {
+		var err error
+		start, err = strconv.ParseInt(startStr, 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		if endStr == "" {
+			end = size - 1
+		} else {
+			end, err = strconv.ParseInt(endStr, 10, 64)
+			if err != nil {
+				return 0, 0, false
+			}
+		}
+	}
+	if start < 0 || end >= size || start > end {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

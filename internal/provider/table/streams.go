@@ -200,15 +200,36 @@ func tableNameFromStreamArn(arn string) string {
 }
 
 // appendStreamRecord writes a record to the stream store if streams are enabled.
+// The record images are filtered according to the table's StreamViewType.
 func (p *TableProvider) appendStreamRecord(tableName, eventName, eventID string, keys, newImg, oldImg map[string]any) {
 	if p.streams == nil || !p.streams.IsEnabled(tableName) {
 		return
 	}
+	// Look up StreamViewType; default to NEW_AND_OLD_IMAGES.
+	ts, err := p.loadTable(context.Background(), tableName)
+	viewType := "NEW_AND_OLD_IMAGES"
+	if err == nil && ts.StreamViewType != "" {
+		viewType = ts.StreamViewType
+	}
+
+	var recNew, recOld map[string]any
+	switch viewType {
+	case "KEYS_ONLY":
+		// No image data — only keys are included.
+	case "NEW_IMAGE":
+		recNew = newImg
+	case "OLD_IMAGE":
+		recOld = oldImg
+	default: // NEW_AND_OLD_IMAGES
+		recNew = newImg
+		recOld = oldImg
+	}
+
 	p.streams.Append(tableName, streamstore.Record{
 		EventID:   eventID,
 		EventName: eventName,
 		Keys:      keys,
-		NewImage:  newImg,
-		OldImage:  oldImg,
+		NewImage:  recNew,
+		OldImage:  recOld,
 	})
 }

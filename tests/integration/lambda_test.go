@@ -242,3 +242,29 @@ func TestLambda_GetFunctionConfiguration(t *testing.T) {
 	assert.Equal(t, "arn:aws:iam::000000000000:role/exec-role", aws.ToString(cfgOut.Role))
 	assert.Equal(t, types.StateActive, cfgOut.State)
 }
+
+func TestLambda_AsyncInvoke(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	_, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("async-func"),
+		Runtime:      types.RuntimeNodejs18x,
+		Role:         aws.String("arn:aws:iam::000000000000:role/exec-role"),
+		Handler:      aws.String("index.handler"),
+		Code:         &types.FunctionCode{ZipFile: []byte("x")},
+	})
+	require.NoError(t, err)
+
+	// InvocationType=Event → 202, empty body
+	out, err := c.Invoke(ctx, &awslambda.InvokeInput{
+		FunctionName:   aws.String("async-func"),
+		InvocationType: types.InvocationTypeEvent,
+		Payload:        []byte(`{"key":"value"}`),
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 202, out.StatusCode)
+	assert.Empty(t, out.Payload)
+}
+

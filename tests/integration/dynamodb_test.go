@@ -804,3 +804,108 @@ func TestDynamoDB_UpdateItem_ConditionExpression(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ConditionalCheckFailedException")
 }
+
+func TestDynamoDB_BatchWriteItem_Delete(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+
+	_, err := client.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:            aws.String("batch-del-tbl"),
+		KeySchema:            []types.KeySchemaElement{{AttributeName: aws.String("PK"), KeyType: types.KeyTypeHash}},
+		AttributeDefinitions: []types.AttributeDefinition{{AttributeName: aws.String("PK"), AttributeType: types.ScalarAttributeTypeS}},
+		BillingMode:          types.BillingModePayPerRequest,
+	})
+	require.NoError(t, err)
+
+	// Write 3 items
+	_, err = client.BatchWriteItem(ctx, &awsdynamo.BatchWriteItemInput{
+		RequestItems: map[string][]types.WriteRequest{
+			"batch-del-tbl": {
+				{PutRequest: &types.PutRequest{Item: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}}}},
+				{PutRequest: &types.PutRequest{Item: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k2"}}}},
+				{PutRequest: &types.PutRequest{Item: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k3"}}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Delete k1 and k3 via BatchWriteItem
+	_, err = client.BatchWriteItem(ctx, &awsdynamo.BatchWriteItemInput{
+		RequestItems: map[string][]types.WriteRequest{
+			"batch-del-tbl": {
+				{DeleteRequest: &types.DeleteRequest{Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k1"}}}},
+				{DeleteRequest: &types.DeleteRequest{Key: map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "k3"}}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Only k2 should remain
+	scanOut, err := client.Scan(ctx, &awsdynamo.ScanInput{TableName: aws.String("batch-del-tbl")})
+	require.NoError(t, err)
+	require.Len(t, scanOut.Items, 1)
+	assert.Equal(t, "k2", scanOut.Items[0]["PK"].(*types.AttributeValueMemberS).Value)
+}
+
+func TestDynamoDB_ScanPagination(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+
+	_, err := client.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:            aws.String("scan-page-tbl"),
+		KeySchema:            []types.KeySchemaElement{{AttributeName: aws.String("PK"), KeyType: types.KeyTypeHash}},
+		AttributeDefinitions: []types.AttributeDefinition{{AttributeName: aws.String("PK"), AttributeType: types.ScalarAttributeTypeS}},
+		BillingMode:          types.BillingModePayPerRequest,
+	})
+	require.NoError(t, err)
+
+	// Write 5 items
+	for i := 1; i <= 5; i++ {
+		_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("scan-page-tbl"),
+			Item:      map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("item%d", i)}},
+		})
+		require.NoError(t, err)
+	}
+
+	// Page 1: limit=2
+	page1, err := client.Scan(ctx, &awsdynamo.ScanInput{
+		TableName: aws.String("scan-page-tbl"),
+		Limit:     aws.Int32(2),
+	})
+	require.NoError(t, err)
+	assert.Len(t, page1.Items, 2)
+	assert.NotNil(t, page1.LastEvaluatedKey, "expected a pagination cursor")
+
+	// Page 2: continue from cursor
+	page2, err := client.Scan(ctx, &awsdynamo.ScanInput{
+		TableName:         aws.String("scan-page-tbl"),
+		Limit:             aws.Int32(2),
+		ExclusiveStartKey: page1.LastEvaluatedKey,
+	})
+	require.NoError(t, err)
+	assert.Len(t, page2.Items, 2)
+
+	// Page 3: last item
+	page3, err := client.Scan(ctx, &awsdynamo.ScanInput{
+		TableName:         aws.String("scan-page-tbl"),
+		ExclusiveStartKey: page2.LastEvaluatedKey,
+	})
+	require.NoError(t, err)
+	assert.Len(t, page3.Items, 1)
+	assert.Nil(t, page3.LastEvaluatedKey)
+
+	// All keys across pages are unique
+	seen := map[string]bool{}
+	for _, page := range [][]map[string]types.AttributeValue{page1.Items, page2.Items, page3.Items} {
+		for _, item := range page {
+			key := item["PK"].(*types.AttributeValueMemberS).Value
+			assert.False(t, seen[key], "duplicate key %s across pages", key)
+			seen[key] = true
+		}
+	}
+	assert.Len(t, seen, 5)
+}
+

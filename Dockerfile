@@ -1,5 +1,6 @@
 # ─── Stage 1: build ───────────────────────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+# --platform=$BUILDPLATFORM ensures the correct Go binary is used for the target architecture in multi-platform builds.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 # Build args injected by Docker Buildx for multi-platform builds
 ARG TARGETOS

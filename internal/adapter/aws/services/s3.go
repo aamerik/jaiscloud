@@ -105,6 +105,16 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if cs := r.Header.Get("X-Amz-Copy-Source"); cs != "" {
 		params["_copy_source"] = cs
 	}
+	if rng := r.Header.Get("Range"); rng != "" {
+		params["_range"] = rng
+	}
+	// Capture x-amz-meta-* user metadata headers.
+	for k, vs := range r.Header {
+		lower := strings.ToLower(k)
+		if strings.HasPrefix(lower, "x-amz-meta-") && len(vs) > 0 {
+			params["_meta_"+strings.TrimPrefix(lower, "x-amz-meta-")] = vs[0]
+		}
+	}
 	// Capture inbound flexible checksum to echo back in response.
 	for _, algo := range []string{"crc32", "crc32c", "sha256", "sha1"} {
 		if v := r.Header.Get("x-amz-checksum-" + algo); v != "" {
@@ -245,7 +255,7 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 // ─── Encode ───────────────────────────────────────────────────────────────────
 
 func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
-	// Raw body passthrough (GetObject)
+	// Raw body passthrough (GetObject / range reads)
 	if pass, _ := resp.Data["_passthrough"].(bool); pass {
 		h := http.Header{}
 		if ct, ok := resp.Data["_content_type"].(string); ok && ct != "" {
@@ -262,10 +272,20 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 		if cl, ok := resp.Data["ContentLength"]; ok {
 			h.Set("Content-Length", fmt.Sprintf("%v", cl))
 		}
+		// Emit x-amz-meta-* user metadata headers.
+		if md, ok := resp.Data["_metadata"].(map[string]string); ok {
+			for k, v := range md {
+				h.Set("x-amz-meta-"+k, v)
+			}
+		}
 		body, _ := resp.Data["_raw_body"].([]byte)
 		// SDK v2 validates CRC32 of the object data on GetObject responses
 		h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
-		return resp.HTTPStatus, h, body
+		status := resp.HTTPStatus
+		if s, ok := resp.Data["_status"].(int); ok {
+			status = s
+		}
+		return status, h, body
 	}
 
 	// HeadObject / HeadBucket — headers only, no body
