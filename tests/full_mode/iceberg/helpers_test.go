@@ -110,6 +110,36 @@ func newDynamoClientAt(t *testing.T, host string) *awsdynamo.Client {
 	})
 }
 
+// ─── run-scoped naming helpers ────────────────────────────────────────────────
+
+// icebergDB returns the Glue database name for this test run.
+// Each invocation of `go test` gets a unique 6-hex-char suffix so that
+// concurrent or back-to-back runs never conflict on the same database name.
+func icebergDB() string { return "iceberg_test_" + testRunID }
+
+// tableLocation returns the S3 LOCATION clause value for an Iceberg table in
+// this run (using the s3:// scheme consumed by Iceberg's S3FileIO).
+func tableLocation(table string) string {
+	return fmt.Sprintf("s3://iceberg-warehouse/%s/%s", testRunID, table)
+}
+
+// outputLoc returns the s3a:// URI used in INSERT OVERWRITE DIRECTORY for this run.
+func outputLoc(dir string) string {
+	return fmt.Sprintf("s3a://iceberg-warehouse/%s/%s/", testRunID, dir)
+}
+
+// outputPrefix returns the S3 key prefix for assertions on output directories
+// (bucket is always "iceberg-warehouse").
+func outputPrefix(dir string) string {
+	return fmt.Sprintf("%s/%s/", testRunID, dir)
+}
+
+// tablePrefix returns the S3 key prefix for a table's sub-directory (e.g.
+// "metadata/" or "data/") — used with countS3Objects / hasS3Objects.
+func tablePrefix(table, subdir string) string {
+	return fmt.Sprintf("%s/%s/%s", testRunID, table, subdir)
+}
+
 // ─── reset helpers ────────────────────────────────────────────────────────────
 
 // resetIcebergTables drops named Glue tables so each test starts clean.
@@ -117,7 +147,7 @@ func resetIcebergTables(t *testing.T, glueClient *awsglue.Client, tableNames ...
 	t.Helper()
 	for _, name := range tableNames {
 		_, _ = glueClient.DeleteTable(context.Background(), &awsglue.DeleteTableInput{
-			DatabaseName: aws.String("iceberg_test_db"),
+			DatabaseName: aws.String(icebergDB()),
 			Name:         aws.String(name),
 		})
 	}
@@ -236,7 +266,7 @@ func icebergSparkConfForHost(host string) []string {
 	return []string{
 		"spark.sql.catalog.glue=org.apache.iceberg.spark.SparkCatalog",
 		"spark.sql.catalog.glue.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog",
-		"spark.sql.catalog.glue.warehouse=s3://iceberg-warehouse/",
+		fmt.Sprintf("spark.sql.catalog.glue.warehouse=s3://iceberg-warehouse/%s/", testRunID),
 		"spark.sql.catalog.glue.io-impl=org.apache.iceberg.aws.s3.S3FileIO",
 		// No distributed lock manager — each Spark job runs in its own JVM so the
 		// default InMemoryLockManager is sufficient for single-writer tests.

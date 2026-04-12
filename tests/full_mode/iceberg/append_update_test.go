@@ -25,31 +25,31 @@ func TestIceberg_GlueCatalog_AppendMultipleBatches(t *testing.T) {
 	// Job 1 — Create table and insert batch 1 (ids 1–100).
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-batch1",
-		SQL: `
-CREATE TABLE IF NOT EXISTS glue.iceberg_test_db.ledger (
+		SQL: fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS glue.%s.ledger (
   id       INT,
   batch    INT,
   amount   DOUBLE
 )
 USING iceberg
-LOCATION 's3://iceberg-warehouse/ledger';
+LOCATION '%s';
 
-INSERT INTO glue.iceberg_test_db.ledger
+INSERT INTO glue.%s.ledger
 SELECT id, 1, CAST(id AS DOUBLE) * 1.0
 FROM range(1, 101);
-`,
+`, icebergDB(), tableLocation("ledger"), icebergDB()),
 	})
 
 	// Verify count after batch 1.
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-count1",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/ledger-count1/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.ledger;
+`, outputLoc("ledger-count1"), icebergDB()),
 	})
-	cnt1 := findS3JSON(t, s3Client, "iceberg-warehouse", "ledger-count1/")
+	cnt1 := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("ledger-count1"))
 	if v, _ := cnt1["cnt"].(float64); int(v) != 100 {
 		t.Errorf("after batch 1: expected cnt=100, got %v", cnt1["cnt"])
 	}
@@ -57,23 +57,23 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
 	// Job 2 — Append batch 2 (ids 101–200).
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-batch2",
-		SQL: `
-INSERT INTO glue.iceberg_test_db.ledger
+		SQL: fmt.Sprintf(`
+INSERT INTO glue.%s.ledger
 SELECT id + 100, 2, CAST(id AS DOUBLE) * 2.0
 FROM range(1, 101);
-`,
+`, icebergDB()),
 	})
 
 	// Verify count after batch 2.
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-count2",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/ledger-count2/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.ledger;
+`, outputLoc("ledger-count2"), icebergDB()),
 	})
-	cnt2 := findS3JSON(t, s3Client, "iceberg-warehouse", "ledger-count2/")
+	cnt2 := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("ledger-count2"))
 	if v, _ := cnt2["cnt"].(float64); int(v) != 200 {
 		t.Errorf("after batch 2: expected cnt=200, got %v", cnt2["cnt"])
 	}
@@ -81,11 +81,11 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
 	// Job 3 — Append batch 3 (ids 201–300).
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-batch3",
-		SQL: `
-INSERT INTO glue.iceberg_test_db.ledger
+		SQL: fmt.Sprintf(`
+INSERT INTO glue.%s.ledger
 SELECT id + 200, 3, CAST(id AS DOUBLE) * 3.0
 FROM range(1, 101);
-`,
+`, icebergDB()),
 	})
 
 	// ── Final assertions ──────────────────────────────────────────────────────
@@ -93,13 +93,13 @@ FROM range(1, 101);
 	// a. Total count = 300.
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-count-total",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/ledger-total/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.ledger;
+`, outputLoc("ledger-total"), icebergDB()),
 	})
-	total := findS3JSON(t, s3Client, "iceberg-warehouse", "ledger-total/")
+	total := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("ledger-total"))
 	if v, _ := total["cnt"].(float64); int(v) != 300 {
 		t.Errorf("expected total cnt=300, got %v", total["cnt"])
 	}
@@ -107,29 +107,29 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.ledger;
 	// b. Per-batch counts — each batch contributes exactly 100 rows.
 	runSparkSQL(t, SparkJob{
 		Name: "ledger-by-batch",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/ledger-by-batch/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
 SELECT batch, COUNT(*) AS cnt
-FROM glue.iceberg_test_db.ledger
+FROM glue.%s.ledger
 GROUP BY batch
 ORDER BY batch;
-`,
+`, outputLoc("ledger-by-batch"), icebergDB()),
 	})
 	// Verify S3 has at least one data file for the per-batch output.
-	if !hasS3Objects(t, s3Client, "iceberg-warehouse", "ledger-by-batch/") {
+	if !hasS3Objects(t, s3Client, "iceberg-warehouse", outputPrefix("ledger-by-batch")) {
 		t.Error("expected per-batch count output in S3")
 	}
 
 	// c. Glue table has 3 snapshot metadata files (one per commit).
-	metaCount := countS3Objects(t, s3Client, "iceberg-warehouse", "ledger/metadata/")
+	metaCount := countS3Objects(t, s3Client, "iceberg-warehouse", tablePrefix("ledger", "metadata/"))
 	if metaCount < 3 {
 		t.Errorf("expected at least 3 metadata files (one per commit), got %d", metaCount)
 	}
 
 	// d. Glue table metadata_location is non-empty.
 	tableOut, err := glueClient.GetTable(context.Background(), &awsglue.GetTableInput{
-		DatabaseName: aws.String("iceberg_test_db"),
+		DatabaseName: aws.String(icebergDB()),
 		Name:         aws.String("ledger"),
 	})
 	if err != nil {
@@ -155,39 +155,39 @@ func TestIceberg_GlueCatalog_SchemaAndDataUpdate(t *testing.T) {
 	// insert 100 rows. No price column yet.
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-initial",
-		SQL: `
-CREATE TABLE IF NOT EXISTS glue.iceberg_test_db.inventory (
+		SQL: fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS glue.%s.inventory (
   id       INT,
   product  STRING,
   quantity INT
 )
 USING iceberg
-LOCATION 's3://iceberg-warehouse/inventory';
+LOCATION '%s';
 
-INSERT INTO glue.iceberg_test_db.inventory
+INSERT INTO glue.%s.inventory
 SELECT id, CONCAT('item-', CAST(id AS STRING)), id * 10
 FROM range(1, 101);
-`,
+`, icebergDB(), tableLocation("inventory"), icebergDB()),
 	})
 
 	// Job 2 — Add the 'price' column (schema evolution) and set it for the
 	// first 50 rows via UPDATE. The remaining 50 rows keep price = NULL.
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-evolve-and-update",
-		SQL: `
-ALTER TABLE glue.iceberg_test_db.inventory ADD COLUMN price DOUBLE;
+		SQL: fmt.Sprintf(`
+ALTER TABLE glue.%s.inventory ADD COLUMN price DOUBLE;
 
-UPDATE glue.iceberg_test_db.inventory
+UPDATE glue.%s.inventory
 SET price = CAST(id AS DOUBLE) * 9.99
 WHERE id <= 50;
-`,
+`, icebergDB(), icebergDB()),
 	})
 
 	// ── Assertions ────────────────────────────────────────────────────────────
 
 	// a. Glue table StorageDescriptor contains the 'price' column.
 	tableOut, err := glueClient.GetTable(context.Background(), &awsglue.GetTableInput{
-		DatabaseName: aws.String("iceberg_test_db"),
+		DatabaseName: aws.String(icebergDB()),
 		Name:         aws.String("inventory"),
 	})
 	if err != nil {
@@ -212,13 +212,13 @@ WHERE id <= 50;
 	// c. Total count still 100 (no rows deleted by UPDATE).
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-count-total",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/inventory-total/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.inventory;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.inventory;
+`, outputLoc("inventory-total"), icebergDB()),
 	})
-	totalResult := findS3JSON(t, s3Client, "iceberg-warehouse", "inventory-total/")
+	totalResult := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("inventory-total"))
 	if v, _ := totalResult["cnt"].(float64); int(v) != 100 {
 		t.Errorf("expected total cnt=100, got %v", totalResult["cnt"])
 	}
@@ -226,15 +226,15 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.inventory;
 	// d. Exactly 50 rows have a non-NULL price (the updated rows, id 1–50).
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-count-priced",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/inventory-priced/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
 SELECT COUNT(*) AS cnt
-FROM glue.iceberg_test_db.inventory
+FROM glue.%s.inventory
 WHERE price IS NOT NULL;
-`,
+`, outputLoc("inventory-priced"), icebergDB()),
 	})
-	pricedResult := findS3JSON(t, s3Client, "iceberg-warehouse", "inventory-priced/")
+	pricedResult := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("inventory-priced"))
 	if v, _ := pricedResult["cnt"].(float64); int(v) != 50 {
 		t.Errorf("expected 50 priced rows, got %v", pricedResult["cnt"])
 	}
@@ -242,15 +242,15 @@ WHERE price IS NOT NULL;
 	// e. Exactly 50 rows still have NULL price (the un-updated rows, id 51–100).
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-count-unpriced",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/inventory-unpriced/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
 SELECT COUNT(*) AS cnt
-FROM glue.iceberg_test_db.inventory
+FROM glue.%s.inventory
 WHERE price IS NULL;
-`,
+`, outputLoc("inventory-unpriced"), icebergDB()),
 	})
-	unpricedResult := findS3JSON(t, s3Client, "iceberg-warehouse", "inventory-unpriced/")
+	unpricedResult := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("inventory-unpriced"))
 	if v, _ := unpricedResult["cnt"].(float64); int(v) != 50 {
 		t.Errorf("expected 50 un-priced rows, got %v", unpricedResult["cnt"])
 	}
@@ -260,14 +260,14 @@ WHERE price IS NULL;
 	runSparkSQL(t, SparkJob{
 		Name: "inventory-price-check",
 		SQL: fmt.Sprintf(`
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/inventory-price-check/'
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
 SELECT id, price
-FROM glue.iceberg_test_db.inventory
+FROM glue.%s.inventory
 WHERE id = 1;
-`),
+`, outputLoc("inventory-price-check"), icebergDB()),
 	})
-	priceCheck := findS3JSON(t, s3Client, "iceberg-warehouse", "inventory-price-check/")
+	priceCheck := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("inventory-price-check"))
 	if price, _ := priceCheck["price"].(float64); price < 9.98 || price > 10.0 {
 		t.Errorf("expected price≈9.99 for id=1, got %v", priceCheck["price"])
 	}

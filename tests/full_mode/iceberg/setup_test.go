@@ -4,6 +4,8 @@ package iceberg_test
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"os"
 	"testing"
 
@@ -15,10 +17,15 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+// testRunID is a random 6-hex-char string unique to this test binary invocation.
+// All Glue DB names and S3 paths are scoped under this ID so that concurrent
+// or back-to-back test runs never share state.
+var testRunID string
+
 // TestMain creates the shared Iceberg infrastructure once before all tests.
-// Shared resources:
+// Shared resources (scoped to this run):
 //   - S3 bucket "iceberg-warehouse"
-//   - Glue database "iceberg_test_db"
+//   - Glue database "iceberg_test_<testRunID>"
 //
 // Individual tests call resetIcebergTables(t, ...) to drop their own Glue tables
 // between runs without touching the database.
@@ -27,6 +34,8 @@ import (
 // runs its own JVM and uses the default InMemoryLockManager, which is correct
 // for single-writer tests.
 func TestMain(m *testing.M) {
+	testRunID = fmt.Sprintf("%06x", rand.Uint32())
+
 	ctx := context.Background()
 	cfg := mustAWSConfig()
 
@@ -43,19 +52,19 @@ func TestMain(m *testing.M) {
 		Bucket: aws.String("iceberg-warehouse"),
 	})
 
-	// 2. Create Glue database (idempotent)
+	// 2. Create run-scoped Glue database (idempotent)
 	_, _ = glueClient.CreateDatabase(ctx, &awsglue.CreateDatabaseInput{
 		DatabaseInput: &gluetypes.DatabaseInput{
-			Name: aws.String("iceberg_test_db"),
+			Name: aws.String(icebergDB()),
 		},
 	})
 
 	code := m.Run()
 
-	// Teardown: remove the Glue database.
+	// Teardown: remove the run-scoped Glue database.
 	// S3 objects are left intact for debugging.
 	_, _ = glueClient.DeleteDatabase(ctx, &awsglue.DeleteDatabaseInput{
-		Name: aws.String("iceberg_test_db"),
+		Name: aws.String(icebergDB()),
 	})
 
 	os.Exit(code)

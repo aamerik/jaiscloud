@@ -4,6 +4,7 @@ package iceberg_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -23,57 +24,57 @@ func TestIceberg_GlueCatalog_SchemaEvolution(t *testing.T) {
 	// Job 1 — Create table with initial schema and insert 50 rows
 	runSparkSQL(t, SparkJob{
 		Name: "products-initial",
-		SQL: `
-CREATE TABLE IF NOT EXISTS glue.iceberg_test_db.products (
+		SQL: fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS glue.%s.products (
   id   INT,
   name STRING
 )
 USING iceberg
-LOCATION 's3://iceberg-warehouse/products';
+LOCATION '%s';
 
-INSERT INTO glue.iceberg_test_db.products
+INSERT INTO glue.%s.products
 SELECT id, CONCAT('product-', CAST(id AS STRING))
 FROM range(1, 51);
-`,
+`, icebergDB(), tableLocation("products"), icebergDB()),
 	})
 
 	// Job 2 — Add column and insert 50 more rows with price values
 	runSparkSQL(t, SparkJob{
 		Name: "products-evolve",
-		SQL: `
-ALTER TABLE glue.iceberg_test_db.products ADD COLUMN price DOUBLE;
+		SQL: fmt.Sprintf(`
+ALTER TABLE glue.%s.products ADD COLUMN price DOUBLE;
 
-INSERT INTO glue.iceberg_test_db.products (id, name, price)
+INSERT INTO glue.%s.products (id, name, price)
 SELECT id + 50, CONCAT('evolved-', CAST(id AS STRING)), CAST(id AS DOUBLE) * 9.99
 FROM range(1, 51);
-`,
+`, icebergDB(), icebergDB()),
 	})
 
 	// Job 3 — Total count
 	runSparkSQL(t, SparkJob{
 		Name: "products-count",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/products-count/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.products;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.products;
+`, outputLoc("products-count"), icebergDB()),
 	})
 
 	// Job 4 — Rows without price (old rows)
 	runSparkSQL(t, SparkJob{
 		Name: "products-null-price-count",
-		SQL: `
-INSERT OVERWRITE DIRECTORY 's3a://iceberg-warehouse/products-nullprice/'
+		SQL: fmt.Sprintf(`
+INSERT OVERWRITE DIRECTORY '%s'
 USING JSON
-SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.products WHERE price IS NULL;
-`,
+SELECT COUNT(*) AS cnt FROM glue.%s.products WHERE price IS NULL;
+`, outputLoc("products-nullprice"), icebergDB()),
 	})
 
 	// ── Assertions ────────────────────────────────────────────────────────────
 
 	// a. Glue GetTable returns "price" column in StorageDescriptor
 	tableOut, err := glueClient.GetTable(context.Background(), &awsglue.GetTableInput{
-		DatabaseName: aws.String("iceberg_test_db"),
+		DatabaseName: aws.String(icebergDB()),
 		Name:         aws.String("products"),
 	})
 	if err != nil {
@@ -96,14 +97,14 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.products WHERE price IS NULL;
 	}
 
 	// c. Total count = 100
-	countResult := findS3JSON(t, s3Client, "iceberg-warehouse", "products-count/")
+	countResult := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("products-count"))
 	cnt, _ := countResult["cnt"].(float64)
 	if int(cnt) != 100 {
 		t.Errorf("expected total cnt=100, got %v", cnt)
 	}
 
 	// d. Exactly 50 rows have NULL price (the original rows)
-	nullResult := findS3JSON(t, s3Client, "iceberg-warehouse", "products-nullprice/")
+	nullResult := findS3JSON(t, s3Client, "iceberg-warehouse", outputPrefix("products-nullprice"))
 	nullCnt, _ := nullResult["cnt"].(float64)
 	if int(nullCnt) != 50 {
 		t.Errorf("expected 50 null-price rows, got %v", nullCnt)

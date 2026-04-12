@@ -35,6 +35,7 @@ s3.create_bucket(Bucket="my-bucket")
 | **Prometheus metrics** | ✅ | 💰 Pro | ❌ | ❌ |
 | **Plugin system** | ✅ | ❌ | ❌ | ❌ |
 | **Spark / EMR emulation** | ✅ | ❌ | ❌ | ❌ |
+| **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ | ❌ |
 | **Written in Go** | ✅ | ❌ | ❌ | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
@@ -55,6 +56,8 @@ s3.create_bucket(Bucket="my-bucket")
 | CreateMultipartUpload / UploadPart / CompleteMultipartUpload / AbortMultipartUpload | ✅ |
 | GetBucketLocation | ✅ |
 | Object/Bucket tagging, ACLs, versioning stubs | ✅ (stubs — no error) |
+| AWS chunked transfer encoding (`x-amz-content-sha256: STREAMING-*`) | ✅ |
+| S3A Hadoop connector compatibility (FileOutputCommitter, flat-key semantics) | ✅ |
 
 ### ✅ Amazon SQS
 | Operation | Supported |
@@ -80,6 +83,8 @@ s3.create_bucket(Bucket="my-bucket")
 | Query (KeyConditionExpression, begins_with, between) | ✅ |
 | BatchWriteItem / BatchGetItem | ✅ |
 | Composite primary keys (hash + range) | ✅ |
+| Conditional writes (ConditionExpression) | ✅ |
+| DynamoDB Streams (GetShardIterator, GetRecords) | ✅ |
 
 ### ✅ Amazon SNS
 | Operation | Supported |
@@ -87,8 +92,18 @@ s3.create_bucket(Bucket="my-bucket")
 | CreateTopic / DeleteTopic / ListTopics | ✅ |
 | GetTopicAttributes / SetTopicAttributes | ✅ |
 | Subscribe / Unsubscribe / ListSubscriptions | ✅ |
-| Publish (fan-out to SQS subscriptions) | ✅ |
+| Publish (fan-out to SQS subscriptions with MessageAttributes) | ✅ |
 | DeleteTopic removes all subscriptions | ✅ |
+
+### ✅ Amazon EventBridge
+| Operation | Supported |
+|---|---|
+| PutRule / DescribeRule / DeleteRule / ListRules | ✅ |
+| PutTargets / RemoveTargets / ListTargetsByRule | ✅ |
+| EnableRule / DisableRule | ✅ |
+| PutEvents (inject arbitrary events into the matching pipeline) | ✅ |
+| Event delivery to SQS targets | ✅ |
+| EventPattern matching | ✅ |
 
 ### ✅ AWS IAM + STS
 | Operation | Supported |
@@ -102,7 +117,7 @@ s3.create_bucket(Bucket="my-bucket")
 | GetCallerIdentity | ✅ |
 | AssumeRole (returns mock credentials) | ✅ |
 
-### ✅ AWS Lambda (mock)
+### ✅ AWS Lambda (echo mode)
 | Operation | Supported |
 |---|---|
 | CreateFunction / GetFunction / DeleteFunction / ListFunctions | ✅ |
@@ -110,6 +125,17 @@ s3.create_bucket(Bucket="my-bucket")
 | Invoke (echo mode — returns payload unchanged) | ✅ |
 
 > Lambda Invoke uses **echo mode**: the payload you send is returned as the response. No subprocess is spawned. This is intentional — it lets you test fan-out pipelines, event routing, and infrastructure wiring without needing real function code.
+
+### ✅ AWS Glue Data Catalog
+| Operation | Supported |
+|---|---|
+| CreateDatabase / GetDatabase / GetDatabases / UpdateDatabase / DeleteDatabase | ✅ |
+| CreateTable / GetTable / GetTables / UpdateTable / DeleteTable | ✅ |
+| CreatePartition / GetPartition / GetPartitions / UpdatePartition / DeletePartition | ✅ |
+| BatchCreatePartition / BatchDeletePartition | ✅ |
+| Iceberg `metadata_location` CAS (conditional update used by Iceberg commits) | ✅ |
+
+> **Apache Iceberg support:** JaisCloud passes as a Glue Catalog endpoint for real Apache Iceberg 1.5+ workloads running in Spark. Iceberg reads and writes table metadata via the Glue API and stores data files in S3 — both backed by JaisCloud. This enables full Iceberg integration testing locally, including schema evolution, time travel, partitioning, and multi-batch appends.
 
 ### ✅ Amazon EMR (on EC2)
 | Operation | Supported |
@@ -132,23 +158,108 @@ s3.create_bucket(Bucket="my-bucket")
 | CreateManagedEndpoint / DescribeManagedEndpoint / DeleteManagedEndpoint / ListManagedEndpoints | ✅ |
 | TagResource / UntagResource / ListTagsForResource | ✅ |
 
+### ⚙️ Stub services (wire protocol only — no business logic)
+The following services are registered and respond with well-formed empty responses so SDK calls don't fail during infrastructure setup. Full implementations are planned.
+
+| Service | Status |
+|---|---|
+| Amazon EC2 | Stub |
+| Amazon Route 53 | Stub |
+| Amazon RDS | Stub |
+| Amazon ElastiCache | Stub |
+| Amazon ECS | Stub |
+| AWS CloudFormation | Stub |
+
+---
+
+## Full Mode (PostgreSQL Persistence)
+
+Start with `--mode full --dsn <postgres DSN>` to persist all state across restarts.
+
+```bash
+./jaiscloud start --mode full \
+  --dsn "postgres://user:pass@localhost:5432/jaiscloud" \
+  --blob-dir /var/lib/jaiscloud/blobs
+```
+
+### What persists
+
+| Service | PostgreSQL table(s) | Blob storage |
+|---|---|---|
+| All resource metadata (queues, topics, tables, roles, functions, Glue, EMR…) | `jc_resources` | — |
+| SQS messages | `jc_sqs_messages`, `jc_sqs_dedup` | — |
+| DynamoDB items | `jc_dynamodb_items` | — |
+| S3 object metadata | `jc_s3_objects` | `--blob-dir` (LocalFSBlobStore) |
+| S3 object bytes | — | `--blob-dir` (LocalFSBlobStore) |
+| Lambda deployment packages | — | `--blob-dir` (MemoryBlobStore by default) |
+
+> **S3 blob storage:** Pass `--blob-dir <path>` to persist S3 object bytes to disk. Without it, blobs are held in memory and lost on restart even in full mode. `LocalFSBlobStore` implements flat S3-key semantics on a local filesystem — keys like `foo/bar` and `foo/bar/baz` coexist correctly, with atomic writes and crash recovery.
+
+### Startup retry
+
+JaisCloud retries the initial database ping up to 10 times with exponential backoff (500 ms → 8 s), so it starts cleanly before Postgres is ready — useful in `docker-compose` or Kubernetes init ordering.
+
+---
+
+## Spark Plugin (`aws-emr-spark`)
+
+The `aws-emr-spark` plugin provides full EMR and EMR-on-EKS API emulation. It is shipped as a separate Go `.so` plugin and loaded at startup via `--plugin-dir`.
+
+```bash
+# Build the plugin
+cd plugins/aws-emr-spark && make build
+# Load at startup
+./jaiscloud start --mode full --plugin-dir ./plugins
+```
+
+### Executor modes
+
+The plugin selects a Spark executor via the `JAISCLOUD_SPARK_MODE` environment variable:
+
+| Mode | Description |
+|---|---|
+| `mock` (default) | Jobs complete immediately with `COMPLETED` state. No external process. Ideal for unit tests and CI where you only need EMR API correctness, not actual computation. |
+| `k8s` | **Planned — Phase 3.5.** Builds the full `spark-submit --master k8s://...` argument list and logs it to stderr. Job execution is currently delegated to `mock` until `client-go` is wired in. Use this mode to verify your `spark-submit` configuration is generated correctly. |
+
+```bash
+# Default: jobs complete immediately
+JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --plugin-dir ./plugins
+
+# Log spark-submit args (k8s execution not yet wired)
+JAISCLOUD_SPARK_MODE=k8s ./jaiscloud start --plugin-dir ./plugins
+```
+
+### Running against a real Spark cluster
+
+The current plugin routes all job execution through the `SparkExecutor` interface. Real cluster support (Spark Standalone, YARN, or K8s) is the next planned milestone:
+
+- **K8s executor (Phase 3.5):** `client-go` will be added to the plugin's `go.mod`. `K8sExecutor.Submit` will launch a `batch/v1 Job` and `K8sExecutor.Status` will map pod phase → `SparkState`.
+- **Remote/Standalone (planned):** `SparkConfig.RemoteURL` is already wired into the config layer for a Spark Standalone REST API executor.
+
+Until then, `mock` is the correct mode for all automated testing, and `k8s` is useful only to verify argument generation.
+
+### Resource profiles
+
+Three named sizes control driver/executor CPU and memory for the K8s executor:
+
+| Size | Driver | Executors |
+|---|---|---|
+| `small` | 500m / 1Gi | 1 × 500m / 1Gi |
+| `medium` | 1 / 2Gi | 2 × 1 / 2Gi |
+| `large` | 2 / 4Gi | 4 × 2 / 4Gi |
+
 ---
 
 ## What's New in Phase 2
 
 ### Plugin System
 
-JaisCloud now supports loadable plugins compiled as Go `.so` files. Plugins extend the emulator with new services without modifying the core binary.
+JaisCloud supports loadable plugins compiled as Go `.so` files. Plugins extend the emulator with new services without modifying the core binary.
 
 ```bash
-# Build the built-in EMR Spark plugin
 cd plugins/aws-emr-spark && make build
-
-# Load it at startup
 ./jaiscloud start --plugin-dir ./plugins
 ```
-
-The included `aws-emr-spark` plugin provides full EMR and EMR-on-EKS emulation with a `MockExecutor` (immediate job completion) and a `K8sExecutor` path (logs `spark-submit` args, real k8s integration planned).
 
 ### Multi-Cloud Mode
 
@@ -162,11 +273,11 @@ Each JaisCloud instance runs in one cloud mode. The default is AWS. Azure and GC
 
 ### Resource Dependency Manager
 
-The `ResourceManager` prevents invalid deletions. When a plugin registers a `DeleteGuardRule`, attempts to delete a parent resource while children exist are blocked (fail), forcibly terminated, or cascaded — depending on the policy.
+The `ResourceManager` prevents invalid deletions. When a plugin registers a `DeleteGuardRule`, attempts to delete a parent resource while children exist are blocked, forcibly terminated, or cascaded — depending on the configured policy.
 
 ### Prometheus Cloud Label
 
-All metrics now include a `cloud` label (`aws` / `azure` / `gcp`) so you can differentiate traffic in mixed-environment dashboards.
+All metrics include a `cloud` label (`aws` / `azure` / `gcp`) so you can differentiate traffic in mixed-environment dashboards.
 
 ---
 
@@ -179,6 +290,9 @@ JaisCloud prioritises **protocol correctness** over breadth:
 - `Last-Modified` headers use RFC 1123 GMT format, not UTC — the SDK parses these strictly.
 - SQS supports both **JSON** (`X-Amz-Target`) and **Query/XML** protocols in the same server.
 - DynamoDB key hash is computed from key attributes only (in schema order), matching AWS semantics.
+- DynamoDB `x-amz-crc32` header is computed and returned on every response.
+- S3 ETag is the MD5 of the stored bytes, including correct handling of AWS chunked transfer encoding.
+- S3 implements flat-key semantics: `foo/bar` and `foo/bar/baz` coexist as independent objects, matching real S3 behaviour.
 
 **Known limitations:**
 - No IAM policy evaluation — all requests are accepted regardless of attached policies.
@@ -186,6 +300,7 @@ JaisCloud prioritises **protocol correctness** over breadth:
 - S3 versioning and object locking are stubbed (no error, no actual versioning).
 - No cross-region or cross-account semantics.
 - Azure and GCP cloud modes are scaffolded only (Phase 3+).
+- EMR K8s executor delegates to mock until Phase 3.5 (client-go not yet wired).
 
 ---
 
@@ -218,7 +333,7 @@ services:
       JAISCLOUD_LOG_LEVEL: info
 ```
 
-### Docker Compose with full mode (Postgres)
+### Docker Compose with full mode (Postgres + blob storage)
 
 ```yaml
 services:
@@ -241,9 +356,13 @@ services:
       JAISCLOUD_MODE: full
       JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
       JAISCLOUD_REGION: us-east-1
+    volumes:
+      - blob_data:/var/lib/jaiscloud/blobs
+    command: ["start", "--blob-dir", "/var/lib/jaiscloud/blobs"]
 
 volumes:
   pg_data:
+  blob_data:
 ```
 
 ### Kubernetes
@@ -331,12 +450,13 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
 | `--plugin-dir` | `JAISCLOUD_PLUGIN_DIR` | _(empty)_ | Directory containing `.so` plugin files |
 | `--dsn` | `JAISCLOUD_DSN` | _(empty)_ | PostgreSQL DSN (required when `--mode full`) |
+| `--blob-dir` | `JAISCLOUD_BLOB_DIR` | _(empty)_ | Directory for S3 blob bytes (full mode, optional) |
 
 ### Modes
 
 **`lite` (default)** — all state in memory. Zero external dependencies. State is lost on restart. Ideal for unit tests and CI.
 
-**`full`** — state persisted in PostgreSQL. Survives restarts. Requires `JAISCLOUD_DSN` or `--dsn`. Ideal for integration environments and long-running dev clusters.
+**`full`** — resource metadata persisted in PostgreSQL. S3 object bytes optionally persisted to `--blob-dir`. Survives restarts. Ideal for integration environments and long-running dev clusters.
 
 ---
 
@@ -422,6 +542,7 @@ const client = new S3Client({
 aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
 aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name my-queue
 aws --endpoint-url http://localhost:4566 dynamodb list-tables
+aws --endpoint-url http://localhost:4566 glue create-database --database-input '{"Name":"mydb"}'
 aws --endpoint-url http://localhost:4566 emr list-clusters
 ```
 
@@ -441,12 +562,17 @@ cd plugins/aws-emr-spark && go test -race ./internal/...
 go test -race -count=1 ./tests/integration/
 
 # Target a specific service
-go test -race -run TestS3 ./tests/integration/
-go test -race -run TestSQS ./tests/integration/
-go test -race -run TestDynamo ./tests/integration/
-go test -race -run TestLambda ./tests/integration/
-go test -race -run TestEMR ./tests/integration/
-go test -race -run TestEMRC ./tests/integration/
+go test -race -run TestS3       ./tests/integration/
+go test -race -run TestSQS      ./tests/integration/
+go test -race -run TestDynamo   ./tests/integration/
+go test -race -run TestLambda   ./tests/integration/
+go test -race -run TestEMR      ./tests/integration/
+go test -race -run TestEMRC     ./tests/integration/
+
+# Iceberg e2e tests (requires Docker + Spark image + Postgres)
+SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test \
+./jaiscloud start --mode full --dsn "postgres://..." --blob-dir /tmp/blobs &
+go test -tags iceberg_e2e -timeout 60m ./tests/full_mode/iceberg/
 ```
 
 ---
@@ -457,17 +583,17 @@ go test -race -run TestEMRC ./tests/integration/
 HTTP request
   → gateway (Chi router + middleware)
       → CloudAdapter.DetectAndDecode        (selected once at startup from --cloud)
-          (X-Amz-Target → SQS/DynamoDB JSON)
+          (X-Amz-Target → SQS/DynamoDB/Glue/EMR JSON)
           (Authorization SigV4 scope → all services)
           (Action param → SQS/IAM/STS/SNS Query protocol)
       → inject: Clock, Region, AccountID, Cloud, ResourceID
       → Registry.Dispatch("Service.Action", NormalizedRequest)
           → exact match: built-in Provider (business logic, pure Go)
-              → ResourceStore  (queue/table/function metadata)
+              → ResourceStore  (queue/table/function/Glue metadata)
               → ServiceStore   (messages/items/objects)
           → plugin wildcard: PluginManager → plugin.Handle
               → EMRProvider / EMRContainersProvider
-                  → SparkExecutor (mock or k8s)
+                  → SparkExecutor (mock | k8s-planned)
                   → StatusPoller
       → Codec.Encode (XML / JSON / raw bytes)
   → HTTP response
