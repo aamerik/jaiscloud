@@ -33,6 +33,8 @@ s3.create_bucket(Bucket="my-bucket")
 | **Kubernetes-native** | ✅ | Partial | ❌ | ✅ |
 | **State export / import** | ✅ | ❌ | ❌ | ❌ |
 | **Prometheus metrics** | ✅ | 💰 Pro | ❌ | ❌ |
+| **Plugin system** | ✅ | ❌ | ❌ | ❌ |
+| **Spark / EMR emulation** | ✅ | ❌ | ❌ | ❌ |
 | **Written in Go** | ✅ | ❌ | ❌ | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
@@ -132,6 +134,42 @@ s3.create_bucket(Bucket="my-bucket")
 
 ---
 
+## What's New in Phase 2
+
+### Plugin System
+
+JaisCloud now supports loadable plugins compiled as Go `.so` files. Plugins extend the emulator with new services without modifying the core binary.
+
+```bash
+# Build the built-in EMR Spark plugin
+cd plugins/aws-emr-spark && make build
+
+# Load it at startup
+./jaiscloud start --plugin-dir ./plugins
+```
+
+The included `aws-emr-spark` plugin provides full EMR and EMR-on-EKS emulation with a `MockExecutor` (immediate job completion) and a `K8sExecutor` path (logs `spark-submit` args, real k8s integration planned).
+
+### Multi-Cloud Mode
+
+Each JaisCloud instance runs in one cloud mode. The default is AWS. Azure and GCP adapters are scaffolded (return `501 Not Implemented`) and will be filled in future phases.
+
+```bash
+./jaiscloud start --cloud aws    # default — full AWS wire protocol
+./jaiscloud start --cloud azure  # stub — returns 501
+./jaiscloud start --cloud gcp    # stub — returns 501
+```
+
+### Resource Dependency Manager
+
+The `ResourceManager` prevents invalid deletions. When a plugin registers a `DeleteGuardRule`, attempts to delete a parent resource while children exist are blocked (fail), forcibly terminated, or cascaded — depending on the policy.
+
+### Prometheus Cloud Label
+
+All metrics now include a `cloud` label (`aws` / `azure` / `gcp`) so you can differentiate traffic in mixed-environment dashboards.
+
+---
+
 ## Fidelity Notes
 
 JaisCloud prioritises **protocol correctness** over breadth:
@@ -147,6 +185,7 @@ JaisCloud prioritises **protocol correctness** over breadth:
 - Lambda runs in echo mode only; no actual function execution.
 - S3 versioning and object locking are stubbed (no error, no actual versioning).
 - No cross-region or cross-account semantics.
+- Azure and GCP cloud modes are scaffolded only (Phase 3+).
 
 ---
 
@@ -177,6 +216,34 @@ services:
     environment:
       JAISCLOUD_REGION: us-east-1
       JAISCLOUD_LOG_LEVEL: info
+```
+
+### Docker Compose with full mode (Postgres)
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jaiscloud
+      POSTGRES_PASSWORD: jaiscloud
+      POSTGRES_DB: jaiscloud
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  jaiscloud:
+    image: ghcr.io/jaisraj/jaiscloud:latest
+    ports:
+      - "4566:4566"
+    depends_on:
+      - postgres
+    environment:
+      JAISCLOUD_MODE: full
+      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
+      JAISCLOUD_REGION: us-east-1
+
+volumes:
+  pg_data:
 ```
 
 ### Kubernetes
@@ -257,10 +324,13 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 |---|---|---|---|
 | `--port` | `JAISCLOUD_PORT` | `4566` | Listen port |
 | `--mode` | `JAISCLOUD_MODE` | `lite` | `lite` (memory) or `full` (postgres) |
+| `--cloud` | `JAISCLOUD_CLOUD` | `aws` | Cloud to emulate: `aws`, `azure`, `gcp` |
 | `--region` | `JAISCLOUD_REGION` | `us-east-1` | AWS region reported in responses |
 | `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
+| `--plugin-dir` | `JAISCLOUD_PLUGIN_DIR` | _(empty)_ | Directory containing `.so` plugin files |
+| `--dsn` | `JAISCLOUD_DSN` | _(empty)_ | PostgreSQL DSN (required when `--mode full`) |
 
 ### Modes
 
@@ -352,6 +422,7 @@ const client = new S3Client({
 aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
 aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name my-queue
 aws --endpoint-url http://localhost:4566 dynamodb list-tables
+aws --endpoint-url http://localhost:4566 emr list-clusters
 ```
 
 ---
@@ -361,6 +432,9 @@ aws --endpoint-url http://localhost:4566 dynamodb list-tables
 ```bash
 # Unit tests (no server required)
 go test -race ./internal/...
+
+# Plugin unit tests
+cd plugins/aws-emr-spark && go test -race ./internal/...
 
 # Integration tests (server must be running on :4566)
 ./jaiscloud start &
@@ -382,19 +456,24 @@ go test -race -run TestEMRC ./tests/integration/
 ```
 HTTP request
   → gateway (Chi router + middleware)
-      → AWSAdapter.DetectAndDecode
+      → CloudAdapter.DetectAndDecode        (selected once at startup from --cloud)
           (X-Amz-Target → SQS/DynamoDB JSON)
           (Authorization SigV4 scope → all services)
           (Action param → SQS/IAM/STS/SNS Query protocol)
+      → inject: Clock, Region, AccountID, Cloud, ResourceID
       → Registry.Dispatch("Service.Action", NormalizedRequest)
-          → Provider (business logic, pure Go)
+          → exact match: built-in Provider (business logic, pure Go)
               → ResourceStore  (queue/table/function metadata)
               → ServiceStore   (messages/items/objects)
+          → plugin wildcard: PluginManager → plugin.Handle
+              → EMRProvider / EMRContainersProvider
+                  → SparkExecutor (mock or k8s)
+                  → StatusPoller
       → Codec.Encode (XML / JSON / raw bytes)
   → HTTP response
 ```
 
-The adapter, provider, and store layers have no circular imports. The `model` package carries the shared `NormalizedRequest` / `ProviderResponse` types between them.
+Each JaisCloud instance runs in one cloud mode (`--cloud`). There is no per-request cloud detection — the adapter is selected once at startup.
 
 ---
 
@@ -409,7 +488,7 @@ go test -race ./...          # must pass
 go vet ./...                 # must pass
 ```
 
-Planned for Phase 2: EventBridge, Kinesis, SES, Secrets Manager, Parameter Store, OIDC auth.
+See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for how to run in full mode, set up the Spark cluster, and write custom plugins.
 
 ---
 

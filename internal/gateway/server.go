@@ -14,7 +14,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"jaiscloud/internal/adapter"
-	awsadapter "jaiscloud/internal/adapter/aws"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
@@ -28,15 +27,15 @@ type Server struct {
 	router       chi.Router
 	adminHandler *admin.Handler
 	registry     *provider.Registry
-	awsAdapter   *awsadapter.AWSAdapter
+	cloudAdapter adapter.CloudAdapter
 }
 
-func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, awsAdapter *awsadapter.AWSAdapter) *Server {
+func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, cloudAdapter adapter.CloudAdapter) *Server {
 	s := &Server{
 		cfg:          cfg,
 		adminHandler: adminHandler,
 		registry:     registry,
-		awsAdapter:   awsAdapter,
+		cloudAdapter: cloudAdapter,
 	}
 	s.buildRouter()
 	return s
@@ -75,7 +74,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nr, codec, detectErr := s.awsAdapter.DetectAndDecode(r, body)
+	nr, codec, detectErr := s.cloudAdapter.DetectAndDecode(r, body)
 	if detectErr != nil {
 		if pe, ok := detectErr.(*model.ProviderError); ok {
 			status, headers, respBody := encodeErrorFallback(codec, nil, pe)
@@ -91,7 +90,13 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr.Region = s.cfg.Region
 	nr.AccountID = s.cfg.AccountID
 	nr.Port = s.cfg.Port
-	nr.ResourceID = config.AWSResourceID(s.cfg.Region, s.cfg.AccountID)
+	nr.Cloud = s.cloudAdapter.Cloud()
+	if s.cloudAdapter.Cloud() == model.CloudAWS {
+		nr.ResourceID = config.AWSResourceID(s.cfg.Region, s.cfg.AccountID)
+	}
+
+	// Attach labels for Prometheus metrics middleware
+	r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
 
 	providerKey := serviceToProvider(nr.Service) + "." + nr.Action
 

@@ -22,11 +22,13 @@ const (
 type Config struct {
 	Port      int
 	Mode      Mode
+	Cloud     string // Cloud provider to emulate: aws (default), azure, gcp
 	LogLevel  string
 	Region    string
 	AccountID string
 	DSN       string // PostgreSQL DSN (required when Mode == full)
 	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
+	PluginDir string // Directory to scan for plugin .so files (full mode only; empty = disabled)
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -77,6 +79,7 @@ func AWSResourceID(region, accountID string) func(resourceType, name string) str
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
 	viper.SetDefault("mode", "lite")
+	viper.SetDefault("cloud", "aws")
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
@@ -86,6 +89,7 @@ func Load() (*Config, error) {
 	} else {
 		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
 	}
+	viper.SetDefault("plugin_dir", "")
 	viper.SetDefault("metrics", false)
 	viper.SetDefault("tracing", false)
 	viper.SetDefault("deterministic", false)
@@ -99,11 +103,13 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:          viper.GetInt("port"),
 		Mode:          Mode(viper.GetString("mode")),
+		Cloud:         viper.GetString("cloud"),
 		LogLevel:      viper.GetString("log_level"),
 		Region:        viper.GetString("region"),
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
 		BlobDir:       viper.GetString("blob_dir"),
+		PluginDir:     viper.GetString("plugin_dir"),
 		Metrics:       viper.GetBool("metrics"),
 		Tracing:       viper.GetBool("tracing"),
 		Deterministic: viper.GetBool("deterministic"),
@@ -113,6 +119,13 @@ func Load() (*Config, error) {
 
 	if cfg.Mode != ModeLite && cfg.Mode != ModeFull {
 		return nil, fmt.Errorf("invalid mode %q: must be lite or full", cfg.Mode)
+	}
+
+	switch cfg.Cloud {
+	case "aws", "azure", "gcp":
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid cloud %q: must be aws, azure, or gcp", cfg.Cloud)
 	}
 
 	// Parse base time for deterministic mode

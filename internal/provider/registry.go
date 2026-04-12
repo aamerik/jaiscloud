@@ -8,12 +8,20 @@ import (
 
 // Registry dispatches NormalizedRequests to the registered HandlerFunc.
 // Key format: "ProviderPrefix.ActionName" e.g. "Queue.SendMessage".
+//
+// Plugins register a wildcard handler via RegisterPlugin("EMR", fn).
+// When Dispatch looks up "EMR.RunJobFlow" and finds no exact match,
+// it falls back to the wildcard handler registered for prefix "EMR".
 type Registry struct {
 	handlers map[string]HandlerFunc
+	plugins  map[string]HandlerFunc // prefix → wildcard handler (plugin fallback)
 }
 
 func NewRegistry() *Registry {
-	return &Registry{handlers: make(map[string]HandlerFunc)}
+	return &Registry{
+		handlers: make(map[string]HandlerFunc),
+		plugins:  make(map[string]HandlerFunc),
+	}
 }
 
 // RegisterAll bulk-registers a provider's route map.
@@ -23,12 +31,34 @@ func (r *Registry) RegisterAll(routes map[string]HandlerFunc) {
 	}
 }
 
+// RegisterPlugin registers a plugin as the wildcard handler for a provider prefix.
+// When Dispatch finds no exact key match, it tries the plugin handler for the prefix.
+// A plugin handler takes precedence over the built-in wildcard fallback.
+func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
+	r.plugins[prefix] = h
+}
+
 // Dispatch routes a request to the matching handler.
-// Returns a ProviderError (wrapped as error) if the handler is not found.
+// Lookup order:
+//  1. Exact match in handlers (built-in providers).
+//  2. Plugin wildcard for the provider prefix (full-mode plugins).
+//  3. ProviderError(UnknownAction).
 func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	h, ok := r.handlers[key]
-	if !ok {
-		return nil, model.NewProviderError("UnknownAction", fmt.Sprintf("no handler for %q", key), 400)
+	if h, ok := r.handlers[key]; ok {
+		return h(ctx, nr)
 	}
-	return h(ctx, nr)
+
+	// Extract prefix from "Prefix.Action"
+	prefix := key
+	for i, c := range key {
+		if c == '.' {
+			prefix = key[:i]
+			break
+		}
+	}
+	if h, ok := r.plugins[prefix]; ok {
+		return h(ctx, nr)
+	}
+
+	return nil, model.NewProviderError("UnknownAction", fmt.Sprintf("no handler for %q", key), 400)
 }

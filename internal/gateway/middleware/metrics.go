@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,17 +10,32 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Context key types — unexported to prevent collisions with other packages.
+type cloudContextKey struct{}
+type serviceContextKey struct{}
+type actionContextKey struct{}
+
+// WithRequestLabels returns a new context with cloud/service/action labels set.
+// The Metrics middleware reads these labels to populate Prometheus counters.
+// Call this from the gateway after decoding each cloud request.
+func WithRequestLabels(ctx context.Context, cloud, service, action string) context.Context {
+	ctx = context.WithValue(ctx, cloudContextKey{}, cloud)
+	ctx = context.WithValue(ctx, serviceContextKey{}, service)
+	ctx = context.WithValue(ctx, actionContextKey{}, action)
+	return ctx
+}
+
 var (
 	requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "jaiscloud_requests_total",
 		Help: "Total number of requests processed.",
-	}, []string{"service", "action", "status"})
+	}, []string{"cloud", "service", "action", "status"})
 
 	requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "jaiscloud_request_duration_seconds",
 		Help:    "Request latency in seconds.",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"service", "action"})
+	}, []string{"cloud", "service", "action"})
 )
 
 // metricsResponseWriter captures the status code.
@@ -43,15 +59,24 @@ func Metrics(next http.Handler) http.Handler {
 		next.ServeHTTP(mw, r)
 		dur := time.Since(start).Seconds()
 
-		// Best-effort label extraction from path (/_jaiscloud/* vs service requests)
+		// Best-effort label extraction from request context.
+		// The cloud/service/action labels are set by the gateway after codec decode;
+		// for admin and unrecognised requests we fall back to safe defaults.
+		cloud := "unknown"
 		service := "unknown"
-		action := "unknown"
-		if len(r.URL.Path) > 1 {
-			service = "aws"
-			action = r.Method
+		action := r.Method
+
+		if c := r.Context().Value(cloudContextKey{}); c != nil {
+			cloud = c.(string)
+		}
+		if s := r.Context().Value(serviceContextKey{}); s != nil {
+			service = s.(string)
+		}
+		if a := r.Context().Value(actionContextKey{}); a != nil {
+			action = a.(string)
 		}
 
-		requestsTotal.WithLabelValues(service, action, strconv.Itoa(mw.status)).Inc()
-		requestDuration.WithLabelValues(service, action).Observe(dur)
+		requestsTotal.WithLabelValues(cloud, service, action, strconv.Itoa(mw.status)).Inc()
+		requestDuration.WithLabelValues(cloud, service, action).Observe(dur)
 	})
 }

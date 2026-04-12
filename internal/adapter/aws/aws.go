@@ -9,6 +9,7 @@ import (
 )
 
 // AWSAdapter routes incoming HTTP requests to the appropriate service codec.
+// Implements adapter.CloudAdapter.
 type AWSAdapter struct {
 	codecs map[string]adapter.Codec // keyed by service name, e.g. "sqs"
 }
@@ -16,6 +17,9 @@ type AWSAdapter struct {
 func NewAdapter(codecs map[string]adapter.Codec) *AWSAdapter {
 	return &AWSAdapter{codecs: codecs}
 }
+
+// Cloud implements adapter.CloudAdapter.
+func (a *AWSAdapter) Cloud() model.Cloud { return model.CloudAWS }
 
 // CodecFor returns the codec for the given service name.
 func (a *AWSAdapter) CodecFor(service string) (adapter.Codec, error) {
@@ -27,7 +31,8 @@ func (a *AWSAdapter) CodecFor(service string) (adapter.Codec, error) {
 	return c, nil
 }
 
-// DetectAndDecode identifies the service, selects the codec, and decodes the request.
+// DetectAndDecode implements adapter.CloudAdapter.
+// Identifies the service, selects the codec, and decodes the request.
 func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, adapter.Codec, error) {
 	service, _ := DetectService(r, body)
 	if service == "" {

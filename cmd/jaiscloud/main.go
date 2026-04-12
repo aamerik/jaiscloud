@@ -15,12 +15,16 @@ import (
 	"jaiscloud/internal/adapter"
 	awsadapter "jaiscloud/internal/adapter/aws"
 	"jaiscloud/internal/adapter/aws/services"
+	azureadapter "jaiscloud/internal/adapter/azure"
+	gcpadapter "jaiscloud/internal/adapter/gcp"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/gateway"
+	"jaiscloud/internal/plugin"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/resourcemgr"
 	"jaiscloud/internal/provider/catalog"
 	"jaiscloud/internal/provider/compute"
 	"jaiscloud/internal/provider/dns"
@@ -83,10 +87,28 @@ func startCmd() *cobra.Command {
 			}
 
 			registry, streamStore := buildRegistry(cfg, s)
-			awsAdapter := buildAdapter()
+			cloudAdapter, err := buildAdapter(cfg)
+			if err != nil {
+				return err
+			}
 			adminHandler := buildAdminHandler(s, streamStore)
 
-			return gateway.NewServer(cfg, adminHandler, registry, awsAdapter).ListenAndServe()
+			// In full mode, load plugins from the configured plugin directory.
+			pluginMgr := plugin.NewPluginManager()
+			if cfg.Mode == config.ModeFull && cfg.PluginDir != "" {
+				storeAdapter := resourcemgr.NewStoreAdapter(s.resources)
+				rm := resourcemgr.New(storeAdapter, nil)
+				sdkRM := plugin.NewSDKResourceManager(rm)
+				sdkStore := plugin.NewSDKStoreAdapter(s.resources)
+				if err := pluginMgr.LoadAll(context.Background(), cfg.PluginDir, sdkRM, sdkStore, registry); err != nil {
+					return fmt.Errorf("plugins: %w", err)
+				}
+			}
+			adminHandler.RegisterResetter(pluginMgr)
+
+			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
+			defer pluginMgr.Shutdown(context.Background())
+			return srv.ListenAndServe()
 		},
 	}
 
@@ -106,6 +128,10 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("blob-dir", "", `Directory for S3 blob bytes (full mode only).
 	Defaults to ~/.jaiscloud/blobs.
 	Env var: JAISCLOUD_BLOB_DIR`)
+	cmd.Flags().String("plugin-dir", "", `Directory to scan for plugin .so files (full mode only).
+	Env var: JAISCLOUD_PLUGIN_DIR`)
+	cmd.Flags().String("cloud", "aws", `Cloud provider to emulate: aws (default), azure, gcp.
+	Env var: JAISCLOUD_CLOUD`)
 
 	return cmd
 }
@@ -124,6 +150,8 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("time", cmd.Flags().Lookup("time"))
 	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
+	viper.BindPFlag("plugin_dir", cmd.Flags().Lookup("plugin-dir"))
+	viper.BindPFlag("cloud", cmd.Flags().Lookup("cloud"))
 }
 
 // appStores holds the five store instances that the server depends on.
@@ -202,8 +230,22 @@ func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *stream
 	return registry, streams
 }
 
-// buildAdapter constructs all AWS service codecs and returns the wired adapter.
-func buildAdapter() *awsadapter.AWSAdapter {
+// buildAdapter selects and constructs the single CloudAdapter for the configured cloud.
+func buildAdapter(cfg *config.Config) (adapter.CloudAdapter, error) {
+	switch cfg.Cloud {
+	case "aws", "":
+		return buildAWSAdapter(), nil
+	case "azure":
+		return azureadapter.New(), nil
+	case "gcp":
+		return gcpadapter.New(), nil
+	default:
+		return nil, fmt.Errorf("unknown cloud %q: must be aws, azure, or gcp", cfg.Cloud)
+	}
+}
+
+// buildAWSAdapter constructs all AWS service codecs and returns the wired adapter.
+func buildAWSAdapter() *awsadapter.AWSAdapter {
 	iamCodec := &services.IAMCodec{}
 	return awsadapter.NewAdapter(map[string]adapter.Codec{
 		"sqs":             &services.SQSCodec{},
@@ -266,6 +308,7 @@ func envCmd() *cobra.Command {
 			}
 			fmt.Printf("JAISCLOUD_PORT=%d\n", cfg.Port)
 			fmt.Printf("JAISCLOUD_MODE=%s\n", cfg.Mode)
+			fmt.Printf("JAISCLOUD_CLOUD=%s\n", cfg.Cloud)
 			fmt.Printf("JAISCLOUD_REGION=%s\n", cfg.Region)
 			fmt.Printf("JAISCLOUD_ACCOUNT_ID=%s\n", cfg.AccountID)
 			fmt.Printf("JAISCLOUD_LOG_LEVEL=%s\n", cfg.LogLevel)

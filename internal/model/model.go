@@ -10,6 +10,15 @@ import (
 	"jaiscloud/internal/clock"
 )
 
+// Cloud identifies which cloud provider handled a request.
+type Cloud string
+
+const (
+	CloudAWS   Cloud = "aws"
+	CloudAzure Cloud = "azure"
+	CloudGCP   Cloud = "gcp"
+)
+
 // NormalizedRequest is the cloud-agnostic representation of an API call.
 // Each cloud adapter decodes the wire-format request into this struct.
 type NormalizedRequest struct {
@@ -22,6 +31,7 @@ type NormalizedRequest struct {
 	Region    string
 	AccountID string
 	Port      int
+	Cloud     Cloud // which cloud adapter handled this request (aws, azure, gcp)
 
 	// ResourceID constructs a cloud-specific resource identifier from an abstract
 	// resource type and logical name. Injected by the gateway; providers must call

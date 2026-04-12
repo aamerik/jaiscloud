@@ -3,6 +3,7 @@ module jaiscloud
 go 1.26.2
 
 require (
+	github.com/jaiscloud/plugin-sdk v0.0.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
@@ -76,3 +77,5 @@ require (
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/jaiscloud/plugin-sdk => ./sdk
