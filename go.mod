@@ -3,7 +3,6 @@ module jaiscloud
 go 1.26.2
 
 require (
-	github.com/jaiscloud/plugin-sdk v0.0.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
@@ -25,6 +24,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jaiscloud/plugin-sdk v0.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.21.0
@@ -39,6 +39,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.6 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.22 // indirect
 	github.com/aws/aws-sdk-go-v2/service/emrcontainers v1.40.17 // indirect
+	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.45.23 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.11.21 // indirect

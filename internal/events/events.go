@@ -1,12 +1,17 @@
 package events
 
-import "sync"
+import (
+	"jaiscloud/internal/model"
+	"sync"
+)
 
 // EventType identifies the kind of event.
 type EventType string
 
 const (
-	EventMessageDLQ EventType = "message.dlq" // message moved to DLQ
+	EventMessageDLQ    EventType = "message.dlq"    // message moved to DLQ
+	EventEMRStepState  EventType = "emr.step.state" // EMR step state changed
+	EventEMRJobRunState EventType = "emr.jobrun.state" // EMR Containers job run state changed
 )
 
 // Event is a domain event published by a provider.
@@ -20,6 +25,28 @@ type DLQEvent struct {
 	SourceQueueURL string
 	DLQQueueURL    string
 	MessageID      string
+}
+
+// EMRStepStateEvent is emitted when an EMR step transitions state.
+type EMRStepStateEvent struct {
+	JobFlowID     string
+	StepID        string
+	State         string
+	FailureReason string
+	Region        string
+	AccountID     string
+	Cloud         model.Cloud
+}
+
+// EMRJobRunStateEvent is emitted when an EMR Containers job run transitions state.
+type EMRJobRunStateEvent struct {
+	VirtualClusterID string
+	JobRunID         string
+	State            string
+	FailureReason    string
+	Region           string
+	AccountID        string
+	Cloud            model.Cloud
 }
 
 // Handler is a function that handles an event.

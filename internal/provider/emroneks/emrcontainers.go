@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -18,10 +19,11 @@ import (
 // EMRContainersProvider handles EMR on EKS: virtual clusters, job runs, managed endpoints.
 type EMRContainersProvider struct {
 	resources store.ResourceStore
+	bus       *events.EventBus
 }
 
-func New(resources store.ResourceStore) *EMRContainersProvider {
-	return &EMRContainersProvider{resources: resources}
+func New(resources store.ResourceStore, bus *events.EventBus) *EMRContainersProvider {
+	return &EMRContainersProvider{resources: resources, bus: bus}
 }
 
 func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
@@ -273,6 +275,17 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 	}
 	jr.State = "CANCEL_PENDING"
 	p.saveJobRun(ctx, jr)
+	p.bus.Publish(events.Event{
+		Type: events.EventEMRJobRunState,
+		Payload: events.EMRJobRunStateEvent{
+			VirtualClusterID: vcID,
+			JobRunID:         jobID,
+			State:            "CANCEL_PENDING",
+			Region:           nr.Region,
+			AccountID:        nr.AccountID,
+			Cloud:            nr.Cloud,
+		},
+	})
 	return provider.OK(map[string]any{"id": jobID, "virtualClusterId": vcID}), nil
 }
 

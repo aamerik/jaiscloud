@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -18,10 +19,11 @@ import (
 // EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
 type EMRProvider struct {
 	resources store.ResourceStore
+	bus       *events.EventBus
 }
 
-func New(resources store.ResourceStore) *EMRProvider {
-	return &EMRProvider{resources: resources}
+func New(resources store.ResourceStore, bus *events.EventBus) *EMRProvider {
+	return &EMRProvider{resources: resources, bus: bus}
 }
 
 func (p *EMRProvider) Routes() map[string]provider.HandlerFunc {
@@ -437,6 +439,17 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 			status["State"] = "CANCELLED"
 			c.Steps[i]["Status"] = status
 			cancelInfo = append(cancelInfo, map[string]any{"StepId": sid, "Status": "SUBMITTED"})
+			p.bus.Publish(events.Event{
+				Type: events.EventEMRStepState,
+				Payload: events.EMRStepStateEvent{
+					JobFlowID: clusterID,
+					StepID:    sid,
+					State:     "CANCELLED",
+					Region:    nr.Region,
+					AccountID: nr.AccountID,
+					Cloud:     nr.Cloud,
+				},
+			})
 		} else {
 			cancelInfo = append(cancelInfo, map[string]any{
 				"StepId": sid,

@@ -70,9 +70,31 @@ func AWSResourceID(region, accountID string) func(resourceType, name string) str
 			return fmt.Sprintf("arn:aws:iam::%s:user/%s", accountID, name)
 		case "s3-bucket":
 			return fmt.Sprintf("arn:aws:s3:::%s", name)
+		case "events-rule":
+			return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", region, accountID, name)
 		default:
 			return name
 		}
+	}
+}
+
+// AzureResourceID returns a ResourceID function that formats Azure resource IDs.
+// Stub implementation: returns name unchanged until Azure provider is implemented.
+func AzureResourceID(region, accountID string) func(resourceType, name string) string {
+	return func(resourceType, name string) string {
+		// Azure resource IDs follow /subscriptions/{sub}/resourceGroups/{rg}/providers/...
+		// Return name as-is until real Azure providers are implemented.
+		return name
+	}
+}
+
+// GCPResourceID returns a ResourceID function that formats GCP resource names.
+// Stub implementation: returns name unchanged until GCP provider is implemented.
+func GCPResourceID(accountID string) func(resourceType, name string) string {
+	return func(resourceType, name string) string {
+		// GCP resource names follow projects/{project}/locations/{loc}/...
+		// Return name as-is until real GCP providers are implemented.
+		return name
 	}
 }
 

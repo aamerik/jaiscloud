@@ -31,3 +31,6 @@ vendor/
 
 #Claude
 .claude/
+
+#Jar files
+*.jar

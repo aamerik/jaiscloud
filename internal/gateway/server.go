@@ -91,8 +91,13 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr.AccountID = s.cfg.AccountID
 	nr.Port = s.cfg.Port
 	nr.Cloud = s.cloudAdapter.Cloud()
-	if s.cloudAdapter.Cloud() == model.CloudAWS {
+	switch s.cloudAdapter.Cloud() {
+	case model.CloudAWS:
 		nr.ResourceID = config.AWSResourceID(s.cfg.Region, s.cfg.AccountID)
+	case model.CloudAzure:
+		nr.ResourceID = config.AzureResourceID(s.cfg.Region, s.cfg.AccountID)
+	case model.CloudGCP:
+		nr.ResourceID = config.GCPResourceID(s.cfg.AccountID)
 	}
 
 	// Attach labels for Prometheus metrics middleware
@@ -162,6 +167,8 @@ func serviceToProvider(service string) string {
 		return "EMR"
 	case "emrcontainers":
 		return "EMRContainers"
+	case "events":
+		return "EventBridge"
 	default:
 		return service
 	}
