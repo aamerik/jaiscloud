@@ -31,6 +31,16 @@ func (a *AWSAdapter) CodecFor(service string) (adapter.Codec, error) {
 	return c, nil
 }
 
+// ServiceToProvider implements adapter.CloudAdapter.
+// Looks up the provider registry prefix for an AWS wire service name.
+// Driven by awsServices in services.go — no hardcoded cases here.
+func (a *AWSAdapter) ServiceToProvider(service string) string {
+	if prefix, ok := serviceProviderMap[service]; ok {
+		return prefix
+	}
+	return service
+}
+
 // DetectAndDecode implements adapter.CloudAdapter.
 // Identifies the service, selects the codec, and decodes the request.
 func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, adapter.Codec, error) {

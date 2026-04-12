@@ -20,9 +20,15 @@ func (c *EventBridgeCodec) ServiceName() string { return "events" }
 
 func (c *EventBridgeCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	target := r.Header.Get("X-Amz-Target")
-	action := strings.TrimPrefix(target, "AmazonCloudWatchEvents.")
+	// AWS SDK v2 eventbridge package uses "AWSEvents." prefix;
+	// older cloudwatchevents package uses "AmazonCloudWatchEvents." — support both.
+	action := strings.TrimPrefix(target, "AWSEvents.")
+	if action == target {
+		action = strings.TrimPrefix(target, "AmazonCloudWatchEvents.")
+	}
 	if action == "" || action == target {
-		return nil, fmt.Errorf("missing or invalid X-Amz-Target for events: %q", target)
+		return nil, model.NewProviderError("InvalidRequest",
+			"missing or invalid X-Amz-Target for events: "+target, 400)
 	}
 
 	var params map[string]any

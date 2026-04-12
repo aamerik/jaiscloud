@@ -22,6 +22,10 @@ func New() *AzureAdapter { return &AzureAdapter{} }
 // Cloud implements adapter.CloudAdapter.
 func (a *AzureAdapter) Cloud() model.Cloud { return model.CloudAzure }
 
+// ServiceToProvider implements adapter.CloudAdapter.
+// Stub: Azure wire service names are not yet mapped; returns the service name unchanged.
+func (a *AzureAdapter) ServiceToProvider(service string) string { return service }
+
 // DetectAndDecode implements adapter.CloudAdapter.
 // Not yet fully implemented — returns UnsupportedOperation.
 func (a *AzureAdapter) DetectAndDecode(_ *http.Request, _ []byte) (*model.NormalizedRequest, adapter.Codec, error) {

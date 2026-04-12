@@ -21,6 +21,10 @@ func New() *GCPAdapter { return &GCPAdapter{} }
 // Cloud implements adapter.CloudAdapter.
 func (a *GCPAdapter) Cloud() model.Cloud { return model.CloudGCP }
 
+// ServiceToProvider implements adapter.CloudAdapter.
+// Stub: GCP wire service names are not yet mapped; returns the service name unchanged.
+func (a *GCPAdapter) ServiceToProvider(service string) string { return service }
+
 // DetectAndDecode implements adapter.CloudAdapter.
 // Not yet fully implemented — returns UnsupportedOperation.
 func (a *GCPAdapter) DetectAndDecode(_ *http.Request, _ []byte) (*model.NormalizedRequest, adapter.Codec, error) {

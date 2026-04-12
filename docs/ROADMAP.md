@@ -104,6 +104,7 @@ JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure
 | **Glue Data Catalog** | JSON/Target | CreateDatabase, GetDatabase, GetDatabases, DeleteDatabase, CreateTable, GetTable, GetTables, UpdateTable, DeleteTable, CreatePartition, GetPartition, GetPartitions, BatchCreatePartition, BatchDeletePartition, BatchUpdatePartition |
 | **CloudFormation** | Query/XML | CreateStack, UpdateStack, DeleteStack, DescribeStacks, ListStacks, DescribeStackResources, ValidateTemplate |
 | **DynamoDB Streams** | JSON/Target | ListStreams, DescribeStream, GetShardIterator, GetRecords |
+| **EventBridge** | JSON/Target | PutRule, DeleteRule, DescribeRule, ListRules, EnableRule, DisableRule, PutTargets, RemoveTargets, ListTargetsByRule, PutEvents (delivers matched events to SQS targets; integrates with EMR/EMR-on-EKS state-change events) |
 | **IAM Advanced** | Query/XML | GetFederationToken (STS), CreateGroup, GetGroup, DeleteGroup, ListGroups, AddUserToGroup, RemoveUserFromGroup, ListGroupsForUser, AttachUserPolicy, DetachUserPolicy, ListAttachedUserPolicies, PutUserPolicy, GetUserPolicy, DeleteUserPolicy, ListUserPolicies, TagUser, UntagUser, ListUserTags, UpdateUser, UpdateAccessKey, CreateInstanceProfile, GetInstanceProfile, DeleteInstanceProfile, AddRoleToInstanceProfile, RemoveRoleFromInstanceProfile, ListInstanceProfiles, SimulatePrincipalPolicy, SimulateCustomPolicy |
 
 ### Infrastructure Deliverables
@@ -116,7 +117,10 @@ JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure
 | **RDS/ElastiCache/CF Codecs** | Generic `flattenQueryValues` Query/XML extractor (replaces IAM-specific allowlist) |
 | **IAM Codec fix** | Replaced hardcoded param allowlist with generic extractor; fixed all list XML encoders to output fields directly inside `<member>` (no spurious wrapper elements) |
 | **Glue/ECS/EMR/Streams Codecs** | JSON/Target codecs registered under their respective `X-Amz-Target` prefixes |
-| **Tests** | Integration tests for all 11 new services/feature areas — all passing, `go test -race` clean |
+| **Service registry** | `internal/adapter/aws/services.go` — `ServiceDescriptor` + `awsServices` as single source of truth for all service metadata. Eliminates hardcoded X-Amz-Target strings, SigV4 allow-list, Action validators in `router.go`, and `serviceToProvider` switch in `server.go`. Adding a service requires one entry in `awsServices`. |
+| **ARN formatter map** | `awsARNFormatters` map in `config.go` replaces the ARN `switch` statement; `AWSResourceID` is a three-line function that never needs changing. |
+| **`CloudAdapter.ServiceToProvider`** | New method on the `CloudAdapter` interface. AWS delegates to `serviceProviderMap` (derived from `awsServices`); Azure/GCP return service name unchanged. Gateway calls the adapter instead of its own switch. |
+| **Tests** | Integration tests for all Phase 2 services/feature areas — all passing, `go test -race` clean |
 
 ### Glue / Iceberg Implementation
 

@@ -22,4 +22,10 @@ type CloudAdapter interface {
 
 	// DetectAndDecode identifies the service, selects the codec, and decodes the request.
 	DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, Codec, error)
+
+	// ServiceToProvider maps a wire service name (e.g. "sqs") to the provider registry
+	// prefix (e.g. "Queue") used to build the dispatch key "Queue.CreateQueue".
+	// Each cloud adapter owns this mapping for its own wire protocol.
+	// Returns the service name unchanged if no mapping is found.
+	ServiceToProvider(service string) string
 }

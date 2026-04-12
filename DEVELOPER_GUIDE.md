@@ -11,6 +11,11 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
 - [EMR Spark Cluster — Kubernetes Mode](#emr-spark-cluster--kubernetes-mode)
 - [Writing a Custom Plugin](#writing-a-custom-plugin)
 - [Running Tests](#running-tests)
+  - [Unit tests](#unit-tests-no-server-needed)
+  - [Integration tests (lite mode)](#integration-tests)
+  - [Full mode integration tests](#full-mode-integration-tests)
+  - [Spark e2e tests](#spark-e2e-tests-spark_e2e-build-tag)
+  - [Apache Iceberg e2e tests](#apache-iceberg-e2e-tests-iceberg_e2e-build-tag)
 - [Platform Setup](#platform-setup)
 
 ---
@@ -930,7 +935,9 @@ Check that `main.go` declares `var Plugin sdk.SparkPlugin = ...` (not `var Plugi
 Both the host and plugin must use the exact same Go version and the same `sdk` module source. The `replace` directive in `go.mod` pointing to `../../sdk` ensures this for the SDK. For any other shared dependencies, make sure versions match in both `go.mod` files.
 
 **Actions are not being routed to the plugin**  
-The registry key is `"ProviderPrefix.Action"`. The prefix is derived from your service name by `serviceToProviderPrefix` in `internal/plugin/routes.go`. Check the mapping there — if `"myservice"` is not in the switch, it falls back to the raw service name (`"myservice"`). The prefix capitalisation must match what `serviceToProvider` in `server.go` produces for your service name. Add a case to both functions if needed.
+The registry key is `"ProviderPrefix.Action"`. The gateway builds it as `cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action`. For the AWS adapter, `ServiceToProvider` looks up `serviceProviderMap` which is derived from `awsServices` in `internal/adapter/aws/services.go`. If your service is not in that map, the service name is used as-is (lowercase).
+
+To route properly, add a `ServiceDescriptor` entry for your service in `awsServices` with the correct `ProviderPrefix`. Also check `serviceToProviderPrefix` in `internal/plugin/routes.go` — the plugin manager uses this to register the wildcard handler; it must produce the same prefix.
 
 **State is not persisted after restart**  
 In lite mode, `MemoryResourceStore` is wiped on restart by design. Use `--mode full` with a DSN for persistence.
@@ -963,9 +970,295 @@ go test -race -count=1 ./tests/integration/
 # Run a specific service
 go test -race -run TestSQS ./tests/integration/
 go test -race -run TestEMR ./tests/integration/
+go test -race -run TestEventBridge ./tests/integration/
 ```
 
 Integration tests automatically call `POST /_jaiscloud/reset` between each test case via `resetState(t)`. You do not need to restart the server between runs.
+
+Current integration test coverage: SQS, IAM/STS, SNS, DynamoDB, S3, Lambda, EC2, Route53, RDS, ElastiCache, ECS, Glue, CloudFormation, DynamoDB Streams, EMR, EMR Containers, EventBridge.
+
+---
+
+### Full mode integration tests
+
+Full mode tests require a running PostgreSQL instance and a JaisCloud server started with `--mode full`. They share the same test files as lite mode integration tests (`tests/integration/`) but run against a persistent store.
+
+#### Prerequisites
+
+| Tool | Purpose |
+|---|---|
+| PostgreSQL 14+ | Persistent store backend |
+| `go` 1.26+ | Test runner |
+
+#### 1. Start PostgreSQL
+
+```bash
+docker run -d \
+  --name jaiscloud-pg \
+  -e POSTGRES_USER=jaiscloud \
+  -e POSTGRES_PASSWORD=jaiscloud \
+  -e POSTGRES_DB=jaiscloud \
+  -p 5432:5432 \
+  postgres:16-alpine
+
+# Wait for it to be ready
+docker exec jaiscloud-pg pg_isready -U jaiscloud
+```
+
+#### 2. Build and start JaisCloud in full mode
+
+```bash
+go build -o jaiscloud ./cmd/jaiscloud/
+./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" &
+```
+
+Migrations run automatically on startup. You should see:
+```
+INFO jaiscloud started port=4566 mode=full
+```
+
+#### 3. Run the integration tests
+
+```bash
+go test -race -count=1 ./tests/integration/
+```
+
+The tests call `POST /_jaiscloud/reset` between cases, which truncates all PostgreSQL tables. No manual wipe is needed between runs.
+
+#### 4. Verify persistence across restarts
+
+```bash
+# Create a resource
+aws --endpoint-url http://localhost:4566 --region us-east-1 \
+    sqs create-queue --queue-name persist-test
+
+# Kill and restart the server
+kill %1
+./jaiscloud start --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" &
+
+# Queue should still be there
+aws --endpoint-url http://localhost:4566 --region us-east-1 \
+    sqs get-queue-url --queue-name persist-test
+```
+
+#### Environment variable override
+
+```bash
+# Point at a different host (e.g. a remote JaisCloud instance)
+JAISCLOUD_HOST=http://my-remote-host:4566 go test -race -count=1 ./tests/integration/
+```
+
+---
+
+### Spark e2e tests (`spark_e2e` build tag)
+
+The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notification lifecycle. They live under `tests/full_mode/plugin/` and are **excluded from normal CI runs** by the `//go:build spark_e2e` tag. Two execution modes are supported: **Docker** (runs Spark in a local container) and **Kubernetes** (submits to a real cluster).
+
+#### Prerequisites (both modes)
+
+| Tool | Minimum version | Purpose |
+|---|---|---|
+| Go | 1.26 | Test runner |
+| Docker | 20+ | Required for Docker mode; used by K8s mode to build images |
+| PostgreSQL | 14+ | JaisCloud full-mode store |
+| JaisCloud server | latest | Running in `--mode full` with the EMR Spark plugin loaded |
+
+Build and start JaisCloud (same as the full mode section above, but with the plugin):
+
+```bash
+# Build the EMR Spark plugin
+cd plugins/aws-emr-spark && make build && cd ../..
+# aws-emr-spark.so is now in the repo root
+
+# Start JaisCloud with the plugin
+./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" \
+  --plugin-dir .
+```
+
+#### Docker mode — EMR steps running SparkPi in a container
+
+Docker mode uses `JAISCLOUD_SPARK_MODE=mock` (the default). The plugin's `MockExecutor` completes jobs immediately without a real Spark cluster. Set `SPARK_E2E_DOCKER_IMAGE` to any Spark image that has the examples JAR at `/opt/spark/examples/jars/`.
+
+```bash
+# Pull or build a Spark image (official Apache image works)
+docker pull apache/spark:3.5.0
+
+# Set the required env var
+export SPARK_E2E_DOCKER_IMAGE=apache/spark:3.5.0
+
+# Run all Docker-mode Spark e2e tests
+go test -v -tags spark_e2e \
+  -run TestSparkJob_Docker \
+  -timeout 10m \
+  ./tests/full_mode/plugin/
+```
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `SPARK_E2E_DOCKER_IMAGE` | — | **(required)** Spark Docker image to run |
+| `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
+| `SPARK_E2E_POLL_INTERVAL` | `3s` | How often to poll step/job state |
+| `SPARK_E2E_JOB_TIMEOUT` | `5m` | Max time to wait for a job to reach terminal state |
+
+#### Kubernetes mode — EMR Containers job runs on a real cluster
+
+K8s mode uses `JAISCLOUD_SPARK_MODE=k8s`. The `K8sExecutor` logs the full `spark-submit` argument list it constructs, then delegates lifecycle to the `MockExecutor`. Real pod submission requires the Spark Operator installed in the target cluster.
+
+```bash
+# Set required env vars
+export SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0
+export SPARK_E2E_K8S_NAMESPACE=default        # optional, defaults to "default"
+
+# Run all K8s-mode Spark e2e tests
+go test -v -tags spark_e2e \
+  -run TestSparkJob_K8s \
+  -timeout 10m \
+  ./tests/full_mode/plugin/
+```
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `SPARK_E2E_SPARK_IMAGE` | — | **(required)** Spark image for K8s executor |
+| `SPARK_E2E_K8S_NAMESPACE` | `default` | Kubernetes namespace for Spark pods |
+| `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
+| `SPARK_E2E_POLL_INTERVAL` | `3s` | Polling interval |
+| `SPARK_E2E_JOB_TIMEOUT` | `5m` | Job timeout |
+
+#### EventBridge notification tests (no real Spark needed)
+
+The EventBridge tests under `tests/full_mode/plugin/` use the `MockExecutor` and do not require any Docker image or Kubernetes cluster. They verify that EMR/EMR-on-EKS state transitions are published to EventBridge and delivered to SQS targets.
+
+```bash
+# No SPARK_E2E_DOCKER_IMAGE or SPARK_E2E_SPARK_IMAGE needed
+go test -v -tags spark_e2e \
+  -run TestSparkJob_EventBridge \
+  -timeout 5m \
+  ./tests/full_mode/plugin/
+```
+
+---
+
+### Apache Iceberg e2e tests (`iceberg_e2e` build tag)
+
+Iceberg tests run a real Spark SQL job via Docker, write Iceberg tables to JaisCloud's S3 (backed by Glue catalog and DynamoDB lock table), and verify the results via the AWS SDK. They are **excluded from normal CI** by the `//go:build iceberg_e2e` tag.
+
+#### Prerequisites
+
+| Tool | Minimum version | Purpose |
+|---|---|---|
+| Go | 1.26 | Test runner |
+| Docker | 20+ | Runs Spark SQL container |
+| curl | any | JAR download script |
+| JaisCloud (full mode) | latest | S3, Glue, DynamoDB store |
+
+JaisCloud must be running in full mode (lite mode works too — Glue, S3, and DynamoDB are all in-memory):
+
+```bash
+./jaiscloud start --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+```
+
+#### 1. Download Iceberg JARs
+
+The Spark container needs Iceberg and AWS connector JARs that are not included in the base image. Download them once from Maven Central:
+
+```bash
+cd tests/full_mode/iceberg/spark-iceberg
+bash download-jars.sh
+```
+
+This creates a `jars/` directory containing:
+
+| JAR | Version |
+|---|---|
+| `iceberg-spark-runtime-3.5_2.12` | 1.5.2 |
+| `iceberg-aws-bundle` | 1.5.2 |
+| `hadoop-aws` | 3.3.4 |
+| `aws-java-sdk-bundle` | 1.12.262 |
+
+#### 2. Build the Spark Iceberg Docker image
+
+```bash
+# Still inside tests/full_mode/iceberg/spark-iceberg/
+docker build -t spark-iceberg-test .
+cd ../../../..    # back to repo root
+```
+
+The Dockerfile extends `apache/spark:3.5.0` and copies the downloaded JARs into `/opt/spark/jars/`.
+
+#### 3. Run the Iceberg tests
+
+```bash
+export SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test
+
+go test -v -tags iceberg_e2e \
+  -timeout 30m \
+  ./tests/full_mode/iceberg/
+```
+
+`TestMain` runs first and creates the shared infrastructure once for the entire suite:
+
+| Resource | Type | Purpose |
+|---|---|---|
+| `iceberg-warehouse` | S3 bucket | Iceberg data and metadata files |
+| `iceberg_test_db` | Glue database | Table catalog |
+| `iceberg_lock` | DynamoDB table | Iceberg `DynamoDbLockManager` commit lock |
+
+After all tests complete, `TestMain` deletes the Glue database and DynamoDB table. S3 objects are left intact for debugging unless `ICEBERG_CLEAN_S3=true` is set.
+
+#### 4. Run a single Iceberg test
+
+```bash
+go test -v -tags iceberg_e2e \
+  -run TestIceberg_GlueCatalog_WriteAndRead \
+  -timeout 15m \
+  ./tests/full_mode/iceberg/
+```
+
+#### Environment variable reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `SPARK_E2E_ICEBERG_IMAGE` | — | **(required)** Docker image built in step 2 |
+| `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
+| `SPARK_E2E_POLL_INTERVAL` | `5s` | Polling interval for Spark job completion |
+| `SPARK_E2E_JOB_TIMEOUT` | `10m` | Max time to wait for a Spark SQL job |
+| `ICEBERG_CLEAN_S3` | `false` | Set to `true` to delete S3 objects on teardown |
+
+#### How it works
+
+Each test writes and reads Iceberg tables through the Glue catalog:
+
+```
+Test (Go SDK) ─────── PutRule / CreateQueue (setup)
+Spark SQL job ────── docker run spark-iceberg-test spark-sql
+                         │
+                         ├─ Glue catalog:  reads/writes metadata_location pointer
+                         ├─ S3 (JaisCloud): reads/writes Parquet data and metadata files
+                         └─ DynamoDB:       acquires commit locks via DynamoDbLockManager
+Test (Go SDK) ─────── DescribeTable / GetObject (verify)
+```
+
+Spark connects to JaisCloud via `host.docker.internal` so it can reach the host's port 4566. The Docker `--add-host=host.docker.internal:host-gateway` flag is set automatically by the test runner.
+
+#### Troubleshooting
+
+**`SPARK_E2E_ICEBERG_IMAGE not set — skipping`**  
+Set `export SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test` before running.
+
+**Spark job times out**  
+Increase `SPARK_E2E_JOB_TIMEOUT=20m` and check Docker resource limits (Spark needs at least 2 GB RAM).
+
+**`Connection refused` from inside the Spark container**  
+JaisCloud must be reachable at `host.docker.internal:4566` from the container. On Linux, ensure Docker is started with `--add-host=host.docker.internal:host-gateway` (the test runner adds this automatically).
+
+**JAR download fails**  
+Rerun `bash download-jars.sh` — it skips already-downloaded files. Check your internet connection and Maven Central reachability.
 
 ### Race detector
 

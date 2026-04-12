@@ -173,13 +173,15 @@ func (p *EventBridgeProvider) setRuleState(ctx context.Context, name, state stri
 
 // ─── target CRUD ──────────────────────────────────────────────────────────────
 
-// targetData stores a rule target. TargetType and QueueName are resolved
+// targetData stores a rule target. TargetType and QueueURL are resolved
 // at PutTargets time from the cloud-specific ARN so delivery is cloud-agnostic.
+// Storing QueueURL directly avoids a runtime resource-store lookup and removes
+// any coupling to the cloud's queue resource type name ("sqs_queues", etc.).
 type targetData struct {
 	ID         string `json:"Id"`
 	Arn        string `json:"Arn"`
 	TargetType string `json:"TargetType,omitempty"` // "sqs" | "" (unsupported type)
-	QueueName  string `json:"QueueName,omitempty"`  // pre-resolved queue name for sqs targets
+	QueueURL   string `json:"QueueURL,omitempty"`   // pre-resolved queue URL for sqs targets
 }
 
 func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -204,9 +206,9 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 			failed = append(failed, map[string]any{"TargetId": id, "ErrorCode": "ValidationException", "ErrorMessage": "Id and Arn are required"})
 			continue
 		}
-		// Resolve target type and queue name at write time using the known cloud.
-		// Delivery path uses only the pre-resolved fields — no ARN parsing at delivery.
-		td := resolveTargetMeta(nr.Cloud, id, arn)
+		// Resolve target type and queue URL at write time.
+		// Storing the full queue URL means delivery never touches the resource store.
+		td := resolveTargetMeta(nr.Cloud, id, arn, nr.Port, nr.AccountID)
 		raw, _ := json.Marshal(td)
 		storeID := ruleName + "/" + id
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
@@ -222,9 +224,11 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 	}), nil
 }
 
-// resolveTargetMeta extracts TargetType and QueueName from the cloud-specific ARN.
+// resolveTargetMeta extracts TargetType and QueueURL from the cloud-specific ARN.
+// port and accountID are used to construct the emulator queue URL at write time
+// so delivery never needs a runtime resource-store lookup.
 // This is the only place that knows about cloud-specific ARN formats for targets.
-func resolveTargetMeta(cloud model.Cloud, id, arn string) targetData {
+func resolveTargetMeta(cloud model.Cloud, id, arn string, port int, accountID string) targetData {
 	td := targetData{ID: id, Arn: arn}
 	switch cloud {
 	case model.CloudAWS:
@@ -233,15 +237,13 @@ func resolveTargetMeta(cloud model.Cloud, id, arn string) targetData {
 			parts := strings.Split(arn, ":")
 			if len(parts) >= 6 {
 				td.TargetType = "sqs"
-				td.QueueName = parts[5]
+				td.QueueURL = fmt.Sprintf("http://localhost:%d/%s/%s", port, accountID, parts[5])
 			}
 		}
 	case model.CloudAzure:
 		// Azure Service Bus format (future): /subscriptions/.../queues/{name}
-		// Stub: no supported target types yet
 	case model.CloudGCP:
 		// GCP Pub/Sub format (future): projects/{project}/topics/{topic}
-		// Stub: no supported target types yet
 	}
 	return td
 }
@@ -292,12 +294,21 @@ func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.Normalize
 			results = append(results, map[string]any{"ErrorCode": "MalformedEntry", "ErrorMessage": "entry must be a JSON object"})
 			continue
 		}
+		// Detail is a JSON string in the wire protocol; parse it so pattern
+		// matching on nested fields (e.g. {"detail":{"state":["X"]}}) works.
+		var detail any = em["Detail"]
+		if s, ok := em["Detail"].(string); ok {
+			var parsed any
+			if json.Unmarshal([]byte(s), &parsed) == nil {
+				detail = parsed
+			}
+		}
 		envelope := map[string]any{
 			"version":     "0",
 			"id":          newEventID(),
 			"source":      em["Source"],
 			"detail-type": em["DetailType"],
-			"detail":      em["Detail"],
+			"detail":      detail,
 			"account":     nr.AccountID,
 			"region":      nr.Region,
 			"time":        time.Now().UTC().Format(time.RFC3339),
@@ -359,21 +370,14 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 }
 
 // deliverToTarget sends the event to the target.
-// Uses pre-resolved TargetType/QueueName — no cloud-specific ARN parsing here.
+// Uses pre-resolved TargetType/QueueURL — no resource-store lookup, no cloud coupling.
 func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData, envelope map[string]any) {
-	if td.TargetType != "sqs" {
-		// Unsupported target type: silently skip (consistent with AWS behaviour for
-		// target types the emulator does not support).
+	if td.TargetType != "sqs" || td.QueueURL == "" {
 		return
 	}
-	entries, _ := p.resources.List(ctx, "queue", td.QueueName)
-	if len(entries) == 0 {
-		return
-	}
-	queueURL := entries[0].ID
 	body, _ := json.Marshal(envelope)
 	_, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
-		QueueURL: queueURL,
+		QueueURL: td.QueueURL,
 		Body:     string(body),
 	})
 }

@@ -45,36 +45,42 @@ type Config struct {
 	RandSource rand.Source
 }
 
+// awsARNFormatters maps abstract resource types to their AWS ARN format function.
+// To add a new resource type, add one entry here — no switch statement to update.
+// The function signature is func(region, accountID, name string) string;
+// IAM ARNs omit region, S3 ARNs omit both, so each formatter uses only what it needs.
+var awsARNFormatters = map[string]func(region, accountID, name string) string{
+	// DynamoDB
+	"dynamodb-table":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", r, a, n) },
+	"dynamodb-stream": func(r, a, n string) string { return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", r, a, n) }, // name is "tableName/stream/label"
+	// Lambda
+	"lambda-function": func(r, a, n string) string { return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", r, a, n) },
+	// SNS
+	"sns-topic":        func(r, a, n string) string { return fmt.Sprintf("arn:aws:sns:%s:%s:%s", r, a, n) },
+	"sns-subscription": func(r, a, n string) string { return fmt.Sprintf("arn:aws:sns:%s:%s:%s", r, a, n) },
+	// SQS
+	"sqs-queue": func(r, a, n string) string { return fmt.Sprintf("arn:aws:sqs:%s:%s:%s", r, a, n) },
+	// IAM — no region in ARN
+	"iam-role":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:role/%s", a, n) },
+	"iam-policy": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:policy/%s", a, n) },
+	"iam-user":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:user/%s", a, n) },
+	// S3 — no region or account in ARN
+	"s3-bucket": func(_, _, n string) string { return fmt.Sprintf("arn:aws:s3:::%s", n) },
+	// EventBridge
+	"events-rule": func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", r, a, n) },
+}
+
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.
-// The returned function maps abstract provider resource types to their AWS ARN format.
-// Inject this into NormalizedRequest.ResourceID at the gateway layer.
+// The returned function maps abstract provider resource types to their AWS ARN format
+// using awsARNFormatters above. Adding a new resource type requires only a new entry
+// in that map — this function never needs to change.
+// Inject the result into NormalizedRequest.ResourceID at the gateway layer.
 func AWSResourceID(region, accountID string) func(resourceType, name string) string {
 	return func(resourceType, name string) string {
-		switch resourceType {
-		case "dynamodb-table":
-			return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, name)
-		case "dynamodb-stream":
-			// name is expected to be "tableName/stream/label"
-			return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, name)
-		case "lambda-function":
-			return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", region, accountID, name)
-		case "sns-topic", "sns-subscription":
-			return fmt.Sprintf("arn:aws:sns:%s:%s:%s", region, accountID, name)
-		case "sqs-queue":
-			return fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, accountID, name)
-		case "iam-role":
-			return fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, name)
-		case "iam-policy":
-			return fmt.Sprintf("arn:aws:iam::%s:policy/%s", accountID, name)
-		case "iam-user":
-			return fmt.Sprintf("arn:aws:iam::%s:user/%s", accountID, name)
-		case "s3-bucket":
-			return fmt.Sprintf("arn:aws:s3:::%s", name)
-		case "events-rule":
-			return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", region, accountID, name)
-		default:
-			return name
+		if f, ok := awsARNFormatters[resourceType]; ok {
+			return f(region, accountID, name)
 		}
+		return name
 	}
 }
 

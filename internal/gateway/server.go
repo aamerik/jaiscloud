@@ -103,7 +103,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	// Attach labels for Prometheus metrics middleware
 	r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
 
-	providerKey := serviceToProvider(nr.Service) + "." + nr.Action
+	providerKey := s.cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action
 
 	resp, dispatchErr := s.registry.Dispatch(r.Context(), providerKey, nr)
 	if dispatchErr != nil {
@@ -131,48 +131,6 @@ func encodeErrorFallback(codec adapter.Codec, nr *model.NormalizedRequest, pe *m
 	return pe.HTTPStatus, h, []byte(body)
 }
 
-func serviceToProvider(service string) string {
-	switch service {
-	case "sqs":
-		return "Queue"
-	case "iam":
-		return "IAM"
-	case "sts":
-		return "STS"
-	case "sns":
-		return "Notification"
-	case "dynamodb":
-		return "Table"
-	case "s3":
-		return "Object"
-	case "lambda":
-		return "Function"
-	case "glue":
-		return "Glue"
-	case "ec2":
-		return "Compute"
-	case "route53":
-		return "DNS"
-	case "rds":
-		return "RDS"
-	case "elasticache":
-		return "ElastiCache"
-	case "ecs":
-		return "ECS"
-	case "dynamodbstreams":
-		return "Streams"
-	case "cloudformation":
-		return "CloudFormation"
-	case "emr":
-		return "EMR"
-	case "emrcontainers":
-		return "EMRContainers"
-	case "events":
-		return "EventBridge"
-	default:
-		return service
-	}
-}
 
 func writeResponse(w http.ResponseWriter, status int, headers http.Header, body []byte) {
 	for k, vs := range headers {

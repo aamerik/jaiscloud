@@ -30,7 +30,7 @@ import (
 //	DELETE /tags/{resourceArn}                                    → UntagResource
 type EMRContainersCodec struct{}
 
-func (c *EMRContainersCodec) ServiceName() string { return "emrcontainers" }
+func (c *EMRContainersCodec) ServiceName() string { return "emr-containers" }
 
 func (c *EMRContainersCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	// Strip leading slash and tokenise
@@ -54,7 +54,7 @@ func (c *EMRContainersCodec) Decode(r *http.Request, body []byte) (*model.Normal
 	action := emrcDetectAction(r.Method, parts, params)
 
 	return &model.NormalizedRequest{
-		Service: "emrcontainers",
+		Service: "emr-containers",
 		Action:  action,
 		Params:  params,
 		Raw:     r,

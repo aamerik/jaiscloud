@@ -63,10 +63,14 @@ plugins/
         emrsparkplugin.go  # EMRSparkPlugin struct — Init, Manifest, Handle, Shutdown, Reset
 internal/
   adapter/              # Cloud wire-protocol layer (no business logic)
-    adapter.go          # CloudAdapter interface (Cloud, DetectAndDecode); Codec interface
+    adapter.go          # CloudAdapter interface (Cloud, DetectAndDecode, ServiceToProvider); Codec interface
     aws/
-      aws.go            # AWSAdapter — Cloud(), DetectAndDecode()
-      router.go         # DetectService — X-Amz-Target / SigV4 / Action param
+      aws.go            # AWSAdapter — Cloud(), DetectAndDecode(), ServiceToProvider()
+      router.go         # DetectService — data-driven via services.go (X-Amz-Target / SigV4 / Action)
+      services.go       # ServiceDescriptor + awsServices registry — single source of truth for all
+                        #   service metadata (SigV4Name, TargetPrefix, QueryActions, ProviderPrefix).
+                        #   Derived maps built at init(): targetPrefixToService, knownSigV4Services,
+                        #   actionToService, serviceProviderMap. Add one entry here to register a service.
       services/
         sqs.go          # SQSCodec: JSON + Query/XML
         iam.go          # IAMCodec: Query/XML (handles STS too)
@@ -84,10 +88,11 @@ internal/
         cloudformation.go  # CloudFormationCodec
         emr.go          # EMRCodec
         emrcontainers.go   # EMRContainersCodec
+        eventbridge.go  # EventBridgeCodec: JSON/Target (X-Amz-Target: AWSEvents.*)
     azure/
-      azure.go          # AzureAdapter stub — Cloud(), DetectAndDecode() (501 not implemented)
+      azure.go          # AzureAdapter stub — Cloud(), DetectAndDecode() (501), ServiceToProvider() (passthrough)
     gcp/
-      gcp.go            # GCPAdapter stub — Cloud(), DetectAndDecode() (501 not implemented)
+      gcp.go            # GCPAdapter stub — Cloud(), DetectAndDecode() (501), ServiceToProvider() (passthrough)
   admin/                # /_jaiscloud/* endpoints
                         # Resetter, Snapshotter interfaces
   blobfs/               # BlobStore interface: MemoryBlobStore, LocalFSBlobStore
@@ -121,6 +126,7 @@ internal/
     rds/                # RDS provider
     stack/              # CloudFormation provider
     table/              # TableProvider — DynamoDB (tables, items, expressions, streams)
+    events/             # EventBridgeProvider — rules, targets, event delivery to SQS
   resourcemgr/          # Deletion guards and parent-existence checks
     manager.go          # Manager — CheckParent, AcquireDelete, RegisterRules, Reset
     deletionlock.go     # DeletionLock — thread-safe per-resource deletion marks
@@ -152,7 +158,7 @@ HTTP request
       → cloudAdapter.DetectAndDecode     (single adapter selected at startup from cfg.Cloud)
           → <ServiceCodec>.Decode        (SQS/IAM/SNS → Query/XML; DynamoDB → JSON/Target;
                                           S3/Lambda → REST)
-      → inject: nr.Clock, nr.Region, nr.AccountID, nr.Cloud, nr.ResourceID (AWS only)
+      → inject: nr.Clock, nr.Region, nr.AccountID, nr.Cloud, nr.ResourceID (all clouds)
       → middleware.WithRequestLabels(ctx, cloud, service, action)
       → Registry.Dispatch("ProviderPrefix.Action", nr)
           → exact match: built-in provider handler
@@ -194,12 +200,17 @@ func buildAdapter(cfg *config.Config) (adapter.CloudAdapter, error) {
 type CloudAdapter interface {
     Cloud() model.Cloud
     DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, Codec, error)
+    ServiceToProvider(service string) string
 }
 ```
 
 `Detect()` was deliberately omitted — cloud identity is a startup config decision, not a per-request inference.
 
+`ServiceToProvider` maps a wire service name (e.g. `"sqs"`) to the provider registry prefix (e.g. `"Queue"`). The gateway calls this instead of maintaining its own switch. AWS delegates to `serviceProviderMap` built from `awsServices` in `services.go`; Azure/GCP stubs return the service name unchanged.
+
 ### Service → Provider mapping
+
+This mapping is defined once in `internal/adapter/aws/services.go` (`awsServices` slice) and derived automatically — no switch statement anywhere. The gateway calls `cloudAdapter.ServiceToProvider(nr.Service)` to get the provider prefix.
 
 | Wire service | Provider prefix | Codec |
 |---|---|---|
@@ -208,10 +219,19 @@ type CloudAdapter interface {
 | `sts` | `STS` | IAMCodec (Query/XML) |
 | `sns` | `Notification` | SNSCodec (Query/XML) |
 | `dynamodb` | `Table` | DynamoDBCodec (JSON/Target) |
+| `dynamodbstreams` | `Streams` | DynamoDBStreamsCodec (JSON/Target) |
 | `s3` | `Object` | S3Codec (REST/XML) |
 | `lambda` | `Function` | LambdaCodec (REST/JSON) |
-| `emr` | `EMR` | EMRCodec |
-| `emrcontainers` | `EMRContainers` | EMRContainersCodec |
+| `glue` | `Glue` | GlueCodec (JSON/Target) |
+| `ec2` | `Compute` | EC2Codec (Query/XML) |
+| `route53` | `DNS` | Route53Codec (REST/XML) |
+| `rds` | `RDS` | RDSCodec (Query/XML) |
+| `elasticache` | `ElastiCache` | ElastiCacheCodec (Query/XML) |
+| `ecs` | `ECS` | ECSCodec (JSON/Target) |
+| `cloudformation` | `CloudFormation` | CloudFormationCodec (Query/XML) |
+| `emr` | `EMR` | EMRCodec (JSON/Target) |
+| `emr-containers` | `EMRContainers` | EMRContainersCodec (REST/JSON) |
+| `events` | `EventBridge` | EventBridgeCodec (JSON/Target) |
 
 ---
 
@@ -460,12 +480,16 @@ Bridges `store.ResourceStore` (host type) to `resourcemgr.ResourceStore` (intern
 
 ### AWS service detection order
 
-In [internal/adapter/aws/router.go](internal/adapter/aws/router.go):
-1. `X-Amz-Target` header (SQS JSON, DynamoDB)
-2. SigV4 `Authorization` scope (all services)
-3. `Action` param in query/body (SQS, IAM, STS, SNS Query protocol)
+Detection is data-driven. All service metadata (target prefixes, SigV4 names, Query-protocol actions) is declared once in [internal/adapter/aws/services.go](internal/adapter/aws/services.go) as `ServiceDescriptor` entries in `awsServices`. Four lookup maps are derived at `init()` time. `DetectService` in [router.go](internal/adapter/aws/router.go) consults those maps — no hardcoded strings.
 
-S3 and Lambda are always detected via SigV4 (they use REST, no `Action` param).
+Priority:
+1. `X-Amz-Target` header — looked up in `targetPrefixToService` map (JSON/Target services: SQS, DynamoDB, Glue, ECS, EMR, EventBridge, DynamoDB Streams)
+2. SigV4 `Authorization` scope — service token checked against `knownSigV4Services` set (all services)
+3. `Action=` query/body param — looked up in `actionToService` map (Query-protocol services: SQS, IAM, STS, SNS)
+
+S3 and Lambda are always detected via SigV4 (REST, no `Action` param).
+
+**Adding a new service:** add one `ServiceDescriptor` entry to `awsServices` in `services.go`. Service detection, SigV4 allow-list, Action routing, and gateway provider mapping all update automatically.
 
 ### S3 action detection
 
@@ -596,23 +620,39 @@ arn := nr.ResourceID("dynamodb-table", name)
 
 **Where each piece lives:**
 - `internal/model/model.go` — declares `ResourceID func(resourceType, name string) string` on `NormalizedRequest`
-- `internal/config/config.go` — `AWSResourceID(region, accountID)` returns the AWS ARN implementation
-- `internal/gateway/server.go` — injects `nr.ResourceID` only when `cloud == aws`; other clouds leave it nil
-- `internal/provider/*/` — calls `nr.ResourceID("type", name)` only; no `"arn:aws:"` literals
+- `internal/config/config.go` — `awsARNFormatters` map + `AWSResourceID(region, accountID)` returns the AWS implementation; `AzureResourceID` / `GCPResourceID` return stub functions that return the name unchanged
+- `internal/gateway/server.go` — injects `nr.ResourceID` for **all clouds** via a switch (AWS gets full ARN formatters; Azure/GCP get their stub functions); `nr.ResourceID` is therefore always non-nil after the gateway
+- `internal/provider/*/` — calls `nr.ResourceID("type", name)` unconditionally; no `"arn:aws:"` literals, no nil checks
 
-**Adding a new resource type:** add a `case "my-service-resource":` to `AWSResourceID` in `config.go`. An Azure adapter would inject a different function that formats Azure resource IDs.
-
-**Fallback:** providers may include a nil-guard fallback for unit tests that don't go through the gateway:
+**Adding a new resource type:** add one entry to `awsARNFormatters` in `config.go`:
 ```go
-func myArn(nr *model.NormalizedRequest, name string) string {
-    if nr.ResourceID != nil {
-        return nr.ResourceID("my-resource", name)
-    }
-    return fmt.Sprintf("arn:aws:...", nr.Region, nr.AccountID, name) // test fallback only
-}
+"my-service-resource": func(r, a, n string) string {
+    return fmt.Sprintf("arn:aws:myservice:%s:%s:resource/%s", r, a, n)
+},
 ```
+An Azure adapter injects its own function that formats Azure resource IDs; providers don't need to change.
 
 The same DI principle applies to any other cloud-specific customisation point: define an interface or function type in `internal/model/`, implement it per cloud in the adapter/config layer, and inject it via `NormalizedRequest` or the provider constructor.
+
+---
+
+### EventBridge conventions
+
+**Wire protocol:** `X-Amz-Target: AmazonCloudWatchEvents.<Action>` (JSON/Target). Detected via the `TargetPrefix` in `services.go`.
+
+**Rule storage:** `eb_rule` resource type. Key = rule name.
+
+**Target storage:** `eb_target` resource type. Key = `"<ruleName>/<targetId>"` so all targets for a rule are listed with a single `List(ctx, "eb_target", ruleName+"/")` call.
+
+**Target type resolution (`resolveTargetMeta`):** ARN parsing happens **once at `PutTargets` time** where `nr.Cloud` is available. The resolved `TargetType` (`"sqs"`) and `QueueName` are stored in `targetData`. The delivery path (`deliverToTarget`) is cloud-agnostic — it reads only pre-resolved fields.
+
+**Event delivery:** `deliverEvent` lists all `ENABLED` rules, matches the event envelope against `EventPattern` using `matchesPattern`, then calls `deliverToTarget` for each matching target.
+
+**EMR integration:** `EMRProvider.CancelSteps` and `EMRContainersProvider.CancelJobRun` publish `EventEMRStepState` / `EventEMRJobRunState` on the `EventBus`. `EventBridgeProvider.subscribeToEventBus` subscribes at construction time and converts these domain events into EventBridge envelopes. The event `source` is derived as `string(ev.Cloud) + ".emr"` — not hardcoded — so it is correct for any cloud.
+
+**`PutEvents` action:** allows tests and callers to inject arbitrary events directly into the rule-matching pipeline without triggering EMR state changes.
+
+**`atomic.Uint64` event counter:** `newEventID()` uses `eventCounter.Add(1)` — thread-safe without a mutex.
 
 ---
 
@@ -626,5 +666,6 @@ The same DI principle applies to any other cloud-specific customisation point: d
 | `github.com/jackc/pgx/v5` | PostgreSQL driver (full mode) |
 | `github.com/prometheus/client_golang` | Prometheus metrics (opt-in) |
 | `github.com/aws/aws-sdk-go-v2` | Integration test client |
+| `github.com/aws/aws-sdk-go-v2/service/eventbridge` | EventBridge integration test client |
 | `github.com/stretchr/testify` | Test assertions |
 | `github.com/jaiscloud/plugin-sdk` | Plugin SDK (local `replace` → `./sdk`) |
