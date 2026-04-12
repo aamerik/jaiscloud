@@ -20,6 +20,11 @@ import (
 // Returns body unchanged if it does not look like aws-chunked format.
 func decodeAWSChunked(body []byte) []byte {
 	var out []byte
+	// parsedChunked tracks whether we have successfully recognised at least one
+	// valid chunk header (including the terminal 0-length chunk). If true, we
+	// know the body was valid aws-chunked and it is safe to return an empty
+	// slice when no data chunks were present (i.e. an empty object upload).
+	parsedChunked := false
 	remaining := body
 	for len(remaining) > 0 {
 		idx := strings.Index(string(remaining), "\r\n")
@@ -38,9 +43,10 @@ func decodeAWSChunked(body []byte) []byte {
 		if err != nil {
 			return body // not aws-chunked, pass through unchanged
 		}
+		parsedChunked = true
 		remaining = remaining[idx+2:]
 		if chunkLen == 0 {
-			break // final chunk
+			break // final chunk — end of valid chunked data
 		}
 		if int64(len(remaining)) < chunkLen {
 			return body // truncated, pass through
@@ -51,7 +57,10 @@ func decodeAWSChunked(body []byte) []byte {
 			remaining = remaining[2:]
 		}
 	}
-	if len(out) == 0 && len(body) > 0 {
+	// Only fall back to the raw body if we never saw a valid chunk header.
+	// An empty aws-chunked stream (terminal 0-chunk only) correctly decodes
+	// to empty bytes — do not return the raw framing bytes in that case.
+	if len(out) == 0 && len(body) > 0 && !parsedChunked {
 		return body
 	}
 	return out

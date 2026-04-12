@@ -80,7 +80,7 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.events;
 	}
 
 	// d. COUNT result = 100
-	result := readS3JSON(t, s3Client, "iceberg-warehouse", "events-count/result.json")
+	result := findS3JSON(t, s3Client, "iceberg-warehouse", "events-count/")
 	cnt, _ := result["cnt"].(float64)
 	if int(cnt) != 100 {
 		t.Errorf("expected cnt=100, got %v", cnt)

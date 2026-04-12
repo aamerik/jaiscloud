@@ -96,14 +96,14 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.products WHERE price IS NULL;
 	}
 
 	// c. Total count = 100
-	countResult := readS3JSON(t, s3Client, "iceberg-warehouse", "products-count/result.json")
+	countResult := findS3JSON(t, s3Client, "iceberg-warehouse", "products-count/")
 	cnt, _ := countResult["cnt"].(float64)
 	if int(cnt) != 100 {
 		t.Errorf("expected total cnt=100, got %v", cnt)
 	}
 
 	// d. Exactly 50 rows have NULL price (the original rows)
-	nullResult := readS3JSON(t, s3Client, "iceberg-warehouse", "products-nullprice/result.json")
+	nullResult := findS3JSON(t, s3Client, "iceberg-warehouse", "products-nullprice/")
 	nullCnt, _ := nullResult["cnt"].(float64)
 	if int(nullCnt) != 50 {
 		t.Errorf("expected 50 null-price rows, got %v", nullCnt)

@@ -85,45 +85,39 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.sales;
 
 	// ── Assertions ────────────────────────────────────────────────────────────
 
-	// a. Glue GetPartitions returns 3 partitions
-	partOut, err := glueClient.GetPartitions(context.Background(), &awsglue.GetPartitionsInput{
+	// a. Glue GetTable shows PartitionKeys (the partition spec is in the table metadata)
+	tableOut, err := glueClient.GetTable(context.Background(), &awsglue.GetTableInput{
 		DatabaseName: aws.String("iceberg_test_db"),
-		TableName:    aws.String("sales"),
+		Name:         aws.String("sales"),
 	})
 	if err != nil {
-		t.Fatalf("GetPartitions: %v", err)
+		t.Fatalf("GetTable sales: %v", err)
 	}
-	if len(partOut.Partitions) != 3 {
-		t.Errorf("expected 3 partitions, got %d", len(partOut.Partitions))
+	if tableOut.Table.Parameters["table_type"] != "ICEBERG" {
+		t.Errorf("expected table_type=ICEBERG, got %q", tableOut.Table.Parameters["table_type"])
 	}
+	if tableOut.Table.Parameters["metadata_location"] == "" {
+		t.Error("expected non-empty metadata_location")
+	}
+	// Note: Iceberg tables do NOT register partitions via the Glue Partition API.
+	// Partition metadata is embedded in Iceberg's own metadata files (in S3).
+	// GetPartitions returns 0 for Iceberg tables — this is the correct behavior
+	// in both real AWS and JaisCloud.
 
-	// b. Partition values include all 3 dates
-	dates := map[string]bool{}
-	for _, p := range partOut.Partitions {
-		if len(p.Values) > 0 {
-			dates[p.Values[0]] = true
-		}
-	}
-	for _, expected := range []string{"2026-01-01", "2026-01-02", "2026-01-03"} {
-		if !dates[expected] {
-			t.Errorf("expected partition for %s, got partitions: %v", expected, dates)
-		}
-	}
-
-	// c. S3 has 3 partition directories
+	// b. S3 has 3 partition directories
 	if countS3Objects(t, s3Client, "iceberg-warehouse", "sales/data/") < 3 {
 		t.Error("expected at least 3 data files (one per partition) in s3://iceberg-warehouse/sales/data/")
 	}
 
-	// d. Filtered count = 100
-	filteredResult := readS3JSON(t, s3Client, "iceberg-warehouse", "sales-count/result.json")
+	// c. Filtered count = 100 (partition pruning on 2026-01-02)
+	filteredResult := findS3JSON(t, s3Client, "iceberg-warehouse", "sales-count/")
 	cnt, _ := filteredResult["cnt"].(float64)
 	if int(cnt) != 100 {
 		t.Errorf("expected filtered cnt=100, got %v", cnt)
 	}
 
-	// e. Total count = 300
-	totalResult := readS3JSON(t, s3Client, "iceberg-warehouse", "sales-total/result.json")
+	// d. Total count = 300
+	totalResult := findS3JSON(t, s3Client, "iceberg-warehouse", "sales-total/")
 	total, _ := totalResult["cnt"].(float64)
 	if int(total) != 300 {
 		t.Errorf("expected total cnt=300, got %v", total)

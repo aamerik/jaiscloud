@@ -55,8 +55,10 @@ SELECT id + 100, 'shipped' FROM range(1, 101);
 `,
 	})
 
-	// Read snapshot ID from S3 before running time-travel queries
-	snapshotIDStr := readS3Text(t, s3Client, "iceberg-warehouse", "orders-meta/part-00000")
+	// Read snapshot ID from S3 before running time-travel queries.
+	// Spark's FileOutputCommitter writes UUID-named files (e.g. part-00000-<uuid>.c000.txt)
+	// so we use findS3Text to locate the first data object under the prefix.
+	snapshotIDStr := findS3Text(t, s3Client, "iceberg-warehouse", "orders-meta/")
 	snapshotID, err := strconv.ParseInt(snapshotIDStr, 10, 64)
 	if err != nil {
 		t.Fatalf("parse snapshot ID %q: %v", snapshotIDStr, err)
@@ -109,14 +111,14 @@ SELECT COUNT(*) AS cnt FROM glue.iceberg_test_db.orders;
 	}
 
 	// c. Time-travel result = 100 (only batch 1)
-	snap1Result := readS3JSON(t, s3Client, "iceberg-warehouse", "orders-snap1/result.json")
+	snap1Result := findS3JSON(t, s3Client, "iceberg-warehouse", "orders-snap1/")
 	snap1Cnt, _ := snap1Result["cnt"].(float64)
 	if int(snap1Cnt) != 100 {
 		t.Errorf("expected time-travel cnt=100, got %v", snap1Cnt)
 	}
 
 	// d. Current result = 200 (both batches)
-	currentResult := readS3JSON(t, s3Client, "iceberg-warehouse", "orders-current/result.json")
+	currentResult := findS3JSON(t, s3Client, "iceberg-warehouse", "orders-current/")
 	currentCnt, _ := currentResult["cnt"].(float64)
 	if int(currentCnt) != 200 {
 		t.Errorf("expected current cnt=200, got %v", currentCnt)
