@@ -37,6 +37,24 @@ func TestSparkConfigFrom_UnknownSizeFallsBack(t *testing.T) {
 	}
 }
 
+func TestSparkConfigFrom_EnvImageOverride(t *testing.T) {
+	t.Setenv("JAISCLOUD_K8S_SPARK_IMAGE", "custom/spark:2.0")
+	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall)
+	if cfg.Image != "custom/spark:2.0" {
+		t.Errorf("expected image %q, got %q", "custom/spark:2.0", cfg.Image)
+	}
+}
+
+func TestSparkConfigFrom_EnvImageOverride_FuncOverrideTakesPrecedence(t *testing.T) {
+	t.Setenv("JAISCLOUD_K8S_SPARK_IMAGE", "env/spark:1.0")
+	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall, func(c *spark.SparkConfig) {
+		c.Image = "func/spark:2.0"
+	})
+	if cfg.Image != "func/spark:2.0" {
+		t.Errorf("functional override should take precedence over env var, got %q", cfg.Image)
+	}
+}
+
 func TestSparkConfigFrom_Override(t *testing.T) {
 	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall, func(c *spark.SparkConfig) {
 		c.Namespace = "spark-jobs"

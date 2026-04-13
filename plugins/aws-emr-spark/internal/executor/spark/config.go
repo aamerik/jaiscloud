@@ -1,5 +1,7 @@
 package spark
 
+import "os"
+
 // ClusterSize is a named resource profile for Spark jobs.
 type ClusterSize string
 
@@ -86,6 +88,8 @@ type SparkConfig struct {
 
 // SparkConfigFrom builds a SparkConfig from the executor mode and optional overrides.
 // It resolves the named size profile and fills default values.
+// JAISCLOUD_K8S_SPARK_IMAGE overrides the default image; functional overrides applied
+// last take precedence over the env var.
 func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConfig)) SparkConfig {
 	profile, ok := clusterSizeProfiles[size]
 	if !ok {
@@ -98,6 +102,9 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 		APIServer: DefaultAPIServer,
 		Size:      size,
 		Resources: profile,
+	}
+	if v := os.Getenv("JAISCLOUD_K8S_SPARK_IMAGE"); v != "" {
+		cfg.Image = v
 	}
 	for _, o := range overrides {
 		o(&cfg)

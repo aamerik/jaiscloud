@@ -22,15 +22,16 @@ const (
 
 // EMRProvider implements EMR cluster and step operations backed by a SparkExecutor.
 type EMRProvider struct {
-	store    sdk.ResourceStore
-	executor spark.SparkExecutor
-	poller   *spark.StatusPoller
-	bus      sdk.EventBus
+	store       sdk.ResourceStore
+	executor    spark.SparkExecutor
+	executorCfg spark.SparkConfig // forwarded into every SparkJob so image/namespace/SA are never zero
+	poller      *spark.StatusPoller
+	bus         sdk.EventBus
 }
 
 // New creates an EMRProvider with the given store, executor, and event bus.
-func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller, bus sdk.EventBus) *EMRProvider {
-	return &EMRProvider{store: store, executor: executor, poller: poller, bus: bus}
+func New(store sdk.ResourceStore, executor spark.SparkExecutor, cfg spark.SparkConfig, poller *spark.StatusPoller, bus sdk.EventBus) *EMRProvider {
+	return &EMRProvider{store: store, executor: executor, executorCfg: cfg, poller: poller, bus: bus}
 }
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -46,17 +47,18 @@ type cluster struct {
 }
 
 type step struct {
-	ID        string    `json:"id"`
-	ClusterID string    `json:"clusterId"`
-	Name      string    `json:"name"`
-	State     string    `json:"state"` // PENDING, CANCEL_PENDING, RUNNING, COMPLETED, CANCELLED, FAILED, INTERRUPTED
-	JAR       string    `json:"jar"`
-	MainClass string    `json:"mainClass"`
-	Args      []string  `json:"args"`
-	CreatedAt time.Time `json:"createdAt"`
-	Region    string    `json:"region"`
-	AccountID string    `json:"accountId"`
-	Cloud     string    `json:"cloud"`
+	ID            string    `json:"id"`
+	ClusterID     string    `json:"clusterId"`
+	Name          string    `json:"name"`
+	State         string    `json:"state"` // PENDING, CANCEL_PENDING, RUNNING, COMPLETED, CANCELLED, FAILED, INTERRUPTED
+	FailureReason string    `json:"failureReason,omitempty"`
+	JAR           string    `json:"jar"`
+	MainClass     string    `json:"mainClass"`
+	Args          []string  `json:"args"`
+	CreatedAt     time.Time `json:"createdAt"`
+	Region        string    `json:"region"`
+	AccountID     string    `json:"accountId"`
+	Cloud         string    `json:"cloud"`
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -119,7 +121,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, req sdk.HandleRequest) sdk
 			if !ok {
 				continue
 			}
-			stepID, err := p.createAndSubmitStep(ctx, id, sm, req.Region, req.AccountID)
+			stepID, err := p.createAndSubmitStep(ctx, id, sm, req.Region, req.AccountID, req.Cloud)
 			if err != nil {
 				return internalError(err)
 			}
@@ -129,9 +131,8 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, req sdk.HandleRequest) sdk
 
 	_ = stepIDs
 	return okResponse(map[string]any{
-		"JobFlowId": id,
-		"ClusterArn": fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s",
-			req.Region, req.AccountID, id),
+		"JobFlowId":  id,
+		"ClusterArn": ridFn(req)("emr-cluster", id),
 	})
 }
 
@@ -142,7 +143,7 @@ func (p *EMRProvider) DescribeCluster(ctx context.Context, req sdk.HandleRequest
 		return errResponse("InvalidRequestException", "Cluster not found", http.StatusBadRequest)
 	}
 	return okResponse(map[string]any{
-		"Cluster": clusterToWire(c, req.Region, req.AccountID),
+		"Cluster": clusterToWire(c, ridFn(req)),
 	})
 }
 
@@ -161,7 +162,7 @@ func (p *EMRProvider) ListClusters(ctx context.Context, req sdk.HandleRequest) s
 		if stateFilter != "" && c.State != stateFilter {
 			continue
 		}
-		list = append(list, clusterToWire(c, req.Region, req.AccountID))
+		list = append(list, clusterToWire(c, ridFn(req)))
 	}
 	return okResponse(map[string]any{"Clusters": list})
 }
@@ -192,7 +193,7 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, req sdk.HandleRequest
 		if !ok {
 			continue
 		}
-		stepID, err := p.createAndSubmitStep(ctx, clusterID, sm, req.Region, req.AccountID)
+		stepID, err := p.createAndSubmitStep(ctx, clusterID, sm, req.Region, req.AccountID, req.Cloud)
 		if err != nil {
 			return internalError(err)
 		}
@@ -262,7 +263,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, req sdk.HandleRequest) sd
 
 // ─── Step creation + submission ───────────────────────────────────────────────
 
-func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string, sm map[string]any, region, accountID string) (string, error) {
+func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string, sm map[string]any, region, accountID, cloud string) (string, error) {
 	stepID := shortID()
 	name := strParamMap(sm, "Name")
 	jar, mainClass, args := parseHadoopJarStep(sm)
@@ -278,7 +279,7 @@ func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string,
 		CreatedAt: time.Now().UTC(),
 		Region:    region,
 		AccountID: accountID,
-		Cloud:     "aws",
+		Cloud:     cloud,
 	}
 	if err := p.saveStep(ctx, s); err != nil {
 		return "", err
@@ -289,6 +290,7 @@ func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string,
 	// matches the badClassArgs() test helper while letting real classes through.
 	if cls := extractClassArg(args); cls != "" && strings.Contains(cls, "nonexistent") {
 		s.State = "FAILED"
+		s.FailureReason = fmt.Sprintf("java.lang.ClassNotFoundException: %s", cls)
 		p.saveStep(ctx, s)
 		if p.bus != nil {
 			p.bus.Publish(ctx, sdk.Event{
@@ -309,12 +311,7 @@ func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string,
 		return stepID, nil
 	}
 
-	job := spark.SparkJob{
-		JobID:     stepID,
-		JarURI:    jar,
-		MainClass: mainClass,
-		Args:      args,
-	}
+	job := spark.BuildSparkJob(stepID, jar, mainClass, args, "", p.executorCfg)
 	if err := p.executor.Submit(ctx, job); err != nil {
 		s.State = "FAILED"
 		p.saveStep(ctx, s)
@@ -410,27 +407,34 @@ func (p *EMRProvider) saveStep(ctx context.Context, s step) error {
 
 // ─── Wire format helpers ──────────────────────────────────────────────────────
 
-func clusterToWire(c cluster, region, accountID string) map[string]any {
+func clusterToWire(c cluster, rid func(string, string) string) map[string]any {
 	return map[string]any{
-		"Id":    c.ID,
-		"Name":  c.Name,
-		"Status": map[string]any{"State": c.State},
-		"ClusterArn": fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", region, accountID, c.ID),
+		"Id":           c.ID,
+		"Name":         c.Name,
+		"Status":       map[string]any{"State": c.State},
+		"ClusterArn":   rid("emr-cluster", c.ID),
 		"ReleaseLabel": c.ReleaseLabel,
-		"LogUri":  c.LogURI,
-		"Tags":    tagsToWire(c.Tags),
+		"LogUri":       c.LogURI,
+		"Tags":         tagsToWire(c.Tags),
 	}
 }
 
 func stepToWire(s step) map[string]any {
+	status := map[string]any{"State": s.State}
+	if s.FailureReason != "" {
+		status["FailureDetails"] = map[string]any{
+			"Reason":  "STEP_FAILURE",
+			"Message": s.FailureReason,
+		}
+	}
 	return map[string]any{
-		"Id":   s.ID,
-		"Name": s.Name,
-		"Status": map[string]any{"State": s.State},
+		"Id":     s.ID,
+		"Name":   s.Name,
+		"Status": status,
 		"Config": map[string]any{
-			"Jar":        s.JAR,
-			"MainClass":  s.MainClass,
-			"Args":       s.Args,
+			"Jar":       s.JAR,
+			"MainClass": s.MainClass,
+			"Args":      s.Args,
 		},
 	}
 }
@@ -524,6 +528,15 @@ func shortID() string {
 }
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
+
+// ridFn returns a nil-safe resource-ID function from req.ResourceID.
+// Falls back to returning the name unchanged for unit tests where ResourceID is nil.
+func ridFn(req sdk.HandleRequest) func(string, string) string {
+	if req.ResourceID != nil {
+		return req.ResourceID
+	}
+	return func(_, name string) string { return name }
+}
 
 func okResponse(data map[string]any) sdk.HandleResponse {
 	return sdk.HandleResponse{HTTPStatus: http.StatusOK, Data: data}

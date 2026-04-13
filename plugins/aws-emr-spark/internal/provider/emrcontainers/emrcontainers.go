@@ -20,16 +20,17 @@ const (
 
 // EMRContainersProvider handles virtual cluster and job run lifecycle.
 type EMRContainersProvider struct {
-	store      sdk.ResourceStore
-	executor   spark.SparkExecutor
-	poller     *spark.StatusPoller
-	bus        sdk.EventBus
-	jobRunToVC sync.Map // jobRunID → virtualClusterID
+	store       sdk.ResourceStore
+	executor    spark.SparkExecutor
+	executorCfg spark.SparkConfig // forwarded into every SparkJob so image/namespace/SA are never zero
+	poller      *spark.StatusPoller
+	bus         sdk.EventBus
+	jobRunToVC  sync.Map // jobRunID → virtualClusterID
 }
 
 // New creates an EMRContainersProvider.
-func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller, bus sdk.EventBus) *EMRContainersProvider {
-	return &EMRContainersProvider{store: store, executor: executor, poller: poller, bus: bus}
+func New(store sdk.ResourceStore, executor spark.SparkExecutor, cfg spark.SparkConfig, poller *spark.StatusPoller, bus sdk.EventBus) *EMRContainersProvider {
+	return &EMRContainersProvider{store: store, executor: executor, executorCfg: cfg, poller: poller, bus: bus}
 }
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -118,7 +119,7 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, req sd
 	return okResponse(map[string]any{
 		"id":   id,
 		"name": name,
-		"arn":  fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", req.Region, req.AccountID, id),
+		"arn":  ridFn(req)("emr-virtual-cluster", id),
 	})
 }
 
@@ -139,7 +140,7 @@ func (p *EMRContainersProvider) DescribeVirtualCluster(ctx context.Context, req 
 	if err != nil {
 		return errResponse("ResourceNotFoundException", "Virtual cluster not found", http.StatusNotFound)
 	}
-	return okResponse(map[string]any{"virtualCluster": vcToWire(vc, req.Region, req.AccountID)})
+	return okResponse(map[string]any{"virtualCluster": vcToWire(vc, ridFn(req))})
 }
 
 func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, req sdk.HandleRequest) sdk.HandleResponse {
@@ -153,7 +154,7 @@ func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, req sdk
 		if json.Unmarshal(e.Data, &vc) != nil {
 			continue
 		}
-		list = append(list, vcToWire(vc, req.Region, req.AccountID))
+		list = append(list, vcToWire(vc, ridFn(req)))
 	}
 	return okResponse(map[string]any{"virtualClusters": list})
 }
@@ -177,27 +178,32 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, req sdk.HandleR
 		CreatedAt:        time.Now().UTC(),
 		Region:           req.Region,
 		AccountID:        req.AccountID,
-		Cloud:            "aws",
+		Cloud:            req.Cloud,
 	}
 	if err := p.saveJobRun(ctx, jr); err != nil {
 		return internalError(err)
 	}
 	p.jobRunToVC.Store(id, vcID)
 
-	// Submit via executor
-	job := spark.SparkJob{JobID: id}
+	// Submit via executor — parse jobDriver fields and forward executorCfg so
+	// image/namespace/SA are never the zero value (Bug 3 fix). Also parse
+	// sparkSubmitParameters into SparkConf overrides (Bug 4 fix).
+	var jar, sparkParams string
+	var args []string
 	if jd, ok := req.Params["jobDriver"].(map[string]any); ok {
 		if sc, ok := jd["sparkSubmitJobDriver"].(map[string]any); ok {
-			job.JarURI, _ = sc["entryPoint"].(string)
+			jar, _ = sc["entryPoint"].(string)
+			sparkParams, _ = sc["sparkSubmitParameters"].(string)
 			if rawArgs, ok := sc["entryPointArguments"].([]any); ok {
 				for _, a := range rawArgs {
 					if s, ok := a.(string); ok {
-						job.Args = append(job.Args, s)
+						args = append(args, s)
 					}
 				}
 			}
 		}
 	}
+	job := spark.BuildSparkJob(id, jar, "", args, sparkParams, p.executorCfg)
 	if err := p.executor.Submit(ctx, job); err == nil && p.poller != nil {
 		p.poller.Track(id, spark.StateRunning)
 	}
@@ -206,7 +212,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, req sdk.HandleR
 		"id":               id,
 		"name":             jr.Name,
 		"virtualClusterId": vcID,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/jobruns/%s", req.Region, req.AccountID, vcID, id),
+		"arn":              ridFn(req)("emr-job-run", vcID+"/jobruns/"+id),
 	})
 }
 
@@ -241,7 +247,7 @@ func (p *EMRContainersProvider) DescribeJobRun(ctx context.Context, req sdk.Hand
 	if err != nil {
 		return errResponse("ResourceNotFoundException", "Job run not found", http.StatusNotFound)
 	}
-	return okResponse(map[string]any{"jobRun": jobRunToWire(jr, req.Region, req.AccountID)})
+	return okResponse(map[string]any{"jobRun": jobRunToWire(jr, ridFn(req))})
 }
 
 func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, req sdk.HandleRequest) sdk.HandleResponse {
@@ -256,7 +262,7 @@ func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, req sdk.HandleR
 		if json.Unmarshal(e.Data, &jr) != nil {
 			continue
 		}
-		list = append(list, jobRunToWire(jr, req.Region, req.AccountID))
+		list = append(list, jobRunToWire(jr, ridFn(req)))
 	}
 	return okResponse(map[string]any{"jobRuns": list})
 }
@@ -341,12 +347,12 @@ func (p *EMRContainersProvider) saveJobRun(ctx context.Context, jr jobRun) error
 
 // ─── Wire format helpers ──────────────────────────────────────────────────────
 
-func vcToWire(vc virtualCluster, region, accountID string) map[string]any {
+func vcToWire(vc virtualCluster, rid func(string, string) string) map[string]any {
 	return map[string]any{
 		"id":    vc.ID,
 		"name":  vc.Name,
 		"state": vc.State,
-		"arn":   fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", region, accountID, vc.ID),
+		"arn":   rid("emr-virtual-cluster", vc.ID),
 		"containerProvider": map[string]any{
 			"type": "EKS",
 			"id":   vc.EKSCluster,
@@ -358,13 +364,13 @@ func vcToWire(vc virtualCluster, region, accountID string) map[string]any {
 	}
 }
 
-func jobRunToWire(jr jobRun, region, accountID string) map[string]any {
+func jobRunToWire(jr jobRun, rid func(string, string) string) map[string]any {
 	return map[string]any{
 		"id":               jr.ID,
 		"name":             jr.Name,
 		"virtualClusterId": jr.VirtualClusterID,
 		"state":            jr.State,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/jobruns/%s", region, accountID, jr.VirtualClusterID, jr.ID),
+		"arn":              rid("emr-job-run", jr.VirtualClusterID+"/jobruns/"+jr.ID),
 		"releaseLabel":     jr.ReleaseLabel,
 		"executionRoleArn": jr.ExecutionRole,
 		"createdAt":        jr.CreatedAt.Format(time.RFC3339),
@@ -389,6 +395,15 @@ func pathOrParam(params map[string]any, pathKey, bodyKey string) string {
 
 func shortID() string {
 	return fmt.Sprintf("%016x", time.Now().UnixNano())
+}
+
+// ridFn returns a nil-safe resource-ID function from req.ResourceID.
+// Falls back to returning the name unchanged for unit tests where ResourceID is nil.
+func ridFn(req sdk.HandleRequest) func(string, string) string {
+	if req.ResourceID != nil {
+		return req.ResourceID
+	}
+	return func(_, name string) string { return name }
 }
 
 func okResponse(data map[string]any) sdk.HandleResponse {

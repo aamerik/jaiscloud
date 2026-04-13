@@ -1,6 +1,37 @@
 package spark
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// BuildSparkJob constructs a SparkJob, always forwarding cfg so that
+// image/namespace/SA are never the zero value.
+// sparkParams (may be empty) is the raw sparkSubmitParameters string from the
+// EMR on EKS API; its --conf key=value pairs are merged into SparkConf so
+// per-job overrides (e.g. a custom container image) take effect.
+func BuildSparkJob(jobID, jar, mainClass string, args []string, sparkParams string, cfg SparkConfig) SparkJob {
+	job := SparkJob{
+		JobID:     jobID,
+		JarURI:    jar,
+		MainClass: mainClass,
+		Args:      args,
+		Config:    cfg,
+	}
+	if sparkParams != "" {
+		job.SparkConf = map[string]string{}
+		tokens := strings.Fields(sparkParams)
+		for i := 0; i+1 < len(tokens); i++ {
+			if tokens[i] == "--conf" {
+				if k, v, ok := strings.Cut(tokens[i+1], "="); ok {
+					job.SparkConf[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+				i++
+			}
+		}
+	}
+	return job
+}
 
 // SparkSubmitArgs builds the spark-submit argument list for a SparkJob.
 // The caller is responsible for prepending the spark-submit binary path.

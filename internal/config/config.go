@@ -72,7 +72,7 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"emr-cluster":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", r, a, n) },
 	// EMR Containers
 	"emr-virtual-cluster":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n) },
-	"emr-job-run":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/jobruns/%s", r, a, n) },
+	"emr-job-run":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n) },
 	"emr-managed-endpoint": func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/endpoints/%s", r, a, n) },
 	// IAM root
 	"iam-root":             func(_, a, _ string) string { return fmt.Sprintf("arn:aws:iam::%s:root", a) },

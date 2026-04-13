@@ -38,6 +38,7 @@ func registerPluginRoutes(registry *provider.Registry, service string, sp sdk.Sp
 			Params:     nr.Params,
 			Region:     nr.Region,
 			AccountID:  nr.AccountID,
+			Cloud:      string(nr.Cloud),
 			ResourceID: nr.ResourceID,
 		}
 		resp := sp.Handle(ctx, req)

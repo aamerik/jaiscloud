@@ -58,8 +58,8 @@ func (p *EMRSparkPlugin) Init(ctx context.Context, _ sdk.ResourceManager, store 
 	}
 
 	p.executor = spark.NewExecutor(mode, cfg)
-	p.emr = emrprovider.New(store, p.executor, nil, bus) // poller set below
-	p.emrc = emrcprovider.New(store, p.executor, nil, bus)
+	p.emr = emrprovider.New(store, p.executor, cfg, nil, bus) // poller set below
+	p.emrc = emrcprovider.New(store, p.executor, cfg, nil, bus)
 	p.poller = spark.NewStatusPoller(p.executor, 5*time.Second, func(ev spark.StateChangeEvent) {
 		p.emr.OnStateChange(ev)
 		p.emrc.OnStateChange(ev)

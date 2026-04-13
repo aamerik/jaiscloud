@@ -80,7 +80,7 @@ var errNotFound sentinelError = "not found"
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func newProvider() *emrcontainers.EMRContainersProvider {
-	return emrcontainers.New(newFakeStore(), spark.NewMockExecutor(), nil, sdk.NoopEventBus{})
+	return emrcontainers.New(newFakeStore(), spark.NewMockExecutor(), spark.SparkConfig{}, nil, sdk.NoopEventBus{})
 }
 
 func req(action string, params map[string]any) sdk.HandleRequest {

@@ -71,6 +71,10 @@ type HandleRequest struct {
 	// AccountID is the AWS account ID, e.g. "000000000000".
 	AccountID string
 
+	// Cloud is the cloud identifier for this request, e.g. "aws", "azure", "gcp".
+	// Injected by the host; empty in unit tests that do not go through the gateway.
+	Cloud string
+
 	// ResourceID returns a cloud-specific resource identifier (e.g. AWS ARN).
 	// The host injects the appropriate formatter; plugins must not call
 	// fmt.Sprintf("arn:aws:...") directly.
