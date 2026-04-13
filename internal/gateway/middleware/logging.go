@@ -17,7 +17,9 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// Logging logs each request with method, path, status, and duration.
+// Logging logs each request. Successful requests (< 400) are logged at the
+// configured level. Error responses (>= 400) are always logged at Error so
+// failures are visible regardless of the configured log level.
 func Logging(level string) func(http.Handler) http.Handler {
 	var logLevel slog.Level
 	switch level {
@@ -36,13 +38,25 @@ func Logging(level string) func(http.Handler) http.Handler {
 			start := time.Now()
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
-			slog.Log(r.Context(), logLevel, "request",
+
+			attrs := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", rw.status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", GetRequestID(r.Context()),
-			)
+			}
+
+			// Service and action are available after DetectAndDecode populates labels.
+			if svc, action := GetRequestLabels(r.Context()); svc != "" {
+				attrs = append(attrs, "service", svc, "action", action)
+			}
+
+			if rw.status >= 400 {
+				slog.Error("request error", attrs...)
+			} else {
+				slog.Log(r.Context(), logLevel, "request", attrs...)
+			}
 		})
 	}
 }

@@ -2,6 +2,7 @@ package aws
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"jaiscloud/internal/adapter"
@@ -44,17 +45,37 @@ func (a *AWSAdapter) ServiceToProvider(service string) string {
 // DetectAndDecode implements adapter.CloudAdapter.
 // Identifies the service, selects the codec, and decodes the request.
 func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, adapter.Codec, error) {
-	service, _ := DetectService(r, body)
+	service, source := DetectService(r, body)
 	if service == "" {
+		slog.Error("aws: service detection failed",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"x_amz_target", r.Header.Get("X-Amz-Target"),
+			"authorization_prefix", authPrefix(r.Header.Get("Authorization")),
+		)
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target AWS service", 400)
 	}
+	slog.Debug("aws: service detected", "service", service, "source", source) // success path — debug only
+
 	codec, err := a.CodecFor(service)
 	if err != nil {
+		slog.Error("aws: no codec for service", "service", service, "err", err)
 		return nil, nil, err
 	}
 	nr, err := codec.Decode(r, body)
 	if err != nil {
+		slog.Error("aws: decode failed", "service", service, "err", err,
+			"method", r.Method, "path", r.URL.Path)
 		return nil, nil, err
 	}
 	return nr, codec, nil
+}
+
+// authPrefix returns only the first 40 chars of the Authorization header for
+// safe logging — enough to identify the scheme without leaking credentials.
+func authPrefix(auth string) string {
+	if len(auth) > 40 {
+		return auth[:40] + "..."
+	}
+	return auth
 }

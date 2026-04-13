@@ -25,6 +25,18 @@ func WithRequestLabels(ctx context.Context, cloud, service, action string) conte
 	return ctx
 }
 
+// GetRequestLabels retrieves the service and action labels stored by WithRequestLabels.
+// Returns empty strings if the labels have not been set (e.g. admin endpoints).
+func GetRequestLabels(ctx context.Context) (service, action string) {
+	if s, ok := ctx.Value(serviceContextKey{}).(string); ok {
+		service = s
+	}
+	if a, ok := ctx.Value(actionContextKey{}).(string); ok {
+		action = a
+	}
+	return
+}
+
 var (
 	requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "jaiscloud_requests_total",

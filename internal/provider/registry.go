@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
 	"jaiscloud/internal/model"
 )
 
@@ -45,7 +47,16 @@ func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
 //  3. ProviderError(UnknownAction).
 func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	if h, ok := r.handlers[key]; ok {
-		return h(ctx, nr)
+		resp, err := h(ctx, nr)
+		if err != nil {
+			if _, isProvider := err.(*model.ProviderError); !isProvider {
+				slog.Error("provider handler error",
+					"key", key,
+					"err", err,
+				)
+			}
+		}
+		return resp, err
 	}
 
 	// Extract prefix from "Prefix.Action"
@@ -57,8 +68,23 @@ func (r *Registry) Dispatch(ctx context.Context, key string, nr *model.Normalize
 		}
 	}
 	if h, ok := r.plugins[prefix]; ok {
-		return h(ctx, nr)
+		resp, err := h(ctx, nr)
+		if err != nil {
+			if _, isProvider := err.(*model.ProviderError); !isProvider {
+				slog.Error("plugin handler error",
+					"key", key,
+					"prefix", prefix,
+					"err", err,
+				)
+			}
+		}
+		return resp, err
 	}
 
+	slog.Error("no handler registered",
+		"key", key,
+		"service", nr.Service,
+		"action", nr.Action,
+	)
 	return nil, model.NewProviderError("UnknownAction", fmt.Sprintf("no handler for %q", key), 400)
 }

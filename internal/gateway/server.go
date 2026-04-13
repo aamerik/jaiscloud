@@ -70,6 +70,12 @@ func (s *Server) buildRouter() {
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		slog.Error("failed to read request body",
+			"err", err,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"request_id", middleware.GetRequestID(r.Context()),
+		)
 		http.Error(w, "failed to read request body", http.StatusInternalServerError)
 		return
 	}
@@ -77,10 +83,23 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr, codec, detectErr := s.cloudAdapter.DetectAndDecode(r, body)
 	if detectErr != nil {
 		if pe, ok := detectErr.(*model.ProviderError); ok {
+			slog.Error("service detection error",
+				"code", pe.Code,
+				"status", pe.HTTPStatus,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"request_id", middleware.GetRequestID(r.Context()),
+			)
 			status, headers, respBody := encodeErrorFallback(codec, nil, pe)
 			writeResponse(w, status, headers, respBody)
 			return
 		}
+		slog.Error("service detection failed",
+			"err", detectErr,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"request_id", middleware.GetRequestID(r.Context()),
+		)
 		http.Error(w, detectErr.Error(), http.StatusBadRequest)
 		return
 	}
@@ -108,11 +127,21 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	resp, dispatchErr := s.registry.Dispatch(r.Context(), providerKey, nr)
 	if dispatchErr != nil {
 		if pe, ok := dispatchErr.(*model.ProviderError); ok {
+			slog.Error("provider error",
+				"code", pe.Code,
+				"status", pe.HTTPStatus,
+				"key", providerKey,
+				"request_id", middleware.GetRequestID(r.Context()),
+			)
 			status, headers, respBody := codec.EncodeError(nr, pe)
 			writeResponse(w, status, headers, respBody)
 			return
 		}
-		slog.Error("dispatch error", "key", providerKey, "err", dispatchErr)
+		slog.Error("dispatch error",
+			"key", providerKey,
+			"err", dispatchErr,
+			"request_id", middleware.GetRequestID(r.Context()),
+		)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

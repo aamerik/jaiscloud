@@ -405,87 +405,195 @@ For delayed completion (useful for testing polling behaviour), set the delay in 
 
 ## EMR Spark Cluster — Kubernetes Mode
 
-In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the plugin uses the `K8sExecutor`. Currently the executor logs the `spark-submit` arguments it *would* send and delegates job lifecycle to the same `MockExecutor`. This gives you a realistic view of the Spark submission parameters while keeping tests fast.
+In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the plugin uses the `K8sExecutor` to submit real `batch/v1 Jobs` to a Kubernetes cluster. Each `RunJobFlow` or `StartJobRun` call creates a K8s Job that runs `spark-submit --deploy-mode cluster` inside the configured Spark image. No `client-go` dependency is needed — the executor uses stdlib HTTP only, so the plugin image size is unchanged.
 
-> **Real k8s submission is planned for a future phase.** The groundwork (SparkSubmitArgs, namespace/service-account config) is already in place.
+### How it works
+
+1. `K8sExecutor.Submit` creates a `batch/v1 Job` named `spark-<sanitized-job-id>` (max 63 chars).
+2. Spark creates the driver Pod; the driver spawns executor Pods.
+3. `StatusPoller` polls the Job every 5 s and maps K8s conditions → `SparkState` (`RUNNING` / `COMPLETED` / `FAILED`).
+4. `TerminateJobFlows` / `CancelJobRun` deletes the Job with `propagationPolicy=Background`, cascading to all Pods.
+5. Completed Jobs self-delete after 1 hour (`ttlSecondsAfterFinished: 3600`).
+
+### Auth — in-cluster (JaisCloud running inside a pod)
+
+Only one env var is needed. The service account token, CA cert, and API server URL are auto-detected from the standard pod mount:
+
+```bash
+export JAISCLOUD_SPARK_MODE=k8s
+# JAISCLOUD_K8S_NAMESPACE and JAISCLOUD_K8S_SA are optional
+```
+
+### Auth — out-of-cluster (local dev, CI)
+
+```bash
+export JAISCLOUD_SPARK_MODE=k8s
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443        # kubectl cluster-info
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa --duration=24h)
+export JAISCLOUD_K8S_CA_FILE=$HOME/.kube/ca.crt              # or unset for system roots
+export JAISCLOUD_K8S_NAMESPACE=spark-jobs
+export JAISCLOUD_K8S_SA=spark-sa
+```
+
+### Environment variable reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `JAISCLOUD_SPARK_MODE` | `mock` | Set to `k8s` to enable real cluster submission |
+| `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
+| `JAISCLOUD_K8S_TOKEN` | in-cluster token file | Bearer token: literal string or path to a file (re-read per request for rotation) |
+| `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA cert. Unset = system roots. |
+| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for Jobs and Pods |
+| `JAISCLOUD_K8S_SA` | _(none)_ | Service account for the spark-submit Pod |
 
 ### Prerequisites
 
-A working Kubernetes cluster with the Spark Operator installed, or a plain cluster where you run `spark-submit` directly. The plugin needs:
-
-- A namespace for Spark jobs (e.g. `spark-jobs`)
-- A service account with `edit` permissions in that namespace
-- A Spark Docker image (default: `apache/spark:3.5.0`)
+- A Kubernetes cluster (local: kind, minikube, or Docker Desktop)
+- A namespace for Spark jobs
+- A Spark Docker image accessible from the cluster (default: `apache/spark:3.5.0`)
 
 ### 1. Prepare the Spark namespace
 
 ```bash
 kubectl create namespace spark-jobs
 
-# Create the service account
-kubectl create serviceaccount spark-sa -n spark-jobs
+# Service account JaisCloud uses to create Jobs
+kubectl create serviceaccount jaiscloud-sa -n spark-jobs
 
-# Grant it edit permissions (needed for driver → executor pod creation)
-kubectl create rolebinding spark-sa-edit \
-  --clusterrole=edit \
-  --serviceaccount=spark-jobs:spark-sa \
-  -n spark-jobs
+# Service account the spark-submit Pod runs as
+kubectl create serviceaccount spark-sa -n spark-jobs
 ```
 
-### 2. Set Spark config via environment variables
+Apply RBAC — JaisCloud needs to manage Jobs; the spark-submit Pod needs to manage Pods:
+
+```yaml
+# jaiscloud-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaiscloud-spark
+  namespace: spark-jobs
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jaiscloud-spark
+  namespace: spark-jobs
+subjects:
+- kind: ServiceAccount
+  name: jaiscloud-sa
+  namespace: spark-jobs
+roleRef:
+  kind: Role
+  name: jaiscloud-spark
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-driver
+  namespace: spark-jobs
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "services", "configmaps"]
+  verbs: ["create", "get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-driver
+  namespace: spark-jobs
+subjects:
+- kind: ServiceAccount
+  name: spark-sa
+  namespace: spark-jobs
+roleRef:
+  kind: Role
+  name: spark-driver
+  apiGroup: rbac.authorization.k8s.io
+```
+
+```bash
+kubectl apply -f jaiscloud-rbac.yaml
+```
+
+### 2. Start JaisCloud with the plugin
 
 ```bash
 export JAISCLOUD_SPARK_MODE=k8s
-export JAISCLOUD_SPARK_NAMESPACE=spark-jobs
-export JAISCLOUD_SPARK_SERVICE_ACCOUNT=spark-sa
-export JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0
-# Optional: enable S3 event logging
-export JAISCLOUD_SPARK_S3_LOG_URI=s3://my-bucket/spark-logs
-```
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n spark-jobs --duration=24h)
+export JAISCLOUD_K8S_NAMESPACE=spark-jobs
+export JAISCLOUD_K8S_SA=spark-sa
 
-### 3. Start JaisCloud with the plugin
-
-```bash
 ./jaiscloud start --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" \
   --plugin-dir .
 ```
 
-### 4. Submit a job
+### 3. Submit a job
 
-Same AWS CLI commands as in Docker mode. The difference is that the plugin will log the full `spark-submit` command it constructs:
+Same AWS CLI commands as in mock mode:
 
+```bash
+# Create an EMR cluster (maps to a logical Spark job group)
+CLUSTER_ID=$(aws --endpoint-url http://localhost:4566 emr create-cluster \
+  --name "my-spark-cluster" \
+  --release-label emr-6.15.0 \
+  --instance-type m5.xlarge \
+  --instance-count 2 \
+  --service-role EMR_DefaultRole \
+  --query 'JobFlowId' --output text)
+
+# Add a step — this triggers K8sExecutor.Submit → batch/v1 Job creation
+aws --endpoint-url http://localhost:4566 emr add-steps \
+  --cluster-id $CLUSTER_ID \
+  --steps Type=Spark,Name="MyJob",\
+ActionOnFailure=CONTINUE,\
+Args=[--class,com.example.App,s3://my-bucket/app.jar,arg1,arg2]
 ```
-INFO k8s executor: submitting spark job jobID=j-ABC123 args=["--master","k8s://https://...","--deploy-mode","cluster","--class","com.example.App",...]
+
+Watch the Job appear in the cluster:
+
+```bash
+kubectl get jobs -n spark-jobs -l app.kubernetes.io/managed-by=jaiscloud
+kubectl describe job spark-j-<id> -n spark-jobs
+kubectl logs -n spark-jobs -l spark-role=driver --tail=100
 ```
 
-### 5. Understanding SparkSubmitArgs
+### 4. Understanding the generated spark-submit command
 
-The plugin builds the following `spark-submit` argument list for k8s mode:
+The plugin constructs the following `spark-submit` arguments for k8s mode:
 
 ```
 spark-submit \
-  --master k8s://https://<api-server> \
+  --master k8s://https://<JAISCLOUD_K8S_APISERVER> \
   --deploy-mode cluster \
   --conf spark.kubernetes.container.image=apache/spark:3.5.0 \
   --conf spark.kubernetes.namespace=spark-jobs \
   --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark-sa \
-  --conf spark.executor.instances=1 \          # SizeSmall
-  --conf spark.driver.memory=1g \
-  --conf spark.executor.memory=2g \
-  --conf spark.eventLog.enabled=true \         # if S3LogURI is set
+  --conf spark.driver.cores=500m \
+  --conf spark.driver.memory=1Gi \
+  --conf spark.executor.cores=500m \
+  --conf spark.executor.memory=1Gi \
+  --conf spark.executor.instances=1 \
+  --conf spark.eventLog.enabled=true \         # only if JAISCLOUD_SPARK_S3_LOG_URI is set
   --conf spark.eventLog.dir=s3://my-bucket/spark-logs \
   --class com.example.App \
-  s3://my-bucket/app.jar
+  s3://my-bucket/app.jar arg1 arg2
 ```
 
-Cluster size controls executor count:
+Cluster size controls resource allocation:
 
-| Size | Executors | Driver memory | Executor memory |
+| Size | Executors | Driver CPU / Mem | Executor CPU / Mem |
 |---|---|---|---|
-| `SizeSmall` | 1 | 1g | 2g |
-| `SizeMedium` | 2 | 2g | 4g |
-| `SizeLarge` | 4 | 4g | 8g |
+| `small` (default) | 1 | 500m / 1Gi | 500m / 1Gi |
+| `medium` | 2 | 1 / 2Gi | 1 / 2Gi |
+| `large` | 4 | 2 / 4Gi | 2 / 4Gi |
 
 ---
 
