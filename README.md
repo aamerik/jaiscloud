@@ -219,24 +219,70 @@ The plugin selects a Spark executor via the `JAISCLOUD_SPARK_MODE` environment v
 | Mode | Description |
 |---|---|
 | `mock` (default) | Jobs complete immediately with `COMPLETED` state. No external process. Ideal for unit tests and CI where you only need EMR API correctness, not actual computation. |
-| `k8s` | **Planned — Phase 3.5.** Builds the full `spark-submit --master k8s://...` argument list and logs it to stderr. Job execution is currently delegated to `mock` until `client-go` is wired in. Use this mode to verify your `spark-submit` configuration is generated correctly. |
+| `k8s` | Submits real Spark jobs to a Kubernetes cluster as `batch/v1 Jobs`. Uses stdlib HTTP only — no `client-go` dependency, zero image size increase. Supports in-cluster service account auth and explicit token/CA configuration via env vars. |
 
 ```bash
 # Default: jobs complete immediately
 JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --plugin-dir ./plugins
 
-# Log spark-submit args (k8s execution not yet wired)
+# Real K8s cluster — in-cluster (service account auto-detected)
 JAISCLOUD_SPARK_MODE=k8s ./jaiscloud start --plugin-dir ./plugins
+
+# Real K8s cluster — out-of-cluster (e.g. local development)
+export JAISCLOUD_SPARK_MODE=k8s
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa)
+export JAISCLOUD_K8S_NAMESPACE=spark-jobs
+export JAISCLOUD_K8S_SA=spark-sa
+./jaiscloud start --plugin-dir ./plugins
+```
+
+### K8s executor configuration
+
+These environment variables are read only when `JAISCLOUD_SPARK_MODE=k8s`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
+| `JAISCLOUD_K8S_TOKEN` | in-cluster token file | Bearer token: literal value or path to a token file (re-read per request to handle rotation) |
+| `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA certificate for TLS verification |
+| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for the spark-submit Job and Pods |
+| `JAISCLOUD_K8S_SA` | _(none)_ | Kubernetes service account for the spark-submit Pod |
+
+**When JaisCloud runs inside a K8s pod**, only `JAISCLOUD_SPARK_MODE=k8s` is required — the service account token, CA cert, and API server URL are all auto-detected from the standard pod mount at `/var/run/secrets/kubernetes.io/serviceaccount/`. The three `JAISCLOUD_K8S_APISERVER` / `JAISCLOUD_K8S_TOKEN` / `JAISCLOUD_K8S_CA_FILE` vars exist solely for out-of-cluster use (local dev, CI with `kubectl` access). Env vars always take precedence over in-cluster defaults.
+
+### Required RBAC
+
+The service account assigned to JaisCloud needs permission to manage Jobs:
+
+```yaml
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "delete"]
+```
+
+The service account for the spark-submit Pod (set via `JAISCLOUD_K8S_SA`) needs permission to create Spark driver and executor Pods:
+
+```yaml
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "services", "configmaps"]
+  verbs: ["create", "get", "list", "delete"]
 ```
 
 ### Running against a real Spark cluster
 
-The current plugin routes all job execution through the `SparkExecutor` interface. Real cluster support (Spark Standalone, YARN, or K8s) is the next planned milestone:
+When `JAISCLOUD_SPARK_MODE=k8s` each `RunJobFlow` or `StartJobRun` call:
 
-- **K8s executor (Phase 3.5):** `client-go` will be added to the plugin's `go.mod`. `K8sExecutor.Submit` will launch a `batch/v1 Job` and `K8sExecutor.Status` will map pod phase → `SparkState`.
-- **Remote/Standalone (planned):** `SparkConfig.RemoteURL` is already wired into the config layer for a Spark Standalone REST API executor.
+1. Creates a `batch/v1 Job` in the configured namespace. The Job runs `spark-submit --master k8s://<APIServer> --deploy-mode cluster ...` using the configured Spark image (default `apache/spark:3.5.0`).
+2. Spark itself creates the driver Pod; the driver spawns executor Pods.
+3. The `StatusPoller` polls the Job every 5 s and maps K8s Job conditions → `SparkState` (`RUNNING` / `COMPLETED` / `FAILED`).
+4. `TerminateJobFlows` / `CancelJobRun` deletes the Job with `propagationPolicy=Background`, cascading to driver and executor Pods.
 
-Until then, `mock` is the correct mode for all automated testing, and `k8s` is useful only to verify argument generation.
+Jobs are given a `ttlSecondsAfterFinished: 3600` so completed Jobs self-clean after one hour.
+
+**Remote/Standalone support (planned):** `SparkConfig.RemoteURL` is already wired into the config layer for a future Spark Standalone REST API executor.
 
 ### Resource profiles
 
@@ -300,7 +346,7 @@ JaisCloud prioritises **protocol correctness** over breadth:
 - S3 versioning and object locking are stubbed (no error, no actual versioning).
 - No cross-region or cross-account semantics.
 - Azure and GCP cloud modes are scaffolded only (Phase 3+).
-- EMR K8s executor delegates to mock until Phase 3.5 (client-go not yet wired).
+- EMR K8s executor (`JAISCLOUD_SPARK_MODE=k8s`) requires a real Kubernetes cluster; `mock` mode is used when no cluster is available.
 
 ---
 
@@ -593,7 +639,7 @@ HTTP request
               → ServiceStore   (messages/items/objects)
           → plugin wildcard: PluginManager → plugin.Handle
               → EMRProvider / EMRContainersProvider
-                  → SparkExecutor (mock | k8s-planned)
+                  → SparkExecutor (mock | k8s)
                   → StatusPoller
       → Codec.Encode (XML / JSON / raw bytes)
   → HTTP response

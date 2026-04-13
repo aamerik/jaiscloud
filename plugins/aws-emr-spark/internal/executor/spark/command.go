@@ -8,7 +8,7 @@ func SparkSubmitArgs(job SparkJob) []string {
 	args := []string{}
 
 	if job.Config.Mode == "k8s" {
-		args = append(args, "--master", fmt.Sprintf("k8s://https://kubernetes.default.svc"))
+		args = append(args, "--master", "k8s://"+job.Config.APIServer)
 		args = append(args,
 			"--deploy-mode", "cluster",
 			"--conf", fmt.Sprintf("spark.kubernetes.container.image=%s", job.Config.Image),

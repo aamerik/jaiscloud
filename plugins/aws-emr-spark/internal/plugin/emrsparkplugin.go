@@ -27,12 +27,34 @@ func New() *EMRSparkPlugin { return &EMRSparkPlugin{} }
 
 // Init is called once after the plugin is loaded.
 // It wires the executor, poller, and both providers.
+//
+// Environment variables for k8s mode (only read when JAISCLOUD_SPARK_MODE=k8s):
+//
+//	JAISCLOUD_K8S_APISERVER  — K8s API server URL (default: https://kubernetes.default.svc)
+//	JAISCLOUD_K8S_NAMESPACE  — Kubernetes namespace (default: "default")
+//	JAISCLOUD_K8S_SA         — Service account for spark-submit pod (optional)
+//	JAISCLOUD_K8S_TOKEN      — Bearer token: literal value or path to token file
+//	JAISCLOUD_K8S_CA_FILE    — Path to PEM CA certificate (optional)
 func (p *EMRSparkPlugin) Init(ctx context.Context, _ sdk.ResourceManager, store sdk.ResourceStore) error {
 	mode := os.Getenv("JAISCLOUD_SPARK_MODE")
 	if mode == "" {
 		mode = "mock"
 	}
+
 	cfg := spark.SparkConfigFrom(mode, spark.SizeSmall)
+
+	if mode == "k8s" {
+		if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
+			cfg.APIServer = v
+		}
+		if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
+			cfg.Namespace = v
+		}
+		if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
+			cfg.ServiceAccount = v
+		}
+	}
+
 	p.executor = spark.NewExecutor(mode, cfg)
 	p.poller = spark.NewStatusPoller(p.executor, 5*time.Second, nil)
 	p.poller.Start(ctx)
@@ -84,7 +106,10 @@ func (p *EMRSparkPlugin) Reset() {
 	if p.poller != nil {
 		p.poller.Reset()
 	}
-	if mock, ok := p.executor.(*spark.MockExecutor); ok {
-		mock.Reset()
+	switch ex := p.executor.(type) {
+	case *spark.MockExecutor:
+		ex.Reset()
+	case *spark.K8sExecutor:
+		ex.Reset()
 	}
 }

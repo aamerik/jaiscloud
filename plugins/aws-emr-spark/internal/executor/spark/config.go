@@ -46,6 +46,9 @@ var clusterSizeProfiles = map[ClusterSize]ResourceProfile{
 	},
 }
 
+// DefaultAPIServer is the K8s API server URL used when running inside a cluster.
+const DefaultAPIServer = "https://kubernetes.default.svc"
+
 // SparkConfig holds executor-level configuration for a Spark job.
 type SparkConfig struct {
 	// Mode selects the executor: "mock", "k8s", "local", "docker", "remote".
@@ -59,6 +62,10 @@ type SparkConfig struct {
 
 	// ServiceAccount is the Kubernetes service account for the driver pod.
 	ServiceAccount string
+
+	// APIServer is the Kubernetes API server URL (k8s executor).
+	// Defaults to https://kubernetes.default.svc (in-cluster).
+	APIServer string
 
 	// Size is a named resource profile. Overridden by explicit resource fields.
 	Size ClusterSize
@@ -88,6 +95,7 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 		Mode:      mode,
 		Image:     DefaultImage,
 		Namespace: "default",
+		APIServer: DefaultAPIServer,
 		Size:      size,
 		Resources: profile,
 	}
