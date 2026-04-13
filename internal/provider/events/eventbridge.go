@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	resTypeRule   = "eb_rule"
-	resTypeTarget = "eb_target"
+	resTypeRule             = "eb_rule"
+	resTypeTarget           = "eb_target"
+	jaiscloudHostPlaceholder = "jaiscloud-host"
 )
 
 // EventBridgeProvider handles EventBridge (CloudWatch Events) operations.
@@ -29,11 +30,18 @@ type EventBridgeProvider struct {
 	resources store.ResourceStore
 	messages  sqsstore.SQSMessageStore
 	bus       *events.EventBus
+	port      int
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *EventBridgeProvider {
 	p := &EventBridgeProvider{resources: resources, messages: messages, bus: bus}
 	p.subscribeToEventBus()
+	return p
+}
+
+// WithPort sets the port used when resolving the placeholder queue URL in deliverToTarget.
+func (p *EventBridgeProvider) WithPort(port int) *EventBridgeProvider {
+	p.port = port
 	return p
 }
 
@@ -208,7 +216,7 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		}
 		// Resolve target type and queue URL at write time.
 		// Storing the full queue URL means delivery never touches the resource store.
-		td := resolveTargetMeta(nr.Cloud, id, arn, nr.Port, nr.AccountID)
+		td := resolveTargetMeta(nr.Cloud, id, arn, nr.AccountID)
 		raw, _ := json.Marshal(td)
 		storeID := ruleName + "/" + id
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
@@ -225,10 +233,10 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 }
 
 // resolveTargetMeta extracts TargetType and QueueURL from the cloud-specific ARN.
-// port and accountID are used to construct the emulator queue URL at write time
-// so delivery never needs a runtime resource-store lookup.
+// The queue URL is stored with a placeholder host that is resolved at delivery time
+// so the URL remains correct after a server restart on a different port.
 // This is the only place that knows about cloud-specific ARN formats for targets.
-func resolveTargetMeta(cloud model.Cloud, id, arn string, port int, accountID string) targetData {
+func resolveTargetMeta(cloud model.Cloud, id, arn, accountID string) targetData {
 	td := targetData{ID: id, Arn: arn}
 	switch cloud {
 	case model.CloudAWS:
@@ -237,7 +245,7 @@ func resolveTargetMeta(cloud model.Cloud, id, arn string, port int, accountID st
 			parts := strings.Split(arn, ":")
 			if len(parts) >= 6 {
 				td.TargetType = "sqs"
-				td.QueueURL = fmt.Sprintf("http://localhost:%d/%s/%s", port, accountID, parts[5])
+				td.QueueURL = fmt.Sprintf("http://%s/%s/%s", jaiscloudHostPlaceholder, accountID, parts[5])
 			}
 		}
 	case model.CloudAzure:
@@ -371,29 +379,69 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 
 // deliverToTarget sends the event to the target.
 // Uses pre-resolved TargetType/QueueURL — no resource-store lookup, no cloud coupling.
+// The placeholder host in QueueURL is replaced with the actual localhost:port at delivery time.
 func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData, envelope map[string]any) {
 	if td.TargetType != "sqs" || td.QueueURL == "" {
 		return
 	}
+	host := fmt.Sprintf("localhost:%d", p.port)
+	queueURL := strings.Replace(td.QueueURL, jaiscloudHostPlaceholder, host, 1)
 	body, _ := json.Marshal(envelope)
 	_, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
-		QueueURL: td.QueueURL,
-		Body:     string(body),
+		QueueURL:  queueURL,
+		MessageID: newEventID(),
+		Body:      string(body),
 	})
 }
 
 // ─── event envelope builders ──────────────────────────────────────────────────
 
+func stateDetailsForStep(state, failureReason string) string {
+	switch state {
+	case "COMPLETED":
+		return "Step completed successfully"
+	case "FAILED":
+		if failureReason != "" {
+			return failureReason
+		}
+		return "Step failed"
+	case "CANCELLED":
+		return "Step was cancelled"
+	default:
+		return state
+	}
+}
+
+func stateDetailsForJobRun(state, failureReason string) string {
+	switch state {
+	case "COMPLETED":
+		return "Job run completed successfully"
+	case "FAILED":
+		if failureReason != "" {
+			return failureReason
+		}
+		return "Job run failed"
+	case "CANCELLED":
+		return "Job run was cancelled"
+	default:
+		return state
+	}
+}
+
 // buildEMRStepEnvelope builds an EventBridge envelope for an EMR step state change.
 // The source is derived from ev.Cloud so the envelope is correct for any cloud.
 func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
-	detail := map[string]any{
-		"jobFlowId": ev.JobFlowID,
-		"stepId":    ev.StepID,
-		"state":     ev.State,
+	name := ev.Name
+	if name == "" {
+		name = "emr-step-" + ev.StepID
 	}
-	if ev.FailureReason != "" {
-		detail["failureReason"] = ev.FailureReason
+	detail := map[string]any{
+		"jobFlowId":    ev.JobFlowID,
+		"stepId":       ev.StepID,
+		"state":        ev.State,
+		"severity":     "INFO",
+		"name":         name,
+		"stateDetails": stateDetailsForStep(ev.State, ev.FailureReason),
 	}
 	return map[string]any{
 		"version":     "0",
@@ -402,6 +450,7 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 		"account":     ev.AccountID,
 		"time":        time.Now().UTC().Format(time.RFC3339),
 		"region":      ev.Region,
+		"resources":   []any{},
 		"detail-type": "EMR Step Status Change",
 		"detail":      detail,
 	}
@@ -409,13 +458,17 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 
 // buildEMRJobRunEnvelope builds an EventBridge envelope for an EMR Containers job run state change.
 func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
+	name := ev.Name
+	if name == "" {
+		name = "emr-jr-" + ev.JobRunID
+	}
 	detail := map[string]any{
 		"virtualClusterId": ev.VirtualClusterID,
 		"id":               ev.JobRunID,
 		"state":            ev.State,
-	}
-	if ev.FailureReason != "" {
-		detail["failureReason"] = ev.FailureReason
+		"severity":         "INFO",
+		"name":             name,
+		"stateDetails":     stateDetailsForJobRun(ev.State, ev.FailureReason),
 	}
 	return map[string]any{
 		"version":     "0",
@@ -424,6 +477,7 @@ func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 		"account":     ev.AccountID,
 		"time":        time.Now().UTC().Format(time.RFC3339),
 		"region":      ev.Region,
+		"resources":   []any{},
 		"detail-type": "EMR Containers Job Run State Change",
 		"detail":      detail,
 	}

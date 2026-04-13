@@ -14,7 +14,7 @@ import (
 func TestPluginManager_LoadAll_EmptyDir_NoOp(t *testing.T) {
 	mgr := plugin.NewPluginManager()
 	reg := provider.NewRegistry()
-	err := mgr.LoadAll(context.Background(), "", nil, nil, reg)
+	err := mgr.LoadAll(context.Background(), "", nil, nil, nil, reg)
 	if err != nil {
 		t.Fatalf("empty dir should be no-op, got: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestPluginManager_LoadAll_EmptyDir_NoOp(t *testing.T) {
 func TestPluginManager_LoadAll_NonexistentDir_NoOp(t *testing.T) {
 	mgr := plugin.NewPluginManager()
 	reg := provider.NewRegistry()
-	err := mgr.LoadAll(context.Background(), "/does/not/exist", nil, nil, reg)
+	err := mgr.LoadAll(context.Background(), "/does/not/exist", nil, nil, nil, reg)
 	if err != nil {
 		t.Fatalf("missing dir should be no-op, got: %v", err)
 	}
@@ -39,7 +39,7 @@ type recordPlugin struct {
 	shutdowns int
 }
 
-func (p *recordPlugin) Init(_ context.Context, _ sdk.ResourceManager, _ sdk.ResourceStore) error {
+func (p *recordPlugin) Init(_ context.Context, _ sdk.ResourceManager, _ sdk.ResourceStore, _ sdk.EventBus) error {
 	return nil
 }
 func (p *recordPlugin) Manifest() sdk.ManifestInfo { return sdk.ManifestInfo{Name: "test"} }

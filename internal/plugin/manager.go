@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	sdk "github.com/jaiscloud/plugin-sdk"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/provider"
 )
 
@@ -34,13 +35,14 @@ func NewPluginManager() *PluginManager {
 // LoadAll opens every *.so file in dir, looks up the Plugin symbol,
 // calls Init, and registers the plugin's routes in registry.
 //
-// rm and store are passed to each plugin's Init method.
+// rm, store, and bus are passed to each plugin's Init method.
 // If dir is empty or does not exist, LoadAll is a no-op (not an error).
 func (m *PluginManager) LoadAll(
 	ctx context.Context,
 	dir string,
 	rm sdk.ResourceManager,
 	store sdk.ResourceStore,
+	bus *events.EventBus,
 	registry *provider.Registry,
 ) error {
 	if dir == "" {
@@ -59,7 +61,7 @@ func (m *PluginManager) LoadAll(
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		if err := m.load(ctx, path, rm, store, registry); err != nil {
+		if err := m.load(ctx, path, rm, store, bus, registry); err != nil {
 			return fmt.Errorf("plugin: load %q: %w", path, err)
 		}
 	}
@@ -73,6 +75,7 @@ func (m *PluginManager) load(
 	path string,
 	rm sdk.ResourceManager,
 	store sdk.ResourceStore,
+	bus *events.EventBus,
 	registry *provider.Registry,
 ) error {
 	p, err := goplugin.Open(path)
@@ -97,7 +100,8 @@ func (m *PluginManager) load(
 	manifest := plugin.Manifest()
 	slog.Info("plugin loaded", "name", manifest.Name, "version", manifest.Version, "services", manifest.Services)
 
-	if err := plugin.Init(ctx, rm, store); err != nil {
+	sdkBus := NewSDKEventBusAdapter(bus)
+	if err := plugin.Init(ctx, rm, store, sdkBus); err != nil {
 		return fmt.Errorf("Init: %w", err)
 	}
 

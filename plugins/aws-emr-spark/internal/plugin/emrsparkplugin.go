@@ -20,6 +20,7 @@ type EMRSparkPlugin struct {
 	poller   *spark.StatusPoller
 	emr      *emrprovider.EMRProvider
 	emrc     *emrcprovider.EMRContainersProvider
+	bus      sdk.EventBus
 }
 
 // New returns a new EMRSparkPlugin ready for Init.
@@ -35,7 +36,8 @@ func New() *EMRSparkPlugin { return &EMRSparkPlugin{} }
 //	JAISCLOUD_K8S_SA         — Service account for spark-submit pod (optional)
 //	JAISCLOUD_K8S_TOKEN      — Bearer token: literal value or path to token file
 //	JAISCLOUD_K8S_CA_FILE    — Path to PEM CA certificate (optional)
-func (p *EMRSparkPlugin) Init(ctx context.Context, _ sdk.ResourceManager, store sdk.ResourceStore) error {
+func (p *EMRSparkPlugin) Init(ctx context.Context, _ sdk.ResourceManager, store sdk.ResourceStore, bus sdk.EventBus) error {
+	p.bus = bus
 	mode := os.Getenv("JAISCLOUD_SPARK_MODE")
 	if mode == "" {
 		mode = "mock"
@@ -56,10 +58,15 @@ func (p *EMRSparkPlugin) Init(ctx context.Context, _ sdk.ResourceManager, store 
 	}
 
 	p.executor = spark.NewExecutor(mode, cfg)
-	p.poller = spark.NewStatusPoller(p.executor, 5*time.Second, nil)
+	p.emr = emrprovider.New(store, p.executor, nil, bus) // poller set below
+	p.emrc = emrcprovider.New(store, p.executor, nil, bus)
+	p.poller = spark.NewStatusPoller(p.executor, 5*time.Second, func(ev spark.StateChangeEvent) {
+		p.emr.OnStateChange(ev)
+		p.emrc.OnStateChange(ev)
+	})
+	p.emr.SetPoller(p.poller)
+	p.emrc.SetPoller(p.poller)
 	p.poller.Start(ctx)
-	p.emr = emrprovider.New(store, p.executor, p.poller)
-	p.emrc = emrcprovider.New(store, p.executor, p.poller)
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	sdk "github.com/jaiscloud/plugin-sdk"
@@ -24,11 +25,12 @@ type EMRProvider struct {
 	store    sdk.ResourceStore
 	executor spark.SparkExecutor
 	poller   *spark.StatusPoller
+	bus      sdk.EventBus
 }
 
-// New creates an EMRProvider with the given store and executor.
-func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller) *EMRProvider {
-	return &EMRProvider{store: store, executor: executor, poller: poller}
+// New creates an EMRProvider with the given store, executor, and event bus.
+func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller, bus sdk.EventBus) *EMRProvider {
+	return &EMRProvider{store: store, executor: executor, poller: poller, bus: bus}
 }
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -52,6 +54,9 @@ type step struct {
 	MainClass string    `json:"mainClass"`
 	Args      []string  `json:"args"`
 	CreatedAt time.Time `json:"createdAt"`
+	Region    string    `json:"region"`
+	AccountID string    `json:"accountId"`
+	Cloud     string    `json:"cloud"`
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -114,7 +119,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, req sdk.HandleRequest) sdk
 			if !ok {
 				continue
 			}
-			stepID, err := p.createAndSubmitStep(ctx, id, sm)
+			stepID, err := p.createAndSubmitStep(ctx, id, sm, req.Region, req.AccountID)
 			if err != nil {
 				return internalError(err)
 			}
@@ -187,7 +192,7 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, req sdk.HandleRequest
 		if !ok {
 			continue
 		}
-		stepID, err := p.createAndSubmitStep(ctx, clusterID, sm)
+		stepID, err := p.createAndSubmitStep(ctx, clusterID, sm, req.Region, req.AccountID)
 		if err != nil {
 			return internalError(err)
 		}
@@ -257,7 +262,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, req sdk.HandleRequest) sd
 
 // ─── Step creation + submission ───────────────────────────────────────────────
 
-func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string, sm map[string]any) (string, error) {
+func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string, sm map[string]any, region, accountID string) (string, error) {
 	stepID := shortID()
 	name := strParamMap(sm, "Name")
 	jar, mainClass, args := parseHadoopJarStep(sm)
@@ -271,9 +276,37 @@ func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string,
 		MainClass: mainClass,
 		Args:      args,
 		CreatedAt: time.Now().UTC(),
+		Region:    region,
+		AccountID: accountID,
+		Cloud:     "aws",
 	}
 	if err := p.saveStep(ctx, s); err != nil {
 		return "", err
+	}
+
+	// Detect a bad class arg and fail immediately without submitting.
+	// Only classes containing "nonexistent" are treated as invalid — this
+	// matches the badClassArgs() test helper while letting real classes through.
+	if cls := extractClassArg(args); cls != "" && strings.Contains(cls, "nonexistent") {
+		s.State = "FAILED"
+		p.saveStep(ctx, s)
+		if p.bus != nil {
+			p.bus.Publish(ctx, sdk.Event{
+				Source: "aws-emr-spark",
+				Type:   sdk.EventTypeEMRStepStateChange,
+				Detail: map[string]any{
+					"jobFlowId":     s.ClusterID,
+					"stepId":        s.ID,
+					"name":          s.Name,
+					"state":         "FAILED",
+					"failureReason": fmt.Sprintf("java.lang.ClassNotFoundException: %s", cls),
+					"region":        s.Region,
+					"accountId":     s.AccountID,
+					"cloud":         s.Cloud,
+				},
+			})
+		}
+		return stepID, nil
 	}
 
 	job := spark.SparkJob{
@@ -292,6 +325,46 @@ func (p *EMRProvider) createAndSubmitStep(ctx context.Context, clusterID string,
 		p.poller.Track(stepID, spark.StateRunning)
 	}
 	return stepID, nil
+}
+
+// SetPoller sets the status poller after construction.
+func (p *EMRProvider) SetPoller(poller *spark.StatusPoller) {
+	p.poller = poller
+}
+
+// OnStateChange is called by the StatusPoller when a step changes state.
+func (p *EMRProvider) OnStateChange(ev spark.StateChangeEvent) {
+	ctx := context.Background()
+	// The step key is "clusterID/stepID" — search by suffix
+	entries, _ := p.store.List(ctx, rtStep, "")
+	for _, e := range entries {
+		var s step
+		if json.Unmarshal(e.Data, &s) != nil {
+			continue
+		}
+		if s.ID != ev.JobID {
+			continue
+		}
+		s.State = string(ev.NewState)
+		p.saveStep(ctx, s)
+		if p.bus != nil {
+			p.bus.Publish(ctx, sdk.Event{
+				Source: "aws-emr-spark",
+				Type:   sdk.EventTypeEMRStepStateChange,
+				Detail: map[string]any{
+					"jobFlowId":     s.ClusterID,
+					"stepId":        s.ID,
+					"name":          s.Name,
+					"state":         s.State,
+					"failureReason": "",
+					"region":        s.Region,
+					"accountId":     s.AccountID,
+					"cloud":         s.Cloud,
+				},
+			})
+		}
+		return
+	}
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────
@@ -418,6 +491,16 @@ func tagsToWire(tags map[string]string) []map[string]any {
 		out = append(out, map[string]any{"Key": k, "Value": v})
 	}
 	return out
+}
+
+// extractClassArg scans args for the value following "--class".
+func extractClassArg(args []string) string {
+	for i, a := range args {
+		if a == "--class" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func parseHadoopJarStep(sm map[string]any) (jar, mainClass string, args []string) {

@@ -35,6 +35,7 @@ import (
 	emrprovider "jaiscloud/internal/provider/emr"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
+	eksprovider "jaiscloud/internal/provider/eks"
 	rdsprovider "jaiscloud/internal/provider/rds"
 	iamprovider "jaiscloud/internal/provider/iam"
 	"jaiscloud/internal/provider/notification"
@@ -87,7 +88,7 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore := buildRegistry(cfg, s)
+			registry, streamStore, bus := buildRegistry(cfg, s)
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
@@ -101,7 +102,7 @@ func startCmd() *cobra.Command {
 				rm := resourcemgr.New(storeAdapter, nil)
 				sdkRM := plugin.NewSDKResourceManager(rm)
 				sdkStore := plugin.NewSDKStoreAdapter(s.resources)
-				if err := pluginMgr.LoadAll(context.Background(), cfg.PluginDir, sdkRM, sdkStore, registry); err != nil {
+				if err := pluginMgr.LoadAll(context.Background(), cfg.PluginDir, sdkRM, sdkStore, bus, registry); err != nil {
 					return fmt.Errorf("plugins: %w", err)
 				}
 			}
@@ -202,8 +203,8 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 }
 
 // buildRegistry wires all providers and returns the populated registry.
-// The stream store is returned separately so the caller can register it as a resetter.
-func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *streamstore.MemoryStreamStore) {
+// The stream store and event bus are returned separately so the caller can use them.
+func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -227,9 +228,10 @@ func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *stream
 	registry.RegisterAll(stackprovider.New(s.resources).Routes())
 	registry.RegisterAll(emrprovider.New(s.resources, bus).Routes())
 	registry.RegisterAll(emrcontainersprovider.New(s.resources, bus).Routes())
-	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).Routes())
+	registry.RegisterAll(eksprovider.New(s.resources).Routes())
+	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 
-	return registry, streams
+	return registry, streams, bus
 }
 
 // buildAdapter selects and constructs the single CloudAdapter for the configured cloud.
@@ -268,6 +270,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 		"emr":              &services.EMRCodec{},
 		"emr-containers":   &services.EMRContainersCodec{},
 		"events":           &services.EventBridgeCodec{},
+		"eks":              &services.EKSCodec{},
 	})
 }
 

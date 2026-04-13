@@ -1,0 +1,55 @@
+# JaisCloud Plugin SDK image.
+#
+# Provides a Go build environment with the plugin SDK pre-installed so you can
+# compile a custom plugin .so without cloning the full JaisCloud repository.
+#
+# ─── Quick start ──────────────────────────────────────────────────────────────
+#
+# 1. Add the SDK replace directive to your plugin's go.mod:
+#
+#      replace github.com/jaiscloud/plugin-sdk => /jaiscloud/sdk
+#
+# 2. Build your plugin .so:
+#
+#      docker run --rm \
+#        -v $(pwd):/workspace \
+#        jaiscloud-sdk:<version> \
+#        go build -buildmode=plugin -o /workspace/my-plugin.so .
+#
+# 3. Load it into JaisCloud:
+#
+#      docker run -v $(pwd)/my-plugin.so:/plugins/my-plugin.so \
+#        -e JAISCLOUD_DSN=postgres://... \
+#        jaiscloud:<version> start --plugin-dir /plugins
+#
+# ─── Using as a base image ────────────────────────────────────────────────────
+#
+#   FROM jaiscloud-sdk:<version> AS builder
+#   COPY . /workspace
+#   RUN go build -buildmode=plugin -o /my-plugin.so .
+#
+#   FROM jaiscloud:<version>
+#   COPY --from=builder /my-plugin.so /plugins/
+# ──────────────────────────────────────────────────────────────────────────────
+FROM golang:1.26
+
+ARG VERSION=dev
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Embed the plugin SDK at a stable, versioned path.
+# Point your plugin's go.mod replace directive here:
+#   replace github.com/jaiscloud/plugin-sdk => /jaiscloud/sdk
+COPY sdk/ /jaiscloud/sdk/
+
+# JAISCLOUD_SDK_PATH advertises the SDK location to plugin Dockerfiles and scripts.
+ENV JAISCLOUD_SDK_PATH=/jaiscloud/sdk
+
+# Mount or COPY your plugin source at /workspace.
+WORKDIR /workspace
+
+LABEL org.opencontainers.image.title="jaiscloud-sdk" \
+      org.opencontainers.image.description="Go build environment for JaisCloud custom plugins" \
+      org.opencontainers.image.version="${VERSION}"

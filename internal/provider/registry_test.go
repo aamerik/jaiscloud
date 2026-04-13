@@ -42,23 +42,25 @@ func TestRegistry_Dispatch_PluginFallback(t *testing.T) {
 	}
 }
 
-func TestRegistry_Dispatch_BuiltinTakesPrecedenceOverPlugin(t *testing.T) {
+func TestRegistry_Dispatch_PluginOverridesBuiltin(t *testing.T) {
 	r := provider.NewRegistry()
 	r.RegisterAll(map[string]provider.HandlerFunc{
 		"EMR.RunJobFlow": makeHandler("builtin"),
 	})
+	// RegisterPlugin overrides ALL built-in handlers for the same prefix so
+	// that the plugin is the single source of truth for the entire service.
 	r.RegisterPlugin("EMR", makeHandler("plugin"))
 
-	// Exact builtin match wins
+	// Plugin wins for actions that had a built-in handler.
 	resp, err := r.Dispatch(context.Background(), "EMR.RunJobFlow", &model.NormalizedRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Data["handler"] != "builtin" {
-		t.Errorf("builtin should win over plugin, got %v", resp.Data["handler"])
+	if resp.Data["handler"] != "plugin" {
+		t.Errorf("plugin should override builtin, got %v", resp.Data["handler"])
 	}
 
-	// Unknown action falls through to plugin
+	// Plugin also handles unknown actions.
 	resp, err = r.Dispatch(context.Background(), "EMR.DescribeCluster", &model.NormalizedRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

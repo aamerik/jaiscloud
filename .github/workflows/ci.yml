@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  # ─── Unit + integration tests ──────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
@@ -15,7 +16,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -55,7 +56,7 @@ jobs:
           echo "AWS_REGION=us-east-1" >> $GITHUB_ENV
 
       - name: Run unit tests
-        run: go test ./internal/... -v -count=1
+        run: go test -race ./internal/... -v -count=1
 
       - name: Run integration tests
         env:
@@ -75,3 +76,37 @@ jobs:
         if: always()
         run: |
           if [ -f server.pid ]; then kill $(cat server.pid) || true; fi
+
+  # ─── Docker build smoke-test ───────────────────────────────────────────────
+  # Builds all three images for linux/amd64 on every PR to catch Dockerfile
+  # errors early. Images are not pushed — push happens only on merge to main
+  # or on a version tag (see docker-publish.yml).
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: jaiscloud-lite
+            dockerfile: Dockerfile
+          - image: jaiscloud-full
+            dockerfile: Dockerfile.full
+          - image: jaiscloud-sdk
+            dockerfile: Dockerfile.sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image }} (linux/amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          platforms: linux/amd64
+          build-args: VERSION=ci-${{ github.sha }}
+          tags: ${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

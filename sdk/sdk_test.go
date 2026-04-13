@@ -15,7 +15,7 @@ import (
 // stubPlugin implements SparkPlugin.
 type stubPlugin struct{}
 
-func (s *stubPlugin) Init(_ context.Context, _ sdk.ResourceManager, _ sdk.ResourceStore) error {
+func (s *stubPlugin) Init(_ context.Context, _ sdk.ResourceManager, _ sdk.ResourceStore, _ sdk.EventBus) error {
 	return nil
 }
 func (s *stubPlugin) Manifest() sdk.ManifestInfo { return sdk.ManifestInfo{} }

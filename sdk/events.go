@@ -2,6 +2,17 @@ package sdk
 
 import "context"
 
+// Event type constants for plugin-to-host event publishing.
+const (
+	// EventTypeEMRStepStateChange is published when an EMR step transitions state.
+	// Required Detail keys: jobFlowId, stepId, name, state, failureReason, region, accountId, cloud.
+	EventTypeEMRStepStateChange = "EMRStepStateChange"
+
+	// EventTypeEMRJobRunStateChange is published when an EMR Containers job run transitions state.
+	// Required Detail keys: virtualClusterId, jobRunId, name, state, failureReason, region, accountId, cloud.
+	EventTypeEMRJobRunStateChange = "EMRJobRunStateChange"
+)
+
 // Event is a typed event emitted by a plugin (e.g. job state changes).
 // The host routes events to registered subscribers (SQS queues, EventBridge, etc.).
 type Event struct {

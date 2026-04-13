@@ -31,6 +31,7 @@ type DLQEvent struct {
 type EMRStepStateEvent struct {
 	JobFlowID     string
 	StepID        string
+	Name          string
 	State         string
 	FailureReason string
 	Region        string
@@ -42,6 +43,7 @@ type EMRStepStateEvent struct {
 type EMRJobRunStateEvent struct {
 	VirtualClusterID string
 	JobRunID         string
+	Name             string
 	State            string
 	FailureReason    string
 	Region           string

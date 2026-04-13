@@ -181,7 +181,7 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, nr *mo
 	return provider.OK(map[string]any{
 		"id":   id,
 		"name": name,
-		"arn":  fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", nr.Region, nr.AccountID, id),
+		"arn":  nr.ResourceID("emr-virtual-cluster", id),
 		"tags": vc.Tags,
 	}), nil
 }
@@ -258,10 +258,27 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtJobRun, ID: storeID, Data: data}); err != nil {
 		return nil, err
 	}
+
+	// Transition immediately to COMPLETED (built-in path has no real executor).
+	jr.State = "COMPLETED"
+	p.saveJobRun(ctx, jr)
+	p.bus.Publish(events.Event{
+		Type: events.EventEMRJobRunState,
+		Payload: events.EMRJobRunStateEvent{
+			VirtualClusterID: vcID,
+			JobRunID:         id,
+			Name:             name,
+			State:            "COMPLETED",
+			Region:           nr.Region,
+			AccountID:        nr.AccountID,
+			Cloud:            nr.Cloud,
+		},
+	})
+
 	return provider.OK(map[string]any{
 		"id":               id,
 		"name":             name,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/jobruns/%s", nr.Region, nr.AccountID, vcID, id),
+		"arn":              nr.ResourceID("emr-job-run", id),
 		"virtualClusterId": vcID,
 	}), nil
 }
@@ -280,6 +297,7 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 		Payload: events.EMRJobRunStateEvent{
 			VirtualClusterID: vcID,
 			JobRunID:         jobID,
+			Name:             jr.Name,
 			State:            "CANCEL_PENDING",
 			Region:           nr.Region,
 			AccountID:        nr.AccountID,
@@ -347,7 +365,7 @@ func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *m
 	return provider.OK(map[string]any{
 		"id":               id,
 		"name":             me.Name,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/endpoints/%s", nr.Region, nr.AccountID, vcID, id),
+		"arn":              nr.ResourceID("emr-managed-endpoint", id),
 		"virtualClusterId": vcID,
 	}), nil
 }

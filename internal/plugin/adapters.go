@@ -4,9 +4,66 @@ import (
 	"context"
 
 	sdk "github.com/jaiscloud/plugin-sdk"
+	"jaiscloud/internal/events"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/resourcemgr"
 	"jaiscloud/internal/store"
 )
+
+// ─── SDK EventBus adapter ─────────────────────────────────────────────────────
+
+// sdkEventBusAdapter bridges sdk.EventBus → *events.EventBus.
+// It translates plugin-side sdk.Event structs (with Detail maps) into the
+// host's typed event payloads so EventBridgeProvider can deliver them.
+type sdkEventBusAdapter struct {
+	inner *events.EventBus
+}
+
+// NewSDKEventBusAdapter wraps a host EventBus for use with plugins.
+func NewSDKEventBusAdapter(bus *events.EventBus) sdk.EventBus {
+	return &sdkEventBusAdapter{inner: bus}
+}
+
+func (a *sdkEventBusAdapter) Publish(_ context.Context, e sdk.Event) error {
+	switch e.Type {
+	case sdk.EventTypeEMRStepStateChange:
+		a.inner.Publish(events.Event{
+			Type: events.EventEMRStepState,
+			Payload: events.EMRStepStateEvent{
+				JobFlowID:     strDetail(e.Detail, "jobFlowId"),
+				StepID:        strDetail(e.Detail, "stepId"),
+				Name:          strDetail(e.Detail, "name"),
+				State:         strDetail(e.Detail, "state"),
+				FailureReason: strDetail(e.Detail, "failureReason"),
+				Region:        strDetail(e.Detail, "region"),
+				AccountID:     strDetail(e.Detail, "accountId"),
+				Cloud:         model.Cloud(strDetail(e.Detail, "cloud")),
+			},
+		})
+	case sdk.EventTypeEMRJobRunStateChange:
+		a.inner.Publish(events.Event{
+			Type: events.EventEMRJobRunState,
+			Payload: events.EMRJobRunStateEvent{
+				VirtualClusterID: strDetail(e.Detail, "virtualClusterId"),
+				JobRunID:         strDetail(e.Detail, "jobRunId"),
+				Name:             strDetail(e.Detail, "name"),
+				State:            strDetail(e.Detail, "state"),
+				FailureReason:    strDetail(e.Detail, "failureReason"),
+				Region:           strDetail(e.Detail, "region"),
+				AccountID:        strDetail(e.Detail, "accountId"),
+				Cloud:            model.Cloud(strDetail(e.Detail, "cloud")),
+			},
+		})
+	}
+	return nil
+}
+
+func strDetail(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
 
 // ─── SDK ResourceStore adapter ────────────────────────────────────────────────
 

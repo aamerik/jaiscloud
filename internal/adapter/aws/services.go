@@ -93,6 +93,7 @@ var awsServices = []ServiceDescriptor{
 	{SigV4Name: "emr", TargetPrefix: "ElasticMapReduce.", ProviderPrefix: "EMR"},
 	{SigV4Name: "emr-containers", ProviderPrefix: "EMRContainers"},
 	{SigV4Name: "events", TargetPrefix: "AWSEvents.", ProviderPrefix: "EventBridge"},
+	{SigV4Name: "eks", ProviderPrefix: "EKS"},
 }
 
 // ─── Derived lookup tables ────────────────────────────────────────────────────

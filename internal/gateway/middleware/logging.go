@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -35,6 +36,11 @@ func Logging(level string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Inject a mutable holder so handleCloudRequest can populate labels
+			// after codec decode. Reading after next.ServeHTTP gives us the final values.
+			holder := &labelsHolder{}
+			r = r.WithContext(context.WithValue(r.Context(), labelsHolderKey{}, holder))
+
 			start := time.Now()
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
@@ -47,9 +53,9 @@ func Logging(level string) func(http.Handler) http.Handler {
 				"request_id", GetRequestID(r.Context()),
 			}
 
-			// Service and action are available after DetectAndDecode populates labels.
-			if svc, action := GetRequestLabels(r.Context()); svc != "" {
-				attrs = append(attrs, "service", svc, "action", action)
+			// Service and action are populated by WithRequestLabels inside the handler.
+			if holder.service != "" {
+				attrs = append(attrs, "service", holder.service, "action", holder.action)
 			}
 
 			if rw.status >= 400 {

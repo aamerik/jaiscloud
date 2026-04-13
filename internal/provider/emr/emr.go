@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/events"
@@ -373,6 +374,40 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 		}
 	}
 	p.saveCluster(ctx, c)
+	for _, step := range c.Steps {
+		// Only publish for steps just added (those in stepIDs set)
+		sid, _ := step["Id"].(string)
+		found := false
+		for _, id := range stepIDs {
+			if id == sid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+		name, _ := step["Name"].(string)
+		status, _ := step["Status"].(map[string]any)
+		state, _ := status["State"].(string)
+		failReason := ""
+		if fd, ok := status["FailureDetails"].(map[string]any); ok {
+			failReason, _ = fd["Message"].(string)
+		}
+		p.bus.Publish(events.Event{
+			Type: events.EventEMRStepState,
+			Payload: events.EMRStepStateEvent{
+				JobFlowID:     id,
+				StepID:        sid,
+				Name:          name,
+				State:         state,
+				FailureReason: failReason,
+				Region:        nr.Region,
+				AccountID:     nr.AccountID,
+				Cloud:         nr.Cloud,
+			},
+		})
+	}
 	return provider.OK(map[string]any{"StepIds": stepIDs}), nil
 }
 
@@ -439,11 +474,13 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 			status["State"] = "CANCELLED"
 			c.Steps[i]["Status"] = status
 			cancelInfo = append(cancelInfo, map[string]any{"StepId": sid, "Status": "SUBMITTED"})
+			stepName, _ := c.Steps[i]["Name"].(string)
 			p.bus.Publish(events.Event{
 				Type: events.EventEMRStepState,
 				Payload: events.EMRStepStateEvent{
 					JobFlowID: clusterID,
 					StepID:    sid,
+					Name:      stepName,
 					State:     "CANCELLED",
 					Region:    nr.Region,
 					AccountID: nr.AccountID,
@@ -892,6 +929,17 @@ func buildInstanceCollections(instances map[string]any, now float64) (fleets, gr
 	return nil, groups, "INSTANCE_GROUP"
 }
 
+func extractClassArg(args []any) string {
+	for i, a := range args {
+		if s, ok := a.(string); ok && s == "--class" && i+1 < len(args) {
+			if next, ok := args[i+1].(string); ok {
+				return next
+			}
+		}
+	}
+	return ""
+}
+
 func makeStep(cfg map[string]any) map[string]any {
 	now := nowUnix()
 	jar := ""
@@ -918,25 +966,42 @@ func makeStep(cfg map[string]any) map[string]any {
 	if actionOnFailure == "" {
 		actionOnFailure = "CONTINUE"
 	}
+
+	stepState := "COMPLETED"
+	var failureDetails map[string]any
+	classArg := extractClassArg(args)
+	if classArg != "" && strings.Contains(classArg, "nonexistent") {
+		stepState = "FAILED"
+		failureDetails = map[string]any{
+			"Reason":  "STEP_FAILURE",
+			"Message": fmt.Sprintf("java.lang.ClassNotFoundException: %s", classArg),
+		}
+	}
+
+	status := map[string]any{
+		"State":             stepState,
+		"StateChangeReason": map[string]any{},
+		"Timeline": map[string]any{
+			"CreationDateTime": now,
+			"StartDateTime":    now,
+			"EndDateTime":      now,
+		},
+	}
+	if failureDetails != nil {
+		status["FailureDetails"] = failureDetails
+	}
+
 	return map[string]any{
 		"Id":   stepID(),
 		"Name": strParamFromMap(cfg, "Name"),
 		"Config": map[string]any{
-			"Jar":       jar,
+			"Jar":        jar,
 			"Properties": props,
-			"MainClass": mainClass,
-			"Args":      args,
+			"MainClass":  mainClass,
+			"Args":       args,
 		},
 		"ActionOnFailure": actionOnFailure,
-		"Status": map[string]any{
-			"State":             "COMPLETED",
-			"StateChangeReason": map[string]any{},
-			"Timeline": map[string]any{
-				"CreationDateTime": now,
-				"StartDateTime":    now,
-				"EndDateTime":      now,
-			},
-		},
+		"Status":          status,
 	}
 }
 

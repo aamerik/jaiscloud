@@ -76,7 +76,7 @@ func initPlugin(t *testing.T) *plugin.EMRSparkPlugin {
 		cancel()
 		p.Shutdown(context.Background())
 	})
-	if err := p.Init(ctx, &fakeRM{}, newFakeStore()); err != nil {
+	if err := p.Init(ctx, &fakeRM{}, newFakeStore(), sdk.NoopEventBus{}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p
@@ -125,11 +125,11 @@ func TestEMRSparkPlugin_Init_Idempotent(t *testing.T) {
 	p := plugin.New()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := p.Init(ctx, &fakeRM{}, newFakeStore()); err != nil {
+	if err := p.Init(ctx, &fakeRM{}, newFakeStore(), sdk.NoopEventBus{}); err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
 	// Second Init with same context — should not deadlock or panic
-	if err := p.Init(ctx, &fakeRM{}, newFakeStore()); err != nil {
+	if err := p.Init(ctx, &fakeRM{}, newFakeStore(), sdk.NoopEventBus{}); err != nil {
 		t.Fatalf("second Init: %v", err)
 	}
 	p.Shutdown(ctx)
@@ -223,7 +223,7 @@ func TestEMRSparkPlugin_Shutdown_StopsPoller(t *testing.T) {
 	p := plugin.New()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p.Init(ctx, &fakeRM{}, newFakeStore())
+	p.Init(ctx, &fakeRM{}, newFakeStore(), sdk.NoopEventBus{})
 
 	if err := p.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)

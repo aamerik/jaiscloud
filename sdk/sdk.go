@@ -18,10 +18,10 @@ import "context"
 //	Reset may be called any time while the plugin is running.
 type SparkPlugin interface {
 	// Init is called once after the plugin is loaded.
-	// The host passes a ResourceManager and ResourceStore so the plugin can
-	// register its deletion-guard rules and query / mutate resources.
+	// The host passes a ResourceManager, ResourceStore, and EventBus so the plugin
+	// can register deletion-guard rules, mutate resources, and publish events.
 	// Init must return within a reasonable timeout (host may cancel ctx).
-	Init(ctx context.Context, rm ResourceManager, store ResourceStore) error
+	Init(ctx context.Context, rm ResourceManager, store ResourceStore, bus EventBus) error
 
 	// Manifest returns metadata the host uses to register the plugin's routes.
 	Manifest() ManifestInfo

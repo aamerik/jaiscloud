@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	sdk "github.com/jaiscloud/plugin-sdk"
@@ -19,14 +20,16 @@ const (
 
 // EMRContainersProvider handles virtual cluster and job run lifecycle.
 type EMRContainersProvider struct {
-	store    sdk.ResourceStore
-	executor spark.SparkExecutor
-	poller   *spark.StatusPoller
+	store      sdk.ResourceStore
+	executor   spark.SparkExecutor
+	poller     *spark.StatusPoller
+	bus        sdk.EventBus
+	jobRunToVC sync.Map // jobRunID → virtualClusterID
 }
 
 // New creates an EMRContainersProvider.
-func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller) *EMRContainersProvider {
-	return &EMRContainersProvider{store: store, executor: executor, poller: poller}
+func New(store sdk.ResourceStore, executor spark.SparkExecutor, poller *spark.StatusPoller, bus sdk.EventBus) *EMRContainersProvider {
+	return &EMRContainersProvider{store: store, executor: executor, poller: poller, bus: bus}
 }
 
 // ─── Data types ───────────────────────────────────────────────────────────────
@@ -50,6 +53,9 @@ type jobRun struct {
 	ExecutionRole    string            `json:"executionRoleArn"`
 	CreatedAt        time.Time         `json:"createdAt"`
 	Tags             map[string]string `json:"tags"`
+	Region           string            `json:"region"`
+	AccountID        string            `json:"accountId"`
+	Cloud            string            `json:"cloud"`
 }
 
 // ─── Handle dispatch ──────────────────────────────────────────────────────────
@@ -169,10 +175,14 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, req sdk.HandleR
 		ReleaseLabel:     strParam(req.Params, "releaseLabel"),
 		ExecutionRole:    strParam(req.Params, "executionRoleArn"),
 		CreatedAt:        time.Now().UTC(),
+		Region:           req.Region,
+		AccountID:        req.AccountID,
+		Cloud:            "aws",
 	}
 	if err := p.saveJobRun(ctx, jr); err != nil {
 		return internalError(err)
 	}
+	p.jobRunToVC.Store(id, vcID)
 
 	// Submit via executor
 	job := spark.SparkJob{JobID: id}
@@ -249,6 +259,43 @@ func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, req sdk.HandleR
 		list = append(list, jobRunToWire(jr, req.Region, req.AccountID))
 	}
 	return okResponse(map[string]any{"jobRuns": list})
+}
+
+// SetPoller sets the status poller after construction.
+func (p *EMRContainersProvider) SetPoller(poller *spark.StatusPoller) {
+	p.poller = poller
+}
+
+// OnStateChange is called by the StatusPoller when a job run changes state.
+func (p *EMRContainersProvider) OnStateChange(ev spark.StateChangeEvent) {
+	vcIDRaw, ok := p.jobRunToVC.Load(ev.JobID)
+	if !ok {
+		return
+	}
+	vcID, _ := vcIDRaw.(string)
+	ctx := context.Background()
+	jr, err := p.loadJobRun(ctx, vcID, ev.JobID)
+	if err != nil {
+		return
+	}
+	jr.State = string(ev.NewState)
+	p.saveJobRun(ctx, jr)
+	if p.bus != nil {
+		p.bus.Publish(ctx, sdk.Event{
+			Source: "aws-emr-spark",
+			Type:   sdk.EventTypeEMRJobRunStateChange,
+			Detail: map[string]any{
+				"virtualClusterId": jr.VirtualClusterID,
+				"jobRunId":         jr.ID,
+				"name":             jr.Name,
+				"state":            jr.State,
+				"failureReason":    "",
+				"region":           jr.Region,
+				"accountId":        jr.AccountID,
+				"cloud":            jr.Cloud,
+			},
+		})
+	}
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────

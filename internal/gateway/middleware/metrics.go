@@ -14,11 +14,23 @@ import (
 type cloudContextKey struct{}
 type serviceContextKey struct{}
 type actionContextKey struct{}
+type labelsHolderKey struct{}
 
-// WithRequestLabels returns a new context with cloud/service/action labels set.
-// The Metrics middleware reads these labels to populate Prometheus counters.
-// Call this from the gateway after decoding each cloud request.
+// labelsHolder is a mutable struct injected into the context by outer middleware
+// so that inner handlers can populate cloud/service/action after decoding. Using
+// a pointer allows mutation without replacing the context value.
+type labelsHolder struct {
+	cloud, service, action string
+}
+
+// WithRequestLabels mutates the labelsHolder in ctx (if present) and also sets
+// immutable context values for callers that read via GetRequestLabels directly.
 func WithRequestLabels(ctx context.Context, cloud, service, action string) context.Context {
+	if h, ok := ctx.Value(labelsHolderKey{}).(*labelsHolder); ok {
+		h.cloud = cloud
+		h.service = service
+		h.action = action
+	}
 	ctx = context.WithValue(ctx, cloudContextKey{}, cloud)
 	ctx = context.WithValue(ctx, serviceContextKey{}, service)
 	ctx = context.WithValue(ctx, actionContextKey{}, action)
@@ -62,8 +74,8 @@ func (w *metricsResponseWriter) WriteHeader(code int) {
 }
 
 // Metrics returns a middleware that records Prometheus metrics per request.
-// service and action are extracted from the NormalizedRequest via context, so
-// we instrument at the transport level using path heuristics here.
+// Labels are read from the labelsHolder injected by the Logging middleware so
+// that values set inside handleCloudRequest are visible here after the handler returns.
 func Metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mw := &metricsResponseWriter{ResponseWriter: w, status: 200}
@@ -71,21 +83,28 @@ func Metrics(next http.Handler) http.Handler {
 		next.ServeHTTP(mw, r)
 		dur := time.Since(start).Seconds()
 
-		// Best-effort label extraction from request context.
-		// The cloud/service/action labels are set by the gateway after codec decode;
-		// for admin and unrecognised requests we fall back to safe defaults.
+		// Read labels from the mutable holder (injected by Logging outer middleware)
+		// when available; fall back to immutable context values set via
+		// *r = *r.WithContext(WithRequestLabels(...)) for standalone Metrics usage.
 		cloud := "unknown"
 		service := "unknown"
 		action := r.Method
 
-		if c := r.Context().Value(cloudContextKey{}); c != nil {
-			cloud = c.(string)
-		}
-		if s := r.Context().Value(serviceContextKey{}); s != nil {
+		if h, ok := r.Context().Value(labelsHolderKey{}).(*labelsHolder); ok && h.service != "" {
+			cloud = h.cloud
+			service = h.service
+			action = h.action
+		} else if s := r.Context().Value(serviceContextKey{}); s != nil {
+			cloud = func() string {
+				if c := r.Context().Value(cloudContextKey{}); c != nil {
+					return c.(string)
+				}
+				return "unknown"
+			}()
 			service = s.(string)
-		}
-		if a := r.Context().Value(actionContextKey{}); a != nil {
-			action = a.(string)
+			if a := r.Context().Value(actionContextKey{}); a != nil {
+				action = a.(string)
+			}
 		}
 
 		requestsTotal.WithLabelValues(cloud, service, action, strconv.Itoa(mw.status)).Inc()

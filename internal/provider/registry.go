@@ -37,6 +37,20 @@ func (r *Registry) RegisterAll(routes map[string]HandlerFunc) {
 // When Dispatch finds no exact key match, it tries the plugin handler for the prefix.
 // A plugin handler takes precedence over the built-in wildcard fallback.
 func (r *Registry) RegisterPlugin(prefix string, h HandlerFunc) {
+	// Override any built-in exact-match handlers whose prefix matches,
+	// so the plugin receives all actions for this service.
+	for key := range r.handlers {
+		p := key
+		for i, c := range key {
+			if c == '.' {
+				p = key[:i]
+				break
+			}
+		}
+		if p == prefix {
+			r.handlers[key] = h
+		}
+	}
 	r.plugins[prefix] = h
 }
 

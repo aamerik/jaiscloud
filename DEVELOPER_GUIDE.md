@@ -4,6 +4,10 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
 
 **Contents**
 - [Prerequisites](#prerequisites)
+- [Docker Images](#docker-images)
+  - [jaiscloud-lite](#jaiscloud-lite-image)
+  - [jaiscloud (full)](#jaiscloud-full-image)
+  - [jaiscloud-sdk](#jaiscloud-sdk-image)
 - [Running in Lite Mode](#running-in-lite-mode)
 - [Running in Full Mode (PostgreSQL)](#running-in-full-mode-postgresql)
 - [Running on Kubernetes](#running-on-local-kubernetes)
@@ -34,6 +38,199 @@ docker version
 kubectl version --client
 aws --version
 ```
+
+---
+
+## Docker Images
+
+JaisCloud ships three Docker images, each with a distinct purpose. Use the root `Makefile` to build them:
+
+```bash
+# Build a specific image
+make docker-lite    # jaiscloud-lite:<version>
+make docker-full    # jaiscloud-full:<version>
+make docker-sdk     # jaiscloud-sdk:<version>
+
+# Build all three at once
+make docker-all
+
+# Override the version tag
+make docker-all VERSION=1.2.3
+
+# Push to a registry
+make docker-all REGISTRY=ghcr.io/myorg
+```
+
+The `VERSION` is inferred from `git describe --tags` automatically. You can override it with any string.
+
+---
+
+### `jaiscloud-lite` image
+
+**Dockerfile:** [Dockerfile](Dockerfile)  
+**Use case:** CI pipelines, unit testing, local development — anywhere you only need lite mode (in-memory state, no PostgreSQL, no plugins).
+
+| Property | Value |
+|---|---|
+| Base image | `scratch` |
+| Binary | CGO_ENABLED=0, fully static |
+| Plugin support | None |
+| Persistence | In-memory only |
+| Image size | ~10 MB |
+
+```bash
+make docker-lite
+```
+
+Run it:
+
+```bash
+docker run -p 4566:4566 jaiscloud-lite:latest
+
+# With options
+docker run -p 4566:4566 \
+  -e JAISCLOUD_LOG_LEVEL=debug \
+  -e JAISCLOUD_METRICS=true \
+  jaiscloud-lite:latest start --region eu-west-1
+```
+
+> This image is built from the existing `Dockerfile`. It cannot load `.so` plugins (CGO is disabled and the runtime is `scratch`).
+
+---
+
+### `jaiscloud` full image
+
+**Dockerfile:** [Dockerfile.full](Dockerfile.full)  
+**Use case:** Shared dev environments, staging, Kubernetes deployments — full mode with PostgreSQL persistence and the `aws-emr-spark` plugin pre-bundled.
+
+| Property | Value |
+|---|---|
+| Base image | `debian:bookworm-slim` |
+| Binary | CGO_ENABLED=1 (required for plugin loading) |
+| Plugin support | Yes — `aws-emr-spark` plugin pre-installed at `/plugins/` |
+| Persistence | PostgreSQL (requires `JAISCLOUD_DSN`) |
+| Image size | ~60 MB |
+
+```bash
+make docker-full
+```
+
+Run it (full mode, plugin auto-loaded):
+
+```bash
+docker run -p 4566:4566 \
+  -e JAISCLOUD_MODE=full \
+  -e JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@host.docker.internal:5432/jaiscloud \
+  jaiscloud-full:latest
+```
+
+The default `CMD` is `start --plugin-dir /plugins`, so the EMR Spark plugin is loaded automatically. Override with your own arguments if needed:
+
+```bash
+# Run with extra flags
+docker run -p 4566:4566 \
+  -e JAISCLOUD_DSN=postgres://... \
+  jaiscloud-full:latest start --plugin-dir /plugins --metrics --log-level debug
+```
+
+With Docker Compose (PostgreSQL + JaisCloud):
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jaiscloud
+      POSTGRES_PASSWORD: jaiscloud
+      POSTGRES_DB: jaiscloud
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
+      interval: 5s
+      retries: 10
+
+  jaiscloud:
+    image: jaiscloud-full:latest
+    ports:
+      - "4566:4566"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      JAISCLOUD_MODE: full
+      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
+      JAISCLOUD_REGION: us-east-1
+      JAISCLOUD_METRICS: "true"
+```
+
+Adding a custom plugin at runtime (without rebuilding the image):
+
+```bash
+# Build your plugin .so (see jaiscloud-sdk below)
+# then mount it alongside the built-in plugins
+docker run -p 4566:4566 \
+  -v $(pwd)/my-plugin.so:/plugins/my-plugin.so \
+  -e JAISCLOUD_DSN=postgres://... \
+  jaiscloud-full:latest
+```
+
+> The full image uses `debian:bookworm-slim` (glibc) instead of `scratch` so that the CGO-linked binary can load `.so` files at runtime via `plugin.Open()`.
+
+---
+
+### `jaiscloud-sdk` image
+
+**Dockerfile:** [Dockerfile.sdk](Dockerfile.sdk)  
+**Use case:** Building custom plugin `.so` files without needing the full JaisCloud source tree. Designed to be used as a build environment or as a `FROM` base in your plugin's `Dockerfile`.
+
+| Property | Value |
+|---|---|
+| Base image | `golang:1.26` |
+| SDK location | `/jaiscloud/sdk` |
+| `JAISCLOUD_SDK_PATH` env | `/jaiscloud/sdk` |
+
+```bash
+make docker-sdk
+```
+
+#### Build a plugin with it (one-liner)
+
+```bash
+# From your plugin directory — mounts source at /workspace, outputs .so there too
+docker run --rm \
+  -v $(pwd):/workspace \
+  jaiscloud-sdk:latest \
+  go build -buildmode=plugin -o /workspace/my-plugin.so .
+```
+
+Your plugin's `go.mod` must point the SDK replace directive at the in-image path:
+
+```
+# go.mod
+module github.com/myorg/jaiscloud-plugin-myservice
+
+go 1.26.2
+
+require github.com/jaiscloud/plugin-sdk v0.0.0-00010101000000-000000000000
+
+replace github.com/jaiscloud/plugin-sdk => /jaiscloud/sdk
+```
+
+#### Use it as a base in your plugin's Dockerfile
+
+```dockerfile
+# Stage 1: build the plugin .so
+FROM jaiscloud-sdk:<version> AS builder
+COPY . /workspace
+RUN go build -buildmode=plugin -o /my-plugin.so .
+
+# Stage 2: bundle into the full JaisCloud image
+FROM jaiscloud-full:<version>
+COPY --from=builder /my-plugin.so /plugins/
+```
+
+> Both the `jaiscloud-full` image and `jaiscloud-sdk` image use the same Go version and glibc toolchain, so plugins built with the SDK image are guaranteed to be compatible with the full runtime image.
 
 ---
 
@@ -256,7 +453,7 @@ kubectl config current-context   # should print: docker-desktop
 ```
 
 The script:
-1. Builds the `jaiscloud:latest` Docker image from the repo root `Dockerfile`
+1. Builds the `jaiscloud-lite:latest` Docker image from the repo root `Dockerfile`
 2. Creates the `jaiscloud` namespace
 3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim (`postgres-pvc`)
 4. Deploys JaisCloud in full mode with a 5 Gi PersistentVolumeClaim for S3 blob bytes (`jaiscloud-blobs-pvc`)

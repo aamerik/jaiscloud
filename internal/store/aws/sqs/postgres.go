@@ -144,8 +144,8 @@ func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, 
 			UPDATE jc_sqs_messages
 			SET receipt_handle=$1, receive_count=receive_count+1, visible_at=$2,
 			    first_received_at=COALESCE(first_received_at,$3)
-			WHERE id=$4
-		`, handle, visibleAt, now, msgs[i].MessageID)
+			WHERE id=$4 AND queue_url=$5
+		`, handle, visibleAt, now, msgs[i].MessageID, msgs[i].QueueURL)
 		if err != nil {
 			return nil, fmt.Errorf("update receive state: %w", err)
 		}

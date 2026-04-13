@@ -84,7 +84,7 @@ var errNotFound sentinelError = "not found"
 func newProvider() (*emr.EMRProvider, *spark.MockExecutor) {
 	store := newFakeStore()
 	executor := spark.NewMockExecutor()
-	p := emr.New(store, executor, nil)
+	p := emr.New(store, executor, nil, sdk.NoopEventBus{})
 	return p, executor
 }
 
