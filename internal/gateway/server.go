@@ -5,20 +5,22 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Server is the JaisCloud HTTP server.
@@ -160,7 +162,6 @@ func encodeErrorFallback(codec adapter.Codec, nr *model.NormalizedRequest, pe *m
 	return pe.HTTPStatus, h, []byte(body)
 }
 
-
 func writeResponse(w http.ResponseWriter, status int, headers http.Header, body []byte) {
 	for k, vs := range headers {
 		for _, v := range vs {
@@ -178,12 +179,17 @@ func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
 	srv := &http.Server{Addr: addr, Handler: s.router}
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
 		slog.Info("jaiscloud started", "port", s.cfg.Port, "mode", s.cfg.Mode)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "err", err)
 		}
 	}()
