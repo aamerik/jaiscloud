@@ -22,10 +22,14 @@ func BuildSparkJob(jobID, jar, mainClass string, args []string, sparkParams stri
 		job.SparkConf = map[string]string{}
 		tokens := strings.Fields(sparkParams)
 		for i := 0; i+1 < len(tokens); i++ {
-			if tokens[i] == "--conf" {
+			switch tokens[i] {
+			case "--conf":
 				if k, v, ok := strings.Cut(tokens[i+1], "="); ok {
 					job.SparkConf[strings.TrimSpace(k)] = strings.TrimSpace(v)
 				}
+				i++
+			case "--class":
+				job.MainClass = tokens[i+1]
 				i++
 			}
 		}
