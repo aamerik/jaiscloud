@@ -282,6 +282,11 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 		cmd = []string{resolveContainerBinary(job.Args[0])}
 		containerArgs = rewriteSparkMaster(job.Args[1:])
 	default:
+		// Resolve local:// URIs to absolute paths in the image for user convenience
+		// (e.g. local://app.jar).
+		if after, ok := strings.CutPrefix(job.JarURI, "local://"); ok {
+			job.JarURI = after
+		}
 		// Pattern 3: Real Jar - Construct full spark-submit invocation
 		cmd = []string{"/opt/spark/bin/spark-submit"}
 		containerArgs = SparkSubmitArgs(job)
