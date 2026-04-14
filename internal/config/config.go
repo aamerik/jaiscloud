@@ -19,6 +19,11 @@ const (
 	ModeFull Mode = "full"
 )
 
+// ExecutorConfig controls which Spark executor is created at startup.
+type ExecutorConfig struct {
+	Spark string // "off" (default) | "mock" | "k8s"
+}
+
 type Config struct {
 	Port      int
 	Mode      Mode
@@ -28,7 +33,8 @@ type Config struct {
 	AccountID string
 	DSN       string // PostgreSQL DSN (required when Mode == full)
 	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
-	PluginDir string // Directory to scan for plugin .so files (full mode only; empty = disabled)
+
+	Executors ExecutorConfig
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -70,10 +76,24 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"events-rule": func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", r, a, n) },
 	// EMR
 	"emr-cluster":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", r, a, n) },
-	// EMR Containers
-	"emr-virtual-cluster":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n) },
-	"emr-job-run":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n) },
-	"emr-managed-endpoint": func(r, a, n string) string { return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/endpoints/%s", r, a, n) },
+	// EMR Containers — name encodes composite IDs as "vcID/resourceID" where needed.
+	"emr-virtual-cluster": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n)
+	},
+	"emr-job-run": func(r, a, n string) string {
+		// n = "virtualClusterID/jobRunID"
+		if vcID, runID, ok := strings.Cut(n, "/"); ok {
+			return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/jobruns/%s", r, a, vcID, runID)
+		}
+		return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/jobruns/%s", r, a, n)
+	},
+	"emr-managed-endpoint": func(r, a, n string) string {
+		// n = "virtualClusterID/endpointID"
+		if vcID, epID, ok := strings.Cut(n, "/"); ok {
+			return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/endpoints/%s", r, a, vcID, epID)
+		}
+		return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/endpoints/%s", r, a, n)
+	},
 	// IAM root
 	"iam-root":             func(_, a, _ string) string { return fmt.Sprintf("arn:aws:iam::%s:root", a) },
 }
@@ -125,7 +145,7 @@ func Load() (*Config, error) {
 	} else {
 		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
 	}
-	viper.SetDefault("plugin_dir", "")
+	viper.SetDefault("spark_mode", "off")
 	viper.SetDefault("metrics", false)
 	viper.SetDefault("tracing", false)
 	viper.SetDefault("deterministic", false)
@@ -145,7 +165,7 @@ func Load() (*Config, error) {
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
 		BlobDir:       viper.GetString("blob_dir"),
-		PluginDir:     viper.GetString("plugin_dir"),
+		Executors:     ExecutorConfig{Spark: viper.GetString("spark_mode")},
 		Metrics:       viper.GetBool("metrics"),
 		Tracing:       viper.GetBool("tracing"),
 		Deterministic: viper.GetBool("deterministic"),

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,26 +22,25 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/gateway"
-	"jaiscloud/internal/plugin"
 	"jaiscloud/internal/provider"
-	"jaiscloud/internal/resourcemgr"
+	cacheprovider "jaiscloud/internal/provider/cache"
 	"jaiscloud/internal/provider/catalog"
 	"jaiscloud/internal/provider/compute"
-	"jaiscloud/internal/provider/dns"
-	functionprovider "jaiscloud/internal/provider/function"
-	cacheprovider "jaiscloud/internal/provider/cache"
 	containerprovider "jaiscloud/internal/provider/container"
-	stackprovider "jaiscloud/internal/provider/stack"
+	"jaiscloud/internal/provider/dns"
+	eksprovider "jaiscloud/internal/provider/eks"
 	emrprovider "jaiscloud/internal/provider/emr"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
-	eksprovider "jaiscloud/internal/provider/eks"
-	rdsprovider "jaiscloud/internal/provider/rds"
+	functionprovider "jaiscloud/internal/provider/function"
 	iamprovider "jaiscloud/internal/provider/iam"
 	"jaiscloud/internal/provider/notification"
 	objectprovider "jaiscloud/internal/provider/object"
 	"jaiscloud/internal/provider/queue"
+	rdsprovider "jaiscloud/internal/provider/rds"
+	stackprovider "jaiscloud/internal/provider/stack"
 	"jaiscloud/internal/provider/table"
 	"jaiscloud/internal/store"
 	dynamostore "jaiscloud/internal/store/aws/dynamodb"
@@ -83,33 +83,23 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			s, err := initStores(context.Background(), cfg)
+			ctx := context.Background()
+			s, err := initStores(ctx, cfg)
 			if err != nil {
 				return err
 			}
 
-			registry, streamStore, bus := buildRegistry(cfg, s)
+			registry, streamStore, bus, cleanup := buildRegistry(ctx, cfg, s)
+			defer cleanup()
+
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
 			adminHandler := buildAdminHandler(s, streamStore)
 
-			// In full mode, load plugins from the configured plugin directory.
-			pluginMgr := plugin.NewPluginManager()
-			if cfg.Mode == config.ModeFull && cfg.PluginDir != "" {
-				storeAdapter := resourcemgr.NewStoreAdapter(s.resources)
-				rm := resourcemgr.New(storeAdapter, nil)
-				sdkRM := plugin.NewSDKResourceManager(rm)
-				sdkStore := plugin.NewSDKStoreAdapter(s.resources)
-				if err := pluginMgr.LoadAll(context.Background(), cfg.PluginDir, sdkRM, sdkStore, bus, registry); err != nil {
-					return fmt.Errorf("plugins: %w", err)
-				}
-			}
-			adminHandler.RegisterResetter(pluginMgr)
-
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
-			defer pluginMgr.Shutdown(context.Background())
+			_ = bus // bus is used internally by providers
 			return srv.ListenAndServe()
 		},
 	}
@@ -130,8 +120,6 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("blob-dir", "", `Directory for S3 blob bytes (full mode only).
 	Defaults to ~/.jaiscloud/blobs.
 	Env var: JAISCLOUD_BLOB_DIR`)
-	cmd.Flags().String("plugin-dir", "", `Directory to scan for plugin .so files (full mode only).
-	Env var: JAISCLOUD_PLUGIN_DIR`)
 	cmd.Flags().String("cloud", "aws", `Cloud provider to emulate: aws (default), azure, gcp.
 	Env var: JAISCLOUD_CLOUD`)
 
@@ -152,7 +140,6 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("time", cmd.Flags().Lookup("time"))
 	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
-	viper.BindPFlag("plugin_dir", cmd.Flags().Lookup("plugin-dir"))
 	viper.BindPFlag("cloud", cmd.Flags().Lookup("cloud"))
 }
 
@@ -202,11 +189,41 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 	}, nil
 }
 
-// buildRegistry wires all providers and returns the populated registry.
-// The stream store and event bus are returned separately so the caller can use them.
-func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus) {
+// buildRegistry wires all providers and returns the populated registry plus a cleanup func.
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
+
+	// Build spark executor (nil when JAISCLOUD_SPARK_MODE=off or unset).
+	sparkExec, sparkCfg := buildSparkExecutor(cfg.Executors.Spark)
+	if sparkExec != nil {
+		slog.Info("spark executor enabled", "mode", cfg.Executors.Spark)
+	}
+
+	var emrOpts []emrprovider.Option
+	var emrcOpts []emrcontainersprovider.Option
+	if sparkExec != nil {
+		emrOpts = append(emrOpts, emrprovider.WithExecutor(sparkExec, sparkCfg))
+		emrcOpts = append(emrcOpts, emrcontainersprovider.WithExecutor(sparkExec, sparkCfg))
+	}
+
+	emrP := emrprovider.New(s.resources, bus, emrOpts...)
+	emrcP := emrcontainersprovider.New(s.resources, bus, emrcOpts...)
+
+	cleanup := func() {}
+	if sparkExec != nil {
+		poller := spark.NewStatusPoller(sparkExec, 5*time.Second, func(ev spark.StateChangeEvent) {
+			emrP.OnStateChange(ev)
+			emrcP.OnStateChange(ev)
+		})
+		emrP.SetPoller(poller)
+		emrcP.SetPoller(poller)
+		poller.Start(ctx)
+		cleanup = func() {
+			emrP.Shutdown(context.Background())
+			emrcP.Shutdown(context.Background())
+		}
+	}
 
 	// tableProvider is created once so both Routes() and StreamRoutes() share state.
 	tableProvider := table.NewWithStreams(s.resources, s.dynamo, streams)
@@ -226,12 +243,38 @@ func buildRegistry(cfg *config.Config, s appStores) (*provider.Registry, *stream
 	registry.RegisterAll(cacheprovider.New(s.resources).Routes())
 	registry.RegisterAll(containerprovider.New(s.resources).Routes())
 	registry.RegisterAll(stackprovider.New(s.resources).Routes())
-	registry.RegisterAll(emrprovider.New(s.resources, bus).Routes())
-	registry.RegisterAll(emrcontainersprovider.New(s.resources, bus).Routes())
+	registry.RegisterAll(emrP.Routes())
+	registry.RegisterAll(emrcP.Routes())
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 
-	return registry, streams, bus
+	return registry, streams, bus, cleanup
+}
+
+// buildSparkExecutor creates a SparkExecutor for the given mode.
+// Returns (nil, zero) when mode is "" or "off" — instant completion remains the default.
+func buildSparkExecutor(mode string) (spark.SparkExecutor, spark.SparkConfig) {
+	if mode == "" || mode == "off" {
+		return nil, spark.SparkConfig{}
+	}
+	cfg := spark.SparkConfigFrom(mode, spark.SizeSmall)
+	// Generic image override — applies to both docker and k8s modes.
+	// JAISCLOUD_K8S_SPARK_IMAGE (legacy) is read by SparkConfigFrom; this wins if set.
+	if v := os.Getenv("JAISCLOUD_SPARK_IMAGE"); v != "" {
+		cfg.Image = v
+	}
+	if mode == "k8s" {
+		if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
+			cfg.APIServer = v
+		}
+		if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
+			cfg.Namespace = v
+		}
+		if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
+			cfg.ServiceAccount = v
+		}
+	}
+	return spark.NewExecutor(mode, cfg), cfg
 }
 
 // buildAdapter selects and constructs the single CloudAdapter for the configured cloud.

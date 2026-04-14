@@ -9,22 +9,58 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
 
-// EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
-type EMRProvider struct {
-	resources store.ResourceStore
-	bus       *events.EventBus
+// jobRef identifies the store resource a Spark job maps to and carries the
+// request context needed to publish EventBus events from async callbacks.
+type jobRef struct {
+	clusterID  string
+	resourceID string // step ID
+	region     string
+	accountID  string
+	cloud      model.Cloud
 }
 
-func New(resources store.ResourceStore, bus *events.EventBus) *EMRProvider {
-	return &EMRProvider{resources: resources, bus: bus}
+// EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
+type EMRProvider struct {
+	resources   store.ResourceStore
+	bus         *events.EventBus
+	executor    spark.SparkExecutor // nil = instant completion
+	executorCfg spark.SparkConfig
+	poller      *spark.StatusPoller // nil when executor is nil
+	jobRefs     sync.Map            // jobID → jobRef
+}
+
+// Option configures EMRProvider.
+type Option func(*EMRProvider)
+
+// WithExecutor attaches a SparkExecutor and its config to the provider.
+func WithExecutor(ex spark.SparkExecutor, cfg spark.SparkConfig) Option {
+	return func(p *EMRProvider) { p.executor = ex; p.executorCfg = cfg }
+}
+
+// WithPoller attaches a StatusPoller.
+func WithPoller(pol *spark.StatusPoller) Option {
+	return func(p *EMRProvider) { p.poller = pol }
+}
+
+// SetPoller sets the poller after construction (used when both providers share one poller).
+func (p *EMRProvider) SetPoller(pol *spark.StatusPoller) { p.poller = pol }
+
+func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRProvider {
+	p := &EMRProvider{resources: resources, bus: bus}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 func (p *EMRProvider) Routes() map[string]provider.HandlerFunc {
@@ -136,14 +172,10 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 
 	clusterID := clusterID()
 	region := nr.Region
-	accountID := nr.AccountID
 	if region == "" {
 		region = "us-east-1"
 	}
-	if accountID == "" {
-		accountID = "000000000000"
-	}
-	arn := fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", region, accountID, clusterID)
+	arn := nr.ResourceID("emr-cluster", clusterID)
 	now := nowUnix()
 
 	instances, _ := nr.Params["Instances"].(map[string]any)
@@ -243,7 +275,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 	if raw, ok := nr.Params["Steps"].([]any); ok {
 		for _, s := range raw {
 			if m, ok := s.(map[string]any); ok {
-				c.Steps = append(c.Steps, makeStep(m))
+				c.Steps = append(c.Steps, makeStep(m, "COMPLETED"))
 			}
 		}
 	}
@@ -366,25 +398,49 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 	stepIDs := []string{}
 	if raw, ok := nr.Params["Steps"].([]any); ok {
 		for _, s := range raw {
-			if m, ok := s.(map[string]any); ok {
-				step := makeStep(m)
-				c.Steps = append(c.Steps, step)
-				stepIDs = append(stepIDs, step["Id"].(string))
+			m, ok := s.(map[string]any)
+			if !ok {
+				continue
+			}
+			initialState := "COMPLETED"
+			if p.executor != nil {
+				initialState = "PENDING"
+			}
+			step := makeStep(m, initialState)
+			sid := step["Id"].(string)
+			c.Steps = append(c.Steps, step)
+			stepIDs = append(stepIDs, sid)
+
+			if p.executor != nil {
+				jar, mainClass, args := extractHadoopJarStep(m)
+				job := spark.BuildSparkJob(sid, jar, mainClass, args, "", p.executorCfg)
+				if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
+					// Mark failed immediately — don't block the API response
+					step["Status"].(map[string]any)["State"] = "FAILED"
+				} else {
+					p.jobRefs.Store(sid, jobRef{
+						clusterID:  id,
+						resourceID: sid,
+						region:     nr.Region,
+						accountID:  nr.AccountID,
+						cloud:      nr.Cloud,
+					})
+					if p.poller != nil {
+						p.poller.Track(sid, spark.StatePending)
+					}
+				}
 			}
 		}
 	}
 	p.saveCluster(ctx, c)
+	// Publish initial state events for newly added steps
+	newIDs := map[string]bool{}
+	for _, sid := range stepIDs {
+		newIDs[sid] = true
+	}
 	for _, step := range c.Steps {
-		// Only publish for steps just added (those in stepIDs set)
 		sid, _ := step["Id"].(string)
-		found := false
-		for _, id := range stepIDs {
-			if id == sid {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !newIDs[sid] {
 			continue
 		}
 		name, _ := step["Name"].(string)
@@ -471,6 +527,10 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 		status, _ := c.Steps[i]["Status"].(map[string]any)
 		state, _ := status["State"].(string)
 		if state == "PENDING" || state == "RUNNING" {
+			if p.executor != nil {
+				_ = p.executor.Cancel(ctx, sid)
+				p.jobRefs.Delete(sid)
+			}
 			status["State"] = "CANCELLED"
 			c.Steps[i]["Status"] = status
 			cancelInfo = append(cancelInfo, map[string]any{"StepId": sid, "Status": "SUBMITTED"})
@@ -751,7 +811,7 @@ func (p *EMRProvider) GetBlockPublicAccessConfiguration(ctx context.Context, nr 
 		"BlockPublicAccessConfiguration": cfg,
 		"BlockPublicAccessConfigurationMetadata": map[string]any{
 			"CreationDateTime": nowUnix(),
-			"CreatedByArn":     fmt.Sprintf("arn:aws:iam::%s:root", nr.AccountID),
+			"CreatedByArn":     nr.ResourceID("iam-root", ""),
 		},
 	}), nil
 }
@@ -828,6 +888,93 @@ func (p *EMRProvider) RemoveManagedScalingPolicy(ctx context.Context, nr *model.
 	c.ManagedScalingPolicy = nil
 	p.saveCluster(ctx, c)
 	return provider.OK(map[string]any{}), nil
+}
+
+// ─── Executor lifecycle ───────────────────────────────────────────────────────
+
+// updateStepState loads the cluster, finds the step, updates its state,
+// saves back, and publishes an EventBus event.
+// message is the executor's failure detail (e.g. stderr); stored in FailureDetails when non-empty.
+func (p *EMRProvider) updateStepState(ctx context.Context, clusterID, stepID, newState, message, region, accountID string, cloud model.Cloud) {
+	c, err := p.loadCluster(ctx, clusterID)
+	if err != nil {
+		return
+	}
+	now := nowUnix()
+	stepName := ""
+	for i, s := range c.Steps {
+		if s["Id"] != stepID {
+			continue
+		}
+		stepName, _ = s["Name"].(string)
+		status, _ := s["Status"].(map[string]any)
+		status["State"] = newState
+		timeline, _ := status["Timeline"].(map[string]any)
+		if timeline == nil {
+			timeline = map[string]any{}
+			status["Timeline"] = timeline
+		}
+		switch newState {
+		case "RUNNING":
+			timeline["StartDateTime"] = now
+		case "COMPLETED", "FAILED", "CANCELLED":
+			timeline["EndDateTime"] = now
+		}
+		if newState == "FAILED" && message != "" {
+			status["FailureDetails"] = map[string]any{"Message": message}
+		}
+		c.Steps[i] = s
+		break
+	}
+	p.saveCluster(ctx, c)
+	p.bus.Publish(events.Event{
+		Type: events.EventEMRStepState,
+		Payload: events.EMRStepStateEvent{
+			JobFlowID: clusterID,
+			StepID:    stepID,
+			Name:      stepName,
+			State:     newState,
+			Region:    region,
+			AccountID: accountID,
+			Cloud:     cloud,
+		},
+	})
+}
+
+// OnStateChange is called by the StatusPoller on each state transition.
+func (p *EMRProvider) OnStateChange(ev spark.StateChangeEvent) {
+	v, ok := p.jobRefs.Load(ev.JobID)
+	if !ok {
+		return
+	}
+	jr := v.(jobRef)
+	p.updateStepState(context.Background(), jr.clusterID, jr.resourceID, string(ev.NewState), ev.Message, jr.region, jr.accountID, jr.cloud)
+	if ev.NewState.IsTerminal() {
+		p.jobRefs.Delete(ev.JobID)
+	}
+}
+
+// Reset clears the in-memory jobRefs map and resets the underlying executor.
+func (p *EMRProvider) Reset() {
+	p.jobRefs.Range(func(k, _ any) bool { p.jobRefs.Delete(k); return true })
+	switch ex := p.executor.(type) {
+	case *spark.MockExecutor:
+		ex.Reset()
+	case *spark.DockerExecutor:
+		ex.Reset()
+	case *spark.K8sExecutor:
+		ex.Reset()
+	}
+}
+
+// Shutdown stops the poller and closes the executor.
+func (p *EMRProvider) Shutdown(ctx context.Context) {
+	if p.poller != nil {
+		p.poller.Stop()
+	}
+	if p.executor != nil {
+		p.executor.Close()
+	}
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────
@@ -940,7 +1087,10 @@ func extractClassArg(args []any) string {
 	return ""
 }
 
-func makeStep(cfg map[string]any) map[string]any {
+// makeStep builds the step wire shape. initialState is "COMPLETED" for the
+// instant-completion path (no executor) and "PENDING" for the executor path.
+// Bad-class detection is only applied on the instant-completion path.
+func makeStep(cfg map[string]any, initialState string) map[string]any {
 	now := nowUnix()
 	jar := ""
 	args := []any{}
@@ -967,25 +1117,29 @@ func makeStep(cfg map[string]any) map[string]any {
 		actionOnFailure = "CONTINUE"
 	}
 
-	stepState := "COMPLETED"
+	stepState := initialState
 	var failureDetails map[string]any
-	classArg := extractClassArg(args)
-	if classArg != "" && strings.Contains(classArg, "nonexistent") {
-		stepState = "FAILED"
-		failureDetails = map[string]any{
-			"Reason":  "STEP_FAILURE",
-			"Message": fmt.Sprintf("java.lang.ClassNotFoundException: %s", classArg),
+	// Bad-class detection only applies on the instant-completion path.
+	if initialState != "PENDING" {
+		classArg := extractClassArg(args)
+		if classArg != "" && strings.Contains(classArg, "nonexistent") {
+			stepState = "FAILED"
+			failureDetails = map[string]any{
+				"Reason":  "STEP_FAILURE",
+				"Message": fmt.Sprintf("java.lang.ClassNotFoundException: %s", classArg),
+			}
 		}
 	}
 
+	timeline := map[string]any{"CreationDateTime": now}
+	if stepState != "PENDING" {
+		timeline["StartDateTime"] = now
+		timeline["EndDateTime"] = now
+	}
 	status := map[string]any{
 		"State":             stepState,
 		"StateChangeReason": map[string]any{},
-		"Timeline": map[string]any{
-			"CreationDateTime": now,
-			"StartDateTime":    now,
-			"EndDateTime":      now,
-		},
+		"Timeline":          timeline,
 	}
 	if failureDetails != nil {
 		status["FailureDetails"] = failureDetails
@@ -1003,6 +1157,24 @@ func makeStep(cfg map[string]any) map[string]any {
 		"ActionOnFailure": actionOnFailure,
 		"Status":          status,
 	}
+}
+
+// extractHadoopJarStep pulls jar, mainClass, and args out of a step config map.
+func extractHadoopJarStep(cfg map[string]any) (jar, mainClass string, args []string) {
+	hj, ok := cfg["HadoopJarStep"].(map[string]any)
+	if !ok {
+		return
+	}
+	jar = strParamFromMap(hj, "Jar")
+	mainClass = strParamFromMap(hj, "MainClass")
+	if raw, ok := hj["Args"].([]any); ok {
+		for _, a := range raw {
+			if s, ok := a.(string); ok {
+				args = append(args, s)
+			}
+		}
+	}
+	return
 }
 
 // ─── Param helpers ─────────────────────────────────────────────────────────────

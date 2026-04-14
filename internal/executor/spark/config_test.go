@@ -3,7 +3,7 @@ package spark_test
 import (
 	"testing"
 
-	"github.com/jaiscloud/plugin-aws-emr-spark/internal/executor/spark"
+	"jaiscloud/internal/executor/spark"
 )
 
 func TestSparkConfigFrom_Small(t *testing.T) {

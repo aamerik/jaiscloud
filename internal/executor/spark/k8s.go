@@ -37,8 +37,10 @@ func NewK8sExecutor(cfg SparkConfig) *K8sExecutor {
 
 	tokenSource := resolveTokenSource()
 	caFile := resolveCAFile()
+	clientCertFile := resolveClientCertFile()
+	clientKeyFile := resolveClientKeyFile()
 
-	client, err := newK8sClient(apiURL, tokenSource, caFile, cfg.Namespace)
+	client, err := newK8sClient(apiURL, tokenSource, caFile, clientCertFile, clientKeyFile, cfg.Namespace)
 	if err != nil {
 		// Non-fatal: log and fall through with a nil client.
 		// Submit will return an error if the client is nil.
@@ -68,6 +70,16 @@ func resolveCAFile() string {
 		return inClusterCAFile
 	}
 	return ""
+}
+
+// resolveClientCertFile returns the client certificate file path for mTLS auth.
+func resolveClientCertFile() string {
+	return os.Getenv("JAISCLOUD_K8S_CLIENT_CERT_FILE")
+}
+
+// resolveClientKeyFile returns the client key file path for mTLS auth.
+func resolveClientKeyFile() string {
+	return os.Getenv("JAISCLOUD_K8S_CLIENT_KEY_FILE")
 }
 
 // Submit creates a K8s batch/v1 Job that runs spark-submit in cluster mode.
@@ -105,9 +117,11 @@ func (e *K8sExecutor) Status(ctx context.Context, jobID string) (SparkStatus, er
 		return SparkStatus{}, fmt.Errorf("K8sExecutor: get job %s: %w", jobName, err)
 	}
 
+	state := mapJobStatus(k8sJob.Status)
 	return SparkStatus{
-		JobID: jobID,
-		State: mapJobStatus(k8sJob.Status),
+		JobID:   jobID,
+		State:   state,
+		Message: jobFailureMessage(k8sJob.Status),
 	}, nil
 }
 
@@ -177,20 +191,55 @@ func mapJobStatus(s batchJobStatus) SparkState {
 	return StatePending
 }
 
+// jobFailureMessage extracts a human-readable failure reason from a K8s Job status.
+// Returns the message from the Failed condition, falling back to the reason field.
+func jobFailureMessage(s batchJobStatus) string {
+	for _, c := range s.Conditions {
+		if c.Type == "Failed" && c.Status == "True" {
+			if c.Message != "" {
+				return c.Message
+			}
+			if c.Reason != "" {
+				return c.Reason
+			}
+		}
+	}
+	return ""
+}
+
 // buildJobManifest constructs a batch/v1 Job that runs spark-submit.
 func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 	backoffLimit := 0
 	ttl := 3600
 
-	args := SparkSubmitArgs(job)
+	// Determine the container command and args.
+	//
+	// EMR Containers style (StartJobRun):
+	//   job.JarURI = EntryPoint  = "/opt/spark/bin/spark-submit"  (executable path)
+	//   job.Args   = EntryPointArguments = ["--master", "local[2]", "--class", ...]
+	//   → use JarURI as the command and Args as-is; calling SparkSubmitArgs would
+	//     re-append JarURI as a JAR and duplicate the user-supplied K8s conf flags.
+	//
+	// EMR classic style (AddJobFlowSteps with a real JAR):
+	//   job.JarURI = "s3://bucket/app.jar"
+	//   job.Args   = application arguments (no spark-submit flags)
+	//   → build the full spark-submit arg list via SparkSubmitArgs.
+	var cmd, containerArgs []string
+	if strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0 {
+		cmd = []string{job.JarURI}
+		containerArgs = job.Args
+	} else {
+		cmd = []string{"/opt/spark/bin/spark-submit"}
+		containerArgs = SparkSubmitArgs(job)
+	}
 
 	spec := podSpec{
 		RestartPolicy: "Never",
 		Containers: []container{{
 			Name:    "spark-submit",
 			Image:   e.cfg.Image,
-			Command: []string{"/opt/spark/bin/spark-submit"},
-			Args:    args,
+			Command: cmd,
+			Args:    containerArgs,
 		}},
 	}
 	if e.cfg.ServiceAccount != "" {

@@ -77,6 +77,8 @@ func NewExecutor(mode string, cfg SparkConfig) SparkExecutor {
 	switch mode {
 	case "k8s":
 		return NewK8sExecutor(cfg)
+	case "docker":
+		return NewDockerExecutor(cfg)
 	default:
 		return NewMockExecutor()
 	}

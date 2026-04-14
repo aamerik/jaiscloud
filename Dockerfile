@@ -13,7 +13,6 @@ WORKDIR /src
 
 # Download dependencies first (cached layer)
 COPY go.mod go.sum ./
-COPY sdk/ ./sdk/
 RUN go mod download
 
 # Copy source and build a fully static binary

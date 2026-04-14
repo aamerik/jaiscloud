@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 jobs:
-  # ─── Resolve version once, share across the matrix ─────────────────────────
+  # ─── Resolve version once ──────────────────────────────────────────────────
   setup:
     runs-on: ubuntu-latest
     outputs:
@@ -26,30 +26,10 @@ jobs:
             echo "version=sha-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           fi
 
-  # ─── Build and push all three images in parallel ───────────────────────────
+  # ─── Build and push single image ───────────────────────────────────────────
   build-and-push:
     needs: setup
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Lite: CGO_ENABLED=0, scratch base — supports all three platforms.
-          - image: jaiscloud-lite
-            dockerfile: Dockerfile
-            platforms: linux/amd64,linux/arm64,linux/arm/v7
-
-          # Full: CGO_ENABLED=1, debian base + bundled aws-emr-spark plugin.
-          # arm/v7 dropped — 32-bit CGO plugin loading is not supported.
-          - image: jaiscloud-full
-            dockerfile: Dockerfile.full
-            platforms: linux/amd64,linux/arm64
-
-          # SDK: golang:1.26 builder image for compiling custom plugins.
-          - image: jaiscloud-sdk
-            dockerfile: Dockerfile.sdk
-            platforms: linux/amd64,linux/arm64
-
     steps:
       - name: Checkout (full history for git describe)
         uses: actions/checkout@v4
@@ -71,16 +51,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ${{ matrix.image }}
+      - name: Build and push jaiscloud
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
           push: true
-          platforms: ${{ matrix.platforms }}
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: VERSION=${{ needs.setup.outputs.version }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.setup.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+            ghcr.io/${{ github.repository_owner }}/jaiscloud:${{ needs.setup.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/jaiscloud:latest
+          cache-from: type=gha,scope=jaiscloud
+          cache-to: type=gha,mode=max,scope=jaiscloud

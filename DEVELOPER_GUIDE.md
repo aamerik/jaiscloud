@@ -4,16 +4,12 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
 
 **Contents**
 - [Prerequisites](#prerequisites)
-- [Docker Images](#docker-images)
-  - [jaiscloud-lite](#jaiscloud-lite-image)
-  - [jaiscloud (full)](#jaiscloud-full-image)
-  - [jaiscloud-sdk](#jaiscloud-sdk-image)
+- [Docker Image](#docker-image)
 - [Running in Lite Mode](#running-in-lite-mode)
 - [Running in Full Mode (PostgreSQL)](#running-in-full-mode-postgresql)
 - [Running on Kubernetes](#running-on-local-kubernetes)
-- [EMR Spark Cluster — Docker Mode](#emr-spark-cluster--docker-mode)
+- [EMR Spark Cluster — Mock Mode](#emr-spark-cluster--mock-mode)
 - [EMR Spark Cluster — Kubernetes Mode](#emr-spark-cluster--kubernetes-mode)
-- [Writing a Custom Plugin](#writing-a-custom-plugin)
 - [Running Tests](#running-tests)
   - [Unit tests](#unit-tests-no-server-needed)
   - [Integration tests (lite mode)](#integration-tests)
@@ -41,96 +37,41 @@ aws --version
 
 ---
 
-## Docker Images
+## Docker Image
 
-JaisCloud ships three Docker images, each with a distinct purpose. Use the root `Makefile` to build them:
+JaisCloud ships a single Docker image built on `scratch` (CGO_ENABLED=0, fully static). It supports both lite and full mode at runtime via environment variables.
 
 ```bash
-# Build a specific image
-make docker-lite    # jaiscloud-lite:<version>
-make docker-full    # jaiscloud-full:<version>
-make docker-sdk     # jaiscloud-sdk:<version>
-
-# Build all three at once
-make docker-all
+# Build
+make docker
 
 # Override the version tag
-make docker-all VERSION=1.2.3
+make docker VERSION=1.2.3
 
 # Push to a registry
-make docker-all REGISTRY=ghcr.io/myorg
+make docker REGISTRY=ghcr.io/myorg
 ```
-
-The `VERSION` is inferred from `git describe --tags` automatically. You can override it with any string.
-
----
-
-### `jaiscloud-lite` image
-
-**Dockerfile:** [Dockerfile](Dockerfile)  
-**Use case:** CI pipelines, unit testing, local development — anywhere you only need lite mode (in-memory state, no PostgreSQL, no plugins).
 
 | Property | Value |
 |---|---|
 | Base image | `scratch` |
 | Binary | CGO_ENABLED=0, fully static |
-| Plugin support | None |
-| Persistence | In-memory only |
+| Persistence | In-memory (lite) or PostgreSQL (full) |
 | Image size | ~10 MB |
 
-```bash
-make docker-lite
-```
-
-Run it:
+Run in lite mode (default):
 
 ```bash
-docker run -p 4566:4566 jaiscloud-lite:latest
-
-# With options
-docker run -p 4566:4566 \
-  -e JAISCLOUD_LOG_LEVEL=debug \
-  -e JAISCLOUD_METRICS=true \
-  jaiscloud-lite:latest start --region eu-west-1
+docker run -p 4566:4566 jaiscloud:latest
 ```
 
-> This image is built from the existing `Dockerfile`. It cannot load `.so` plugins (CGO is disabled and the runtime is `scratch`).
-
----
-
-### `jaiscloud` full image
-
-**Dockerfile:** [Dockerfile.full](Dockerfile.full)  
-**Use case:** Shared dev environments, staging, Kubernetes deployments — full mode with PostgreSQL persistence and the `aws-emr-spark` plugin pre-bundled.
-
-| Property | Value |
-|---|---|
-| Base image | `debian:bookworm-slim` |
-| Binary | CGO_ENABLED=1 (required for plugin loading) |
-| Plugin support | Yes — `aws-emr-spark` plugin pre-installed at `/plugins/` |
-| Persistence | PostgreSQL (requires `JAISCLOUD_DSN`) |
-| Image size | ~60 MB |
-
-```bash
-make docker-full
-```
-
-Run it (full mode, plugin auto-loaded):
+Run in full mode (PostgreSQL):
 
 ```bash
 docker run -p 4566:4566 \
   -e JAISCLOUD_MODE=full \
   -e JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@host.docker.internal:5432/jaiscloud \
-  jaiscloud-full:latest
-```
-
-The default `CMD` is `start --plugin-dir /plugins`, so the EMR Spark plugin is loaded automatically. Override with your own arguments if needed:
-
-```bash
-# Run with extra flags
-docker run -p 4566:4566 \
-  -e JAISCLOUD_DSN=postgres://... \
-  jaiscloud-full:latest start --plugin-dir /plugins --metrics --log-level debug
+  jaiscloud:latest
 ```
 
 With Docker Compose (PostgreSQL + JaisCloud):
@@ -151,7 +92,7 @@ services:
       retries: 10
 
   jaiscloud:
-    image: jaiscloud-full:latest
+    image: jaiscloud:latest
     ports:
       - "4566:4566"
     depends_on:
@@ -163,74 +104,6 @@ services:
       JAISCLOUD_REGION: us-east-1
       JAISCLOUD_METRICS: "true"
 ```
-
-Adding a custom plugin at runtime (without rebuilding the image):
-
-```bash
-# Build your plugin .so (see jaiscloud-sdk below)
-# then mount it alongside the built-in plugins
-docker run -p 4566:4566 \
-  -v $(pwd)/my-plugin.so:/plugins/my-plugin.so \
-  -e JAISCLOUD_DSN=postgres://... \
-  jaiscloud-full:latest
-```
-
-> The full image uses `debian:bookworm-slim` (glibc) instead of `scratch` so that the CGO-linked binary can load `.so` files at runtime via `plugin.Open()`.
-
----
-
-### `jaiscloud-sdk` image
-
-**Dockerfile:** [Dockerfile.sdk](Dockerfile.sdk)  
-**Use case:** Building custom plugin `.so` files without needing the full JaisCloud source tree. Designed to be used as a build environment or as a `FROM` base in your plugin's `Dockerfile`.
-
-| Property | Value |
-|---|---|
-| Base image | `golang:1.26` |
-| SDK location | `/jaiscloud/sdk` |
-| `JAISCLOUD_SDK_PATH` env | `/jaiscloud/sdk` |
-
-```bash
-make docker-sdk
-```
-
-#### Build a plugin with it (one-liner)
-
-```bash
-# From your plugin directory — mounts source at /workspace, outputs .so there too
-docker run --rm \
-  -v $(pwd):/workspace \
-  jaiscloud-sdk:latest \
-  go build -buildmode=plugin -o /workspace/my-plugin.so .
-```
-
-Your plugin's `go.mod` must point the SDK replace directive at the in-image path:
-
-```
-# go.mod
-module github.com/myorg/jaiscloud-plugin-myservice
-
-go 1.26.2
-
-require github.com/jaiscloud/plugin-sdk v0.0.0-00010101000000-000000000000
-
-replace github.com/jaiscloud/plugin-sdk => /jaiscloud/sdk
-```
-
-#### Use it as a base in your plugin's Dockerfile
-
-```dockerfile
-# Stage 1: build the plugin .so
-FROM jaiscloud-sdk:<version> AS builder
-COPY . /workspace
-RUN go build -buildmode=plugin -o /my-plugin.so .
-
-# Stage 2: bundle into the full JaisCloud image
-FROM jaiscloud-full:<version>
-COPY --from=builder /my-plugin.so /plugins/
-```
-
-> Both the `jaiscloud-full` image and `jaiscloud-sdk` image use the same Go version and glibc toolchain, so plugins built with the SDK image are guaranteed to be compatible with the full runtime image.
 
 ---
 
@@ -453,7 +326,7 @@ kubectl config current-context   # should print: docker-desktop
 ```
 
 The script:
-1. Builds the `jaiscloud-lite:latest` Docker image from the repo root `Dockerfile`
+1. Builds the `jaiscloud:latest` Docker image from the repo root `Dockerfile`
 2. Creates the `jaiscloud` namespace
 3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim (`postgres-pvc`)
 4. Deploys JaisCloud in full mode with a 5 Gi PersistentVolumeClaim for S3 blob bytes (`jaiscloud-blobs-pvc`)
@@ -493,36 +366,23 @@ kubectl logs -n jaiscloud deployment/postgres -f
 
 ---
 
-## EMR Spark Cluster — Docker Mode
+## EMR Spark Cluster — Mock Mode
 
-The `aws-emr-spark` plugin ships with a `MockExecutor` and a `K8sExecutor`. In **Docker mode** (i.e., `JAISCLOUD_SPARK_MODE=mock`, which is the default), Spark jobs complete immediately without any actual Spark cluster. This is what you want for most local development and all unit tests.
+The built-in EMR and EMR-on-EKS providers use a `MockExecutor` by default (`JAISCLOUD_SPARK_MODE=off` or unset). In this mode, Spark jobs complete immediately without any actual Spark cluster. This is what you want for most local development and all unit tests.
 
-To run in mock Spark mode with the plugin loaded:
-
-### 1. Build the plugin
-
-```bash
-cd plugins/aws-emr-spark
-make build
-# Produces: ../../aws-emr-spark.so (in the repo root)
-cd ../..
-```
-
-### 2. Start JaisCloud with the plugin
+### 1. Start JaisCloud
 
 ```bash
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" \
-  --plugin-dir .
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
 ```
 
-The `--plugin-dir .` tells JaisCloud to scan the repo root for `.so` files. You should see:
+You should see:
 ```
-INFO plugin loaded name=aws-emr-spark version=1.0.0 services=[emr emrcontainers]
 INFO jaiscloud started port=4566 mode=full
 ```
 
-### 3. Submit an EMR job
+### 2. Submit an EMR job
 
 ```bash
 # Create an EMR cluster
@@ -590,19 +450,20 @@ aws --endpoint-url http://localhost:4566 \
 
 ### 5. Controlling mock behaviour
 
-Set `JAISCLOUD_SPARK_MODE=mock` (already the default) to use immediate job completion.
+The default (no `JAISCLOUD_SPARK_MODE` set) uses the mock executor, which completes jobs immediately.
 
+Set `JAISCLOUD_SPARK_MODE=mock` explicitly if you want to be explicit:
 ```bash
-JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --plugin-dir .
+JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --mode full --dsn "postgres://..."
 ```
 
-For delayed completion (useful for testing polling behaviour), set the delay in the plugin's `Init` — see `plugins/aws-emr-spark/internal/executor/spark/mock.go:NewMockExecutorWithDelay`.
+For real K8s submission, set `JAISCLOUD_SPARK_MODE=k8s` — see the next section.
 
 ---
 
 ## EMR Spark Cluster — Kubernetes Mode
 
-In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the plugin uses the `K8sExecutor` to submit real `batch/v1 Jobs` to a Kubernetes cluster. Each `RunJobFlow` or `StartJobRun` call creates a K8s Job that runs `spark-submit --deploy-mode cluster` inside the configured Spark image. No `client-go` dependency is needed — the executor uses stdlib HTTP only, so the plugin image size is unchanged.
+In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the `K8sExecutor` submits real `batch/v1 Jobs` to a Kubernetes cluster. Each `RunJobFlow` or `StartJobRun` call creates a K8s Job that runs `spark-submit --deploy-mode cluster` inside the configured Spark image. No `client-go` dependency is needed — the executor uses stdlib HTTP only.
 
 ### How it works
 
@@ -718,7 +579,7 @@ roleRef:
 kubectl apply -f jaiscloud-rbac.yaml
 ```
 
-### 2. Start JaisCloud with the plugin
+### 2. Start JaisCloud in K8s mode
 
 ```bash
 export JAISCLOUD_SPARK_MODE=k8s
@@ -728,8 +589,7 @@ export JAISCLOUD_K8S_NAMESPACE=spark-jobs
 export JAISCLOUD_K8S_SA=spark-sa
 
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" \
-  --plugin-dir .
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
 ```
 
 ### 3. Submit a job
@@ -794,474 +654,12 @@ Cluster size controls resource allocation:
 
 ---
 
-## Writing a Custom Plugin
-
-This section walks through building a complete plugin from scratch. By the end you will have a working plugin that handles a fake `myservice` API and can be loaded into JaisCloud at runtime.
-
-### What is a Plugin?
-
-A plugin is a regular Go package compiled as a shared library (`.so` file). JaisCloud loads it at startup, calls `Init` once to wire it up, and then routes all requests for the plugin's services to its `Handle` method.
-
-The plugin and the host **never import each other's code**. They communicate only through the `github.com/jaiscloud/plugin-sdk` module, which has zero external dependencies (stdlib only).
-
-```
-JaisCloud host binary          Your plugin .so
-─────────────────────          ─────────────────
-internal/plugin/manager.go ──→ var Plugin sdk.SparkPlugin
-                          Init(ctx, rm, store)
-                          Manifest() → services: ["myservice"]
-  request arrives ────────────→ Handle(ctx, req) → HandleResponse
-  server shutdown ────────────→ Shutdown(ctx)
-  POST /_jaiscloud/reset ─────→ Reset()
-```
-
-### Step 1: Create the plugin module
-
-Create a directory outside the main repo (or inside `plugins/`):
-
-```bash
-mkdir -p plugins/my-service
-cd plugins/my-service
-go mod init github.com/myorg/jaiscloud-plugin-myservice
-```
-
-Add the SDK dependency:
-
-```
-# go.mod — add these two lines
-require github.com/jaiscloud/plugin-sdk v0.0.0-00010101000000-000000000000
-
-replace github.com/jaiscloud/plugin-sdk => ../../sdk
-```
-
-Your `go.mod` should look like:
-```
-module github.com/myorg/jaiscloud-plugin-myservice
-
-go 1.26.2
-
-require github.com/jaiscloud/plugin-sdk v0.0.0-00010101000000-000000000000
-
-replace github.com/jaiscloud/plugin-sdk => ../../sdk
-```
-
-### Step 2: Implement the SparkPlugin interface
-
-The SDK defines this interface (every method is required):
-
-```go
-type SparkPlugin interface {
-    Init(ctx context.Context, rm ResourceManager, store ResourceStore) error
-    Manifest() ManifestInfo
-    Handle(ctx context.Context, req HandleRequest) HandleResponse
-    Shutdown(ctx context.Context) error
-    Reset()
-}
-```
-
-Create `internal/plugin/myplugin.go`:
-
-```go
-package plugin
-
-import (
-    "context"
-    "fmt"
-    "sync"
-
-    sdk "github.com/jaiscloud/plugin-sdk"
-)
-
-// MyPlugin implements sdk.SparkPlugin.
-type MyPlugin struct {
-    store    sdk.ResourceStore
-    mu       sync.Mutex
-    counters map[string]int // in-memory state: tracks how many times each key was called
-}
-
-// New creates a new MyPlugin. Called by main.go.
-func New() *MyPlugin {
-    return &MyPlugin{counters: make(map[string]int)}
-}
-
-// Init is called once after the plugin is loaded.
-// Use it to save references to the store and resource manager,
-// and to register any deletion guard rules you need.
-func (p *MyPlugin) Init(_ context.Context, _ sdk.ResourceManager, store sdk.ResourceStore) error {
-    p.store = store
-    return nil
-}
-
-// Manifest tells the host which services this plugin handles.
-// The host uses the Services list to route requests to this plugin.
-func (p *MyPlugin) Manifest() sdk.ManifestInfo {
-    return sdk.ManifestInfo{
-        Name:     "my-service-plugin",
-        Version:  "1.0.0",
-        Services: []string{"myservice"},
-    }
-}
-
-// Handle is called for every request routed to this plugin.
-// req.Service will always be "myservice" (from the Manifest).
-// req.Action is the API action name, e.g. "GetCounter".
-// req.Params contains all decoded request parameters.
-func (p *MyPlugin) Handle(ctx context.Context, req sdk.HandleRequest) sdk.HandleResponse {
-    switch req.Action {
-    case "IncrementCounter":
-        return p.incrementCounter(req)
-    case "GetCounter":
-        return p.getCounter(req)
-    default:
-        return sdk.HandleResponse{
-            Err: &sdk.PluginError{
-                Code:       "UnsupportedOperation",
-                Message:    fmt.Sprintf("action %q not supported by my-service-plugin", req.Action),
-                HTTPStatus: 400,
-            },
-        }
-    }
-}
-
-// Shutdown is called on graceful server stop.
-// Stop any background goroutines here.
-func (p *MyPlugin) Shutdown(_ context.Context) error {
-    return nil
-}
-
-// Reset wipes all in-memory state.
-// Called from POST /_jaiscloud/reset during integration tests.
-func (p *MyPlugin) Reset() {
-    p.mu.Lock()
-    defer p.mu.Unlock()
-    p.counters = make(map[string]int)
-}
-
-// ─── Action handlers ──────────────────────────────────────────────────────────
-
-func (p *MyPlugin) incrementCounter(req sdk.HandleRequest) sdk.HandleResponse {
-    key, _ := req.Params["Key"].(string)
-    if key == "" {
-        return sdk.HandleResponse{
-            Err: &sdk.PluginError{
-                Code:       "ValidationException",
-                Message:    "Key is required",
-                HTTPStatus: 400,
-            },
-        }
-    }
-
-    p.mu.Lock()
-    p.counters[key]++
-    val := p.counters[key]
-    p.mu.Unlock()
-
-    return sdk.HandleResponse{
-        Data: map[string]any{"Key": key, "Value": val},
-    }
-}
-
-func (p *MyPlugin) getCounter(req sdk.HandleRequest) sdk.HandleResponse {
-    key, _ := req.Params["Key"].(string)
-    if key == "" {
-        return sdk.HandleResponse{
-            Err: &sdk.PluginError{
-                Code:       "ValidationException",
-                Message:    "Key is required",
-                HTTPStatus: 400,
-            },
-        }
-    }
-
-    p.mu.Lock()
-    val := p.counters[key]
-    p.mu.Unlock()
-
-    return sdk.HandleResponse{
-        Data: map[string]any{"Key": key, "Value": val},
-    }
-}
-```
-
-### Step 3: Create main.go
-
-The plugin entry point **must** be in `package main` and must export a variable named `Plugin`:
-
-```go
-// main.go
-package main
-
-import (
-    sdk "github.com/jaiscloud/plugin-sdk"
-    "github.com/myorg/jaiscloud-plugin-myservice/internal/plugin"
-)
-
-// Plugin is the symbol the host looks up with plugin.Lookup("Plugin").
-// It must be a *sdk.SparkPlugin (pointer to interface).
-var Plugin sdk.SparkPlugin = plugin.New()
-```
-
-> **Why is it in package main?** Go's plugin system requires the entry point to be in `package main`. By keeping only the one-liner in `main.go` and putting all real logic in `internal/plugin/`, the code remains fully unit-testable without needing `-buildmode=plugin`.
-
-### Step 4: Write tests (without building .so)
-
-Create `internal/plugin/myplugin_test.go`. Tests use the internal package directly — no `.so` needed:
-
-```go
-package plugin_test
-
-import (
-    "context"
-    "testing"
-
-    "github.com/myorg/jaiscloud-plugin-myservice/internal/plugin"
-)
-
-func TestMyPlugin_Manifest(t *testing.T) {
-    p := plugin.New()
-    m := p.Manifest()
-    if m.Name != "my-service-plugin" {
-        t.Errorf("unexpected name: %s", m.Name)
-    }
-    if len(m.Services) == 0 || m.Services[0] != "myservice" {
-        t.Errorf("expected myservice in manifest services")
-    }
-}
-
-func TestMyPlugin_IncrementCounter(t *testing.T) {
-    p := plugin.New()
-    p.Init(context.Background(), nil, nil)
-
-    resp := p.Handle(context.Background(), sdk.HandleRequest{
-        Service: "myservice",
-        Action:  "IncrementCounter",
-        Params:  map[string]any{"Key": "hits"},
-    })
-    if resp.Err != nil {
-        t.Fatalf("unexpected error: %v", resp.Err)
-    }
-    if resp.Data["Value"].(int) != 1 {
-        t.Errorf("expected Value=1, got %v", resp.Data["Value"])
-    }
-}
-
-func TestMyPlugin_Reset_ClearsCounters(t *testing.T) {
-    p := plugin.New()
-    p.Init(context.Background(), nil, nil)
-
-    p.Handle(context.Background(), sdk.HandleRequest{
-        Service: "myservice", Action: "IncrementCounter",
-        Params: map[string]any{"Key": "x"},
-    })
-    p.Reset()
-
-    resp := p.Handle(context.Background(), sdk.HandleRequest{
-        Service: "myservice", Action: "GetCounter",
-        Params: map[string]any{"Key": "x"},
-    })
-    if resp.Data["Value"].(int) != 0 {
-        t.Errorf("expected 0 after reset, got %v", resp.Data["Value"])
-    }
-}
-
-// Interface compliance check — fails to compile if MyPlugin doesn't satisfy the interface.
-var _ sdk.SparkPlugin = (*plugin.MyPlugin)(nil)
-```
-
-Run the tests:
-```bash
-cd plugins/my-service
-go test -race ./internal/...
-```
-
-### Step 5: Build the .so
-
-Plugin `.so` files must be built with the exact same Go toolchain and module dependency versions as the host binary. Build from the plugin directory:
-
-```bash
-cd plugins/my-service
-go build -buildmode=plugin -o ../../my-service.so .
-```
-
-> **Important:** If you see `plugin was built with a different version of package X`, it means the host and plugin were compiled with different versions of a shared dependency. Fix it by making sure both use the same Go version and identical `sdk` module path (the `replace` directive ensures this).
-
-### Step 6: Load the plugin at runtime
-
-```bash
-# From the repo root
-./jaiscloud start --plugin-dir .
-```
-
-You should see:
-```
-INFO plugin loaded name=my-service-plugin version=1.0.0 services=[myservice]
-INFO jaiscloud started port=4566 mode=lite
-```
-
-### Step 7: Test the plugin via the API
-
-JaisCloud routes requests based on the service name. Your plugin registered `"myservice"`, so any request with `Service: myservice` is routed to it. The routing key in the registry is `"MyService.IncrementCounter"` (the service prefix is capitalised by `serviceToProviderPrefix` in `internal/plugin/routes.go`).
-
-In practice, you call the plugin via a codec (SQS, DynamoDB, REST, etc.) that your plugin declares. For a quick sanity check, use the built-in EMR codec pattern as a reference and call it via the AWS CLI with the correct `X-Amz-Target` header if you add a JSON codec — or build a simple `curl` test:
-
-```bash
-# Example: direct JSON call (if you wire a JSON codec for myservice)
-curl -s -X POST http://localhost:4566 \
-  -H "X-Amz-Target: MyService.IncrementCounter" \
-  -H "Content-Type: application/x-amz-json-1.1" \
-  -d '{"Key":"hits"}' | jq .
-```
-
-### Step 8: Add a Makefile
-
-Add a `Makefile` to your plugin directory for convenience:
-
-```makefile
-.PHONY: build test clean
-
-build:
-	go build -buildmode=plugin -o ../../my-service.so .
-
-test:
-	go test -race ./internal/...
-
-clean:
-	rm -f ../../my-service.so
-```
-
-### Step 9: Using the ResourceStore
-
-The `store` passed to `Init` lets your plugin persist and retrieve resources across requests so state survives beyond a single `Handle` call.
-
-```go
-import sdk "github.com/jaiscloud/plugin-sdk"
-
-// Store a resource
-err := p.store.Create(ctx, sdk.ResourceEntry{
-    Type:       "my_counter",
-    ID:         key,
-    Attributes: map[string]string{"value": "1", "name": key},
-})
-
-// Retrieve it later
-entry, err := p.store.Get(ctx, "my_counter", key)
-if err != nil {
-    // handle not-found, etc.
-}
-val := entry.Attributes["value"]
-
-// List all counters
-entries, err := p.store.List(ctx, "my_counter", "")
-
-// Update
-entry.Attributes["value"] = "42"
-p.store.Update(ctx, entry)
-
-// Delete
-p.store.Delete(ctx, "my_counter", key)
-```
-
-> In lite mode, the store is backed by `MemoryResourceStore`. In full mode it is backed by `PostgresResourceStore`. Your plugin does not need to care — the interface is identical.
-
-### Step 10: Using the ResourceManager (deletion guards)
-
-When your plugin has a parent→child relationship (e.g. "cluster" has "jobs"), use the `ResourceManager` to prevent deleting a parent while children still exist.
-
-Register a guard rule during `Init`:
-
-```go
-func (p *MyPlugin) Init(ctx context.Context, rm sdk.ResourceManager, store sdk.ResourceStore) error {
-    p.store = store
-    p.rm = rm
-
-    rm.RegisterRules([]sdk.DeleteGuardRule{
-        {
-            // When someone tries to delete a "my_cluster", find its jobs first.
-            ParentType: "my_cluster",
-            FindChildren: func(ctx context.Context, s sdk.ResourceStore, parentID string) ([]sdk.ChildRef, error) {
-                jobs, err := s.List(ctx, "my_job", parentID)
-                if err != nil {
-                    return nil, err
-                }
-                refs := make([]sdk.ChildRef, len(jobs))
-                for i, j := range jobs {
-                    refs[i] = sdk.ChildRef{Type: "my_job", ID: j.ID}
-                }
-                return refs, nil
-            },
-            Policy:     sdk.PolicyFail,  // block the delete if any jobs exist
-            FailCode:   "ValidationException",
-            FailStatus: 400,
-            // Optional: custom message
-            FailMessage: func(parentID string, children []sdk.ChildRef) string {
-                return fmt.Sprintf("cluster %s has %d active jobs; terminate them first", parentID, len(children))
-            },
-        },
-    })
-    return nil
-}
-```
-
-Then use `AcquireDelete` before actually deleting:
-
-```go
-func (p *MyPlugin) deleteCluster(ctx context.Context, clusterID string) sdk.HandleResponse {
-    // This checks the rules registered above.
-    // If any jobs exist, it returns an error without acquiring the lock.
-    handle, err := p.rm.AcquireDelete(ctx, "my_cluster", clusterID)
-    if err != nil {
-        if opErr, ok := err.(*sdk.PluginError); ok {
-            return sdk.HandleResponse{Err: opErr}
-        }
-        return sdk.HandleResponse{Err: &sdk.PluginError{Code: "InternalError", Message: err.Error(), HTTPStatus: 500}}
-    }
-    defer handle.Release()
-
-    // Safe to delete now.
-    p.store.Delete(ctx, "my_cluster", clusterID)
-    return sdk.HandleResponse{Data: map[string]any{"ClusterId": clusterID}}
-}
-```
-
-Available deletion policies:
-
-| Policy | Behaviour |
-|---|---|
-| `sdk.PolicyFail` | Block the delete and return an error if any children exist |
-| `sdk.PolicyCascade` | Automatically delete all children first, then proceed |
-| `sdk.PolicyForceTerminate` | Call your `ForceTerminate` callback on each child (e.g. stop a running process), then proceed |
-
-### Common mistakes
-
-**The plugin panics with "interface conversion failed"**  
-Check that `main.go` declares `var Plugin sdk.SparkPlugin = ...` (not `var Plugin = ...`). The host does `sym.(*sdk.SparkPlugin)` — it must be a pointer to the interface.
-
-**`plugin was built with a different version of package`**  
-Both the host and plugin must use the exact same Go version and the same `sdk` module source. The `replace` directive in `go.mod` pointing to `../../sdk` ensures this for the SDK. For any other shared dependencies, make sure versions match in both `go.mod` files.
-
-**Actions are not being routed to the plugin**  
-The registry key is `"ProviderPrefix.Action"`. The gateway builds it as `cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action`. For the AWS adapter, `ServiceToProvider` looks up `serviceProviderMap` which is derived from `awsServices` in `internal/adapter/aws/services.go`. If your service is not in that map, the service name is used as-is (lowercase).
-
-To route properly, add a `ServiceDescriptor` entry for your service in `awsServices` with the correct `ProviderPrefix`. Also check `serviceToProviderPrefix` in `internal/plugin/routes.go` — the plugin manager uses this to register the wildcard handler; it must produce the same prefix.
-
-**State is not persisted after restart**  
-In lite mode, `MemoryResourceStore` is wiped on restart by design. Use `--mode full` with a DSN for persistence.
-
----
-
 ## Running Tests
 
 ### Unit tests (no server needed)
 
 ```bash
-# Host module
 go test -race ./internal/...
-
-# Plugin SDK
-cd sdk && go test -race ./...
-
-# EMR Spark plugin
-cd plugins/aws-emr-spark && go test -race ./internal/...
 ```
 
 ### Integration tests
@@ -1369,20 +767,15 @@ The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notific
 | Go | 1.26 | Test runner |
 | Docker | 20+ | Required for Docker mode; used by K8s mode to build images |
 | PostgreSQL | 14+ | JaisCloud full-mode store |
-| JaisCloud server | latest | Running in `--mode full` with the EMR Spark plugin loaded |
+| JaisCloud server | latest | Running in `--mode full` |
 
-Build and start JaisCloud (same as the full mode section above, but with the plugin):
+Build and start JaisCloud:
 
 ```bash
-# Build the EMR Spark plugin
-cd plugins/aws-emr-spark && make build && cd ../..
-# aws-emr-spark.so is now in the repo root
-
-# Start JaisCloud with the plugin
+go build -o jaiscloud ./cmd/jaiscloud/
 ./jaiscloud start \
   --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" \
-  --plugin-dir .
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
 ```
 
 #### Docker mode — EMR steps running SparkPi in a container

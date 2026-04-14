@@ -12,6 +12,8 @@ type StateChangeEvent struct {
 	JobID    string
 	OldState SparkState
 	NewState SparkState
+	// Message carries the executor's human-readable detail (e.g. stderr on failure).
+	Message string
 }
 
 // OnStateChange is a callback invoked on every state transition.
@@ -122,7 +124,7 @@ func (p *StatusPoller) pollAll(ctx context.Context) {
 
 			slog.Info("poller: job state changed", "jobID", j.jobID, "from", old, "to", status.State)
 			if p.onChange != nil {
-				p.onChange(StateChangeEvent{JobID: j.jobID, OldState: old, NewState: status.State})
+				p.onChange(StateChangeEvent{JobID: j.jobID, OldState: old, NewState: status.State, Message: status.Message})
 			}
 		}
 	}

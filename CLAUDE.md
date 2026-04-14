@@ -6,7 +6,7 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 
 **Phase 0 (complete):** SQS — all 32 integration tests pass.  
 **Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.  
-**Phase 2 (complete):** Plugin system; Plugin SDK (`sdk/`); ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS via `aws-emr-spark` plugin; Prometheus cloud label.
+**Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.
 
 ---
 
@@ -17,18 +17,6 @@ module jaiscloud   # go.mod
 go 1.26.2
 ```
 
-The plugin SDK is a separate standalone module at `sdk/` with no jaiscloud core dependencies:
-
-```
-module github.com/jaiscloud/plugin-sdk   # sdk/go.mod
-go 1.26.2
-```
-
-The host module references the SDK via a `replace` directive in `go.mod`:
-```
-replace github.com/jaiscloud/plugin-sdk => ./sdk
-```
-
 ---
 
 ## Directory layout
@@ -36,32 +24,15 @@ replace github.com/jaiscloud/plugin-sdk => ./sdk
 ```
 cmd/jaiscloud/          # main.go — wires everything together, Cobra CLI
 docs/                   # Architecture, LLD, phase plan documents
-sdk/                    # Standalone plugin SDK module (github.com/jaiscloud/plugin-sdk)
-  sdk.go                # SparkPlugin interface, ManifestInfo, HandleRequest/Response, PluginError
-  store.go              # ResourceStore interface (sdk-facing, stdlib only)
-  rm.go                 # ResourceManager interface, DeleteGuardRule, DeletionPolicy, DeletionHandle
-  events.go             # EventBus interface, Event, NoopEventBus
-plugins/
-  aws-emr-spark/        # EMR + EMR-on-EKS plugin (standalone module: github.com/jaiscloud/plugin-aws-emr-spark)
-    main.go             # var Plugin sdk.SparkPlugin = plugin.New()  (package main, buildmode=plugin)
-    Makefile            # build / test / clean targets
-    Dockerfile          # multi-stage build → aws-emr-spark.so
-    internal/
-      executor/spark/
-        executor.go     # SparkExecutor interface, SparkJob, SparkState, NewExecutor factory
-        config.go       # SparkConfig, ClusterSize (Small/Medium/Large), SparkConfigFrom
-        mock.go         # MockExecutor — immediate COMPLETED, ForceState, Reset
-        k8s.go          # K8sExecutor — wraps MockExecutor, logs spark-submit args
-        command.go      # SparkSubmitArgs — builds --master k8s:// arg list
-        poller.go       # StatusPoller — background goroutine, OnStateChange callback
-      provider/
-        emr/            # EMRProvider — RunJobFlow, DescribeCluster, ListClusters,
-                        #   TerminateJobFlows, AddJobFlowSteps, DescribeStep, ListSteps,
-                        #   CancelSteps, tag operations
-        emrcontainers/  # EMRContainersProvider — virtual clusters, job runs
-      plugin/
-        emrsparkplugin.go  # EMRSparkPlugin struct — Init, Manifest, Handle, Shutdown, Reset
 internal/
+  executor/spark/
+    executor.go         # SparkExecutor interface, SparkJob, SparkState, NewExecutor factory
+    config.go           # SparkConfig, ClusterSize (Small/Medium/Large), SparkConfigFrom
+    mock.go             # MockExecutor — immediate COMPLETED, ForceState, Reset
+    k8s.go              # K8sExecutor — submits batch/v1 Jobs to Kubernetes
+    k8sclient.go        # stdlib K8s HTTP client (no client-go)
+    command.go          # SparkSubmitArgs — builds --master k8s:// arg list
+    poller.go           # StatusPoller — background goroutine, OnStateChange callback
   adapter/              # Cloud wire-protocol layer (no business logic)
     adapter.go          # CloudAdapter interface (Cloud, DetectAndDecode, ServiceToProvider); Codec interface
     aws/
@@ -103,21 +74,16 @@ internal/
     server.go           # Server — holds single CloudAdapter; handleCloudRequest
     middleware/         # Recovery, RequestID, Logging, Metrics (Prometheus + cloud label)
   model/                # Shared types: NormalizedRequest, ProviderResponse, ProviderError
-  plugin/               # Host-side plugin management
-    manager.go          # PluginManager — LoadAll, Shutdown, Reset, InjectForTest
-    routes.go           # registerPluginRoutes, serviceToProviderPrefix
-    adapters.go         # Bridge adapters: NewSDKStoreAdapter, NewSDKResourceManager, convertRule
   provider/             # Business logic layer
     provider.go         # HandlerFunc type, OK() helper
-    registry.go         # Registry — Dispatch (exact match → plugin wildcard → error)
-                        # RegisterPlugin(prefix, handler) for plugin wildcard fallback
+    registry.go         # Registry — Dispatch (exact match → error)
     cache/              # ElastiCache provider
     catalog/            # Glue Data Catalog provider
     compute/            # EC2 provider
     container/          # ECS provider
     dns/                # Route53 provider
-    emr/                # EMR provider (built-in stub)
-    emroneks/           # EMR-on-EKS provider (built-in stub)
+    emr/                # EMRProvider — RunJobFlow, steps, tags; wires SparkExecutor + StatusPoller
+    emroneks/           # EMRContainersProvider — virtual clusters, job runs; wires SparkExecutor
     function/           # FunctionProvider — Lambda (echo invoke)
     iam/                # IAMProvider + STS (roles, policies, users, access keys)
     notification/       # SNSProvider (topics, subscriptions, fan-out to SQS)
@@ -161,11 +127,9 @@ HTTP request
       → inject: nr.Clock, nr.Region, nr.AccountID, nr.Cloud, nr.ResourceID (all clouds)
       → middleware.WithRequestLabels(ctx, cloud, service, action)
       → Registry.Dispatch("ProviderPrefix.Action", nr)
-          → exact match: built-in provider handler
-          → plugin wildcard fallback: PluginManager → plugin.Handle
-              → plugin.EMRSparkPlugin.Handle → EMRProvider / EMRContainersProvider
-                  → sdk.ResourceStore (store bridge)
-                  → SparkExecutor (mock or k8s)
+          → exact match: built-in provider handler (EMR, EMRContainers, etc.)
+              → EMRProvider / EMRContainersProvider
+                  → SparkExecutor (mock or k8s, wired at startup)
                   → StatusPoller
       → <ServiceCodec>.Encode            (XML or JSON or raw bytes)
   → HTTP response
@@ -174,7 +138,7 @@ HTTP request
 Key design rules:
 - **No layer imports its caller.** The `model` package breaks the cycle between `gateway` and `adapter`.
 - **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection.
-- **Plugins never import the host module.** They import only `github.com/jaiscloud/plugin-sdk` (stdlib only). The host bridges host types to SDK interfaces at the boundary.
+- **Executors are wired at startup.** `JAISCLOUD_SPARK_MODE` controls which `SparkExecutor` is created; providers receive it via the `WithExecutor` option.
 
 ### Single-cloud adapter model
 
@@ -253,12 +217,8 @@ go build -o jaiscloud ./cmd/jaiscloud/
 # Run in GCP cloud mode (stub — returns 501 for all requests)
 ./jaiscloud start --cloud gcp
 
-# Load EMR Spark plugin from a directory
-./jaiscloud start --mode full --plugin-dir /path/to/plugins
-
-# Build the EMR Spark plugin .so
-cd plugins/aws-emr-spark && make build
-# Produces aws-emr-spark.so in the root of the repo
+# Enable EMR Spark real K8s submission
+JAISCLOUD_SPARK_MODE=k8s ./jaiscloud start --mode full --dsn "postgres://..."
 
 # Enable Prometheus metrics
 ./jaiscloud start --metrics        # served at /metrics
@@ -272,7 +232,7 @@ JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
 JAISCLOUD_METRICS=true
-JAISCLOUD_PLUGIN_DIR=        # path to directory containing .so plugin files
+JAISCLOUD_SPARK_MODE=        # "mock" or "k8s" (default: off = immediate completion)
 ```
 
 > **Config loading:** `config.Load()` reads from the global Viper instance. All `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not a local `viper.New()` instance) or flags will be silently ignored and defaults used.
@@ -296,12 +256,6 @@ JAISCLOUD_PLUGIN_DIR=        # path to directory containing .so plugin files
 ```bash
 # Unit + store tests (no server needed)
 go test -race ./internal/...
-
-# Plugin SDK tests
-cd sdk && go test -race ./...
-
-# Plugin unit tests (does not require -buildmode=plugin)
-cd plugins/aws-emr-spark && go test -race ./internal/...
 
 # Integration tests — lite mode (no external deps)
 ./jaiscloud start &
@@ -330,102 +284,23 @@ Current integration test coverage: **SQS, IAM/STS, SNS, DynamoDB, S3, Lambda**.
 | `PostgresDynamoDBItemStore` | `jc_dynamodb_items` |
 | `PostgresS3ObjectMetaStore` | `jc_s3_objects` |
 | `MemoryBlobStore` | in-memory blob bytes |
-| `PluginManager` | calls `Reset()` on every loaded plugin |
 
 > **Note:** Even in full mode, blob bytes (`BlobStore`) use `MemoryBlobStore`. `LocalFSBlobStore` is implemented but not yet wired into `main.go`. Swap the `NewMemoryBlobStore()` call in `startCmd` for `NewLocalFSBlobStore(dir)` to enable on-disk blob persistence.
 
 ---
 
-## Plugin system
+## Spark executor (`internal/executor/spark/`)
 
-### Overview
+The `SparkExecutor` interface drives EMR step execution and EMR-on-EKS job runs:
 
-Plugins are Go `.so` files compiled with `-buildmode=plugin`. The host discovers them at startup by scanning `--plugin-dir` for `*.so` files. Each plugin must export a package-level variable:
-
-```go
-var Plugin sdk.SparkPlugin = plugin.New()
-```
-
-The host lifecycle:
-
-```
-plugin.Open(.so) → Lookup("Plugin") → Init(ctx, rm, store) → Manifest() → RegisterPlugin routes
-                                                                          ↓ on request
-                                                            Handle(ctx, req) → HandleResponse
-                                                                          ↓ on shutdown
-                                                            Shutdown(ctx)
-                                                                          ↓ on reset
-                                                            Reset()
-```
-
-### Plugin SDK (`sdk/`)
-
-The SDK module (`github.com/jaiscloud/plugin-sdk`) uses only the Go standard library. Plugins import it; they never import the host module `jaiscloud`.
-
-Key interfaces:
-
-```go
-type SparkPlugin interface {
-    Init(ctx context.Context, rm ResourceManager, store ResourceStore) error
-    Manifest() ManifestInfo
-    Handle(ctx context.Context, req HandleRequest) HandleResponse
-    Shutdown(ctx context.Context) error
-    Reset()
-}
-
-type ResourceStore interface {
-    Exists(ctx, resourceType, id string) (bool, error)
-    Get(ctx, resourceType, id string) (ResourceEntry, error)
-    List(ctx, resourceType, prefix string) ([]ResourceEntry, error)
-    Create(ctx context.Context, e ResourceEntry) error
-    Update(ctx context.Context, e ResourceEntry) error
-    Delete(ctx, resourceType, id string) error
-}
-
-type ResourceManager interface {
-    CheckParent(ctx, parentType, parentID, notFoundCode, notFoundMsg string, httpStatus int) error
-    AcquireDelete(ctx, resourceType, resourceID string) (DeletionHandle, error)
-    RegisterRules(rules []DeleteGuardRule)
-}
-```
-
-### Bridge adapters (`internal/plugin/adapters.go`)
-
-The host bridges its concrete types to SDK interfaces at the plugin boundary:
-
-| Function | Bridges |
-|---|---|
-| `NewSDKStoreAdapter(store.ResourceStore)` | `store.ResourceStore` → `sdk.ResourceStore` |
-| `NewSDKResourceManager(*resourcemgr.Manager)` | `*resourcemgr.Manager` → `sdk.ResourceManager` |
-| `convertRule(sdk.DeleteGuardRule)` | `sdk.DeleteGuardRule` → `resourcemgr.DeleteGuardRule` (translates all callback fields) |
-
-### Registry plugin wildcard
-
-`provider.Registry` supports a two-tier dispatch:
-1. **Exact match** — `"EMR.RunJobFlow"` hits a built-in handler.
-2. **Plugin wildcard** — `registry.RegisterPlugin("EMR", handler)` registers a catch-all for all `EMR.*` actions not matched exactly. The plugin's `Handle` method dispatches internally.
-
-```go
-registry.RegisterPlugin("EMR", func(ctx, nr) (*ProviderResponse, error) {
-    resp := plugin.Handle(ctx, toSDKRequest(nr))
-    ...
-})
-```
-
-### EMR Spark plugin (`plugins/aws-emr-spark/`)
-
-The plugin is a self-contained module. Its structure:
-
-- **`EMRSparkPlugin`** (`internal/plugin/emrsparkplugin.go`) — extracted to a testable non-main package; `main.go` is a one-liner.
-- **`SparkExecutor`** interface — `Submit`, `Status`, `Cancel`, `Close`. Implementations:
-  - `MockExecutor` — immediate `COMPLETED`, supports `ForceState` and `Reset` for tests.
-  - `K8sExecutor` — wraps `MockExecutor`; logs `spark-submit` args via `SparkSubmitArgs(job)`. Real client-go integration is a future phase.
-- **`StatusPoller`** — single background goroutine; polls non-terminal jobs at a configurable interval; fires `OnStateChange` callbacks. `Stop()` is safe to call multiple times (uses `sync.Once`).
+- **`MockExecutor`** — immediate `COMPLETED`, supports `ForceState` and `Reset` for tests.
+- **`K8sExecutor`** — submits real `batch/v1 Jobs` to Kubernetes via stdlib HTTP (no client-go). Reads auth from in-cluster service account or `JAISCLOUD_K8S_*` env vars.
+- **`StatusPoller`** — single background goroutine; polls non-terminal jobs at a configurable interval; fires `OnStateChange` callbacks. `Stop()` is safe to call multiple times (`sync.Once`).
 - **`SparkSubmitArgs`** — builds the full `spark-submit` argument list including `--master k8s://`, `--deploy-mode cluster`, container image, namespace, service account, resource profile, and S3 event-log args.
-- **`EMRProvider`** — handles `RunJobFlow`, `DescribeCluster`, `ListClusters`, `TerminateJobFlows`, `AddJobFlowSteps`, `DescribeStep`, `ListSteps`, `CancelSteps`, and tag operations. Steps are stored under key `clusterID/stepID`.
-- **`EMRContainersProvider`** — handles virtual clusters and job runs. `pathOrParam` helper reads `_path_<key>` REST path parameters before falling back to body params.
 
-Spark mode is controlled by `JAISCLOUD_SPARK_MODE` env var (default `"mock"`). Set to `"k8s"` to use the K8s executor path.
+EMR and EMRContainers providers accept a `WithExecutor(exec, cfg)` option. When an executor is wired, `AddJobFlowSteps` / `StartJobRun` call `Submit`, and state changes from the `StatusPoller` feed back via `OnStateChange`. Without an executor, steps complete instantly (mock behaviour).
+
+`JAISCLOUD_SPARK_MODE` controls which executor is created at startup (`"off"`/`""` = instant completion, `"mock"` = MockExecutor, `"k8s"` = K8sExecutor).
 
 ---
 
@@ -468,7 +343,7 @@ defer handle.Release()
 
 ### RegisterRules
 
-Plugins call `rm.RegisterRules([]sdk.DeleteGuardRule{...})` during `Init` to register their own resource dependency rules. Thread-safe.
+Providers call `rm.RegisterRules([]resourcemgr.DeleteGuardRule{...})` at construction time to register their own resource dependency rules. Thread-safe.
 
 ### StoreAdapter (`internal/resourcemgr/adapter.go`)
 

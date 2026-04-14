@@ -8,22 +8,58 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
 
-// EMRContainersProvider handles EMR on EKS: virtual clusters, job runs, managed endpoints.
-type EMRContainersProvider struct {
-	resources store.ResourceStore
-	bus       *events.EventBus
+// jobRef identifies the store resource a Spark job maps to and carries the
+// request context needed to publish EventBus events from async callbacks.
+type jobRef struct {
+	vcID      string
+	jrID      string
+	region    string
+	accountID string
+	cloud     model.Cloud
 }
 
-func New(resources store.ResourceStore, bus *events.EventBus) *EMRContainersProvider {
-	return &EMRContainersProvider{resources: resources, bus: bus}
+// EMRContainersProvider handles EMR on EKS: virtual clusters, job runs, managed endpoints.
+type EMRContainersProvider struct {
+	resources   store.ResourceStore
+	bus         *events.EventBus
+	executor    spark.SparkExecutor // nil = instant completion
+	executorCfg spark.SparkConfig
+	poller      *spark.StatusPoller
+	jobRefs     sync.Map // sparkJobID → jobRef
+}
+
+// Option configures EMRContainersProvider.
+type Option func(*EMRContainersProvider)
+
+// WithExecutor attaches a SparkExecutor and its config.
+func WithExecutor(ex spark.SparkExecutor, cfg spark.SparkConfig) Option {
+	return func(p *EMRContainersProvider) { p.executor = ex; p.executorCfg = cfg }
+}
+
+// WithPoller attaches a StatusPoller.
+func WithPoller(pol *spark.StatusPoller) Option {
+	return func(p *EMRContainersProvider) { p.poller = pol }
+}
+
+// SetPoller sets the poller after construction.
+func (p *EMRContainersProvider) SetPoller(pol *spark.StatusPoller) { p.poller = pol }
+
+func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRContainersProvider {
+	p := &EMRContainersProvider{resources: resources, bus: bus}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
@@ -68,12 +104,12 @@ type virtualCluster struct {
 	Tags        map[string]string `json:"tags"`
 }
 
-func (vc virtualCluster) toWire(region, accountID string) map[string]any {
+func (vc virtualCluster) toWire(resourceID func(string, string) string) map[string]any {
 	return map[string]any{
 		"id":    vc.ID,
 		"name":  vc.Name,
 		"state": vc.State,
-		"arn":   fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", region, accountID, vc.ID),
+		"arn":   resourceID("emr-virtual-cluster", vc.ID),
 		"containerProvider": map[string]any{
 			"type": "EKS",
 			"id":   vc.EksCluster,
@@ -95,6 +131,7 @@ type jobRun struct {
 	Name             string            `json:"name"`
 	VirtualClusterID string            `json:"virtualClusterId"`
 	State            string            `json:"state"` // PENDING, SUBMITTED, RUNNING, FAILED, CANCELLED, CANCEL_PENDING, COMPLETED
+	FailureReason    string            `json:"failureReason,omitempty"`
 	ReleaseLabel     string            `json:"releaseLabel"`
 	ExecutionRole    string            `json:"executionRoleArn"`
 	CreatedAt        time.Time         `json:"createdAt"`
@@ -102,19 +139,23 @@ type jobRun struct {
 	JobDriver        map[string]any    `json:"jobDriver"`
 }
 
-func (jr jobRun) toWire(region, accountID string) map[string]any {
-	return map[string]any{
+func (jr jobRun) toWire(resourceID func(string, string) string) map[string]any {
+	m := map[string]any{
 		"id":               jr.ID,
 		"name":             jr.Name,
 		"virtualClusterId": jr.VirtualClusterID,
 		"state":            jr.State,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/jobruns/%s", region, accountID, jr.VirtualClusterID, jr.ID),
+		"arn":              resourceID("emr-job-run", jr.VirtualClusterID+"/"+jr.ID),
 		"releaseLabel":     jr.ReleaseLabel,
 		"executionRoleArn": jr.ExecutionRole,
 		"createdAt":        jr.CreatedAt.Format(time.RFC3339),
 		"tags":             jr.Tags,
 		"jobDriver":        jr.JobDriver,
 	}
+	if jr.FailureReason != "" {
+		m["failureReason"] = jr.FailureReason
+	}
+	return m
 }
 
 // ─── Managed Endpoint types ───────────────────────────────────────────────────
@@ -131,7 +172,7 @@ type managedEndpoint struct {
 	Tags             map[string]string `json:"tags"`
 }
 
-func (me managedEndpoint) toWire(region, accountID string) map[string]any {
+func (me managedEndpoint) toWire(resourceID func(string, string) string) map[string]any {
 	return map[string]any{
 		"id":               me.ID,
 		"name":             me.Name,
@@ -140,7 +181,7 @@ func (me managedEndpoint) toWire(region, accountID string) map[string]any {
 		"releaseLabel":     me.ReleaseLabel,
 		"executionRoleArn": me.ExecutionRole,
 		"state":            me.State,
-		"arn":              fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s/endpoints/%s", region, accountID, me.VirtualClusterID, me.ID),
+		"arn":              resourceID("emr-managed-endpoint", me.VirtualClusterID+"/"+me.ID),
 		"createdAt":        me.CreatedAt.Format(time.RFC3339),
 		"tags":             me.Tags,
 	}
@@ -203,7 +244,7 @@ func (p *EMRContainersProvider) DescribeVirtualCluster(ctx context.Context, nr *
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
-	return provider.OK(map[string]any{"virtualCluster": vc.toWire(nr.Region, nr.AccountID)}), nil
+	return provider.OK(map[string]any{"virtualCluster": vc.toWire(nr.ResourceID)}), nil
 }
 
 func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -223,7 +264,7 @@ func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, nr *mod
 		if eksFilter != "" && vc.EksCluster != eksFilter {
 			continue
 		}
-		list = append(list, vc.toWire(nr.Region, nr.AccountID))
+		list = append(list, vc.toWire(nr.ResourceID))
 	}
 	return provider.OK(map[string]any{"virtualClusters": list}), nil
 }
@@ -238,11 +279,17 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 
 	id := shortID()
 	name := strParam(nr.Params, "name")
+
+	initialState := "COMPLETED"
+	if p.executor != nil {
+		initialState = "PENDING"
+	}
+
 	jr := jobRun{
 		ID:               id,
 		Name:             name,
 		VirtualClusterID: vcID,
-		State:            "RUNNING",
+		State:            initialState,
 		ReleaseLabel:     strParam(nr.Params, "releaseLabel"),
 		ExecutionRole:    strParam(nr.Params, "executionRoleArn"),
 		CreatedAt:        time.Now().UTC(),
@@ -252,33 +299,66 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		jr.JobDriver = jd
 	}
 
-	// Composite key: virtualClusterID/jobRunID
 	storeID := vcID + "/" + id
 	data, _ := json.Marshal(jr)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtJobRun, ID: storeID, Data: data}); err != nil {
 		return nil, err
 	}
 
-	// Transition immediately to COMPLETED (built-in path has no real executor).
-	jr.State = "COMPLETED"
-	p.saveJobRun(ctx, jr)
-	p.bus.Publish(events.Event{
-		Type: events.EventEMRJobRunState,
-		Payload: events.EMRJobRunStateEvent{
-			VirtualClusterID: vcID,
-			JobRunID:         id,
-			Name:             name,
-			State:            "COMPLETED",
-			Region:           nr.Region,
-			AccountID:        nr.AccountID,
-			Cloud:            nr.Cloud,
-		},
-	})
+	if p.executor != nil {
+		var entryPoint, sparkParams string
+		var args []string
+		if jd, ok := nr.Params["jobDriver"].(map[string]any); ok {
+			if sc, ok := jd["sparkSubmitJobDriver"].(map[string]any); ok {
+				entryPoint, _ = sc["entryPoint"].(string)
+				sparkParams, _ = sc["sparkSubmitParameters"].(string)
+				if raw, ok := sc["entryPointArguments"].([]any); ok {
+					for _, a := range raw {
+						if s, ok := a.(string); ok {
+							args = append(args, s)
+						}
+					}
+				}
+			}
+		}
+		job := spark.BuildSparkJob(id, entryPoint, "", args, sparkParams, p.executorCfg)
+		if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
+			jr.State = "FAILED"
+			p.saveJobRun(ctx, jr)
+		} else {
+			p.jobRefs.Store(id, jobRef{
+					vcID:      vcID,
+					jrID:      id,
+					region:    nr.Region,
+					accountID: nr.AccountID,
+					cloud:     nr.Cloud,
+				})
+			if p.poller != nil {
+				p.poller.Track(id, spark.StatePending)
+			}
+		}
+	} else {
+		// Instant completion path — transition to COMPLETED and publish event.
+		jr.State = "COMPLETED"
+		p.saveJobRun(ctx, jr)
+		p.bus.Publish(events.Event{
+			Type: events.EventEMRJobRunState,
+			Payload: events.EMRJobRunStateEvent{
+				VirtualClusterID: vcID,
+				JobRunID:         id,
+				Name:             name,
+				State:            "COMPLETED",
+				Region:           nr.Region,
+				AccountID:        nr.AccountID,
+				Cloud:            nr.Cloud,
+			},
+		})
+	}
 
 	return provider.OK(map[string]any{
 		"id":               id,
 		"name":             name,
-		"arn":              nr.ResourceID("emr-job-run", id),
+		"arn":              nr.ResourceID("emr-job-run", vcID+"/"+id),
 		"virtualClusterId": vcID,
 	}), nil
 }
@@ -290,7 +370,11 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
-	jr.State = "CANCEL_PENDING"
+	if p.executor != nil {
+		_ = p.executor.Cancel(ctx, jobID)
+		p.jobRefs.Delete(jobID)
+	}
+	jr.State = "CANCELLED"
 	p.saveJobRun(ctx, jr)
 	p.bus.Publish(events.Event{
 		Type: events.EventEMRJobRunState,
@@ -298,7 +382,7 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 			VirtualClusterID: vcID,
 			JobRunID:         jobID,
 			Name:             jr.Name,
-			State:            "CANCEL_PENDING",
+			State:            "CANCELLED",
 			Region:           nr.Region,
 			AccountID:        nr.AccountID,
 			Cloud:            nr.Cloud,
@@ -314,7 +398,7 @@ func (p *EMRContainersProvider) DescribeJobRun(ctx context.Context, nr *model.No
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
-	return provider.OK(map[string]any{"jobRun": jr.toWire(nr.Region, nr.AccountID)}), nil
+	return provider.OK(map[string]any{"jobRun": jr.toWire(nr.ResourceID)}), nil
 }
 
 func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -332,7 +416,7 @@ func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, nr *model.Norma
 		if stateFilter != "" && jr.State != stateFilter {
 			continue
 		}
-		list = append(list, jr.toWire(nr.Region, nr.AccountID))
+		list = append(list, jr.toWire(nr.ResourceID))
 	}
 	return provider.OK(map[string]any{"jobRuns": list}), nil
 }
@@ -365,7 +449,7 @@ func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *m
 	return provider.OK(map[string]any{
 		"id":               id,
 		"name":             me.Name,
-		"arn":              nr.ResourceID("emr-managed-endpoint", id),
+		"arn":              nr.ResourceID("emr-managed-endpoint", vcID+"/"+id),
 		"virtualClusterId": vcID,
 	}), nil
 }
@@ -389,7 +473,7 @@ func (p *EMRContainersProvider) DescribeManagedEndpoint(ctx context.Context, nr 
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Managed endpoint not found", HTTPStatus: http.StatusNotFound}
 	}
-	return provider.OK(map[string]any{"endpoint": me.toWire(nr.Region, nr.AccountID)}), nil
+	return provider.OK(map[string]any{"endpoint": me.toWire(nr.ResourceID)}), nil
 }
 
 func (p *EMRContainersProvider) ListManagedEndpoints(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -407,7 +491,7 @@ func (p *EMRContainersProvider) ListManagedEndpoints(ctx context.Context, nr *mo
 		if stateFilter != "" && me.State != stateFilter {
 			continue
 		}
-		list = append(list, me.toWire(nr.Region, nr.AccountID))
+		list = append(list, me.toWire(nr.ResourceID))
 	}
 	return provider.OK(map[string]any{"endpoints": list}), nil
 }
@@ -428,6 +512,68 @@ func (p *EMRContainersProvider) UntagResource(ctx context.Context, nr *model.Nor
 
 func (p *EMRContainersProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{"tags": map[string]string{}}), nil
+}
+
+// ─── Executor lifecycle ───────────────────────────────────────────────────────
+
+func (p *EMRContainersProvider) updateJobRunState(ctx context.Context, vcID, jrID, newState, message, region, accountID string, cloud model.Cloud) {
+	jr, err := p.loadJobRun(ctx, vcID, jrID)
+	if err != nil {
+		return
+	}
+	jr.State = newState
+	if newState == "FAILED" && message != "" {
+		jr.FailureReason = message
+	}
+	p.saveJobRun(ctx, jr)
+	p.bus.Publish(events.Event{
+		Type: events.EventEMRJobRunState,
+		Payload: events.EMRJobRunStateEvent{
+			VirtualClusterID: vcID,
+			JobRunID:         jrID,
+			Name:             jr.Name,
+			State:            newState,
+			Region:           region,
+			AccountID:        accountID,
+			Cloud:            cloud,
+		},
+	})
+}
+
+// OnStateChange is called by the StatusPoller on each state transition.
+func (p *EMRContainersProvider) OnStateChange(ev spark.StateChangeEvent) {
+	v, ok := p.jobRefs.Load(ev.JobID)
+	if !ok {
+		return
+	}
+	jr := v.(jobRef)
+	p.updateJobRunState(context.Background(), jr.vcID, jr.jrID, string(ev.NewState), ev.Message, jr.region, jr.accountID, jr.cloud)
+	if ev.NewState.IsTerminal() {
+		p.jobRefs.Delete(ev.JobID)
+	}
+}
+
+// Reset clears in-memory state and resets the underlying executor.
+func (p *EMRContainersProvider) Reset() {
+	p.jobRefs.Range(func(k, _ any) bool { p.jobRefs.Delete(k); return true })
+	switch ex := p.executor.(type) {
+	case *spark.MockExecutor:
+		ex.Reset()
+	case *spark.DockerExecutor:
+		ex.Reset()
+	case *spark.K8sExecutor:
+		ex.Reset()
+	}
+}
+
+// Shutdown stops the poller and closes the executor.
+func (p *EMRContainersProvider) Shutdown(ctx context.Context) {
+	if p.poller != nil {
+		p.poller.Stop()
+	}
+	if p.executor != nil {
+		p.executor.Close()
+	}
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────

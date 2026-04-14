@@ -78,35 +78,25 @@ jobs:
           if [ -f server.pid ]; then kill $(cat server.pid) || true; fi
 
   # ─── Docker build smoke-test ───────────────────────────────────────────────
-  # Builds all three images for linux/amd64 on every PR to catch Dockerfile
-  # errors early. Images are not pushed — push happens only on merge to main
-  # or on a version tag (see docker-publish.yml).
+  # Builds the image for linux/amd64 on every PR to catch Dockerfile errors early.
+  # Images are not pushed — push happens only on merge to main or on a version tag
+  # (see docker-publish.yml).
   docker-build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: jaiscloud-lite
-            dockerfile: Dockerfile
-          - image: jaiscloud-full
-            dockerfile: Dockerfile.full
-          - image: jaiscloud-sdk
-            dockerfile: Dockerfile.sdk
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ${{ matrix.image }} (linux/amd64, no push)
+      - name: Build jaiscloud (linux/amd64, no push)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
           push: false
           platforms: linux/amd64
           build-args: VERSION=ci-${{ github.sha }}
-          tags: ${{ matrix.image }}:ci
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          tags: jaiscloud:ci
+          cache-from: type=gha,scope=jaiscloud
+          cache-to: type=gha,mode=max,scope=jaiscloud

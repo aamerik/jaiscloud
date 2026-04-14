@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jaiscloud/plugin-aws-emr-spark/internal/executor/spark"
+	"jaiscloud/internal/executor/spark"
 )
 
 func TestMockExecutor_Submit_Status_Complete(t *testing.T) {

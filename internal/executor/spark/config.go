@@ -24,26 +24,28 @@ type ResourceProfile struct {
 }
 
 // clusterSizeProfiles maps named sizes to resource profiles.
+// CPU and memory values use Spark conf format: integer cores, and Spark memory
+// strings (e.g. "1g", "512m") — NOT Kubernetes unit notation ("500m", "1Gi").
 var clusterSizeProfiles = map[ClusterSize]ResourceProfile{
 	SizeSmall: {
-		DriverCPU:      "500m",
-		DriverMemory:   "1Gi",
-		ExecutorCPU:    "500m",
-		ExecutorMemory: "1Gi",
+		DriverCPU:      "1",
+		DriverMemory:   "1g",
+		ExecutorCPU:    "1",
+		ExecutorMemory: "1g",
 		ExecutorCount:  1,
 	},
 	SizeMedium: {
 		DriverCPU:      "1",
-		DriverMemory:   "2Gi",
+		DriverMemory:   "2g",
 		ExecutorCPU:    "1",
-		ExecutorMemory: "2Gi",
+		ExecutorMemory: "2g",
 		ExecutorCount:  2,
 	},
 	SizeLarge: {
 		DriverCPU:      "2",
-		DriverMemory:   "4Gi",
+		DriverMemory:   "4g",
 		ExecutorCPU:    "2",
-		ExecutorMemory: "4Gi",
+		ExecutorMemory: "4g",
 		ExecutorCount:  4,
 	},
 }

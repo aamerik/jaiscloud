@@ -67,10 +67,12 @@ func (c *k8sClient) readToken() (string, error) {
 // tokenSource is either:
 //   - a file path (if it exists on disk) → token is re-read on each request
 //   - a literal token string             → used as-is
-//   - empty string                        → no authentication
+//   - empty string                        → no authentication (use clientCertFile/Key instead)
 //
-// caFile is the path to a PEM CA certificate. Empty string uses system roots.
-func newK8sClient(apiURL, tokenSource, caFile, namespace string) (*k8sClient, error) {
+// caFile is the path to a PEM CA certificate file. Empty string uses system roots.
+// clientCertFile / clientKeyFile are paths to PEM client certificate + key for
+// mutual TLS authentication (used by Docker Desktop and most self-hosted clusters).
+func newK8sClient(apiURL, tokenSource, caFile, clientCertFile, clientKeyFile, namespace string) (*k8sClient, error) {
 	c := &k8sClient{
 		apiURL:    strings.TrimRight(apiURL, "/"),
 		namespace: namespace,
@@ -99,6 +101,15 @@ func newK8sClient(apiURL, tokenSource, caFile, namespace string) (*k8sClient, er
 		tlsCfg.RootCAs = pool
 	}
 
+	// Client certificate authentication (Docker Desktop / self-hosted clusters).
+	if clientCertFile != "" && clientKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("k8s: load client cert: %w", err)
+		}
+		tlsCfg.Certificates = append(tlsCfg.Certificates, cert)
+	}
+
 	base := &http.Transport{TLSClientConfig: tlsCfg}
 	c.httpClient = &http.Client{
 		Transport: &bearingTransport{base: base, client: c},
@@ -109,7 +120,7 @@ func newK8sClient(apiURL, tokenSource, caFile, namespace string) (*k8sClient, er
 // newInClusterClient auto-detects in-cluster config from the standard
 // service account token mount. Falls back gracefully if not in a pod.
 func newInClusterClient(namespace string) (*k8sClient, error) {
-	return newK8sClient(DefaultAPIServer, inClusterTokenFile, inClusterCAFile, namespace)
+	return newK8sClient(DefaultAPIServer, inClusterTokenFile, inClusterCAFile, "", "", namespace)
 }
 
 // ── Minimal K8s type stubs ──────────────────────────────────────────────────
@@ -163,8 +174,10 @@ type batchJobStatus struct {
 }
 
 type jobCondition struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // ── API operations ──────────────────────────────────────────────────────────
