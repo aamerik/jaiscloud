@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	resTypeRule             = "eb_rule"
-	resTypeTarget           = "eb_target"
+	resTypeRule              = "eb_rule"
+	resTypeTarget            = "eb_target"
 	jaiscloudHostPlaceholder = "jaiscloud-host"
 )
 
@@ -436,7 +436,7 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 		name = "emr-step-" + ev.StepID
 	}
 	detail := map[string]any{
-		"jobFlowId":    ev.JobFlowID,
+		"clusterId":    ev.JobFlowID,
 		"stepId":       ev.StepID,
 		"state":        ev.State,
 		"severity":     "INFO",
