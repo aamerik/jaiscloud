@@ -83,6 +83,11 @@ type SparkConfig struct {
 	// RoleMappings maps IAM role ARNs to K8s service accounts (k8s executor).
 	RoleMappings map[string]string
 
+	// SparkSubmitPath overrides the default spark-submit binary path in the container.
+	// Defaults to "/opt/spark/bin/spark-submit". (Apacher Spark)
+	// EMR images use /usr/bin/spark-submit.
+	SparkSubmitPath string
+
 	// RemoteURL is the Spark Standalone master REST API URL (remote executor).
 	// Example: "http://spark-master:6066"
 	RemoteURL string
@@ -107,6 +112,9 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_SPARK_IMAGE"); v != "" {
 		cfg.Image = v
+	}
+	if v := os.Getenv("JAISCLOUD_K8S_SPARK_SUBMIT"); v != "" {
+		cfg.SparkSubmitPath = v
 	}
 	for _, o := range overrides {
 		o(&cfg)

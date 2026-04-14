@@ -279,24 +279,37 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 		containerArgs = job.Args
 	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
 		// Pattern 2: command-runner.jar (EMR classic style)
-		cmd = []string{resolveContainerBinary(job.Args[0])}
+		binary := resolveContainerBinary(job.Args[0])
+		if e.cfg.SparkSubmitPath != "" && binary == "/opt/spark/bin/spark-submit" {
+			binary = e.cfg.SparkSubmitPath
+		}
+		cmd = []string{binary}
 		containerArgs = rewriteSparkMaster(job.Args[1:])
 	default:
-		// Resolve local:// URIs to absolute paths in the image for user convenience
-		// (e.g. local://app.jar).
-		if after, ok := strings.CutPrefix(job.JarURI, "local://"); ok {
-			job.JarURI = after
+		// Pattern 3: Real Jar - Construct full spark-submit invocation.
+		// Preserve local:// prefix - in k8s cluster deploy-mode it tell
+		// spark the jar is alredy present in the driver/executor image,
+		// avoiding the need for spark.kubernetes.file.upload.path.
+		sparkSubmit := e.cfg.SparkSubmitPath
+		if sparkSubmit == "" {
+			sparkSubmit = "/opt/spark/bin/spark-submit"
 		}
-		// Pattern 3: Real Jar - Construct full spark-submit invocation
-		cmd = []string{"/opt/spark/bin/spark-submit"}
+		cmd = []string{sparkSubmit}
 		containerArgs = SparkSubmitArgs(job)
+	}
+
+	// Use custome image from SparkCOnf if porvided; otherwise fall back to
+	// the executor's default image (JAISCLOUD_K8S_SPARK_IMAGE).
+	image := e.cfg.Image
+	if v, ok := job.SparkConf["spark.kubernetes.container.image"]; ok && v != "" {
+		image = v
 	}
 
 	spec := podSpec{
 		RestartPolicy: "Never",
 		Containers: []container{{
 			Name:    "spark-submit",
-			Image:   e.cfg.Image,
+			Image:   image,
 			Command: cmd,
 			Args:    containerArgs,
 		}},

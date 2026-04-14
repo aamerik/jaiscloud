@@ -36,32 +36,32 @@ func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 		// AMIs
 		"Compute.DescribeImages": p.DescribeImages,
 		// Security Groups
-		"Compute.CreateSecurityGroup":            p.CreateSecurityGroup,
-		"Compute.DescribeSecurityGroups":         p.DescribeSecurityGroups,
-		"Compute.DeleteSecurityGroup":            p.DeleteSecurityGroup,
-		"Compute.AuthorizeSecurityGroupIngress":  p.AuthorizeSecurityGroupIngress,
-		"Compute.AuthorizeSecurityGroupEgress":   p.AuthorizeSecurityGroupEgress,
-		"Compute.RevokeSecurityGroupIngress":     p.RevokeSecurityGroupIngress,
+		"Compute.CreateSecurityGroup":           p.CreateSecurityGroup,
+		"Compute.DescribeSecurityGroups":        p.DescribeSecurityGroups,
+		"Compute.DeleteSecurityGroup":           p.DeleteSecurityGroup,
+		"Compute.AuthorizeSecurityGroupIngress": p.AuthorizeSecurityGroupIngress,
+		"Compute.AuthorizeSecurityGroupEgress":  p.AuthorizeSecurityGroupEgress,
+		"Compute.RevokeSecurityGroupIngress":    p.RevokeSecurityGroupIngress,
 		// Key Pairs
-		"Compute.CreateKeyPair":   p.CreateKeyPair,
+		"Compute.CreateKeyPair":    p.CreateKeyPair,
 		"Compute.DescribeKeyPairs": p.DescribeKeyPairs,
-		"Compute.DeleteKeyPair":   p.DeleteKeyPair,
-		"Compute.ImportKeyPair":   p.ImportKeyPair,
+		"Compute.DeleteKeyPair":    p.DeleteKeyPair,
+		"Compute.ImportKeyPair":    p.ImportKeyPair,
 		// VPC
-		"Compute.CreateVpc":       p.CreateVpc,
-		"Compute.DescribeVpcs":    p.DescribeVpcs,
-		"Compute.DeleteVpc":       p.DeleteVpc,
+		"Compute.CreateVpc":          p.CreateVpc,
+		"Compute.DescribeVpcs":       p.DescribeVpcs,
+		"Compute.DeleteVpc":          p.DeleteVpc,
 		"Compute.ModifyVpcAttribute": p.ModifyVpcAttribute,
 		// Subnets
 		"Compute.CreateSubnet":    p.CreateSubnet,
 		"Compute.DescribeSubnets": p.DescribeSubnets,
 		"Compute.DeleteSubnet":    p.DeleteSubnet,
 		// Internet Gateways
-		"Compute.CreateInternetGateway":  p.CreateInternetGateway,
+		"Compute.CreateInternetGateway":    p.CreateInternetGateway,
 		"Compute.DescribeInternetGateways": p.DescribeInternetGateways,
-		"Compute.DeleteInternetGateway":  p.DeleteInternetGateway,
-		"Compute.AttachInternetGateway":  p.AttachInternetGateway,
-		"Compute.DetachInternetGateway":  p.DetachInternetGateway,
+		"Compute.DeleteInternetGateway":    p.DeleteInternetGateway,
+		"Compute.AttachInternetGateway":    p.AttachInternetGateway,
+		"Compute.DetachInternetGateway":    p.DetachInternetGateway,
 		// Route Tables
 		"Compute.CreateRouteTable":    p.CreateRouteTable,
 		"Compute.DescribeRouteTables": p.DescribeRouteTables,
@@ -88,6 +88,10 @@ const (
 	rtRouteTable    = "ec2_route_table"
 	rtNatGateway    = "ec2_nat_gateway"
 )
+
+// tagKeyCustomID is a special tag that lets callers specify their own IDs for
+// resources instead of getting random one.
+const tagKeyCustomID = "_custom_id_"
 
 // ─── ID generators ────────────────────────────────────────────────────────────
 
@@ -243,8 +247,8 @@ func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.Norm
 		inst.State = "terminated"
 		p.saveInstance(ctx, inst)
 		result = append(result, map[string]any{
-			"InstanceId":   id,
-			"CurrentState": map[string]any{"Code": "48", "Name": "terminated"},
+			"InstanceId":    id,
+			"CurrentState":  map[string]any{"Code": "48", "Name": "terminated"},
 			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
 		})
 	}
@@ -263,8 +267,8 @@ func (p *ComputeProvider) StartInstances(ctx context.Context, nr *model.Normaliz
 		inst.State = "running"
 		p.saveInstance(ctx, inst)
 		result = append(result, map[string]any{
-			"InstanceId":   id,
-			"CurrentState": map[string]any{"Code": "16", "Name": "running"},
+			"InstanceId":    id,
+			"CurrentState":  map[string]any{"Code": "16", "Name": "running"},
 			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
 		})
 	}
@@ -283,8 +287,8 @@ func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.Normalize
 		inst.State = "stopped"
 		p.saveInstance(ctx, inst)
 		result = append(result, map[string]any{
-			"InstanceId":   id,
-			"CurrentState": map[string]any{"Code": "80", "Name": "stopped"},
+			"InstanceId":    id,
+			"CurrentState":  map[string]any{"Code": "80", "Name": "stopped"},
 			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
 		})
 	}
@@ -313,14 +317,14 @@ func (p *ComputeProvider) DescribeImages(ctx context.Context, nr *model.Normaliz
 // ─── Security Group operations ────────────────────────────────────────────────
 
 type securityGroup struct {
-	GroupId     string            `json:"GroupId"`
-	GroupName   string            `json:"GroupName"`
-	Description string            `json:"Description"`
-	VpcId       string            `json:"VpcId"`
-	OwnerId     string            `json:"OwnerId"`
-	IngressRules []map[string]any `json:"IngressRules"`
-	EgressRules  []map[string]any `json:"EgressRules"`
-	Tags        map[string]string `json:"Tags"`
+	GroupId      string            `json:"GroupId"`
+	GroupName    string            `json:"GroupName"`
+	Description  string            `json:"Description"`
+	VpcId        string            `json:"VpcId"`
+	OwnerId      string            `json:"OwnerId"`
+	IngressRules []map[string]any  `json:"IngressRules"`
+	EgressRules  []map[string]any  `json:"EgressRules"`
+	Tags         map[string]string `json:"Tags"`
 }
 
 func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -330,8 +334,13 @@ func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.Nor
 	if name == "" {
 		return nil, &model.ProviderError{Code: "MissingParameter", Message: "GroupName is required", HTTPStatus: http.StatusBadRequest}
 	}
+	sgId := newID("sg")
+	if customId := extractCustomID(nr.Params); customId != "" {
+		sgId = customId
+	}
+
 	sg := securityGroup{
-		GroupId:     newID("sg"),
+		GroupId:     sgId,
 		GroupName:   name,
 		Description: desc,
 		VpcId:       vpcId,
@@ -339,6 +348,14 @@ func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.Nor
 	}
 	data, _ := json.Marshal(sg)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: sg.GroupId, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			// Idempotent: return the existing subnet if same ID already exists.
+			if entry, getErr := p.resources.Get(ctx, rtSecurityGroup, sgId); getErr == nil {
+				var existing securityGroup
+				json.Unmarshal(entry.Data, &existing)
+				return provider.OK(map[string]any{"GroupId": existing.GroupId}), nil
+			}
+		}
 		return nil, err
 	}
 	return provider.OK(map[string]any{"GroupId": sg.GroupId}), nil
@@ -517,8 +534,12 @@ func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedReq
 	if cidr == "" {
 		return nil, &model.ProviderError{Code: "MissingParameter", Message: "CidrBlock is required", HTTPStatus: http.StatusBadRequest}
 	}
+	vpcId := newID("vpc")
+	if customId := extractCustomID(nr.Params); customId != "" {
+		vpcId = customId
+	}
 	vpc := ec2Vpc{
-		VpcId:     newID("vpc"),
+		VpcId:     vpcId,
 		State:     "available",
 		CidrBlock: cidr,
 		IsDefault: false,
@@ -526,6 +547,13 @@ func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedReq
 	}
 	data, _ := json.Marshal(vpc)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtVpc, ID: vpc.VpcId, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			if entry, getErr := p.resources.Get(ctx, rtVpc, vpcId); getErr == nil {
+				var existingVPC ec2Vpc
+				json.Unmarshal(entry.Data, &existingVPC)
+				return provider.OK(map[string]any{"Vpc": vpcToWire(existingVPC)}), nil
+			}
+		}
 		return nil, err
 	}
 	return provider.OK(map[string]any{"Vpc": vpcToWire(vpc)}), nil
@@ -594,8 +622,14 @@ func (p *ComputeProvider) CreateSubnet(ctx context.Context, nr *model.Normalized
 	if az == "" {
 		az = nr.Region + "a"
 	}
+
+	subnetId := newID("subnet")
+	if customId := extractCustomID(nr.Params); customId != "" {
+		subnetId = customId
+	}
+
 	sn := ec2Subnet{
-		SubnetId:                newID("subnet"),
+		SubnetId:                subnetId,
 		State:                   "available",
 		VpcId:                   vpcId,
 		CidrBlock:               cidr,
@@ -604,6 +638,14 @@ func (p *ComputeProvider) CreateSubnet(ctx context.Context, nr *model.Normalized
 	}
 	data, _ := json.Marshal(sn)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnet, ID: sn.SubnetId, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			// Idempotent: return the existing subnet if same ID already exists.
+			if entry, getErr := p.resources.Get(ctx, rtSubnet, subnetId); getErr == nil {
+				var existing ec2Subnet
+				json.Unmarshal(entry.Data, &existing)
+				return provider.OK(map[string]any{"Subnet": subnetToWire(existing)}), nil
+			}
+		}
 		return nil, err
 	}
 	return provider.OK(map[string]any{"Subnet": subnetToWire(sn)}), nil
@@ -955,6 +997,27 @@ func extractIndexedParam(params map[string]any, prefix string) []string {
 		}
 	}
 	return result
+}
+
+func extractCustomID(params map[string]any) string {
+	for ts := 1; ; ts++ {
+		tagKeyPrefix := fmt.Sprintf("TagSpecification.%d.Tag.", ts)
+		found := false
+		for t := 1; ; t++ {
+			key := strParam(params, fmt.Sprintf("%s%d.Key", tagKeyPrefix, t))
+			if key == "" {
+				break
+			}
+			found = true
+			if key == tagKeyCustomID {
+				return strParam(params, fmt.Sprintf("%s%d.Value", tagKeyPrefix, t))
+			}
+		}
+		if !found {
+			break
+		}
+	}
+	return ""
 }
 
 func containsStr(slice []string, s string) bool {

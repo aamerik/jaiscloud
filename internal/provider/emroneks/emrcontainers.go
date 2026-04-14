@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,43 +66,43 @@ func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *E
 func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Virtual clusters
-		"EMRContainers.CreateVirtualCluster":  p.CreateVirtualCluster,
-		"EMRContainers.DeleteVirtualCluster":  p.DeleteVirtualCluster,
+		"EMRContainers.CreateVirtualCluster":   p.CreateVirtualCluster,
+		"EMRContainers.DeleteVirtualCluster":   p.DeleteVirtualCluster,
 		"EMRContainers.DescribeVirtualCluster": p.DescribeVirtualCluster,
-		"EMRContainers.ListVirtualClusters":   p.ListVirtualClusters,
+		"EMRContainers.ListVirtualClusters":    p.ListVirtualClusters,
 		// Job runs
 		"EMRContainers.StartJobRun":    p.StartJobRun,
 		"EMRContainers.CancelJobRun":   p.CancelJobRun,
 		"EMRContainers.DescribeJobRun": p.DescribeJobRun,
 		"EMRContainers.ListJobRuns":    p.ListJobRuns,
 		// Managed endpoints
-		"EMRContainers.CreateManagedEndpoint":  p.CreateManagedEndpoint,
-		"EMRContainers.DeleteManagedEndpoint":  p.DeleteManagedEndpoint,
+		"EMRContainers.CreateManagedEndpoint":   p.CreateManagedEndpoint,
+		"EMRContainers.DeleteManagedEndpoint":   p.DeleteManagedEndpoint,
 		"EMRContainers.DescribeManagedEndpoint": p.DescribeManagedEndpoint,
-		"EMRContainers.ListManagedEndpoints":   p.ListManagedEndpoints,
+		"EMRContainers.ListManagedEndpoints":    p.ListManagedEndpoints,
 		// Tagging
 		"EMRContainers.TagResource":         p.TagResource,
-		"EMRContainers.UntagResource":        p.UntagResource,
-		"EMRContainers.ListTagsForResource":  p.ListTagsForResource,
+		"EMRContainers.UntagResource":       p.UntagResource,
+		"EMRContainers.ListTagsForResource": p.ListTagsForResource,
 	}
 }
 
 const (
-	rtVirtualCluster   = "emrc_virtual_cluster"
-	rtJobRun           = "emrc_job_run"
-	rtManagedEndpoint  = "emrc_managed_endpoint"
+	rtVirtualCluster  = "emrc_virtual_cluster"
+	rtJobRun          = "emrc_job_run"
+	rtManagedEndpoint = "emrc_managed_endpoint"
 )
 
 // ─── Virtual Cluster types ────────────────────────────────────────────────────
 
 type virtualCluster struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	State       string            `json:"state"` // RUNNING, TERMINATING, TERMINATED, ARRESTED
-	EksCluster  string            `json:"eksCluster"`
-	Namespace   string            `json:"namespace"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	Tags        map[string]string `json:"tags"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	State      string            `json:"state"` // RUNNING, TERMINATING, TERMINATED, ARRESTED
+	EksCluster string            `json:"eksCluster"`
+	Namespace  string            `json:"namespace"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Tags       map[string]string `json:"tags"`
 }
 
 func (vc virtualCluster) toWire(resourceID func(string, string) string) map[string]any {
@@ -321,18 +322,49 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 				}
 			}
 		}
+		// Extract --conf flags from the ConfigurationOverrides.applicationConfiguration
+		// (spark-defaults properties). sparkSubmitParameters --conf flag are parsed
+		// later by BuildSparkJob and take precedence (last-wins).
+		var configOverrides []string
+		if co, ok := nr.Params["configurationOverrides"].(map[string]any); ok {
+			if appConfs, ok := co["applicationConfiguration"].([]any); ok {
+				for _, ac := range appConfs {
+					acMap, ok := ac.(map[string]any)
+					if !ok {
+						continue
+					}
+					if props, ok := acMap["properties"].(map[string]any); ok {
+						for k, v := range props {
+							if s, ok := v.(string); ok {
+								configOverrides = append(configOverrides, "--conf", k+"="+s)
+							}
+						}
+					}
+				}
+			}
+		}
+		// Prepend config overrides to user-supplied spark params so that they take precedence.
+		if len(configOverrides) > 0 {
+			combined := strings.Join(configOverrides, " ")
+			if sparkParams != "" {
+				sparkParams = combined + " " + sparkParams
+			} else {
+				sparkParams = combined
+			}
+		}
+
 		job := spark.BuildSparkJob(id, entryPoint, "", args, sparkParams, p.executorCfg)
 		if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
 			jr.State = "FAILED"
 			p.saveJobRun(ctx, jr)
 		} else {
 			p.jobRefs.Store(id, jobRef{
-					vcID:      vcID,
-					jrID:      id,
-					region:    nr.Region,
-					accountID: nr.AccountID,
-					cloud:     nr.Cloud,
-				})
+				vcID:      vcID,
+				jrID:      id,
+				region:    nr.Region,
+				accountID: nr.AccountID,
+				cloud:     nr.Cloud,
+			})
 			if p.poller != nil {
 				p.poller.Track(id, spark.StatePending)
 			}
