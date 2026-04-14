@@ -272,10 +272,17 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 	//   job.Args   = application arguments (no spark-submit flags)
 	//   → build the full spark-submit arg list via SparkSubmitArgs.
 	var cmd, containerArgs []string
-	if strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0 {
+	switch {
+	case strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0:
+		// Pattern 1: absolute path entry point (EMR Containers style)
 		cmd = []string{job.JarURI}
 		containerArgs = job.Args
-	} else {
+	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
+		// Pattern 2: command-runner.jar (EMR classic style)
+		cmd = []string{resolveContainerBinary(job.Args[0])}
+		containerArgs = rewriteSparkMaster(job.Args[1:])
+	default:
+		// Pattern 3: Real Jar - Construct full spark-submit invocation
 		cmd = []string{"/opt/spark/bin/spark-submit"}
 		containerArgs = SparkSubmitArgs(job)
 	}
