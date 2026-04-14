@@ -157,6 +157,53 @@ func (e *K8sExecutor) Reset() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+// resolveContainerBinary maps a user-supplied command name to the absolute
+// path in the Spark image.
+func resolveContainerBinary(name string) string {
+	switch name {
+	case "spark-submit":
+		return "/opt/spark/bin/spark-submit"
+	case "spark-sql":
+		return "/opt/spark/bin/spark-sql"
+	case "spark-shell":
+		return "/opt/spark/bin/spark-shell"
+	default:
+		return name // assume it's a path or a well-known binary in the image
+	}
+}
+
+// rewriteSparkMaster scans the spark-submit args for --master flag for execution
+// inside a k8s job container, Cloud porviders send platform-specific master
+// (EMR: "yarn", HDInsight: "yarn") bur jaiscloud executes spark insider a container
+// where none of these resource manager are exist. Any master which is not local or
+// k8s:// is replaced with local[*] (in process execution).
+// "--deploy-mode cluster" is also stripped since the driver runs inside the container.
+func rewriteSparkMaster(args []string) []string {
+	out := make([]string, 0, len(args))
+	skip := false
+	for i, a := range args {
+		if skip {
+			skip = false
+			continue
+		}
+		if a == "--master" && i+1 < len(args) {
+			master := args[i+1]
+			if !strings.HasPrefix(master, "local") && !strings.HasPrefix(master, "k8s://") {
+				out = append(out, "--master", "local[*]")
+			} else {
+				out = append(out, "--master", master)
+			}
+			skip = true
+			continue
+		}
+		if a == "--deploy-mode" && i+1 < len(args) && args[i+1] == "cluster" {
+			skip = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
 
 // k8sJobName converts an arbitrary job ID to a valid K8s DNS label name.
 // Format: "spark-<sanitized>", max 63 characters.
