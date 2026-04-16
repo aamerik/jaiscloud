@@ -8,17 +8,29 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// RunMigrations applies all unapplied SQL migration files in sorted order.
-// Each file is tracked in jc_schema_migrations by filename; already-applied
+// RunMigrations creates the cloud schema if it does not exist, then applies
+// all unapplied SQL migration files in sorted order. Each file is tracked in
+// jc_schema_migrations (inside the cloud schema) by filename; already-applied
 // files are skipped so the function is safe to call on every startup.
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	// Ensure the tracking table exists first.
+//
+// cloud must be an allowlist-validated value ("aws", "azure", "gcp").
+func RunMigrations(ctx context.Context, pool *pgxpool.Pool, cloud string) error {
+	// Create the cloud schema. pgx.Identifier quotes the name correctly.
+	schemaIdent := pgx.Identifier{cloud}.Sanitize()
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schemaIdent); err != nil {
+		return fmt.Errorf("create schema %s: %w", cloud, err)
+	}
+
+	// Ensure the tracking table exists inside the cloud schema.
+	// search_path is already set to cloud on every pool connection, so the
+	// unqualified name jc_schema_migrations resolves to the correct schema.
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS jc_schema_migrations (
 			filename   TEXT        PRIMARY KEY,

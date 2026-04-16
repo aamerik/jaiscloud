@@ -23,7 +23,12 @@ type PostgresResourceStore struct {
 // poolConfig returns a pgxpool.Config with sensible connection-pool defaults
 // similar to HikariCP: bounded pool size, health checks, and fast connection
 // acquisition timeouts.
-func poolConfig(dsn string) (*pgxpool.Config, error) {
+//
+// cloud sets the PostgreSQL search_path so every connection in the pool
+// automatically resolves unqualified table names to the cloud-specific schema
+// (e.g. "aws", "azure", "gcp"). The value is allowlist-validated by
+// config.Load() before it reaches here, so no sanitisation is needed.
+func poolConfig(dsn, cloud string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
@@ -34,6 +39,10 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 	cfg.MaxConnIdleTime = 10 * time.Minute
 	cfg.HealthCheckPeriod = 30 * time.Second
 	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	if cfg.ConnConfig.Config.RuntimeParams == nil {
+		cfg.ConnConfig.Config.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.Config.RuntimeParams["search_path"] = cloud
 	return cfg, nil
 }
 
@@ -41,8 +50,8 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 // migrations, and returns a ready store.  It retries the initial ping up to
 // maxAttempts times with exponential backoff so that the server can be started
 // before the database is ready (e.g. docker-compose spin-up order).
-func NewPostgresResourceStore(ctx context.Context, dsn string) (*PostgresResourceStore, error) {
-	cfg, err := poolConfig(dsn)
+func NewPostgresResourceStore(ctx context.Context, dsn, cloud string) (*PostgresResourceStore, error) {
+	cfg, err := poolConfig(dsn, cloud)
 	if err != nil {
 		return nil, fmt.Errorf("pgxpool config: %w", err)
 	}
@@ -76,7 +85,7 @@ func NewPostgresResourceStore(ctx context.Context, dsn string) (*PostgresResourc
 		}
 	}
 
-	if err := RunMigrations(ctx, pool); err != nil {
+	if err := RunMigrations(ctx, pool, cloud); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
