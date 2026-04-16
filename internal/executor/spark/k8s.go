@@ -259,50 +259,60 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 	backoffLimit := 0
 	ttl := 3600
 
+	// Resolve the container image first - needed to determine the spark-submit path.
+	// Use custom image from SparkConf if provided; otherwise fallback to the
+	// executor's detault image (JAISCLOUD_K8S_SPARK_IMAGE).
+	image := e.cfg.Image
+	if v, ok := job.SparkConf["spark.kubernetes.container.image"]; ok && v != "" {
+		image = v
+	}
+
+	// Determine the spark-submit binary path for this image.
+	// EMR images (e.g. spark-emr-eks-*) use /usr/bin/spark-submit
+	// Apache spark images (default, apache/spark:*) use /opt/spark/bin/spark-submit
+	// When SparkSubmitPath is configured,apply it only for non-default images
+	// that contains "emr" in the name (EMR-sprcific images)
+	defaultSparkSubmit := resolveContainerBinary("spark-submit")
+	useAlSparkSubmit := e.cfg.SparkSubmitPath != "" && image != e.cfg.Image && strings.Contains(strings.ToLower(image), "emr")
+	sparkSubmitForImage := defaultSparkSubmit
+	if useAlSparkSubmit {
+		sparkSubmitForImage = e.cfg.SparkSubmitPath
+	}
+
 	// Determine the container command and args.
-	//
-	// EMR Containers style (StartJobRun):
-	//   job.JarURI = EntryPoint  = "/opt/spark/bin/spark-submit"  (executable path)
-	//   job.Args   = EntryPointArguments = ["--master", "local[2]", "--class", ...]
-	//   → use JarURI as the command and Args as-is; calling SparkSubmitArgs would
-	//     re-append JarURI as a JAR and duplicate the user-supplied K8s conf flags.
-	//
-	// EMR classic style (AddJobFlowSteps with a real JAR):
-	//   job.JarURI = "s3://bucket/app.jar"
-	//   job.Args   = application arguments (no spark-submit flags)
-	//   → build the full spark-submit arg list via SparkSubmitArgs.
+	// EMR Containers styple (StartJobRun):
+	//   job.JarURI = EntryPoint = "/opt/spark/bin/spark-submit" (executable path)
+	//   job.Args = EntryPointArguments = ["--master", "local[2], "--class", ...]
+	//   -> use JarURI as the command and Args as-is; calling SparkSubmitArgs would
+	//      re-append JarURI as a JAR and duplicate the user-supplied k8s conf flags.
+	// EMR classic style (AddJobFlowSteps with a real jar):
+	//   job.JarURI = "s3://bucket/app.jar" (real jar)
+	//   job.Args = application arguments (no spark-submit flags)
+	//   -> build the full spark-submit arg list via SparkSubmitArgs.
 	var cmd, containerArgs []string
 	switch {
 	case strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0:
 		// Pattern 1: absolute path entry point (EMR Containers style)
-		cmd = []string{job.JarURI}
+		entryPoint := job.JarURI
+		if useAlSparkSubmit && entryPoint == defaultSparkSubmit {
+			entryPoint = sparkSubmitForImage
+		}
+		cmd = []string{entryPoint}
 		containerArgs = job.Args
 	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
 		// Pattern 2: command-runner.jar (EMR classic style)
 		binary := resolveContainerBinary(job.Args[0])
-		if e.cfg.SparkSubmitPath != "" && binary == "/opt/spark/bin/spark-submit" {
-			binary = e.cfg.SparkSubmitPath
+		if useAlSparkSubmit && binary == defaultSparkSubmit {
+			binary = sparkSubmitForImage
 		}
 		cmd = []string{binary}
 		containerArgs = rewriteSparkMaster(job.Args[1:])
 	default:
-		// Pattern 3: Real Jar - Construct full spark-submit invocation.
-		// Preserve local:// prefix - in k8s cluster deploy-mode it tell
-		// spark the jar is alredy present in the driver/executor image,
-		// avoiding the need for spark.kubernetes.file.upload.path.
-		sparkSubmit := e.cfg.SparkSubmitPath
-		if sparkSubmit == "" {
-			sparkSubmit = "/opt/spark/bin/spark-submit"
-		}
-		cmd = []string{sparkSubmit}
+		// Pattern 3: Real Jar - JaisCloud construct the full spark-submit invocation.
+		// Preserve local:// prefix - in k8s cluster deploy-mode it tells spark the jar is
+		// already in present in the driver/executor image.
+		cmd = []string{sparkSubmitForImage}
 		containerArgs = SparkSubmitArgs(job)
-	}
-
-	// Use custome image from SparkCOnf if porvided; otherwise fall back to
-	// the executor's default image (JAISCLOUD_K8S_SPARK_IMAGE).
-	image := e.cfg.Image
-	if v, ok := job.SparkConf["spark.kubernetes.container.image"]; ok && v != "" {
-		image = v
 	}
 
 	spec := podSpec{
