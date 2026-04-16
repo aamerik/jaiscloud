@@ -159,7 +159,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			return appStores{}, fmt.Errorf("--mode full requires --dsn (or JAISCLOUD_DSN)")
 		}
 		slog.Info("starting in full mode", "dsn", cfg.DSN)
-		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN)
+		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, cfg.Cloud)
 		if err != nil {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
 		}
