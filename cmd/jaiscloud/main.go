@@ -32,6 +32,7 @@ import (
 	"jaiscloud/internal/provider/dns"
 	eksprovider "jaiscloud/internal/provider/eks"
 	emrprovider "jaiscloud/internal/provider/emr"
+	keyprovider "jaiscloud/internal/key"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
@@ -89,14 +90,19 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore, bus, cleanup := buildRegistry(ctx, cfg, s)
+			dek, err := bootstrapDEK(ctx, cfg, s)
+			if err != nil {
+				return err
+			}
+
+			registry, streamStore, bus, keyStore, cleanup := buildRegistry(ctx, cfg, s, dek)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
-			adminHandler := buildAdminHandler(s, streamStore)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore)
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
 			_ = bus // bus is used internally by providers
@@ -205,8 +211,32 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 	}, nil
 }
 
+// bootstrapDEK loads or creates the server data-encryption key.
+// In full mode it is persisted in PostgreSQL (wrapped by KMSMasterKey if set).
+// In lite mode a fresh ephemeral key is generated each startup.
+func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte, error) {
+	if cfg.Mode == config.ModeFull {
+		pgStore, ok := s.resources.(*store.PostgresResourceStore)
+		if !ok {
+			return nil, fmt.Errorf("kms bootstrap: expected *store.PostgresResourceStore in full mode")
+		}
+		keyStore := keyprovider.NewPostgresKeyStore(pgStore.Pool(), nil) // nil DEK — only loading blob
+		dek, err := keyprovider.LoadOrCreateDEK(ctx, keyStore, cfg.KMSMasterKey)
+		if err != nil {
+			return nil, fmt.Errorf("kms bootstrap: %w", err)
+		}
+		return dek, nil
+	}
+	// Lite mode: ephemeral DEK, not persisted.
+	dek, err := keyprovider.Generate32()
+	if err != nil {
+		return nil, fmt.Errorf("kms bootstrap: generate ephemeral DEK: %w", err)
+	}
+	return dek, nil
+}
+
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -244,7 +274,18 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores) (*provi
 	// tableProvider is created once so both Routes() and StreamRoutes() share state.
 	tableProvider := table.NewWithStreams(s.resources, s.dynamo, streams)
 
+	// Build KMS key store and provider.
+	var keyStore keyprovider.KeyStore
+	if cfg.Mode == config.ModeFull {
+		pgStore := s.resources.(*store.PostgresResourceStore)
+		keyStore = keyprovider.NewPostgresKeyStore(pgStore.Pool(), dek)
+	} else {
+		keyStore = keyprovider.NewMemoryKeyStore()
+	}
+	keyProv := keyprovider.New(keyStore, nil, dek)
+
 	registry := provider.NewRegistry()
+	registry.RegisterAll(keyProv.Routes())
 	registry.RegisterAll(queue.New(s.resources, s.messages, cfg.Clock, bus).Routes())
 	registry.RegisterAll(iamprovider.New(s.resources).Routes())
 	registry.RegisterAll(notification.New(s.resources, s.messages, bus).Routes())
@@ -264,7 +305,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores) (*provi
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 
-	return registry, streams, bus, cleanup
+	return registry, streams, bus, keyStore, cleanup
 }
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
@@ -311,6 +352,7 @@ func buildAdapter(cfg *config.Config) (adapter.CloudAdapter, error) {
 func buildAWSAdapter() *awsadapter.AWSAdapter {
 	iamCodec := &services.IAMCodec{}
 	return awsadapter.NewAdapter(map[string]adapter.Codec{
+		"kms":             &services.KMSCodec{},
 		"sqs":             &services.SQSCodec{},
 		"iam":             iamCodec,
 		"sts":             iamCodec,
@@ -334,7 +376,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 }
 
 // buildAdminHandler registers all resetters and snapshotters, then returns the handler.
-func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore) *admin.Handler {
+func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore) *admin.Handler {
 	h := admin.NewHandler()
 	h.RegisterResetter(s.resources)
 	h.RegisterResetter(s.messages)
@@ -342,6 +384,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore) *adm
 	h.RegisterResetter(s.s3Meta)
 	h.RegisterResetter(s.blobs)
 	h.RegisterResetter(streams)
+	h.RegisterResetter(keyStore)
 	if snap, ok := s.resources.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("resources", snap)
 	}
