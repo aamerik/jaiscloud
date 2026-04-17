@@ -35,6 +35,7 @@ import (
 	keyprovider "jaiscloud/internal/key"
 	secretprovider "jaiscloud/internal/secret"
 	paramprovider "jaiscloud/internal/parameter"
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
@@ -295,17 +296,29 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
+	// Build Lambda executor.
+	lambdaCfg := lambdaexec.LambdaConfig{
+		Mode:          cfg.LambdaMode,
+		DefaultImage:  cfg.LambdaImage,
+		Network:       cfg.LambdaNetwork,
+		KeepaliveSecs: cfg.LambdaKeepaliveSecs,
+	}
+	lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
+	slog.Info("lambda executor", "mode", cfg.LambdaMode)
+	prevCleanup := cleanup
+	cleanup = func() { lambdaExec.Close(); prevCleanup() }
+
 	registry := provider.NewRegistry()
 	registry.RegisterAll(keyProv.Routes())
 	registry.RegisterAll(secretProv.Routes())
 	registry.RegisterAll(paramProv.Routes())
+	registry.RegisterAll(functionprovider.NewWithExecutor(s.resources, lambdaExec).Routes())
 	registry.RegisterAll(queue.New(s.resources, s.messages, cfg.Clock, bus).Routes())
 	registry.RegisterAll(iamprovider.New(s.resources).Routes())
 	registry.RegisterAll(notification.New(s.resources, s.messages, bus).Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
 	registry.RegisterAll(objectprovider.New(s.s3Meta, s.blobs).Routes())
-	registry.RegisterAll(functionprovider.New(s.resources).Routes())
 	registry.RegisterAll(catalog.New(s.resources).Routes())
 	registry.RegisterAll(compute.New(s.resources).Routes())
 	registry.RegisterAll(dns.New(s.resources).Routes())

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -19,10 +20,17 @@ const resourceType = "lambda_functions"
 // FunctionProvider handles all Lambda operations.
 type FunctionProvider struct {
 	resources store.ResourceStore
+	executor  lambdaexec.LambdaExecutor // nil → MockExecutor behaviour (echo)
 }
 
+// New constructs a FunctionProvider with a mock (echo) executor.
 func New(resources store.ResourceStore) *FunctionProvider {
-	return &FunctionProvider{resources: resources}
+	return &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}}
+}
+
+// NewWithExecutor constructs a FunctionProvider with the given executor.
+func NewWithExecutor(resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *FunctionProvider {
+	return &FunctionProvider{resources: resources, executor: exec}
 }
 
 func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
@@ -84,7 +92,7 @@ func parseEnvVars(params map[string]any) map[string]string {
 }
 
 func (p *FunctionProvider) functionARN(nr *model.NormalizedRequest, name string) string {
-	return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", nr.Region, nr.AccountID, name)
+	return nr.ResourceID(model.RTLambdaFunction, name)
 }
 
 func (p *FunctionProvider) saveConfig(ctx context.Context, cfg functionConfig) error {
@@ -265,21 +273,33 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 
 // ─── Invoke ───────────────────────────────────────────────────────────────────
 
-// InvokeFunction echoes the payload back — mock Lambda behaviour.
-// When InvocationType=Event (async), returns 202 with empty body.
+// InvokeFunction invokes the function via the configured executor.
+// When InvocationType=Event (async), returns 202 without waiting for a result.
 func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "_function_name")
-	if _, err := p.loadConfig(ctx, name); err != nil {
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	if strings.EqualFold(strParam(nr.Params, "_invocation_type"), "Event") {
 		return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 	}
 	payload, _ := nr.Params["_payload"].([]byte)
+	req := lambdaexec.InvokeRequest{
+		FunctionName: cfg.FunctionName,
+		Runtime:      cfg.Runtime,
+		Handler:      cfg.Handler,
+		MemoryMB:     cfg.MemorySize,
+		TimeoutSecs:  cfg.Timeout,
+		EnvVars:      cfg.Environment,
+		Payload:      payload,
+	}
+	result, err := p.executor.Invoke(ctx, req)
+	if err != nil {
+		return nil, model.NewProviderError("ServiceException", "invocation failed: "+err.Error(), 500)
+	}
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
-		Data: map[string]any{
-			"_payload": payload,
-		},
+		Data:       map[string]any{"_payload": result},
 	}, nil
 }
