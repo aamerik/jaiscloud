@@ -108,13 +108,13 @@ func TestK8sExecutor_Submit(t *testing.T) {
 		t.Errorf("unexpected container command: %v", containers[0].Command)
 	}
 	hasMaster := false
-	for _, a := range containers[0].Args {
-		if strings.HasPrefix(a, "k8s://") {
+	for i, a := range containers[0].Args {
+		if a == "--master" && i+1 < len(containers[0].Args) && containers[0].Args[i+1] == "local[*]" {
 			hasMaster = true
 		}
 	}
 	if !hasMaster {
-		t.Errorf("expected k8s:// in args, got %v", containers[0].Args)
+		t.Errorf("expected --master local[*] in args, got %v", containers[0].Args)
 	}
 	if _, ok := exec.jobs.Load(job.JobID); !ok {
 		t.Error("expected job to be tracked in executor map after submit")
@@ -276,5 +276,116 @@ func TestK8sJobName_Truncation(t *testing.T) {
 	}
 	if strings.HasSuffix(got, "-") {
 		t.Errorf("k8sJobName should not end with hyphen after truncation: %q", got)
+	}
+}
+
+// ── rewriteSparkMaster ───────────────────────────────────────────────────────
+
+func TestRewriteSparkMaster(t *testing.T) {
+	cases := []struct {
+		name           string
+		in             []string
+		wantMaster     string
+		wantDeployMode string
+	}{
+		{
+			name:       "yarn_rewritten_to_local",
+			in:         []string{"--master", "yarn", "--class", "Main", "app.jar"},
+			wantMaster: "local[*]",
+		},
+		{
+			name:       "k8s_rewritten_to_local",
+			in:         []string{"--master", "k8s://https://kubernetes.default.svc"},
+			wantMaster: "local[*]",
+		},
+		{
+			name:       "local_star_preserved",
+			in:         []string{"--master", "local[*]", "--class", "Main"},
+			wantMaster: "local[*]",
+		},
+		{
+			name:       "local_n_preserved",
+			in:         []string{"--master", "local[2]", "--class", "Main"},
+			wantMaster: "local[2]",
+		},
+		{
+			name:           "deploy_mode_cluster_rewritten",
+			in:             []string{"--master", "local[*]", "--deploy-mode", "cluster"},
+			wantMaster:     "local[*]",
+			wantDeployMode: "client",
+		},
+		{
+			name:           "no_master_prepended",
+			in:             []string{"--class", "Main", "app.jar"},
+			wantMaster:     "local[*]",
+			wantDeployMode: "client",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := rewriteSparkMaster(c.in)
+			master, deployMode := "", ""
+			for i, a := range out {
+				if a == "--master" && i+1 < len(out) {
+					master = out[i+1]
+				}
+				if a == "--deploy-mode" && i+1 < len(out) {
+					deployMode = out[i+1]
+				}
+			}
+			if master != c.wantMaster {
+				t.Errorf("master: got %q, want %q (args: %v)", master, c.wantMaster, out)
+			}
+			if c.wantDeployMode != "" && deployMode != c.wantDeployMode {
+				t.Errorf("deploy-mode: got %q, want %q (args: %v)", deployMode, c.wantDeployMode, out)
+			}
+		})
+	}
+}
+
+// ── EMR Containers pattern ───────────────────────────────────────────────────
+
+func TestK8sExecutor_Submit_EMRContainersPattern(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	// Pattern 1: EMR Containers style — JarURI is the spark-submit binary path.
+	job := SparkJob{
+		JobID:  "jr-ABC123",
+		JarURI: "/opt/spark/bin/spark-submit",
+		Args: []string{
+			"--master", "yarn",
+			"--class", "org.apache.spark.examples.SparkPi",
+			"local:///opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar",
+			"10",
+		},
+		Config: exec.cfg,
+	}
+
+	if err := exec.Submit(context.Background(), job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(fk.created) != 1 {
+		t.Fatalf("expected 1 job created, got %d", len(fk.created))
+	}
+
+	containers := fk.created[0].Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(containers))
+	}
+	if containers[0].Command[0] != "/opt/spark/bin/spark-submit" {
+		t.Errorf("unexpected command: %v", containers[0].Command)
+	}
+	hasMaster := false
+	for i, a := range containers[0].Args {
+		if a == "--master" && i+1 < len(containers[0].Args) {
+			hasMaster = true
+			if containers[0].Args[i+1] != "local[*]" {
+				t.Errorf("expected --master local[*], got %q", containers[0].Args[i+1])
+			}
+		}
+	}
+	if !hasMaster {
+		t.Errorf("expected --master in args, got %v", containers[0].Args)
 	}
 }

@@ -1,11 +1,10 @@
 //go:build spark_e2e
 
-package plugin_test
+package emrcontainers_test
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -16,13 +15,6 @@ import (
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 )
-
-func k8sNamespace() string {
-	if ns := os.Getenv("SPARK_E2E_K8S_NAMESPACE"); ns != "" {
-		return ns
-	}
-	return "default"
-}
 
 // TestSparkJob_K8s_StartJobRun_And_Complete verifies the full virtual cluster + job run lifecycle
 // and that a COMPLETED EventBridge notification is delivered to SQS.
@@ -85,7 +77,7 @@ func TestSparkJob_K8s_StartJobRun_And_Complete(t *testing.T) {
 	if msg["source"] != "aws.emr-containers" {
 		t.Errorf("expected source=aws.emr-containers, got %v", msg["source"])
 	}
-	if msg["detail-type"] != "EMR Containers Job Run State Change" {
+	if msg["detail-type"] != "EMR Job Run State Change" {
 		t.Errorf("unexpected detail-type: %v", msg["detail-type"])
 	}
 	detail, _ := msg["detail"].(map[string]any)
@@ -290,39 +282,5 @@ func TestSparkJob_K8s_FailedJobRun_ReportsFailure(t *testing.T) {
 	}
 	if detail["id"] != jobRunID {
 		t.Errorf("expected detail.id=%s, got %v", jobRunID, detail["id"])
-	}
-}
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
-func createVirtualCluster(t *testing.T, emrcClient *awsemrc.Client, name string) string {
-	t.Helper()
-	out, err := emrcClient.CreateVirtualCluster(context.Background(), &awsemrc.CreateVirtualClusterInput{
-		Name: aws.String(name),
-		ContainerProvider: &emrctypes.ContainerProvider{
-			Id:   aws.String(k8sNamespace()),
-			Type: emrctypes.ContainerProviderTypeEks,
-			Info: &emrctypes.ContainerInfoMemberEksInfo{
-				Value: emrctypes.EksInfo{
-					Namespace: aws.String(k8sNamespace()),
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateVirtualCluster %s: %v", name, err)
-	}
-	return *out.Id
-}
-
-func k8sSparkPiArgs(slices int) []string {
-	// Run SparkPi in local mode inside the K8s Job container (apache/spark:3.5.0).
-	// This avoids cluster deploy-mode which requires driver pod RBAC and a reachable
-	// K8s API from within the container — not needed for local testing.
-	return []string{
-		"--master", "local[2]",
-		"--class", "org.apache.spark.examples.SparkPi",
-		"local:///opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar",
-		fmt.Sprintf("%d", slices),
 	}
 }

@@ -20,33 +20,28 @@ type dockerJob struct {
 // available locally or pullable.
 //
 // The image is resolved in this order:
-//  1. job.Config.Image (per-job override)
+//  1. job.SparkConf["spark.kubernetes.container.image"] (per-job override)
 //  2. cfg.Image passed to NewDockerExecutor (executor-level default)
 //  3. DefaultImage
 //
-// When job.Args is non-empty, it is passed directly as the container command
-// (EMR command-runner.jar style where Args = ["spark-submit", ...]). Otherwise
-// SparkSubmitArgs is used.
+// When S3Endpoint is set, AWS credential env vars and --network host are injected
+// so spark-submit can reach JaisCloud's S3 endpoint from inside the container.
 type DockerExecutor struct {
-	image string
-	jobs  sync.Map // jobID → *dockerJob
+	cfg  SparkConfig
+	jobs sync.Map // jobID → *dockerJob
 }
 
 // NewDockerExecutor creates a DockerExecutor. cfg.Image is the default Spark image.
 func NewDockerExecutor(cfg SparkConfig) *DockerExecutor {
-	image := cfg.Image
-	if image == "" {
-		image = DefaultImage
+	if cfg.Image == "" {
+		cfg.Image = DefaultImage
 	}
-	return &DockerExecutor{image: image}
+	return &DockerExecutor{cfg: cfg}
 }
 
 // Submit launches a Docker container running spark-submit asynchronously.
 func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
-	image := job.Config.Image
-	if image == "" {
-		image = e.image
-	}
+	resolved := AWSResolveSparkCommand(job, e.cfg)
 
 	dj := &dockerJob{state: StateRunning}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -55,7 +50,20 @@ func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
 
 	go func() {
 		defer cancel()
-		dockerArgs := append([]string{"run", "--rm", image}, e.containerArgs(job)...)
+
+		dockerArgs := []string{"run", "--rm", "--network", "host"}
+		if e.cfg.S3Endpoint != "" {
+			dockerArgs = append(dockerArgs,
+				"-e", "AWS_ENDPOINT_URL="+e.cfg.S3Endpoint,
+				"-e", "AWS_REGION="+e.cfg.Region,
+				"-e", "AWS_ACCESS_KEY_ID="+e.cfg.AWSAccessKey,
+				"-e", "AWS_SECRET_ACCESS_KEY="+e.cfg.AWSSecretKey,
+			)
+		}
+		// Pass binary + args after image name (overrides CMD in container).
+		dockerArgs = append(dockerArgs, resolved.Image, resolved.Binary)
+		dockerArgs = append(dockerArgs, resolved.Args...)
+
 		var stderr bytes.Buffer
 		cmd := exec.CommandContext(runCtx, "docker", dockerArgs...)
 		cmd.Stderr = &stderr
@@ -78,16 +86,6 @@ func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
 		}
 	}()
 	return nil
-}
-
-// containerArgs returns the arguments to pass inside the container.
-// EMR uses command-runner.jar where job.Args = ["spark-submit", ...] — use directly.
-// For jobs built via BuildSparkJob with a real JarURI, delegate to SparkSubmitArgs.
-func (e *DockerExecutor) containerArgs(job SparkJob) []string {
-	if len(job.Args) > 0 {
-		return job.Args
-	}
-	return append([]string{"/opt/spark/bin/spark-submit"}, SparkSubmitArgs(job)...)
 }
 
 // Status returns the current state of a submitted job.
@@ -122,7 +120,6 @@ func (e *DockerExecutor) Cancel(_ context.Context, jobID string) error {
 func (e *DockerExecutor) Close() error { return nil }
 
 // Reset cancels all running containers and clears tracked state.
-// Already-terminal jobs are not affected beyond being removed from the map.
 func (e *DockerExecutor) Reset() {
 	e.jobs.Range(func(k, v any) bool {
 		dj := v.(*dockerJob)

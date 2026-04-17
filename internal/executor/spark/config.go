@@ -88,9 +88,26 @@ type SparkConfig struct {
 	// EMR images use /usr/bin/spark-submit.
 	SparkSubmitPath string
 
+	// S3Endpoint is the S3 endpoint URL injected into Spark pods as environment
+	// variables so spark-submit can resolve s3:// URIs (pod templates, jars, logs).
+	// In devbox this points to JaisCloud's S3 service inside the cluster.
+	S3Endpoint string
+
 	// RemoteURL is the Spark Standalone master REST API URL (remote executor).
 	// Example: "http://spark-master:6066"
 	RemoteURL string
+
+	// Region is the AWS region injected into Spark pods.
+	// Defaults to JAISCLOUD_REGION or "us-east-1".
+	Region string
+
+	// AWSAccessKey is the AWS access key ID injected into Spark pods.
+	// Defaults to JAISCLOUD_AWS_ACCESS_KEY_ID or "test".
+	AWSAccessKey string
+
+	// AWSSecretKey is the AWS secret access key injected into Spark pods.
+	// Defaults to JAISCLOUD_AWS_SECRET_ACCESS_KEY or "test".
+	AWSSecretKey string
 }
 
 // SparkConfigFrom builds a SparkConfig from the executor mode and optional overrides.
@@ -115,6 +132,21 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_SPARK_SUBMIT"); v != "" {
 		cfg.SparkSubmitPath = v
+	}
+	if v := os.Getenv("JAISCLOUD_K8S_S3_ENDPOINT"); v != "" {
+		cfg.S3Endpoint = v
+	}
+	cfg.Region = "us-east-1"
+	if v := os.Getenv("JAISCLOUD_REGION"); v != "" {
+		cfg.Region = v
+	}
+	cfg.AWSAccessKey = "test"
+	if v := os.Getenv("JAISCLOUD_AWS_ACCESS_KEY_ID"); v != "" {
+		cfg.AWSAccessKey = v
+	}
+	cfg.AWSSecretKey = "test"
+	if v := os.Getenv("JAISCLOUD_AWS_SECRET_ACCESS_KEY"); v != "" {
+		cfg.AWSSecretKey = v
 	}
 	for _, o := range overrides {
 		o(&cfg)

@@ -4,9 +4,9 @@
 // These tests use the mock Spark executor (no real Docker/K8s needed) to validate
 // the full EventBridge rule → SQS target delivery path.
 //
-// Run: go test -v -tags spark_e2e ./tests/full_mode/plugin/ -run TestSparkJob_EventBridge -timeout 5m
+// Run: go test -v -tags spark_e2e ./tests/full_mode/eventbridge/ -run TestSparkJob_EventBridge -timeout 5m
 
-package plugin_test
+package eventbridge_test
 
 import (
 	"context"
@@ -216,7 +216,7 @@ func TestSparkJob_EventBridge_JobRunCompletion_K8s(t *testing.T) {
 	if msg["source"] != "aws.emr-containers" {
 		t.Errorf("expected source=aws.emr-containers, got %v", msg["source"])
 	}
-	if msg["detail-type"] != "EMR Containers Job Run State Change" {
+	if msg["detail-type"] != "EMR Job Run State Change" {
 		t.Errorf("unexpected detail-type: %v", msg["detail-type"])
 	}
 	detail, _ := msg["detail"].(map[string]any)

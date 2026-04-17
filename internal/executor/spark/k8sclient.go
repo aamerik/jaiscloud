@@ -154,17 +154,41 @@ type podMeta struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+type volume struct {
+	Name      string        `json:"name"`
+	ConfigMap *configMapRef `json:"configMap,omitempty"`
+}
+
+type configMapRef struct {
+	Name string `json:"name"`
+}
+
+type volumeMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mountPath"`
+	ReadOnly  bool   `json:"readOnly,omitempty"`
+}
+
+type envVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 type podSpec struct {
 	RestartPolicy      string      `json:"restartPolicy"`
 	ServiceAccountName string      `json:"serviceAccountName,omitempty"`
 	Containers         []container `json:"containers"`
+	Volumes            []volume    `json:"volumes,omitempty"`
 }
 
 type container struct {
-	Name    string   `json:"name"`
-	Image   string   `json:"image"`
-	Command []string `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Name            string        `json:"name"`
+	Image           string        `json:"image"`
+	ImagePullPolicy string        `json:"imagePullPolicy,omitempty"`
+	Command         []string      `json:"command"`
+	Args            []string      `json:"args,omitempty"`
+	Env             []envVar      `json:"env,omitempty"`
+	VolumeMounts    []volumeMount `json:"volumeMounts,omitempty"`
 }
 
 type batchJobStatus struct {

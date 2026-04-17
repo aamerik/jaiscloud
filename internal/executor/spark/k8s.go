@@ -172,13 +172,60 @@ func resolveContainerBinary(name string) string {
 	}
 }
 
-// rewriteSparkMaster scans the spark-submit args for --master flag for execution
-// inside a k8s job container, Cloud porviders send platform-specific master
-// (EMR: "yarn", HDInsight: "yarn") bur jaiscloud executes spark insider a container
-// where none of these resource manager are exist. Any master which is not local or
-// k8s:// is replaced with local[*] (in process execution).
-// "--deploy-mode cluster" is also stripped since the driver runs inside the container.
+// rewriteSparkMaster rewrites spark-submit args for execution inside a container.
+// Any --master that is not already local[*]/local[N] is replaced with local[*].
+// --deploy-mode cluster is rewritten to --deploy-mode client.
+// If no --master is present, --master local[*] --deploy-mode client is prepended.
 func rewriteSparkMaster(args []string) []string {
+	out := make([]string, 0, len(args))
+	skip := false
+	hasMaster := false
+	for i, a := range args {
+		if skip {
+			skip = false
+			continue
+		}
+		if a == "--master" && i+1 < len(args) {
+			hasMaster = true
+			master := args[i+1]
+			if strings.HasPrefix(master, "local") {
+				out = append(out, "--master", master)
+			} else {
+				out = append(out, "--master", "local[*]")
+			}
+			skip = true
+			continue
+		}
+		if a == "--deploy-mode" && i+1 < len(args) && args[i+1] == "cluster" {
+			out = append(out, "--deploy-mode", "client")
+			skip = true
+			continue
+		}
+		out = append(out, a)
+	}
+	if !hasMaster {
+		out = append([]string{"--master", "local[*]", "--deploy-mode", "client"}, out...)
+	}
+	return out
+}
+
+// insertBeforeJar inserts extra args before the first .jar argument in a
+// spark-submit arg list. If no .jar is found, appends at the end.
+func insertBeforeJar(args, extra []string) []string {
+	for i, a := range args {
+		if strings.HasSuffix(a, ".jar") && (i == 0 || args[i-1] != "--jars") {
+			out := make([]string, 0, len(args)+len(extra))
+			out = append(out, args[:i]...)
+			out = append(out, extra...)
+			out = append(out, args[i:]...)
+			return out
+		}
+	}
+	return append(args, extra...)
+}
+
+// stripSparkConfs removes --conf entries whose key matches any of the given prefixes.
+func stripSparkConfs(args []string, keys ...string) []string {
 	out := make([]string, 0, len(args))
 	skip := false
 	for i, a := range args {
@@ -186,19 +233,19 @@ func rewriteSparkMaster(args []string) []string {
 			skip = false
 			continue
 		}
-		if a == "--master" && i+1 < len(args) {
-			master := args[i+1]
-			if !strings.HasPrefix(master, "local") && !strings.HasPrefix(master, "k8s://") {
-				out = append(out, "--master", "local[*]")
-			} else {
-				out = append(out, "--master", master)
+		if a == "--conf" && i+1 < len(args) {
+			val := args[i+1]
+			stripped := false
+			for _, k := range keys {
+				if strings.HasPrefix(val, k+"=") {
+					skip = true
+					stripped = true
+					break
+				}
 			}
-			skip = true
-			continue
-		}
-		if a == "--deploy-mode" && i+1 < len(args) && args[i+1] == "cluster" {
-			skip = true
-			continue
+			if stripped {
+				continue
+			}
 		}
 		out = append(out, a)
 	}
@@ -259,71 +306,40 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 	backoffLimit := 0
 	ttl := 3600
 
-	// Resolve the container image first - needed to determine the spark-submit path.
-	// Use custom image from SparkConf if provided; otherwise fallback to the
-	// executor's detault image (JAISCLOUD_K8S_SPARK_IMAGE).
-	image := e.cfg.Image
-	if v, ok := job.SparkConf["spark.kubernetes.container.image"]; ok && v != "" {
-		image = v
-	}
+	resolved := AWSResolveSparkCommand(job, e.cfg)
 
-	// Determine the spark-submit binary path for this image.
-	// EMR images (e.g. spark-emr-eks-*) use /usr/bin/spark-submit
-	// Apache spark images (default, apache/spark:*) use /opt/spark/bin/spark-submit
-	// When SparkSubmitPath is configured,apply it only for non-default images
-	// that contains "emr" in the name (EMR-sprcific images)
-	defaultSparkSubmit := resolveContainerBinary("spark-submit")
-	useAlSparkSubmit := e.cfg.SparkSubmitPath != "" && image != e.cfg.Image && strings.Contains(strings.ToLower(image), "emr")
-	sparkSubmitForImage := defaultSparkSubmit
-	if useAlSparkSubmit {
-		sparkSubmitForImage = e.cfg.SparkSubmitPath
-	}
-
-	// Determine the container command and args.
-	// EMR Containers styple (StartJobRun):
-	//   job.JarURI = EntryPoint = "/opt/spark/bin/spark-submit" (executable path)
-	//   job.Args = EntryPointArguments = ["--master", "local[2], "--class", ...]
-	//   -> use JarURI as the command and Args as-is; calling SparkSubmitArgs would
-	//      re-append JarURI as a JAR and duplicate the user-supplied k8s conf flags.
-	// EMR classic style (AddJobFlowSteps with a real jar):
-	//   job.JarURI = "s3://bucket/app.jar" (real jar)
-	//   job.Args = application arguments (no spark-submit flags)
-	//   -> build the full spark-submit arg list via SparkSubmitArgs.
-	var cmd, containerArgs []string
-	switch {
-	case strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0:
-		// Pattern 1: absolute path entry point (EMR Containers style)
-		entryPoint := job.JarURI
-		if useAlSparkSubmit && entryPoint == defaultSparkSubmit {
-			entryPoint = sparkSubmitForImage
-		}
-		cmd = []string{entryPoint}
-		containerArgs = job.Args
-	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
-		// Pattern 2: command-runner.jar (EMR classic style)
-		binary := resolveContainerBinary(job.Args[0])
-		if useAlSparkSubmit && binary == defaultSparkSubmit {
-			binary = sparkSubmitForImage
-		}
-		cmd = []string{binary}
-		containerArgs = rewriteSparkMaster(job.Args[1:])
-	default:
-		// Pattern 3: Real Jar - JaisCloud construct the full spark-submit invocation.
-		// Preserve local:// prefix - in k8s cluster deploy-mode it tells spark the jar is
-		// already in present in the driver/executor image.
-		cmd = []string{sparkSubmitForImage}
-		containerArgs = SparkSubmitArgs(job)
+	ctr := container{
+		Name:    "spark-submit",
+		Image:   resolved.Image,
+		Command: []string{resolved.Binary},
+		Args:    resolved.Args,
 	}
 
 	spec := podSpec{
 		RestartPolicy: "Never",
-		Containers: []container{{
-			Name:    "spark-submit",
-			Image:   image,
-			Command: cmd,
-			Args:    containerArgs,
-		}},
 	}
+
+	if e.cfg.S3Endpoint != "" {
+		ctr.ImagePullPolicy = "Never"
+		ctr.Env = []envVar{
+			{Name: "AWS_ENDPOINT_URL", Value: e.cfg.S3Endpoint},
+			{Name: "AWS_REGION", Value: e.cfg.Region},
+			{Name: "AWS_ACCESS_KEY_ID", Value: e.cfg.AWSAccessKey},
+			{Name: "AWS_SECRET_ACCESS_KEY", Value: e.cfg.AWSSecretKey},
+		}
+		ctr.VolumeMounts = []volumeMount{{
+			Name:      "jaiscloud-aws-credentials",
+			MountPath: "/etc/aws",
+			ReadOnly:  true,
+		}}
+		spec.Volumes = []volume{{
+			Name:      "jaiscloud-aws-credentials",
+			ConfigMap: &configMapRef{Name: "jaiscloud-aws-credentials"},
+		}}
+	}
+
+	spec.Containers = []container{ctr}
+
 	if e.cfg.ServiceAccount != "" {
 		spec.ServiceAccountName = e.cfg.ServiceAccount
 	}

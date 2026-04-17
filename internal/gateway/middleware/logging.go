@@ -60,6 +60,8 @@ func Logging(level string) func(http.Handler) http.Handler {
 
 			if rw.status >= 400 {
 				slog.Error("request error", attrs...)
+			} else if holder.action == "ReceiveMessage" || holder.action == "SendMessage" {
+				slog.Log(r.Context(), slog.LevelDebug, "request", attrs...)
 			} else {
 				slog.Log(r.Context(), logLevel, "request", attrs...)
 			}

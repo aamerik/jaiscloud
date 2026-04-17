@@ -1,11 +1,10 @@
 //go:build spark_e2e
 
-package plugin_test
+package dpc_test
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"testing"
@@ -16,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awsemr "github.com/aws/aws-sdk-go-v2/service/emr"
 	awsemrc "github.com/aws/aws-sdk-go-v2/service/emrcontainers"
+	emrctypes "github.com/aws/aws-sdk-go-v2/service/emrcontainers/types"
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
 )
@@ -80,23 +80,12 @@ func resetState(t *testing.T) {
 	resp.Body.Close()
 }
 
-// ─── skip guards ─────────────────────────────────────────────────────────────
-
-func requireDockerEnv(t *testing.T) {
-	t.Helper()
-	if os.Getenv("SPARK_E2E_DOCKER_IMAGE") == "" {
-		t.Skip("SPARK_E2E_DOCKER_IMAGE not set — skipping Docker Spark e2e test")
-	}
-}
-
 func requireK8sEnv(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SPARK_E2E_SPARK_IMAGE") == "" {
 		t.Skip("SPARK_E2E_SPARK_IMAGE not set — skipping K8s Spark e2e test")
 	}
 }
-
-// ─── polling helpers ─────────────────────────────────────────────────────────
 
 func pollInterval() time.Duration {
 	if v := os.Getenv("SPARK_E2E_POLL_INTERVAL"); v != "" {
@@ -118,8 +107,6 @@ func jobTimeout() time.Duration {
 	return 5 * time.Minute
 }
 
-// pollEMRStep polls DescribeStep until a terminal state or timeout.
-// Returns the final state string.
 func pollEMRStep(t *testing.T, emrClient *awsemr.Client, clusterID, stepID string) string {
 	t.Helper()
 	deadline := time.Now().Add(jobTimeout())
@@ -152,7 +139,6 @@ func isTerminalStepState(state string) bool {
 	return false
 }
 
-// pollJobRun polls DescribeJobRun until terminal state or timeout.
 func pollJobRun(t *testing.T, emrcClient *awsemrc.Client, vcID, jobRunID string) string {
 	t.Helper()
 	deadline := time.Now().Add(jobTimeout())
@@ -185,15 +171,13 @@ func isTerminalJobRunState(state string) bool {
 	return false
 }
 
-// pollSQSMessage polls ReceiveMessage on a queue until a message arrives or timeout.
-// Returns the parsed message body as a map.
-func pollSQSMessage(t *testing.T, sqsClient *awssqs.Client, queueURL string, maxWait time.Duration) map[string]any {
+func pollSQSMessageWithState(t *testing.T, sqsClient *awssqs.Client, queueURL, wantState string, maxWait time.Duration) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		out, err := sqsClient.ReceiveMessage(context.Background(), &awssqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
-			MaxNumberOfMessages: 1,
+			MaxNumberOfMessages: 10,
 			WaitTimeSeconds:     1,
 		})
 		if err != nil {
@@ -201,19 +185,21 @@ func pollSQSMessage(t *testing.T, sqsClient *awssqs.Client, queueURL string, max
 			time.Sleep(time.Second)
 			continue
 		}
-		if len(out.Messages) > 0 {
+		for _, m := range out.Messages {
 			var body map[string]any
-			if err := json.Unmarshal([]byte(*out.Messages[0].Body), &body); err != nil {
-				t.Fatalf("parse SQS message body: %v", err)
+			if err := json.Unmarshal([]byte(*m.Body), &body); err != nil {
+				continue
 			}
-			return body
+			detail, _ := body["detail"].(map[string]any)
+			if detail != nil && detail["state"] == wantState {
+				return body
+			}
 		}
 	}
-	t.Fatalf("no SQS message received within %s on %s", maxWait, queueURL)
+	t.Fatalf("no SQS message with state=%s within %s on %s", wantState, maxWait, queueURL)
 	return nil
 }
 
-// createQueue creates an SQS queue and returns its URL.
 func createQueue(t *testing.T, sqsClient *awssqs.Client, name string) string {
 	t.Helper()
 	out, err := sqsClient.CreateQueue(context.Background(), &awssqs.CreateQueueInput{
@@ -225,22 +211,28 @@ func createQueue(t *testing.T, sqsClient *awssqs.Client, name string) string {
 	return *out.QueueUrl
 }
 
-// sparkPiArgs returns spark-submit args for SparkPi running in local mode.
-func sparkPiArgs(slices int) []string {
-	return []string{
-		"spark-submit",
-		"--master", "local[2]",
-		"--class", "org.apache.spark.examples.SparkPi",
-		"/opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar",
-		fmt.Sprintf("%d", slices),
+func createVirtualCluster(t *testing.T, emrcClient *awsemrc.Client, name string) string {
+	t.Helper()
+	ns := k8sNamespace()
+	out, err := emrcClient.CreateVirtualCluster(context.Background(), &awsemrc.CreateVirtualClusterInput{
+		Name: aws.String(name),
+		ContainerProvider: &emrctypes.ContainerProvider{
+			Id:   aws.String(ns),
+			Type: emrctypes.ContainerProviderTypeEks,
+			Info: &emrctypes.ContainerInfoMemberEksInfo{
+				Value: emrctypes.EksInfo{Namespace: aws.String(ns)},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateVirtualCluster %s: %v", name, err)
 	}
+	return *out.Id
 }
 
-// badClassArgs returns spark-submit args for a non-existent class (will fail).
-func badClassArgs() []string {
-	return []string{
-		"spark-submit",
-		"--class", "com.nonexistent.ClassThatDoesNotExist",
-		"/opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar",
+func k8sNamespace() string {
+	if ns := os.Getenv("SPARK_E2E_K8S_NAMESPACE"); ns != "" {
+		return ns
 	}
+	return "default"
 }

@@ -1,6 +1,6 @@
 //go:build spark_e2e
 
-package plugin_test
+package emr_test
 
 import (
 	"context"
@@ -217,34 +217,10 @@ func TestSparkJob_Docker_MultipleStepsSequential(t *testing.T) {
 		t.Fatalf("expected 3 step IDs, got %d", len(stepOut.StepIds))
 	}
 
-	// Poll each step sequentially
 	for i, stepID := range stepOut.StepIds {
 		finalState := pollEMRStep(t, emrClient, clusterID, stepID)
 		if finalState != "COMPLETED" {
 			t.Errorf("step %d (%s): expected COMPLETED, got %s", i+1, stepID, finalState)
 		}
 	}
-}
-
-// ─── helpers ──────────────────────────────────────────────────��──────────────
-
-func createCluster(t *testing.T, emrClient *awsemr.Client, name string) string {
-	t.Helper()
-	out, err := emrClient.RunJobFlow(context.Background(), &awsemr.RunJobFlowInput{
-		Name:         aws.String(name),
-		ReleaseLabel: aws.String("emr-6.10.0"),
-		ServiceRole:  aws.String("EMR_DefaultRole"),
-		JobFlowRole:  aws.String("EMR_EC2_DefaultRole"),
-		LogUri:       aws.String("s3://my-bucket/logs/"),
-		Instances: &types.JobFlowInstancesConfig{
-			MasterInstanceType:          aws.String("m5.xlarge"),
-			SlaveInstanceType:           aws.String("m5.xlarge"),
-			InstanceCount:               aws.Int32(1),
-			KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunJobFlow %s: %v", name, err)
-	}
-	return *out.JobFlowId
 }

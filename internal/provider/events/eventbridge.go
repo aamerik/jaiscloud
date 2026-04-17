@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -354,16 +355,23 @@ func (p *EventBridgeProvider) subscribeToEventBus() {
 
 // deliverEvent matches envelope against all ENABLED rules and sends to matching SQS targets.
 func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[string]any) {
+	source, _ := envelope["source"].(string)
+	detailType, _ := envelope["detail-type"].(string)
+	fmt.Fprintf(os.Stderr, "[EventBridge] deliverEvent source=%q detail-type=%q\n", source, detailType)
 	entries, _ := p.resources.List(ctx, resTypeRule, "")
+	fmt.Fprintf(os.Stderr, "[EventBridge] checking %d rules\n", len(entries))
 	for _, e := range entries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
 			continue
 		}
 		if rule.State != "ENABLED" {
+			fmt.Fprintf(os.Stderr, "[EventBridge] rule %q state=%s (skipping)\n", rule.Name, rule.State)
 			continue
 		}
-		if !matchesPattern(rule.EventPattern, envelope) {
+		matched := matchesPattern(rule.EventPattern, envelope)
+		fmt.Fprintf(os.Stderr, "[EventBridge] rule %q matched=%v pattern=%s\n", rule.Name, matched, rule.EventPattern)
+		if !matched {
 			continue
 		}
 		targets, _ := p.resources.List(ctx, resTypeTarget, rule.Name+"/")
@@ -381,17 +389,20 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 // Uses pre-resolved TargetType/QueueURL — no resource-store lookup, no cloud coupling.
 // The placeholder host in QueueURL is replaced with the actual localhost:port at delivery time.
 func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData, envelope map[string]any) {
+	fmt.Fprintf(os.Stderr, "[EventBridge] deliverToTarget id=%q type=%q queueURL=%q\n", td.ID, td.TargetType, td.QueueURL)
 	if td.TargetType != "sqs" || td.QueueURL == "" {
+		fmt.Fprintf(os.Stderr, "[EventBridge] skipping unsupported target type=%q\n", td.TargetType)
 		return
 	}
 	host := fmt.Sprintf("localhost:%d", p.port)
 	queueURL := strings.Replace(td.QueueURL, jaiscloudHostPlaceholder, host, 1)
 	body, _ := json.Marshal(envelope)
-	_, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
+	_, err := p.messages.Send(ctx, sqsstore.SQSMessage{
 		QueueURL:  queueURL,
 		MessageID: newEventID(),
 		Body:      string(body),
 	})
+	fmt.Fprintf(os.Stderr, "[EventBridge] SQS send to %q err=%v\n", queueURL, err)
 }
 
 // ─── event envelope builders ──────────────────────────────────────────────────
@@ -478,7 +489,7 @@ func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 		"time":        time.Now().UTC().Format(time.RFC3339),
 		"region":      ev.Region,
 		"resources":   []any{},
-		"detail-type": "EMR Containers Job Run State Change",
+		"detail-type": "EMR Job Run State Change",
 		"detail":      detail,
 	}
 }
