@@ -2,18 +2,21 @@
 
 ## Overview
 
-JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure wire protocols so any SDK can point at it without modification. Development is structured in 7 phases — 0 through 6.
+JaisCloud is a local multi-cloud emulator that speaks native AWS, GCP, and Azure wire protocols so any SDK can point at it without modification. Development is structured in phases — 0 through 7.
+
+> **Multi-cloud note:** GCP (`--cloud gcp`) and Azure (`--cloud azure`) adapters are stubs that return 501 for all requests until Phases 5 and 6 respectively. The `--cloud` flags are intentionally kept in the binary as a forward-compatible API, but `jaiscloud doctor` and the startup log clearly report which services are active vs. stub. Do not expose GCP/Azure as supported in documentation until Phase 5/6 work lands.
 
 | Phase | Name | Status | Timeline |
 |---|---|---|---|
 | 0 | SQS Proof of Concept | ✅ Complete | Weeks 1–2 |
 | 1 | AWS Core Services | ✅ Complete | Weeks 3–5 |
 | 2 | AWS Extended Services | ✅ Complete | Weeks 7–10 |
-| 3 | AWS Athena (DuckDB) | Planned | Weeks 11–12 |
-| 4 | Full State Export / Import | Planned | Weeks 13–14 |
-| 5 | GCP API Layer | Planned | Weeks 15–18 |
-| 6 | Azure API Layer | Planned | Weeks 19–22 |
-| 7 | Polish & Release | Planned | Weeks 23–24 |
+| 2.5 | P0 Gap Services (KMS, SecretsManager, SSM, API Gateway, Lambda real exec, CloudFormation) | ✅ Complete | Weeks 11–13 |
+| 3 | AWS Athena (DuckDB) + Terraform compat + Docker image | Planned | Weeks 14–16 |
+| 4 | Full State Export / Import | Planned | Weeks 17–18 |
+| 5 | GCP API Layer | Planned | Weeks 19–22 |
+| 6 | Azure API Layer | Planned | Weeks 23–26 |
+| 7 | Polish & Release | Planned | Weeks 27–28 |
 
 ---
 
@@ -142,9 +145,53 @@ Streams are integrated into `TableProvider` rather than a standalone provider �
 
 ---
 
-## Phase 3: AWS Athena (DuckDB)
+## Phase 2.5: P0 Gap Services ✅
 
-**Goal:** Emulate Athena using DuckDB as the query engine. Depends on Glue (Phase 2) and S3/BlobFS (Phase 1).
+**Goal:** Add the services that block real-world AWS application testing but have low implementation cost. These must ship before Athena because they are cross-cutting dependencies for Lambda, ECS, and CloudFormation workflows.
+
+**Why before Phase 3:** KMS/SecretsManager/SSM are required by most Terraform modules that provision Lambda + RDS. Without them, `terraform apply` against JaisCloud fails on resource creation, making Terraform compat testing (Phase 3) impossible to validate.
+
+### Services Delivered
+
+| Service | Key Operations | Status |
+|---|---|---|
+| **KMS** | CreateKey, DescribeKey, ListKeys, DescribeKey, Encrypt, Decrypt, ReEncrypt, GenerateDataKey, GenerateDataKeyWithoutPlaintext, CreateAlias, DeleteAlias, ListAliases, EnableKey, DisableKey, ScheduleKeyDeletion, CancelKeyDeletion, EnableKeyRotation, DisableKeyRotation, GetKeyRotationStatus, CreateGrant, RetireGrant, RevokeGrant, ListGrants, TagResource, UntagResource, ListResourceTags | ✅ |
+| **Secrets Manager** | CreateSecret, DescribeSecret, GetSecretValue, PutSecretValue, UpdateSecret, DeleteSecret, RestoreSecret, ListSecrets, RotateSecret, TagResource, UntagResource, ListSecretVersionIds | ✅ |
+| **SSM Parameter Store** | PutParameter, GetParameter, GetParameters, GetParametersByPath, GetParameterHistory, DeleteParameter, DeleteParameters, LabelParameterVersion, AddTagsToResource, ListTagsForResource | ✅ |
+| **API Gateway (REST)** | CreateRestApi, GetRestApi, GetRestApis, UpdateRestApi, DeleteRestApi, GetResources, GetResource, CreateResource, DeleteResource, PutMethod, GetMethod, DeleteMethod, PutIntegration, GetIntegration, DeleteIntegration, PutMethodResponse, PutIntegrationResponse, CreateDeployment, GetDeployments, DeleteDeployment, CreateStage, GetStage, GetStages, UpdateStage, DeleteStage | ✅ |
+| **API Gateway execute-api** | InvokeApi (AWS_PROXY→Lambda, MOCK, HTTP_PROXY integrations) | ✅ |
+| **Lambda real execution** | DockerExecutor (warm pool per function), K8sExecutor (batch/v1 Job per invocation); `JAISCLOUD_LAMBDA_MODE=docker\|k8s` | ✅ |
+| **CloudFormation** | CreateStack, UpdateStack, DeleteStack, DescribeStacks, ListStacks, DescribeStackResources, ValidateTemplate, GetTemplate; intrinsics (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::If, Fn::Select, Fn::Split, Fn::FindInMap, Fn::Base64, Fn::Not, Fn::And, Fn::Or, Fn::Equals, Fn::Length); topological sort (DependsOn + implicit Ref/GetAtt); real resource dispatch to 9 provider types | ✅ |
+
+### Infrastructure Delivered
+
+| Component | Scope |
+|---|---|
+| **`jc_kms_keys`, `jc_kms_aliases`, `jc_kms_master_key`** | KMS key store with DEK/KEK envelope encryption |
+| **`jc_secrets`, `jc_secret_versions`** | SecretsManager with AES-GCM encryption at rest via KMS |
+| **`jc_parameters`, `jc_parameter_history`** | SSM Parameter Store with SecureString encryption via KMS |
+| **API Gateway provider** | Full management plane (`internal/provider/apigw/`) + execute-api invoke plane |
+| **Lambda Docker executor** | Warm container pool, runtime image mapping, GC goroutine, `JAISCLOUD_LAMBDA_MODE=docker` |
+| **Lambda K8s executor** | One-shot `batch/v1 Job` per invocation, TTL cleanup, `JAISCLOUD_LAMBDA_MODE=k8s` |
+| **CloudFormation intrinsics engine** | `internal/provider/stack/intrinsics.go` — full CloudFormation intrinsic function resolver |
+| **Topological sort** | `internal/provider/stack/topsort.go` — Kahn's algorithm with DependsOn + implicit Ref/GetAtt dependency extraction and cycle detection |
+| **CFN resource dispatch** | `internal/provider/stack/dispatch.go` + `registerCFNHandlers` in `main.go` — wires 9 resource types (SQS Queue, SNS Topic, S3 Bucket, DynamoDB Table, IAM Role, Lambda Function, SSM Parameter, SecretsManager Secret, KMS Key) to real providers |
+| **Integration tests** | Full test coverage for KMS, SecretsManager, SSM, APIGateway, CloudFormation |
+
+### Exit Criteria
+
+All exit criteria met:
+
+- ✅ KMS, SecretsManager, SSM, API Gateway, CloudFormation integration tests pass.
+- ✅ Lambda Docker and K8s executor modes operational.
+- ✅ CloudFormation stacks with intrinsics (Ref, Fn::GetAtt, Fn::Sub, DependsOn) provision real resources via underlying providers.
+- ✅ Full integration test suite (`go test -race ./tests/integration/`) green.
+
+---
+
+## Phase 3: AWS Athena (DuckDB) + Terraform Compat + Docker Image
+
+**Goal:** Emulate Athena using DuckDB as the query engine. Depends on Glue (Phase 2) and S3/BlobFS (Phase 1). This phase also ships the two highest-leverage adoption unlockers: Terraform provider compatibility testing and a published Docker image.
 
 ### Planned Deliverables
 
@@ -155,6 +202,9 @@ Streams are integrated into `TableProvider` rather than a standalone provider �
 | **Subprocess mode** (default) | DuckDB CLI invoked as child process — pure Go binary, ~50ms overhead per query |
 | **Embedded CGO mode** (optional) | DuckDB linked via CGO — ~1–5ms overhead, requires C compiler at build time |
 | **Build targets** | `make build` (CGO_ENABLED=0, subprocess) and `make build-cgo` (CGO_ENABLED=1, embedded) |
+| **Docker image** | `docker run jaiscloud/jaiscloud` one-liner; published to Docker Hub on each release; includes `lite` and `full` variants |
+| **Terraform compat suite** | Run AWS Terraform provider against JaisCloud; target: S3, DynamoDB, IAM, Lambda, SQS, SNS, KMS, SecretsManager, SSM; fix any wire-protocol edge cases surfaced (presigned URLs, error shapes, pagination token formats) |
+| **SDK compatibility matrix** | Document tested SDK versions: `aws-sdk-go-v2`, `boto3`, `aws-sdk-js-v3`; publish as `docs/SDK_COMPAT.md` |
 
 #### Query Flow
 
@@ -272,16 +322,20 @@ The manifest `jaiscloud_version` field is checked on import:
 
 | Component | Scope |
 |---|---|
-| **`LocalFSBlobStore` wiring** | Wire `LocalFSBlobStore` in `main.go` for full mode so blob files are on disk and exportable (currently `MemoryBlobStore` is used even in full mode) |
+| **`LocalFSBlobStore` wiring** | ⚠ Already implemented — must be wired in Phase 2.5. Listed here for full-mode export completeness. |
 | **`pg_dump` / `pg_restore`** | Run `pg_dump` of the JaisCloud Postgres database into `store-dump.sql`; `pg_restore` on import |
 | **BlobFS export** | Walk `LocalFSBlobStore` directory and stream files into `blobs/` in the archive |
 | **BlobFS restore** | Extract `blobs/` from archive back into the BlobFS directory |
-| **`manifest.json`** | Generate on export with resource counts and SHA-256 checksums; validate on import |
-| **Admin HTTP upgrade** | Replace current JSON `GET /_jaiscloud/export` with `tar.gz` streaming response; replace JSON `POST /_jaiscloud/import` with multipart `tar.gz` upload. **Full mode only — 409 in lite mode.** |
+| **`manifest.json`** | Generate on export with resource counts, SHA-256 checksums, and `streams_excluded` flag if DynamoDB Streams state was omitted |
+| **`--strip-kek` export** | Decrypt DEK before archiving so import does not require KEK; patched row uses VERSION=0x00 plaintext layout |
+| **`--export-key <hex>` flag** | AES-GCM wrap the `jc_kms_master_key` row in the archive; safe to store in S3 or git; requires `--export-key` on import |
+| **Admin HTTP upgrade** | Replace current JSON `GET /_jaiscloud/export` with `tar.gz` streaming response; replace JSON `POST /_jaiscloud/import` with multipart `tar.gz` upload |
+| **Lite-mode JSON snapshot export** | `jaiscloud export` in lite mode produces a JSON snapshot of all in-memory stores via the existing `Snapshotter` interface (no blobs); returns 200, not 409 |
 | **`GET /_jaiscloud/state/summary`** | New endpoint returning resource counts per service (works in both modes) |
-| **CLI `export` upgrade** | `jaiscloud export [-o file.tar.gz] [--metadata-only]` |
-| **CLI `import` upgrade** | `jaiscloud import --file file.tar.gz [--merge] [--dry-run] [--yes]` |
-| **Integration test** | Export → reset → import round-trip: all resources and data restored correctly |
+| **`MemoryStreamStore` snapshot** | Implement `Snapshot`/`Restore` on `MemoryStreamStore`; register with `adminHandler`; or emit `streams_excluded=true` in manifest if deferred |
+| **CLI `export` upgrade** | `jaiscloud export [-o file.tar.gz] [--metadata-only] [--strip-kek] [--export-key <hex>]` |
+| **CLI `import` upgrade** | `jaiscloud import --file file.tar.gz [--merge] [--dry-run] [--yes] [--export-key <hex>]` |
+| **Integration test** | Full-mode: export → reset → import round-trip. Lite-mode: JSON snapshot export → reset → import. Cross-instance: strip-kek export → import on fresh instance → rotate-master-key. |
 
 ---
 
@@ -289,16 +343,19 @@ The manifest `jaiscloud_version` field is checked on import:
 
 **Goal:** Map GCP APIs to the existing provider/store layer so GCP SDKs work without modification.
 
+**Pre-requisite (must complete in Phase 2.5):** Move `awsARNFormatters` out of `config.go` into `aws/adapter.go` and add `FormatResourceID` to the `CloudAdapter` interface. GCP adapter will implement its own resource path formatters. Without this, providers calling `nr.ResourceID(...)` with `cloud=gcp` silently produce bare IDs. See ARCHITECTURE_P0_EXPANSION.md section 12.1.
+
 ### Planned Deliverables
 
 | Component | Scope |
 |---|---|
-| **GCP adapter** | REST path routing, OAuth token parsing, URL path version detection |
+| **GCP adapter** | REST path routing, OAuth token parsing, URL path version detection; implements `FormatResourceID` with GCP resource path format |
 | **GCS codec** | `storage.googleapis.com` v1 — maps to existing `ObjectProvider` |
 | **Compute codec** | `compute.googleapis.com` v1 — maps to new `ComputeProvider` |
 | **Pub/Sub codec** | `pubsub.googleapis.com` v1 — maps to existing `QueueProvider` + `NotificationProvider` |
 | **BigQuery codec** | `bigquery.googleapis.com` v2 — maps to existing `TableProvider` |
 | **Cloud SQL codec** | `sqladmin.googleapis.com` v1beta4 — maps to new `RelationalProvider` |
+| **Two-instance compose example** | `docker-compose.yml` running AWS instance (:4566) + GCP instance (:4567) for multi-cloud app testing |
 | **Integration tests** | Google Cloud Go SDK test suite |
 
 ---

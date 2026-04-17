@@ -6,7 +6,8 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 
 **Phase 0 (complete):** SQS — all 32 integration tests pass.  
 **Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.  
-**Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.
+**Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.  
+**Phase 2.5 (complete):** KMS (envelope crypto, grants, rotation); SecretsManager (AES-GCM at rest via KMS); SSM Parameter Store (SecureString via KMS); API Gateway REST management plane + execute-api invoke plane (MOCK, AWS_PROXY, HTTP_PROXY); Lambda Docker/K8s executors; CloudFormation with full intrinsics engine (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, conditions, mappings), topological sort, and real resource dispatch for 9 AWS resource types.
 
 ---
 
@@ -60,6 +61,10 @@ internal/
         emr.go          # EMRCodec
         emrcontainers.go   # EMRContainersCodec
         eventbridge.go  # EventBridgeCodec: JSON/Target (X-Amz-Target: AWSEvents.*)
+        kms.go          # KMSCodec: JSON/Target
+        secretsmanager.go  # SecretsManagerCodec: JSON/Target
+        ssm.go          # SSMCodec: JSON/Target
+        apigateway.go   # APIGatewayCodec: REST JSON (management plane path routing)
     azure/
       azure.go          # AzureAdapter stub — Cloud(), DetectAndDecode() (501), ServiceToProvider() (passthrough)
     gcp/
@@ -84,15 +89,23 @@ internal/
     dns/                # Route53 provider
     emr/                # EMRProvider — RunJobFlow, steps, tags; wires SparkExecutor + StatusPoller
     emroneks/           # EMRContainersProvider — virtual clusters, job runs; wires SparkExecutor
-    function/           # FunctionProvider — Lambda (echo invoke)
+    function/           # FunctionProvider — Lambda (echo/Docker/K8s invoke)
     iam/                # IAMProvider + STS (roles, policies, users, access keys)
     notification/       # SNSProvider (topics, subscriptions, fan-out to SQS)
     object/             # ObjectProvider — S3 (buckets, objects, multipart)
     queue/              # QueueProvider — SQS (all 17 operations)
     rds/                # RDS provider
     stack/              # CloudFormation provider
+      cloudformation.go # StackProvider — CreateStack, UpdateStack, DeleteStack, Describe, List
+      intrinsics.go     # CloudFormation intrinsic function resolver (Ref, Fn::*, conditions)
+      topsort.go        # Kahn's topological sort for DependsOn + implicit Ref/GetAtt deps
+      dispatch.go       # CFNResourceDispatcher — per-resource-type create/delete handlers
     table/              # TableProvider — DynamoDB (tables, items, expressions, streams)
     events/             # EventBridgeProvider — rules, targets, event delivery to SQS
+    apigw/              # APIGatewayProvider — REST API management plane + execute-api invoke
+    key/                # KeyProvider — KMS (keys, aliases, grants, envelope crypto, rotation)
+    secret/             # SecretProvider — SecretsManager (secrets, versions, rotation)
+    param/              # ParameterProvider — SSM Parameter Store (put/get/history/path)
   resourcemgr/          # Deletion guards and parent-existence checks
     manager.go          # Manager — CheckParent, AcquireDelete, RegisterRules, Reset
     deletionlock.go     # DeletionLock — thread-safe per-resource deletion marks
@@ -137,7 +150,7 @@ HTTP request
 
 Key design rules:
 - **No layer imports its caller.** The `model` package breaks the cycle between `gateway` and `adapter`.
-- **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection.
+- **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection. For multi-cloud applications that need both AWS and GCP simultaneously, run two instances on different ports (e.g. `--port 4566 --cloud aws` and `--port 4567 --cloud gcp`). A `docker-compose` example shipping in Phase 5 documents this pattern.
 - **Executors are wired at startup.** `JAISCLOUD_SPARK_MODE` controls which `SparkExecutor` is created; providers receive it via the `WithExecutor` option.
 
 ### Single-cloud adapter model
@@ -196,6 +209,178 @@ This mapping is defined once in `internal/adapter/aws/services.go` (`awsServices
 | `emr` | `EMR` | EMRCodec (JSON/Target) |
 | `emr-containers` | `EMRContainers` | EMRContainersCodec (REST/JSON) |
 | `events` | `EventBridge` | EventBridgeCodec (JSON/Target) |
+| `kms` | `KMS` | KMSCodec (JSON/Target) |
+| `secretsmanager` | `SecretsManager` | SecretsManagerCodec (JSON/Target) |
+| `ssm` | `SSM` | SSMCodec (JSON/Target) |
+| `apigateway` | `APIGateway` | APIGatewayCodec (REST/JSON, path-based routing) |
+
+---
+
+## Backend resources by mode
+
+This section documents what real infrastructure resources JaisCloud creates for each service depending on the runtime mode and executor configuration. "Metadata only" means the service stores resource definitions in-memory or in PostgreSQL but does **not** spin up any real compute.
+
+### Mode matrix
+
+| Service | Lite (default) | Full (`--mode full`) | Full + Docker executor | Full + K8s executor |
+|---|---|---|---|---|
+| SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
+| DynamoDB + Streams | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
+| S3 | In-memory maps + `MemoryBlobStore` | PostgreSQL rows + `LocalFSBlobStore`* | same | same |
+| Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s `batch/v1 Job`** per invocation |
+| EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | — | **K8s `batch/v1 Job`** per step |
+| EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | — | **K8s `batch/v1 Job`** per job run |
+| EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
+| RDS | Metadata only | Metadata only | — | — |
+| ElastiCache | Metadata only | Metadata only | — | — |
+| ECS | Metadata only | Metadata only | — | — |
+| API Gateway | In-memory resource store | PostgreSQL rows | — | — |
+| CloudFormation | In-memory stack store + real resource dispatch | PostgreSQL rows + real resource dispatch | — | — |
+| Glue / EventBridge | In-memory maps | PostgreSQL rows | — | — |
+| EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
+| RDS | Metadata only | Metadata only | — | — |
+| ElastiCache | Metadata only | Metadata only | — | — |
+| ECS | Metadata only | Metadata only | — | — |
+
+> \* `LocalFSBlobStore` is implemented and wired in `main.go` when `--blob-dir` is set. Without `--blob-dir`, `MemoryBlobStore` is used even in full mode and S3 blobs are lost on restart.
+
+---
+
+### Lambda — Docker executor (`JAISCLOUD_LAMBDA_MODE=docker`)
+
+Each distinct function gets **one warm Docker container** that is reused across invocations until it is idle beyond the keep-alive timeout.
+
+```
+docker run -d
+  --name jc-lambda-{functionName}-{shortID}
+  --network jaiscloud-net
+  -p {hostPort}:{INVOCATION_PORT}
+  -e AWS_LAMBDA_FUNCTION_NAME={name}
+  -e AWS_DEFAULT_REGION={region}
+  -e JAISCLOUD_ENDPOINT=http://host.docker.internal:{port}
+  -e {user env vars...}
+  --memory {memMB}m
+  {runtimeImage}
+```
+
+**Container lifecycle:**
+
+| Trigger | Action |
+|---|---|
+| First `InvokeFunction` for a function | `docker run` (cold start) |
+| Subsequent invocations | HTTP POST to warm container port (reuse) |
+| `DeleteFunction` | `docker stop` + `docker rm` |
+| Idle > `JAISCLOUD_LAMBDA_KEEPALIVE_SECS` (default 300 s) | GC goroutine stops container |
+| Server shutdown (`Close()`) | All warm containers stopped |
+
+**Runtime → image mapping** (override with `JAISCLOUD_LAMBDA_IMAGE` or per-function `ImageUri`):
+
+| Runtime | Default image |
+|---|---|
+| `python3.12` | `public.ecr.aws/lambda/python:3.12` |
+| `nodejs20.x` | `public.ecr.aws/lambda/nodejs:20` |
+| `java21` | `public.ecr.aws/lambda/java:21` |
+| `go1.x` / `provided.al2` | `public.ecr.aws/lambda/provided:al2` |
+
+---
+
+### Lambda — K8s executor (`JAISCLOUD_LAMBDA_MODE=k8s`)
+
+Each invocation creates a **one-shot `batch/v1 Job`** (no warm pool). The job is deleted automatically after `ttlSecondsAfterFinished: 300`.
+
+```yaml
+kind: Job
+metadata:
+  name: jc-lambda-{functionName}-{invocationID[:8]}
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-lambda
+    function: {functionName}
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  activeDeadlineSeconds: {timeoutSecs + 10}
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: lambda
+          image: {runtimeImage}
+          env:
+            - name: _LAMBDA_PAYLOAD_B64
+              value: {base64(payload)}
+          resources:
+            limits:
+              memory: {memoryMB}Mi
+              cpu: "1"
+```
+
+Result is retrieved by polling `Job.status.succeeded` then reading pod logs.
+
+---
+
+### EMR on EC2 steps — K8s executor (`JAISCLOUD_SPARK_MODE=k8s`)
+
+Each EMR step (`AddJobFlowSteps`) that reaches `RUNNING` state submits a **`batch/v1 Job`** via `spark-submit` in cluster deploy mode:
+
+```yaml
+kind: Job
+metadata:
+  name: jc-spark-{clusterID[:8]}-{stepID[:8]}
+  namespace: {SparkConfig.Namespace}   # default: "default"
+  labels:
+    app: jaiscloud-spark
+    cluster: {clusterID}
+    step: {stepID}
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: {SparkConfig.ServiceAccount}
+      containers:
+        - name: spark-submit
+          image: {SparkConfig.Image}
+          command: ["spark-submit"]
+          args:
+            - --master k8s://{apiServer}
+            - --deploy-mode cluster
+            - --conf spark.kubernetes.container.image={SparkConfig.Image}
+            - --conf spark.kubernetes.namespace={namespace}
+            - {user --conf entries from step args}
+            - {jar URI}
+            - {step args...}
+```
+
+The `StatusPoller` goroutine polls the Job every `SparkConfig.PollInterval` (default 5 s) and fires `OnStateChange` to update the EMR step state (`PENDING → RUNNING → COMPLETED / FAILED`).
+
+---
+
+### EMR on EKS job runs — K8s executor (`JAISCLOUD_SPARK_MODE=k8s`)
+
+Each `StartJobRun` on a virtual cluster submits the same `batch/v1 Job` pattern as EMR steps (above), with the job named `jc-emrc-{virtualClusterID[:8]}-{jobRunID[:8]}` and labels `app: jaiscloud-emrc`.
+
+---
+
+### RDS, ElastiCache, ECS — metadata only (current)
+
+These services currently store resource definitions (instance configs, cluster configs, task definitions) as JSON blobs in `jc_resources` (PostgreSQL in full mode, in-memory map in lite mode). **No real database processes or containers are started.** This is the same pattern as LocalStack's basic tier for these services.
+
+Real container provisioning (e.g. spinning up a PostgreSQL container for each `CreateDBInstance` call, or a Redis container for each `CreateCacheCluster`) is planned as a future enhancement triggered by a dedicated executor flag (e.g. `JAISCLOUD_RDS_MODE=docker`), following the same executor pattern used for Lambda and Spark.
+
+---
+
+### S3 blob storage
+
+S3 object **bodies** are stored in `BlobStore`, separate from the metadata in PostgreSQL:
+
+| Mode | BlobStore | Where blobs live |
+|---|---|---|
+| Lite | `MemoryBlobStore` | In-process heap; lost on restart |
+| Full (current) | `MemoryBlobStore` | In-process heap; lost on restart |
+| Full (when wired) | `LocalFSBlobStore` | `JAISCLOUD_BLOB_DIR` on local filesystem |
+
+`LocalFSBlobStore` is fully implemented at [internal/blobfs/](internal/blobfs/) but the `main.go` wire-up still uses `MemoryBlobStore`. Swap `NewMemoryBlobStore()` for `NewLocalFSBlobStore(cfg.BlobDir)` in `startCmd` to enable persistent blob storage.
 
 ---
 
@@ -233,9 +418,22 @@ JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
 JAISCLOUD_METRICS=true
 JAISCLOUD_SPARK_MODE=        # "mock" or "k8s" (default: off = immediate completion)
+JAISCLOUD_LAMBDA_MODE=       # "mock", "docker", or "k8s" (default: mock = echo)
+JAISCLOUD_LAMBDA_IMAGE=      # override default runtime image
+JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300  # Docker warm container idle timeout
+JAISCLOUD_KMS_MASTER_KEY=    # 32-byte hex KEK; if unset DEK stored plaintext (dev only)
+JAISCLOUD_APIGW_PROXY_TIMEOUT=30s    # HTTP_PROXY integration timeout
+JAISCLOUD_APIGW_ALLOW_PRIVATE_HOSTS= # true to allow RFC-1918 HTTP_PROXY targets
 ```
 
 > **Config loading:** `config.Load()` reads from the global Viper instance. All `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not a local `viper.New()` instance) or flags will be silently ignored and defaults used.
+
+> **Startup executor log:** on startup the server logs a structured block showing the active mode for every executor and store. A misconfigured executor (e.g. `JAISCLOUD_LAMBDA_MODE` unset) silently falls back to mock — the startup log is the first place to check:
+> ```
+> INFO  executor  lambda=mock  spark=mock
+> INFO  store     mode=full  blob=memory [WARN: LocalFSBlobStore not wired — S3 blobs lost on restart]
+> INFO  kms       master-key=unset  dek=plaintext [WARN: dev mode only]
+> ```
 
 ### CLI commands
 
@@ -246,8 +444,10 @@ JAISCLOUD_SPARK_MODE=        # "mock" or "k8s" (default: off = immediate complet
 | `env` | Print effective config as env vars (includes JAISCLOUD_CLOUD) |
 | `doctor` | Check emulator reachability |
 | `reset` | Wipe all emulator state via HTTP |
-| `export [-o file]` | Export state snapshot to JSON |
-| `import [-i file]` | Restore state from JSON snapshot |
+| `export [-o file] [--strip-kek] [--export-key hex]` | Export state snapshot; use `--strip-kek` when moving to a different instance |
+| `import [-i file] [--export-key hex]` | Restore state from snapshot |
+| `rotate-master-key --new-key <hex>` | Re-wrap KMS DEK with new KEK; zero re-encryption of key material |
+| `services` | Print each service with its implementation level: `full \| partial \| metadata-only \| stub` |
 
 ---
 

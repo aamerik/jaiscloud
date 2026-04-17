@@ -117,14 +117,20 @@ s3.create_bucket(Bucket="my-bucket")
 | GetCallerIdentity | ✅ |
 | AssumeRole (returns mock credentials) | ✅ |
 
-### ✅ AWS Lambda (echo mode)
+### ✅ AWS Lambda
 | Operation | Supported |
 |---|---|
 | CreateFunction / GetFunction / DeleteFunction / ListFunctions | ✅ |
 | UpdateFunctionConfiguration / UpdateFunctionCode | ✅ |
-| Invoke (echo mode — returns payload unchanged) | ✅ |
+| Invoke (echo mode, Docker warm pool, or K8s job) | ✅ |
 
-> Lambda Invoke uses **echo mode**: the payload you send is returned as the response. No subprocess is spawned. This is intentional — it lets you test fan-out pipelines, event routing, and infrastructure wiring without needing real function code.
+Lambda supports three execution modes controlled by `JAISCLOUD_LAMBDA_MODE`:
+
+| Mode | Behaviour |
+|---|---|
+| _(unset)_ / `mock` | Echo mode — payload returned unchanged. No subprocess. Ideal for testing infrastructure wiring. |
+| `docker` | Each function runs in a **warm Docker container** (one per function, reused across invocations). Cold start on first invoke; container kept alive for `JAISCLOUD_LAMBDA_KEEPALIVE_SECS` (default 300 s). |
+| `k8s` | Each invocation creates a **one-shot `batch/v1 Job`** in Kubernetes. No warm pool. Result read from pod logs after job completion. |
 
 ### ✅ AWS Glue Data Catalog
 | Operation | Supported |
@@ -158,6 +164,63 @@ s3.create_bucket(Bucket="my-bucket")
 | CreateManagedEndpoint / DescribeManagedEndpoint / DeleteManagedEndpoint / ListManagedEndpoints | ✅ |
 | TagResource / UntagResource / ListTagsForResource | ✅ |
 
+### ✅ AWS KMS
+| Operation | Supported |
+|---|---|
+| CreateKey / DescribeKey / ListKeys / EnableKey / DisableKey | ✅ |
+| Encrypt / Decrypt / ReEncrypt | ✅ |
+| GenerateDataKey / GenerateDataKeyWithoutPlaintext | ✅ |
+| CreateAlias / DeleteAlias / ListAliases | ✅ |
+| ScheduleKeyDeletion / CancelKeyDeletion | ✅ |
+| EnableKeyRotation / DisableKeyRotation / GetKeyRotationStatus | ✅ |
+| CreateGrant / RetireGrant / RevokeGrant / ListGrants | ✅ |
+| TagResource / UntagResource / ListResourceTags | ✅ |
+
+> KMS uses AES-256-GCM envelope encryption. When `JAISCLOUD_KMS_MASTER_KEY` is set to a 32-byte hex KEK, all DEKs are wrapped with it. Without it, DEKs are stored in plaintext (dev mode only).
+
+### ✅ AWS Secrets Manager
+| Operation | Supported |
+|---|---|
+| CreateSecret / DescribeSecret / UpdateSecret / DeleteSecret / RestoreSecret | ✅ |
+| GetSecretValue / PutSecretValue | ✅ (SecretString and SecretBinary) |
+| ListSecrets / ListSecretVersionIds | ✅ |
+| RotateSecret | ✅ |
+| TagResource / UntagResource | ✅ |
+
+### ✅ AWS SSM Parameter Store
+| Operation | Supported |
+|---|---|
+| PutParameter / GetParameter / GetParameters | ✅ |
+| GetParametersByPath (recursive, with filters) | ✅ |
+| GetParameterHistory | ✅ |
+| DeleteParameter / DeleteParameters | ✅ |
+| LabelParameterVersion | ✅ |
+| AddTagsToResource / ListTagsForResource | ✅ |
+| String, StringList, SecureString types | ✅ |
+
+### ✅ AWS API Gateway (REST)
+| Operation | Supported |
+|---|---|
+| CreateRestApi / GetRestApi / GetRestApis / UpdateRestApi / DeleteRestApi | ✅ |
+| GetResources / GetResource / CreateResource / DeleteResource | ✅ |
+| PutMethod / GetMethod / DeleteMethod | ✅ |
+| PutIntegration / GetIntegration / DeleteIntegration | ✅ |
+| PutMethodResponse / PutIntegrationResponse | ✅ |
+| CreateDeployment / GetDeployments / DeleteDeployment | ✅ |
+| CreateStage / GetStage / GetStages / UpdateStage / DeleteStage | ✅ |
+| InvokeApi — MOCK, AWS_PROXY (→ Lambda), HTTP_PROXY integrations | ✅ |
+
+### ✅ AWS CloudFormation
+| Operation | Supported |
+|---|---|
+| CreateStack / UpdateStack / DeleteStack | ✅ |
+| DescribeStacks / ListStacks | ✅ |
+| DescribeStackResources | ✅ |
+| ValidateTemplate / GetTemplate | ✅ |
+| Intrinsics: Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::If, Fn::Select, Fn::Split, Fn::FindInMap, Fn::Base64, Fn::Not, Fn::And, Fn::Or, Fn::Equals, Fn::Length | ✅ |
+| DependsOn (explicit) + implicit Ref/GetAtt dependency ordering | ✅ |
+| Real resource provisioning: SQS Queue, SNS Topic, S3 Bucket, DynamoDB Table, IAM Role, Lambda Function, SSM Parameter, SecretsManager Secret, KMS Key | ✅ |
+
 ### ⚙️ Stub services (wire protocol only — no business logic)
 The following services are registered and respond with well-formed empty responses so SDK calls don't fail during infrastructure setup. Full implementations are planned.
 
@@ -168,7 +231,6 @@ The following services are registered and respond with well-formed empty respons
 | Amazon RDS | Stub |
 | Amazon ElastiCache | Stub |
 | Amazon ECS | Stub |
-| AWS CloudFormation | Stub |
 
 ---
 
@@ -296,6 +358,34 @@ Three named sizes control driver/executor CPU and memory for the K8s executor:
 
 ---
 
+## What's New in Phase 2.5
+
+### KMS, Secrets Manager, and SSM Parameter Store
+
+Full implementations of the three services most commonly blocking Terraform-based testing. KMS uses AES-256-GCM envelope encryption with an optional KEK (`JAISCLOUD_KMS_MASTER_KEY`). SecretsManager encrypts secret values at rest via KMS. SSM supports String, StringList, and SecureString with KMS-encrypted values.
+
+### API Gateway
+
+Full REST API management plane plus an execute-api invoke plane. Supports MOCK, AWS_PROXY (fan-out to Lambda), and HTTP_PROXY integrations. SDK-compatible path routing, stages, deployments, and methods.
+
+### Lambda Real Execution
+
+Two new Lambda executor modes beyond the default echo mode:
+
+```bash
+# Warm Docker container per function
+JAISCLOUD_LAMBDA_MODE=docker ./jaiscloud start
+
+# One-shot Kubernetes Job per invocation
+JAISCLOUD_LAMBDA_MODE=k8s ./jaiscloud start
+```
+
+### CloudFormation with Intrinsics
+
+CloudFormation now provisions real resources. Stacks are parsed, topologically sorted (DependsOn + implicit Ref/GetAtt), and each resource type is dispatched to the underlying JaisCloud provider. Supported intrinsics: Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::If, Fn::Select, Fn::Split, Fn::FindInMap, Fn::Base64, Fn::Not, Fn::And, Fn::Or, Fn::Equals, Fn::Length.
+
+---
+
 ## What's New in Phase 2
 
 ### Plugin System
@@ -342,11 +432,12 @@ JaisCloud prioritises **protocol correctness** over breadth:
 
 **Known limitations:**
 - No IAM policy evaluation — all requests are accepted regardless of attached policies.
-- Lambda runs in echo mode only; no actual function execution.
+- Lambda defaults to echo mode; Docker/K8s modes require `JAISCLOUD_LAMBDA_MODE=docker|k8s` and a running Docker daemon or Kubernetes cluster respectively.
 - S3 versioning and object locking are stubbed (no error, no actual versioning).
 - No cross-region or cross-account semantics.
 - Azure and GCP cloud modes are scaffolded only (Phase 3+).
 - EMR K8s executor (`JAISCLOUD_SPARK_MODE=k8s`) requires a real Kubernetes cluster; `mock` mode is used when no cluster is available.
+- CloudFormation resource dispatch covers 9 resource types; other `AWS::*` resources are recorded in stack metadata but not provisioned.
 
 ---
 
@@ -608,12 +699,17 @@ cd plugins/aws-emr-spark && go test -race ./internal/...
 go test -race -count=1 ./tests/integration/
 
 # Target a specific service
-go test -race -run TestS3       ./tests/integration/
-go test -race -run TestSQS      ./tests/integration/
-go test -race -run TestDynamo   ./tests/integration/
-go test -race -run TestLambda   ./tests/integration/
-go test -race -run TestEMR      ./tests/integration/
-go test -race -run TestEMRC     ./tests/integration/
+go test -race -run TestS3               ./tests/integration/
+go test -race -run TestSQS              ./tests/integration/
+go test -race -run TestDynamo           ./tests/integration/
+go test -race -run TestLambda           ./tests/integration/
+go test -race -run TestEMR              ./tests/integration/
+go test -race -run TestEMRC             ./tests/integration/
+go test -race -run TestKMS              ./tests/integration/
+go test -race -run TestSecretsManager   ./tests/integration/
+go test -race -run TestSSM              ./tests/integration/
+go test -race -run TestAPIGateway       ./tests/integration/
+go test -race -run TestCF               ./tests/integration/
 
 # Iceberg e2e tests (requires Docker + Spark image + Postgres)
 SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test \
