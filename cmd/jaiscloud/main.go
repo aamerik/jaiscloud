@@ -34,6 +34,7 @@ import (
 	emrprovider "jaiscloud/internal/provider/emr"
 	keyprovider "jaiscloud/internal/key"
 	secretprovider "jaiscloud/internal/secret"
+	paramprovider "jaiscloud/internal/parameter"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
@@ -96,14 +97,14 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore, bus, keyStore, secretStore, cleanup := buildRegistry(ctx, cfg, s, dek)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, cleanup := buildRegistry(ctx, cfg, s, dek)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
-			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore)
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
 			_ = bus // bus is used internally by providers
@@ -168,12 +169,13 @@ func bindFlags(cmd *cobra.Command) {
 
 // appStores holds all store instances that the server depends on.
 type appStores struct {
-	resources store.ResourceStore
-	messages  sqsstore.SQSMessageStore
-	dynamo    dynamostore.DynamoDBItemStore
-	s3Meta    s3store.S3ObjectMetaStore
-	blobs     blobfs.BlobStore
-	secrets   secretprovider.SecretStore
+	resources  store.ResourceStore
+	messages   sqsstore.SQSMessageStore
+	dynamo     dynamostore.DynamoDBItemStore
+	s3Meta     s3store.S3ObjectMetaStore
+	blobs      blobfs.BlobStore
+	secrets    secretprovider.SecretStore
+	parameters paramprovider.ParameterStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -195,23 +197,25 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		}
 		slog.Info("blob storage", "dir", cfg.BlobDir)
 		return appStores{
-			resources: pgStore,
-			messages:  sqsstore.NewPostgresSQSMessageStore(pool),
-			dynamo:    dynamostore.NewPostgresDynamoDBItemStore(pool),
-			s3Meta:    s3store.NewPostgresS3ObjectMetaStore(pool),
-			blobs:     blobs,
-			secrets:   secretprovider.NewPostgresSecretStore(pool),
+			resources:  pgStore,
+			messages:   sqsstore.NewPostgresSQSMessageStore(pool),
+			dynamo:     dynamostore.NewPostgresDynamoDBItemStore(pool),
+			s3Meta:     s3store.NewPostgresS3ObjectMetaStore(pool),
+			blobs:      blobs,
+			secrets:    secretprovider.NewPostgresSecretStore(pool),
+			parameters: paramprovider.NewPostgresParameterStore(pool),
 		}, nil
 	}
 
 	slog.Info("starting in lite mode")
 	return appStores{
-		resources: store.NewMemoryResourceStore(),
-		messages:  sqsstore.NewMemoryMessageStore(),
-		dynamo:    dynamostore.NewMemoryDynamoDBItemStore(),
-		s3Meta:    s3store.NewMemoryS3ObjectMetaStore(),
-		blobs:     blobfs.NewMemoryBlobStore(),
-		secrets:   secretprovider.NewMemorySecretStore(),
+		resources:  store.NewMemoryResourceStore(),
+		messages:   sqsstore.NewMemoryMessageStore(),
+		dynamo:     dynamostore.NewMemoryDynamoDBItemStore(),
+		s3Meta:     s3store.NewMemoryS3ObjectMetaStore(),
+		blobs:      blobfs.NewMemoryBlobStore(),
+		secrets:    secretprovider.NewMemorySecretStore(),
+		parameters: paramprovider.NewMemoryParameterStore(),
 	}, nil
 }
 
@@ -240,7 +244,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -287,11 +291,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		keyStore = keyprovider.NewMemoryKeyStore()
 	}
 	keyProv := keyprovider.New(keyStore, nil, dek)
-	secretProv := secretprovider.New(s.secrets, keyProv.AsKeyEncryptor())
+	kmsEncryptor := keyProv.AsKeyEncryptor()
+	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
+	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
 	registry := provider.NewRegistry()
 	registry.RegisterAll(keyProv.Routes())
 	registry.RegisterAll(secretProv.Routes())
+	registry.RegisterAll(paramProv.Routes())
 	registry.RegisterAll(queue.New(s.resources, s.messages, cfg.Clock, bus).Routes())
 	registry.RegisterAll(iamprovider.New(s.resources).Routes())
 	registry.RegisterAll(notification.New(s.resources, s.messages, bus).Routes())
@@ -311,7 +318,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 
-	return registry, streams, bus, keyStore, s.secrets, cleanup
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, cleanup
 }
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
@@ -360,6 +367,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 	return awsadapter.NewAdapter(map[string]adapter.Codec{
 		"kms":             &services.KMSCodec{},
 		"secretsmanager":  &services.SecretsManagerCodec{},
+		"ssm":             &services.SSMCodec{},
 		"sqs":             &services.SQSCodec{},
 		"iam":             iamCodec,
 		"sts":             iamCodec,
@@ -383,7 +391,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 }
 
 // buildAdminHandler registers all resetters and snapshotters, then returns the handler.
-func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore, secretStore secretprovider.SecretStore) *admin.Handler {
+func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore, secretStore secretprovider.SecretStore, paramStore paramprovider.ParameterStore) *admin.Handler {
 	h := admin.NewHandler()
 	h.RegisterResetter(s.resources)
 	h.RegisterResetter(s.messages)
@@ -393,6 +401,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(streams)
 	h.RegisterResetter(keyStore)
 	h.RegisterResetter(secretStore)
+	h.RegisterResetter(paramStore)
 	if snap, ok := s.resources.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("resources", snap)
 	}
