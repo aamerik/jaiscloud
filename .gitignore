@@ -5,6 +5,7 @@ plan_docs/
 
 # Ignore built binary not folder
 jaiscloud
+jaiscloud-linux
 !jaiscloud/
 
 # Go build outputs
