@@ -15,6 +15,11 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
   - [Integration tests (lite mode)](#integration-tests)
   - [Full mode integration tests](#full-mode-integration-tests)
   - [Spark e2e tests](#spark-e2e-tests-spark_e2e-build-tag)
+  - [Phase 2.5 e2e tests](#phase-25-e2e-tests-lambda_e2e-build-tag)
+    - [Lambda Docker mode](#lambda-docker-mode)
+    - [Lambda Kubernetes mode](#lambda-kubernetes-mode)
+    - [KMS · SecretsManager · SSM cross-service](#kms--secretsmanager--ssm-cross-service)
+    - [CloudFormation e2e](#cloudformation-e2e)
   - [Apache Iceberg e2e tests](#apache-iceberg-e2e-tests-iceberg_e2e-build-tag)
 - [Platform Setup](#platform-setup)
 
@@ -838,6 +843,321 @@ go test -v -tags spark_e2e \
   -timeout 5m \
   ./tests/full_mode/plugin/
 ```
+
+---
+
+---
+
+### Phase 2.5 e2e tests (`lambda_e2e` build tag)
+
+These tests cover the Phase 2.5 services — Lambda Docker/K8s executors, KMS, SecretsManager, SSM Parameter Store, and CloudFormation real resource dispatch — in full end-to-end mode. They live under `tests/full_mode/p25/` and are **excluded from normal CI** by the `//go:build lambda_e2e` tag.
+
+All tests in this suite follow the same conventions as the Spark e2e tests:
+- `resetState(t)` calls `POST /_jaiscloud/reset` before each test.
+- Skip guards (e.g. `requireLambdaDockerEnv`) skip individual tests when the required executor is not configured.
+- Timeouts are controlled via environment variables.
+
+#### Common prerequisites
+
+| Tool | Purpose |
+|---|---|
+| Go 1.26+ | Test runner |
+| PostgreSQL 14+ | Full-mode persistence (KMS keys, secrets, parameters, CF stacks) |
+| JaisCloud (full mode) | Running server |
+
+Start the server:
+```bash
+go build -o jaiscloud ./cmd/jaiscloud/
+./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+```
+
+Run **all** Phase 2.5 e2e tests (Docker/K8s tests skip automatically if not configured):
+```bash
+go test -v -tags lambda_e2e -timeout 15m ./tests/full_mode/p25/
+```
+
+---
+
+#### Lambda Docker mode
+
+In Docker mode the Lambda executor starts a real Docker container per function (warm pool). Each invocation posts to the container's Lambda Runtime Interface Emulator endpoint. The container is reused across invocations until deleted or idle.
+
+##### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Docker running | `docker info` must succeed |
+| JaisCloud started with `JAISCLOUD_LAMBDA_MODE=docker` | Controls executor selection at startup |
+| A Lambda container image | Must implement the Lambda RIC and echo or process events. See example below. |
+
+Start JaisCloud with Docker executor:
+```bash
+JAISCLOUD_LAMBDA_MODE=docker ./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+```
+
+##### Building a minimal test Lambda image
+
+The tests invoke functions with a payload and verify the response is non-empty. Any Lambda RIC-compatible image works. The simplest Python echo handler:
+
+```dockerfile
+# Dockerfile.lambda-test
+FROM public.ecr.aws/lambda/python:3.12
+COPY handler.py ${LAMBDA_TASK_ROOT}/
+CMD ["handler.lambda_handler"]
+```
+
+```python
+# handler.py
+import json, os
+
+def lambda_handler(event, context):
+    return {
+        "statusCode": 200,
+        "body": json.dumps(event),
+        "env": {k: v for k, v in os.environ.items() if k.startswith(("APP_", "TEST_", "STAGE"))}
+    }
+```
+
+```bash
+docker build -t jaiscloud-lambda-test -f Dockerfile.lambda-test .
+```
+
+##### Running Docker mode tests
+
+```bash
+export LAMBDA_E2E_DOCKER_IMAGE=jaiscloud-lambda-test
+
+go test -v -tags lambda_e2e \
+  -run TestLambdaDocker \
+  -timeout 10m \
+  ./tests/full_mode/p25/
+```
+
+| Test | What it verifies |
+|---|---|
+| `TestLambdaDocker_ColdStart_ReturnsResponse` | Container starts on first invoke; response is non-empty |
+| `TestLambdaDocker_WarmPoolReuse` | Second invocation reuses warm container; faster than cold start |
+| `TestLambdaDocker_ConcurrentInvocations` | 5 simultaneous invocations all succeed without deadlock |
+| `TestLambdaDocker_DeleteFunction_StopsContainer` | `DeleteFunction` stops warm container; subsequent invoke fails |
+| `TestLambdaDocker_UpdateCode_HotswapContainer` | `UpdateFunctionCode` succeeds; invocation still works after hotswap |
+| `TestLambdaDocker_EnvironmentVariables_PassedToContainer` | Env vars configured at `CreateFunction` are present in the running container |
+
+##### Environment variable reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `LAMBDA_E2E_DOCKER_IMAGE` | — | **(required)** Lambda container image URI. Tests are skipped if unset. |
+| `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
+| `LAMBDA_E2E_INVOKE_TIMEOUT` | `2m` | Max time to wait for a single invocation |
+| `LAMBDA_E2E_POLL_INTERVAL` | `3s` | Polling interval for async checks |
+
+##### Troubleshooting Docker mode
+
+**Tests skip with "LAMBDA_E2E_DOCKER_IMAGE not set"**  
+Export the variable: `export LAMBDA_E2E_DOCKER_IMAGE=jaiscloud-lambda-test`
+
+**Cold start times out**  
+The container image pull can take 30–60 s on first run. Pre-pull the image: `docker pull jaiscloud-lambda-test`. Increase `LAMBDA_E2E_INVOKE_TIMEOUT=5m`.
+
+**"connection refused" during warm invocation**  
+JaisCloud's Docker executor exposes the container on a random host port. Make sure Docker's host networking is working: `docker run --rm alpine ping host.docker.internal`.
+
+**Container not cleaned up after `DeleteFunction`**  
+Container teardown is asynchronous. Run `docker ps | grep jc-lambda` to check. Orphaned containers are named `jc-lambda-<functionName>-<id>` and can be removed with `docker rm -f`.
+
+---
+
+#### Lambda Kubernetes mode
+
+In K8s mode the Lambda executor creates a one-shot `batch/v1 Job` per invocation. There is no warm pool — each call is an independent Job. The result is read from pod logs once the Job reaches `Succeeded`.
+
+##### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Kubernetes cluster | Docker Desktop, kind, minikube, or a remote cluster |
+| JaisCloud started with `JAISCLOUD_LAMBDA_MODE=k8s` | Controls executor selection at startup |
+| K8s credentials configured | `JAISCLOUD_K8S_APISERVER` + `JAISCLOUD_K8S_TOKEN`, or in-cluster |
+| A Lambda container image in the cluster's registry | Must be pullable from within the cluster |
+
+Start JaisCloud with K8s Lambda executor:
+```bash
+export JAISCLOUD_LAMBDA_MODE=k8s
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
+export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+
+./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+```
+
+##### RBAC for Lambda Jobs
+
+JaisCloud needs permission to create, get, and delete `batch/v1 Jobs` and read `Pod` logs in the configured namespace:
+
+```yaml
+# lambda-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaiscloud-lambda
+  namespace: jaiscloud
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "delete", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jaiscloud-lambda
+  namespace: jaiscloud
+subjects:
+- kind: ServiceAccount
+  name: jaiscloud-sa
+  namespace: jaiscloud
+roleRef:
+  kind: Role
+  name: jaiscloud-lambda
+  apiGroup: rbac.authorization.k8s.io
+```
+
+```bash
+kubectl create namespace jaiscloud
+kubectl create serviceaccount jaiscloud-sa -n jaiscloud
+kubectl apply -f lambda-rbac.yaml
+```
+
+##### Running K8s mode tests
+
+```bash
+export LAMBDA_E2E_K8S_IMAGE=jaiscloud-lambda-test   # must be pullable from the cluster
+
+go test -v -tags lambda_e2e \
+  -run TestLambdaK8s \
+  -timeout 15m \
+  ./tests/full_mode/p25/
+```
+
+| Test | What it verifies |
+|---|---|
+| `TestLambdaK8s_Invoke_ReturnsResponse` | Single invocation creates a Job and returns response |
+| `TestLambdaK8s_MultipleInvocations_EachCreatesNewJob` | 3 sequential invocations each produce a distinct Job |
+| `TestLambdaK8s_ConcurrentInvocations` | 4 parallel invocations all complete without error |
+| `TestLambdaK8s_DeleteFunction_NoErrorAfterDelete` | Delete succeeds; subsequent invoke returns not-found error |
+| `TestLambdaK8s_EnvironmentVariables_PassedToJob` | Env vars stored on the function appear in the K8s Job spec |
+
+##### Environment variable reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `LAMBDA_E2E_K8S_IMAGE` | — | **(required)** Lambda image URI pullable from the cluster. Tests skip if unset. |
+| `JAISCLOUD_LAMBDA_MODE` | `mock` | Must be `k8s` when the server starts |
+| `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
+| `JAISCLOUD_K8S_TOKEN` | in-cluster token | Bearer token or path to a token file |
+| `JAISCLOUD_K8S_CA_FILE` | in-cluster CA | PEM CA cert; unset = system roots |
+| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for Lambda Jobs |
+| `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
+| `LAMBDA_E2E_INVOKE_TIMEOUT` | `2m` | Max time to wait for a Job to complete |
+| `LAMBDA_E2E_POLL_INTERVAL` | `3s` | Polling interval for Job status checks |
+
+##### Watching Jobs during tests
+
+```bash
+# Stream Job status in real time while tests run
+kubectl get jobs -n jaiscloud -w
+
+# Inspect a specific Lambda Job
+kubectl describe job jc-lambda-<functionName>-<invocationID> -n jaiscloud
+
+# Read pod logs (result payload is written to stdout by the Lambda handler)
+kubectl logs -n jaiscloud -l app=jaiscloud-lambda --tail=50
+```
+
+##### Troubleshooting K8s mode
+
+**Tests skip with "LAMBDA_E2E_K8S_IMAGE not set"**  
+Export `LAMBDA_E2E_K8S_IMAGE` before running.
+
+**Job stuck in `Pending`**  
+The image may not be pullable from the cluster. Check `kubectl describe pod -n jaiscloud` for `ImagePullBackOff`. For local clusters (kind, minikube), load the image into the cluster: `kind load docker-image jaiscloud-lambda-test`.
+
+**"Forbidden" creating Jobs**  
+Apply the RBAC manifest above and verify `kubectl auth can-i create jobs -n jaiscloud --as=system:serviceaccount:jaiscloud:jaiscloud-sa`.
+
+**Invocation timeout**  
+K8s cold start includes image pull + pod scheduling. Increase `LAMBDA_E2E_INVOKE_TIMEOUT=10m` on first run. Subsequent runs reuse cached images.
+
+---
+
+#### KMS · SecretsManager · SSM cross-service
+
+These tests verify cross-service integration between KMS, SecretsManager, and SSM Parameter Store. They do **not** require Docker or Kubernetes — only a running JaisCloud server (lite or full mode).
+
+```bash
+# No special executor mode needed — mock Lambda is fine
+./jaiscloud start --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+
+go test -v -tags lambda_e2e \
+  -run "TestKMS_|TestSSM_" \
+  -timeout 5m \
+  ./tests/full_mode/p25/
+```
+
+| Test | What it verifies |
+|---|---|
+| `TestKMS_SecretsManager_Integration` | Create KMS CMK → create secret with that key → `GetSecretValue` decrypts correctly |
+| `TestKMS_SecretsManager_BinarySecret` | Binary secret stored and retrieved as `SecretBinary` (not `SecretString`) |
+| `TestKMS_SecretsManager_RotateSecret` | `PutSecretValue` creates a new version; latest version is returned |
+| `TestKMS_DisabledKey_BlocksSecretCreate` | Creating a secret with a disabled KMS key returns an error |
+| `TestSSM_SecureString_KMSEncryption` | `PutParameter` with `SecureString` type encrypts via KMS; `GetParameter` with `WithDecryption=true` decrypts |
+| `TestSSM_PathHierarchy_RecursiveVsNonRecursive` | Non-recursive listing returns only direct children; recursive returns all descendants |
+| `TestSSM_PathPrefix_NoFalseMatch` | `/app` does not match `/appname/x` (trailing-slash normalization fix) |
+| `TestSSM_ParameterHistory` | Overwriting a parameter increments version and records history entry |
+
+No environment variables beyond `JAISCLOUD_HOST` are required for this group.
+
+---
+
+#### CloudFormation e2e
+
+These tests verify that CloudFormation stacks provision, update, and delete real downstream resources (SQS queues, Lambda functions, KMS keys, SecretsManager secrets). They do **not** require Docker or Kubernetes.
+
+```bash
+go test -v -tags lambda_e2e \
+  -run TestCFN_ \
+  -timeout 5m \
+  ./tests/full_mode/p25/
+```
+
+| Test | Template resources | What it verifies |
+|---|---|---|
+| `TestCFN_StackProvisionsSQSAndLambda` | `AWS::SQS::Queue` + `AWS::Lambda::Function` | Stack reaches `CREATE_COMPLETE`; both resources queryable via their service APIs; `Outputs` reference them |
+| `TestCFN_StackWithKMSKey_SecretRef` | `AWS::KMS::Key` + `AWS::SecretsManager::Secret` (with `KmsKeyId: !Ref AppKey`) | KMS key is enabled; secret is decryptable using that key |
+| `TestCFN_UpdateStack_ChangesResources` | `AWS::SQS::Queue` (parameterized name) | Stack reaches `UPDATE_COMPLETE`; parameter value persisted in stack metadata |
+| `TestCFN_DeleteStack_CascadesChildren` | `AWS::SQS::Queue` + `AWS::Lambda::Function` | After `DeleteStack`, both child resources return not-found from their service APIs |
+| `TestCFN_StackParameters_DefaultsApplied` | Same as above, no explicit parameters | Template default values are applied; Lambda function created under the default name |
+
+No environment variables beyond `JAISCLOUD_HOST` are required for this group.
+
+##### Template reference
+
+The tests use inline templates. Key patterns covered:
+
+| Pattern | Template syntax | Test |
+|---|---|---|
+| `Ref` to a parameter | `{"Ref": "FunctionName"}` | `TestCFN_StackParameters_DefaultsApplied` |
+| `Fn::GetAtt` for output | `{"Fn::GetAtt": ["ProcessorFunction", "Arn"]}` | `TestCFN_StackProvisionsSQSAndLambda` |
+| Cross-resource `Ref` | `"KmsKeyId": {"Ref": "AppKey"}` | `TestCFN_StackWithKMSKey_SecretRef` |
 
 ---
 
