@@ -32,6 +32,7 @@ import (
 	"jaiscloud/internal/provider/dns"
 	eksprovider "jaiscloud/internal/provider/eks"
 	emrprovider "jaiscloud/internal/provider/emr"
+	apigwprovider "jaiscloud/internal/provider/apigw"
 	keyprovider "jaiscloud/internal/key"
 	secretprovider "jaiscloud/internal/secret"
 	paramprovider "jaiscloud/internal/parameter"
@@ -330,6 +331,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(emrcP.Routes())
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
+	registry.RegisterAll(apigwprovider.New(s.resources).Routes())
 
 	return registry, streams, bus, keyStore, s.secrets, s.parameters, cleanup
 }
@@ -400,6 +402,8 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 		"emr-containers":   &services.EMRContainersCodec{},
 		"events":           &services.EventBridgeCodec{},
 		"eks":              &services.EKSCodec{},
+		"apigateway":       &services.APIGatewayCodec{},
+		"execute-api":      &services.ExecuteAPICodec{},
 	})
 }
 
