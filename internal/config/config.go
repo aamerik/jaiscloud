@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -35,6 +36,15 @@ type Config struct {
 	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
 
 	Executors ExecutorConfig
+
+	// KMS
+	KMSMasterKey string // 32-byte hex KEK; if unset DEK is stored plaintext (dev only)
+
+	// Lambda executor
+	LambdaMode          string // "mock" (default) | "docker" | "k8s"
+	LambdaImage         string // override default runtime image
+	LambdaNetwork       string // Docker network for Lambda containers (default: "jaiscloud-net")
+	LambdaKeepaliveSecs int    // Docker warm container idle timeout in seconds (default: 300)
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -95,7 +105,26 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 		return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/-/endpoints/%s", r, a, n)
 	},
 	// IAM root
-	"iam-root":             func(_, a, _ string) string { return fmt.Sprintf("arn:aws:iam::%s:root", a) },
+	"iam-root": func(_, a, _ string) string { return fmt.Sprintf("arn:aws:iam::%s:root", a) },
+	// KMS
+	"kms-key":   func(r, a, n string) string { return fmt.Sprintf("arn:aws:kms:%s:%s:key/%s", r, a, n) },
+	"kms-alias": func(r, a, n string) string { return fmt.Sprintf("arn:aws:kms:%s:%s:alias/%s", r, a, n) },
+	"kms-grant": func(r, a, n string) string { return fmt.Sprintf("arn:aws:kms:%s:%s:key/%s", r, a, n) },
+	// SecretsManager
+	"secretsmanager-secret": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:secretsmanager:%s:%s:secret:%s", r, a, n)
+	},
+	// SSM
+	"ssm-parameter": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ssm:%s:%s:parameter/%s", r, a, n) },
+	// API Gateway
+	"apigateway-restapi":    func(r, _, n string) string { return fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", r, n) },
+	"apigateway-stage":      func(r, _, n string) string { return fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", r, n) }, // n = "apiID/stageName"
+	"apigateway-resource":   func(r, _, n string) string { return fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", r, n) },
+	"apigateway-deployment": func(r, _, n string) string { return fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", r, n) },
+	// CloudFormation
+	"cloudformation-stack": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:stack/%s", r, a, n)
+	},
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.
@@ -108,6 +137,7 @@ func AWSResourceID(region, accountID string) func(resourceType, name string) str
 		if f, ok := awsARNFormatters[resourceType]; ok {
 			return f(region, accountID, name)
 		}
+		slog.Warn("AWSResourceID: unknown resource type, returning name as-is", "resourceType", resourceType, "name", name)
 		return name
 	}
 }
@@ -146,6 +176,11 @@ func Load() (*Config, error) {
 		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
 	}
 	viper.SetDefault("spark_mode", "off")
+	viper.SetDefault("kms_master_key", "")
+	viper.SetDefault("lambda_mode", "mock")
+	viper.SetDefault("lambda_image", "")
+	viper.SetDefault("lambda_network", "jaiscloud-net")
+	viper.SetDefault("lambda_keepalive_secs", 300)
 	viper.SetDefault("metrics", false)
 	viper.SetDefault("tracing", false)
 	viper.SetDefault("deterministic", false)
@@ -165,8 +200,13 @@ func Load() (*Config, error) {
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
 		BlobDir:       viper.GetString("blob_dir"),
-		Executors:     ExecutorConfig{Spark: viper.GetString("spark_mode")},
-		Metrics:       viper.GetBool("metrics"),
+		Executors:           ExecutorConfig{Spark: viper.GetString("spark_mode")},
+		KMSMasterKey:        viper.GetString("kms_master_key"),
+		LambdaMode:          viper.GetString("lambda_mode"),
+		LambdaImage:         viper.GetString("lambda_image"),
+		LambdaNetwork:       viper.GetString("lambda_network"),
+		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),
+		Metrics:             viper.GetBool("metrics"),
 		Tracing:       viper.GetBool("tracing"),
 		Deterministic: viper.GetBool("deterministic"),
 		Seed:          viper.GetInt64("seed"),

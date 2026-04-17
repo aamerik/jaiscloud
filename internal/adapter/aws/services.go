@@ -5,7 +5,11 @@
 // gateway's service→provider mapping are derived automatically from that entry.
 package aws
 
-import "strings"
+import (
+	"strings"
+
+	"jaiscloud/internal/adapter"
+)
 
 // ServiceDescriptor captures every piece of per-service metadata needed by the
 // router and the gateway routing layer.
@@ -27,6 +31,11 @@ type ServiceDescriptor struct {
 	// (e.g. "Queue" → "Queue.CreateQueue"). It appears in Routes() maps as the
 	// first segment of every handler key.
 	ProviderPrefix string
+
+	// Codec is a factory function that returns a new Codec for this service.
+	// Nil for services whose codec is registered via the existing per-file mechanism.
+	// When non-nil, AWSAdapter.DetectAndDecode will use this factory to create the codec.
+	Codec func() adapter.Codec
 }
 
 // awsServices is the authoritative list of AWS services known to JaisCloud.
@@ -94,6 +103,30 @@ var awsServices = []ServiceDescriptor{
 	{SigV4Name: "emr-containers", ProviderPrefix: "EMRContainers"},
 	{SigV4Name: "events", TargetPrefix: "AWSEvents.", ProviderPrefix: "EventBridge"},
 	{SigV4Name: "eks", ProviderPrefix: "EKS"},
+	// P0 expansion services — Codec factories set to nil until Phase 2–6 wire them.
+	{
+		SigV4Name:      "kms",
+		TargetPrefix:   "TrentService.",
+		ProviderPrefix: "Key",
+	},
+	{
+		SigV4Name:      "secretsmanager",
+		TargetPrefix:   "secretsmanager.",
+		ProviderPrefix: "Secret",
+	},
+	{
+		SigV4Name:      "ssm",
+		TargetPrefix:   "AmazonSSM.",
+		ProviderPrefix: "Parameter",
+	},
+	{
+		SigV4Name:      "apigateway",
+		ProviderPrefix: "Gateway",
+	},
+	{
+		SigV4Name:      "execute-api",
+		ProviderPrefix: "Gateway",
+	},
 }
 
 // ─── Derived lookup tables ────────────────────────────────────────────────────

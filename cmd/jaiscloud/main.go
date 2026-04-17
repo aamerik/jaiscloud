@@ -122,6 +122,17 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_BLOB_DIR`)
 	cmd.Flags().String("cloud", "aws", `Cloud provider to emulate: aws (default), azure, gcp.
 	Env var: JAISCLOUD_CLOUD`)
+	cmd.Flags().String("kms-master-key", "", `32-byte hex KEK for KMS envelope encryption.
+	If unset, DEK is stored plaintext (dev only).
+	Env var: JAISCLOUD_KMS_MASTER_KEY`)
+	cmd.Flags().String("lambda-mode", "mock", `Lambda executor mode: mock (default), docker, k8s.
+	Env var: JAISCLOUD_LAMBDA_MODE`)
+	cmd.Flags().String("lambda-image", "", `Override default Lambda runtime image.
+	Env var: JAISCLOUD_LAMBDA_IMAGE`)
+	cmd.Flags().String("lambda-network", "jaiscloud-net", `Docker network for Lambda containers.
+	Env var: JAISCLOUD_LAMBDA_NETWORK`)
+	cmd.Flags().Int("lambda-keepalive-secs", 300, `Docker warm container idle timeout in seconds.
+	Env var: JAISCLOUD_LAMBDA_KEEPALIVE_SECS`)
 
 	return cmd
 }
@@ -141,6 +152,11 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("cloud", cmd.Flags().Lookup("cloud"))
+	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
+	viper.BindPFlag("lambda_mode", cmd.Flags().Lookup("lambda-mode"))
+	viper.BindPFlag("lambda_image", cmd.Flags().Lookup("lambda-image"))
+	viper.BindPFlag("lambda_network", cmd.Flags().Lookup("lambda-network"))
+	viper.BindPFlag("lambda_keepalive_secs", cmd.Flags().Lookup("lambda-keepalive-secs"))
 }
 
 // appStores holds the five store instances that the server depends on.

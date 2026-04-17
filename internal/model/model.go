@@ -4,11 +4,44 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
 	"jaiscloud/internal/clock"
 )
+
+// KeyEncryptor is the narrow interface that providers use to interact with KMS.
+// It lives in the model package to prevent import cycles: providers import
+// model (not the key package), and the key package constructs implementations
+// that are injected at startup.
+type KeyEncryptor interface {
+	// Encrypt encrypts plaintext using the given KMS key and optional encryption context.
+	Encrypt(ctx context.Context, keyID string, pt []byte, encCtx map[string]string) ([]byte, error)
+	// Decrypt decrypts ciphertext produced by Encrypt.
+	Decrypt(ctx context.Context, keyID string, ct []byte, encCtx map[string]string) ([]byte, error)
+	// GenerateDataKey generates a new data key under keyID.
+	// Returns (plaintextDEK, encryptedDEK, error). Callers must zero ptDEK after use.
+	GenerateDataKey(ctx context.Context, keyID string, bits int) (ptDEK, ctDEK []byte, err error)
+}
+
+// NoopKeyEncryptor is a pass-through KeyEncryptor used in lite mode (no real KMS).
+// Encrypt returns the plaintext unchanged; Decrypt returns ciphertext unchanged.
+// This is intentional for development — not production use.
+type NoopKeyEncryptor struct{}
+
+func (NoopKeyEncryptor) Encrypt(_ context.Context, _ string, pt []byte, _ map[string]string) ([]byte, error) {
+	return pt, nil
+}
+
+func (NoopKeyEncryptor) Decrypt(_ context.Context, _ string, ct []byte, _ map[string]string) ([]byte, error) {
+	return ct, nil
+}
+
+func (NoopKeyEncryptor) GenerateDataKey(_ context.Context, _ string, bits int) ([]byte, []byte, error) {
+	key := make([]byte, bits/8)
+	return key, key, nil
+}
 
 // Cloud identifies which cloud provider handled a request.
 type Cloud string
