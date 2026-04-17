@@ -24,6 +24,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/gateway"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	cacheprovider "jaiscloud/internal/provider/cache"
 	"jaiscloud/internal/provider/catalog"
@@ -309,24 +310,33 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	prevCleanup := cleanup
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
 
+	// Named provider variables so registerCFNHandlers can reference them.
+	funcP := functionprovider.NewWithExecutor(s.resources, lambdaExec)
+	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
+	iamP := iamprovider.New(s.resources)
+	notifP := notification.New(s.resources, s.messages, bus)
+	objectP := objectprovider.New(s.s3Meta, s.blobs)
+	stackP := stackprovider.New(s.resources)
+	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv)
+
 	registry := provider.NewRegistry()
 	registry.RegisterAll(keyProv.Routes())
 	registry.RegisterAll(secretProv.Routes())
 	registry.RegisterAll(paramProv.Routes())
-	registry.RegisterAll(functionprovider.NewWithExecutor(s.resources, lambdaExec).Routes())
-	registry.RegisterAll(queue.New(s.resources, s.messages, cfg.Clock, bus).Routes())
-	registry.RegisterAll(iamprovider.New(s.resources).Routes())
-	registry.RegisterAll(notification.New(s.resources, s.messages, bus).Routes())
+	registry.RegisterAll(funcP.Routes())
+	registry.RegisterAll(queueP.Routes())
+	registry.RegisterAll(iamP.Routes())
+	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
-	registry.RegisterAll(objectprovider.New(s.s3Meta, s.blobs).Routes())
+	registry.RegisterAll(objectP.Routes())
 	registry.RegisterAll(catalog.New(s.resources).Routes())
 	registry.RegisterAll(compute.New(s.resources).Routes())
 	registry.RegisterAll(dns.New(s.resources).Routes())
 	registry.RegisterAll(rdsprovider.New(s.resources).Routes())
 	registry.RegisterAll(cacheprovider.New(s.resources).Routes())
 	registry.RegisterAll(containerprovider.New(s.resources).Routes())
-	registry.RegisterAll(stackprovider.New(s.resources).Routes())
+	registry.RegisterAll(stackP.Routes())
 	registry.RegisterAll(emrP.Routes())
 	registry.RegisterAll(emrcP.Routes())
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
@@ -360,6 +370,224 @@ func buildSparkExecutor(mode string) (spark.SparkExecutor, spark.SparkConfig) {
 		}
 	}
 	return spark.NewExecutor(mode, cfg), cfg
+}
+
+// registerCFNHandlers wires real resource provisioning for the 9 most common
+// CloudFormation resource types. Each handler delegates to the relevant provider.
+func registerCFNHandlers(
+	stackP *stackprovider.StackProvider,
+	queueP *queue.QueueProvider,
+	notifP *notification.SNSProvider,
+	objectP *objectprovider.ObjectProvider,
+	tableP *table.TableProvider,
+	iamP *iamprovider.IAMProvider,
+	funcP *functionprovider.FunctionProvider,
+	keyP *keyprovider.KeyProvider,
+	secretP *secretprovider.SecretProvider,
+	paramP *paramprovider.ParameterProvider,
+) {
+	// child builds a minimal NormalizedRequest inheriting context from the CFN
+	// request so that providers receive region, accountID, port, clock, and
+	// ResourceID without needing separate configuration.
+	child := func(nr *model.NormalizedRequest, params map[string]any) *model.NormalizedRequest {
+		return &model.NormalizedRequest{
+			Region:     nr.Region,
+			AccountID:  nr.AccountID,
+			Port:       nr.Port,
+			Cloud:      nr.Cloud,
+			Clock:      nr.Clock,
+			ResourceID: nr.ResourceID,
+			Params:     params,
+		}
+	}
+	propStr := func(props map[string]any, key, fallback string) string {
+		if v, ok := props[key].(string); ok && v != "" {
+			return v
+		}
+		return fallback
+	}
+	copyProps := func(props map[string]any) map[string]any {
+		out := make(map[string]any, len(props))
+		for k, v := range props {
+			out[k] = v
+		}
+		return out
+	}
+
+	// ── AWS::SQS::Queue ──────────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::SQS::Queue", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "QueueName", logicalID)
+			resp, err := queueP.CreateQueue(ctx, child(nr, map[string]any{"QueueName": name}))
+			if err != nil {
+				return "", nil, err
+			}
+			url := resp.Data["QueueUrl"].(string)
+			arn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", nr.Region, nr.AccountID, name)
+			return url, map[string]any{"QueueUrl": url, "Arn": arn}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := queueP.DeleteQueue(ctx, &model.NormalizedRequest{Params: map[string]any{"QueueUrl": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::SNS::Topic ──────────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::SNS::Topic", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "TopicName", logicalID)
+			resp, err := notifP.CreateTopic(ctx, child(nr, map[string]any{"Name": name}))
+			if err != nil {
+				return "", nil, err
+			}
+			arn := resp.Data["TopicArn"].(string)
+			return arn, map[string]any{"TopicArn": arn}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := notifP.DeleteTopic(ctx, &model.NormalizedRequest{Params: map[string]any{"TopicArn": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::S3::Bucket ──────────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::S3::Bucket", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "BucketName", logicalID)
+			if _, err := objectP.CreateBucket(ctx, child(nr, map[string]any{"_bucket": name})); err != nil {
+				return "", nil, err
+			}
+			arn := "arn:aws:s3:::" + name
+			return name, map[string]any{"Arn": arn, "DomainName": name + ".s3.amazonaws.com"}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := objectP.DeleteBucket(ctx, &model.NormalizedRequest{Params: map[string]any{"_bucket": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::DynamoDB::Table ─────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::DynamoDB::Table", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "TableName", logicalID)
+			params := copyProps(props)
+			params["TableName"] = name
+			if _, err := tableP.CreateTable(ctx, child(nr, params)); err != nil {
+				return "", nil, err
+			}
+			arn := fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
+			return name, map[string]any{"Arn": arn, "StreamArn": ""}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := tableP.DeleteTable(ctx, &model.NormalizedRequest{Params: map[string]any{"TableName": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::IAM::Role ───────────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::IAM::Role", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "RoleName", logicalID)
+			params := copyProps(props)
+			params["RoleName"] = name
+			resp, err := iamP.CreateRole(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, err
+			}
+			arn := ""
+			if rm, ok := resp.Data["Role"].(map[string]any); ok {
+				arn, _ = rm["Arn"].(string)
+			}
+			return name, map[string]any{"Arn": arn}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := iamP.DeleteRole(ctx, &model.NormalizedRequest{
+				AccountID: "000000000000",
+				Params:    map[string]any{"RoleName": physicalID},
+			})
+			return err
+		},
+	})
+
+	// ── AWS::Lambda::Function ────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::Lambda::Function", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "FunctionName", logicalID)
+			params := copyProps(props)
+			params["FunctionName"] = name
+			resp, err := funcP.CreateFunction(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, err
+			}
+			arn, _ := resp.Data["FunctionArn"].(string)
+			return name, map[string]any{"Arn": arn}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := funcP.DeleteFunction(ctx, &model.NormalizedRequest{Params: map[string]any{"_function_name": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::SSM::Parameter ──────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::SSM::Parameter", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "Name", "/cfn/"+logicalID)
+			params := copyProps(props)
+			params["Name"] = name
+			if _, err := paramP.PutParameter(ctx, child(nr, params)); err != nil {
+				return "", nil, err
+			}
+			return name, map[string]any{}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := paramP.DeleteParameter(ctx, &model.NormalizedRequest{Params: map[string]any{"Name": physicalID}})
+			return err
+		},
+	})
+
+	// ── AWS::SecretsManager::Secret ──────────────────────────────────────────
+	stackP.RegisterHandler("AWS::SecretsManager::Secret", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "Name", logicalID)
+			params := copyProps(props)
+			params["Name"] = name
+			resp, err := secretP.CreateSecret(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, err
+			}
+			arn, _ := resp.Data["ARN"].(string)
+			return arn, map[string]any{"Id": name}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := secretP.DeleteSecret(ctx, &model.NormalizedRequest{
+				ResourceID: func(_, _ string) string { return physicalID },
+				Params:     map[string]any{"SecretId": physicalID, "ForceDeleteWithoutRecovery": true},
+			})
+			return err
+		},
+	})
+
+	// ── AWS::KMS::Key ────────────────────────────────────────────────────────
+	stackP.RegisterHandler("AWS::KMS::Key", stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			params := copyProps(props)
+			resp, err := keyP.CreateKey(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, err
+			}
+			keyID, arn := "", ""
+			if km, ok := resp.Data["KeyMetadata"].(map[string]any); ok {
+				keyID, _ = km["KeyId"].(string)
+				arn, _ = km["Arn"].(string)
+			}
+			return keyID, map[string]any{"Arn": arn, "KeyId": keyID}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := keyP.ScheduleKeyDeletion(ctx, &model.NormalizedRequest{
+				Params: map[string]any{"KeyId": physicalID, "PendingWindowInDays": float64(7)},
+			})
+			return err
+		},
+	})
 }
 
 // buildAdapter selects and constructs the single CloudAdapter for the configured cloud.

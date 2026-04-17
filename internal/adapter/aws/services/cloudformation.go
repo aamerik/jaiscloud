@@ -30,10 +30,14 @@ func (c *CloudFormationCodec) Decode(r *http.Request, body []byte) (*model.Norma
 	}, nil
 }
 
-func (c *CloudFormationCodec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *CloudFormationCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
-	body := buildCFXML(resp.Data)
+	action := ""
+	if nr != nil {
+		action = nr.Action
+	}
+	body := buildCFXML(action, resp.Data)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -53,73 +57,79 @@ func (c *CloudFormationCodec) EncodeError(_ *model.NormalizedRequest, perr *mode
 
 const cfNS = `xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"`
 
-func buildCFXML(data map[string]any) string {
+func buildCFXML(action string, data map[string]any) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 	}
 
 	meta := `<ResponseMetadata><RequestId>jaiscloud-cf</RequestId></ResponseMetadata>`
 
-	wrap := func(action, inner string) string {
+	wrap := func(act, inner string) string {
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
-			`<` + action + `Response ` + cfNS + `>` +
-			`<` + action + `Result>` + inner + `</` + action + `Result>` +
+			`<` + act + `Response ` + cfNS + `>` +
+			`<` + act + `Result>` + inner + `</` + act + `Result>` +
 			meta +
-			`</` + action + `Response>`
+			`</` + act + `Response>`
 	}
-	wrapNoResult := func(action string) string {
+	wrapNoResult := func(act string) string {
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
-			`<` + action + `Response ` + cfNS + `>` + meta + `</` + action + `Response>`
+			`<` + act + `Response ` + cfNS + `>` + meta + `</` + act + `Response>`
 	}
 
-	if v, ok := data["StackId"]; ok {
-		if _, create := data["CreateStack"]; create {
-			return wrap("CreateStack", xmlTag("StackId", str(v)))
-		}
-		if _, update := data["UpdateStack"]; update {
-			return wrap("UpdateStack", xmlTag("StackId", str(v)))
-		}
-	}
-	if _, ok := data["DeleteStack"]; ok {
+	switch action {
+	case "CreateStack":
+		return wrap("CreateStack", xmlTag("StackId", str(data["StackId"])))
+	case "UpdateStack":
+		return wrap("UpdateStack", xmlTag("StackId", str(data["StackId"])))
+	case "DeleteStack":
 		return wrapNoResult("DeleteStack")
-	}
-	if list, ok := data["Stacks"]; ok {
+	case "DescribeStacks":
 		var sb strings.Builder
 		sb.WriteString(`<Stacks>`)
-		if stacks, ok := list.([]map[string]any); ok {
+		if stacks, ok := data["Stacks"].([]map[string]any); ok {
 			for _, s := range stacks {
 				sb.WriteString(encodeCFStack(s))
 			}
 		}
 		sb.WriteString(`</Stacks>`)
 		return wrap("DescribeStacks", sb.String())
-	}
-	if list, ok := data["StackSummaries"]; ok {
+	case "ListStacks":
 		var sb strings.Builder
 		sb.WriteString(`<StackSummaries>`)
-		if sums, ok := list.([]map[string]any); ok {
+		if sums, ok := data["StackSummaries"].([]map[string]any); ok {
 			for _, s := range sums {
 				sb.WriteString(encodeCFStackSummary(s))
 			}
 		}
 		sb.WriteString(`</StackSummaries>`)
 		return wrap("ListStacks", sb.String())
-	}
-	if list, ok := data["StackResources"]; ok {
+	case "DescribeStackResources":
 		var sb strings.Builder
 		sb.WriteString(`<StackResources>`)
-		if resources, ok := list.([]map[string]any); ok {
+		if resources, ok := data["StackResources"].([]map[string]any); ok {
 			for _, r := range resources {
 				sb.WriteString(encodeCFStackResource(r))
 			}
 		}
 		sb.WriteString(`</StackResources>`)
 		return wrap("DescribeStackResources", sb.String())
-	}
-	if v, ok := data["StackStatus"]; ok {
-		if _, ok := data["ValidateTemplate"]; ok {
-			return wrap("ValidateTemplate", xmlTag("Description", str(v)))
+	case "ValidateTemplate":
+		inner := xmlTag("Parameters", "")
+		if params, ok := data["Parameters"].([]any); ok && len(params) > 0 {
+			var pb strings.Builder
+			for _, p := range params {
+				if pm, ok := p.(map[string]any); ok {
+					pb.WriteString(`<member>`)
+					pb.WriteString(xmlTag("ParameterKey", str(pm["ParameterKey"])))
+					pb.WriteString(xmlTag("Description", str(pm["Description"])))
+					pb.WriteString(`</member>`)
+				}
+			}
+			inner = xmlTag("Parameters", pb.String())
 		}
+		return wrap("ValidateTemplate", inner)
+	case "GetTemplate":
+		return wrap("GetTemplate", xmlTag("TemplateBody", str(data["TemplateBody"])))
 	}
 	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 }

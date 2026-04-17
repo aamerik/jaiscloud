@@ -77,7 +77,7 @@ func (p *SecretProvider) CreateSecret(ctx context.Context, nr *model.NormalizedR
 
 	// Store initial value if provided.
 	if sv, _ := nr.Params["SecretString"].(string); sv != "" {
-		if err := p.putValue(ctx, secretID, kmsKeyID, []byte(sv), name); err != nil {
+		if err := p.putValue(ctx, secretID, kmsKeyID, []byte(sv), name, false); err != nil {
 			return nil, err
 		}
 	} else if svb, _ := nr.Params["SecretBinary"].(string); svb != "" {
@@ -85,7 +85,7 @@ func (p *SecretProvider) CreateSecret(ctx context.Context, nr *model.NormalizedR
 		if err != nil {
 			return nil, model.NewProviderError("ValidationException", "SecretBinary must be base64-encoded", 400)
 		}
-		if err := p.putValue(ctx, secretID, kmsKeyID, raw, name); err != nil {
+		if err := p.putValue(ctx, secretID, kmsKeyID, raw, name, true); err != nil {
 			return nil, err
 		}
 	}
@@ -217,6 +217,7 @@ func (p *SecretProvider) PutSecretValue(ctx context.Context, nr *model.Normalize
 	}
 
 	var raw []byte
+	var isBinary bool
 	if sv, _ := nr.Params["SecretString"].(string); sv != "" {
 		raw = []byte(sv)
 	} else if svb, _ := nr.Params["SecretBinary"].(string); svb != "" {
@@ -224,6 +225,7 @@ func (p *SecretProvider) PutSecretValue(ctx context.Context, nr *model.Normalize
 		if err != nil {
 			return nil, model.NewProviderError("ValidationException", "SecretBinary must be base64-encoded", 400)
 		}
+		isBinary = true
 	} else {
 		return nil, model.NewProviderError("ValidationException", "SecretString or SecretBinary is required", 400)
 	}
@@ -233,7 +235,7 @@ func (p *SecretProvider) PutSecretValue(ctx context.Context, nr *model.Normalize
 		versionID = newID()
 	}
 
-	if err := p.putValueWithID(ctx, e.SecretID, e.KMSKeyID, raw, e.Name, versionID); err != nil {
+	if err := p.putValueWithID(ctx, e.SecretID, e.KMSKeyID, raw, e.Name, versionID, isBinary); err != nil {
 		return nil, err
 	}
 
@@ -277,14 +279,19 @@ func (p *SecretProvider) GetSecretValue(ctx context.Context, nr *model.Normalize
 	}
 
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
-	return provider.OK(map[string]any{
+	resp := map[string]any{
 		"ARN":           secretARN,
 		"Name":          e.Name,
 		"VersionId":     v.VersionID,
 		"VersionStages": v.Stages,
-		"SecretString":  string(pt),
 		"CreatedDate":   v.CreatedAt.Unix(),
-	}), nil
+	}
+	if v.IsBinary {
+		resp["SecretBinary"] = pt
+	} else {
+		resp["SecretString"] = string(pt)
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *SecretProvider) ListSecretVersionIds(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -393,11 +400,11 @@ func (p *SecretProvider) resolveSecret(ctx context.Context, nr *model.Normalized
 	return e, nil
 }
 
-func (p *SecretProvider) putValue(ctx context.Context, secretID, kmsKeyID string, raw []byte, name string) error {
-	return p.putValueWithID(ctx, secretID, kmsKeyID, raw, name, newID())
+func (p *SecretProvider) putValue(ctx context.Context, secretID, kmsKeyID string, raw []byte, name string, isBinary bool) error {
+	return p.putValueWithID(ctx, secretID, kmsKeyID, raw, name, newID(), isBinary)
 }
 
-func (p *SecretProvider) putValueWithID(ctx context.Context, secretID, kmsKeyID string, raw []byte, name, versionID string) error {
+func (p *SecretProvider) putValueWithID(ctx context.Context, secretID, kmsKeyID string, raw []byte, name, versionID string, isBinary bool) error {
 	ct, err := p.encrypt(ctx, kmsKeyID, raw, name)
 	if err != nil {
 		return fmt.Errorf("sm: encrypt: %w", err)
@@ -406,12 +413,13 @@ func (p *SecretProvider) putValueWithID(ctx context.Context, secretID, kmsKeyID 
 		SecretID:     secretID,
 		VersionID:    versionID,
 		SecretBinary: ct,
+		IsBinary:     isBinary,
 		Stages:       []string{"AWSCURRENT"},
 	})
 }
 
 func (p *SecretProvider) encrypt(ctx context.Context, kmsKeyID string, pt []byte, name string) ([]byte, error) {
-	if p.kms == nil {
+	if p.kms == nil || kmsKeyID == "" {
 		return pt, nil
 	}
 	encCtx := map[string]string{"SecretARN": name}
@@ -419,7 +427,7 @@ func (p *SecretProvider) encrypt(ctx context.Context, kmsKeyID string, pt []byte
 }
 
 func (p *SecretProvider) decrypt(ctx context.Context, kmsKeyID string, ct []byte, name string) ([]byte, error) {
-	if p.kms == nil {
+	if p.kms == nil || kmsKeyID == "" {
 		return ct, nil
 	}
 	encCtx := map[string]string{"SecretARN": name}

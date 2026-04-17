@@ -1,10 +1,19 @@
 // Package stack implements the CloudFormation provider (StackProvider).
+//
+// Phase 7 additions:
+//   - Intrinsics engine (Ref, Fn::Sub, Fn::GetAtt, Fn::Join, Fn::If, …)
+//   - Topological sort — respects DependsOn and implicit Ref/GetAtt deps
+//   - Resource dispatcher — actually provisions underlying resources via registered handlers
+//   - Outputs section — resolved after all resources are created
+//   - Rollback — on CREATE failure, already-created resources are deleted in reverse order
 package stack
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,12 +26,26 @@ import (
 // StackProvider handles CloudFormation stacks and resources.
 type StackProvider struct {
 	resources store.ResourceStore
+	// handlers maps AWS resource type (e.g. "AWS::SQS::Queue") to a handler.
+	// If no handler is registered for a type, the resource is metadata-only.
+	handlers map[string]ResourceHandler
 }
 
+// New constructs a StackProvider.
 func New(resources store.ResourceStore) *StackProvider {
-	return &StackProvider{resources: resources}
+	return &StackProvider{
+		resources: resources,
+		handlers:  make(map[string]ResourceHandler),
+	}
 }
 
+// RegisterHandler registers a provisioning handler for an AWS resource type.
+// Call this in main.go before the first stack operation.
+func (p *StackProvider) RegisterHandler(resourceType string, h ResourceHandler) {
+	p.handlers[resourceType] = h
+}
+
+// Routes returns all CloudFormation handler registrations.
 func (p *StackProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"CloudFormation.CreateStack":            p.CreateStack,
@@ -32,10 +55,32 @@ func (p *StackProvider) Routes() map[string]provider.HandlerFunc {
 		"CloudFormation.ListStacks":             p.ListStacks,
 		"CloudFormation.DescribeStackResources": p.DescribeStackResources,
 		"CloudFormation.ValidateTemplate":       p.ValidateTemplate,
+		"CloudFormation.GetTemplate":            p.GetTemplate,
 	}
 }
 
 const rtStack = "cfn_stack"
+
+// cfResource is the stored representation of a CloudFormation resource.
+type cfResource struct {
+	LogicalResourceId  string         `json:"LogicalResourceId"`
+	PhysicalResourceId string         `json:"PhysicalResourceId"`
+	ResourceType       string         `json:"ResourceType"`
+	ResourceStatus     string         `json:"ResourceStatus"`
+	Attributes         map[string]any `json:"Attributes,omitempty"`
+}
+
+type cfParam struct {
+	ParameterKey   string `json:"ParameterKey"`
+	ParameterValue string `json:"ParameterValue"`
+}
+
+type cfOutput struct {
+	OutputKey   string `json:"OutputKey"`
+	OutputValue string `json:"OutputValue"`
+	Description string `json:"Description"`
+	ExportName  string `json:"ExportName,omitempty"`
+}
 
 type cfStack struct {
 	StackId      string            `json:"StackId"`
@@ -50,24 +95,6 @@ type cfStack struct {
 	Template     string            `json:"Template"`
 }
 
-type cfParam struct {
-	ParameterKey   string `json:"ParameterKey"`
-	ParameterValue string `json:"ParameterValue"`
-}
-
-type cfOutput struct {
-	OutputKey   string `json:"OutputKey"`
-	OutputValue string `json:"OutputValue"`
-	Description string `json:"Description"`
-}
-
-type cfResource struct {
-	LogicalResourceId  string `json:"LogicalResourceId"`
-	PhysicalResourceId string `json:"PhysicalResourceId"`
-	ResourceType       string `json:"ResourceType"`
-	ResourceStatus     string `json:"ResourceStatus"`
-}
-
 func (s cfStack) toWire() map[string]any {
 	params := make([]map[string]any, len(s.Parameters))
 	for i, p := range s.Parameters {
@@ -75,7 +102,15 @@ func (s cfStack) toWire() map[string]any {
 	}
 	outputs := make([]map[string]any, len(s.Outputs))
 	for i, o := range s.Outputs {
-		outputs[i] = map[string]any{"OutputKey": o.OutputKey, "OutputValue": o.OutputValue, "Description": o.Description}
+		m := map[string]any{
+			"OutputKey":   o.OutputKey,
+			"OutputValue": o.OutputValue,
+			"Description": o.Description,
+		}
+		if o.ExportName != "" {
+			m["ExportName"] = o.ExportName
+		}
+		outputs[i] = m
 	}
 	return map[string]any{
 		"StackId":      s.StackId,
@@ -104,71 +139,263 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 	if name == "" {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "StackName is required", HTTPStatus: http.StatusBadRequest}
 	}
+
 	template := strParam(nr.Params, "TemplateBody")
 	if template == "" {
 		template = strParam(nr.Params, "TemplateURL")
 	}
 
-	stackId := fmt.Sprintf("arn:aws:cloudformation:us-east-1:000000000000:stack/%s/%s", name, shortID())
+	doc, err := parseTemplate(template)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template: " + err.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	stackID := fmt.Sprintf("arn:aws:cloudformation:%s:%s:stack/%s/%s",
+		nr.Region, nr.AccountID, name, shortID())
+
+	rc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
+	rc.pseudoParams["AWS::StackName"] = name
+	rc.pseudoParams["AWS::StackId"] = stackID
+
+	// Resolve Parameters.
+	callerParams := parseCallerParams(nr.Params)
+	if tplParams, ok := doc["Parameters"].(map[string]any); ok {
+		rc.resolveParameters(tplParams, callerParams)
+	} else {
+		for k, v := range callerParams {
+			rc.params[k] = v
+		}
+	}
+
+	// Load Mappings.
+	if m, ok := doc["Mappings"].(map[string]any); ok {
+		rc.mappings = m
+	}
+
+	// Evaluate Conditions.
+	if conds, ok := doc["Conditions"].(map[string]any); ok {
+		rc.evaluateConditions(conds)
+	}
+
+	// Provision resources.
+	resourcesDef, _ := doc["Resources"].(map[string]any)
+	if len(resourcesDef) == 0 {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "template must have at least one resource", HTTPStatus: http.StatusBadRequest}
+	}
+
+	order, err := topoSort(resourcesDef)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: err.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	created := make([]cfResource, 0, len(order))
+	var provisionErr error
+	for _, logicalID := range order {
+		resDef, _ := resourcesDef[logicalID].(map[string]any)
+		resType, _ := resDef["Type"].(string)
+
+		// Skip resources whose Condition evaluates to false.
+		if cond, ok := resDef["Condition"].(string); ok {
+			if !rc.conditions[cond] {
+				continue
+			}
+		}
+
+		props, _ := resDef["Properties"].(map[string]any)
+		resolvedProps := rc.resolvePropsMap(props)
+
+		physicalID, attrs, err := p.provisionResource(ctx, logicalID, resType, resolvedProps, stackID, nr)
+		if err != nil {
+			slog.Warn("cloudformation: resource creation failed", "logical", logicalID, "type", resType, "err", err)
+			provisionErr = fmt.Errorf("resource %s (%s) failed: %w", logicalID, resType, err)
+			break
+		}
+
+		r := cfResource{
+			LogicalResourceId:  logicalID,
+			PhysicalResourceId: physicalID,
+			ResourceType:       resType,
+			ResourceStatus:     "CREATE_COMPLETE",
+			Attributes:         attrs,
+		}
+		created = append(created, r)
+		rc.resources[logicalID] = &created[len(created)-1]
+	}
+
+	// Rollback on failure.
+	if provisionErr != nil {
+		p.rollback(ctx, created)
+		return nil, &model.ProviderError{Code: "CreateStack_ROLLBACK_COMPLETE", Message: provisionErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	// Resolve Outputs.
+	outputs := p.resolveOutputs(doc, rc, name)
+
 	s := cfStack{
-		StackId:      stackId,
+		StackId:      stackID,
 		StackName:    name,
 		StackStatus:  "CREATE_COMPLETE",
 		Description:  strParam(nr.Params, "Description"),
 		CreationTime: time.Now().UTC(),
-		Parameters:   parseParams(nr.Params),
-		Template:     template,
+		Parameters:   paramsToSlice(rc.params),
+		Outputs:      outputs,
+		Resources:    created,
 		Tags:         map[string]string{},
-		Resources:    parseTemplateResources(template, name),
+		Template:     template,
 	}
 
 	data, _ := json.Marshal(s)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtStack, ID: name, Data: data}); err != nil {
-		if err == store.ErrAlreadyExists {
-			return nil, &model.ProviderError{Code: "AlreadyExistsException", Message: "Stack already exists", HTTPStatus: http.StatusBadRequest}
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, &model.ProviderError{Code: "AlreadyExistsException", Message: "Stack already exists: " + name, HTTPStatus: http.StatusBadRequest}
 		}
 		return nil, err
 	}
-	return provider.OK(map[string]any{"StackId": stackId, "CreateStack": true}), nil
+	return provider.OK(map[string]any{"StackId": stackID}), nil
 }
 
 func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
 	s, err := p.loadStack(ctx, name)
 	if err != nil {
-		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found", HTTPStatus: http.StatusBadRequest}
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
-	if template := strParam(nr.Params, "TemplateBody"); template != "" {
-		s.Template = template
-		s.Resources = parseTemplateResources(template, name)
+
+	newTemplate := strParam(nr.Params, "TemplateBody")
+	if newTemplate == "" {
+		newTemplate = s.Template // UsePreviousTemplate
 	}
+	s.Template = newTemplate
+
+	doc, err := parseTemplate(newTemplate)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template: " + err.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	rc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
+	rc.pseudoParams["AWS::StackName"] = name
+	rc.pseudoParams["AWS::StackId"] = s.StackId
+
+	callerParams := parseCallerParams(nr.Params)
+	if tplParams, ok := doc["Parameters"].(map[string]any); ok {
+		rc.resolveParameters(tplParams, callerParams)
+	}
+	if m, ok := doc["Mappings"].(map[string]any); ok {
+		rc.mappings = m
+	}
+	if conds, ok := doc["Conditions"].(map[string]any); ok {
+		rc.evaluateConditions(conds)
+	}
+
+	// Re-populate existing resources in the resolve context (needed for Ref resolution).
+	for i := range s.Resources {
+		rc.resources[s.Resources[i].LogicalResourceId] = &s.Resources[i]
+	}
+
+	resourcesDef, _ := doc["Resources"].(map[string]any)
+	if len(resourcesDef) == 0 {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "template must have at least one resource", HTTPStatus: http.StatusBadRequest}
+	}
+
+	order, err := topoSort(resourcesDef)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: err.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	// Build new resource list, keeping or recreating each resource.
+	oldByLogical := make(map[string]cfResource, len(s.Resources))
+	for _, r := range s.Resources {
+		oldByLogical[r.LogicalResourceId] = r
+	}
+
+	newResources := make([]cfResource, 0, len(order))
+	for _, logicalID := range order {
+		resDef, _ := resourcesDef[logicalID].(map[string]any)
+		resType, _ := resDef["Type"].(string)
+
+		if cond, ok := resDef["Condition"].(string); ok {
+			if !rc.conditions[cond] {
+				continue
+			}
+		}
+
+		props, _ := resDef["Properties"].(map[string]any)
+		resolvedProps := rc.resolvePropsMap(props)
+
+		if old, exists := oldByLogical[logicalID]; exists && old.ResourceType == resType {
+			// Existing resource: update in-place (metadata).
+			old.Attributes = updateAttributes(old.Attributes, resolvedProps)
+			newResources = append(newResources, old)
+			rc.resources[logicalID] = &newResources[len(newResources)-1]
+		} else {
+			// New resource or type changed: provision it.
+			physicalID, attrs, err := p.provisionResource(ctx, logicalID, resType, resolvedProps, s.StackId, nr)
+			if err != nil {
+				slog.Warn("cloudformation: update resource creation failed", "logical", logicalID, "err", err)
+				physicalID = name + "-" + logicalID
+				attrs = nil
+			}
+			r := cfResource{
+				LogicalResourceId:  logicalID,
+				PhysicalResourceId: physicalID,
+				ResourceType:       resType,
+				ResourceStatus:     "UPDATE_COMPLETE",
+				Attributes:         attrs,
+			}
+			newResources = append(newResources, r)
+			rc.resources[logicalID] = &newResources[len(newResources)-1]
+		}
+	}
+
+	// Delete resources removed in the new template.
+	newByLogical := make(map[string]bool, len(newResources))
+	for _, r := range newResources {
+		newByLogical[r.LogicalResourceId] = true
+	}
+	for _, old := range s.Resources {
+		if !newByLogical[old.LogicalResourceId] {
+			p.deprovisionResource(ctx, old)
+		}
+	}
+
+	outputs := p.resolveOutputs(doc, rc, name)
+
+	s.Resources = newResources
+	s.Outputs = outputs
 	s.StackStatus = "UPDATE_COMPLETE"
-	if params := parseParams(nr.Params); len(params) > 0 {
-		s.Parameters = params
+	if params := parseCallerParams(nr.Params); len(params) > 0 {
+		s.Parameters = paramsToSlice(params)
 	}
 	p.saveStack(ctx, s)
-	return provider.OK(map[string]any{"StackId": s.StackId, "UpdateStack": true}), nil
+	return provider.OK(map[string]any{"StackId": s.StackId}), nil
 }
 
 func (p *StackProvider) DeleteStack(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
-	// strip ARN if given
 	if strings.HasPrefix(name, "arn:") {
 		parts := strings.Split(name, "/")
 		if len(parts) >= 2 {
 			name = parts[1]
 		}
 	}
-	if err := p.resources.Delete(ctx, rtStack, name); err == store.ErrNotFound {
-		// CloudFormation silently succeeds on delete of non-existent stack
+
+	s, err := p.loadStack(ctx, name)
+	if err == nil {
+		// Delete resources in reverse creation order.
+		p.rollback(ctx, s.Resources)
 	}
-	return provider.OK(map[string]any{"DeleteStack": true}), nil
+
+	if err := p.resources.Delete(ctx, rtStack, name); err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return provider.OK(map[string]any{}), nil
 }
 
 func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
 	if name != "" {
-		// strip ARN
 		if strings.HasPrefix(name, "arn:") {
 			parts := strings.Split(name, "/")
 			if len(parts) >= 2 {
@@ -177,15 +404,12 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 		}
 		s, err := p.loadStack(ctx, name)
 		if err != nil {
-			return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found", HTTPStatus: http.StatusBadRequest}
+			return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 		}
 		return provider.OK(map[string]any{"Stacks": []map[string]any{s.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtStack, "")
-	if err != nil {
-		return nil, err
-	}
-	stacks := []map[string]any{}
+	entries, _ := p.resources.List(ctx, rtStack, "")
+	stacks := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var s cfStack
 		json.Unmarshal(e.Data, &s)
@@ -195,11 +419,8 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 }
 
 func (p *StackProvider) ListStacks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtStack, "")
-	if err != nil {
-		return nil, err
-	}
-	summaries := []map[string]any{}
+	entries, _ := p.resources.List(ctx, rtStack, "")
+	summaries := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var s cfStack
 		json.Unmarshal(e.Data, &s)
@@ -212,7 +433,7 @@ func (p *StackProvider) DescribeStackResources(ctx context.Context, nr *model.No
 	name := strParam(nr.Params, "StackName")
 	s, err := p.loadStack(ctx, name)
 	if err != nil {
-		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found", HTTPStatus: http.StatusBadRequest}
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 	resources := make([]map[string]any, len(s.Resources))
 	for i, r := range s.Resources {
@@ -227,9 +448,91 @@ func (p *StackProvider) DescribeStackResources(ctx context.Context, nr *model.No
 	return provider.OK(map[string]any{"StackResources": resources}), nil
 }
 
-func (p *StackProvider) ValidateTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Always valid in the emulator
-	return provider.OK(map[string]any{"StackStatus": "VALID", "ValidateTemplate": true}), nil
+func (p *StackProvider) ValidateTemplate(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	template := strParam(nr.Params, "TemplateBody")
+	if template != "" {
+		if _, err := parseTemplate(template); err != nil {
+			return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template JSON: " + err.Error(), HTTPStatus: http.StatusBadRequest}
+		}
+	}
+	return provider.OK(map[string]any{"Parameters": []any{}}), nil
+}
+
+func (p *StackProvider) GetTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "StackName")
+	s, err := p.loadStack(ctx, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	return provider.OK(map[string]any{"TemplateBody": s.Template}), nil
+}
+
+// ─── Resource provisioning ────────────────────────────────────────────────────
+
+func (p *StackProvider) provisionResource(ctx context.Context, logicalID, resourceType string, props map[string]any, stackID string, nr *model.NormalizedRequest) (physicalID string, attrs map[string]any, err error) {
+	if h, ok := p.handlers[resourceType]; ok && h.Create != nil {
+		return h.Create(ctx, logicalID, props, nr)
+	}
+	// Metadata-only fallback: generate a deterministic physical ID.
+	physicalID = stackPhysicalID(nr.Params, logicalID)
+	return physicalID, nil, nil
+}
+
+func (p *StackProvider) deprovisionResource(ctx context.Context, r cfResource) {
+	if h, ok := p.handlers[r.ResourceType]; ok && h.Delete != nil {
+		if err := h.Delete(ctx, r.PhysicalResourceId, nil); err != nil {
+			slog.Warn("cloudformation: deprovision failed", "logical", r.LogicalResourceId, "physical", r.PhysicalResourceId, "err", err)
+		}
+	}
+}
+
+// rollback deletes resources in reverse order (last created → first).
+func (p *StackProvider) rollback(ctx context.Context, created []cfResource) {
+	for i := len(created) - 1; i >= 0; i-- {
+		p.deprovisionResource(ctx, created[i])
+	}
+}
+
+// ─── Outputs resolution ───────────────────────────────────────────────────────
+
+func (p *StackProvider) resolveOutputs(doc map[string]any, rc *resolveCtx, stackName string) []cfOutput {
+	outSection, ok := doc["Outputs"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	outputs := make([]cfOutput, 0, len(outSection))
+	for key, def := range outSection {
+		m, ok := def.(map[string]any)
+		if !ok {
+			continue
+		}
+		value := fmt.Sprintf("%v", rc.Resolve(m["Value"]))
+		desc, _ := m["Description"].(string)
+		o := cfOutput{
+			OutputKey:   key,
+			OutputValue: value,
+			Description: desc,
+		}
+		if export, ok := m["Export"].(map[string]any); ok {
+			o.ExportName = fmt.Sprintf("%v", rc.Resolve(export["Name"]))
+		}
+		outputs = append(outputs, o)
+	}
+	return outputs
+}
+
+// ─── Template parsing ─────────────────────────────────────────────────────────
+
+// parseTemplate unmarshals a CloudFormation template from JSON.
+func parseTemplate(body string) (map[string]any, error) {
+	if body == "" {
+		return nil, fmt.Errorf("empty template body")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -248,6 +551,17 @@ func (p *StackProvider) saveStack(ctx context.Context, s cfStack) {
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtStack, ID: s.StackName, Data: data})
 }
 
+func (rc *resolveCtx) resolvePropsMap(props map[string]any) map[string]any {
+	if props == nil {
+		return map[string]any{}
+	}
+	v := rc.Resolve(props)
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return props
+}
+
 func strParam(params map[string]any, key string) string {
 	if v, ok := params[key]; ok {
 		if s, ok := v.(string); ok {
@@ -257,79 +571,44 @@ func strParam(params map[string]any, key string) string {
 	return ""
 }
 
-func parseParams(params map[string]any) []cfParam {
-	var out []cfParam
-	// AWS Query protocol sends Parameters.member.1.ParameterKey / ParameterValue
+// parseCallerParams extracts Parameters.member.N.ParameterKey / ParameterValue from the request.
+func parseCallerParams(params map[string]any) map[string]string {
+	out := make(map[string]string)
 	for i := 1; ; i++ {
 		key := params[fmt.Sprintf("Parameters.member.%d.ParameterKey", i)]
 		val := params[fmt.Sprintf("Parameters.member.%d.ParameterValue", i)]
 		if key == nil {
 			break
 		}
-		out = append(out, cfParam{
-			ParameterKey:   fmt.Sprintf("%v", key),
-			ParameterValue: fmt.Sprintf("%v", val),
-		})
+		out[fmt.Sprintf("%v", key)] = fmt.Sprintf("%v", val)
 	}
 	return out
 }
 
-// parseTemplateResources parses a CloudFormation JSON template body and
-// extracts resource logical IDs and types for DescribeStackResources.
-func parseTemplateResources(template, stackName string) []cfResource {
-	if template == "" {
+func paramsToSlice(m map[string]string) []cfParam {
+	out := make([]cfParam, 0, len(m))
+	for k, v := range m {
+		out = append(out, cfParam{ParameterKey: k, ParameterValue: v})
+	}
+	return out
+}
+
+func stackPhysicalID(params map[string]any, logicalID string) string {
+	stackName := strParam(params, "StackName")
+	if stackName != "" {
+		return stackName + "-" + logicalID
+	}
+	return logicalID
+}
+
+func updateAttributes(old map[string]any, props map[string]any) map[string]any {
+	if old == nil {
 		return nil
 	}
-	// Try JSON parse first.
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(template), &doc); err == nil {
-		if resources, ok := doc["Resources"].(map[string]any); ok {
-			var out []cfResource
-			for logicalID, v := range resources {
-				if m, ok := v.(map[string]any); ok {
-					rtype, _ := m["Type"].(string)
-					out = append(out, cfResource{
-						LogicalResourceId:  logicalID,
-						PhysicalResourceId: fmt.Sprintf("%s-%s", stackName, logicalID),
-						ResourceType:       rtype,
-						ResourceStatus:     "CREATE_COMPLETE",
-					})
-				}
-			}
-			return out
-		}
-	}
-	// Fallback: scan for "Type": "AWS::..." lines (YAML/malformed JSON).
-	var resources []cfResource
-	lines := strings.Split(template, "\n")
-	var currentLogical string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Detect logical resource ID lines: `"LogicalId": {` or `LogicalId:` (YAML)
-		if strings.HasSuffix(line, `": {`) {
-			name := strings.TrimSuffix(line, `": {`)
-			name = strings.Trim(name, `"`)
-			if name != "" && name != "Resources" && name != "Properties" && !strings.Contains(name, "AWS::") {
-				currentLogical = name
-			}
-		}
-		if strings.Contains(line, `"Type": "AWS::`) && currentLogical != "" {
-			start := strings.Index(line, `"AWS::`)
-			end := strings.LastIndex(line, `"`)
-			if start >= 0 && end > start {
-				resources = append(resources, cfResource{
-					LogicalResourceId:  currentLogical,
-					PhysicalResourceId: fmt.Sprintf("%s-%s", stackName, currentLogical),
-					ResourceType:       line[start+1 : end],
-					ResourceStatus:     "CREATE_COMPLETE",
-				})
-				currentLogical = ""
-			}
-		}
-	}
-	return resources
+	return old
 }
 
 func shortID() string {
 	return fmt.Sprintf("%016x", time.Now().UnixNano())
 }
+

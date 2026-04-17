@@ -137,6 +137,8 @@ func apigwResourcesAction(method string, parts []string, params map[string]any) 
 		case http.MethodGet:
 			return "GetResource"
 		case http.MethodPost:
+			// For CreateResource the {resourceId} path segment IS the parentId.
+			params["parentId"] = parts[3]
 			return "CreateResource"
 		case http.MethodDelete:
 			return "DeleteResource"

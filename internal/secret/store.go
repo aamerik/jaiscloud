@@ -31,6 +31,7 @@ type VersionEntry struct {
 	SecretID     string
 	VersionID    string
 	SecretBinary []byte   // AES-GCM ciphertext (plaintext in lite/noop mode)
+	IsBinary     bool     // true when caller stored SecretBinary (vs SecretString)
 	Stages       []string // e.g. ["AWSCURRENT"], ["AWSPREVIOUS"]
 	CreatedAt    time.Time
 }
