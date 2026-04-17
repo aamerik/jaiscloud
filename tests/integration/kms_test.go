@@ -253,3 +253,66 @@ func TestKMS_EncryptRawPlaintext_Base64Transport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, raw, decOut.Plaintext)
 }
+
+func TestKMS_ReEncrypt(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	srcOut, err := c.CreateKey(ctx, &awskms.CreateKeyInput{Description: aws.String("src")})
+	require.NoError(t, err)
+	srcKeyID := aws.ToString(srcOut.KeyMetadata.KeyId)
+
+	dstOut, err := c.CreateKey(ctx, &awskms.CreateKeyInput{Description: aws.String("dst")})
+	require.NoError(t, err)
+	dstKeyID := aws.ToString(dstOut.KeyMetadata.KeyId)
+
+	plaintext := []byte("data to re-encrypt")
+	encOut, err := c.Encrypt(ctx, &awskms.EncryptInput{
+		KeyId:     aws.String(srcKeyID),
+		Plaintext: plaintext,
+	})
+	require.NoError(t, err)
+
+	reOut, err := c.ReEncrypt(ctx, &awskms.ReEncryptInput{
+		CiphertextBlob:   encOut.CiphertextBlob,
+		DestinationKeyId: aws.String(dstKeyID),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, aws.ToString(reOut.KeyId), dstKeyID)
+
+	// Decrypt with destination key must recover original plaintext.
+	decOut, err := c.Decrypt(ctx, &awskms.DecryptInput{
+		CiphertextBlob: reOut.CiphertextBlob,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decOut.Plaintext)
+}
+
+func TestKMS_ScheduleKeyDeletion_BlocksCryptoOps(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	createOut, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
+	require.NoError(t, err)
+	keyID := aws.ToString(createOut.KeyMetadata.KeyId)
+
+	_, err = c.ScheduleKeyDeletion(ctx, &awskms.ScheduleKeyDeletionInput{
+		KeyId:               aws.String(keyID),
+		PendingWindowInDays: aws.Int32(7),
+	})
+	require.NoError(t, err)
+
+	// DescribeKey should show PendingDeletion state.
+	descOut, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+	assert.Equal(t, types.KeyStatePendingDeletion, descOut.KeyMetadata.KeyState)
+
+	// Encrypt on a pending-deletion key must fail.
+	_, err = c.Encrypt(ctx, &awskms.EncryptInput{
+		KeyId:     aws.String(keyID),
+		Plaintext: []byte("should fail"),
+	})
+	require.Error(t, err)
+}

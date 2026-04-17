@@ -78,15 +78,20 @@ func (s *MemoryParameterStore) ListParameters(_ context.Context, path string, re
 			out = append(out, e)
 			continue
 		}
+		// Normalise path to always end with "/" so "/app" doesn't match "/apple/x".
+		prefix := path
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
 		if recursive {
-			if strings.HasPrefix(name, path) {
+			if strings.HasPrefix(name, prefix) {
 				out = append(out, e)
 			}
 		} else {
 			// Non-recursive: only direct children (one level below path).
-			if strings.HasPrefix(name, path) {
-				rest := strings.TrimPrefix(name, path)
-				if rest != "" && !strings.Contains(strings.TrimPrefix(rest, "/"), "/") {
+			if strings.HasPrefix(name, prefix) {
+				rest := strings.TrimPrefix(name, prefix)
+				if rest != "" && !strings.Contains(rest, "/") {
 					out = append(out, e)
 				}
 			}

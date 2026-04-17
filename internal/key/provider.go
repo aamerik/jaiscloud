@@ -169,14 +169,20 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 	}
 	deletionDate := time.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
 
-	// In this emulator we delete immediately but return the scheduled date.
-	if err := p.store.DeleteKey(ctx, keyID); err != nil {
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
 		return nil, p.keyErr(err)
+	}
+	e.Enabled = false
+	e.PendingDeletion = true
+	e.DeletionDate = deletionDate
+	if err := p.store.UpdateKey(ctx, e); err != nil {
+		return nil, fmt.Errorf("kms: schedule deletion: %w", err)
 	}
 	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	return provider.OK(map[string]any{
-		"KeyId":        keyARN,
-		"DeletionDate": deletionDate.Unix(),
+		"KeyId":               keyARN,
+		"DeletionDate":        deletionDate.Unix(),
 		"PendingWindowInDays": pendingDays,
 	}), nil
 }
@@ -403,6 +409,9 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
@@ -446,6 +455,9 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
@@ -475,6 +487,9 @@ func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedR
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
 	}
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
@@ -834,23 +849,30 @@ func extractStringList(params map[string]any, key string) []string {
 }
 
 func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
-	return map[string]any{
-		"KeyId":          e.KeyID,
-		"Arn":            arn,
-		"Enabled":        e.Enabled,
-		"Description":    e.Description,
-		"KeyUsage":       e.KeyUsage,
-		"KeySpec":        e.KeySpec,
-		"Origin":         e.Origin,
-		"KeyState":       boolToKeyState(e.Enabled),
-		"AWSAccountId":   accountID,
-		"CreationDate":   time.Now().Unix(),
-		"MultiRegion":    false,
+	m := map[string]any{
+		"KeyId":        e.KeyID,
+		"Arn":          arn,
+		"Enabled":      e.Enabled,
+		"Description":  e.Description,
+		"KeyUsage":     e.KeyUsage,
+		"KeySpec":      e.KeySpec,
+		"Origin":       e.Origin,
+		"KeyState":     keyState(e),
+		"AWSAccountId": accountID,
+		"CreationDate": time.Now().Unix(),
+		"MultiRegion":  false,
 	}
+	if e.PendingDeletion && !e.DeletionDate.IsZero() {
+		m["DeletionDate"] = e.DeletionDate.Unix()
+	}
+	return m
 }
 
-func boolToKeyState(enabled bool) string {
-	if enabled {
+func keyState(e KeyEntry) string {
+	if e.PendingDeletion {
+		return "PendingDeletion"
+	}
+	if e.Enabled {
 		return "Enabled"
 	}
 	return "Disabled"

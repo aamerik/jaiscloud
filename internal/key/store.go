@@ -3,6 +3,7 @@ package key
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -15,13 +16,15 @@ var (
 
 // KeyEntry holds the persisted state of a KMS key.
 type KeyEntry struct {
-	KeyID       string
-	Enabled     bool
-	Description string
-	KeyUsage    string // "ENCRYPT_DECRYPT" | "SIGN_VERIFY"
-	KeySpec     string // "SYMMETRIC_DEFAULT" | "RSA_2048" | ...
-	Origin      string // "AWS_KMS" | "EXTERNAL"
-	Tags        map[string]string
+	KeyID          string
+	Enabled        bool
+	PendingDeletion bool      // true after ScheduleKeyDeletion until deletion date
+	DeletionDate   time.Time // zero unless PendingDeletion is true
+	Description    string
+	KeyUsage       string // "ENCRYPT_DECRYPT" | "SIGN_VERIFY"
+	KeySpec        string // "SYMMETRIC_DEFAULT" | "RSA_2048" | ...
+	Origin         string // "AWS_KMS" | "EXTERNAL"
+	Tags           map[string]string
 	// KeyMaterial is the AES-GCM–encrypted 32-byte data key used for
 	// Encrypt/Decrypt operations on this logical KMS key.
 	// Nil for metadata-only (pending import) keys.

@@ -112,13 +112,18 @@ func (s *PostgresParameterStore) DeleteParameter(ctx context.Context, name strin
 func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string, recursive bool) ([]ParameterEntry, error) {
 	var rows pgx.Rows
 	var err error
+	// Normalise prefix to always end with "/" to avoid "/app" matching "/apple/x".
+	prefix := path
+	if path != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
 	if path == "" {
 		rows, err = s.pool.Query(ctx,
 			`SELECT name, param_data, param_value, version, created_at, updated_at FROM jc_ssm_parameters`)
 	} else {
 		rows, err = s.pool.Query(ctx,
 			`SELECT name, param_data, param_value, version, created_at, updated_at
-			 FROM jc_ssm_parameters WHERE name LIKE $1`, path+"%")
+			 FROM jc_ssm_parameters WHERE name LIKE $1`, prefix+"%")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ssm postgres: list parameters: %w", err)
@@ -133,8 +138,8 @@ func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string
 		}
 		unmarshalParamMeta(&e, data)
 		if !recursive && path != "" {
-			rest := strings.TrimPrefix(e.Name, path)
-			if strings.Contains(strings.TrimPrefix(rest, "/"), "/") {
+			rest := strings.TrimPrefix(e.Name, prefix)
+			if strings.Contains(rest, "/") {
 				continue
 			}
 		}

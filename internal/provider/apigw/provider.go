@@ -154,6 +154,18 @@ func (p *GatewayProvider) DeleteRestApi(ctx context.Context, nr *model.Normalize
 	if err := p.resources.Delete(ctx, rtAPI, apiID); err != nil {
 		return nil, p.notFound(err, "Rest API not found: "+apiID)
 	}
+	// Cascade-delete all child entities associated with this API.
+	for _, rt := range []string{rtResource, rtStage, rtDeployment} {
+		entries, _ := p.resources.List(ctx, rt, "")
+		for _, e := range entries {
+			var m map[string]any
+			if json.Unmarshal(e.Data, &m) == nil {
+				if aid, _ := m["apiId"].(string); aid == apiID {
+					p.resources.Delete(ctx, rt, e.ID) //nolint:errcheck
+				}
+			}
+		}
+	}
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 

@@ -150,8 +150,7 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template: " + err.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
-	stackID := fmt.Sprintf("arn:aws:cloudformation:%s:%s:stack/%s/%s",
-		nr.Region, nr.AccountID, name, shortID())
+	stackID := nr.ResourceID(model.RTCFNStack, name+"/"+shortID())
 
 	rc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
 	rc.pseudoParams["AWS::StackName"] = name
@@ -363,9 +362,7 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 	s.Resources = newResources
 	s.Outputs = outputs
 	s.StackStatus = "UPDATE_COMPLETE"
-	if params := parseCallerParams(nr.Params); len(params) > 0 {
-		s.Parameters = paramsToSlice(params)
-	}
+	s.Parameters = paramsToSlice(rc.params)
 	p.saveStack(ctx, s)
 	return provider.OK(map[string]any{"StackId": s.StackId}), nil
 }

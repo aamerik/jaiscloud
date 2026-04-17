@@ -122,13 +122,23 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 		e.mu.Unlock()
 		return c, nil
 	}
+	// Reserve a port and insert a sentinel so concurrent callers skip straight
+	// to the existing entry rather than racing to start a second container.
 	port := e.nextPort
 	e.nextPort++
+	sentinel := &warmContainer{hostPort: port}
+	e.containers[req.FunctionName] = sentinel
 	e.mu.Unlock()
 
 	image := ImageForRuntime(req, e.cfg)
 	id, err := e.startContainer(ctx, req, image, port)
 	if err != nil {
+		// Remove the sentinel so the next caller can retry.
+		e.mu.Lock()
+		if e.containers[req.FunctionName] == sentinel {
+			delete(e.containers, req.FunctionName)
+		}
+		e.mu.Unlock()
 		return nil, err
 	}
 

@@ -309,3 +309,98 @@ func TestAPIGateway_DeleteResource(t *testing.T) {
 	})
 	require.Error(t, err, "deleted resource should not be found")
 }
+
+// TestAPIGateway_MockIntegrationSetup verifies the full management-plane pipeline
+// for a MOCK integration: method + integration + integration response + deployment + stage.
+// Execute-api invoke requires SigV4-signed requests (tested separately with the SDK).
+func TestAPIGateway_MockIntegrationSetup(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newAPIGWClient(t)
+
+	createOut, err := c.CreateRestApi(ctx, &awsapigw.CreateRestApiInput{Name: aws.String("mock-invoke-api")})
+	require.NoError(t, err)
+	apiID := aws.ToString(createOut.Id)
+
+	resOut, err := c.GetResources(ctx, &awsapigw.GetResourcesInput{RestApiId: aws.String(apiID)})
+	require.NoError(t, err)
+	rootID := aws.ToString(resOut.Items[0].Id)
+
+	_, err = c.PutMethod(ctx, &awsapigw.PutMethodInput{
+		RestApiId:         aws.String(apiID),
+		ResourceId:        aws.String(rootID),
+		HttpMethod:        aws.String("GET"),
+		AuthorizationType: aws.String("NONE"),
+	})
+	require.NoError(t, err)
+
+	_, err = c.PutIntegration(ctx, &awsapigw.PutIntegrationInput{
+		RestApiId:  aws.String(apiID),
+		ResourceId: aws.String(rootID),
+		HttpMethod: aws.String("GET"),
+		Type:       apigwtypes.IntegrationTypeMock,
+		RequestTemplates: map[string]string{
+			"application/json": `{"statusCode": 200}`,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = c.PutIntegrationResponse(ctx, &awsapigw.PutIntegrationResponseInput{
+		RestApiId:         aws.String(apiID),
+		ResourceId:        aws.String(rootID),
+		HttpMethod:        aws.String("GET"),
+		StatusCode:        aws.String("200"),
+		ResponseTemplates: map[string]string{"application/json": `{"ok":true}`},
+	})
+	require.NoError(t, err)
+
+	deplOut, err := c.CreateDeployment(ctx, &awsapigw.CreateDeploymentInput{
+		RestApiId: aws.String(apiID),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, aws.ToString(deplOut.Id))
+
+	_, err = c.CreateStage(ctx, &awsapigw.CreateStageInput{
+		RestApiId:    aws.String(apiID),
+		StageName:    aws.String("test"),
+		DeploymentId: deplOut.Id,
+	})
+	require.NoError(t, err)
+
+	// Verify stage is retrievable after full setup.
+	stageOut, err := c.GetStage(ctx, &awsapigw.GetStageInput{
+		RestApiId: aws.String(apiID),
+		StageName: aws.String("test"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "test", aws.ToString(stageOut.StageName))
+}
+
+func TestAPIGateway_DeleteRestApi_CascadesChildren(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newAPIGWClient(t)
+
+	createOut, err := c.CreateRestApi(ctx, &awsapigw.CreateRestApiInput{Name: aws.String("cascade-api")})
+	require.NoError(t, err)
+	apiID := aws.ToString(createOut.Id)
+
+	deplOut, err := c.CreateDeployment(ctx, &awsapigw.CreateDeploymentInput{RestApiId: aws.String(apiID)})
+	require.NoError(t, err)
+
+	_, err = c.CreateStage(ctx, &awsapigw.CreateStageInput{
+		RestApiId:    aws.String(apiID),
+		StageName:    aws.String("prod"),
+		DeploymentId: deplOut.Id,
+	})
+	require.NoError(t, err)
+
+	_, err = c.DeleteRestApi(ctx, &awsapigw.DeleteRestApiInput{RestApiId: aws.String(apiID)})
+	require.NoError(t, err)
+
+	_, err = c.GetRestApi(ctx, &awsapigw.GetRestApiInput{RestApiId: aws.String(apiID)})
+	require.Error(t, err, "deleted API should not be found")
+
+	_, err = c.GetStage(ctx, &awsapigw.GetStageInput{RestApiId: aws.String(apiID), StageName: aws.String("prod")})
+	require.Error(t, err, "stage of deleted API should not be found")
+}
