@@ -33,6 +33,7 @@ import (
 	eksprovider "jaiscloud/internal/provider/eks"
 	emrprovider "jaiscloud/internal/provider/emr"
 	keyprovider "jaiscloud/internal/key"
+	secretprovider "jaiscloud/internal/secret"
 	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
@@ -95,14 +96,14 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore, bus, keyStore, cleanup := buildRegistry(ctx, cfg, s, dek)
+			registry, streamStore, bus, keyStore, secretStore, cleanup := buildRegistry(ctx, cfg, s, dek)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
-			adminHandler := buildAdminHandler(s, streamStore, keyStore)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore)
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
 			_ = bus // bus is used internally by providers
@@ -165,13 +166,14 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("lambda_keepalive_secs", cmd.Flags().Lookup("lambda-keepalive-secs"))
 }
 
-// appStores holds the five store instances that the server depends on.
+// appStores holds all store instances that the server depends on.
 type appStores struct {
 	resources store.ResourceStore
 	messages  sqsstore.SQSMessageStore
 	dynamo    dynamostore.DynamoDBItemStore
 	s3Meta    s3store.S3ObjectMetaStore
 	blobs     blobfs.BlobStore
+	secrets   secretprovider.SecretStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -198,6 +200,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			dynamo:    dynamostore.NewPostgresDynamoDBItemStore(pool),
 			s3Meta:    s3store.NewPostgresS3ObjectMetaStore(pool),
 			blobs:     blobs,
+			secrets:   secretprovider.NewPostgresSecretStore(pool),
 		}, nil
 	}
 
@@ -208,6 +211,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		dynamo:    dynamostore.NewMemoryDynamoDBItemStore(),
 		s3Meta:    s3store.NewMemoryS3ObjectMetaStore(),
 		blobs:     blobfs.NewMemoryBlobStore(),
+		secrets:   secretprovider.NewMemorySecretStore(),
 	}, nil
 }
 
@@ -236,7 +240,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -283,9 +287,11 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		keyStore = keyprovider.NewMemoryKeyStore()
 	}
 	keyProv := keyprovider.New(keyStore, nil, dek)
+	secretProv := secretprovider.New(s.secrets, keyProv.AsKeyEncryptor())
 
 	registry := provider.NewRegistry()
 	registry.RegisterAll(keyProv.Routes())
+	registry.RegisterAll(secretProv.Routes())
 	registry.RegisterAll(queue.New(s.resources, s.messages, cfg.Clock, bus).Routes())
 	registry.RegisterAll(iamprovider.New(s.resources).Routes())
 	registry.RegisterAll(notification.New(s.resources, s.messages, bus).Routes())
@@ -305,7 +311,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 
-	return registry, streams, bus, keyStore, cleanup
+	return registry, streams, bus, keyStore, s.secrets, cleanup
 }
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
@@ -353,6 +359,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 	iamCodec := &services.IAMCodec{}
 	return awsadapter.NewAdapter(map[string]adapter.Codec{
 		"kms":             &services.KMSCodec{},
+		"secretsmanager":  &services.SecretsManagerCodec{},
 		"sqs":             &services.SQSCodec{},
 		"iam":             iamCodec,
 		"sts":             iamCodec,
@@ -376,7 +383,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 }
 
 // buildAdminHandler registers all resetters and snapshotters, then returns the handler.
-func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore) *admin.Handler {
+func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore, secretStore secretprovider.SecretStore) *admin.Handler {
 	h := admin.NewHandler()
 	h.RegisterResetter(s.resources)
 	h.RegisterResetter(s.messages)
@@ -385,6 +392,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(s.blobs)
 	h.RegisterResetter(streams)
 	h.RegisterResetter(keyStore)
+	h.RegisterResetter(secretStore)
 	if snap, ok := s.resources.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("resources", snap)
 	}
