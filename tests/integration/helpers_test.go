@@ -21,8 +21,12 @@ import (
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
+	awsapigw "github.com/aws/aws-sdk-go-v2/service/apigateway"
+	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	awssm "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
+	awsssm "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
 )
@@ -250,6 +254,62 @@ func newEMRContainersClient(t *testing.T) *awsemrc.Client {
 		t.Fatalf("load config: %v", err)
 	}
 	return awsemrc.NewFromConfig(cfg, func(o *awsemrc.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newKMSClient(t *testing.T) *awskms.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awskms.NewFromConfig(cfg, func(o *awskms.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newSMClient(t *testing.T) *awssm.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awssm.NewFromConfig(cfg, func(o *awssm.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newSSMClient(t *testing.T) *awsssm.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsssm.NewFromConfig(cfg, func(o *awsssm.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newAPIGWClient(t *testing.T) *awsapigw.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsapigw.NewFromConfig(cfg, func(o *awsapigw.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
 }
