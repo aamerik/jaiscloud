@@ -151,7 +151,7 @@ HTTP request
 Key design rules:
 - **No layer imports its caller.** The `model` package breaks the cycle between `gateway` and `adapter`.
 - **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection. For multi-cloud applications that need both AWS and GCP simultaneously, run two instances on different ports (e.g. `--port 4566 --cloud aws` and `--port 4567 --cloud gcp`). A `docker-compose` example shipping in Phase 5 documents this pattern.
-- **Executors are wired at startup.** `JAISCLOUD_SPARK_MODE` controls which `SparkExecutor` is created; providers receive it via the `WithExecutor` option.
+- **Executors are wired at startup.** `JAISCLOUD_EXECUTOR_MODE` controls the container orchestrator for both Spark and Lambda executors; providers receive it via the `WithExecutor` option.
 
 ### Single-cloud adapter model
 
@@ -222,14 +222,16 @@ This section documents what real infrastructure resources JaisCloud creates for 
 
 ### Mode matrix
 
-| Service | Lite (default) | Full (`--mode full`) | Full + Docker executor | Full + K8s executor |
+Executor behaviour is controlled by a single env var: `JAISCLOUD_EXECUTOR_MODE` (`""` / `mock` / `docker` / `k8s`). It applies globally to both Spark (EMR) and Lambda.
+
+| Service | Lite (default) | Full (`--mode full`) | `EXECUTOR_MODE=docker` | `EXECUTOR_MODE=k8s` |
 |---|---|---|---|---|
 | SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
 | DynamoDB + Streams | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
 | S3 | In-memory maps + `MemoryBlobStore` | PostgreSQL rows + `LocalFSBlobStore`* | same | same |
 | Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s `batch/v1 Job`** per invocation |
-| EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | — | **K8s `batch/v1 Job`** per step |
-| EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | — | **K8s `batch/v1 Job`** per job run |
+| EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per step | **K8s `batch/v1 Job`** per step |
+| EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per job run | **K8s `batch/v1 Job`** per job run |
 | EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
 | RDS | Metadata only | Metadata only | — | — |
 | ElastiCache | Metadata only | Metadata only | — | — |
@@ -246,7 +248,7 @@ This section documents what real infrastructure resources JaisCloud creates for 
 
 ---
 
-### Lambda — Docker executor (`JAISCLOUD_LAMBDA_MODE=docker`)
+### Lambda — Docker executor (`JAISCLOUD_EXECUTOR_MODE=docker`)
 
 Each distinct function gets **one warm Docker container** that is reused across invocations until it is idle beyond the keep-alive timeout.
 
@@ -284,7 +286,7 @@ docker run -d
 
 ---
 
-### Lambda — K8s executor (`JAISCLOUD_LAMBDA_MODE=k8s`)
+### Lambda — K8s executor (`JAISCLOUD_EXECUTOR_MODE=k8s`)
 
 Each invocation creates a **one-shot `batch/v1 Job`** (no warm pool). The job is deleted automatically after `ttlSecondsAfterFinished: 300`.
 
@@ -319,7 +321,7 @@ Result is retrieved by polling `Job.status.succeeded` then reading pod logs.
 
 ---
 
-### EMR on EC2 steps — K8s executor (`JAISCLOUD_SPARK_MODE=k8s`)
+### EMR on EC2 steps — K8s executor (`JAISCLOUD_EXECUTOR_MODE=k8s`)
 
 Each EMR step (`AddJobFlowSteps`) that reaches `RUNNING` state submits a **`batch/v1 Job`** via `spark-submit` in cluster deploy mode:
 
@@ -356,7 +358,7 @@ The `StatusPoller` goroutine polls the Job every `SparkConfig.PollInterval` (def
 
 ---
 
-### EMR on EKS job runs — K8s executor (`JAISCLOUD_SPARK_MODE=k8s`)
+### EMR on EKS job runs — K8s executor (`JAISCLOUD_EXECUTOR_MODE=k8s`)
 
 Each `StartJobRun` on a virtual cluster submits the same `batch/v1 Job` pattern as EMR steps (above), with the job named `jc-emrc-{virtualClusterID[:8]}-{jobRunID[:8]}` and labels `app: jaiscloud-emrc`.
 
@@ -402,8 +404,11 @@ go build -o jaiscloud ./cmd/jaiscloud/
 # Run in GCP cloud mode (stub — returns 501 for all requests)
 ./jaiscloud start --cloud gcp
 
-# Enable EMR Spark real K8s submission
-JAISCLOUD_SPARK_MODE=k8s ./jaiscloud start --mode full --dsn "postgres://..."
+# Enable all executors via K8s (Spark + Lambda)
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud start --mode full --dsn "postgres://..."
+
+# Enable all executors via Docker (Spark + Lambda)
+JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud start --mode full --dsn "postgres://..."
 
 # Enable Prometheus metrics
 ./jaiscloud start --metrics        # served at /metrics
@@ -417,9 +422,8 @@ JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
 JAISCLOUD_METRICS=true
-JAISCLOUD_SPARK_MODE=        # "mock" or "k8s" (default: off = immediate completion)
-JAISCLOUD_LAMBDA_MODE=       # "mock", "docker", or "k8s" (default: mock = echo)
-JAISCLOUD_LAMBDA_IMAGE=      # override default runtime image
+JAISCLOUD_EXECUTOR_MODE=     # "" (default mock) | "mock" | "docker" | "k8s" — applies to Spark + Lambda
+JAISCLOUD_LAMBDA_IMAGE=      # override default Lambda runtime image
 JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300  # Docker warm container idle timeout
 JAISCLOUD_KMS_MASTER_KEY=    # 32-byte hex KEK; if unset DEK stored plaintext (dev only)
 JAISCLOUD_APIGW_PROXY_TIMEOUT=30s    # HTTP_PROXY integration timeout
@@ -428,7 +432,7 @@ JAISCLOUD_APIGW_ALLOW_PRIVATE_HOSTS= # true to allow RFC-1918 HTTP_PROXY targets
 
 > **Config loading:** `config.Load()` reads from the global Viper instance. All `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not a local `viper.New()` instance) or flags will be silently ignored and defaults used.
 
-> **Startup executor log:** on startup the server logs a structured block showing the active mode for every executor and store. A misconfigured executor (e.g. `JAISCLOUD_LAMBDA_MODE` unset) silently falls back to mock — the startup log is the first place to check:
+> **Startup executor log:** on startup the server logs the active executor mode. An unset `JAISCLOUD_EXECUTOR_MODE` silently defaults to mock — the startup log is the first place to check:
 > ```
 > INFO  executor  lambda=mock  spark=mock
 > INFO  store     mode=full  blob=memory [WARN: LocalFSBlobStore not wired — S3 blobs lost on restart]
@@ -500,7 +504,7 @@ The `SparkExecutor` interface drives EMR step execution and EMR-on-EKS job runs:
 
 EMR and EMRContainers providers accept a `WithExecutor(exec, cfg)` option. When an executor is wired, `AddJobFlowSteps` / `StartJobRun` call `Submit`, and state changes from the `StatusPoller` feed back via `OnStateChange`. Without an executor, steps complete instantly (mock behaviour).
 
-`JAISCLOUD_SPARK_MODE` controls which executor is created at startup (`"off"`/`""` = instant completion, `"mock"` = MockExecutor, `"k8s"` = K8sExecutor).
+`JAISCLOUD_EXECUTOR_MODE` controls which executor is created at startup for both Spark and Lambda: `""` / unset = instant mock completion, `"mock"` = MockExecutor, `"docker"` = DockerExecutor, `"k8s"` = K8sExecutor.
 
 ---
 

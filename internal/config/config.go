@@ -20,11 +20,6 @@ const (
 	ModeFull Mode = "full"
 )
 
-// ExecutorConfig controls which Spark executor is created at startup.
-type ExecutorConfig struct {
-	Spark string // "off" (default) | "mock" | "k8s"
-}
-
 type Config struct {
 	Port      int
 	Mode      Mode
@@ -35,13 +30,15 @@ type Config struct {
 	DSN       string // PostgreSQL DSN (required when Mode == full)
 	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
 
-	Executors ExecutorConfig
+	// ExecutorMode selects the container orchestrator for all executors (Spark + Lambda).
+	// Values: "" (default, mock/instant) | "mock" | "docker" | "k8s".
+	// Set via --executor-mode / JAISCLOUD_EXECUTOR_MODE.
+	ExecutorMode string
 
 	// KMS
 	KMSMasterKey string // 32-byte hex KEK; if unset DEK is stored plaintext (dev only)
 
 	// Lambda executor
-	LambdaMode          string // "mock" (default) | "docker" | "k8s"
 	LambdaImage         string // override default runtime image
 	LambdaNetwork       string // Docker network for Lambda containers (default: "jaiscloud-net")
 	LambdaKeepaliveSecs int    // Docker warm container idle timeout in seconds (default: 300)
@@ -175,9 +172,8 @@ func Load() (*Config, error) {
 	} else {
 		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
 	}
-	viper.SetDefault("spark_mode", "off")
+	viper.SetDefault("executor_mode", "")
 	viper.SetDefault("kms_master_key", "")
-	viper.SetDefault("lambda_mode", "mock")
 	viper.SetDefault("lambda_image", "")
 	viper.SetDefault("lambda_network", "jaiscloud-net")
 	viper.SetDefault("lambda_keepalive_secs", 300)
@@ -200,9 +196,8 @@ func Load() (*Config, error) {
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
 		BlobDir:       viper.GetString("blob_dir"),
-		Executors:           ExecutorConfig{Spark: viper.GetString("spark_mode")},
+		ExecutorMode:        viper.GetString("executor_mode"),
 		KMSMasterKey:        viper.GetString("kms_master_key"),
-		LambdaMode:          viper.GetString("lambda_mode"),
 		LambdaImage:         viper.GetString("lambda_image"),
 		LambdaNetwork:       viper.GetString("lambda_network"),
 		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),

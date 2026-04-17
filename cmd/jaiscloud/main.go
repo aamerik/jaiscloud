@@ -136,8 +136,10 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("kms-master-key", "", `32-byte hex KEK for KMS envelope encryption.
 	If unset, DEK is stored plaintext (dev only).
 	Env var: JAISCLOUD_KMS_MASTER_KEY`)
-	cmd.Flags().String("lambda-mode", "mock", `Lambda executor mode: mock (default), docker, k8s.
-	Env var: JAISCLOUD_LAMBDA_MODE`)
+	cmd.Flags().String("executor-mode", "", `Container orchestrator for all executors (Spark + Lambda): mock, docker, or k8s.
+	"" / unset: instant mock completion (no containers).  "mock": explicit mock.
+	"docker": Docker daemon.  "k8s": Kubernetes (docker-desktop or in-cluster).
+	Env var: JAISCLOUD_EXECUTOR_MODE`)
 	cmd.Flags().String("lambda-image", "", `Override default Lambda runtime image.
 	Env var: JAISCLOUD_LAMBDA_IMAGE`)
 	cmd.Flags().String("lambda-network", "jaiscloud-net", `Docker network for Lambda containers.
@@ -164,7 +166,7 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("cloud", cmd.Flags().Lookup("cloud"))
 	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
-	viper.BindPFlag("lambda_mode", cmd.Flags().Lookup("lambda-mode"))
+	viper.BindPFlag("executor_mode", cmd.Flags().Lookup("executor-mode"))
 	viper.BindPFlag("lambda_image", cmd.Flags().Lookup("lambda-image"))
 	viper.BindPFlag("lambda_network", cmd.Flags().Lookup("lambda-network"))
 	viper.BindPFlag("lambda_keepalive_secs", cmd.Flags().Lookup("lambda-keepalive-secs"))
@@ -251,10 +253,11 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
-	// Build spark executor (nil when JAISCLOUD_SPARK_MODE=off or unset).
-	sparkExec, sparkCfg := buildSparkExecutor(cfg.Executors.Spark)
+	// Build spark executor. cfg.ExecutorMode drives both Spark and Lambda.
+	// "" / "mock" → instant mock completion (nil exec); "docker" / "k8s" → real executor.
+	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode)
 	if sparkExec != nil {
-		slog.Info("spark executor enabled", "mode", cfg.Executors.Spark)
+		slog.Info("spark executor enabled", "mode", cfg.ExecutorMode)
 	}
 
 	var emrOpts []emrprovider.Option
@@ -298,15 +301,15 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
-	// Build Lambda executor.
+	// Build Lambda executor. Same ExecutorMode drives Lambda and Spark.
 	lambdaCfg := lambdaexec.LambdaConfig{
-		Mode:          cfg.LambdaMode,
+		Mode:          cfg.ExecutorMode,
 		DefaultImage:  cfg.LambdaImage,
 		Network:       cfg.LambdaNetwork,
 		KeepaliveSecs: cfg.LambdaKeepaliveSecs,
 	}
 	lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
-	slog.Info("lambda executor", "mode", cfg.LambdaMode)
+	slog.Info("lambda executor", "mode", cfg.ExecutorMode)
 	prevCleanup := cleanup
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
 

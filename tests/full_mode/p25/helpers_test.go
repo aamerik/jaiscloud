@@ -93,7 +93,7 @@ func resetState(t *testing.T) {
 // ─── skip guards ─────────────────────────────────────────────────────────────
 
 // requireLambdaDockerEnv skips the test unless LAMBDA_E2E_DOCKER_IMAGE is set,
-// which implies the server is running with JAISCLOUD_LAMBDA_MODE=docker and
+// which implies the server is running with JAISCLOUD_EXECUTOR_MODE=docker and
 // Docker is available. The variable should be the image URI for a test Lambda
 // function (e.g. public.ecr.aws/lambda/python:3.12 with a handler that echoes
 // the event).
@@ -105,7 +105,7 @@ func requireLambdaDockerEnv(t *testing.T) {
 }
 
 // requireLambdaK8sEnv skips the test unless LAMBDA_E2E_K8S_IMAGE is set,
-// which implies the server is running with JAISCLOUD_LAMBDA_MODE=k8s and a
+// which implies the server is running with JAISCLOUD_EXECUTOR_MODE=k8s and a
 // Kubernetes cluster is reachable.
 func requireLambdaK8sEnv(t *testing.T) {
 	t.Helper()

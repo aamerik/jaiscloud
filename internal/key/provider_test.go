@@ -218,7 +218,9 @@ func TestKeyProvider_ScheduleKeyDeletion(t *testing.T) {
 	})
 	assert.NotZero(t, delData["DeletionDate"])
 
-	// Key should be gone from the store.
-	_, err := routes["Key.DescribeKey"](context.Background(), nr(map[string]any{"KeyId": keyID}))
-	require.Error(t, err)
+	// Key still describable but in PendingDeletion state.
+	descData, err := routes["Key.DescribeKey"](context.Background(), nr(map[string]any{"KeyId": keyID}))
+	require.NoError(t, err)
+	meta := descData.Data["KeyMetadata"].(map[string]any)
+	assert.Equal(t, "PendingDeletion", meta["KeyState"])
 }
