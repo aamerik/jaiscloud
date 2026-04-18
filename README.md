@@ -1,6 +1,19 @@
 # JaisCloud
 
-**A lightweight, zero-dependency AWS emulator that runs anywhere — laptop, CI, or Kubernetes.**
+<p align="center">
+  <img src="docs/images/jaiscloud-hero.png" alt="JaisCloud — AI Agent to multi-cloud emulation" width="100%"/>
+</p>
+
+> **Early Development Notice**
+> JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
+
+**⚡ JaisCloud — Fast, Local, Realistic Cloud for AI-Driven Development that runs anywhere — laptop, CI, or Kubernetes**
+
+JaisCloud is a free and open-source, lightweight multi-cloud emulator designed to enable AI agents and developers to rapidly deploy and validate code changes for enterprise applications that depend on cloud resources—without interacting with real cloud environments. It goes beyond basic emulation by providing high-fidelity, scaled-down implementations of cloud services (across AWS, Azure, and GCP), including real execution backends for systems like EMR (Spark), Lambda, and container-based workloads. This allows workloads to behave much closer to actual cloud environments while still running locally or in isolated infrastructure.
+
+By combining protocol-level compatibility with real execution semantics, JaisCloud enables end-to-end validation of cloud-dependent workflows in complete isolation, eliminating the latency, cost, and risk associated with real deployments. **This dramatically shortens the feedback loop: AI agents can provision resources, execute workflows, and verify behavior in seconds rather than minutes. At the same time, it significantly reduces cloud costs by removing the need to provision real cloud infrastructure for development and testing workflows.**
+
+As an open-source project, JaisCloud offers transparency, extensibility, and community-driven innovation—allowing teams to customize, audit, and evolve the platform to fit their specific needs. It plays a critical role in accelerating AI-driven Software Development Lifecycle (AI-SDLC) by enabling fast, reliable, and repeatable validation of code changes. By empowering AI agents with tight feedback cycles and realistic execution environments, JaisCloud becomes a foundational tool for building, testing, and evolving cloud-native systems with high velocity.
 
 JaisCloud speaks the exact same wire protocols as AWS — no SDK shims, no proxy rewrites. Point any `aws-sdk-go-v2`, `boto3`, or `aws-sdk-js` client at `http://localhost:4566` and it works, unmodified.
 
