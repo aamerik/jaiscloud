@@ -121,11 +121,11 @@ func (s *PostgresSecretStore) PutVersion(ctx context.Context, v VersionEntry) er
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO jc_sm_versions (secret_id, version_id, secret_binary, stages)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO jc_sm_versions (secret_id, version_id, secret_binary, stages, is_binary)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (secret_id, version_id) DO UPDATE
-		  SET secret_binary=$3, stages=$4`,
-		v.SecretID, v.VersionID, v.SecretBinary, v.Stages,
+		  SET secret_binary=$3, stages=$4, is_binary=$5`,
+		v.SecretID, v.VersionID, v.SecretBinary, v.Stages, v.IsBinary,
 	)
 	if err != nil {
 		return fmt.Errorf("sm postgres: put version: %w", err)
@@ -137,10 +137,10 @@ func (s *PostgresSecretStore) GetVersion(ctx context.Context, secretID, versionI
 	var v VersionEntry
 	var stages []string
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, created_at
+		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 AND version_id=$2`,
 		secretID, versionID,
-	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.CreatedAt)
+	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VersionEntry{}, ErrVersionNotFound
 	}
@@ -155,11 +155,11 @@ func (s *PostgresSecretStore) GetVersionByStage(ctx context.Context, secretID, s
 	var v VersionEntry
 	var stages []string
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, created_at
+		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 AND $2=ANY(stages)
 		ORDER BY created_at DESC LIMIT 1`,
 		secretID, stage,
-	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.CreatedAt)
+	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VersionEntry{}, ErrVersionNotFound
 	}
@@ -172,7 +172,7 @@ func (s *PostgresSecretStore) GetVersionByStage(ctx context.Context, secretID, s
 
 func (s *PostgresSecretStore) ListVersions(ctx context.Context, secretID string) ([]VersionEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, created_at
+		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 ORDER BY created_at DESC`,
 		secretID,
 	)
@@ -184,7 +184,7 @@ func (s *PostgresSecretStore) ListVersions(ctx context.Context, secretID string)
 	for rows.Next() {
 		var v VersionEntry
 		var stages []string
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		v.Stages = stages

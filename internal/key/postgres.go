@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,11 +29,13 @@ func NewPostgresKeyStore(pool *pgxpool.Pool, dek []byte) *PostgresKeyStore {
 
 func (s *PostgresKeyStore) CreateKey(ctx context.Context, e KeyEntry) error {
 	data, err := json.Marshal(map[string]any{
-		"description": e.Description,
-		"key_usage":   e.KeyUsage,
-		"key_spec":    e.KeySpec,
-		"origin":      e.Origin,
-		"tags":        e.Tags,
+		"description":      e.Description,
+		"key_usage":        e.KeyUsage,
+		"key_spec":         e.KeySpec,
+		"origin":           e.Origin,
+		"tags":             e.Tags,
+		"pending_deletion": e.PendingDeletion,
+		"deletion_date":    e.DeletionDate,
 	})
 	if err != nil {
 		return fmt.Errorf("kms postgres: marshal key data: %w", err)
@@ -60,11 +63,13 @@ func (s *PostgresKeyStore) GetKey(ctx context.Context, keyID string) (KeyEntry, 
 
 func (s *PostgresKeyStore) UpdateKey(ctx context.Context, e KeyEntry) error {
 	data, err := json.Marshal(map[string]any{
-		"description": e.Description,
-		"key_usage":   e.KeyUsage,
-		"key_spec":    e.KeySpec,
-		"origin":      e.Origin,
-		"tags":        e.Tags,
+		"description":      e.Description,
+		"key_usage":        e.KeyUsage,
+		"key_spec":         e.KeySpec,
+		"origin":           e.Origin,
+		"tags":             e.Tags,
+		"pending_deletion": e.PendingDeletion,
+		"deletion_date":    e.DeletionDate,
 	})
 	if err != nil {
 		return fmt.Errorf("kms postgres: marshal key data: %w", err)
@@ -293,11 +298,13 @@ func scanKey(row scannable) (KeyEntry, error) {
 		return KeyEntry{}, fmt.Errorf("kms postgres: scan key: %w", err)
 	}
 	var meta struct {
-		Description string            `json:"description"`
-		KeyUsage    string            `json:"key_usage"`
-		KeySpec     string            `json:"key_spec"`
-		Origin      string            `json:"origin"`
-		Tags        map[string]string `json:"tags"`
+		Description     string            `json:"description"`
+		KeyUsage        string            `json:"key_usage"`
+		KeySpec         string            `json:"key_spec"`
+		Origin          string            `json:"origin"`
+		Tags            map[string]string `json:"tags"`
+		PendingDeletion bool              `json:"pending_deletion"`
+		DeletionDate    time.Time         `json:"deletion_date"`
 	}
 	_ = json.Unmarshal(data, &meta)
 	e.Description = meta.Description
@@ -305,6 +312,8 @@ func scanKey(row scannable) (KeyEntry, error) {
 	e.KeySpec = meta.KeySpec
 	e.Origin = meta.Origin
 	e.Tags = meta.Tags
+	e.PendingDeletion = meta.PendingDeletion
+	e.DeletionDate = meta.DeletionDate
 	return e, nil
 }
 

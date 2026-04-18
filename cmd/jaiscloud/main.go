@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -455,7 +456,12 @@ func registerCFNHandlers(
 	// ── AWS::S3::Bucket ──────────────────────────────────────────────────────
 	stackP.RegisterHandler("AWS::S3::Bucket", stackprovider.ResourceHandler{
 		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
-			name := propStr(props, "BucketName", logicalID)
+			stackName, _ := nr.Params["StackName"].(string)
+			defaultName := logicalID
+			if stackName != "" {
+				defaultName = strings.ToLower(stackName + "-" + logicalID)
+			}
+			name := propStr(props, "BucketName", defaultName)
 			if _, err := objectP.CreateBucket(ctx, child(nr, map[string]any{"_bucket": name})); err != nil {
 				return "", nil, err
 			}

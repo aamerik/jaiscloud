@@ -24,20 +24,19 @@ s3.create_bucket(Bucket="my-bucket")
 
 ## Why JaisCloud?
 
-| | JaisCloud | LocalStack (Community) | Moto | Fake GCS |
-|---|---|---|---|---|
-| **Single static binary** | ✅ | ❌ (Python + Docker) | ❌ (Python library) | ❌ |
-| **Zero runtime deps (lite mode)** | ✅ | ❌ | ❌ | ✅ |
-| **Postgres persistence (full mode)** | ✅ | 💰 Pro | ❌ | ❌ |
-| **Exact AWS wire protocol** | ✅ | ✅ | Partial | N/A |
-| **Kubernetes-native** | ✅ | Partial | ❌ | ✅ |
-| **State export / import** | ✅ | ❌ | ❌ | ❌ |
-| **Prometheus metrics** | ✅ | 💰 Pro | ❌ | ❌ |
-| **Plugin system** | ✅ | ❌ | ❌ | ❌ |
-| **Spark / EMR emulation** | ✅ | ❌ | ❌ | ❌ |
-| **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ | ❌ |
-| **Written in Go** | ✅ | ❌ | ❌ | ❌ |
-| **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 | Apache-2.0 |
+| | JaisCloud | LocalStack (Community) | Moto |
+|---|---|---|---|
+| **Single static binary** | ✅ | ❌ (Python + Docker) | ❌ (Python library) |
+| **Zero runtime deps (lite mode)** | ✅ | ❌ | ❌ |
+| **Postgres persistence (full mode)** | ✅ | 💰 Pro | ❌ |
+| **Exact AWS wire protocol** | ✅ | ✅ | Partial |
+| **Kubernetes-native** | ✅ | Partial | ❌ |
+| **State export / import** | &#x231B; | ❌ | ❌ |
+| **Prometheus metrics** | ✅ | 💰 Pro | ❌ |
+| **Spark / EMR real execution** | ✅ | ❌ | ❌ |
+| **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ |
+| **Written in Go** | ✅ | ❌ | ❌ |
+| **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
 > **Fidelity over features.** JaisCloud implements fewer services than LocalStack, but the ones it does implement pass the full AWS SDK integration test suite with no patching.
 
@@ -45,399 +44,30 @@ s3.create_bucket(Bucket="my-bucket")
 
 ## Supported Services
 
-### ✅ Amazon S3
-| Operation | Supported |
-|---|---|
-| CreateBucket / DeleteBucket / ListBuckets / HeadBucket | ✅ |
-| PutObject / GetObject / HeadObject / DeleteObject | ✅ |
-| ListObjectsV1 / ListObjectsV2 (prefix, delimiter, pagination) | ✅ |
-| CopyObject | ✅ |
-| DeleteObjects (batch) | ✅ |
-| CreateMultipartUpload / UploadPart / CompleteMultipartUpload / AbortMultipartUpload | ✅ |
-| GetBucketLocation | ✅ |
-| Object/Bucket tagging, ACLs, versioning stubs | ✅ (stubs — no error) |
-| AWS chunked transfer encoding (`x-amz-content-sha256: STREAMING-*`) | ✅ |
-| S3A Hadoop connector compatibility (FileOutputCommitter, flat-key semantics) | ✅ |
-
-### ✅ Amazon SQS
-| Operation | Supported |
-|---|---|
-| CreateQueue / DeleteQueue / ListQueues / GetQueueUrl | ✅ |
-| GetQueueAttributes / SetQueueAttributes | ✅ |
-| SendMessage / ReceiveMessage / DeleteMessage | ✅ |
-| SendMessageBatch / DeleteMessageBatch | ✅ |
-| ChangeMessageVisibility / ChangeMessageVisibilityBatch | ✅ |
-| PurgeQueue | ✅ |
-| TagQueue / UntagQueue / ListQueueTags | ✅ |
-| FIFO queues (deduplication, message groups) | ✅ |
-| Dead-letter queues | ✅ |
-| JSON protocol (`X-Amz-Target`) + Query/XML protocol | ✅ |
-
-### ✅ Amazon DynamoDB
-| Operation | Supported |
-|---|---|
-| CreateTable / DescribeTable / DeleteTable / ListTables | ✅ |
-| PutItem / GetItem / DeleteItem | ✅ |
-| UpdateItem (SET, REMOVE, ADD expressions) | ✅ |
-| Scan (with FilterExpression) | ✅ |
-| Query (KeyConditionExpression, begins_with, between) | ✅ |
-| BatchWriteItem / BatchGetItem | ✅ |
-| Composite primary keys (hash + range) | ✅ |
-| Conditional writes (ConditionExpression) | ✅ |
-| DynamoDB Streams (GetShardIterator, GetRecords) | ✅ |
-
-### ✅ Amazon SNS
-| Operation | Supported |
-|---|---|
-| CreateTopic / DeleteTopic / ListTopics | ✅ |
-| GetTopicAttributes / SetTopicAttributes | ✅ |
-| Subscribe / Unsubscribe / ListSubscriptions | ✅ |
-| Publish (fan-out to SQS subscriptions with MessageAttributes) | ✅ |
-| DeleteTopic removes all subscriptions | ✅ |
-
-### ✅ Amazon EventBridge
-| Operation | Supported |
-|---|---|
-| PutRule / DescribeRule / DeleteRule / ListRules | ✅ |
-| PutTargets / RemoveTargets / ListTargetsByRule | ✅ |
-| EnableRule / DisableRule | ✅ |
-| PutEvents (inject arbitrary events into the matching pipeline) | ✅ |
-| Event delivery to SQS targets | ✅ |
-| EventPattern matching | ✅ |
-
-### ✅ AWS IAM + STS
-| Operation | Supported |
-|---|---|
-| CreateRole / GetRole / DeleteRole / ListRoles | ✅ |
-| CreatePolicy / GetPolicy / DeletePolicy / ListPolicies | ✅ |
-| AttachRolePolicy / DetachRolePolicy / ListAttachedRolePolicies | ✅ |
-| PutRolePolicy / GetRolePolicy / DeleteRolePolicy (inline) | ✅ |
-| CreateUser / GetUser / DeleteUser / ListUsers | ✅ |
-| CreateAccessKey / DeleteAccessKey / ListAccessKeys | ✅ |
-| GetCallerIdentity | ✅ |
-| AssumeRole (returns mock credentials) | ✅ |
-
-### ✅ AWS Lambda
-| Operation | Supported |
-|---|---|
-| CreateFunction / GetFunction / DeleteFunction / ListFunctions | ✅ |
-| UpdateFunctionConfiguration / UpdateFunctionCode | ✅ |
-| Invoke (echo mode, Docker warm pool, or K8s job) | ✅ |
-
-Lambda supports three execution modes controlled by `JAISCLOUD_LAMBDA_MODE`:
-
-| Mode | Behaviour |
-|---|---|
-| _(unset)_ / `mock` | Echo mode — payload returned unchanged. No subprocess. Ideal for testing infrastructure wiring. |
-| `docker` | Each function runs in a **warm Docker container** (one per function, reused across invocations). Cold start on first invoke; container kept alive for `JAISCLOUD_LAMBDA_KEEPALIVE_SECS` (default 300 s). |
-| `k8s` | Each invocation creates a **one-shot `batch/v1 Job`** in Kubernetes. No warm pool. Result read from pod logs after job completion. |
-
-### ✅ AWS Glue Data Catalog
-| Operation | Supported |
-|---|---|
-| CreateDatabase / GetDatabase / GetDatabases / UpdateDatabase / DeleteDatabase | ✅ |
-| CreateTable / GetTable / GetTables / UpdateTable / DeleteTable | ✅ |
-| CreatePartition / GetPartition / GetPartitions / UpdatePartition / DeletePartition | ✅ |
-| BatchCreatePartition / BatchDeletePartition | ✅ |
-| Iceberg `metadata_location` CAS (conditional update used by Iceberg commits) | ✅ |
-
-> **Apache Iceberg support:** JaisCloud passes as a Glue Catalog endpoint for real Apache Iceberg 1.5+ workloads running in Spark. Iceberg reads and writes table metadata via the Glue API and stores data files in S3 — both backed by JaisCloud. This enables full Iceberg integration testing locally, including schema evolution, time travel, partitioning, and multi-batch appends.
-
-### ✅ Amazon EMR (on EC2)
-| Operation | Supported |
-|---|---|
-| RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows | ✅ |
-| ModifyCluster / SetTerminationProtection / SetVisibleToAllUsers | ✅ |
-| AddJobFlowSteps / DescribeStep / ListSteps / CancelSteps | ✅ |
-| AddInstanceFleet / ListInstanceFleets / ModifyInstanceFleet | ✅ |
-| AddInstanceGroups / ListInstanceGroups / ModifyInstanceGroups | ✅ |
-| ListBootstrapActions | ✅ |
-| AddTags / RemoveTags | ✅ |
-| GetBlockPublicAccessConfiguration / PutBlockPublicAccessConfiguration | ✅ |
-| PutManagedScalingPolicy / GetManagedScalingPolicy / RemoveManagedScalingPolicy | ✅ |
-
-### ✅ Amazon EMR on EKS (EMR Containers)
-| Operation | Supported |
-|---|---|
-| CreateVirtualCluster / DescribeVirtualCluster / DeleteVirtualCluster / ListVirtualClusters | ✅ |
-| StartJobRun / DescribeJobRun / CancelJobRun / ListJobRuns | ✅ |
-| CreateManagedEndpoint / DescribeManagedEndpoint / DeleteManagedEndpoint / ListManagedEndpoints | ✅ |
-| TagResource / UntagResource / ListTagsForResource | ✅ |
-
-### ✅ AWS KMS
-| Operation | Supported |
-|---|---|
-| CreateKey / DescribeKey / ListKeys / EnableKey / DisableKey | ✅ |
-| Encrypt / Decrypt / ReEncrypt | ✅ |
-| GenerateDataKey / GenerateDataKeyWithoutPlaintext | ✅ |
-| CreateAlias / DeleteAlias / ListAliases | ✅ |
-| ScheduleKeyDeletion / CancelKeyDeletion | ✅ |
-| EnableKeyRotation / DisableKeyRotation / GetKeyRotationStatus | ✅ |
-| CreateGrant / RetireGrant / RevokeGrant / ListGrants | ✅ |
-| TagResource / UntagResource / ListResourceTags | ✅ |
-
-> KMS uses AES-256-GCM envelope encryption. When `JAISCLOUD_KMS_MASTER_KEY` is set to a 32-byte hex KEK, all DEKs are wrapped with it. Without it, DEKs are stored in plaintext (dev mode only).
-
-### ✅ AWS Secrets Manager
-| Operation | Supported |
-|---|---|
-| CreateSecret / DescribeSecret / UpdateSecret / DeleteSecret / RestoreSecret | ✅ |
-| GetSecretValue / PutSecretValue | ✅ (SecretString and SecretBinary) |
-| ListSecrets / ListSecretVersionIds | ✅ |
-| RotateSecret | ✅ |
-| TagResource / UntagResource | ✅ |
-
-### ✅ AWS SSM Parameter Store
-| Operation | Supported |
-|---|---|
-| PutParameter / GetParameter / GetParameters | ✅ |
-| GetParametersByPath (recursive, with filters) | ✅ |
-| GetParameterHistory | ✅ |
-| DeleteParameter / DeleteParameters | ✅ |
-| LabelParameterVersion | ✅ |
-| AddTagsToResource / ListTagsForResource | ✅ |
-| String, StringList, SecureString types | ✅ |
-
-### ✅ AWS API Gateway (REST)
-| Operation | Supported |
-|---|---|
-| CreateRestApi / GetRestApi / GetRestApis / UpdateRestApi / DeleteRestApi | ✅ |
-| GetResources / GetResource / CreateResource / DeleteResource | ✅ |
-| PutMethod / GetMethod / DeleteMethod | ✅ |
-| PutIntegration / GetIntegration / DeleteIntegration | ✅ |
-| PutMethodResponse / PutIntegrationResponse | ✅ |
-| CreateDeployment / GetDeployments / DeleteDeployment | ✅ |
-| CreateStage / GetStage / GetStages / UpdateStage / DeleteStage | ✅ |
-| InvokeApi — MOCK, AWS_PROXY (→ Lambda), HTTP_PROXY integrations | ✅ |
-
-### ✅ AWS CloudFormation
-| Operation | Supported |
-|---|---|
-| CreateStack / UpdateStack / DeleteStack | ✅ |
-| DescribeStacks / ListStacks | ✅ |
-| DescribeStackResources | ✅ |
-| ValidateTemplate / GetTemplate | ✅ |
-| Intrinsics: Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::If, Fn::Select, Fn::Split, Fn::FindInMap, Fn::Base64, Fn::Not, Fn::And, Fn::Or, Fn::Equals, Fn::Length | ✅ |
-| DependsOn (explicit) + implicit Ref/GetAtt dependency ordering | ✅ |
-| Real resource provisioning: SQS Queue, SNS Topic, S3 Bucket, DynamoDB Table, IAM Role, Lambda Function, SSM Parameter, SecretsManager Secret, KMS Key | ✅ |
-
-### ⚙️ Stub services (wire protocol only — no business logic)
-The following services are registered and respond with well-formed empty responses so SDK calls don't fail during infrastructure setup. Full implementations are planned.
-
-| Service | Status |
-|---|---|
-| Amazon EC2 | Stub |
-| Amazon Route 53 | Stub |
-| Amazon RDS | Stub |
-| Amazon ElastiCache | Stub |
-| Amazon ECS | Stub |
-
----
-
-## Full Mode (PostgreSQL Persistence)
-
-Start with `--mode full --dsn <postgres DSN>` to persist all state across restarts.
-
-```bash
-./jaiscloud start --mode full \
-  --dsn "postgres://user:pass@localhost:5432/jaiscloud" \
-  --blob-dir /var/lib/jaiscloud/blobs
-```
-
-### What persists
-
-| Service | PostgreSQL table(s) | Blob storage |
+| Service | Status | Coverage |
 |---|---|---|
-| All resource metadata (queues, topics, tables, roles, functions, Glue, EMR…) | `jc_resources` | — |
-| SQS messages | `jc_sqs_messages`, `jc_sqs_dedup` | — |
-| DynamoDB items | `jc_dynamodb_items` | — |
-| S3 object metadata | `jc_s3_objects` | `--blob-dir` (LocalFSBlobStore) |
-| S3 object bytes | — | `--blob-dir` (LocalFSBlobStore) |
-| Lambda deployment packages | — | `--blob-dir` (MemoryBlobStore by default) |
+| Amazon S3 | ✅ Full | Buckets, objects, multipart, batch delete, chunked encoding, Iceberg/S3A compatible |
+| Amazon SQS | ✅ Full | All 17 operations, FIFO, DLQ, JSON + Query/XML protocols |
+| Amazon DynamoDB | ✅ Full | CRUD, expressions, batch ops, streams, composite keys |
+| Amazon SNS | ✅ Full | Topics, subscriptions, SQS fan-out with MessageAttributes |
+| Amazon EventBridge | ✅ Full | Rules, targets, event pattern matching, SQS delivery |
+| AWS IAM + STS | ✅ Full | Roles, policies, users, access keys, AssumeRole, GetCallerIdentity |
+| AWS Lambda | ✅ Full | Echo / Docker warm pool / K8s one-shot job |
+| AWS Glue Data Catalog | ✅ Full | Databases, tables, partitions, Iceberg metadata CAS |
+| Amazon EMR (on EC2) | ✅ Full | Clusters, steps, instance fleets/groups; mock or real K8s Spark |
+| Amazon EMR on EKS | ✅ Full | Virtual clusters, job runs, managed endpoints; mock or real K8s |
+| AWS KMS | ✅ Full | Keys, aliases, grants, envelope crypto (AES-256-GCM), rotation |
+| AWS Secrets Manager | ✅ Full | Secrets, versions, rotation, KMS-encrypted at rest |
+| AWS SSM Parameter Store | ✅ Full | String / StringList / SecureString, history, path queries |
+| AWS API Gateway (REST) | ✅ Full | Management plane + MOCK / AWS_PROXY / HTTP_PROXY invoke |
+| AWS CloudFormation | ✅ Full | Intrinsics, topo sort, real resource dispatch (9 types) |
+| Amazon EC2 | ⚙️ Stub | Wire protocol only |
+| Amazon Route 53 | ⚙️ Stub | Wire protocol only |
+| Amazon RDS | ⚙️ Stub | Wire protocol only |
+| Amazon ElastiCache | ⚙️ Stub | Wire protocol only |
+| Amazon ECS | ⚙️ Stub | Wire protocol only |
 
-> **S3 blob storage:** Pass `--blob-dir <path>` to persist S3 object bytes to disk. Without it, blobs are held in memory and lost on restart even in full mode. `LocalFSBlobStore` implements flat S3-key semantics on a local filesystem — keys like `foo/bar` and `foo/bar/baz` coexist correctly, with atomic writes and crash recovery.
-
-### Startup retry
-
-JaisCloud retries the initial database ping up to 10 times with exponential backoff (500 ms → 8 s), so it starts cleanly before Postgres is ready — useful in `docker-compose` or Kubernetes init ordering.
-
----
-
-## Spark Plugin (`aws-emr-spark`)
-
-The `aws-emr-spark` plugin provides full EMR and EMR-on-EKS API emulation. It is shipped as a separate Go `.so` plugin and loaded at startup via `--plugin-dir`.
-
-```bash
-# Build the plugin
-cd plugins/aws-emr-spark && make build
-# Load at startup
-./jaiscloud start --mode full --plugin-dir ./plugins
-```
-
-### Executor modes
-
-The plugin selects a Spark executor via the `JAISCLOUD_SPARK_MODE` environment variable:
-
-| Mode | Description |
-|---|---|
-| `mock` (default) | Jobs complete immediately with `COMPLETED` state. No external process. Ideal for unit tests and CI where you only need EMR API correctness, not actual computation. |
-| `k8s` | Submits real Spark jobs to a Kubernetes cluster as `batch/v1 Jobs`. Uses stdlib HTTP only — no `client-go` dependency, zero image size increase. Supports in-cluster service account auth and explicit token/CA configuration via env vars. |
-
-```bash
-# Default: jobs complete immediately
-JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --plugin-dir ./plugins
-
-# Real K8s cluster — in-cluster (service account auto-detected)
-JAISCLOUD_SPARK_MODE=k8s ./jaiscloud start --plugin-dir ./plugins
-
-# Real K8s cluster — out-of-cluster (e.g. local development)
-export JAISCLOUD_SPARK_MODE=k8s
-export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
-export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa)
-export JAISCLOUD_K8S_NAMESPACE=spark-jobs
-export JAISCLOUD_K8S_SA=spark-sa
-./jaiscloud start --plugin-dir ./plugins
-```
-
-### K8s executor configuration
-
-These environment variables are read only when `JAISCLOUD_SPARK_MODE=k8s`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
-| `JAISCLOUD_K8S_TOKEN` | in-cluster token file | Bearer token: literal value or path to a token file (re-read per request to handle rotation) |
-| `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA certificate for TLS verification |
-| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for the spark-submit Job and Pods |
-| `JAISCLOUD_K8S_SA` | _(none)_ | Kubernetes service account for the spark-submit Pod |
-
-**When JaisCloud runs inside a K8s pod**, only `JAISCLOUD_SPARK_MODE=k8s` is required — the service account token, CA cert, and API server URL are all auto-detected from the standard pod mount at `/var/run/secrets/kubernetes.io/serviceaccount/`. The three `JAISCLOUD_K8S_APISERVER` / `JAISCLOUD_K8S_TOKEN` / `JAISCLOUD_K8S_CA_FILE` vars exist solely for out-of-cluster use (local dev, CI with `kubectl` access). Env vars always take precedence over in-cluster defaults.
-
-### Required RBAC
-
-The service account assigned to JaisCloud needs permission to manage Jobs:
-
-```yaml
-rules:
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["create", "get", "delete"]
-```
-
-The service account for the spark-submit Pod (set via `JAISCLOUD_K8S_SA`) needs permission to create Spark driver and executor Pods:
-
-```yaml
-rules:
-- apiGroups: [""]
-  resources: ["pods", "pods/log", "services", "configmaps"]
-  verbs: ["create", "get", "list", "delete"]
-```
-
-### Running against a real Spark cluster
-
-When `JAISCLOUD_SPARK_MODE=k8s` each `RunJobFlow` or `StartJobRun` call:
-
-1. Creates a `batch/v1 Job` in the configured namespace. The Job runs `spark-submit --master k8s://<APIServer> --deploy-mode cluster ...` using the configured Spark image (default `apache/spark:3.5.0`).
-2. Spark itself creates the driver Pod; the driver spawns executor Pods.
-3. The `StatusPoller` polls the Job every 5 s and maps K8s Job conditions → `SparkState` (`RUNNING` / `COMPLETED` / `FAILED`).
-4. `TerminateJobFlows` / `CancelJobRun` deletes the Job with `propagationPolicy=Background`, cascading to driver and executor Pods.
-
-Jobs are given a `ttlSecondsAfterFinished: 3600` so completed Jobs self-clean after one hour.
-
-**Remote/Standalone support (planned):** `SparkConfig.RemoteURL` is already wired into the config layer for a future Spark Standalone REST API executor.
-
-### Resource profiles
-
-Three named sizes control driver/executor CPU and memory for the K8s executor:
-
-| Size | Driver | Executors |
-|---|---|---|
-| `small` | 500m / 1Gi | 1 × 500m / 1Gi |
-| `medium` | 1 / 2Gi | 2 × 1 / 2Gi |
-| `large` | 2 / 4Gi | 4 × 2 / 4Gi |
-
----
-
-## What's New in Phase 2.5
-
-### KMS, Secrets Manager, and SSM Parameter Store
-
-Full implementations of the three services most commonly blocking Terraform-based testing. KMS uses AES-256-GCM envelope encryption with an optional KEK (`JAISCLOUD_KMS_MASTER_KEY`). SecretsManager encrypts secret values at rest via KMS. SSM supports String, StringList, and SecureString with KMS-encrypted values.
-
-### API Gateway
-
-Full REST API management plane plus an execute-api invoke plane. Supports MOCK, AWS_PROXY (fan-out to Lambda), and HTTP_PROXY integrations. SDK-compatible path routing, stages, deployments, and methods.
-
-### Lambda Real Execution
-
-Two new Lambda executor modes beyond the default echo mode:
-
-```bash
-# Warm Docker container per function
-JAISCLOUD_LAMBDA_MODE=docker ./jaiscloud start
-
-# One-shot Kubernetes Job per invocation
-JAISCLOUD_LAMBDA_MODE=k8s ./jaiscloud start
-```
-
-### CloudFormation with Intrinsics
-
-CloudFormation now provisions real resources. Stacks are parsed, topologically sorted (DependsOn + implicit Ref/GetAtt), and each resource type is dispatched to the underlying JaisCloud provider. Supported intrinsics: Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::If, Fn::Select, Fn::Split, Fn::FindInMap, Fn::Base64, Fn::Not, Fn::And, Fn::Or, Fn::Equals, Fn::Length.
-
----
-
-## What's New in Phase 2
-
-### Plugin System
-
-JaisCloud supports loadable plugins compiled as Go `.so` files. Plugins extend the emulator with new services without modifying the core binary.
-
-```bash
-cd plugins/aws-emr-spark && make build
-./jaiscloud start --plugin-dir ./plugins
-```
-
-### Multi-Cloud Mode
-
-Each JaisCloud instance runs in one cloud mode. The default is AWS. Azure and GCP adapters are scaffolded (return `501 Not Implemented`) and will be filled in future phases.
-
-```bash
-./jaiscloud start --cloud aws    # default — full AWS wire protocol
-./jaiscloud start --cloud azure  # stub — returns 501
-./jaiscloud start --cloud gcp    # stub — returns 501
-```
-
-### Resource Dependency Manager
-
-The `ResourceManager` prevents invalid deletions. When a plugin registers a `DeleteGuardRule`, attempts to delete a parent resource while children exist are blocked, forcibly terminated, or cascaded — depending on the configured policy.
-
-### Prometheus Cloud Label
-
-All metrics include a `cloud` label (`aws` / `azure` / `gcp`) so you can differentiate traffic in mixed-environment dashboards.
-
----
-
-## Fidelity Notes
-
-JaisCloud prioritises **protocol correctness** over breadth:
-
-- All responses use the exact XML/JSON envelope the AWS SDK expects.
-- Error codes match AWS (`NoSuchBucket`, `ResourceNotFoundException`, etc.).
-- `Last-Modified` headers use RFC 1123 GMT format, not UTC — the SDK parses these strictly.
-- SQS supports both **JSON** (`X-Amz-Target`) and **Query/XML** protocols in the same server.
-- DynamoDB key hash is computed from key attributes only (in schema order), matching AWS semantics.
-- DynamoDB `x-amz-crc32` header is computed and returned on every response.
-- S3 ETag is the MD5 of the stored bytes, including correct handling of AWS chunked transfer encoding.
-- S3 implements flat-key semantics: `foo/bar` and `foo/bar/baz` coexist as independent objects, matching real S3 behaviour.
-
-**Known limitations:**
-- No IAM policy evaluation — all requests are accepted regardless of attached policies.
-- Lambda defaults to echo mode; Docker/K8s modes require `JAISCLOUD_LAMBDA_MODE=docker|k8s` and a running Docker daemon or Kubernetes cluster respectively.
-- S3 versioning and object locking are stubbed (no error, no actual versioning).
-- No cross-region or cross-account semantics.
-- Azure and GCP cloud modes are scaffolded only (Phase 3+).
-- EMR K8s executor (`JAISCLOUD_SPARK_MODE=k8s`) requires a real Kubernetes cluster; `mock` mode is used when no cluster is available.
-- CloudFormation resource dispatch covers 9 resource types; other `AWS::*` resources are recorded in stack metadata but not provisioned.
+For per-operation coverage, executor modes, fidelity notes, and full-mode persistence details see **[docs/SERVICES.md](docs/SERVICES.md)**.
 
 ---
 
@@ -453,24 +83,11 @@ go build -o jaiscloud ./cmd/jaiscloud/
 ### Docker
 
 ```bash
-docker build -t jaiscloud .
-docker run -p 4566:4566 jaiscloud
+docker pull ghcr.io/jaisrajms/jaiscloud:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud:latest
 ```
 
-### Docker Compose
-
-```yaml
-services:
-  jaiscloud:
-    image: ghcr.io/jaisraj/jaiscloud:latest
-    ports:
-      - "4566:4566"
-    environment:
-      JAISCLOUD_REGION: us-east-1
-      JAISCLOUD_LOG_LEVEL: info
-```
-
-### Docker Compose with full mode (Postgres + blob storage)
+### Docker Compose (full mode with Postgres)
 
 ```yaml
 services:
@@ -482,35 +99,107 @@ services:
       POSTGRES_DB: jaiscloud
     volumes:
       - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   jaiscloud:
-    image: ghcr.io/jaisraj/jaiscloud:latest
+    image: ghcr.io/jaisrajms/jaiscloud:latest
     ports:
       - "4566:4566"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       JAISCLOUD_MODE: full
       JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
       JAISCLOUD_REGION: us-east-1
     volumes:
       - blob_data:/var/lib/jaiscloud/blobs
-    command: ["start", "--blob-dir", "/var/lib/jaiscloud/blobs"]
+    command: ["start", "--blob-dir", "/var/lib/jaiscloud/blobs", "--metrics"]
 
 volumes:
   pg_data:
   blob_data:
 ```
 
-### Kubernetes
+### Kubernetes (full mode with Postgres)
 
 ```yaml
+# Persistent volume for S3 blob storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaiscloud-blobs
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Postgres StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: jaiscloud
+            - name: POSTGRES_PASSWORD
+              value: jaiscloud
+            - name: POSTGRES_DB
+              value: jaiscloud
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pg-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "jaiscloud"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: pg-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+# JaisCloud Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jaiscloud
-  labels:
-    app: jaiscloud
 spec:
   replicas: 1
   selector:
@@ -527,34 +216,41 @@ spec:
     spec:
       containers:
         - name: jaiscloud
-          image: ghcr.io/jaisraj/jaiscloud:latest
-          args: ["start", "--metrics"]
+          image: ghcr.io/jaisrajms/jaiscloud:latest
+          args: ["start", "--mode", "full", "--blob-dir", "/blobs", "--metrics"]
           ports:
             - containerPort: 4566
           env:
             - name: JAISCLOUD_REGION
               value: us-east-1
-            - name: JAISCLOUD_LOG_LEVEL
-              value: info
+            - name: JAISCLOUD_DSN
+              value: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
+          volumeMounts:
+            - name: blobs
+              mountPath: /blobs
           readinessProbe:
             httpGet:
               path: /_jaiscloud/health
               port: 4566
-            initialDelaySeconds: 2
+            initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /_jaiscloud/health
               port: 4566
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: 10
+            periodSeconds: 15
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
+      volumes:
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: jaiscloud-blobs
 ---
 apiVersion: v1
 kind: Service
@@ -585,15 +281,13 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 | `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
-| `--plugin-dir` | `JAISCLOUD_PLUGIN_DIR` | _(empty)_ | Directory containing `.so` plugin files |
 | `--dsn` | `JAISCLOUD_DSN` | _(empty)_ | PostgreSQL DSN (required when `--mode full`) |
 | `--blob-dir` | `JAISCLOUD_BLOB_DIR` | _(empty)_ | Directory for S3 blob bytes (full mode, optional) |
-
-### Modes
+| `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | _(empty)_ | Container orchestrator: `mock` / `docker` / `k8s` |
 
 **`lite` (default)** — all state in memory. Zero external dependencies. State is lost on restart. Ideal for unit tests and CI.
 
-**`full`** — resource metadata persisted in PostgreSQL. S3 object bytes optionally persisted to `--blob-dir`. Survives restarts. Ideal for integration environments and long-running dev clusters.
+**`full`** — resource metadata persisted in PostgreSQL; S3 object bytes optionally persisted to `--blob-dir`. Ideal for integration environments.
 
 ---
 
@@ -607,18 +301,6 @@ jaiscloud doctor         # verify the emulator is reachable
 jaiscloud reset          # wipe all state
 jaiscloud export -o snapshot.json   # save state to file
 jaiscloud import -i snapshot.json   # restore state from file
-```
-
-### State snapshots
-
-Export/import lets you seed a fresh emulator with pre-built state — useful for integration test fixtures:
-
-```bash
-# Seed your test environment once, capture the state
-jaiscloud export -o fixtures/baseline.json
-
-# In CI: restore the baseline before each test run
-jaiscloud import -i fixtures/baseline.json
 ```
 
 ---
@@ -679,7 +361,6 @@ const client = new S3Client({
 aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
 aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name my-queue
 aws --endpoint-url http://localhost:4566 dynamodb list-tables
-aws --endpoint-url http://localhost:4566 glue create-database --database-input '{"Name":"mydb"}'
 aws --endpoint-url http://localhost:4566 emr list-clusters
 ```
 
@@ -691,31 +372,33 @@ aws --endpoint-url http://localhost:4566 emr list-clusters
 # Unit tests (no server required)
 go test -race ./internal/...
 
-# Plugin unit tests
-cd plugins/aws-emr-spark && go test -race ./internal/...
-
 # Integration tests (server must be running on :4566)
 ./jaiscloud start &
 go test -race -count=1 ./tests/integration/
 
 # Target a specific service
-go test -race -run TestS3               ./tests/integration/
-go test -race -run TestSQS              ./tests/integration/
-go test -race -run TestDynamo           ./tests/integration/
-go test -race -run TestLambda           ./tests/integration/
-go test -race -run TestEMR              ./tests/integration/
-go test -race -run TestEMRC             ./tests/integration/
-go test -race -run TestKMS              ./tests/integration/
-go test -race -run TestSecretsManager   ./tests/integration/
-go test -race -run TestSSM              ./tests/integration/
-go test -race -run TestAPIGateway       ./tests/integration/
-go test -race -run TestCF               ./tests/integration/
+go test -race -run TestS3             ./tests/integration/
+go test -race -run TestSQS            ./tests/integration/
+go test -race -run TestDynamo         ./tests/integration/
+go test -race -run TestLambda         ./tests/integration/
+go test -race -run TestKMS            ./tests/integration/
+go test -race -run TestSecretsManager ./tests/integration/
+go test -race -run TestSSM            ./tests/integration/
+go test -race -run TestCF             ./tests/integration/
 
-# Iceberg e2e tests (requires Docker + Spark image + Postgres)
+# Full mode e2e (EMR K8s executor)
+SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0 \
+JAISCLOUD_EXECUTOR_MODE=k8s \
+./jaiscloud start --mode full --dsn "<DB_CONNECTION_STRING>" &
+go test -tags spark_e2e -timeout 30m ./tests/full_mode/emr/
+
+# Iceberg e2e (requires Docker + Spark image + Postgres)
 SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test \
-./jaiscloud start --mode full --dsn "postgres://..." --blob-dir /tmp/blobs &
+./jaiscloud start --mode full --dsn "<DB_CONNECTION_STRING>" --blob-dir /tmp/blobs &
 go test -tags iceberg_e2e -timeout 60m ./tests/full_mode/iceberg/
 ```
+
+See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for the full test matrix and how to set up the Spark and Lambda environments.
 
 ---
 
@@ -724,24 +407,21 @@ go test -tags iceberg_e2e -timeout 60m ./tests/full_mode/iceberg/
 ```
 HTTP request
   → gateway (Chi router + middleware)
-      → CloudAdapter.DetectAndDecode        (selected once at startup from --cloud)
+      → CloudAdapter.DetectAndDecode     (selected once at startup from --cloud)
           (X-Amz-Target → SQS/DynamoDB/Glue/EMR JSON)
           (Authorization SigV4 scope → all services)
           (Action param → SQS/IAM/STS/SNS Query protocol)
       → inject: Clock, Region, AccountID, Cloud, ResourceID
       → Registry.Dispatch("Service.Action", NormalizedRequest)
-          → exact match: built-in Provider (business logic, pure Go)
-              → ResourceStore  (queue/table/function/Glue metadata)
-              → ServiceStore   (messages/items/objects)
-          → plugin wildcard: PluginManager → plugin.Handle
-              → EMRProvider / EMRContainersProvider
-                  → SparkExecutor (mock | k8s)
-                  → StatusPoller
+          → Provider (business logic, pure Go)
+              → ResourceStore  (metadata)
+              → ServiceStore   (messages / items / objects)
+              → Executor       (mock | docker | k8s)
       → Codec.Encode (XML / JSON / raw bytes)
   → HTTP response
 ```
 
-Each JaisCloud instance runs in one cloud mode (`--cloud`). There is no per-request cloud detection — the adapter is selected once at startup.
+Each JaisCloud instance emulates exactly one cloud (`--cloud`). There is no per-request cloud detection — the adapter is selected once at startup.
 
 ---
 
@@ -752,11 +432,11 @@ Contributions welcome. Please open an issue before starting large changes.
 ```bash
 git clone https://github.com/jaisraj/jaiscloud
 cd jaiscloud
-go test -race ./...          # must pass
-go vet ./...                 # must pass
+go test -race ./...   # must pass
+go vet ./...          # must pass
 ```
 
-See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for how to run in full mode, set up the Spark cluster, and write custom plugins.
+See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for full development setup.
 
 ---
 
