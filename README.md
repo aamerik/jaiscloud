@@ -49,6 +49,7 @@ s3.create_bucket(Bucket="my-bucket")
 | **Spark / EMR real execution** | ✅ | ❌ | ❌ |
 | **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ |
 | **Written in Go** | ✅ | ❌ | ❌ |
+| **Multi Cloud** | &#x231B; | Partial | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
 > **Fidelity over features.** JaisCloud implements fewer services than LocalStack, but the ones it does implement pass the full AWS SDK integration test suite with no patching.
