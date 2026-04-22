@@ -49,6 +49,7 @@ import (
 	rdsprovider "jaiscloud/internal/provider/rds"
 	stackprovider "jaiscloud/internal/provider/stack"
 	"jaiscloud/internal/provider/table"
+	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/store"
 	dynamostore "jaiscloud/internal/store/aws/dynamodb"
 	s3store "jaiscloud/internal/store/aws/s3"
@@ -110,7 +111,15 @@ func startCmd() *cobra.Command {
 			}
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter)
 
-			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
+			var certs certstore.CertStore
+			if cfg.Mode == config.ModeFull {
+				pgStore := s.resources.(*store.PostgresResourceStore)
+				certs = certstore.NewPostgresCertStore(pgStore.Pool())
+			} else {
+				certs = certstore.NewMemoryCertStore()
+			}
+
+			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs)
 			_ = bus // bus is used internally by providers
 			return srv.ListenAndServe()
 		},

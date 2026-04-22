@@ -22,6 +22,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
+	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
 	"jaiscloud/internal/model"
@@ -38,14 +39,16 @@ type Server struct {
 	adminHandler *admin.Handler
 	registry     *provider.Registry
 	cloudAdapter adapter.CloudAdapter
+	certs        certstore.CertStore
 }
 
-func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, cloudAdapter adapter.CloudAdapter) *Server {
+func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, cloudAdapter adapter.CloudAdapter, certs certstore.CertStore) *Server {
 	s := &Server{
 		cfg:          cfg,
 		adminHandler: adminHandler,
 		registry:     registry,
 		cloudAdapter: cloudAdapter,
+		certs:        certs,
 	}
 	s.buildRouter()
 	return s
@@ -183,6 +186,38 @@ func writeResponse(w http.ResponseWriter, status int, headers http.Header, body 
 	w.Write(body)
 }
 
+func (s *Server) loadOrGenerateCert(ctx context.Context) (tls.Certificate, error) {
+	stored, err := s.certs.Load(ctx)
+	if err == nil && !stored.NeedsRenewal() {
+		cert, parseErr := tls.X509KeyPair(stored.CertPEM, stored.KeyPEM)
+		if parseErr == nil {
+			return cert, nil
+		}
+		slog.Warn("https: stored cert parse failed, regenerating", "err", parseErr)
+	}
+
+	cert, genErr := generateSelfSignedCert(string(s.cfg.Cloud), s.cfg.Region)
+	if genErr != nil {
+		return tls.Certificate{}, genErr
+	}
+
+	leaf, leafErr := x509.ParseCertificate(cert.Certificate[0])
+	if leafErr == nil {
+		certPEM := pemEncode("CERTIFICATE", cert.Certificate[0])
+		keyDER, _ := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
+		keyPEM := pemEncode("EC PRIVATE KEY", keyDER)
+		if saveErr := s.certs.Save(ctx, &certstore.StoredCert{
+			CertPEM:  certPEM,
+			KeyPEM:   keyPEM,
+			NotAfter: leaf.NotAfter,
+		}); saveErr != nil {
+			slog.Warn("https: could not persist TLS cert", "err", saveErr)
+		}
+	}
+
+	return cert, nil
+}
+
 func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
 	srv := &http.Server{Addr: addr, Handler: s.router}
@@ -207,7 +242,7 @@ func (s *Server) ListenAndServe() error {
 	go func() {
 		cert, tlsErr := tls.LoadX509KeyPair("/etc/tls/tls.crt", "/etc/tls/tls.key")
 		if tlsErr != nil {
-			cert, tlsErr = generateSelfSignedCert(string(s.cfg.Cloud), s.cfg.Region)
+			cert, tlsErr = s.loadOrGenerateCert(ctx)
 			if tlsErr != nil {
 				slog.Warn("https: could not generate TLS cert, HTTPS disabled", "err", tlsErr)
 				return
