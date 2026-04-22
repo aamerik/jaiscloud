@@ -101,14 +101,14 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, cleanup := buildRegistry(ctx, cfg, s, dek)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
-			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter)
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter)
 			_ = bus // bus is used internally by providers
@@ -250,7 +250,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -303,11 +303,20 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
 	// Build Lambda executor. Same ExecutorMode drives Lambda and Spark.
-	lambdaCfg := lambdaexec.LambdaConfig{
-		Mode:          cfg.ExecutorMode,
-		DefaultImage:  cfg.LambdaImage,
-		Network:       cfg.LambdaNetwork,
-		KeepaliveSecs: cfg.LambdaKeepaliveSecs,
+	lambdaCfg := lambdaexec.DefaultLambdaConfig()
+	lambdaCfg.Mode = cfg.ExecutorMode
+	lambdaCfg.Region = cfg.Region
+	if cfg.LambdaImage != "" {
+		lambdaCfg.DefaultImage = cfg.LambdaImage
+	}
+	if cfg.LambdaNetwork != "" {
+		lambdaCfg.Network = cfg.LambdaNetwork
+	}
+	if cfg.LambdaKeepaliveSecs > 0 {
+		lambdaCfg.KeepaliveSecs = cfg.LambdaKeepaliveSecs
+	}
+	if v := os.Getenv("JAISCLOUD_ENDPOINT"); v != "" {
+		lambdaCfg.JaisCloudEndpoint = v
 	}
 	lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
 	slog.Info("lambda executor", "mode", cfg.ExecutorMode)
@@ -347,7 +356,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 	registry.RegisterAll(apigwprovider.New(s.resources).Routes())
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, cleanup
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup
 }
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
@@ -645,7 +654,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 }
 
 // buildAdminHandler registers all resetters and snapshotters, then returns the handler.
-func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore, secretStore secretprovider.SecretStore, paramStore paramprovider.ParameterStore) *admin.Handler {
+func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyStore keyprovider.KeyStore, secretStore secretprovider.SecretStore, paramStore paramprovider.ParameterStore, extra ...admin.Resetter) *admin.Handler {
 	h := admin.NewHandler()
 	h.RegisterResetter(s.resources)
 	h.RegisterResetter(s.messages)
@@ -656,6 +665,11 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(keyStore)
 	h.RegisterResetter(secretStore)
 	h.RegisterResetter(paramStore)
+	for _, r := range extra {
+		if r != nil {
+			h.RegisterResetter(r)
+		}
+	}
 	if snap, ok := s.resources.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("resources", snap)
 	}

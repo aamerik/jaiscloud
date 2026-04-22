@@ -1,6 +1,6 @@
 //go:build lambda_e2e
 
-package p25_test
+package lambda_test
 
 import (
 	"context"

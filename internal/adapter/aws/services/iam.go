@@ -305,6 +305,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			sb.WriteString(xmlTag("Arn", str(aru["Arn"])))
 			sb.WriteString("</AssumedRoleUser>")
 		}
+		sb.WriteString(xmlTag("PackedPolicySize", str(data["PackedPolicySize"])))
 	case "GetSessionToken":
 		if creds, ok := data["Credentials"].(map[string]any); ok {
 			sb.WriteString(encodeSTS(creds))
@@ -323,7 +324,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			sb.WriteString(xmlTag("Arn", str(fu["Arn"])))
 			sb.WriteString("</FederatedUser>")
 		}
-		sb.WriteString(xmlTag("PackedPolicySize", "0"))
+		sb.WriteString(xmlTag("PackedPolicySize", str(data["PackedPolicySize"])))
 
 	// Groups
 	case "CreateGroup":

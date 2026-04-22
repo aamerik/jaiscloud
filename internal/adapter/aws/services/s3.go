@@ -90,14 +90,20 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 		body = decodeAWSChunked(body)
 	}
 
-	// Parse path-style: /{bucket}/{key...}
-	path := strings.TrimPrefix(r.URL.Path, "/")
 	var bucket, key string
-	if idx := strings.IndexByte(path, '/'); idx >= 0 {
-		bucket = path[:idx]
-		key = path[idx+1:]
+	if host := r.Host; strings.Contains(host, ".s3.") {
+		// Virtual-hosted: "mybucket.s3.us-east-1.amazonaws.com"
+		bucket = host[:strings.Index(host, ".s3.")]
+		key = strings.TrimPrefix(r.URL.Path, "/")
 	} else {
-		bucket = path
+		// Path-style: /{bucket}/{key...}
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if idx := strings.IndexByte(path, '/'); idx >= 0 {
+			bucket = path[:idx]
+			key = path[idx+1:]
+		} else {
+			bucket = path
+		}
 	}
 
 	query := r.URL.Query()

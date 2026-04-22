@@ -3,10 +3,12 @@ package spark
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 // dnsNameRe matches characters that are NOT allowed in a K8s DNS label.
@@ -47,7 +49,9 @@ func NewK8sExecutor(cfg SparkConfig) *K8sExecutor {
 		fmt.Fprintf(os.Stderr, "[K8sExecutor] init error: %v\n", err)
 		return &K8sExecutor{cfg: cfg}
 	}
-	return &K8sExecutor{cfg: cfg, client: client}
+	e := &K8sExecutor{cfg: cfg, client: client}
+	go e.cleanupOrphans()
+	return e
 }
 
 // resolveTokenSource returns the bearer token source (env var or in-cluster file).
@@ -144,8 +148,87 @@ func (e *K8sExecutor) Cancel(ctx context.Context, jobID string) error {
 	return nil
 }
 
-// Close is a no-op — the HTTP client has no persistent connections to release.
-func (e *K8sExecutor) Close() error { return nil }
+// Close suspends all tracked Jobs so streaming Spark jobs can survive a server restart.
+func (e *K8sExecutor) Close() error {
+	if e.client == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	e.jobs.Range(func(k, v any) bool {
+		if name, ok := v.(string); ok {
+			if err := e.client.suspendJob(ctx, name); err != nil {
+				slog.Warn("spark k8s: failed to suspend job", "job", name, "err", err)
+			} else {
+				slog.Info("spark k8s: suspended job", "job", name)
+			}
+		}
+		return true
+	})
+	return nil
+}
+
+// cleanupOrphans runs at startup to re-adopt or delete jobs from previous runs.
+func (e *K8sExecutor) cleanupOrphans() {
+	if e.client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	items, err := e.client.listJobs(ctx, "app.kubernetes.io%2Fmanaged-by%3Djaiscloud")
+	if err != nil {
+		slog.Warn("spark k8s: cleanupOrphans: list jobs failed", "err", err)
+		return
+	}
+
+	for _, item := range items {
+		name := item.Metadata.Name
+		jobID := item.Metadata.Labels["jaiscloud-job-id"]
+		if jobID == "" {
+			jobID = name
+		}
+
+		isTerminal := item.Status.Succeeded > 0 || item.Status.Failed > 0
+		isSuspended := item.Spec.Suspend != nil && *item.Spec.Suspend
+
+		switch {
+		case isTerminal:
+			if err := e.client.deleteJob(ctx, name); err != nil {
+				slog.Warn("spark k8s: cleanupOrphans: delete terminal job failed", "job", name, "err", err)
+			} else {
+				slog.Info("spark k8s: cleanupOrphans: deleted terminal job", "job", name)
+			}
+		case isSuspended:
+			if err := e.client.unsuspendJob(ctx, name); err != nil {
+				slog.Warn("spark k8s: cleanupOrphans: unsuspend job failed", "job", name, "err", err)
+			} else {
+				e.jobs.Store(jobID, name)
+				slog.Info("spark k8s: cleanupOrphans: resumed suspended job", "job", name)
+			}
+		default:
+			e.jobs.Store(jobID, name)
+			slog.Info("spark k8s: cleanupOrphans: re-adopted running job", "job", name)
+		}
+	}
+}
+
+// sanitizeLabel converts a string to a valid K8s label value (max 63 chars).
+func sanitizeLabel(s string) string {
+	var b strings.Builder
+	for _, ch := range strings.ToLower(s) {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' || ch == '_' {
+			b.WriteRune(ch)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	if len(result) > 63 {
+		result = strings.TrimRight(result[:63], "-")
+	}
+	return result
+}
 
 // Reset clears the in-memory job map. Real K8s Jobs are left running so that
 // a JaisCloud reset does not affect live cluster workloads.
@@ -346,6 +429,7 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by": "jaiscloud",
+		"jaiscloud-job-id":             sanitizeLabel(job.JobID),
 	}
 
 	return batchJob{

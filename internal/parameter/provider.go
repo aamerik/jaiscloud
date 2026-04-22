@@ -202,11 +202,18 @@ func (p *ParameterProvider) GetParameterHistory(ctx context.Context, nr *model.N
 	if err != nil {
 		return nil, fmt.Errorf("ssm: get parameter history: %w", err)
 	}
+	withDecryption, _ := nr.Params["WithDecryption"].(bool)
 	items := make([]map[string]any, 0, len(history))
 	for _, h := range history {
+		e := ParameterEntry{Name: h.Name, Type: h.Type, KMSKeyID: h.KMSKeyID, Value: h.Value}
+		value, err := p.decryptValue(ctx, e, withDecryption)
+		if err != nil {
+			return nil, err
+		}
 		items = append(items, map[string]any{
 			"Name":    h.Name,
 			"Type":    h.Type,
+			"Value":   value,
 			"Version": h.Version,
 		})
 	}

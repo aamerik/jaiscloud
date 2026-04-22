@@ -55,6 +55,7 @@ func NewDockerExecutor(cfg LambdaConfig) *DockerExecutor {
 			},
 		},
 	}
+	e.cleanupOrphans()
 	e.wg.Add(1)
 	go e.gcLoop()
 	return e
@@ -154,7 +155,7 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 
 	env := []string{
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", req.FunctionName),
-		fmt.Sprintf("AWS_DEFAULT_REGION=us-east-1"),
+		fmt.Sprintf("AWS_DEFAULT_REGION=%s", regionOrDefault(e.cfg.Region)),
 		fmt.Sprintf("_HANDLER=%s", req.Handler),
 	}
 	if e.cfg.JaisCloudEndpoint != "" {
@@ -277,6 +278,47 @@ func (e *DockerExecutor) dockerCall(ctx context.Context, method, url string, bod
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	return rb, resp.StatusCode, nil
+}
+
+// DeleteFunction tears down the warm container for the named function.
+func (e *DockerExecutor) DeleteFunction(_ context.Context, name string) {
+	e.removeContainer(name)
+}
+
+// Reset tears down all warm containers without stopping the GC goroutine.
+func (e *DockerExecutor) Reset() {
+	e.mu.Lock()
+	names := make([]string, 0, len(e.containers))
+	for name := range e.containers {
+		names = append(names, name)
+	}
+	e.mu.Unlock()
+	for _, name := range names {
+		e.removeContainer(name)
+	}
+}
+
+// cleanupOrphans stops and removes any Docker containers whose names start with
+// containerPrefix that were left over from a previous process.
+func (e *DockerExecutor) cleanupOrphans() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("http://localhost/v1.41/containers/json?all=true&filters={\"name\":[\"%s\"]}", containerPrefix)
+	body, status, err := e.dockerCall(ctx, http.MethodGet, url, nil)
+	if err != nil || status >= 300 {
+		return
+	}
+	var items []struct {
+		Id string `json:"Id"`
+	}
+	if err := json.Unmarshal(body, &items); err != nil {
+		return
+	}
+	for _, item := range items {
+		e.dockerCall(ctx, http.MethodPost, fmt.Sprintf("http://localhost/v1.41/containers/%s/stop", item.Id), nil)
+		e.dockerCall(ctx, http.MethodDelete, fmt.Sprintf("http://localhost/v1.41/containers/%s?force=true", item.Id), nil)
+	}
 }
 
 func sanitizeName(name string) string {

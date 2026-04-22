@@ -69,7 +69,7 @@ spec:
           persistentVolumeClaim:
             claimName: postgres-pvc
 ---
-# ClusterIP Service — only reachable inside the cluster
+# ClusterIP Service — reachable inside the cluster
 apiVersion: v1
 kind: Service
 metadata:
@@ -81,3 +81,18 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
+---
+# NodePort Service — exposes postgres for local tooling (e.g. psql, migrations)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-external
+  namespace: jaiscloud
+spec:
+  type: NodePort
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      nodePort: 30543

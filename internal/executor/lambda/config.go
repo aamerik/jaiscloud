@@ -20,6 +20,16 @@ type LambdaConfig struct {
 	APIServer string
 	// JaisCloudEndpoint is passed to containers so they can call back (optional).
 	JaisCloudEndpoint string
+	// Region is injected as AWS_DEFAULT_REGION into containers.
+	Region string
+}
+
+// regionOrDefault returns r if non-empty, else "us-east-1".
+func regionOrDefault(r string) string {
+	if r != "" {
+		return r
+	}
+	return "us-east-1"
 }
 
 // DefaultLambdaConfig returns a LambdaConfig with sensible defaults.

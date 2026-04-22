@@ -214,6 +214,7 @@ func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.Normali
 	if err := p.resources.Delete(ctx, resourceType, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
+	p.executor.DeleteFunction(ctx, name)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 

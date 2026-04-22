@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jaiscloud
+      POSTGRES_PASSWORD: jaiscloud
+      POSTGRES_DB: jaiscloud
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - jaiscloud
+
+  jaiscloud:
+    build: .
+    container_name: jaiscloud-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${JAISCLOUD_PORT:-4566}:4566"
+    environment:
+      JAISCLOUD_MODE: full
+      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
+      JAISCLOUD_EXECUTOR_MODE: ${JAISCLOUD_EXECUTOR_MODE:-docker}
+      JAISCLOUD_SPARK_IMAGE: ${JAISCLOUD_SPARK_IMAGE:-apache/spark:3.5.0}
+      JAISCLOUD_LAMBDA_IMAGE: ${JAISCLOUD_LAMBDA_IMAGE:-public.ecr.aws/lambda/python:3.12}
+      JAISCLOUD_DOCKER_NETWORK: jaiscloud_jaiscloud
+      JAISCLOUD_ENDPOINT: http://jaiscloud-server:4566
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/jaiscloud", "doctor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - jaiscloud
+
+networks:
+  jaiscloud:
+    driver: bridge

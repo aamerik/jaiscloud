@@ -34,6 +34,7 @@ func (s *MemoryParameterStore) PutParameter(_ context.Context, e ParameterEntry,
 			Name:      existing.Name,
 			Version:   existing.Version,
 			Type:      existing.Type,
+			KMSKeyID:  existing.KMSKeyID,
 			Value:     existing.Value,
 			CreatedAt: existing.UpdatedAt,
 		})

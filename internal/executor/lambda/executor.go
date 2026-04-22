@@ -22,6 +22,10 @@ type InvokeRequest struct {
 type LambdaExecutor interface {
 	// Invoke executes a Lambda function synchronously and returns the response payload.
 	Invoke(ctx context.Context, req InvokeRequest) ([]byte, error)
+	// DeleteFunction tears down any warm container or pod for the named function.
+	DeleteFunction(ctx context.Context, functionName string)
+	// Reset tears down all warm containers or pods (called on /_jaiscloud/reset).
+	Reset()
 	// Close releases all resources held by the executor (containers, goroutines).
 	Close() error
 }

@@ -66,7 +66,7 @@ s3.create_bucket(Bucket="my-bucket")
 | Amazon SNS | ✅ Full | Topics, subscriptions, SQS fan-out with MessageAttributes |
 | Amazon EventBridge | ✅ Full | Rules, targets, event pattern matching, SQS delivery |
 | AWS IAM + STS | ✅ Full | Roles, policies, users, access keys, AssumeRole, GetCallerIdentity |
-| AWS Lambda | ✅ Full | Echo / Docker warm pool / K8s one-shot job |
+| AWS Lambda | ✅ Full | Echo / Docker warm pool / K8s warm pod (Pod + ClusterIP Service per function) |
 | AWS Glue Data Catalog | ✅ Full | Databases, tables, partitions, Iceberg metadata CAS |
 | Amazon EMR (on EC2) | ✅ Full | Clusters, steps, instance fleets/groups; mock or real K8s Spark |
 | Amazon EMR on EKS | ✅ Full | Virtual clusters, job runs, managed endpoints; mock or real K8s |
@@ -103,40 +103,24 @@ docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud:latest
 
 ### Docker Compose (full mode with Postgres)
 
-```yaml
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: jaiscloud
-      POSTGRES_PASSWORD: jaiscloud
-      POSTGRES_DB: jaiscloud
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+A `docker-compose.yml` is included at the repo root. It starts Postgres (port 5433) and JaisCloud (port 4566) with the Docker executor enabled:
 
-  jaiscloud:
-    image: ghcr.io/jaisrajms/jaiscloud:latest
-    ports:
-      - "4566:4566"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      JAISCLOUD_MODE: full
-      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
-      JAISCLOUD_REGION: us-east-1
-    volumes:
-      - blob_data:/var/lib/jaiscloud/blobs
-    command: ["start", "--blob-dir", "/var/lib/jaiscloud/blobs", "--metrics"]
+```bash
+# Build image and start services
+make up-docker
 
-volumes:
-  pg_data:
-  blob_data:
+# Run with a specific executor mode
+JAISCLOUD_EXECUTOR_MODE=mock make up-docker
+
+# Stop
+make down-docker
+```
+
+Or use Docker Compose directly:
+
+```bash
+docker-compose up -d
+docker-compose down
 ```
 
 ### Kubernetes (full mode with Postgres)
@@ -400,16 +384,17 @@ go test -race -run TestSecretsManager ./tests/integration/
 go test -race -run TestSSM            ./tests/integration/
 go test -race -run TestCF             ./tests/integration/
 
-# Full mode e2e (EMR K8s executor)
-SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0 \
-JAISCLOUD_EXECUTOR_MODE=k8s \
-./jaiscloud start --mode full --dsn "<DB_CONNECTION_STRING>" &
-go test -tags spark_e2e -timeout 30m ./tests/full_mode/emr/
+# Full-mode e2e via Makefile (handles server + postgres via docker-compose)
+make test-e2e-lambda-docker        # Lambda Docker warm-pool (tag: lambda_e2e)
+make test-e2e-lambda-k8s           # Lambda K8s warm-pod (tag: lambda_e2e)
+make test-e2e-emr-docker           # EMR Spark via Docker (tag: spark_e2e)
+make test-e2e-emrcontainers-k8s    # EMR Containers K8s (tag: spark_e2e)
+make test-e2e-cloudformation       # CloudFormation (tag: cfn_fullmode)
+make test-e2e-kms                  # KMS/SecretsManager/SSM (tag: kms_fullmode)
+make test-e2e-iceberg              # Iceberg Glue (tag: iceberg_e2e)
 
-# Iceberg e2e (requires Docker + Spark image + Postgres)
-SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test \
-./jaiscloud start --mode full --dsn "<DB_CONNECTION_STRING>" --blob-dir /tmp/blobs &
-go test -tags iceberg_e2e -timeout 60m ./tests/full_mode/iceberg/
+# Or run a specific test
+make test-e2e-lambda-docker TEST_RUN=TestLambda_DeleteAndReCreate
 ```
 
 See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for the full test matrix and how to set up the Spark and Lambda environments.

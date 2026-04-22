@@ -658,6 +658,16 @@ func (p *IAMProvider) AssumeRole(ctx context.Context, nr *model.NormalizedReques
 		sessionName = "session"
 	}
 	expiry := time.Now().UTC().Add(time.Hour)
+	policySize := 1
+	if policy := strParam(nr.Params, "Policy"); policy != "" {
+		policySize = (len(policy) * 100) / 2048
+		if policySize < 1 {
+			policySize = 1
+		}
+		if policySize > 100 {
+			policySize = 100
+		}
+	}
 	return provider.OK(map[string]any{
 		"Credentials": map[string]any{
 			"AccessKeyId":     "ASIA" + randID(16),
@@ -669,6 +679,7 @@ func (p *IAMProvider) AssumeRole(ctx context.Context, nr *model.NormalizedReques
 			"AssumedRoleId": roleArn + ":" + sessionName,
 			"Arn":           roleArn + "/" + sessionName,
 		},
+		"PackedPolicySize": policySize,
 	}), nil
 }
 
@@ -709,7 +720,19 @@ func (p *IAMProvider) GetFederationToken(ctx context.Context, nr *model.Normaliz
 			"FederatedUserId": fmt.Sprintf("%s:%s", nr.AccountID, name),
 			"Arn":             fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", nr.AccountID, name),
 		},
-		"PackedPolicySize": 0,
+		"PackedPolicySize": func() int {
+			policySize := 1
+			if policy := strParam(nr.Params, "Policy"); policy != "" {
+				policySize = (len(policy) * 100) / 2048
+				if policySize < 1 {
+					policySize = 1
+				}
+				if policySize > 100 {
+					policySize = 100
+				}
+			}
+			return policySize
+		}(),
 	}), nil
 }
 

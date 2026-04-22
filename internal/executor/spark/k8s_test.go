@@ -11,11 +11,14 @@ import (
 
 // fakeK8s runs an httptest.TLSServer that fakes the K8s batch/v1 Jobs API.
 type fakeK8s struct {
-	server  *httptest.Server
-	client  *k8sClient
-	created []batchJob
-	deleted []string
-	status  batchJobStatus // returned by GET /jobs/{name}
+	server    *httptest.Server
+	client    *k8sClient
+	created   []batchJob
+	deleted   []string
+	suspended []string // job names suspended via PATCH
+	resumed   []string // job names unsuspended via PATCH
+	status    batchJobStatus // returned by GET /jobs/{name}
+	listItems []jobListItem  // returned by GET /jobs (list)
 }
 
 func newFakeK8s(t *testing.T) *fakeK8s {
@@ -42,6 +45,29 @@ func newFakeK8s(t *testing.T) *fakeK8s {
 			parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
 			fk.deleted = append(fk.deleted, parts[len(parts)-1])
 			w.WriteHeader(http.StatusOK)
+
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/jobs/"):
+			parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+			jobName := parts[len(parts)-1]
+			var patch struct {
+				Spec struct {
+					Suspend *bool `json:"suspend"`
+				} `json:"spec"`
+			}
+			json.NewDecoder(r.Body).Decode(&patch)
+			if patch.Spec.Suspend != nil {
+				if *patch.Spec.Suspend {
+					fk.suspended = append(fk.suspended, jobName)
+				} else {
+					fk.resumed = append(fk.resumed, jobName)
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(batchJob{})
+
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/jobs") && !strings.Contains(r.URL.Path, "/jobs/"):
+			// Job list endpoint.
+			json.NewEncoder(w).Encode(map[string]any{"items": fk.listItems})
 
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
@@ -387,5 +413,169 @@ func TestK8sExecutor_Submit_EMRContainersPattern(t *testing.T) {
 	}
 	if !hasMaster {
 		t.Errorf("expected --master in args, got %v", containers[0].Args)
+	}
+}
+
+// ── Close (suspend) ──────────────────────────────────────────────────────────
+
+func TestK8sExecutor_Close_SuspendsTrackedJobs(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	exec.jobs.Store("job-a", "spark-job-a")
+	exec.jobs.Store("job-b", "spark-job-b")
+
+	if err := exec.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if len(fk.suspended) != 2 {
+		t.Errorf("expected 2 suspended jobs, got %d: %v", len(fk.suspended), fk.suspended)
+	}
+	if len(fk.deleted) != 0 {
+		t.Errorf("Close should not delete jobs, got deleted: %v", fk.deleted)
+	}
+}
+
+// ── cleanupOrphans ───────────────────────────────────────────────────────────
+
+func trueBool() *bool { b := true; return &b }
+func falseBool() *bool { b := false; return &b }
+
+func TestK8sExecutor_CleanupOrphans_ReAdoptsRunningJobs(t *testing.T) {
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-running-job", Labels: map[string]string{"jaiscloud-job-id": "job-run-1"}},
+			Status: struct {
+				Succeeded int `json:"succeeded"`
+				Failed    int `json:"failed"`
+				Active    int `json:"active"`
+			}{Active: 1},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+	exec.cleanupOrphans()
+
+	if _, ok := exec.jobs.Load("job-run-1"); !ok {
+		t.Error("running job should be re-adopted in jobs map")
+	}
+	if len(fk.deleted) != 0 {
+		t.Errorf("running job should not be deleted, got: %v", fk.deleted)
+	}
+}
+
+func TestK8sExecutor_CleanupOrphans_DeletesTerminalJobs(t *testing.T) {
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-done-job", Labels: map[string]string{"jaiscloud-job-id": "job-done-1"}},
+			Status: struct {
+				Succeeded int `json:"succeeded"`
+				Failed    int `json:"failed"`
+				Active    int `json:"active"`
+			}{Succeeded: 1},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+	exec.cleanupOrphans()
+
+	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-done-job" {
+		t.Errorf("terminal job should be deleted, got: %v", fk.deleted)
+	}
+	if _, ok := exec.jobs.Load("job-done-1"); ok {
+		t.Error("terminal job should not be adopted")
+	}
+}
+
+func TestK8sExecutor_CleanupOrphans_ResumesSuspendedJobs(t *testing.T) {
+	suspend := true
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-suspended-job", Labels: map[string]string{"jaiscloud-job-id": "job-susp-1"}},
+			Spec: struct {
+				Suspend *bool `json:"suspend"`
+			}{Suspend: &suspend},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+	exec.cleanupOrphans()
+
+	if len(fk.resumed) != 1 || fk.resumed[0] != "spark-suspended-job" {
+		t.Errorf("suspended job should be unsuspended, got resumed: %v", fk.resumed)
+	}
+	if _, ok := exec.jobs.Load("job-susp-1"); !ok {
+		t.Error("resumed job should be adopted in jobs map")
+	}
+}
+
+func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
+	suspend := true
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-running", Labels: map[string]string{"jaiscloud-job-id": "jid-running"}},
+			Status: struct {
+				Succeeded int `json:"succeeded"`
+				Failed    int `json:"failed"`
+				Active    int `json:"active"`
+			}{Active: 1},
+		},
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-terminal", Labels: map[string]string{"jaiscloud-job-id": "jid-terminal"}},
+			Status: struct {
+				Succeeded int `json:"succeeded"`
+				Failed    int `json:"failed"`
+				Active    int `json:"active"`
+			}{Failed: 1},
+		},
+		{
+			Metadata: struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			}{Name: "spark-suspended", Labels: map[string]string{"jaiscloud-job-id": "jid-suspended"}},
+			Spec: struct {
+				Suspend *bool `json:"suspend"`
+			}{Suspend: &suspend},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+	exec.cleanupOrphans()
+
+	// Running → adopted.
+	if _, ok := exec.jobs.Load("jid-running"); !ok {
+		t.Error("running job should be adopted")
+	}
+	// Terminal → deleted.
+	found := false
+	for _, d := range fk.deleted {
+		if d == "spark-terminal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("terminal job should be deleted, deleted: %v", fk.deleted)
+	}
+	// Suspended → resumed and adopted.
+	if len(fk.resumed) != 1 || fk.resumed[0] != "spark-suspended" {
+		t.Errorf("suspended job should be resumed, got: %v", fk.resumed)
+	}
+	if _, ok := exec.jobs.Load("jid-suspended"); !ok {
+		t.Error("resumed job should be adopted")
 	}
 }

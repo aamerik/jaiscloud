@@ -31,6 +31,7 @@ type HistoryEntry struct {
 	Name      string
 	Version   int64
 	Type      string
+	KMSKeyID  string
 	Value     []byte
 	CreatedAt time.Time
 }

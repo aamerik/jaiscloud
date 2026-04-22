@@ -25,6 +25,14 @@ data:
   JAISCLOUD_LOG_LEVEL: "info"
   JAISCLOUD_METRICS: "true"
   JAISCLOUD_BLOB_DIR: "/data/blobs"
+  JAISCLOUD_EXECUTOR_MODE: "k8s"
+  JAISCLOUD_SPARK_IMAGE: "apache/spark:3.5.0"
+  JAISCLOUD_LAMBDA_IMAGE: "public.ecr.aws/lambda/python:3.12"
+  JAISCLOUD_K8S_NAMESPACE: "jaiscloud"
+  JAISCLOUD_K8S_APISERVER: "https://kubernetes.default.svc"
+  JAISCLOUD_K8S_SA: "jaiscloud"
+  JAISCLOUD_K8S_CA_FILE: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+  JAISCLOUD_K8S_TOKEN_FILE: "/var/run/secrets/kubernetes.io/serviceaccount/token"
 ---
 # Deployment
 apiVersion: apps/v1
@@ -46,6 +54,8 @@ spec:
         prometheus.io/port: "4566"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: jaiscloud
+      terminationGracePeriodSeconds: 45
       containers:
         - name: jaiscloud
           image: jaiscloud:latest
@@ -83,8 +93,8 @@ spec:
               cpu: 100m
               memory: 64Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: "1"
+              memory: 512Mi
       volumes:
         - name: blobs
           persistentVolumeClaim:

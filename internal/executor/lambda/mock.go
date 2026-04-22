@@ -10,4 +10,6 @@ func (e *MockExecutor) Invoke(_ context.Context, req InvokeRequest) ([]byte, err
 	return req.Payload, nil
 }
 
-func (e *MockExecutor) Close() error { return nil }
+func (e *MockExecutor) DeleteFunction(_ context.Context, _ string) {}
+func (e *MockExecutor) Reset()                                     {}
+func (e *MockExecutor) Close() error                               { return nil }

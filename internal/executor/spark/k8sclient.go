@@ -142,6 +142,7 @@ type jobMeta struct {
 type jobSpec struct {
 	BackoffLimit            *int        `json:"backoffLimit"`
 	TTLSecondsAfterFinished *int        `json:"ttlSecondsAfterFinished,omitempty"`
+	Suspend                 *bool       `json:"suspend,omitempty"`
 	Template                podTemplate `json:"template"`
 }
 
@@ -193,8 +194,26 @@ type container struct {
 
 type batchJobStatus struct {
 	Active     int            `json:"active"`
+	Succeeded  int            `json:"succeeded"`
+	Failed     int            `json:"failed"`
 	StartTime  string         `json:"startTime,omitempty"`
 	Conditions []jobCondition `json:"conditions,omitempty"`
+}
+
+// jobListItem is used when listing jobs (lighter than full batchJob).
+type jobListItem struct {
+	Metadata struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+	Spec struct {
+		Suspend *bool `json:"suspend"`
+	} `json:"spec"`
+	Status struct {
+		Succeeded int `json:"succeeded"`
+		Failed    int `json:"failed"`
+		Active    int `json:"active"`
+	} `json:"status"`
 }
 
 type jobCondition struct {
@@ -250,6 +269,45 @@ func (c *k8sClient) deleteJob(ctx context.Context, name string) error {
 		return fmt.Errorf("k8s: new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, nil)
+}
+
+// listJobs lists batch/v1 Jobs matching the given label selector.
+func (c *k8sClient) listJobs(ctx context.Context, labelSelector string) ([]jobListItem, error) {
+	url := c.jobsURL()
+	if labelSelector != "" {
+		url += "?labelSelector=" + labelSelector
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: new request: %w", err)
+	}
+	var result struct {
+		Items []jobListItem `json:"items"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// suspendJob patches a Job to set spec.suspend=true.
+func (c *k8sClient) suspendJob(ctx context.Context, name string) error {
+	return c.patchJobSuspend(ctx, name, true)
+}
+
+// unsuspendJob patches a Job to set spec.suspend=false.
+func (c *k8sClient) unsuspendJob(ctx context.Context, name string) error {
+	return c.patchJobSuspend(ctx, name, false)
+}
+
+func (c *k8sClient) patchJobSuspend(ctx context.Context, name string, suspend bool) error {
+	patch := fmt.Sprintf(`{"spec":{"suspend":%v}}`, suspend)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.jobURL(name), bytes.NewBufferString(patch))
+	if err != nil {
+		return fmt.Errorf("k8s: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/strategic-merge-patch+json")
 	return c.do(req, nil)
 }
 

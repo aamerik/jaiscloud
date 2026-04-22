@@ -7,7 +7,8 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 **Phase 0 (complete):** SQS — all 32 integration tests pass.  
 **Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.  
 **Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.  
-**Phase 2.5 (complete):** KMS (envelope crypto, grants, rotation); SecretsManager (AES-GCM at rest via KMS); SSM Parameter Store (SecureString via KMS); API Gateway REST management plane + execute-api invoke plane (MOCK, AWS_PROXY, HTTP_PROXY); Lambda Docker/K8s executors; CloudFormation with full intrinsics engine (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, conditions, mappings), topological sort, and real resource dispatch for 9 AWS resource types.
+**Phase 2.5 (complete):** KMS (envelope crypto, grants, rotation); SecretsManager (AES-GCM at rest via KMS); SSM Parameter Store (SecureString via KMS); API Gateway REST management plane + execute-api invoke plane (MOCK, AWS_PROXY, HTTP_PROXY); Lambda Docker/K8s executors; CloudFormation with full intrinsics engine (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, conditions, mappings), topological sort, and real resource dispatch for 9 AWS resource types.  
+**Phase 2.5 patch (complete):** Lambda K8s executor rewritten to warm-pod-per-function model (matching Docker executor); Spark K8s executor `Close()` suspends tracked Jobs instead of deleting them; `cleanupOrphans()` re-adopts running/suspended Jobs on restart; HTTPS server with auto-generated cloud-aware TLS cert (ECDSA P-256, 10-year, DNS SANs per cloud); S3 virtual-hosted-style parsing (`mybucket.s3.<region>.amazonaws.com`); IAM `AssumeRole`/`GetFederationToken` `PackedPolicySize` computed correctly; SSM `GetParameterHistory` now decrypts SecureString values; `DeleteFunction` tears down warm container/pod; `LambdaExecutor` interface extended with `DeleteFunction` + `Reset`; test suite reorganised under `tests/full_mode/aws/`; `docker-compose.yml` + K8s RBAC manifest + Lambda echo image added.
 
 ---
 
@@ -229,7 +230,7 @@ Executor behaviour is controlled by a single env var: `JAISCLOUD_EXECUTOR_MODE` 
 | SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
 | DynamoDB + Streams | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
 | S3 | In-memory maps + `MemoryBlobStore` | PostgreSQL rows + `LocalFSBlobStore`* | same | same |
-| Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s `batch/v1 Job`** per invocation |
+| Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s Pod + ClusterIP Service** per function (warm pool) |
 | EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per step | **K8s `batch/v1 Job`** per step |
 | EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per job run | **K8s `batch/v1 Job`** per job run |
 | EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
@@ -288,36 +289,24 @@ docker run -d
 
 ### Lambda — K8s executor (`JAISCLOUD_EXECUTOR_MODE=k8s`)
 
-Each invocation creates a **one-shot `batch/v1 Job`** (no warm pool). The job is deleted automatically after `ttlSecondsAfterFinished: 300`.
+Each distinct function gets **one warm Pod + ClusterIP Service** that is reused across invocations until idle beyond the keep-alive timeout — matching the Docker executor pattern. Invocations POST to the Lambda RIE endpoint (`/2015-03-31/functions/function/invocations`, port 8080) on the ClusterIP Service.
 
-```yaml
-kind: Job
-metadata:
-  name: jc-lambda-{functionName}-{invocationID[:8]}
-  namespace: jaiscloud
-  labels:
-    app: jaiscloud-lambda
-    function: {functionName}
-spec:
-  ttlSecondsAfterFinished: 300
-  backoffLimit: 0
-  activeDeadlineSeconds: {timeoutSecs + 10}
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: lambda
-          image: {runtimeImage}
-          env:
-            - name: _LAMBDA_PAYLOAD_B64
-              value: {base64(payload)}
-          resources:
-            limits:
-              memory: {memoryMB}Mi
-              cpu: "1"
+```
+Pod name:    jc-lambda-{sanitized-name}-{shortID}   (namespace: jaiscloud)
+Service name: jc-lambda-{sanitized-name}             (ClusterIP, port 8080)
+Labels:      app=jaiscloud-lambda, function={name}
 ```
 
-Result is retrieved by polling `Job.status.succeeded` then reading pod logs.
+**Pod/Service lifecycle:**
+
+| Trigger | Action |
+|---|---|
+| First `InvokeFunction` for a function | Create Pod + ClusterIP Service (cold start); wait Ready (90 s timeout) |
+| Subsequent invocations | HTTP POST to ClusterIP endpoint (reuse) |
+| `DeleteFunction` | Delete Pod + Service |
+| Idle > `JAISCLOUD_LAMBDA_KEEPALIVE_SECS` (default 300 s) | GC goroutine deletes Pod + Service |
+| Server shutdown (`Close()`) | All warm Pods + Services deleted |
+| Server restart (startup `cleanupOrphans`) | Orphaned `app=jaiscloud-lambda` Pods + Services deleted |
 
 ---
 
@@ -329,7 +318,7 @@ Each EMR step (`AddJobFlowSteps`) that reaches `RUNNING` state submits a **`batc
 kind: Job
 metadata:
   name: jc-spark-{clusterID[:8]}-{stepID[:8]}
-  namespace: {SparkConfig.Namespace}   # default: "default"
+  namespace: {SparkConfig.Namespace}   # default: "jaiscloud"
   labels:
     app: jaiscloud-spark
     cluster: {clusterID}
@@ -355,6 +344,8 @@ spec:
 ```
 
 The `StatusPoller` goroutine polls the Job every `SparkConfig.PollInterval` (default 5 s) and fires `OnStateChange` to update the EMR step state (`PENDING → RUNNING → COMPLETED / FAILED`).
+
+**Suspend/resume lifecycle:** `K8sExecutor.Close()` suspends all tracked Jobs (strategic-merge-patch `spec.suspend: true`) instead of deleting them, preserving partial progress across server restarts. On startup, `cleanupOrphans()` lists all `app.kubernetes.io/managed-by=jaiscloud` Jobs: terminal Jobs are deleted, suspended Jobs are unsuspended and re-adopted into the live jobs map, running Jobs are adopted directly.
 
 ---
 
@@ -396,7 +387,11 @@ go build -o jaiscloud ./cmd/jaiscloud/
 ./jaiscloud start
 
 # Run in full mode (PostgreSQL persistence)
-./jaiscloud start --mode full --dsn "postgres://user:pass@localhost:5432/jaiscloud"
+./jaiscloud start --mode full --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+
+# Run via docker-compose (postgres on 5433, jaiscloud on 4566)
+make up-docker      # start detached (builds image first)
+make down-docker    # stop and remove
 
 # Run with options
 ./jaiscloud start --port 4566 --region us-east-1 --metrics
@@ -471,11 +466,36 @@ go test -race ./tests/integration/
 
 # Point at a different host
 JAISCLOUD_HOST=http://localhost:9000 go test ./tests/integration/
+
+# Full-mode e2e via Makefile (docker-compose handles server + postgres)
+make test-e2e-lambda-docker      # Lambda Docker warm-pool (tag: lambda_e2e)
+make test-e2e-lambda-k8s         # Lambda K8s warm-pod (tag: lambda_e2e)
+make test-e2e-emr-docker         # EMR Spark via Docker (tag: spark_e2e)
+make test-e2e-emrcontainers-k8s  # EMR Containers K8s (tag: spark_e2e)
+make test-e2e-cloudformation     # CloudFormation (tag: cfn_fullmode)
+make test-e2e-kms                # KMS/SecretsManager/SSM (tag: kms_fullmode)
+make test-e2e-eventbridge        # EventBridge (tag: spark_e2e)
+make test-e2e-iceberg            # Iceberg Glue (tag: iceberg_e2e)
 ```
 
 Integration tests call `POST /_jaiscloud/reset` between each test via `resetState(t)` in [tests/integration/helpers_test.go](tests/integration/helpers_test.go).
 
 Current integration test coverage: **SQS, IAM/STS, SNS, DynamoDB, S3, Lambda**.
+
+### Full-mode test layout
+
+All full-mode e2e tests live under `tests/full_mode/aws/`:
+
+| Directory | Build tag | Description |
+|---|---|---|
+| `tests/full_mode/aws/lambda/` | `lambda_e2e` | Lambda Docker + K8s warm-pool / warm-pod |
+| `tests/full_mode/aws/cloudformation/` | `cfn_fullmode` | CloudFormation stacks, real resource dispatch |
+| `tests/full_mode/aws/kms/` | `kms_fullmode` | KMS, SecretsManager, SSM cross-service |
+| `tests/full_mode/aws/emr/` | `spark_e2e` | EMR on EC2 steps (Docker + K8s lifecycle) |
+| `tests/full_mode/aws/emrcontainers/` | `spark_e2e` | EMR on EKS job runs |
+| `tests/full_mode/aws/eventbridge/` | `spark_e2e` | EventBridge rule matching + SQS delivery |
+| `tests/full_mode/aws/dpc/` | `spark_e2e` | DPC Spark tests |
+| `tests/full_mode/aws/iceberg/` | `iceberg_e2e` | Apache Iceberg via Glue Catalog |
 
 ### Full mode reset behaviour
 
@@ -498,7 +518,7 @@ Current integration test coverage: **SQS, IAM/STS, SNS, DynamoDB, S3, Lambda**.
 The `SparkExecutor` interface drives EMR step execution and EMR-on-EKS job runs:
 
 - **`MockExecutor`** — immediate `COMPLETED`, supports `ForceState` and `Reset` for tests.
-- **`K8sExecutor`** — submits real `batch/v1 Jobs` to Kubernetes via stdlib HTTP (no client-go). Reads auth from in-cluster service account or `JAISCLOUD_K8S_*` env vars.
+- **`K8sExecutor`** — submits real `batch/v1 Jobs` to Kubernetes via stdlib HTTP (no client-go). Reads auth from in-cluster service account or `JAISCLOUD_K8S_*` env vars. `Close()` **suspends** (not deletes) tracked Jobs; `cleanupOrphans()` on startup re-adopts or deletes orphaned Jobs.
 - **`StatusPoller`** — single background goroutine; polls non-terminal jobs at a configurable interval; fires `OnStateChange` callbacks. `Stop()` is safe to call multiple times (`sync.Once`).
 - **`SparkSubmitArgs`** — builds the full `spark-submit` argument list including `--master k8s://`, `--deploy-mode cluster`, container image, namespace, service account, resource profile, and S3 event-log args.
 

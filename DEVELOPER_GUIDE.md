@@ -15,11 +15,11 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
   - [Integration tests (lite mode)](#integration-tests)
   - [Full mode integration tests](#full-mode-integration-tests)
   - [Spark e2e tests](#spark-e2e-tests-spark_e2e-build-tag)
-  - [Phase 2.5 e2e tests](#phase-25-e2e-tests-lambda_e2e-build-tag)
+  - [Lambda e2e tests](#lambda-e2e-tests-lambda_e2e-build-tag)
     - [Lambda Docker mode](#lambda-docker-mode)
     - [Lambda Kubernetes mode](#lambda-kubernetes-mode)
-    - [KMS · SecretsManager · SSM cross-service](#kms--secretsmanager--ssm-cross-service)
-    - [CloudFormation e2e](#cloudformation-e2e)
+  - [KMS · SecretsManager · SSM e2e tests](#kms--secretsmanager--ssm-e2e-tests-kms_fullmode-build-tag)
+  - [CloudFormation e2e tests](#cloudformation-e2e-tests-cfn_fullmode-build-tag)
   - [Apache Iceberg e2e tests](#apache-iceberg-e2e-tests-iceberg_e2e-build-tag)
 - [Platform Setup](#platform-setup)
 
@@ -79,35 +79,18 @@ docker run -p 4566:4566 \
   jaiscloud:latest
 ```
 
-With Docker Compose (PostgreSQL + JaisCloud):
+With Docker Compose — use the included `docker-compose.yml` at the repo root:
 
-```yaml
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: jaiscloud
-      POSTGRES_PASSWORD: jaiscloud
-      POSTGRES_DB: jaiscloud
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
-      interval: 5s
-      retries: 10
+```bash
+make up-docker       # builds image, starts postgres (port 5433) + jaiscloud (port 4566)
+make down-docker     # stops and removes services
+```
 
-  jaiscloud:
-    image: jaiscloud:latest
-    ports:
-      - "4566:4566"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      JAISCLOUD_MODE: full
-      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
-      JAISCLOUD_REGION: us-east-1
-      JAISCLOUD_METRICS: "true"
+Or directly:
+
+```bash
+docker-compose up -d
+docker-compose down
 ```
 
 ---
@@ -195,7 +178,13 @@ Full mode persists all state — queues, topics, tables, S3 objects, IAM resourc
 
 ### 1. Start PostgreSQL
 
-The quickest way is Docker:
+The quickest way is via docker-compose (port 5433 on the host):
+
+```bash
+make up-docker
+```
+
+Or start postgres manually with Docker:
 
 ```bash
 docker run -d \
@@ -203,7 +192,7 @@ docker run -d \
   -e POSTGRES_USER=jaiscloud \
   -e POSTGRES_PASSWORD=jaiscloud \
   -e POSTGRES_DB=jaiscloud \
-  -p 5432:5432 \
+  -p 5433:5432 \
   postgres:16-alpine
 ```
 
@@ -223,7 +212,7 @@ docker exec jaiscloud-pg pg_isready -U jaiscloud
 ```bash
 ./jaiscloud start \
   --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
 The server runs SQL migrations automatically on every startup — no manual schema setup needed. You will see:
@@ -241,57 +230,19 @@ INFO jaiscloud started port=4566 mode=full
 
 ### 4. Using Docker Compose (recommended for local dev)
 
-Save this as `docker-compose.dev.yml` in the repo root:
+The repo includes a `docker-compose.yml` at the root. Start with:
 
-```yaml
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: jaiscloud
-      POSTGRES_PASSWORD: jaiscloud
-      POSTGRES_DB: jaiscloud
-    ports:
-      - "5432:5432"
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
-      interval: 5s
-      retries: 10
-
-  jaiscloud:
-    build: .
-    ports:
-      - "4566:4566"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      JAISCLOUD_MODE: full
-      JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
-      JAISCLOUD_REGION: us-east-1
-      JAISCLOUD_LOG_LEVEL: info
-      JAISCLOUD_METRICS: "true"
-
-volumes:
-  pg_data:
+```bash
+make up-docker            # builds jaiscloud image, starts postgres + server
+make down-docker          # stop and remove services
+docker-compose down -v    # wipe all data (postgres volume)
 ```
 
-Start everything:
-```bash
-docker compose -f docker-compose.dev.yml up -d
-docker compose -f docker-compose.dev.yml logs -f jaiscloud
-```
+Postgres is exposed on host port **5433** (to avoid conflicts with local Postgres). JaisCloud is on port **4566**.
 
-Stop (data preserved):
+To view logs:
 ```bash
-docker compose -f docker-compose.dev.yml down
-```
-
-Wipe data completely:
-```bash
-docker compose -f docker-compose.dev.yml down -v
+docker-compose logs -f jaiscloud
 ```
 
 ### 5. Connection string reference
@@ -304,9 +255,9 @@ docker compose -f docker-compose.dev.yml down -v
 | Port | `5432` | default postgres port |
 | Database | `jaiscloud` | must already exist |
 
-Full DSN: `postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud`
+Full DSN: `postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud`
 
-Via environment variable: `JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud`
+Via environment variable: `JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud`
 
 ---
 
@@ -324,7 +275,16 @@ Verify:
 kubectl config current-context   # should print: docker-desktop
 ```
 
-### One-click deploy
+### Deploy with Makefile (recommended)
+
+```bash
+make up-k8s     # builds image, applies all manifests, waits for ready
+make down-k8s   # removes deployment and cleans up Lambda/Spark resources
+```
+
+This applies manifests in order: `namespace.yaml` → `rbac.yaml` → `postgres.yaml` → `jaiscloud.yaml`.
+
+### One-click deploy (legacy script)
 
 ```bash
 ./deploy/deploy.sh
@@ -379,7 +339,7 @@ The built-in EMR and EMR-on-EKS providers use a `MockExecutor` by default (`JAIS
 
 ```bash
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
 You should see:
@@ -457,12 +417,12 @@ aws --endpoint-url http://localhost:4566 \
 
 The default (no `JAISCLOUD_SPARK_MODE` set) uses the mock executor, which completes jobs immediately.
 
-Set `JAISCLOUD_SPARK_MODE=mock` explicitly if you want to be explicit:
+Set `JAISCLOUD_EXECUTOR_MODE=mock` explicitly if you want to be explicit:
 ```bash
-JAISCLOUD_SPARK_MODE=mock ./jaiscloud start --mode full --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start --mode full --dsn "postgres://..."
 ```
 
-For real K8s submission, set `JAISCLOUD_SPARK_MODE=k8s` — see the next section.
+For real K8s submission, set `JAISCLOUD_EXECUTOR_MODE=k8s` — see the next section.
 
 ---
 
@@ -483,14 +443,14 @@ In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the `K8sExecutor` submits r
 Only one env var is needed. The service account token, CA cert, and API server URL are auto-detected from the standard pod mount:
 
 ```bash
-export JAISCLOUD_SPARK_MODE=k8s
+export JAISCLOUD_EXECUTOR_MODE=k8s
 # JAISCLOUD_K8S_NAMESPACE and JAISCLOUD_K8S_SA are optional
 ```
 
 ### Auth — out-of-cluster (local dev, CI)
 
 ```bash
-export JAISCLOUD_SPARK_MODE=k8s
+export JAISCLOUD_EXECUTOR_MODE=k8s
 export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443        # kubectl cluster-info
 export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa --duration=24h)
 export JAISCLOUD_K8S_CA_FILE=$HOME/.kube/ca.crt              # or unset for system roots
@@ -502,11 +462,11 @@ export JAISCLOUD_K8S_SA=spark-sa
 
 | Variable | Default | Description |
 |---|---|---|
-| `JAISCLOUD_SPARK_MODE` | `mock` | Set to `k8s` to enable real cluster submission |
+| `JAISCLOUD_EXECUTOR_MODE` | `mock` | Set to `k8s` to enable real cluster submission |
 | `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
 | `JAISCLOUD_K8S_TOKEN` | in-cluster token file | Bearer token: literal string or path to a file (re-read per request for rotation) |
 | `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA cert. Unset = system roots. |
-| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for Jobs and Pods |
+| `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace for Jobs and Pods |
 | `JAISCLOUD_K8S_SA` | _(none)_ | Service account for the spark-submit Pod |
 
 ### Prerequisites
@@ -515,19 +475,16 @@ export JAISCLOUD_K8S_SA=spark-sa
 - A namespace for Spark jobs
 - A Spark Docker image accessible from the cluster (default: `apache/spark:3.5.0`)
 
-### 1. Prepare the Spark namespace
+### 1. Prepare the namespace and RBAC
+
+Use the included manifests which create the `jaiscloud` namespace and grant full executor permissions:
 
 ```bash
-kubectl create namespace spark-jobs
-
-# Service account JaisCloud uses to create Jobs
-kubectl create serviceaccount jaiscloud-sa -n spark-jobs
-
-# Service account the spark-submit Pod runs as
-kubectl create serviceaccount spark-sa -n spark-jobs
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/rbac.yaml
 ```
 
-Apply RBAC — JaisCloud needs to manage Jobs; the spark-submit Pod needs to manage Pods:
+Or create manually and apply custom RBAC — JaisCloud needs to manage Jobs; the spark-submit Pod needs to manage Pods:
 
 ```yaml
 # jaiscloud-rbac.yaml
@@ -587,14 +544,14 @@ kubectl apply -f jaiscloud-rbac.yaml
 ### 2. Start JaisCloud in K8s mode
 
 ```bash
-export JAISCLOUD_SPARK_MODE=k8s
+export JAISCLOUD_EXECUTOR_MODE=k8s
 export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
 export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n spark-jobs --duration=24h)
 export JAISCLOUD_K8S_NAMESPACE=spark-jobs
 export JAISCLOUD_K8S_SA=spark-sa
 
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
 ### 3. Submit a job
@@ -719,7 +676,7 @@ docker exec jaiscloud-pg pg_isready -U jaiscloud
 go build -o jaiscloud ./cmd/jaiscloud/
 ./jaiscloud start \
   --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" &
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 ```
 
 Migrations run automatically on startup. You should see:
@@ -745,7 +702,7 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
 # Kill and restart the server
 kill %1
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud" &
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 
 # Queue should still be there
 aws --endpoint-url http://localhost:4566 --region us-east-1 \
@@ -763,7 +720,7 @@ JAISCLOUD_HOST=http://my-remote-host:4566 go test -race -count=1 ./tests/integra
 
 ### Spark e2e tests (`spark_e2e` build tag)
 
-The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notification lifecycle. They live under `tests/full_mode/plugin/` and are **excluded from normal CI runs** by the `//go:build spark_e2e` tag. Two execution modes are supported: **Docker** (runs Spark in a local container) and **Kubernetes** (submits to a real cluster).
+The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notification lifecycle. They live under `tests/full_mode/aws/emr/`, `tests/full_mode/aws/emrcontainers/`, and `tests/full_mode/aws/eventbridge/`, and are **excluded from normal CI runs** by the `//go:build spark_e2e` tag. Use the Makefile targets which handle server lifecycle via docker-compose or K8s.
 
 #### Prerequisites (both modes)
 
@@ -774,31 +731,35 @@ The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notific
 | PostgreSQL | 14+ | JaisCloud full-mode store |
 | JaisCloud server | latest | Running in `--mode full` |
 
-Build and start JaisCloud:
+Use the Makefile to start the server and run tests:
 
 ```bash
-go build -o jaiscloud ./cmd/jaiscloud/
-./jaiscloud start \
-  --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+# EMR Docker tests (server starts via docker-compose)
+make test-e2e-emr-docker SPARK_IMAGE=apache/spark:3.5.0
+
+# EMR Containers K8s tests (server deployed to K8s)
+make test-e2e-emrcontainers-k8s SPARK_IMAGE=apache/spark:3.5.0
+
+# EventBridge tests
+make test-e2e-eventbridge
+
+# Narrow to a specific test
+make test-e2e-emrcontainers-k8s TEST_RUN=TestSparkJob_K8s_CancelJobRun
 ```
+
+Or run manually:
 
 #### Docker mode — EMR steps running SparkPi in a container
 
-Docker mode uses `JAISCLOUD_SPARK_MODE=mock` (the default). The plugin's `MockExecutor` completes jobs immediately without a real Spark cluster. Set `SPARK_E2E_DOCKER_IMAGE` to any Spark image that has the examples JAR at `/opt/spark/examples/jars/`.
-
 ```bash
-# Pull or build a Spark image (official Apache image works)
-docker pull apache/spark:3.5.0
+# Start server via docker-compose
+make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0
 
-# Set the required env var
-export SPARK_E2E_DOCKER_IMAGE=apache/spark:3.5.0
+# Run tests
+SPARK_E2E_DOCKER_IMAGE=apache/spark:3.5.0 JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags spark_e2e -timeout 10m ./tests/full_mode/aws/emr/
 
-# Run all Docker-mode Spark e2e tests
-go test -v -tags spark_e2e \
-  -run TestSparkJob_Docker \
-  -timeout 10m \
-  ./tests/full_mode/plugin/
+make down-docker
 ```
 
 | Environment variable | Default | Description |
@@ -810,141 +771,96 @@ go test -v -tags spark_e2e \
 
 #### Kubernetes mode — EMR Containers job runs on a real cluster
 
-K8s mode uses `JAISCLOUD_SPARK_MODE=k8s`. The `K8sExecutor` logs the full `spark-submit` argument list it constructs, then delegates lifecycle to the `MockExecutor`. Real pod submission requires the Spark Operator installed in the target cluster.
-
 ```bash
-# Set required env vars
-export SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0
-export SPARK_E2E_K8S_NAMESPACE=default        # optional, defaults to "default"
+# Deploy server to K8s
+make up-k8s
 
-# Run all K8s-mode Spark e2e tests
-go test -v -tags spark_e2e \
-  -run TestSparkJob_K8s \
-  -timeout 10m \
-  ./tests/full_mode/plugin/
+# Run EMR Containers tests
+SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0 SPARK_E2E_K8S_NAMESPACE=jaiscloud \
+  JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags spark_e2e -timeout 15m ./tests/full_mode/aws/emrcontainers/
+
+make down-k8s
 ```
 
 | Environment variable | Default | Description |
 |---|---|---|
 | `SPARK_E2E_SPARK_IMAGE` | — | **(required)** Spark image for K8s executor |
-| `SPARK_E2E_K8S_NAMESPACE` | `default` | Kubernetes namespace for Spark pods |
+| `SPARK_E2E_K8S_NAMESPACE` | `jaiscloud` | Kubernetes namespace for Spark pods |
 | `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
 | `SPARK_E2E_POLL_INTERVAL` | `3s` | Polling interval |
 | `SPARK_E2E_JOB_TIMEOUT` | `5m` | Job timeout |
 
 #### EventBridge notification tests (no real Spark needed)
 
-The EventBridge tests under `tests/full_mode/plugin/` use the `MockExecutor` and do not require any Docker image or Kubernetes cluster. They verify that EMR/EMR-on-EKS state transitions are published to EventBridge and delivered to SQS targets.
-
 ```bash
-# No SPARK_E2E_DOCKER_IMAGE or SPARK_E2E_SPARK_IMAGE needed
-go test -v -tags spark_e2e \
-  -run TestSparkJob_EventBridge \
-  -timeout 5m \
-  ./tests/full_mode/plugin/
+make test-e2e-eventbridge
+# or manually:
+make up-docker JAISCLOUD_EXECUTOR_MODE=mock
+JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags spark_e2e -timeout 10m ./tests/full_mode/aws/eventbridge/
+make down-docker
 ```
 
 ---
 
 ---
 
-### Phase 2.5 e2e tests (`lambda_e2e` build tag)
+### Lambda e2e tests (`lambda_e2e` build tag)
 
-These tests cover the Phase 2.5 services — Lambda Docker/K8s executors, KMS, SecretsManager, SSM Parameter Store, and CloudFormation real resource dispatch — in full end-to-end mode. They live under `tests/full_mode/p25/` and are **excluded from normal CI** by the `//go:build lambda_e2e` tag.
+Lambda e2e tests live under `tests/full_mode/aws/lambda/` and are **excluded from normal CI** by the `//go:build lambda_e2e` tag. Use the Makefile targets which start the server via docker-compose or K8s:
 
-All tests in this suite follow the same conventions as the Spark e2e tests:
+```bash
+make test-e2e-lambda-docker   # Docker warm-pool executor
+make test-e2e-lambda-k8s      # K8s warm-pod executor
+```
+
+All tests follow these conventions:
 - `resetState(t)` calls `POST /_jaiscloud/reset` before each test.
-- Skip guards (e.g. `requireLambdaDockerEnv`) skip individual tests when the required executor is not configured.
-- Timeouts are controlled via environment variables.
-
-#### Common prerequisites
-
-| Tool | Purpose |
-|---|---|
-| Go 1.26+ | Test runner |
-| PostgreSQL 14+ | Full-mode persistence (KMS keys, secrets, parameters, CF stacks) |
-| JaisCloud (full mode) | Running server |
-
-Start the server:
-```bash
-go build -o jaiscloud ./cmd/jaiscloud/
-./jaiscloud start \
-  --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
-```
-
-Run **all** Phase 2.5 e2e tests (Docker/K8s tests skip automatically if not configured):
-```bash
-go test -v -tags lambda_e2e -timeout 15m ./tests/full_mode/p25/
-```
+- Skip guards (`requireLambdaDockerEnv`, `requireLambdaK8sEnv`) skip when the executor is not configured.
+- Timeouts controlled via environment variables.
 
 ---
 
 #### Lambda Docker mode
 
-In Docker mode the Lambda executor starts a real Docker container per function (warm pool). Each invocation posts to the container's Lambda Runtime Interface Emulator endpoint. The container is reused across invocations until deleted or idle.
+In Docker mode the Lambda executor starts a real Docker container per function (warm pool). Each invocation posts to the container's Lambda Runtime Interface Emulator (RIE) endpoint on port 8080. The container is reused across invocations until deleted or idle.
 
 ##### Prerequisites
 
 | Requirement | Notes |
 |---|---|
 | Docker running | `docker info` must succeed |
-| JaisCloud started with `JAISCLOUD_LAMBDA_MODE=docker` | Controls executor selection at startup |
-| A Lambda container image | Must implement the Lambda RIC and echo or process events. See example below. |
+| `JAISCLOUD_EXECUTOR_MODE=docker` | Controls executor selection at startup |
+| A Lambda container image | Must implement the Lambda RIC. Use the included echo image or build your own. |
 
-Start JaisCloud with Docker executor:
-```bash
-JAISCLOUD_LAMBDA_MODE=docker ./jaiscloud start \
-  --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
-```
+##### Using the included echo image
 
-##### Building a minimal test Lambda image
-
-The tests invoke functions with a payload and verify the response is non-empty. Any Lambda RIC-compatible image works. The simplest Python echo handler:
-
-```dockerfile
-# Dockerfile.lambda-test
-FROM public.ecr.aws/lambda/python:3.12
-COPY handler.py ${LAMBDA_TASK_ROOT}/
-CMD ["handler.lambda_handler"]
-```
-
-```python
-# handler.py
-import json, os
-
-def lambda_handler(event, context):
-    return {
-        "statusCode": 200,
-        "body": json.dumps(event),
-        "env": {k: v for k, v in os.environ.items() if k.startswith(("APP_", "TEST_", "STAGE"))}
-    }
-```
+The repo includes a ready-to-use echo handler at `deploy/images/lambda-echo/`:
 
 ```bash
-docker build -t jaiscloud-lambda-test -f Dockerfile.lambda-test .
+docker build -t jaiscloud-lambda-echo deploy/images/lambda-echo/
 ```
+
+The handler simply echoes the event back: `def handler(event, context): return event`. Tests pass `Handler: "handler.handler"` when creating functions.
 
 ##### Running Docker mode tests
 
 ```bash
-export LAMBDA_E2E_DOCKER_IMAGE=jaiscloud-lambda-test
-
-go test -v -tags lambda_e2e \
-  -run TestLambdaDocker \
-  -timeout 10m \
-  ./tests/full_mode/p25/
+make test-e2e-lambda-docker LAMBDA_IMAGE=jaiscloud-lambda-echo
+# or manually:
+make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_LAMBDA_IMAGE=jaiscloud-lambda-echo
+LAMBDA_E2E_DOCKER_IMAGE=jaiscloud-lambda-echo JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags lambda_e2e -timeout 10m ./tests/full_mode/aws/lambda/
+make down-docker
 ```
 
 | Test | What it verifies |
 |---|---|
-| `TestLambdaDocker_ColdStart_ReturnsResponse` | Container starts on first invoke; response is non-empty |
-| `TestLambdaDocker_WarmPoolReuse` | Second invocation reuses warm container; faster than cold start |
-| `TestLambdaDocker_ConcurrentInvocations` | 5 simultaneous invocations all succeed without deadlock |
-| `TestLambdaDocker_DeleteFunction_StopsContainer` | `DeleteFunction` stops warm container; subsequent invoke fails |
-| `TestLambdaDocker_UpdateCode_HotswapContainer` | `UpdateFunctionCode` succeeds; invocation still works after hotswap |
-| `TestLambdaDocker_EnvironmentVariables_PassedToContainer` | Env vars configured at `CreateFunction` are present in the running container |
+| `TestLambda_Docker_*` | Docker warm-pool: cold start, warm reuse, concurrent invocations, delete cleanup |
+| `TestLambda_ColdStartAfterReset` | Container re-created after `/_jaiscloud/reset` |
+| `TestLambda_DeleteAndReCreate` | Delete + immediate re-create without collision in warm pool |
+| `TestLambda_HealthAfterOrphanCleanup` | Server healthy after startup orphan cleanup |
 
 ##### Environment variable reference
 
@@ -973,112 +889,67 @@ Container teardown is asynchronous. Run `docker ps | grep jc-lambda` to check. O
 
 #### Lambda Kubernetes mode
 
-In K8s mode the Lambda executor creates a one-shot `batch/v1 Job` per invocation. There is no warm pool — each call is an independent Job. The result is read from pod logs once the Job reaches `Succeeded`.
+In K8s mode the Lambda executor creates **one warm Pod + ClusterIP Service per function** (matching the Docker executor pattern). Invocations POST to the RIE endpoint on the Service; the Pod is reused across calls and garbage-collected when idle.
 
 ##### Prerequisites
 
 | Requirement | Notes |
 |---|---|
 | Kubernetes cluster | Docker Desktop, kind, minikube, or a remote cluster |
-| JaisCloud started with `JAISCLOUD_LAMBDA_MODE=k8s` | Controls executor selection at startup |
-| K8s credentials configured | `JAISCLOUD_K8S_APISERVER` + `JAISCLOUD_K8S_TOKEN`, or in-cluster |
-| A Lambda container image in the cluster's registry | Must be pullable from within the cluster |
+| `JAISCLOUD_EXECUTOR_MODE=k8s` | Controls executor selection at startup |
+| In-cluster RBAC | Apply `deploy/k8s/rbac.yaml` — grants Jobs, Pods, Services permissions in the `jaiscloud` namespace |
+| A Lambda container image pullable from the cluster | Use the echo image or your own |
 
-Start JaisCloud with K8s Lambda executor:
-```bash
-export JAISCLOUD_LAMBDA_MODE=k8s
-export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
-export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
-export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+##### RBAC
 
-./jaiscloud start \
-  --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
-```
-
-##### RBAC for Lambda Jobs
-
-JaisCloud needs permission to create, get, and delete `batch/v1 Jobs` and read `Pod` logs in the configured namespace:
-
-```yaml
-# lambda-rbac.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: jaiscloud-lambda
-  namespace: jaiscloud
-rules:
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["create", "get", "delete", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods", "pods/log"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jaiscloud-lambda
-  namespace: jaiscloud
-subjects:
-- kind: ServiceAccount
-  name: jaiscloud-sa
-  namespace: jaiscloud
-roleRef:
-  kind: Role
-  name: jaiscloud-lambda
-  apiGroup: rbac.authorization.k8s.io
-```
+Apply the included manifest (grants all needed permissions in the `jaiscloud` namespace):
 
 ```bash
-kubectl create namespace jaiscloud
-kubectl create serviceaccount jaiscloud-sa -n jaiscloud
-kubectl apply -f lambda-rbac.yaml
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/rbac.yaml
 ```
 
 ##### Running K8s mode tests
 
 ```bash
-export LAMBDA_E2E_K8S_IMAGE=jaiscloud-lambda-test   # must be pullable from the cluster
-
-go test -v -tags lambda_e2e \
-  -run TestLambdaK8s \
-  -timeout 15m \
-  ./tests/full_mode/p25/
+make test-e2e-lambda-k8s LAMBDA_IMAGE=jaiscloud-lambda-echo
+# or manually:
+make up-k8s
+LAMBDA_E2E_K8S_IMAGE=jaiscloud-lambda-echo JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags lambda_e2e -timeout 15m ./tests/full_mode/aws/lambda/
+make down-k8s
 ```
 
 | Test | What it verifies |
 |---|---|
-| `TestLambdaK8s_Invoke_ReturnsResponse` | Single invocation creates a Job and returns response |
-| `TestLambdaK8s_MultipleInvocations_EachCreatesNewJob` | 3 sequential invocations each produce a distinct Job |
-| `TestLambdaK8s_ConcurrentInvocations` | 4 parallel invocations all complete without error |
-| `TestLambdaK8s_DeleteFunction_NoErrorAfterDelete` | Delete succeeds; subsequent invoke returns not-found error |
-| `TestLambdaK8s_EnvironmentVariables_PassedToJob` | Env vars stored on the function appear in the K8s Job spec |
+| `TestLambda_K8s_*` | K8s warm-pod: cold start, warm reuse, concurrent invocations |
+| `TestLambda_ColdStartAfterReset` | Pod re-created after `/_jaiscloud/reset` |
+| `TestLambda_DeleteAndReCreate` | Delete + immediate re-create without K8s pod collision |
+| `TestLambda_HealthAfterOrphanCleanup` | Server healthy after startup orphan pod cleanup |
 
 ##### Environment variable reference
 
 | Variable | Default | Description |
 |---|---|---|
 | `LAMBDA_E2E_K8S_IMAGE` | — | **(required)** Lambda image URI pullable from the cluster. Tests skip if unset. |
-| `JAISCLOUD_LAMBDA_MODE` | `mock` | Must be `k8s` when the server starts |
+| `JAISCLOUD_EXECUTOR_MODE` | `mock` | Must be `k8s` when the server starts |
 | `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
-| `JAISCLOUD_K8S_TOKEN` | in-cluster token | Bearer token or path to a token file |
 | `JAISCLOUD_K8S_CA_FILE` | in-cluster CA | PEM CA cert; unset = system roots |
-| `JAISCLOUD_K8S_NAMESPACE` | `default` | Namespace for Lambda Jobs |
+| `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace for Lambda Pods + Services |
 | `JAISCLOUD_HOST` | `http://localhost:4566` | JaisCloud endpoint |
-| `LAMBDA_E2E_INVOKE_TIMEOUT` | `2m` | Max time to wait for a Job to complete |
-| `LAMBDA_E2E_POLL_INTERVAL` | `3s` | Polling interval for Job status checks |
+| `LAMBDA_E2E_INVOKE_TIMEOUT` | `2m` | Max time to wait for cold start + invocation |
+| `LAMBDA_E2E_POLL_INTERVAL` | `3s` | Polling interval |
 
-##### Watching Jobs during tests
+##### Watching warm pods during tests
 
 ```bash
-# Stream Job status in real time while tests run
-kubectl get jobs -n jaiscloud -w
+# Watch pods in real time
+kubectl get pods -n jaiscloud -l app=jaiscloud-lambda -w
 
-# Inspect a specific Lambda Job
-kubectl describe job jc-lambda-<functionName>-<invocationID> -n jaiscloud
+# Inspect a warm pod
+kubectl describe pod -n jaiscloud -l app=jaiscloud-lambda
 
-# Read pod logs (result payload is written to stdout by the Lambda handler)
+# Read logs
 kubectl logs -n jaiscloud -l app=jaiscloud-lambda --tail=50
 ```
 
@@ -1087,30 +958,28 @@ kubectl logs -n jaiscloud -l app=jaiscloud-lambda --tail=50
 **Tests skip with "LAMBDA_E2E_K8S_IMAGE not set"**  
 Export `LAMBDA_E2E_K8S_IMAGE` before running.
 
-**Job stuck in `Pending`**  
-The image may not be pullable from the cluster. Check `kubectl describe pod -n jaiscloud` for `ImagePullBackOff`. For local clusters (kind, minikube), load the image into the cluster: `kind load docker-image jaiscloud-lambda-test`.
+**Pod stuck in `Pending`**  
+Image may not be pullable. Check `kubectl describe pod -n jaiscloud` for `ImagePullBackOff`. For kind/minikube: `kind load docker-image jaiscloud-lambda-echo`.
 
-**"Forbidden" creating Jobs**  
-Apply the RBAC manifest above and verify `kubectl auth can-i create jobs -n jaiscloud --as=system:serviceaccount:jaiscloud:jaiscloud-sa`.
+**"Forbidden" creating Pods/Services**  
+Apply `deploy/k8s/rbac.yaml` and verify `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:jaiscloud`.
 
 **Invocation timeout**  
-K8s cold start includes image pull + pod scheduling. Increase `LAMBDA_E2E_INVOKE_TIMEOUT=10m` on first run. Subsequent runs reuse cached images.
+K8s cold start includes image pull + pod scheduling. Increase `LAMBDA_E2E_INVOKE_TIMEOUT=10m` on first run. Subsequent invocations reuse the warm pod and are fast.
 
 ---
 
-#### KMS · SecretsManager · SSM cross-service
+### KMS · SecretsManager · SSM e2e tests (`kms_fullmode` build tag)
 
-These tests verify cross-service integration between KMS, SecretsManager, and SSM Parameter Store. They do **not** require Docker or Kubernetes — only a running JaisCloud server (lite or full mode).
+These tests live under `tests/full_mode/aws/kms/` and verify cross-service integration between KMS, SecretsManager, and SSM Parameter Store. They do **not** require Docker or Kubernetes.
 
 ```bash
-# No special executor mode needed — mock Lambda is fine
-./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
-
-go test -v -tags lambda_e2e \
-  -run "TestKMS_|TestSSM_" \
-  -timeout 5m \
-  ./tests/full_mode/p25/
+make test-e2e-kms
+# or manually:
+make up-docker JAISCLOUD_EXECUTOR_MODE=mock
+JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags kms_fullmode -timeout 10m ./tests/full_mode/aws/kms/
+make down-docker
 ```
 
 | Test | What it verifies |
@@ -1128,15 +997,17 @@ No environment variables beyond `JAISCLOUD_HOST` are required for this group.
 
 ---
 
-#### CloudFormation e2e
+### CloudFormation e2e tests (`cfn_fullmode` build tag)
 
-These tests verify that CloudFormation stacks provision, update, and delete real downstream resources (SQS queues, Lambda functions, KMS keys, SecretsManager secrets). They do **not** require Docker or Kubernetes.
+These tests live under `tests/full_mode/aws/cloudformation/` and verify that CloudFormation stacks provision, update, and delete real downstream resources (SQS queues, Lambda functions, KMS keys, SecretsManager secrets). They do **not** require Docker or Kubernetes.
 
 ```bash
-go test -v -tags lambda_e2e \
-  -run TestCFN_ \
-  -timeout 5m \
-  ./tests/full_mode/p25/
+make test-e2e-cloudformation
+# or manually:
+make up-docker JAISCLOUD_EXECUTOR_MODE=mock
+JAISCLOUD_HOST=http://localhost:4566 \
+  go test -v -tags cfn_fullmode -timeout 10m ./tests/full_mode/aws/cloudformation/
+make down-docker
 ```
 
 | Test | Template resources | What it verifies |
@@ -1178,7 +1049,7 @@ JaisCloud must be running in full mode (lite mode works too — Glue, S3, and Dy
 
 ```bash
 ./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
 #### 1. Download Iceberg JARs
@@ -1186,7 +1057,7 @@ JaisCloud must be running in full mode (lite mode works too — Glue, S3, and Dy
 The Spark container needs Iceberg and AWS connector JARs that are not included in the base image. Download them once from Maven Central:
 
 ```bash
-cd tests/full_mode/iceberg/spark-iceberg
+cd tests/full_mode/aws/iceberg/spark-iceberg
 bash download-jars.sh
 ```
 
@@ -1216,7 +1087,7 @@ export SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test
 
 go test -v -tags iceberg_e2e \
   -timeout 30m \
-  ./tests/full_mode/iceberg/
+  ./tests/full_mode/aws/iceberg/
 ```
 
 `TestMain` runs first and creates the shared infrastructure once for the entire suite:
@@ -1235,7 +1106,7 @@ After all tests complete, `TestMain` deletes the Glue database and DynamoDB tabl
 go test -v -tags iceberg_e2e \
   -run TestIceberg_GlueCatalog_WriteAndRead \
   -timeout 15m \
-  ./tests/full_mode/iceberg/
+  ./tests/full_mode/aws/iceberg/
 ```
 
 #### Environment variable reference
