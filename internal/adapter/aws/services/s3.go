@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -113,6 +114,11 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 		"_bucket": bucket,
 		"_key":    key,
 		"_body":   body,
+	}
+	// body == nil only when the gateway determined this is a streaming upload
+	// (PutObject / UploadPart) and intentionally skipped io.ReadAll.
+	if body == nil {
+		params["_streaming"] = true
 	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		params["_content_type"] = ct
@@ -293,12 +299,21 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 				h.Set("x-amz-meta-"+k, v)
 			}
 		}
-		body, _ := resp.Data["_raw_body"].([]byte)
-		// SDK v2 validates CRC32 of the object data on GetObject responses
-		h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
+		// CRC32: prefer value stored at upload time; fall back to computing from body.
+		if crc32v, ok := resp.Data["_crc32"].(string); ok && crc32v != "" {
+			h.Set("x-amz-checksum-crc32", crc32v)
+		}
 		status := resp.HTTPStatus
 		if s, ok := resp.Data["_status"].(int); ok {
 			status = s
+		}
+		// Streaming response: headers are set; gateway will io.Copy the stream.
+		if _, ok := resp.Data["_stream"].(io.ReadCloser); ok {
+			return status, h, nil
+		}
+		body, _ := resp.Data["_raw_body"].([]byte)
+		if h.Get("x-amz-checksum-crc32") == "" {
+			h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
 		}
 		return status, h, body
 	}
@@ -326,10 +341,15 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 		}
 		if nr.Action == "PutObject" {
 			if hdr, ok := nr.Params["_checksum_header"].(string); ok {
+				// Client supplied a checksum algorithm — echo the value back.
 				if val, ok := nr.Params["_checksum_value"].(string); ok {
 					h.Set(hdr, val)
 				}
+			} else if crc32v, ok := resp.Data["_server_crc32"].(string); ok && crc32v != "" {
+				// Provider computed CRC32 during streaming write.
+				h.Set("x-amz-checksum-crc32", crc32v)
 			} else {
+				// Buffered path: compute from the in-memory body.
 				uploadedBody, _ := nr.Params["_body"].([]byte)
 				h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(uploadedBody))
 			}

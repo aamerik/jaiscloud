@@ -4,8 +4,10 @@
 package blobfs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,10 +19,26 @@ import (
 type BlobStore interface {
 	Put(ctx context.Context, bucket, key string, data []byte) error
 	Get(ctx context.Context, bucket, key string) ([]byte, error)
+	// PutStream writes r to the store, returning bytes written. Implementations
+	// may buffer internally (MemoryBlobStore) or stream to disk (LocalFSBlobStore).
+	PutStream(ctx context.Context, bucket, key string, r io.Reader) (int64, error)
+	// GetStream opens the object for reading. offset is the byte offset to start
+	// at; length is the number of bytes to read (-1 means read to end). The
+	// caller must close the returned ReadCloser.
+	GetStream(ctx context.Context, bucket, key string, offset, length int64) (io.ReadCloser, error)
 	Delete(ctx context.Context, bucket, key string) error
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
 	Reset()
 }
+
+// limitReadCloser wraps an io.Reader with a separate io.Closer so that
+// io.LimitReader (which returns a plain Reader) can be paired with a file.
+type limitReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (l *limitReadCloser) Close() error { return l.closer.Close() }
 
 // -- MemoryBlobStore --
 
@@ -78,6 +96,37 @@ func (s *MemoryBlobStore) List(_ context.Context, bucket, prefix string) ([]stri
 		}
 	}
 	return keys, nil
+}
+
+func (s *MemoryBlobStore) PutStream(ctx context.Context, bucket, key string, r io.Reader) (int64, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.Put(ctx, bucket, key, data); err != nil {
+		return 0, err
+	}
+	return int64(len(data)), nil
+}
+
+func (s *MemoryBlobStore) GetStream(_ context.Context, bucket, key string, offset, length int64) (io.ReadCloser, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	b, ok := s.data[blobKey(bucket, key)]
+	if !ok {
+		return nil, fmt.Errorf("blob not found: %s/%s", bucket, key)
+	}
+	if offset >= int64(len(b)) {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
+	end := int64(len(b))
+	if length >= 0 && offset+length < end {
+		end = offset + length
+	}
+	// Copy slice to avoid a race with concurrent Put/Delete.
+	cp := make([]byte, end-offset)
+	copy(cp, b[offset:end])
+	return io.NopCloser(bytes.NewReader(cp)), nil
 }
 
 func (s *MemoryBlobStore) Reset() {
@@ -382,6 +431,88 @@ func (s *LocalFSBlobStore) List(_ context.Context, bucket, prefix string) ([]str
 		return nil, nil
 	}
 	return keys, err
+}
+
+// PutStream streams r to the store using a three-phase protocol to avoid a
+// deadlock when the caller's reader itself calls GetStream on the same store
+// (e.g. CompleteMultipartUpload assembling parts via seqPartReader):
+//
+//  1. Lock briefly to set up paths and create the temp file.
+//  2. Release the lock and stream data into the temp file — the reader can
+//     now acquire RLock freely.
+//  3. Reacquire the lock for the atomic rename.
+func (s *LocalFSBlobStore) PutStream(_ context.Context, bucket, key string, r io.Reader) (n int64, retErr error) {
+	// Phase 1: resolve paths and create temp file under write lock.
+	s.mu.Lock()
+	p := s.path(bucket, key)
+	if err := s.ensureDir(filepath.Dir(p)); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	target, err := s.resolveWrite(p)
+	if err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	f, err := os.CreateTemp(filepath.Dir(target), putTmpPrefix)
+	s.mu.Unlock() // release before io.Copy so readers can acquire RLock
+	if err != nil {
+		return 0, fmt.Errorf("blobfs: create temp: %w", err)
+	}
+	tmpName := f.Name()
+	defer func() {
+		if retErr != nil {
+			os.Remove(tmpName)
+		}
+	}()
+
+	// Phase 2: stream to the temp file — no lock held.
+	n, err = io.Copy(f, r)
+	if err != nil {
+		f.Close()
+		return 0, fmt.Errorf("blobfs: stream write: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return 0, fmt.Errorf("blobfs: sync: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return 0, fmt.Errorf("blobfs: close temp: %w", err)
+	}
+
+	// Phase 3: atomic rename under write lock.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Rename(tmpName, target); err != nil {
+		return 0, fmt.Errorf("blobfs: rename: %w", err)
+	}
+	return n, nil
+}
+
+// GetStream opens the object for streaming. The mutex is released after the
+// file is opened; POSIX keeps the inode alive until the last fd is closed, so
+// a concurrent Delete cannot corrupt an in-progress read.
+func (s *LocalFSBlobStore) GetStream(_ context.Context, bucket, key string, offset, length int64) (io.ReadCloser, error) {
+	s.mu.RLock()
+	p := s.resolveRead(s.path(bucket, key))
+	f, err := os.Open(p)
+	s.mu.RUnlock()
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("blob not found: %s/%s", bucket, key)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+	if length >= 0 {
+		return &limitReadCloser{Reader: io.LimitReader(f, length), closer: f}, nil
+	}
+	return f, nil
 }
 
 func (s *LocalFSBlobStore) Reset() {

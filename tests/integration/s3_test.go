@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"io"
 	"strings"
 	"testing"
@@ -503,6 +504,190 @@ func TestS3_ObjectUserMetadata(t *testing.T) {
 	io.ReadAll(out.Body)
 	assert.Equal(t, "alice", out.Metadata["author"])
 	assert.Equal(t, "2", out.Metadata["version"])
+}
+
+// ─── Streaming upload / download ──────────────────────────────────────────────
+
+// TestS3_Streaming_PutGet uploads a 1 MB object and reads it back, verifying
+// that the server does not buffer the body (content correctness check).
+func TestS3_Streaming_PutGet(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("stream-bucket")})
+	require.NoError(t, err)
+
+	const size = 1 << 20 // 1 MB
+	payload := make([]byte, size)
+	_, err = io.ReadFull(rand.Reader, payload)
+	require.NoError(t, err)
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:        aws.String("stream-bucket"),
+		Key:           aws.String("large.bin"),
+		Body:          bytes.NewReader(payload),
+		ContentLength: aws.Int64(int64(len(payload))),
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("stream-bucket"),
+		Key:    aws.String("large.bin"),
+	})
+	require.NoError(t, err)
+	defer out.Body.Close()
+
+	got, err := io.ReadAll(out.Body)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+	assert.Equal(t, int64(size), aws.ToInt64(out.ContentLength))
+}
+
+// TestS3_Streaming_RangeRead uploads a 512 KB object and performs byte-range
+// reads, exercising the GetStream offset+length path.
+func TestS3_Streaming_RangeRead(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("range-stream-bucket")})
+	require.NoError(t, err)
+
+	const size = 512 * 1024
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte(i % 251) // deterministic, non-zero
+	}
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: aws.String("range-stream-bucket"),
+		Key:    aws.String("data.bin"),
+		Body:   bytes.NewReader(payload),
+	})
+	require.NoError(t, err)
+
+	cases := []struct {
+		name       string
+		rangeHdr   string
+		wantSlice  []byte
+	}{
+		{"first 1KB", "bytes=0-1023", payload[:1024]},
+		{"middle 4KB", "bytes=4096-8191", payload[4096:8192]},
+		{"last 512B", "bytes=523776-524287", payload[523776:524288]},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+				Bucket: aws.String("range-stream-bucket"),
+				Key:    aws.String("data.bin"),
+				Range:  aws.String(tc.rangeHdr),
+			})
+			require.NoError(t, err)
+			defer out.Body.Close()
+			got, err := io.ReadAll(out.Body)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSlice, got)
+		})
+	}
+}
+
+// TestS3_Streaming_Multipart uploads a multi-part object using the SDK's
+// manual multipart API and verifies the reassembled content.
+func TestS3_Streaming_Multipart(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("mp-stream-bucket")})
+	require.NoError(t, err)
+
+	createOut, err := c.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{
+		Bucket: aws.String("mp-stream-bucket"),
+		Key:    aws.String("assembled.bin"),
+	})
+	require.NoError(t, err)
+	uploadID := aws.ToString(createOut.UploadId)
+
+	// Three parts of 256 KB each.
+	const partSize = 256 * 1024
+	var partData [3][]byte
+	var completedParts []types.CompletedPart
+	for i := 0; i < 3; i++ {
+		partData[i] = make([]byte, partSize)
+		for j := range partData[i] {
+			partData[i][j] = byte(i + 1)
+		}
+		pn := int32(i + 1)
+		p, err := c.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket:     aws.String("mp-stream-bucket"),
+			Key:        aws.String("assembled.bin"),
+			UploadId:   aws.String(uploadID),
+			PartNumber: aws.Int32(pn),
+			Body:       bytes.NewReader(partData[i]),
+		})
+		require.NoError(t, err)
+		completedParts = append(completedParts, types.CompletedPart{
+			PartNumber: aws.Int32(pn),
+			ETag:       p.ETag,
+		})
+	}
+
+	_, err = c.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+		Bucket:   aws.String("mp-stream-bucket"),
+		Key:      aws.String("assembled.bin"),
+		UploadId: aws.String(uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: completedParts,
+		},
+	})
+	require.NoError(t, err)
+
+	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String("mp-stream-bucket"),
+		Key:    aws.String("assembled.bin"),
+	})
+	require.NoError(t, err)
+	defer out.Body.Close()
+
+	got, err := io.ReadAll(out.Body)
+	require.NoError(t, err)
+
+	var want []byte
+	for _, d := range partData {
+		want = append(want, d...)
+	}
+	assert.Equal(t, want, got)
+	assert.Equal(t, int64(3*partSize), aws.ToInt64(out.ContentLength))
+}
+
+// TestS3_Streaming_HeadAfterStreamPut verifies metadata (size, ETag) is
+// correct after a streaming PutObject.
+func TestS3_Streaming_HeadAfterStreamPut(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("head-stream-bucket")})
+	require.NoError(t, err)
+
+	const size = 128 * 1024
+	payload := bytes.Repeat([]byte("x"), size)
+
+	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: aws.String("head-stream-bucket"),
+		Key:    aws.String("obj.bin"),
+		Body:   bytes.NewReader(payload),
+	})
+	require.NoError(t, err)
+
+	head, err := c.HeadObject(ctx, &awss3.HeadObjectInput{
+		Bucket: aws.String("head-stream-bucket"),
+		Key:    aws.String("obj.bin"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(size), aws.ToInt64(head.ContentLength))
+	assert.NotEmpty(t, aws.ToString(head.ETag))
 }
 
 func TestS3_BatchDeleteObjects(t *testing.T) {

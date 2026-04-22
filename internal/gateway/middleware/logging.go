@@ -18,6 +18,17 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Flush forwards http.Flusher so that calling w.(http.Flusher).Flush() inside
+// a handler reaches the underlying net/http bufio writer and actually sends
+// buffered response bytes to the TCP socket. Without this delegation the type
+// assertion succeeds but Flush() silently does nothing because the embedded
+// http.ResponseWriter interface value doesn't promote the concrete Flusher.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Logging logs each request. Successful requests (< 400) are logged at the
 // configured level. Error responses (>= 400) are always logged at Error so
 // failures are visible regardless of the configured log level.

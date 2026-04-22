@@ -73,6 +73,12 @@ func (w *metricsResponseWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+func (w *metricsResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Metrics returns a middleware that records Prometheus metrics per request.
 // Labels are read from the labelsHolder injected by the Logging middleware so
 // that values set inside handleCloudRequest are visible here after the handler returns.

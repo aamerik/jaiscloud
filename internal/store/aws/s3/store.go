@@ -10,6 +10,9 @@ import (
 type ObjectMeta struct {
 	Key          string
 	ETag         string
+	// CRC32 is the base64-encoded IEEE CRC32 checksum of the object body,
+	// computed at upload time and echoed in GetObject responses.
+	CRC32        string
 	Size         int64
 	ContentType  string
 	LastModified time.Time

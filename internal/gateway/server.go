@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -80,17 +81,77 @@ func (s *Server) buildRouter() {
 	s.router = r
 }
 
+// isS3StreamingUpload returns true for S3 PutObject and UploadPart requests —
+// the two actions whose body is raw object data that should not be buffered.
+// Detection is done purely from headers/path/query so no body is read first.
+// Excluded: CopyObject/UploadPartCopy (X-Amz-Copy-Source), bucket-level PUTs
+// (no key segment in path), and management PUTs (tagging, acl, versioning, etc).
+func isS3StreamingUpload(r *http.Request) bool {
+	if r.Method != http.MethodPut {
+		return false
+	}
+	// Detect S3 via SigV4 Authorization header or pre-signed URL query param.
+	auth := r.Header.Get("Authorization")
+	cred := r.URL.Query().Get("X-Amz-Credential")
+	if !strings.Contains(auth, "/s3/aws4_request") && !strings.Contains(cred, "/s3/") {
+		return false
+	}
+	// Server-side copy: no body to stream.
+	if r.Header.Get("X-Amz-Copy-Source") != "" {
+		return false
+	}
+	// Management sub-resources carry small XML bodies that must be read normally.
+	q := r.URL.Query()
+	for _, sub := range []string{"tagging", "acl", "versioning", "cors", "policy", "lifecycle", "notification", "website", "requestPayment", "logging"} {
+		if q.Has(sub) {
+			return false
+		}
+	}
+	// Must be an object-level PUT (path has both bucket and key).
+	// Virtual-hosted style: bucket is in Host, key is the full path.
+	if strings.Contains(r.Host, ".s3.") {
+		return strings.TrimPrefix(r.URL.Path, "/") != ""
+	}
+	// Path-style: /bucket/key — need a non-empty key after the bucket segment.
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	idx := strings.IndexByte(path, '/')
+	return idx >= 0 && len(path) > idx+1
+}
+
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		slog.Error("failed to read request body",
-			"err", err,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"request_id", middleware.GetRequestID(r.Context()),
-		)
-		http.Error(w, "failed to read request body", http.StatusInternalServerError)
-		return
+	streaming := isS3StreamingUpload(r)
+
+	// For streaming S3 uploads we intentionally leave r.Body unread here so
+	// the provider can stream directly from it. Always drain+close on exit so
+	// the HTTP connection stays reusable regardless of what the provider does.
+	// Flush the response to TCP first so the client receives it before we spend
+	// time draining any remaining request bytes (otherwise Go's bufio layer holds
+	// the response in memory until the handler goroutine fully returns, and if
+	// the drain blocks even briefly the client never receives the 200 OK).
+	if streaming {
+		defer func() {
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			io.Copy(io.Discard, r.Body)
+			r.Body.Close()
+		}()
+	}
+
+	var body []byte
+	if !streaming {
+		var err error
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			slog.Error("failed to read request body",
+				"err", err,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"request_id", middleware.GetRequestID(r.Context()),
+			)
+			http.Error(w, "failed to read request body", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	nr, codec, detectErr := s.cloudAdapter.DetectAndDecode(r, body)
@@ -160,6 +221,11 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status, headers, respBody := codec.Encode(nr, resp)
+	if stream, ok := resp.Data["_stream"].(io.ReadCloser); ok {
+		defer stream.Close()
+		writeStreamResponse(w, status, headers, stream)
+		return
+	}
 	writeResponse(w, status, headers, respBody)
 }
 
@@ -171,6 +237,16 @@ func encodeErrorFallback(codec adapter.Codec, nr *model.NormalizedRequest, pe *m
 	h.Set("Content-Type", "application/json")
 	body := fmt.Sprintf(`{"__type":%q,"message":%q}`, pe.Code, pe.Message)
 	return pe.HTTPStatus, h, []byte(body)
+}
+
+func writeStreamResponse(w http.ResponseWriter, status int, headers http.Header, stream io.ReadCloser) {
+	for k, vs := range headers {
+		for _, v := range vs {
+			w.Header().Set(k, v)
+		}
+	}
+	w.WriteHeader(status)
+	io.Copy(w, stream)
 }
 
 func writeResponse(w http.ResponseWriter, status int, headers http.Header, body []byte) {

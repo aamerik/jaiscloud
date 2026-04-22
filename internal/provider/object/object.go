@@ -2,11 +2,17 @@
 package object
 
 import (
+	"bufio"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"hash/crc32"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -30,41 +36,41 @@ func New(meta s3store.S3ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvider
 func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Bucket operations
-		"Object.CreateBucket":          p.CreateBucket,
-		"Object.DeleteBucket":          p.DeleteBucket,
-		"Object.ListBuckets":           p.ListBuckets,
-		"Object.GetBucketLocation":     p.GetBucketLocation,
-		"Object.HeadBucket":            p.HeadBucket,
+		"Object.CreateBucket":      p.CreateBucket,
+		"Object.DeleteBucket":      p.DeleteBucket,
+		"Object.ListBuckets":       p.ListBuckets,
+		"Object.GetBucketLocation": p.GetBucketLocation,
+		"Object.HeadBucket":        p.HeadBucket,
 		// Object operations
-		"Object.PutObject":             p.PutObject,
-		"Object.GetObject":             p.GetObject,
-		"Object.HeadObject":            p.HeadObject,
-		"Object.DeleteObject":          p.DeleteObject,
-		"Object.CopyObject":            p.CopyObject,
+		"Object.PutObject":    p.PutObject,
+		"Object.GetObject":    p.GetObject,
+		"Object.HeadObject":   p.HeadObject,
+		"Object.DeleteObject": p.DeleteObject,
+		"Object.CopyObject":   p.CopyObject,
 		// Listing
-		"Object.ListObjectsV1":         p.ListObjectsV1,
-		"Object.ListObjectsV2":         p.ListObjectsV2,
-		"Object.DeleteObjects":         p.DeleteObjects,
+		"Object.ListObjectsV1":  p.ListObjectsV1,
+		"Object.ListObjectsV2":  p.ListObjectsV2,
+		"Object.DeleteObjects":  p.DeleteObjects,
 		// Multipart
-		"Object.CreateMultipartUpload": p.CreateMultipartUpload,
-		"Object.UploadPart":            p.UploadPart,
+		"Object.CreateMultipartUpload":   p.CreateMultipartUpload,
+		"Object.UploadPart":              p.UploadPart,
 		"Object.CompleteMultipartUpload": p.CompleteMultipartUpload,
-		"Object.AbortMultipartUpload":  p.AbortMultipartUpload,
-		"Object.ListMultipartUploads":  p.ListMultipartUploads,
-		"Object.ListParts":             p.ListParts,
+		"Object.AbortMultipartUpload":    p.AbortMultipartUpload,
+		"Object.ListMultipartUploads":    p.ListMultipartUploads,
+		"Object.ListParts":               p.ListParts,
 		// Tagging/versioning (stub)
-		"Object.PutObjectTagging":      p.stub,
-		"Object.GetObjectTagging":      p.stub,
-		"Object.DeleteObjectTagging":   p.stub,
-		"Object.PutBucketTagging":      p.stub,
-		"Object.GetBucketTagging":      p.stub,
-		"Object.DeleteBucketTagging":   p.stub,
-		"Object.PutBucketVersioning":   p.stub,
-		"Object.GetBucketVersioning":   p.stub,
-		"Object.GetBucketAcl":          p.stub,
-		"Object.PutBucketAcl":          p.stub,
-		"Object.GetObjectAcl":          p.stub,
-		"Object.PutObjectAcl":          p.stub,
+		"Object.PutObjectTagging":    p.stub,
+		"Object.GetObjectTagging":    p.stub,
+		"Object.DeleteObjectTagging": p.stub,
+		"Object.PutBucketTagging":    p.stub,
+		"Object.GetBucketTagging":    p.stub,
+		"Object.DeleteBucketTagging": p.stub,
+		"Object.PutBucketVersioning": p.stub,
+		"Object.GetBucketVersioning": p.stub,
+		"Object.GetBucketAcl":        p.stub,
+		"Object.PutBucketAcl":        p.stub,
+		"Object.GetObjectAcl":        p.stub,
+		"Object.PutObjectAcl":        p.stub,
 	}
 }
 
@@ -111,6 +117,161 @@ func etag(data []byte) string {
 	return fmt.Sprintf(`"%x"`, md5.Sum(data))
 }
 
+// crc32Base64 returns the base64-encoded IEEE CRC32 of data, matching the
+// x-amz-checksum-crc32 format expected by AWS SDK v2.
+func crc32Base64(data []byte) string {
+	sum := crc32.ChecksumIEEE(data)
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, sum)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// crc32Base64FromHash encodes the running CRC32 hash state as base64.
+func crc32Base64FromHash(h *crc32State) string {
+	sum := h.Sum32()
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, sum)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// crc32State wraps hash/crc32 as an io.Writer so it can feed a TeeReader.
+type crc32State struct{ h hash.Hash32 }
+
+func newCRC32() *crc32State        { return &crc32State{h: crc32.NewIEEE()} }
+func (c *crc32State) Write(p []byte) (int, error) { return c.h.Write(p) }
+func (c *crc32State) Sum32() uint32               { return c.h.Sum32() }
+
+// writeChecksums writes from r to the BlobStore and returns the MD5 ETag,
+// CRC32 checksum (base64), and byte count — all computed in a single pass.
+func (p *ObjectProvider) writeChecksums(ctx context.Context, bucket, key string, r io.Reader) (etagVal, crc32Val string, n int64, err error) {
+	md5h := md5.New()
+	crc32h := newCRC32()
+	tee := io.TeeReader(r, io.MultiWriter(md5h, crc32h))
+	n, err = p.blobs.PutStream(ctx, bucket, key, tee)
+	if err != nil {
+		return "", "", 0, err
+	}
+	etagVal = fmt.Sprintf(`"%x"`, md5h.Sum(nil))
+	crc32Val = crc32Base64FromHash(crc32h)
+	return etagVal, crc32Val, n, nil
+}
+
+// bodyReader returns an io.Reader for the request body, decoding aws-chunked
+// framing when present. Used by the streaming upload path.
+func bodyReader(nr *model.NormalizedRequest) io.Reader {
+	r := nr.Raw.Body
+	if strings.Contains(strings.ToLower(nr.Raw.Header.Get("Content-Encoding")), "aws-chunked") ||
+		strings.HasPrefix(nr.Raw.Header.Get("x-amz-content-sha256"), "STREAMING-") ||
+		nr.Raw.Header.Get("x-amz-decoded-content-length") != "" {
+		return newAWSChunkedReader(r)
+	}
+	return r
+}
+
+// ─── aws-chunked streaming decoder ───────────────────────────────────────────
+//
+// AWS SDK v2 sends large uploads with Content-Encoding: aws-chunked.
+// Format: "<hex-size>[;chunk-signature=...]\r\n<data>\r\n" … "0[;...]\r\n\r\n"
+
+type awsChunkedReader struct {
+	r         *bufio.Reader
+	chunkLeft int64
+	done      bool
+}
+
+func newAWSChunkedReader(r io.Reader) *awsChunkedReader {
+	return &awsChunkedReader{r: bufio.NewReaderSize(r, 32*1024)}
+}
+
+func (a *awsChunkedReader) Read(p []byte) (int, error) {
+	if a.done {
+		return 0, io.EOF
+	}
+	for a.chunkLeft == 0 {
+		line, err := a.r.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if semi := strings.IndexByte(line, ';'); semi >= 0 {
+			line = line[:semi]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		size, err := strconv.ParseInt(line, 16, 64)
+		if err != nil {
+			return 0, fmt.Errorf("aws-chunked: invalid chunk size %q: %w", line, err)
+		}
+		if size == 0 {
+			a.done = true
+			return 0, io.EOF
+		}
+		a.chunkLeft = size
+	}
+	if int64(len(p)) > a.chunkLeft {
+		p = p[:a.chunkLeft]
+	}
+	n, err := a.r.Read(p)
+	a.chunkLeft -= int64(n)
+	if a.chunkLeft == 0 && err == nil {
+		// Consume the trailing \r\n after the chunk data.
+		a.r.ReadString('\n')
+	}
+	return n, err
+}
+
+// ─── seqPartReader ────────────────────────────────────────────────────────────
+//
+// Reads multipart upload parts sequentially, opening one at a time to keep
+// the number of concurrent open file descriptors to O(1).
+
+type seqPartReader struct {
+	ctx     context.Context
+	blobs   blobfs.BlobStore
+	bucket  string
+	uploadID string
+	parts   []s3store.PartMeta
+	idx     int
+	current io.ReadCloser
+}
+
+func (s *seqPartReader) Read(p []byte) (int, error) {
+	for {
+		if s.current == nil {
+			if s.idx >= len(s.parts) {
+				return 0, io.EOF
+			}
+			part := s.parts[s.idx]
+			s.idx++
+			partKey := fmt.Sprintf("%s/part%d", s.uploadID, part.PartNumber)
+			rc, err := s.blobs.GetStream(s.ctx, s.bucket+"/__parts__", partKey, 0, -1)
+			if err != nil {
+				return 0, err
+			}
+			s.current = rc
+		}
+		n, err := s.current.Read(p)
+		if err == io.EOF {
+			s.current.Close()
+			s.current = nil
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+}
+
+func (s *seqPartReader) Close() error {
+	if s.current != nil {
+		return s.current.Close()
+	}
+	return nil
+}
+
 // ─── Buckets ──────────────────────────────────────────────────────────────────
 
 func (p *ObjectProvider) CreateBucket(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -120,7 +281,6 @@ func (p *ObjectProvider) CreateBucket(ctx context.Context, nr *model.NormalizedR
 	}
 	if err := p.meta.CreateBucket(ctx, bucket, nil); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
-			// S3: CreateBucket is idempotent for same owner
 			return provider.OK(map[string]any{"Location": "/" + bucket}), nil
 		}
 		return nil, model.NewProviderError("InternalError", err.Error(), 500)
@@ -177,21 +337,36 @@ func (p *ObjectProvider) HeadBucket(ctx context.Context, nr *model.NormalizedReq
 func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
-	body, _ := nr.Params["_body"].([]byte)
 	contentType := strParam(nr.Params, "_content_type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	if err := p.blobs.Put(ctx, bucket, key, body); err != nil {
-		return nil, err
+	var etagVal, crc32Val string
+	var size int64
+
+	if _, streaming := nr.Params["_streaming"]; streaming {
+		// Streaming path: body arrives via nr.Raw.Body (gateway skipped io.ReadAll).
+		var err error
+		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket, key, bodyReader(nr))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		body, _ := nr.Params["_body"].([]byte)
+		if err := p.blobs.Put(ctx, bucket, key, body); err != nil {
+			return nil, err
+		}
+		etagVal = etag(body)
+		crc32Val = crc32Base64(body)
+		size = int64(len(body))
 	}
 
-	etagVal := etag(body)
 	meta := s3store.ObjectMeta{
 		Key:          key,
 		ETag:         etagVal,
-		Size:         int64(len(body)),
+		CRC32:        crc32Val,
+		Size:         size,
 		ContentType:  contentType,
 		LastModified: time.Now().UTC(),
 		StorageClass: "STANDARD",
@@ -200,7 +375,10 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 	if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
 		return nil, err
 	}
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"ETag": etagVal}}, nil
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"ETag":          etagVal,
+		"_server_crc32": crc32Val,
+	}}, nil
 }
 
 // extractUserMetadata collects x-amz-meta-* headers stored under "_meta_*" params.
@@ -228,42 +406,43 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
 
-	body, err := p.blobs.Get(ctx, bucket, key)
+	status := 200
+	var offset, length int64 = 0, -1
+	contentLength := m.Size
+
+	rangeHdr := strParam(nr.Params, "_range")
+	if rangeHdr != "" {
+		start, end, ok := parseByteRange(rangeHdr, m.Size)
+		if !ok {
+			return nil, model.NewProviderError("InvalidRange", "The requested range is not satisfiable", 416)
+		}
+		offset = start
+		length = end - start + 1
+		contentLength = length
+		status = 206
+	}
+
+	rc, err := p.blobs.GetStream(ctx, bucket, key, offset, length)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
 
-	status := 200
-	rangeHdr := strParam(nr.Params, "_range")
-	if rangeHdr != "" {
-		start, end, ok := parseByteRange(rangeHdr, int64(len(body)))
-		if !ok {
-			return nil, model.NewProviderError("InvalidRange", "The requested range is not satisfiable", 416)
-		}
-		body = body[start : end+1]
-		status = 206
-	}
-
 	data := map[string]any{
-		"_raw_body":     body,
+		"_stream":       rc,
 		"_passthrough":  true,
 		"_content_type": m.ContentType,
 		"ETag":          m.ETag,
-		"ContentLength": int64(len(body)),
+		"_crc32":        m.CRC32,
+		"ContentLength": contentLength,
 		"LastModified":  m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
 	}
 	if status == 206 {
 		data["_status"] = status
 	}
-	// Return user metadata so the codec can emit x-amz-meta-* headers.
 	if len(m.Metadata) > 0 {
 		data["_metadata"] = m.Metadata
 	}
-
-	return &model.ProviderResponse{
-		HTTPStatus: status,
-		Data:       data,
-	}, nil
+	return &model.ProviderResponse{HTTPStatus: status, Data: data}, nil
 }
 
 // parseByteRange parses a "bytes=<start>-<end>" Range header.
@@ -274,7 +453,6 @@ func parseByteRange(hdr string, size int64) (int64, int64, bool) {
 		return 0, 0, false
 	}
 	spec := strings.TrimPrefix(hdr, "bytes=")
-	// Only handle single range (no multi-range)
 	if strings.Contains(spec, ",") {
 		return 0, 0, false
 	}
@@ -285,7 +463,6 @@ func parseByteRange(hdr string, size int64) (int64, int64, bool) {
 	startStr, endStr := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	var start, end int64
 	if startStr == "" {
-		// Suffix range: bytes=-N (last N bytes)
 		n, err := strconv.ParseInt(endStr, 10, 64)
 		if err != nil || n <= 0 {
 			return 0, 0, false
@@ -363,7 +540,7 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 	etagVal := etag(data)
 	now := time.Now().UTC()
 	_ = p.meta.PutObjectMeta(ctx, dstBucket, dstKey, s3store.ObjectMeta{
-		Key: dstKey, ETag: etagVal, Size: srcMeta.Size,
+		Key: dstKey, ETag: etagVal, CRC32: crc32Base64(data), Size: srcMeta.Size,
 		ContentType: srcMeta.ContentType, LastModified: now, StorageClass: "STANDARD",
 	})
 	return provider.OK(map[string]any{
@@ -473,20 +650,33 @@ func (p *ObjectProvider) CreateMultipartUpload(ctx context.Context, nr *model.No
 
 func (p *ObjectProvider) UploadPart(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
-	key := strParam(nr.Params, "_key")
 	uploadID := strParam(nr.Params, "uploadId")
 	partNumber := intParam(nr.Params, "partNumber", 0)
-	body, _ := nr.Params["_body"].([]byte)
-
 	partKey := fmt.Sprintf("%s/part%d", uploadID, partNumber)
-	if err := p.blobs.Put(ctx, bucket+"/__parts__", partKey, body); err != nil {
-		return nil, err
+
+	var etagVal string
+	var size int64
+
+	if _, streaming := nr.Params["_streaming"]; streaming {
+		var err error
+		var crc32Val string
+		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket+"/__parts__", partKey, bodyReader(nr))
+		_ = crc32Val
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		body, _ := nr.Params["_body"].([]byte)
+		if err := p.blobs.Put(ctx, bucket+"/__parts__", partKey, body); err != nil {
+			return nil, err
+		}
+		etagVal = etag(body)
+		size = int64(len(body))
 	}
-	etagVal := etag(body)
+
 	if err := p.meta.PutPart(ctx, uploadID, partNumber, s3store.PartMeta{
-		PartNumber: partNumber, ETag: etagVal, Size: int64(len(body)),
+		PartNumber: partNumber, ETag: etagVal, Size: size,
 	}); err != nil {
-		_ = key // suppress unused
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"ETag": etagVal}}, nil
@@ -502,21 +692,30 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		return nil, model.NewProviderError("NoSuchUpload", "The specified upload does not exist", 404)
 	}
 
-	// Concatenate all part blobs.
-	var combined []byte
+	// Stream parts sequentially into the final object, computing ETag+CRC32
+	// in a single pass with no in-memory accumulation.
+	seq := &seqPartReader{
+		ctx:      ctx,
+		blobs:    p.blobs,
+		bucket:   bucket,
+		uploadID: uploadID,
+		parts:    parts,
+	}
+	defer seq.Close()
+
+	etagVal, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Remove part blobs after successful assembly.
 	for _, part := range parts {
 		partKey := fmt.Sprintf("%s/part%d", uploadID, part.PartNumber)
-		data, _ := p.blobs.Get(ctx, bucket+"/__parts__", partKey)
-		combined = append(combined, data...)
 		_ = p.blobs.Delete(ctx, bucket+"/__parts__", partKey)
 	}
 
-	if err := p.blobs.Put(ctx, bucket, key, combined); err != nil {
-		return nil, err
-	}
-	etagVal := etag(combined)
 	_ = p.meta.PutObjectMeta(ctx, bucket, key, s3store.ObjectMeta{
-		Key: key, ETag: etagVal, Size: int64(len(combined)),
+		Key: key, ETag: etagVal, CRC32: crc32Val, Size: totalSize,
 		ContentType: "application/octet-stream", LastModified: time.Now().UTC(),
 		StorageClass: "STANDARD",
 	})

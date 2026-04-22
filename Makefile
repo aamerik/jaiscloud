@@ -223,6 +223,12 @@ test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/full_mode/aws/kms/ (
 	  go test -v -tags kms_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kms/
 	$(MAKE) down-docker
 
+test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/full_mode/aws/s3/ (tag: s3_fullmode)
+	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -v -tags s3_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/s3/
+	$(MAKE) down-docker
+
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/full_mode/aws/iceberg/ (tag: iceberg_e2e)
