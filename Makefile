@@ -40,7 +40,7 @@ IMAGE := jaiscloud
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
-        test-e2e-cloudformation test-e2e-kms test-e2e-persistence \
+        test-e2e-cloudformation test-e2e-kms test-e2e-dynamodb test-e2e-persistence \
         test-e2e-iceberg \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
         _build-for-e2e _restart-server-lite _wait-docker _start-k8s _stop-k8s \
@@ -131,7 +131,7 @@ up-docker: _check-docker-prereq docker ## Start JaisCloud + Postgres via docker-
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
 	  JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE) \
 	  JAISCLOUD_LAMBDA_IMAGE=$(LAMBDA_IMAGE) \
-	  docker-compose up -d
+	  docker-compose up -d --build
 	$(MAKE) _wait-docker
 
 down-docker: ## Stop and remove docker-compose services
@@ -215,6 +215,12 @@ test-e2e-cloudformation: ## CloudFormation e2e tests — tests/full_mode/aws/clo
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags cfn_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/cloudformation/
+	$(MAKE) down-docker
+
+test-e2e-dynamodb: ## DynamoDB GSI/LSI e2e tests — tests/full_mode/aws/dynamodb/ (tag: dynamo_fullmode)
+	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -v -tags dynamo_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/dynamodb/
 	$(MAKE) down-docker
 
 test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/full_mode/aws/kms/ (tag: kms_fullmode)

@@ -63,20 +63,21 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 // ─── Table metadata ───────────────────────────────────────────────────────────
 
 type tableSchema struct {
-	TableName              string                   `json:"TableName"`
-	TableArn               string                   `json:"TableArn"`
-	TableStatus            string                   `json:"TableStatus"`
-	KeySchema              []map[string]string      `json:"KeySchema"`
-	AttributeDefinitions   []map[string]string      `json:"AttributeDefinitions"`
-	GlobalSecondaryIndexes []map[string]any         `json:"GlobalSecondaryIndexes,omitempty"`
-	BillingMode            string                   `json:"BillingMode"`
-	ItemCount              int                      `json:"ItemCount"`
-	TableSizeBytes         int                      `json:"TableSizeBytes"`
-	CreationDateTime       time.Time                `json:"CreationDateTime"`
-	Tags                   map[string]string        `json:"Tags"`
-	StreamEnabled          bool                     `json:"StreamEnabled"`
-	StreamViewType         string                   `json:"StreamViewType"`
-	LatestStreamArn        string                   `json:"LatestStreamArn"`
+	TableName              string              `json:"TableName"`
+	TableArn               string              `json:"TableArn"`
+	TableStatus            string              `json:"TableStatus"`
+	KeySchema              []map[string]string `json:"KeySchema"`
+	AttributeDefinitions   []map[string]string `json:"AttributeDefinitions"`
+	GlobalSecondaryIndexes []map[string]any    `json:"GlobalSecondaryIndexes,omitempty"`
+	LocalSecondaryIndexes  []map[string]any    `json:"LocalSecondaryIndexes,omitempty"`
+	BillingMode            string              `json:"BillingMode"`
+	ItemCount              int                 `json:"ItemCount"`
+	TableSizeBytes         int                 `json:"TableSizeBytes"`
+	CreationDateTime       time.Time           `json:"CreationDateTime"`
+	Tags                   map[string]string   `json:"Tags"`
+	StreamEnabled          bool                `json:"StreamEnabled"`
+	StreamViewType         string              `json:"StreamViewType"`
+	LatestStreamArn        string              `json:"LatestStreamArn"`
 }
 
 func tableArn(nr *model.NormalizedRequest, name string) string {
@@ -128,9 +129,17 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 	keySchema := parseKeySchema(nr.Params["KeySchema"])
 	attrDefs := parseAttrDefs(nr.Params["AttributeDefinitions"])
 	gsis := parseGSIs(nr.Params["GlobalSecondaryIndexes"])
+	lsis := parseLSIs(nr.Params["LocalSecondaryIndexes"])
 	billing := strParam(nr.Params, "BillingMode")
 	if billing == "" {
 		billing = "PROVISIONED"
+	}
+
+	if len(gsis) > 20 {
+		return nil, model.NewProviderError("ValidationException", "Number of GlobalSecondaryIndexes exceeds the limit of 20", 400)
+	}
+	if len(lsis) > 5 {
+		return nil, model.NewProviderError("ValidationException", "Number of LocalSecondaryIndexes exceeds the limit of 5", 400)
 	}
 
 	ts := tableSchema{
@@ -140,6 +149,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 		KeySchema:              keySchema,
 		AttributeDefinitions:   attrDefs,
 		GlobalSecondaryIndexes: gsis,
+		LocalSecondaryIndexes:  lsis,
 		BillingMode:            billing,
 		CreationDateTime:       time.Now().UTC(),
 		Tags:                   map[string]string{},
@@ -169,6 +179,14 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 		}
 		return nil, err
 	}
+
+	// Initialise per-table item storage (no-op for memory store, DDL for postgres store).
+	storeSchema := toStoreSchema(ts, attrDefs)
+	if err := p.items.CreateTableSchema(ctx, storeSchema); err != nil {
+		// Non-fatal: legacy store doesn't need this. Log and continue.
+		_ = err
+	}
+
 	return provider.OK(map[string]any{"TableDescription": tableDesc(ts)}), nil
 }
 
@@ -188,7 +206,7 @@ func (p *TableProvider) DeleteTable(ctx context.Context, nr *model.NormalizedReq
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	_ = p.resources.Delete(ctx, "dynamodb_tables", name)
-	p.items.Reset() // simplification: reset all items (acceptable for emulator)
+	_ = p.items.DropTableSchema(ctx, name)
 	return provider.OK(map[string]any{"TableDescription": tableDesc(ts)}), nil
 }
 
@@ -216,7 +234,7 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 	if billing := strParam(nr.Params, "BillingMode"); billing != "" {
 		ts.BillingMode = billing
 	}
-	// Handle StreamSpecification
+	// Handle StreamSpecification.
 	if ss, ok := nr.Params["StreamSpecification"].(map[string]any); ok {
 		enabled, _ := ss["StreamEnabled"].(bool)
 		viewType, _ := ss["StreamViewType"].(string)
@@ -231,6 +249,52 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 			p.streams.Enable(name, streamArn)
 		} else if !enabled && p.streams != nil {
 			p.streams.Disable(name)
+		}
+	}
+	// Handle GlobalSecondaryIndexUpdates.
+	if updates, ok := nr.Params["GlobalSecondaryIndexUpdates"].([]any); ok {
+		for _, u := range updates {
+			m, ok := u.(map[string]any)
+			if !ok {
+				continue
+			}
+			if create, ok := m["Create"].(map[string]any); ok {
+				if len(ts.GlobalSecondaryIndexes) >= 20 {
+					return nil, model.NewProviderError("ValidationException", "Number of GlobalSecondaryIndexes exceeds the limit of 20", 400)
+				}
+				newGSIWire := map[string]any{
+					"IndexName":   create["IndexName"],
+					"KeySchema":   create["KeySchema"],
+					"Projection":  create["Projection"],
+					"IndexStatus": "ACTIVE",
+				}
+				ts.GlobalSecondaryIndexes = append(ts.GlobalSecondaryIndexes, newGSIWire)
+				schema := toStoreSchema(ts, ts.AttributeDefinitions)
+				idx := indexDefFromWire(newGSIWire, func() map[string]string {
+					m := make(map[string]string)
+					for _, a := range ts.AttributeDefinitions {
+						m[a["AttributeName"]] = a["AttributeType"]
+					}
+					return m
+				}(), false)
+				if err := p.items.AddGSI(ctx, name, schema, idx); err != nil {
+					return nil, err
+				}
+			}
+			if del, ok := m["Delete"].(map[string]any); ok {
+				indexName := strParam(del, "IndexName")
+				newGSIs := ts.GlobalSecondaryIndexes[:0]
+				for _, g := range ts.GlobalSecondaryIndexes {
+					if fmt.Sprintf("%v", g["IndexName"]) != indexName {
+						newGSIs = append(newGSIs, g)
+					}
+				}
+				ts.GlobalSecondaryIndexes = newGSIs
+				schema := toStoreSchema(ts, ts.AttributeDefinitions)
+				if err := p.items.DeleteGSI(ctx, name, schema, indexName); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	_ = p.saveTable(ctx, ts)
@@ -249,11 +313,13 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	pkHash := computePKHash(item, ts)
 	// Peek at existing item for stream event type — before the conditional write.
 	existingForStream, _ := p.items.GetItem(ctx, name, pkHash)
+	schema := buildItemSchema(ts)
 	cond := dynamostore.ConditionSpec{
 		ConditionExpression:       strParam(nr.Params, "ConditionExpression"),
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
+		Schema:                    schema,
 	}
 	oldItem, err := p.items.PutItem(ctx, name, pkHash, item, cond)
 	if err != nil {
@@ -309,6 +375,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
+		Schema:                    buildItemSchema(ts),
 	}
 	oldItem, err := p.items.DeleteItem(ctx, name, pkHash, cond)
 	if err != nil {
@@ -340,6 +407,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
+		Schema:                    buildItemSchema(ts),
 	}
 
 	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
@@ -360,13 +428,20 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
+	ts, _ := p.loadTable(ctx, name)
+	indexName := strParam(nr.Params, "IndexName")
+	scanFwd := true
+	if v, ok := nr.Params["ScanIndexForward"].(bool); ok {
+		scanFwd = v
+	}
 	q := dynamostore.QuerySpec{
-		IndexName:                 strParam(nr.Params, "IndexName"),
+		IndexName:                 indexName,
+		IndexSchema:               resolveIndexSchema(ts, indexName),
 		KeyConditionExpression:    strParam(nr.Params, "KeyConditionExpression"),
 		FilterExpression:          strParam(nr.Params, "FilterExpression"),
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
-		ScanIndexForward:          true,
+		ScanIndexForward:          scanFwd,
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
@@ -386,7 +461,11 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
+	ts, _ := p.loadTable(ctx, name)
+	indexName := strParam(nr.Params, "IndexName")
 	sc := dynamostore.ScanSpec{
+		IndexName:                 indexName,
+		IndexSchema:               resolveIndexSchema(ts, indexName),
 		FilterExpression:          strParam(nr.Params, "FilterExpression"),
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
@@ -421,6 +500,7 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 				item := itemParam(put, "Item")
 				reqs = append(reqs, dynamostore.BatchWriteRequest{
 					Table:   tableName,
+					Schema:  buildItemSchema(ts),
 					PutItem: item,
 					PutHash: computePKHash(item, ts),
 				})
@@ -429,6 +509,7 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 				key := itemParam(del, "Key")
 				reqs = append(reqs, dynamostore.BatchWriteRequest{
 					Table:      tableName,
+					Schema:     buildItemSchema(ts),
 					DeleteKey:  key,
 					DeleteHash: computePKHash(key, ts),
 				})
@@ -598,6 +679,7 @@ func tableDesc(ts tableSchema) map[string]any {
 		"KeySchema":              ts.KeySchema,
 		"AttributeDefinitions":   ts.AttributeDefinitions,
 		"GlobalSecondaryIndexes": ts.GlobalSecondaryIndexes,
+		"LocalSecondaryIndexes":  ts.LocalSecondaryIndexes,
 		"BillingModeSummary":     map[string]any{"BillingMode": ts.BillingMode},
 		"ItemCount":              ts.ItemCount,
 		"TableSizeBytes":         ts.TableSizeBytes,
@@ -629,6 +711,8 @@ func parseKeySchema(v any) []map[string]string {
 				result = append(result, entry)
 			}
 		}
+	case []map[string]string:
+		return ks
 	}
 	return result
 }
@@ -674,6 +758,186 @@ func parseGSIs(v any) []map[string]any {
 		return result
 	}
 	return nil
+}
+
+// buildItemSchema converts a loaded tableSchema into a *dynamostore.TableSchema for index maintenance.
+func buildItemSchema(ts tableSchema) *dynamostore.TableSchema {
+	s := toStoreSchema(ts, ts.AttributeDefinitions)
+	return &s
+}
+
+// resolveIndexSchema finds the IndexKeyRef for the given indexName in the table schema.
+func resolveIndexSchema(ts tableSchema, indexName string) *dynamostore.IndexKeyRef {
+	if indexName == "" {
+		return nil
+	}
+	attrTypes := make(map[string]string)
+	for _, a := range ts.AttributeDefinitions {
+		attrTypes[a["AttributeName"]] = a["AttributeType"]
+	}
+	for _, g := range ts.GlobalSecondaryIndexes {
+		if fmt.Sprintf("%v", g["IndexName"]) != indexName {
+			continue
+		}
+		ks := parseKeySchema(g["KeySchema"])
+		var pkAttr, skAttr string
+		for _, k := range ks {
+			switch k["KeyType"] {
+			case "HASH":
+				pkAttr = k["AttributeName"]
+			case "RANGE":
+				skAttr = k["AttributeName"]
+			}
+		}
+		return &dynamostore.IndexKeyRef{
+			IndexName: indexName,
+			PKAttr:    pkAttr,
+			SKAttr:    skAttr,
+			PKType:    attrTypes[pkAttr],
+			SKType:    attrTypes[skAttr],
+			IsLSI:     false,
+		}
+	}
+	for _, l := range ts.LocalSecondaryIndexes {
+		if fmt.Sprintf("%v", l["IndexName"]) != indexName {
+			continue
+		}
+		ks := parseKeySchema(l["KeySchema"])
+		var pkAttr, skAttr string
+		for _, k := range ks {
+			switch k["KeyType"] {
+			case "HASH":
+				pkAttr = k["AttributeName"]
+			case "RANGE":
+				skAttr = k["AttributeName"]
+			}
+		}
+		if pkAttr == "" {
+			// KeySchema stored as []map[string]string from parseKeySchema
+			pkAttr = tableMainPK(ts)
+		}
+		return &dynamostore.IndexKeyRef{
+			IndexName: indexName,
+			PKAttr:    pkAttr,
+			SKAttr:    skAttr,
+			PKType:    attrTypes[pkAttr],
+			SKType:    attrTypes[skAttr],
+			IsLSI:     true,
+		}
+	}
+	return nil
+}
+
+func tableMainPK(ts tableSchema) string {
+	for _, k := range ts.KeySchema {
+		if k["KeyType"] == "HASH" {
+			return k["AttributeName"]
+		}
+	}
+	return ""
+}
+
+func parseLSIs(v any) []map[string]any {
+	if v == nil {
+		return nil
+	}
+	ls, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var result []map[string]any
+	for _, li := range ls {
+		if m, ok := li.(map[string]any); ok {
+			lsi := map[string]any{
+				"IndexName":   m["IndexName"],
+				"KeySchema":   parseKeySchema(m["KeySchema"]),
+				"Projection":  m["Projection"],
+				"IndexStatus": "ACTIVE",
+			}
+			result = append(result, lsi)
+		}
+	}
+	return result
+}
+
+// toStoreSchema converts the wire tableSchema into a dynamostore.TableSchema
+// so the item store knows key attribute names and index definitions.
+func toStoreSchema(ts tableSchema, attrDefs []map[string]string) dynamostore.TableSchema {
+	// Build attribute type map from AttributeDefinitions.
+	attrTypes := make(map[string]string, len(attrDefs))
+	for _, a := range attrDefs {
+		attrTypes[a["AttributeName"]] = a["AttributeType"]
+	}
+
+	var pkAttr, skAttr, pkType, skType string
+	for _, ks := range ts.KeySchema {
+		switch ks["KeyType"] {
+		case "HASH":
+			pkAttr = ks["AttributeName"]
+			pkType = attrTypes[pkAttr]
+		case "RANGE":
+			skAttr = ks["AttributeName"]
+			skType = attrTypes[skAttr]
+		}
+	}
+
+	schema := dynamostore.TableSchema{
+		TableName: ts.TableName,
+		PKAttr:    pkAttr,
+		SKAttr:    skAttr,
+		PKType:    pkType,
+		SKType:    skType,
+	}
+
+	for _, g := range ts.GlobalSecondaryIndexes {
+		idx := indexDefFromWire(g, attrTypes, false)
+		schema.GSIs = append(schema.GSIs, idx)
+	}
+	for _, l := range ts.LocalSecondaryIndexes {
+		idx := indexDefFromWire(l, attrTypes, true)
+		schema.LSIs = append(schema.LSIs, idx)
+	}
+
+	return schema
+}
+
+func indexDefFromWire(m map[string]any, attrTypes map[string]string, isLSI bool) dynamostore.IndexDef {
+	name, _ := m["IndexName"].(string)
+	ks := parseKeySchema(m["KeySchema"])
+	var pkAttr, skAttr, pkType, skType string
+	for _, k := range ks {
+		switch k["KeyType"] {
+		case "HASH":
+			pkAttr = k["AttributeName"]
+			pkType = attrTypes[pkAttr]
+		case "RANGE":
+			skAttr = k["AttributeName"]
+			skType = attrTypes[skAttr]
+		}
+	}
+	var proj dynamostore.ProjectionDef
+	if p, ok := m["Projection"].(map[string]any); ok {
+		proj.Type, _ = p["ProjectionType"].(string)
+		if na, ok := p["NonKeyAttributes"].([]any); ok {
+			for _, a := range na {
+				if s, ok := a.(string); ok {
+					proj.NonKeyAttrs = append(proj.NonKeyAttrs, s)
+				}
+			}
+		}
+	}
+	if proj.Type == "" {
+		proj.Type = "ALL"
+	}
+	return dynamostore.IndexDef{
+		IndexName:  name,
+		PKAttr:     pkAttr,
+		SKAttr:     skAttr,
+		PKType:     pkType,
+		SKType:     skType,
+		Projection: proj,
+		IsLSI:      isLSI,
+	}
 }
 
 func itemParam(params map[string]any, key string) map[string]any {

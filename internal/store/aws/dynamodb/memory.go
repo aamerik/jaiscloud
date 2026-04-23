@@ -12,13 +12,17 @@ import (
 // MemoryDynamoDBItemStore is an in-memory DynamoDBItemStore.
 // Items are stored per table keyed by pkHash (caller-computed primary key string).
 type MemoryDynamoDBItemStore struct {
-	mu     sync.RWMutex
-	tables map[string]map[string]map[string]any // table → pkHash → item
+	mu      sync.RWMutex
+	schemas map[string]TableSchema                    // tableName → schema
+	tables  map[string]map[string]map[string]any      // table → pkHash → item
+	gsiIdx  map[string]map[string]map[string][]string // tableName → indexName → gsiPKVal → []pkHash
 }
 
 func NewMemoryDynamoDBItemStore() *MemoryDynamoDBItemStore {
 	return &MemoryDynamoDBItemStore{
-		tables: make(map[string]map[string]map[string]any),
+		schemas: make(map[string]TableSchema),
+		tables:  make(map[string]map[string]map[string]any),
+		gsiIdx:  make(map[string]map[string]map[string][]string),
 	}
 }
 
@@ -35,12 +39,11 @@ func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash strin
 	t := s.tableMap(table)
 	oldItem := t[pkHash]
 	if cond.ConditionExpression != "" {
-		// Condition is evaluated against the existing item (nil treated as empty map).
 		existing := oldItem
 		if existing == nil {
 			existing = map[string]any{}
 		}
-		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues) {
+		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -48,7 +51,15 @@ func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash strin
 	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
 		returnOld = copyItem(oldItem)
 	}
+	// Remove old GSI entries before overwriting.
+	if oldItem != nil && cond.Schema != nil {
+		s.removeGSIEntries(table, pkHash, oldItem, cond.Schema)
+	}
 	t[pkHash] = copyItem(item)
+	// Add new GSI entries.
+	if cond.Schema != nil {
+		s.addGSIEntries(table, pkHash, item, cond.Schema)
+	}
 	return returnOld, nil
 }
 
@@ -79,7 +90,7 @@ func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash st
 		if existing == nil {
 			existing = map[string]any{}
 		}
-		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues) {
+		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -88,6 +99,9 @@ func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash st
 		returnOld = copyItem(oldItem)
 	}
 	if t != nil {
+		if cond.Schema != nil && oldItem != nil {
+			s.removeGSIEntries(table, pkHash, oldItem, cond.Schema)
+		}
 		delete(t, pkHash)
 	}
 	return returnOld, nil
@@ -109,29 +123,34 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 		if check == nil {
 			check = map[string]any{}
 		}
-		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues) {
+		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues, nil) {
 			return nil, &conditionFailedError{}
 		}
 	}
 
+	oldItem := existing
 	if existing == nil {
-		existing = copyItem(item) // create new item from key
+		existing = copyItem(item)
 	} else {
 		existing = copyItem(existing)
 	}
 
-	// Apply UpdateExpression (minimal: SET and REMOVE clauses).
 	if spec.UpdateExpression != "" {
 		applyUpdateExpression(existing, spec.UpdateExpression,
 			spec.ExpressionAttributeNames, spec.ExpressionAttributeValues)
 	} else {
-		// If no expression, merge provided attributes (legacy).
 		for k, v := range item {
 			existing[k] = v
 		}
 	}
 
+	if spec.Schema != nil && oldItem != nil {
+		s.removeGSIEntries(table, pkHash, oldItem, spec.Schema)
+	}
 	t[pkHash] = existing
+	if spec.Schema != nil {
+		s.addGSIEntries(table, pkHash, existing, spec.Schema)
+	}
 	return copyItem(existing), nil
 }
 
@@ -142,27 +161,115 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	if t == nil {
 		return []map[string]any{}, "", nil
 	}
+	schema := s.schemas[table]
+	attrTypes := buildAttrTypes(schema)
 
-	// Collect all matching items into a stable-ordered slice.
-	var all []map[string]any
-	for _, item := range t {
-		if matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues) {
-			if q.FilterExpression == "" || matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues) {
-				all = append(all, copyItem(item))
+	// Collect candidates based on index routing.
+	var candidates []map[string]any
+	var sortAttr string
+	var sortIsNumeric bool
+	var sortForward = true
+	if q.ScanIndexForward {
+		sortForward = true
+	}
+
+	if q.IndexSchema != nil {
+		idx := q.IndexSchema
+		sortAttr = idx.SKAttr
+		sortIsNumeric = idx.SKType == "N"
+		if !sortForward {
+			sortForward = false
+		}
+
+		if !idx.IsLSI {
+			// GSI: use gsiIdx to narrow candidates to matching GSI partition.
+			gsiPKVal, found := extractEqValue(q.KeyConditionExpression, idx.PKAttr, q.ExpressionAttributeNames, q.ExpressionAttributeValues)
+			if found {
+				for _, ph := range s.gsiIdx[table][idx.IndexName][gsiPKVal] {
+					if item, ok := t[ph]; ok {
+						candidates = append(candidates, item)
+					}
+				}
+			} else {
+				for _, item := range t {
+					candidates = append(candidates, item)
+				}
+			}
+		} else {
+			// LSI: filter by main table PK value.
+			mainPKVal, found := extractEqValue(q.KeyConditionExpression, schema.PKAttr, q.ExpressionAttributeNames, q.ExpressionAttributeValues)
+			if found {
+				for _, item := range t {
+					if v, ok := AttrVal(item[schema.PKAttr]); ok && v == mainPKVal {
+						candidates = append(candidates, item)
+					}
+				}
+			} else {
+				for _, item := range t {
+					candidates = append(candidates, item)
+				}
 			}
 		}
+	} else {
+		sortAttr = schema.SKAttr
+		sortIsNumeric = schema.SKType == "N"
+		for _, item := range t {
+			candidates = append(candidates, item)
+		}
 	}
-	sort.Slice(all, func(i, j int) bool { return itemPKHash(all[i]) < itemPKHash(all[j]) })
-	all = paginateItems(all, q.ExclusiveStartKey, q.Limit)
+
+	// Apply key condition and filter expression.
+	var matched []map[string]any
+	for _, item := range candidates {
+		if !matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
+			continue
+		}
+		if q.FilterExpression != "" && !matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
+			continue
+		}
+		matched = append(matched, item)
+	}
+
+	// Sort by sort key if available, otherwise by pkHash for stable order.
+	if sortAttr != "" {
+		skAttr := sortAttr
+		numeric := sortIsNumeric
+		fwd := sortForward
+		sort.Slice(matched, func(i, j int) bool {
+			if numeric {
+				ni, _ := ParseNumeric(matched[i][skAttr])
+				nj, _ := ParseNumeric(matched[j][skAttr])
+				if fwd {
+					return ni < nj
+				}
+				return ni > nj
+			}
+			vi, _ := AttrVal(matched[i][skAttr])
+			vj, _ := AttrVal(matched[j][skAttr])
+			if fwd {
+				return vi < vj
+			}
+			return vi > vj
+		})
+	} else {
+		sort.Slice(matched, func(i, j int) bool { return itemPKHash(matched[i]) < itemPKHash(matched[j]) })
+	}
+
+	all := paginateItems(matched, q.ExclusiveStartKey, q.Limit)
 	var lastKey string
-	if q.Limit > 0 && len(all) == q.Limit {
+	if q.Limit > 0 && len(matched) == q.Limit {
 		b, _ := json.Marshal(all[len(all)-1])
 		lastKey = string(b)
 	}
-	if all == nil {
-		all = []map[string]any{}
+
+	result := make([]map[string]any, len(all))
+	for i, item := range all {
+		result[i] = copyItem(item)
 	}
-	return all, lastKey, nil
+	if len(result) == 0 {
+		result = []map[string]any{}
+	}
+	return result, lastKey, nil
 }
 
 func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanSpec) ([]map[string]any, string, error) {
@@ -172,11 +279,35 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 	if t == nil {
 		return []map[string]any{}, "", nil
 	}
+	schema := s.schemas[table]
+	attrTypes := buildAttrTypes(schema)
+
+	var candidates []map[string]any
+	if sc.IndexSchema != nil && !sc.IndexSchema.IsLSI {
+		// GSI scan: iterate all buckets in the GSI index.
+		if idx := s.gsiIdx[table][sc.IndexSchema.IndexName]; idx != nil {
+			seen := make(map[string]bool)
+			for _, hashes := range idx {
+				for _, ph := range hashes {
+					if !seen[ph] {
+						seen[ph] = true
+						if item, ok := t[ph]; ok {
+							candidates = append(candidates, item)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		for _, item := range t {
+			candidates = append(candidates, item)
+		}
+	}
 
 	var all []map[string]any
-	for _, item := range t {
-		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues) {
-			all = append(all, copyItem(item))
+	for _, item := range candidates {
+		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, attrTypes) {
+			all = append(all, item)
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return itemPKHash(all[i]) < itemPKHash(all[j]) })
@@ -189,11 +320,14 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 	if all == nil {
 		all = []map[string]any{}
 	}
-	return all, lastKey, nil
+	result := make([]map[string]any, len(all))
+	for i, item := range all {
+		result[i] = copyItem(item)
+	}
+	return result, lastKey, nil
 }
 
-// paginateItems skips items up to and including the ExclusiveStartKey item,
-// then returns up to limit items (all items if limit is 0).
+// paginateItems skips items up to and including the ExclusiveStartKey item.
 func paginateItems(items []map[string]any, exclusiveStartKey string, limit int) []map[string]any {
 	start := 0
 	if exclusiveStartKey != "" {
@@ -221,14 +355,26 @@ func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []Batc
 	for _, req := range reqs {
 		t := s.tableMap(req.Table)
 		if req.PutItem != nil {
+			if req.Schema != nil {
+				if old, ok := t[req.PutHash]; ok {
+					s.removeGSIEntries(req.Table, req.PutHash, old, req.Schema)
+				}
+			}
 			t[req.PutHash] = copyItem(req.PutItem)
+			if req.Schema != nil {
+				s.addGSIEntries(req.Table, req.PutHash, req.PutItem, req.Schema)
+			}
 		} else if req.DeleteKey != nil {
+			if req.Schema != nil {
+				if old, ok := t[req.DeleteHash]; ok {
+					s.removeGSIEntries(req.Table, req.DeleteHash, old, req.Schema)
+				}
+			}
 			delete(t, req.DeleteHash)
 		}
 	}
 	return nil, nil
 }
-
 
 func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
 	s.mu.RLock()
@@ -251,7 +397,103 @@ func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchG
 func (s *MemoryDynamoDBItemStore) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.schemas = make(map[string]TableSchema)
 	s.tables = make(map[string]map[string]map[string]any)
+	s.gsiIdx = make(map[string]map[string]map[string][]string)
+}
+
+func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, schema TableSchema) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schemas[schema.TableName] = schema
+	if s.tables[schema.TableName] == nil {
+		s.tables[schema.TableName] = make(map[string]map[string]any)
+	}
+	s.gsiIdx[schema.TableName] = make(map[string]map[string][]string)
+	for _, gsi := range schema.GSIs {
+		s.gsiIdx[schema.TableName][gsi.IndexName] = make(map[string][]string)
+	}
+	return nil
+}
+
+func (s *MemoryDynamoDBItemStore) DropTableSchema(_ context.Context, tableName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.schemas, tableName)
+	delete(s.tables, tableName)
+	delete(s.gsiIdx, tableName)
+	return nil
+}
+
+func (s *MemoryDynamoDBItemStore) AddGSI(_ context.Context, tableName string, schema TableSchema, idx IndexDef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schemas[tableName] = schema
+	if s.gsiIdx[tableName] == nil {
+		s.gsiIdx[tableName] = make(map[string]map[string][]string)
+	}
+	bucket := make(map[string][]string)
+	for pkHash, item := range s.tables[tableName] {
+		if gsiPKVal, ok := AttrVal(item[idx.PKAttr]); ok {
+			bucket[gsiPKVal] = append(bucket[gsiPKVal], pkHash)
+		}
+	}
+	s.gsiIdx[tableName][idx.IndexName] = bucket
+	return nil
+}
+
+func (s *MemoryDynamoDBItemStore) DeleteGSI(_ context.Context, tableName string, schema TableSchema, indexName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schemas[tableName] = schema
+	if idx := s.gsiIdx[tableName]; idx != nil {
+		delete(idx, indexName)
+	}
+	return nil
+}
+
+// ─── GSI index helpers ────────────────────────────────────────────────────────
+
+// removeGSIEntries removes pkHash from all GSI index slices for the old item.
+// Must be called with s.mu held (write).
+func (s *MemoryDynamoDBItemStore) removeGSIEntries(table, pkHash string, old map[string]any, schema *TableSchema) {
+	idx := s.gsiIdx[table]
+	if idx == nil {
+		return
+	}
+	for _, gsi := range schema.GSIs {
+		gsiPKVal, ok := AttrVal(old[gsi.PKAttr])
+		if !ok {
+			continue
+		}
+		bucket := idx[gsi.IndexName][gsiPKVal]
+		for i, h := range bucket {
+			if h == pkHash {
+				idx[gsi.IndexName][gsiPKVal] = append(bucket[:i], bucket[i+1:]...)
+				break
+			}
+		}
+	}
+}
+
+// addGSIEntries inserts pkHash into GSI index buckets for each GSI whose PK attr is present.
+// Must be called with s.mu held (write).
+func (s *MemoryDynamoDBItemStore) addGSIEntries(table, pkHash string, item map[string]any, schema *TableSchema) {
+	if s.gsiIdx[table] == nil {
+		s.gsiIdx[table] = make(map[string]map[string][]string)
+	}
+	for _, gsi := range schema.GSIs {
+		gsiPKVal, ok := AttrVal(item[gsi.PKAttr])
+		if !ok {
+			continue
+		}
+		if s.gsiIdx[table][gsi.IndexName] == nil {
+			s.gsiIdx[table][gsi.IndexName] = make(map[string][]string)
+		}
+		s.gsiIdx[table][gsi.IndexName][gsiPKVal] = append(
+			s.gsiIdx[table][gsi.IndexName][gsiPKVal], pkHash,
+		)
+	}
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -259,28 +501,17 @@ func (s *MemoryDynamoDBItemStore) Reset() {
 // MemoryItemPKHash is the exported version used by the table provider as fallback.
 func MemoryItemPKHash(item map[string]any) string { return itemPKHash(item) }
 
-// itemPKHash computes a stable string key from a DynamoDB item/key.
-// Uses a sorted concatenation of attribute name+value strings.
 func itemPKHash(item map[string]any) string {
-	// Collect all keys in sorted order for a stable hash.
 	var parts []string
 	for k, v := range item {
 		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
 	}
-	// Simple stable sort by joining — good enough for an emulator.
 	result := strings.Join(sortStrings(parts), "|")
 	return result
 }
 
 func sortStrings(ss []string) []string {
-	n := len(ss)
-	for i := 0; i < n-1; i++ {
-		for j := i + 1; j < n; j++ {
-			if ss[i] > ss[j] {
-				ss[i], ss[j] = ss[j], ss[i]
-			}
-		}
-	}
+	sort.Strings(ss)
 	return ss
 }
 
@@ -292,10 +523,55 @@ func copyItem(item map[string]any) map[string]any {
 	return cp
 }
 
-// applyUpdateExpression handles SET and REMOVE clauses.
-// e.g. "SET #n = :val, #c = :cnt REMOVE #old"
+// buildAttrTypes returns a map of attribute name → type ("S", "N", "B") from the table schema.
+func buildAttrTypes(schema TableSchema) map[string]string {
+	m := make(map[string]string)
+	if schema.PKAttr != "" {
+		m[schema.PKAttr] = schema.PKType
+	}
+	if schema.SKAttr != "" {
+		m[schema.SKAttr] = schema.SKType
+	}
+	for _, gsi := range schema.GSIs {
+		if gsi.PKAttr != "" {
+			m[gsi.PKAttr] = gsi.PKType
+		}
+		if gsi.SKAttr != "" {
+			m[gsi.SKAttr] = gsi.SKType
+		}
+	}
+	for _, lsi := range schema.LSIs {
+		if lsi.SKAttr != "" {
+			m[lsi.SKAttr] = lsi.SKType
+		}
+	}
+	return m
+}
+
+// extractEqValue finds the equality value for attrName in a key condition expression.
+func extractEqValue(expr, attrName string, names map[string]string, values map[string]any) (string, bool) {
+	for _, cond := range splitAND(expr) {
+		cond = strings.TrimSpace(cond)
+		if !strings.Contains(cond, " = ") {
+			continue
+		}
+		parts := strings.SplitN(cond, " = ", 2)
+		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
+		if attr != attrName {
+			continue
+		}
+		val := resolveExprValue(strings.TrimSpace(parts[1]), values)
+		s, ok := AttrVal(val)
+		if !ok {
+			s = fmt.Sprintf("%v", extractDynamoString(val))
+		}
+		return s, true
+	}
+	return "", false
+}
+
+// applyUpdateExpression handles SET, REMOVE, and ADD clauses.
 func applyUpdateExpression(item map[string]any, expr string, names map[string]string, values map[string]any) {
-	// Split on SET/REMOVE keywords (case-insensitive, rough parse).
 	upper := strings.ToUpper(expr)
 	setIdx := strings.Index(upper, "SET ")
 	removeIdx := strings.Index(upper, " REMOVE ")
@@ -347,7 +623,6 @@ func applyUpdateExpression(item map[string]any, expr string, names map[string]st
 			valRef := strings.TrimSpace(parts[1])
 			val := resolveExprValue(valRef, values)
 			if attr != "" {
-				// ADD for numbers: existing + val
 				if existing, ok := item[attr]; ok {
 					if em, ok := existing.(map[string]any); ok {
 						if nv, ok := em["N"]; ok {
@@ -422,47 +697,60 @@ func toFloat(v any) float64 {
 	return 0
 }
 
-// matchesKeyCondition does a simple equality check for the partition key.
-// Full expression parsing is deferred to Phase 2.
-func matchesKeyCondition(item map[string]any, expr string, names map[string]string, values map[string]any) bool {
+// matchesKeyCondition evaluates a DynamoDB KeyConditionExpression against an item.
+func matchesKeyCondition(item map[string]any, expr string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
 	if expr == "" {
 		return true
 	}
-	// Handle "pk = :val" and "#pk = :val AND sk = :val2" patterns.
 	conditions := splitAND(expr)
 	for _, cond := range conditions {
-		if !evalCondition(item, strings.TrimSpace(cond), names, values) {
+		if !evalCondition(item, strings.TrimSpace(cond), names, values, attrTypes) {
 			return false
 		}
 	}
 	return true
 }
 
-func matchesFilter(item map[string]any, expr string, names map[string]string, values map[string]any) bool {
+// matchesFilter evaluates a DynamoDB FilterExpression against an item.
+func matchesFilter(item map[string]any, expr string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
 	if expr == "" {
 		return true
 	}
-	return matchesKeyCondition(item, expr, names, values)
+	return matchesKeyCondition(item, expr, names, values, attrTypes)
 }
 
+// splitAND splits a condition expression on top-level AND connectives,
+// correctly handling "attr BETWEEN :lo AND :hi" patterns.
+// A " AND " is treated as a BETWEEN's closing token when the clause accumulated
+// so far contains more BETWEEN keywords than AND keywords.
 func splitAND(expr string) []string {
 	upper := strings.ToUpper(expr)
 	var parts []string
-	start := 0
-	for {
-		idx := strings.Index(upper[start:], " AND ")
-		if idx < 0 {
-			parts = append(parts, expr[start:])
-			break
+	partStart := 0 // start of the current part
+	i := 0
+	for i+5 <= len(upper) {
+		if upper[i:i+5] != " AND " {
+			i++
+			continue
 		}
-		parts = append(parts, expr[start:start+idx])
-		start += idx + 5
+		// Found " AND " at position i.
+		clause := upper[partStart:i]
+		betweenCount := strings.Count(clause, " BETWEEN ")
+		andInClause := strings.Count(clause, " AND ")
+		if betweenCount > andInClause {
+			// This AND is closing an open BETWEEN — keep scanning same part.
+			i += 5
+			continue
+		}
+		parts = append(parts, expr[partStart:i])
+		partStart = i + 5
+		i = partStart
 	}
+	parts = append(parts, expr[partStart:])
 	return parts
 }
 
-func evalCondition(item map[string]any, cond string, names map[string]string, values map[string]any) bool {
-	// "attr = :val" or "attr begins_with :val" etc.
+func evalCondition(item map[string]any, cond string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(cond))
 
 	if strings.HasPrefix(upper, "ATTRIBUTE_NOT_EXISTS(") {
@@ -481,8 +769,25 @@ func evalCondition(item map[string]any, cond string, names map[string]string, va
 		return exists
 	}
 
-	if strings.Contains(upper, " BEGINS_WITH ") || strings.Contains(upper, "BEGINS_WITH(") {
-		// begins_with(attr, :val)
+	if strings.HasPrefix(upper, "CONTAINS(") {
+		inner := strings.TrimSpace(cond[len("contains("):])
+		inner = strings.TrimSuffix(inner, ")")
+		parts := strings.SplitN(inner, ",", 2)
+		if len(parts) != 2 {
+			return true
+		}
+		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
+		valRef := strings.TrimSpace(parts[1])
+		val := resolveExprValue(valRef, values)
+		s, _ := AttrVal(item[attr])
+		vs, _ := AttrVal(val)
+		if vs == "" {
+			vs = fmt.Sprintf("%v", extractDynamoString(val))
+		}
+		return strings.Contains(s, vs)
+	}
+
+	if strings.Contains(upper, " BEGINS_WITH ") || strings.HasPrefix(upper, "BEGINS_WITH(") {
 		inner := strings.TrimSpace(cond)
 		inner = strings.TrimPrefix(strings.ToLower(inner), "begins_with(")
 		inner = strings.TrimSuffix(inner, ")")
@@ -495,6 +800,86 @@ func evalCondition(item map[string]any, cond string, names map[string]string, va
 		val := resolveExprValue(valRef, values)
 		itemVal := itemAttrString(item, attr)
 		return strings.HasPrefix(itemVal, fmt.Sprintf("%v", extractDynamoString(val)))
+	}
+
+	// BETWEEN: "attr BETWEEN :lo AND :hi"
+	if betweenIdx := strings.Index(upper, " BETWEEN "); betweenIdx >= 0 {
+		attr := resolveExprName(strings.TrimSpace(cond[:betweenIdx]), names)
+		rest := cond[betweenIdx+9:]
+		andIdx := strings.Index(strings.ToUpper(rest), " AND ")
+		if andIdx < 0 {
+			return true
+		}
+		loRef := strings.TrimSpace(rest[:andIdx])
+		hiRef := strings.TrimSpace(rest[andIdx+5:])
+		lo := resolveExprValue(loRef, values)
+		hi := resolveExprValue(hiRef, values)
+		itemVal := item[attr]
+		loN, loIsN := ParseNumeric(lo)
+		hiN, hiIsN := ParseNumeric(hi)
+		itemN, itemIsN := ParseNumeric(itemVal)
+		if loIsN && hiIsN && itemIsN {
+			return itemN >= loN && itemN <= hiN
+		}
+		ls, _ := AttrVal(lo)
+		hs, _ := AttrVal(hi)
+		is, _ := AttrVal(itemVal)
+		if ls == "" {
+			ls = fmt.Sprintf("%v", extractDynamoString(lo))
+		}
+		if hs == "" {
+			hs = fmt.Sprintf("%v", extractDynamoString(hi))
+		}
+		if is == "" {
+			is = fmt.Sprintf("%v", extractDynamoString(itemVal))
+		}
+		return is >= ls && is <= hs
+	}
+
+	// Comparison operators in order from longest to shortest to avoid mis-matches.
+	for _, op := range []string{" <> ", " <= ", " >= ", " < ", " > "} {
+		if strings.Contains(cond, op) {
+			parts := strings.SplitN(cond, op, 2)
+			attr := resolveExprName(strings.TrimSpace(parts[0]), names)
+			val := resolveExprValue(strings.TrimSpace(parts[1]), values)
+			itemVal := item[attr]
+			aN, aIsN := ParseNumeric(itemVal)
+			bN, bIsN := ParseNumeric(val)
+			if aIsN && bIsN {
+				switch strings.TrimSpace(op) {
+				case "<>":
+					return aN != bN
+				case "<":
+					return aN < bN
+				case "<=":
+					return aN <= bN
+				case ">":
+					return aN > bN
+				case ">=":
+					return aN >= bN
+				}
+			}
+			as, _ := AttrVal(itemVal)
+			bs, _ := AttrVal(val)
+			if as == "" {
+				as = fmt.Sprintf("%v", extractDynamoString(itemVal))
+			}
+			if bs == "" {
+				bs = fmt.Sprintf("%v", extractDynamoString(val))
+			}
+			switch strings.TrimSpace(op) {
+			case "<>":
+				return as != bs
+			case "<":
+				return as < bs
+			case "<=":
+				return as <= bs
+			case ">":
+				return as > bs
+			case ">=":
+				return as >= bs
+			}
+		}
 	}
 
 	if strings.Contains(cond, " = ") {
