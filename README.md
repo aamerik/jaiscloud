@@ -283,6 +283,22 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 | `--blob-dir` | `JAISCLOUD_BLOB_DIR` | _(empty)_ | Directory for S3 blob bytes (full mode, optional) |
 | `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | _(empty)_ | Container orchestrator: `mock` / `docker` / `k8s` |
 
+### Platform Runtime Layer
+
+The Platform Runtime Layer injects TLS trust, extra volumes, and environment variables uniformly into every JaisCloud-managed container or pod — without coupling the configuration to any specific executor.
+
+| Env var | Default | Description |
+|---|---|---|
+| `JAISCLOUD_PLATFORM_TLS_ENABLED` | `true` | Enable TLS CA injection into managed containers |
+| `JAISCLOUD_PLATFORM_TLS_CA_SOURCES` | JaisCloud ConfigMap | JSON/YAML array of CA sources (`configMap`, `secret`, or `file`) |
+| `JAISCLOUD_PLATFORM_TLS_CA_SOURCES_FILE` | _(empty)_ | File path variant of the above |
+| `JAISCLOUD_PLATFORM_TLS_PASSWORD` | `changeit` | JVM truststore password |
+| `JAISCLOUD_PLATFORM_VOLUMES` | _(empty)_ | JSON/YAML array of extra volume specs to mount into every pod/container |
+| `JAISCLOUD_PLATFORM_VOLUMES_FILE` | _(empty)_ | File path variant of the above |
+| `JAISCLOUD_PLATFORM_ENV` | _(empty)_ | JSON/YAML map of extra environment variables injected into every pod/container |
+| `JAISCLOUD_PLATFORM_ENV_FILE` | _(empty)_ | File path variant of the above |
+| `JAISCLOUD_PLATFORM_HOSTPATH_ALLOWLIST` | _(empty)_ | Comma-separated list of allowed `hostPath` prefixes (Docker bind-mounts) |
+
 **`lite` (default)** — all state in memory. Zero external dependencies. State is lost on restart. Ideal for unit tests and CI.
 
 **`full`** — resource metadata persisted in PostgreSQL; S3 object bytes optionally persisted to `--blob-dir`. Ideal for integration environments.
@@ -413,9 +429,11 @@ HTTP request
       → inject: Clock, Region, AccountID, Cloud, ResourceID
       → Registry.Dispatch("Service.Action", NormalizedRequest)
           → Provider (business logic, pure Go)
-              → ResourceStore  (metadata)
-              → ServiceStore   (messages / items / objects)
-              → Executor       (mock | docker | k8s)
+              → ResourceStore          (metadata)
+              → ServiceStore           (messages / items / objects)
+              → CloudSparkTransform    (AWS | Azure | GCP — URI rewrite, confs, pod env)
+              → Executor               (mock | docker | k8s)
+                  → PlatformConfig     (TLS CA injection, extra volumes, extra env)
       → Codec.Encode (XML / JSON / raw bytes)
   → HTTP response
 ```

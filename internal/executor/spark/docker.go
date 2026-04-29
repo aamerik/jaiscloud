@@ -3,8 +3,11 @@ package spark
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os/exec"
 	"sync"
+
+	"jaiscloud/internal/platform"
 )
 
 // dockerJob tracks a running Docker container's state.
@@ -18,30 +21,27 @@ type dockerJob struct {
 // DockerExecutor runs spark-submit inside a Docker container (docker run --rm).
 // It requires the Docker daemon to be running and the specified image to be
 // available locally or pullable.
-//
-// The image is resolved in this order:
-//  1. job.SparkConf["spark.kubernetes.container.image"] (per-job override)
-//  2. cfg.Image passed to NewDockerExecutor (executor-level default)
-//  3. DefaultImage
-//
-// When S3Endpoint is set, AWS credential env vars and --network host are injected
-// so spark-submit can reach JaisCloud's S3 endpoint from inside the container.
 type DockerExecutor struct {
-	cfg  SparkConfig
-	jobs sync.Map // jobID → *dockerJob
+	cfg      SparkConfig
+	platform *platform.PlatformConfig
+	jobs     sync.Map // jobID → *dockerJob
 }
 
-// NewDockerExecutor creates a DockerExecutor. cfg.Image is the default Spark image.
-func NewDockerExecutor(cfg SparkConfig) *DockerExecutor {
+// NewDockerExecutor creates a DockerExecutor. plat may be nil.
+func NewDockerExecutor(cfg SparkConfig, plat *platform.PlatformConfig) *DockerExecutor {
 	if cfg.Image == "" {
 		cfg.Image = DefaultImage
 	}
-	return &DockerExecutor{cfg: cfg}
+	return &DockerExecutor{cfg: cfg, platform: plat}
 }
 
 // Submit launches a Docker container running spark-submit asynchronously.
 func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
-	resolved := AWSResolveSparkCommand(job, e.cfg)
+	transform, err := selectTransform(e.cfg.Cloud)
+	if err != nil {
+		return err
+	}
+	resolved := transform.ResolveCommand(job, e.cfg)
 
 	dj := &dockerJob{state: StateRunning}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -52,15 +52,22 @@ func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
 		defer cancel()
 
 		dockerArgs := []string{"run", "--rm", "--network", "host"}
-		if e.cfg.S3Endpoint != "" {
-			dockerArgs = append(dockerArgs,
-				"-e", "AWS_ENDPOINT_URL="+e.cfg.S3Endpoint,
-				"-e", "AWS_REGION="+e.cfg.Region,
-				"-e", "AWS_ACCESS_KEY_ID="+e.cfg.AWSAccessKey,
-				"-e", "AWS_SECRET_ACCESS_KEY="+e.cfg.AWSSecretKey,
-			)
+
+		// Cloud-specific env vars.
+		for _, ev := range transform.PodEnv(e.cfg) {
+			dockerArgs = append(dockerArgs, "-e", ev.Name+"="+ev.Value)
 		}
-		// Pass binary + args after image name (overrides CMD in container).
+
+		// Platform layer: TLS PEM bundle + extra volumes + extra env.
+		if e.platform != nil {
+			volArgs, envArgs, err := platform.ApplyDocker(e.platform)
+			if err != nil {
+				slog.Warn("spark docker: platform apply failed", "err", err)
+			}
+			dockerArgs = append(dockerArgs, volArgs...)
+			dockerArgs = append(dockerArgs, envArgs...)
+		}
+
 		dockerArgs = append(dockerArgs, resolved.Image, resolved.Binary)
 		dockerArgs = append(dockerArgs, resolved.Args...)
 
@@ -73,7 +80,7 @@ func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
 		dj.mu.Lock()
 		defer dj.mu.Unlock()
 		if dj.state == StateCancelled {
-			return // Cancel() already set terminal state
+			return
 		}
 		if err != nil {
 			dj.state = StateFailed

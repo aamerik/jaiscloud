@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"jaiscloud/internal/k8stypes"
 )
 
 const (
@@ -123,14 +125,24 @@ func newInClusterClient(namespace string) (*k8sClient, error) {
 	return newK8sClient(DefaultAPIServer, inClusterTokenFile, inClusterCAFile, "", "", namespace)
 }
 
-// ── Minimal K8s type stubs ──────────────────────────────────────────────────
+// ── Type aliases from k8stypes (pod-spec wire types shared across executors) ─
+
+type (
+	podSpec     = k8stypes.PodSpec
+	container   = k8stypes.Container
+	volume      = k8stypes.Volume
+	volumeMount = k8stypes.VolumeMount
+	envVar      = k8stypes.EnvVar
+)
+
+// ── Batch-job types (Spark-specific) ────────────────────────────────────────
 
 type batchJob struct {
-	APIVersion string          `json:"apiVersion"`
-	Kind       string          `json:"kind"`
-	Metadata   jobMeta         `json:"metadata"`
-	Spec       jobSpec         `json:"spec"`
-	Status     batchJobStatus  `json:"status,omitempty"`
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	Metadata   jobMeta        `json:"metadata"`
+	Spec       jobSpec        `json:"spec"`
+	Status     batchJobStatus `json:"status,omitempty"`
 }
 
 type jobMeta struct {
@@ -153,43 +165,6 @@ type podTemplate struct {
 
 type podMeta struct {
 	Labels map[string]string `json:"labels,omitempty"`
-}
-
-type volume struct {
-	Name      string        `json:"name"`
-	ConfigMap *configMapRef `json:"configMap,omitempty"`
-}
-
-type configMapRef struct {
-	Name string `json:"name"`
-}
-
-type volumeMount struct {
-	Name      string `json:"name"`
-	MountPath string `json:"mountPath"`
-	ReadOnly  bool   `json:"readOnly,omitempty"`
-}
-
-type envVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-type podSpec struct {
-	RestartPolicy      string      `json:"restartPolicy"`
-	ServiceAccountName string      `json:"serviceAccountName,omitempty"`
-	Containers         []container `json:"containers"`
-	Volumes            []volume    `json:"volumes,omitempty"`
-}
-
-type container struct {
-	Name            string        `json:"name"`
-	Image           string        `json:"image"`
-	ImagePullPolicy string        `json:"imagePullPolicy,omitempty"`
-	Command         []string      `json:"command"`
-	Args            []string      `json:"args,omitempty"`
-	Env             []envVar      `json:"env,omitempty"`
-	VolumeMounts    []volumeMount `json:"volumeMounts,omitempty"`
 }
 
 type batchJobStatus struct {

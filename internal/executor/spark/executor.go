@@ -73,12 +73,14 @@ type SparkExecutor interface {
 
 // NewExecutor creates a SparkExecutor for the given mode.
 // mode: "mock" (default), "k8s", "local", "docker", "remote".
+// For K8s/Docker executors with a platform config, use NewK8sExecutor /
+// NewDockerExecutor directly.
 func NewExecutor(mode string, cfg SparkConfig) SparkExecutor {
 	switch mode {
 	case "k8s":
-		return NewK8sExecutor(cfg)
+		return NewK8sExecutor(cfg, nil)
 	case "docker":
-		return NewDockerExecutor(cfg)
+		return NewDockerExecutor(cfg, nil)
 	default:
 		return NewMockExecutor()
 	}

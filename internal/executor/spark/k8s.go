@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/platform"
 )
 
 // dnsNameRe matches characters that are NOT allowed in a K8s DNS label.
@@ -24,14 +26,15 @@ var dnsNameRe = regexp.MustCompile(`[^a-z0-9-]`)
 //  2. In-cluster service account at /var/run/secrets/kubernetes.io/serviceaccount/
 //  3. Unauthenticated (development only)
 type K8sExecutor struct {
-	cfg    SparkConfig
-	client *k8sClient
-	jobs   sync.Map // jobID (string) → k8s Job name (string)
+	cfg      SparkConfig
+	platform *platform.PlatformConfig
+	client   *k8sClient
+	jobs     sync.Map // jobID (string) → k8s Job name (string)
 }
 
 // NewK8sExecutor builds a K8sExecutor. Auth and TLS config are resolved from
-// env vars and in-cluster service account files.
-func NewK8sExecutor(cfg SparkConfig) *K8sExecutor {
+// env vars and in-cluster service account files. plat may be nil.
+func NewK8sExecutor(cfg SparkConfig, plat *platform.PlatformConfig) *K8sExecutor {
 	apiURL := cfg.APIServer
 	if apiURL == "" {
 		apiURL = DefaultAPIServer
@@ -49,7 +52,7 @@ func NewK8sExecutor(cfg SparkConfig) *K8sExecutor {
 		fmt.Fprintf(os.Stderr, "[K8sExecutor] init error: %v\n", err)
 		return &K8sExecutor{cfg: cfg}
 	}
-	e := &K8sExecutor{cfg: cfg, client: client}
+	e := &K8sExecutor{cfg: cfg, platform: plat, client: client}
 	go e.cleanupOrphans()
 	return e
 }
@@ -93,7 +96,10 @@ func (e *K8sExecutor) Submit(ctx context.Context, job SparkJob) error {
 	}
 
 	jobName := k8sJobName(job.JobID)
-	manifest := e.buildJobManifest(jobName, job)
+	manifest, err := e.buildJobManifest(jobName, job)
+	if err != nil {
+		return fmt.Errorf("K8sExecutor: build manifest: %w", err)
+	}
 
 	if err := e.client.createJob(ctx, manifest); err != nil {
 		return fmt.Errorf("K8sExecutor: create job %s: %w", jobName, err)
@@ -385,50 +391,53 @@ func jobFailureMessage(s batchJobStatus) string {
 }
 
 // buildJobManifest constructs a batch/v1 Job that runs spark-submit.
-func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
+func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) (batchJob, error) {
 	backoffLimit := 0
 	ttl := 3600
 
-	resolved := AWSResolveSparkCommand(job, e.cfg)
+	transform, err := selectTransform(e.cfg.Cloud)
+	if err != nil {
+		return batchJob{}, err
+	}
+
+	cmd := transform.ResolveCommand(job, e.cfg)
+
+	// URI rewriting applied once across all argument sources.
+	cmd.Args = rewriteURIs(transform, cmd.Args, e.cfg)
+	cloudConfs := rewriteURIs(transform, transform.SparkConfs(e.cfg), e.cfg)
+	extraConfs := rewriteURIs(transform, e.cfg.ExtraSparkConfs, e.cfg)
+
+	cmd.Args = insertBeforeJar(cmd.Args, cloudConfs)
+	cmd.Args = insertBeforeJar(cmd.Args, extraConfs)
+
+	cloudVols, cloudMounts := transform.PodVolumes(e.cfg)
 
 	ctr := container{
-		Name:    "spark-submit",
-		Image:   resolved.Image,
-		Command: []string{resolved.Binary},
-		Args:    resolved.Args,
+		Name:            "spark-submit",
+		Image:           cmd.Image,
+		Command:         []string{cmd.Binary},
+		Args:            cmd.Args,
+		ImagePullPolicy: "Never",
+		Env:             transform.PodEnv(e.cfg),
+		VolumeMounts:    cloudMounts,
 	}
 
-	spec := podSpec{
-		RestartPolicy: "Never",
+	spec := podSpec{RestartPolicy: "Never"}
+	if e.cfg.ServiceAccount != "" {
+		spec.ServiceAccountName = e.cfg.ServiceAccount
 	}
+	spec.Volumes = append(spec.Volumes, cloudVols...)
 
-	if e.cfg.S3Endpoint != "" {
-		ctr.ImagePullPolicy = "Never"
-		ctr.Env = []envVar{
-			{Name: "AWS_ENDPOINT_URL", Value: e.cfg.S3Endpoint},
-			{Name: "AWS_REGION", Value: e.cfg.Region},
-			{Name: "AWS_ACCESS_KEY_ID", Value: e.cfg.AWSAccessKey},
-			{Name: "AWS_SECRET_ACCESS_KEY", Value: e.cfg.AWSSecretKey},
-		}
-		ctr.VolumeMounts = []volumeMount{{
-			Name:      "jaiscloud-aws-credentials",
-			MountPath: "/etc/aws",
-			ReadOnly:  true,
-		}}
-		spec.Volumes = []volume{{
-			Name:      "jaiscloud-aws-credentials",
-			ConfigMap: &configMapRef{Name: "jaiscloud-aws-credentials"},
-		}}
+	// Platform layer: TLS, generic volumes, env — applied after cloud contributions.
+	if err := platform.ApplyK8s(&spec, &ctr, e.platform); err != nil {
+		return batchJob{}, fmt.Errorf("platform apply: %w", err)
 	}
 
 	spec.Containers = []container{ctr}
 
-	if e.cfg.ServiceAccount != "" {
-		spec.ServiceAccountName = e.cfg.ServiceAccount
-	}
-
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by": "jaiscloud",
+		"jaiscloud-cloud":              string(e.cfg.Cloud),
 		"jaiscloud-job-id":             sanitizeLabel(job.JobID),
 	}
 
@@ -448,5 +457,5 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) batchJob {
 				Spec:     spec,
 			},
 		},
-	}
+	}, nil
 }

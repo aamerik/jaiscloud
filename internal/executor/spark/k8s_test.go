@@ -96,6 +96,7 @@ func newTestK8sExecutor(t *testing.T, fk *fakeK8s) *K8sExecutor {
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 	cfg.Image = "apache/spark:3.5.0"
 	cfg.Namespace = "default"
+	cfg.Cloud = "aws"
 	return &K8sExecutor{cfg: cfg, client: fk.client}
 }
 

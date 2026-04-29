@@ -1,6 +1,10 @@
 package spark
 
-import "os"
+import (
+	"os"
+
+	"jaiscloud/internal/model"
+)
 
 // ClusterSize is a named resource profile for Spark jobs.
 type ClusterSize string
@@ -108,6 +112,26 @@ type SparkConfig struct {
 	// AWSSecretKey is the AWS secret access key injected into Spark pods.
 	// Defaults to JAISCLOUD_AWS_SECRET_ACCESS_KEY or "test".
 	AWSSecretKey string
+
+	// ExtraSparkConfs are additional --conf flags layered after cloud-transform confs.
+	ExtraSparkConfs []string
+
+	// Cloud identifies which cloud transform to apply when building K8s manifests.
+	Cloud model.Cloud
+
+	// Azure-specific
+	AzureStorageAccount  string
+	AzureStorageKey      string
+	AzureClientID        string
+	AzureClientSecret    string
+	AzureTenantID        string
+	AzureStorageEndpoint string
+
+	// GCP-specific
+	GCPProjectID             string
+	GCPServiceAccountKeyPath string
+	GCPServiceAccountSecret  string
+	GCPStorageEndpoint       string
 }
 
 // SparkConfigFrom builds a SparkConfig from the executor mode and optional overrides.
@@ -148,6 +172,21 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 	if v := os.Getenv("JAISCLOUD_AWS_SECRET_ACCESS_KEY"); v != "" {
 		cfg.AWSSecretKey = v
 	}
+
+	// Azure
+	cfg.AzureStorageAccount = os.Getenv("JAISCLOUD_AZURE_STORAGE_ACCOUNT")
+	cfg.AzureStorageKey = os.Getenv("JAISCLOUD_AZURE_STORAGE_KEY")
+	cfg.AzureClientID = os.Getenv("JAISCLOUD_AZURE_CLIENT_ID")
+	cfg.AzureClientSecret = os.Getenv("JAISCLOUD_AZURE_CLIENT_SECRET")
+	cfg.AzureTenantID = os.Getenv("JAISCLOUD_AZURE_TENANT_ID")
+	cfg.AzureStorageEndpoint = os.Getenv("JAISCLOUD_AZURE_STORAGE_ENDPOINT")
+
+	// GCP
+	cfg.GCPProjectID = os.Getenv("JAISCLOUD_GCP_PROJECT_ID")
+	cfg.GCPServiceAccountKeyPath = os.Getenv("JAISCLOUD_GCP_SERVICE_ACCOUNT_KEY_PATH")
+	cfg.GCPServiceAccountSecret = os.Getenv("JAISCLOUD_GCP_SERVICE_ACCOUNT_SECRET")
+	cfg.GCPStorageEndpoint = os.Getenv("JAISCLOUD_GCP_STORAGE_ENDPOINT")
+
 	for _, o := range overrides {
 		o(&cfg)
 	}
