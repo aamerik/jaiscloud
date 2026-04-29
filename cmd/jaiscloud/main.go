@@ -103,7 +103,12 @@ func startCmd() *cobra.Command {
 				return err
 			}
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek)
+			platformCfg, err := platform.LoadFromEnv()
+			if err != nil {
+				return fmt.Errorf("platform config: %w", err)
+			}
+
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek, platformCfg)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
@@ -260,15 +265,9 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
-
-	platformCfg, err := platform.LoadFromEnv()
-	if err != nil {
-		slog.Error("platform config", "err", err)
-		os.Exit(1)
-	}
 
 	// Build spark executor. cfg.ExecutorMode drives both Spark and Lambda.
 	// "" / "mock" → instant mock completion (nil exec); "docker" / "k8s" → real executor.
