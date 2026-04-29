@@ -16,6 +16,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/k8stypes"
+	"jaiscloud/internal/platform"
 )
 
 const (
@@ -35,18 +38,20 @@ type warmPod struct {
 
 // K8sExecutor manages warm Pods per Lambda function using the Lambda RIE HTTP protocol.
 type K8sExecutor struct {
-	cfg    LambdaConfig
-	k8s    *http.Client // talks to K8s API server (30s timeout, custom TLS)
-	invoke *http.Client // talks to Lambda RIE pods (5min timeout)
-	token  string
-	mu     sync.Mutex
-	pods   map[string]*warmPod // functionName -> warm pod
-	done   chan struct{}
-	wg     sync.WaitGroup
+	cfg      LambdaConfig
+	platform *platform.PlatformConfig
+	k8s      *http.Client // talks to K8s API server (30s timeout, custom TLS)
+	invoke   *http.Client // talks to Lambda RIE pods (5min timeout)
+	token    string
+	mu       sync.Mutex
+	pods     map[string]*warmPod // functionName -> warm pod
+	done     chan struct{}
+	wg       sync.WaitGroup
 }
 
 // NewK8sExecutor creates a K8sExecutor with warm-pod-per-function architecture.
-func NewK8sExecutor(cfg LambdaConfig) *K8sExecutor {
+// plat may be nil.
+func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *K8sExecutor {
 	// Read bearer token.
 	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
 	if token == "" {
@@ -94,12 +99,13 @@ func NewK8sExecutor(cfg LambdaConfig) *K8sExecutor {
 	invokeClient := &http.Client{Timeout: 5 * time.Minute}
 
 	e := &K8sExecutor{
-		cfg:    cfg,
-		k8s:    k8sClient,
-		invoke: invokeClient,
-		token:  token,
-		pods:   make(map[string]*warmPod),
-		done:   make(chan struct{}),
+		cfg:      cfg,
+		platform: plat,
+		k8s:      k8sClient,
+		invoke:   invokeClient,
+		token:    token,
+		pods:     make(map[string]*warmPod),
+		done:     make(chan struct{}),
 	}
 	e.cleanupOrphans()
 	e.wg.Add(1)
@@ -235,15 +241,15 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	podName := podPrefix + sanitized + "-" + shortID()
 	svcName := svcPrefix + sanitized
 
-	env := []map[string]string{
-		{"name": "AWS_LAMBDA_FUNCTION_NAME", "value": req.FunctionName},
-		{"name": "AWS_DEFAULT_REGION", "value": regionOrDefault(e.cfg.Region)},
+	env := []k8stypes.EnvVar{
+		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: req.FunctionName},
+		{Name: "AWS_DEFAULT_REGION", Value: regionOrDefault(e.cfg.Region)},
 	}
 	if e.cfg.JaisCloudEndpoint != "" {
-		env = append(env, map[string]string{"name": "JAISCLOUD_ENDPOINT", "value": e.cfg.JaisCloudEndpoint})
+		env = append(env, k8stypes.EnvVar{Name: "JAISCLOUD_ENDPOINT", Value: e.cfg.JaisCloudEndpoint})
 	}
 	for k, v := range req.EnvVars {
-		env = append(env, map[string]string{"name": k, "value": v})
+		env = append(env, k8stypes.EnvVar{Name: k, Value: v})
 	}
 
 	var args []string
@@ -256,38 +262,44 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		memMB = 128
 	}
 
+	podSpec := k8stypes.PodSpec{
+		RestartPolicy: "Never",
+		Containers: []k8stypes.Container{{
+			Name:            "lambda",
+			Image:           image,
+			ImagePullPolicy: "IfNotPresent",
+			Args:            args,
+			Env:             env,
+			Ports:           []k8stypes.ContainerPort{{ContainerPort: riePort}},
+			Resources: &k8stypes.Resources{
+				Requests: map[string]string{"cpu": "100m", "memory": "64Mi"},
+				Limits:   map[string]string{"cpu": "1", "memory": fmt.Sprintf("%dMi", memMB)},
+			},
+			ReadinessProbe: &k8stypes.Probe{
+				TCPSocket:           &k8stypes.TCPSocketAction{Port: riePort},
+				InitialDelaySeconds: 1,
+				PeriodSeconds:       1,
+				FailureThreshold:    30,
+			},
+		}},
+	}
+
+	// Platform layer: TLS, generic volumes, env — applied before submission.
+	if e.platform != nil {
+		if err := platform.ApplyK8s(&podSpec, &podSpec.Containers[0], e.platform); err != nil {
+			return nil, fmt.Errorf("platform apply: %w", err)
+		}
+	}
+
 	podManifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
 		"metadata": map[string]any{
 			"name":      podName,
 			"namespace": ns,
-			"labels": map[string]string{
-				"app":      labelApp,
-				"function": sanitized,
-			},
+			"labels":    map[string]string{"app": labelApp, "function": sanitized},
 		},
-		"spec": map[string]any{
-			"restartPolicy": "Never",
-			"containers": []map[string]any{{
-				"name":            "lambda",
-				"image":           image,
-				"imagePullPolicy": "IfNotPresent",
-				"args":            args,
-				"env":             env,
-				"ports":           []map[string]any{{"containerPort": riePort}},
-				"resources": map[string]any{
-					"requests": map[string]string{"cpu": "100m", "memory": "64Mi"},
-					"limits":   map[string]string{"cpu": "1", "memory": fmt.Sprintf("%dMi", memMB)},
-				},
-				"readinessProbe": map[string]any{
-					"tcpSocket":           map[string]any{"port": riePort},
-					"initialDelaySeconds": 1,
-					"periodSeconds":       1,
-					"failureThreshold":    30,
-				},
-			}},
-		},
+		"spec": podSpec,
 	}
 
 	podBody, _ := json.Marshal(podManifest)
@@ -298,6 +310,10 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	slog.Info("lambda k8s: pod created", "pod", podName, "function", req.FunctionName)
 
 	// Create ClusterIP service (idempotent — ignore errors if already exists).
+	type svcPort struct {
+		Port       int `json:"port"`
+		TargetPort int `json:"targetPort"`
+	}
 	svcManifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
@@ -309,7 +325,7 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		"spec": map[string]any{
 			"type":     "ClusterIP",
 			"selector": map[string]string{"function": sanitized},
-			"ports":    []map[string]any{{"port": riePort, "targetPort": riePort}},
+			"ports":    []svcPort{{Port: riePort, TargetPort: riePort}},
 		},
 	}
 	svcBody, _ := json.Marshal(svcManifest)

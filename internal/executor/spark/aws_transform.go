@@ -1,6 +1,64 @@
 package spark
 
-import "strings"
+import (
+	"strings"
+
+	"jaiscloud/internal/k8stypes"
+	"jaiscloud/internal/model"
+)
+
+// awsTransform implements CloudSparkTransform for AWS EMR / EMR-on-EKS.
+type awsTransform struct{}
+
+func init() { RegisterTransform(model.CloudAWS, awsTransform{}) }
+
+func (awsTransform) Cloud() model.Cloud { return model.CloudAWS }
+
+func (awsTransform) Rewrite(uri string, _ SparkConfig) string { return uri } // s3a:// is native on AWS
+
+func (t awsTransform) ResolveCommand(job SparkJob, cfg SparkConfig) SparkSubmitCommand {
+	return AWSResolveSparkCommand(job, cfg)
+}
+
+func (awsTransform) PodEnv(cfg SparkConfig) []k8stypes.EnvVar {
+	if cfg.S3Endpoint == "" {
+		return nil
+	}
+	return toEnvVars(map[string]string{
+		"AWS_ENDPOINT_URL":          cfg.S3Endpoint,
+		"AWS_REGION":                cfg.Region,
+		"AWS_ACCESS_KEY_ID":         cfg.AWSAccessKey,
+		"AWS_SECRET_ACCESS_KEY":     cfg.AWSSecretKey,
+		"AWS_S3_FORCE_PATH_STYLE":   "true",
+	})
+}
+
+func (awsTransform) PodVolumes(cfg SparkConfig) ([]k8stypes.Volume, []k8stypes.VolumeMount) {
+	if cfg.S3Endpoint == "" {
+		return nil, nil
+	}
+	vols := []k8stypes.Volume{{
+		Name:      "jaiscloud-aws-credentials",
+		ConfigMap: &k8stypes.ConfigMapVol{Name: "jaiscloud-aws-credentials"},
+	}}
+	mounts := []k8stypes.VolumeMount{{
+		Name:      "jaiscloud-aws-credentials",
+		MountPath: "/etc/aws",
+		ReadOnly:  true,
+	}}
+	return vols, mounts
+}
+
+func (awsTransform) SparkConfs(cfg SparkConfig) []string {
+	if cfg.S3Endpoint == "" {
+		return nil
+	}
+	image := cfg.Image
+	if image == "" {
+		image = DefaultImage
+	}
+	return awsDevboxSparkConfs(cfg, image)
+}
 
 // SparkSubmitCommand holds the resolved container command and arguments
 // after applying all transformations for local execution.

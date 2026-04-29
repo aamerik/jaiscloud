@@ -21,6 +21,15 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
   - [KMS · SecretsManager · SSM e2e tests](#kms--secretsmanager--ssm-e2e-tests-kms_fullmode-build-tag)
   - [CloudFormation e2e tests](#cloudformation-e2e-tests-cfn_fullmode-build-tag)
   - [Apache Iceberg e2e tests](#apache-iceberg-e2e-tests-iceberg_e2e-build-tag)
+- [Platform Runtime Layer](#platform-runtime-layer)
+  - [TLS CA injection](#tls-ca-injection)
+  - [Extra volumes](#extra-volumes)
+  - [Extra environment variables](#extra-environment-variables)
+  - [Docker mode behaviour](#docker-mode-behaviour)
+  - [Kubernetes mode behaviour](#kubernetes-mode-behaviour)
+- [Multi-Cloud Spark Transforms](#multi-cloud-spark-transforms)
+  - [Azure](#azure-spark-transform)
+  - [GCP](#gcp-spark-transform)
 - [Platform Setup](#platform-setup)
 
 ---
@@ -1155,6 +1164,404 @@ Always run with `-race`. JaisCloud is heavily concurrent and the race detector c
 
 ```bash
 go test -race ./...
+```
+
+---
+
+---
+
+## Platform Runtime Layer
+
+The Platform Runtime Layer (`internal/platform/`) injects TLS certificate trust, extra volumes, and environment variables uniformly into **every** JaisCloud-managed container or pod — Lambda Docker/K8s executors and Spark Docker/K8s executors alike. Configuration is loaded once at startup via `platform.LoadFromEnv()` and passed by pointer to each executor constructor. It never embeds into any workload-specific config.
+
+### TLS CA injection
+
+Two materializers run in order whenever `JAISCLOUD_PLATFORM_TLS_ENABLED=true`:
+
+| Materializer | What it does |
+|---|---|
+| **JVM truststore** | Copies the default JVM `cacerts` into an `emptyDir` and imports all CA certs via `keytool`. Sets `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=...` on the main container. |
+| **PEM bundle** | Concatenates all CA files into a single PEM bundle and sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `CURL_CA_BUNDLE` on the main container. |
+
+CA sources are specified as a JSON or YAML array via `JAISCLOUD_PLATFORM_TLS_CA_SOURCES`:
+
+```bash
+# Single ConfigMap source (K8s mode — default if unset)
+export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
+  {"name":"jaiscloud","source":{"kind":"configMap","name":"jaiscloud-ca-cert","key":"ca.crt"}}
+]'
+
+# Multiple sources (ConfigMap + Secret)
+export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
+  {"name":"corp-ca","source":{"kind":"configMap","name":"corp-ca","key":"ca.pem"}},
+  {"name":"internal","source":{"kind":"secret","name":"internal-ca","key":"tls.crt"}}
+]'
+
+# Local file (Docker mode — only "kind":"file" sources can be read by the host process)
+export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
+  {"name":"my-ca","source":{"kind":"file","key":"/etc/ssl/certs/my-ca.pem"}}
+]'
+```
+
+> **Docker mode note:** Only `kind="file"` CA sources can be materialised on the Docker host. `configMap` and `secret` sources are skipped with a warning — they are K8s-only. For Docker deployments, use `kind="file"` sources pointing to host-local PEM files.
+
+Disable TLS injection entirely:
+
+```bash
+export JAISCLOUD_PLATFORM_TLS_ENABLED=false
+```
+
+### Extra volumes
+
+Inject additional volumes into every pod/container via `JAISCLOUD_PLATFORM_VOLUMES` (JSON/YAML array, or `_FILE` variant for a file path). Both a short-form and a long-form spec are supported.
+
+**Short form** — convenience for the common cases:
+
+```bash
+export JAISCLOUD_PLATFORM_VOLUMES='[
+  {"name":"my-configmap", "configMap":"my-cm-name",   "mountPath":"/etc/conf"},
+  {"name":"my-secret",    "secret":"my-secret-name",  "mountPath":"/etc/secret",  "readOnly":true},
+  {"name":"my-pvc",       "pvc":"my-pvc-claim",       "mountPath":"/data"},
+  {"name":"scratch",      "emptyDir":true,             "mountPath":"/tmp/scratch"}
+]'
+```
+
+**Long form** — for projected volumes, CSI, hostPath, and per-mount subPath:
+
+```bash
+export JAISCLOUD_PLATFORM_VOLUMES='[
+  {
+    "name": "azure-workload-id",
+    "source": {
+      "kind": "projected",
+      "projected": {
+        "sources": [
+          {"serviceAccountToken": {"audience":"api://AzureADTokenExchange","expirationSeconds":3600,"path":"token"}}
+        ]
+      }
+    },
+    "mounts": [{"mountPath":"/var/run/secrets/azure/identity"}]
+  }
+]'
+```
+
+> **Docker mode note:** Only `kind="hostPath"` volumes produce `-v` bind-mount args. `configMap`, `secret`, `pvc`, and `projected` volumes are K8s-only and are silently skipped in Docker mode.
+
+### Extra environment variables
+
+Inject extra env vars into every pod/container:
+
+```bash
+export JAISCLOUD_PLATFORM_ENV='{"CUSTOM_VAR":"value","ANOTHER":"value2"}'
+
+# Or via file
+export JAISCLOUD_PLATFORM_ENV_FILE=/etc/jaiscloud/extra-env.json
+```
+
+### Environment variable reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `JAISCLOUD_PLATFORM_TLS_ENABLED` | `true` | Enable CA injection |
+| `JAISCLOUD_PLATFORM_TLS_CA_SOURCES` | JaisCloud default ConfigMap | JSON/YAML CA source array |
+| `JAISCLOUD_PLATFORM_TLS_CA_SOURCES_FILE` | _(empty)_ | File-based variant; takes precedence over the inline var |
+| `JAISCLOUD_PLATFORM_TLS_CLIENT_CERT` | _(empty)_ | Optional mTLS client cert source (same shape as one CA source element) |
+| `JAISCLOUD_PLATFORM_TLS_PASSWORD` | `changeit` | JVM truststore password |
+| `JAISCLOUD_PLATFORM_VOLUMES` | _(empty)_ | JSON/YAML volume spec array |
+| `JAISCLOUD_PLATFORM_VOLUMES_FILE` | _(empty)_ | File-based variant |
+| `JAISCLOUD_PLATFORM_ENV` | _(empty)_ | JSON/YAML `{"KEY":"VALUE"}` map |
+| `JAISCLOUD_PLATFORM_ENV_FILE` | _(empty)_ | File-based variant |
+| `JAISCLOUD_PLATFORM_HOSTPATH_ALLOWLIST` | _(empty)_ | Comma-separated allowed `hostPath` prefixes; empty = hostPath disabled |
+
+### Docker mode behaviour
+
+`platform.ApplyDocker` is called inside `DockerExecutor.Submit` / `startContainer` and returns `-v` and `-e` args appended to the `docker run` command:
+
+- TLS PEM bundle materialised to a host temp file → `-v /tmp/jaiscloud-ca-bundle-*.pem:/etc/ssl/certs/jaiscloud-ca.pem:ro`
+- All six non-JVM env vars set to the container path → `-e SSL_CERT_FILE=/etc/ssl/certs/jaiscloud-ca.pem ...`
+- `hostPath` volumes → `-v host/path:container/path:ro`
+- Extra env → `-e KEY=VALUE`
+
+### Kubernetes mode behaviour
+
+`platform.ApplyK8s` is called inside `K8sExecutor.buildJobManifest` / `createPod` and mutates the `k8stypes.PodSpec` in place **after** the cloud-specific transform has already contributed its volumes and env:
+
+1. CA source volumes added to `spec.volumes`
+2. JVM materializer: `emptyDir` output volume + init container (keytool import) + main container env
+3. PEM materializer: `emptyDir` output volume + init container (concatenate) + main container env vars
+4. Platform extra volumes appended (conflict-checked against existing names)
+5. Platform extra volume mounts added to the main container
+6. Platform extra env merged into the main container env (first-wins deduplication)
+
+---
+
+## Multi-Cloud Spark Transforms
+
+The `CloudSparkTransform` registry (`internal/executor/spark/cloud_transform.go`) decouples cloud-specific Spark contributions from the executor. Each cloud registers itself via `init()` and is selected at manifest build time from `SparkConfig.Cloud` (derived from `--cloud` / `JAISCLOUD_CLOUD`).
+
+| Cloud | Transform | URI rewrite | Auth mechanism |
+|---|---|---|---|
+| `aws` | `awsTransform` | `s3a://` → `s3a://` (identity) | S3 endpoint env + Hadoop S3A confs |
+| `azure` | `azureTransform` | `s3a://` → `abfss://bucket@account.dfs.core.windows.net/` | SharedKey or OAuth/Workload Identity |
+| `gcp` | `gcpTransform` | `s3a://` → `gs://` | Service account key file or K8s Secret |
+
+Each transform contributes:
+- `ResolveCommand` — binary path + rewritten `spark-submit` args
+- `SparkConfs` — `--conf` flags injected before the JAR path
+- `PodEnv` — environment variables for the spark-submit container
+- `PodVolumes` — cloud-specific volumes and mounts (credentials, identity tokens)
+
+### Azure Spark transform
+
+Set `JAISCLOUD_CLOUD=azure` and configure one of two authentication modes:
+
+**Shared key** (simpler, for dev):
+
+```bash
+export JAISCLOUD_CLOUD=azure
+export JAISCLOUD_AZURE_STORAGE_ACCOUNT=mystorageacct
+export JAISCLOUD_AZURE_STORAGE_KEY=base64encodedkey==
+```
+
+This injects `fs.azure.account.auth.type.*.dfs.core.windows.net=SharedKey` and the account key into Spark confs. URIs are rewritten `s3a://bucket/key` → `abfss://bucket@mystorageacct.dfs.core.windows.net/key`.
+
+**OAuth / Workload Identity** (for production K8s):
+
+```bash
+export JAISCLOUD_CLOUD=azure
+export JAISCLOUD_AZURE_STORAGE_ACCOUNT=mystorageacct
+export JAISCLOUD_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+export JAISCLOUD_AZURE_CLIENT_SECRET=my-client-secret
+export JAISCLOUD_AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+This injects OAuth confs and mounts a `projected` volume (`serviceAccountToken` + `downwardAPI`) at `/var/run/secrets/azure/identity` for Workload Identity federation.
+
+Optionally override the ADLS endpoint:
+
+```bash
+export JAISCLOUD_AZURE_STORAGE_ENDPOINT=https://mystorageacct.dfs.core.windows.net
+```
+
+### GCP Spark transform
+
+Set `JAISCLOUD_CLOUD=gcp` and configure one of two service-account modes:
+
+**Key file path** (the key is already present on the container filesystem):
+
+```bash
+export JAISCLOUD_CLOUD=gcp
+export JAISCLOUD_GCP_PROJECT_ID=my-gcp-project
+export JAISCLOUD_GCP_SA_KEY_PATH=/etc/gcp/key.json
+```
+
+**K8s Secret** (the key is stored in a Kubernetes Secret and mounted by the executor):
+
+```bash
+export JAISCLOUD_CLOUD=gcp
+export JAISCLOUD_GCP_PROJECT_ID=my-gcp-project
+export JAISCLOUD_GCP_SA_SECRET=my-gcp-sa-key-secret   # K8s Secret name in the executor namespace
+```
+
+The executor mounts the Secret at `/etc/gcp` and sets `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/key.json`. URIs are rewritten `s3a://bucket/key` → `gs://bucket/key`. GCS Spark confs (`spark.hadoop.google.cloud.auth.service.account.enable=true`, `spark.hadoop.fs.gs.project.id`) are injected automatically.
+
+Optionally override the GCS endpoint (for emulators):
+
+```bash
+export JAISCLOUD_GCP_STORAGE_ENDPOINT=http://fake-gcs-server:4443
+```
+
+---
+
+## Executor Mode Configuration Examples
+
+Complete environment variable sets for each executor mode. Copy the block that matches your setup and adjust paths / names.
+
+### Mock mode (default — no containers, instant completion)
+
+No extra configuration needed. This is the default when `JAISCLOUD_EXECUTOR_MODE` is unset.
+
+```bash
+# Minimal — everything defaults to in-memory mock
+./jaiscloud start
+
+# Explicit mock with full persistence
+./jaiscloud start \
+  --mode full \
+  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" \
+  --executor-mode mock
+```
+
+All Lambda invocations return an echo of the request payload. All EMR steps and job runs complete immediately with `COMPLETED` state. No Docker daemon or Kubernetes cluster needed.
+
+---
+
+### Docker mode
+
+Requires a running Docker daemon. Each Lambda function gets a warm Docker container; each Spark job runs `spark-submit` inside a Docker container.
+
+```bash
+# ── Core ──────────────────────────────────────────────────────────────────────
+export JAISCLOUD_EXECUTOR_MODE=docker
+export JAISCLOUD_MODE=full
+export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
+
+# ── Lambda ────────────────────────────────────────────────────────────────────
+export JAISCLOUD_LAMBDA_IMAGE=public.ecr.aws/lambda/python:3.12  # default per-runtime; override globally here
+export JAISCLOUD_LAMBDA_NETWORK=jaiscloud-net                     # Docker network containers join
+export JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300                        # idle container TTL
+
+# ── Spark (EMR / EMR on EKS) ──────────────────────────────────────────────────
+export JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0   # Spark Docker image
+
+# Optional: S3 endpoint so Spark containers can reach JaisCloud's S3
+export JAISCLOUD_SPARK_S3_ENDPOINT=http://host.docker.internal:4566
+export JAISCLOUD_AWS_REGION=us-east-1
+export JAISCLOUD_AWS_ACCESS_KEY_ID=test
+export JAISCLOUD_AWS_SECRET_ACCESS_KEY=test
+
+# ── Platform layer ─────────────────────────────────────────────────────────────
+# TLS: disable if no custom CA is needed
+export JAISCLOUD_PLATFORM_TLS_ENABLED=false
+
+# TLS: inject a local CA PEM file into every container
+# export JAISCLOUD_PLATFORM_TLS_ENABLED=true
+# export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[{"name":"corp-ca","source":{"kind":"file","key":"/etc/ssl/certs/corp-ca.pem"}}]'
+
+# Extra env passed to every managed container
+export JAISCLOUD_PLATFORM_ENV='{"HTTP_PROXY":"http://proxy.corp:3128","NO_PROXY":"localhost"}'
+
+# hostPath bind-mounts (must be in allowlist)
+export JAISCLOUD_PLATFORM_HOSTPATH_ALLOWLIST=/etc/ssl/certs,/run/secrets
+export JAISCLOUD_PLATFORM_VOLUMES='[{"name":"corp-certs","mountPath":"/etc/corp/certs","hostPath":"/etc/ssl/certs","readOnly":true}]'
+
+./jaiscloud start
+```
+
+**Verify Docker executor is active:**
+```bash
+# After starting, you should see in the logs:
+# INFO  executor  lambda=docker  spark=docker
+# INFO  platform tls  enabled=false  ...
+
+# Lambda cold start creates a container visible via:
+docker ps --filter name=jc-lambda-
+# Spark jobs create containers visible via:
+docker ps --filter name=jc-spark-
+```
+
+---
+
+### Kubernetes mode
+
+Requires a reachable Kubernetes cluster. Each Lambda function gets a warm Pod + ClusterIP Service; each Spark job submits a `batch/v1` Job.
+
+```bash
+# ── Core ──────────────────────────────────────────────────────────────────────
+export JAISCLOUD_EXECUTOR_MODE=k8s
+export JAISCLOUD_MODE=full
+export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
+
+# ── Kubernetes API server ─────────────────────────────────────────────────────
+# In-cluster (JaisCloud runs inside a pod): leave these unset — auto-detected
+# Out-of-cluster (local dev / CI):
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443          # kubectl cluster-info
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
+export JAISCLOUD_K8S_CA_FILE=$HOME/.kube/ca.crt                # unset = system roots
+export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+export JAISCLOUD_K8S_SA=jaiscloud-sa
+
+# ── Lambda ────────────────────────────────────────────────────────────────────
+export JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300    # idle pod TTL before garbage collection
+
+# ── Spark (EMR / EMR on EKS) ──────────────────────────────────────────────────
+export JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0
+export JAISCLOUD_K8S_SPARK_NAMESPACE=jaiscloud       # namespace for Spark batch Jobs
+export JAISCLOUD_K8S_SPARK_SA=spark-sa               # service account for the Spark driver
+
+# Optional: S3 endpoint for Spark pods to reach JaisCloud's S3
+export JAISCLOUD_SPARK_S3_ENDPOINT=http://jaiscloud.jaiscloud.svc.cluster.local:4566
+export JAISCLOUD_AWS_REGION=us-east-1
+export JAISCLOUD_AWS_ACCESS_KEY_ID=test
+export JAISCLOUD_AWS_SECRET_ACCESS_KEY=test
+
+# ── Platform layer ─────────────────────────────────────────────────────────────
+# TLS: inject a CA from a ConfigMap that already exists in the cluster
+export JAISCLOUD_PLATFORM_TLS_ENABLED=true
+export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
+  {"name":"corp-ca","source":{"kind":"configMap","name":"corp-ca-bundle","key":"ca.crt"}}
+]'
+# Password for the JVM truststore init container
+export JAISCLOUD_PLATFORM_TLS_PASSWORD=changeit
+
+# Extra env injected into every pod's main container
+export JAISCLOUD_PLATFORM_ENV='{"CUSTOM_ENDPOINT":"http://internal-service:8080"}'
+
+# Extra volume from a Secret mounted at a specific path
+export JAISCLOUD_PLATFORM_VOLUMES='[
+  {"name":"corp-tls","secret":"corp-tls-secret","mountPath":"/etc/corp/tls","readOnly":true}
+]'
+
+./jaiscloud start
+```
+
+**Verify K8s executor is active:**
+```bash
+# After starting you should see in the logs:
+# INFO  executor  lambda=k8s  spark=k8s
+# INFO  platform tls  enabled=true  ca-sources=[corp-ca]  ...
+
+# Lambda warm pods:
+kubectl get pods -n jaiscloud -l app=jaiscloud-lambda
+
+# Lambda ClusterIP services (one per function):
+kubectl get svc -n jaiscloud -l app=jaiscloud-lambda
+
+# Spark batch jobs:
+kubectl get jobs -n jaiscloud -l app=jaiscloud-spark
+```
+
+---
+
+### Multi-cloud (Azure / GCP) with K8s executor
+
+Set `--cloud` to select the cloud adapter, then add the cloud-specific Spark transform env vars. The Platform layer applies identically across all clouds.
+
+**Azure (K8s executor, OAuth auth):**
+```bash
+export JAISCLOUD_CLOUD=azure
+export JAISCLOUD_EXECUTOR_MODE=k8s
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
+export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+
+export JAISCLOUD_AZURE_STORAGE_ACCOUNT=mystorageacct
+export JAISCLOUD_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+export JAISCLOUD_AZURE_CLIENT_SECRET=my-client-secret
+export JAISCLOUD_AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+export JAISCLOUD_PLATFORM_TLS_ENABLED=true
+export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
+  {"name":"azure-ca","source":{"kind":"configMap","name":"azure-ca-bundle","key":"ca.crt"}}
+]'
+
+./jaiscloud start --mode full --dsn "postgres://..."
+```
+
+**GCP (K8s executor, Secret-based SA key):**
+```bash
+export JAISCLOUD_CLOUD=gcp
+export JAISCLOUD_EXECUTOR_MODE=k8s
+export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
+export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
+export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+
+export JAISCLOUD_GCP_PROJECT_ID=my-gcp-project
+export JAISCLOUD_GCP_SA_SECRET=my-gcp-sa-key-secret   # K8s Secret in the executor namespace
+
+export JAISCLOUD_PLATFORM_TLS_ENABLED=false   # GCP root CAs already trusted by default JVM
+
+./jaiscloud start --mode full --dsn "postgres://..."
 ```
 
 ---

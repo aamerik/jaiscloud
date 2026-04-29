@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/platform"
 )
 
 const (
@@ -32,7 +34,8 @@ type warmContainer struct {
 // until it has been idle for cfg.KeepaliveSecs seconds.
 type DockerExecutor struct {
 	cfg        LambdaConfig
-	client     *http.Client   // talks to Docker socket
+	platform   *platform.PlatformConfig
+	client     *http.Client // talks to Docker socket
 	mu         sync.Mutex
 	containers map[string]*warmContainer // functionName → container
 	nextPort   int
@@ -41,9 +44,11 @@ type DockerExecutor struct {
 }
 
 // NewDockerExecutor creates a DockerExecutor and starts the GC goroutine.
-func NewDockerExecutor(cfg LambdaConfig) *DockerExecutor {
+// plat may be nil.
+func NewDockerExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *DockerExecutor {
 	e := &DockerExecutor{
 		cfg:        cfg,
+		platform:   plat,
 		containers: make(map[string]*warmContainer),
 		nextPort:   9100,
 		done:       make(chan struct{}),
@@ -165,21 +170,43 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 		env = append(env, k+"="+v)
 	}
 
+	// Platform layer: TLS PEM bundle + extra env for this container.
+	var binds []string
+	if e.platform != nil {
+		volArgs, envArgs, err := platform.ApplyDocker(e.platform)
+		if err != nil {
+			slog.Warn("lambda docker: platform apply failed", "err", err)
+		}
+		// volArgs are pairs ["-v", "src:dst:ro"]; extract bind strings.
+		for i := 1; i < len(volArgs); i += 2 {
+			binds = append(binds, volArgs[i])
+		}
+		// envArgs are pairs ["-e", "KEY=VAL"]; extract env strings.
+		for i := 1; i < len(envArgs); i += 2 {
+			env = append(env, envArgs[i])
+		}
+	}
+
+	hostConfig := map[string]any{
+		"PortBindings": map[string]any{
+			fmt.Sprintf("%d/tcp", invocationPort): []map[string]any{
+				{"HostPort": fmt.Sprintf("%d", hostPort)},
+			},
+		},
+		"NetworkMode": e.cfg.Network,
+		"Memory":      int64(req.MemoryMB) * 1024 * 1024,
+	}
+	if len(binds) > 0 {
+		hostConfig["Binds"] = binds
+	}
+
 	body, _ := json.Marshal(map[string]any{
 		"Image": image,
 		"Env":   env,
 		"ExposedPorts": map[string]any{
 			fmt.Sprintf("%d/tcp", invocationPort): map[string]any{},
 		},
-		"HostConfig": map[string]any{
-			"PortBindings": map[string]any{
-				fmt.Sprintf("%d/tcp", invocationPort): []map[string]any{
-					{"HostPort": fmt.Sprintf("%d", hostPort)},
-				},
-			},
-			"NetworkMode": e.cfg.Network,
-			"Memory":      int64(req.MemoryMB) * 1024 * 1024,
-		},
+		"HostConfig": hostConfig,
 	})
 
 	createURL := fmt.Sprintf("http://localhost/v1.41/containers/create?name=%s", name)
@@ -248,6 +275,9 @@ func (e *DockerExecutor) gcOnce() {
 	e.mu.Lock()
 	var toRemove []string
 	for name, c := range e.containers {
+		if c.id == "" {
+			continue // sentinel during cold start; skip
+		}
 		if now.Sub(c.lastUsed) > keepalive {
 			toRemove = append(toRemove, name)
 		}

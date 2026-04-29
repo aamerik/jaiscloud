@@ -50,6 +50,7 @@ import (
 	stackprovider "jaiscloud/internal/provider/stack"
 	"jaiscloud/internal/provider/table"
 	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/platform"
 	"jaiscloud/internal/store"
 	dynamostore "jaiscloud/internal/store/aws/dynamodb"
 	s3store "jaiscloud/internal/store/aws/s3"
@@ -263,9 +264,15 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
+	platformCfg, err := platform.LoadFromEnv()
+	if err != nil {
+		slog.Error("platform config", "err", err)
+		os.Exit(1)
+	}
+
 	// Build spark executor. cfg.ExecutorMode drives both Spark and Lambda.
 	// "" / "mock" → instant mock completion (nil exec); "docker" / "k8s" → real executor.
-	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode)
+	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode, cfg.Cloud, platformCfg)
 	if sparkExec != nil {
 		slog.Info("spark executor enabled", "mode", cfg.ExecutorMode)
 	}
@@ -327,7 +334,15 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if v := os.Getenv("JAISCLOUD_ENDPOINT"); v != "" {
 		lambdaCfg.JaisCloudEndpoint = v
 	}
-	lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
+	var lambdaExec lambdaexec.LambdaExecutor
+	switch cfg.ExecutorMode {
+	case "docker":
+		lambdaExec = lambdaexec.NewDockerExecutor(lambdaCfg, platformCfg)
+	case "k8s":
+		lambdaExec = lambdaexec.NewK8sExecutor(lambdaCfg, platformCfg)
+	default:
+		lambdaExec = lambdaexec.NewExecutor(lambdaCfg)
+	}
 	slog.Info("lambda executor", "mode", cfg.ExecutorMode)
 	prevCleanup := cleanup
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
@@ -370,11 +385,12 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
 // Returns (nil, zero) when mode is "" or "off" — instant completion remains the default.
-func buildSparkExecutor(mode string) (spark.SparkExecutor, spark.SparkConfig) {
+func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig) (spark.SparkExecutor, spark.SparkConfig) {
 	if mode == "" || mode == "off" {
 		return nil, spark.SparkConfig{}
 	}
 	cfg := spark.SparkConfigFrom(mode, spark.SizeSmall)
+	cfg.Cloud = model.Cloud(cloud)
 	// Generic image override — applies to both docker and k8s modes.
 	// JAISCLOUD_K8S_SPARK_IMAGE (legacy) is read by SparkConfigFrom; this wins if set.
 	if v := os.Getenv("JAISCLOUD_SPARK_IMAGE"); v != "" {
@@ -390,6 +406,10 @@ func buildSparkExecutor(mode string) (spark.SparkExecutor, spark.SparkConfig) {
 		if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
 			cfg.ServiceAccount = v
 		}
+		return spark.NewK8sExecutor(cfg, plat), cfg
+	}
+	if mode == "docker" {
+		return spark.NewDockerExecutor(cfg, plat), cfg
 	}
 	return spark.NewExecutor(mode, cfg), cfg
 }

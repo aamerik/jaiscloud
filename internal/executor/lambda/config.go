@@ -22,6 +22,8 @@ type LambdaConfig struct {
 	JaisCloudEndpoint string
 	// Region is injected as AWS_DEFAULT_REGION into containers.
 	Region string
+	// Cloud is used for metadata labels on managed pods/containers.
+	Cloud string
 }
 
 // regionOrDefault returns r if non-empty, else "us-east-1".
@@ -87,12 +89,13 @@ func ImageForRuntime(req InvokeRequest, cfg LambdaConfig) string {
 }
 
 // NewExecutor constructs the appropriate LambdaExecutor for the given mode.
+// For executors with a platform config use NewK8sExecutor / NewDockerExecutor directly.
 func NewExecutor(cfg LambdaConfig) LambdaExecutor {
 	switch cfg.Mode {
 	case "docker":
-		return NewDockerExecutor(cfg)
+		return NewDockerExecutor(cfg, nil)
 	case "k8s":
-		return NewK8sExecutor(cfg)
+		return NewK8sExecutor(cfg, nil)
 	default:
 		return &MockExecutor{}
 	}
