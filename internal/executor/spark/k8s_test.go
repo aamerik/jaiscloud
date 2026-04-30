@@ -146,7 +146,7 @@ func TestK8sExecutor_Submit(t *testing.T) {
 	if !hasMaster {
 		t.Errorf("expected --master local[*] in args, got %v", containers[0].Args)
 	}
-	if _, ok := exec.jobs.Load(job.JobID); !ok {
+	if _, ok := exec.jobEntries.Load(job.JobID); !ok {
 		t.Error("expected job to be tracked in executor map after submit")
 	}
 }
@@ -173,7 +173,7 @@ func TestK8sExecutor_Status_Completed(t *testing.T) {
 		Conditions: []jobCondition{{Type: "Complete", Status: "True"}},
 	}
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-1", "spark-job-1")
+	exec.jobEntries.Store("job-1", &jobEntry{name: "spark-job-1"})
 
 	s, err := exec.Status(context.Background(), "job-1")
 	if err != nil {
@@ -190,7 +190,7 @@ func TestK8sExecutor_Status_Failed(t *testing.T) {
 		Conditions: []jobCondition{{Type: "Failed", Status: "True"}},
 	}
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-2", "spark-job-2")
+	exec.jobEntries.Store("job-2", &jobEntry{name: "spark-job-2"})
 
 	s, err := exec.Status(context.Background(), "job-2")
 	if err != nil {
@@ -205,7 +205,7 @@ func TestK8sExecutor_Status_Running(t *testing.T) {
 	fk := newFakeK8s(t)
 	fk.status = batchJobStatus{Active: 1, StartTime: "2026-01-01T00:00:00Z"}
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-3", "spark-job-3")
+	exec.jobEntries.Store("job-3", &jobEntry{name: "spark-job-3"})
 
 	s, err := exec.Status(context.Background(), "job-3")
 	if err != nil {
@@ -234,7 +234,7 @@ func TestK8sExecutor_Status_UnknownJob_ReturnsPending(t *testing.T) {
 func TestK8sExecutor_Cancel(t *testing.T) {
 	fk := newFakeK8s(t)
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-4", "spark-job-4")
+	exec.jobEntries.Store("job-4", &jobEntry{name: "spark-job-4"})
 
 	if err := exec.Cancel(context.Background(), "job-4"); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -242,7 +242,7 @@ func TestK8sExecutor_Cancel(t *testing.T) {
 	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-job-4" {
 		t.Errorf("expected spark-job-4 deleted, got %v", fk.deleted)
 	}
-	if _, ok := exec.jobs.Load("job-4"); ok {
+	if _, ok := exec.jobEntries.Load("job-4"); ok {
 		t.Error("job should be removed from map after cancel")
 	}
 }
@@ -264,13 +264,13 @@ func TestK8sExecutor_Cancel_UnknownJob_NoOp(t *testing.T) {
 func TestK8sExecutor_Reset_ClearsMap(t *testing.T) {
 	fk := newFakeK8s(t)
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-a", "spark-job-a")
-	exec.jobs.Store("job-b", "spark-job-b")
+	exec.jobEntries.Store("job-a", &jobEntry{name: "spark-job-a"})
+	exec.jobEntries.Store("job-b", &jobEntry{name: "spark-job-b"})
 
 	exec.Reset()
 
 	count := 0
-	exec.jobs.Range(func(_, _ any) bool { count++; return true })
+	exec.jobEntries.Range(func(_, _ any) bool { count++; return true })
 	if count != 0 {
 		t.Errorf("expected empty map after Reset, got %d entries", count)
 	}
@@ -425,8 +425,8 @@ func TestK8sExecutor_Submit_EMRContainersPattern(t *testing.T) {
 func TestK8sExecutor_Close_SuspendsTrackedJobs(t *testing.T) {
 	fk := newFakeK8s(t)
 	exec := newTestK8sExecutor(t, fk)
-	exec.jobs.Store("job-a", "spark-job-a")
-	exec.jobs.Store("job-b", "spark-job-b")
+	exec.jobEntries.Store("job-a", &jobEntry{name: "spark-job-a"})
+	exec.jobEntries.Store("job-b", &jobEntry{name: "spark-job-b"})
 
 	if err := exec.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -463,7 +463,7 @@ func TestK8sExecutor_CleanupOrphans_ReAdoptsRunningJobs(t *testing.T) {
 	exec := newTestK8sExecutor(t, fk)
 	exec.cleanupOrphans()
 
-	if _, ok := exec.jobs.Load("job-run-1"); !ok {
+	if _, ok := exec.jobEntries.Load("job-run-1"); !ok {
 		t.Error("running job should be re-adopted in jobs map")
 	}
 	if len(fk.deleted) != 0 {
@@ -492,7 +492,7 @@ func TestK8sExecutor_CleanupOrphans_DeletesTerminalJobs(t *testing.T) {
 	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-done-job" {
 		t.Errorf("terminal job should be deleted, got: %v", fk.deleted)
 	}
-	if _, ok := exec.jobs.Load("job-done-1"); ok {
+	if _, ok := exec.jobEntries.Load("job-done-1"); ok {
 		t.Error("terminal job should not be adopted")
 	}
 }
@@ -517,7 +517,7 @@ func TestK8sExecutor_CleanupOrphans_ResumesSuspendedJobs(t *testing.T) {
 	if len(fk.resumed) != 1 || fk.resumed[0] != "spark-suspended-job" {
 		t.Errorf("suspended job should be unsuspended, got resumed: %v", fk.resumed)
 	}
-	if _, ok := exec.jobs.Load("job-susp-1"); !ok {
+	if _, ok := exec.jobEntries.Load("job-susp-1"); !ok {
 		t.Error("resumed job should be adopted in jobs map")
 	}
 }
@@ -540,7 +540,7 @@ func TestBuildJobManifest_Bootstrap_NoExtras(t *testing.T) {
 	exec := newTestK8sExecutor(t, fk)
 	job := SparkJob{JobID: "j-1", JarURI: "s3://b/app.jar", Config: exec.cfg}
 
-	manifest, err := exec.buildJobManifest("spark-j-1", job)
+	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-1", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestBuildJobManifest_Bootstrap_InitContainersPrepended(t *testing.T) {
 		},
 	}
 
-	manifest, err := exec.buildJobManifest("spark-j-boot", job)
+	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-boot", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestBuildJobManifest_Bootstrap_VolumesAppended(t *testing.T) {
 		},
 	}
 
-	manifest, err := exec.buildJobManifest("spark-j-vols", job)
+	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-vols", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestBuildJobManifest_Bootstrap_MainMountsAppended(t *testing.T) {
 		ExtraMainMounts:     []volumeMount{{Name: "bootstrap-prefix-etc-pki", MountPath: "/etc/pki"}},
 	}
 
-	manifest, err := exec.buildJobManifest("spark-j-mounts", job)
+	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-mounts", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestBuildJobManifest_Bootstrap_VolumeConflict(t *testing.T) {
 		ExtraVolumes:        []volume{{Name: "conflict-vol", EmptyDir: &k8stypes.EmptyDirVol{}}},
 	}
 
-	if _, err := exec.buildJobManifest("spark-j-conflict", job); err == nil {
+	if _, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-conflict", job); err == nil {
 		t.Error("expected volume conflict error from buildJobManifest; got nil")
 	}
 }
@@ -691,7 +691,7 @@ func TestBuildJobManifest_Bootstrap_OrderPreserved(t *testing.T) {
 		ExtraVolumes:        []volume{{Name: "bootstrap-prefix-tmp", EmptyDir: &k8stypes.EmptyDirVol{}}},
 	}
 
-	manifest, err := exec.buildJobManifest("spark-j-order", job)
+	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-order", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -745,7 +745,7 @@ func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
 	exec.cleanupOrphans()
 
 	// Running → adopted.
-	if _, ok := exec.jobs.Load("jid-running"); !ok {
+	if _, ok := exec.jobEntries.Load("jid-running"); !ok {
 		t.Error("running job should be adopted")
 	}
 	// Terminal → deleted.
@@ -762,7 +762,7 @@ func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
 	if len(fk.resumed) != 1 || fk.resumed[0] != "spark-suspended" {
 		t.Errorf("suspended job should be resumed, got: %v", fk.resumed)
 	}
-	if _, ok := exec.jobs.Load("jid-suspended"); !ok {
+	if _, ok := exec.jobEntries.Load("jid-suspended"); !ok {
 		t.Error("resumed job should be adopted")
 	}
 }

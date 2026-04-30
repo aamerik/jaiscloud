@@ -272,7 +272,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	// Build spark executor. cfg.ExecutorMode drives both Spark and Lambda.
 	// "" / "mock" → instant mock completion (nil exec); "docker" / "k8s" → real executor.
-	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode, cfg.Cloud, platformCfg)
+	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode, cfg.Cloud, platformCfg, s.blobs)
 	if sparkExec != nil {
 		slog.Info("spark executor enabled", "mode", cfg.ExecutorMode)
 	}
@@ -310,6 +310,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
 	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
+	emrcOpts = append(emrcOpts, emrcontainersprovider.WithBlobFetcher(s3Fetcher))
 	if sparkExec != nil {
 		emrOpts = append(emrOpts, emrprovider.WithExecutor(sparkExec, sparkCfg))
 		emrcOpts = append(emrcOpts, emrcontainersprovider.WithExecutor(sparkExec, sparkCfg))
@@ -317,6 +318,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	emrP := emrprovider.New(s.resources, bus, emrOpts...)
 	emrcP := emrcontainersprovider.New(s.resources, bus, emrcOpts...)
+
+	if k8sExec, ok := sparkExec.(*spark.K8sExecutor); ok {
+		k8sExec.OnClusterModeOrphanDelete(func(jobID, reason string) {
+			ev := spark.StateChangeEvent{JobID: jobID, NewState: spark.StateFailed, Message: reason}
+			emrP.OnStateChange(ev)
+			emrcP.OnStateChange(ev)
+		})
+	}
 
 	cleanup := func() {}
 	if sparkExec != nil {
@@ -416,7 +425,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
 // Returns (nil, zero) when mode is "" or "off" — instant completion remains the default.
-func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig) (spark.SparkExecutor, spark.SparkConfig) {
+func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig, blobs blobfs.BlobStore) (spark.SparkExecutor, spark.SparkConfig) {
 	if mode == "" || mode == "off" {
 		return nil, spark.SparkConfig{}
 	}
@@ -437,7 +446,7 @@ func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig) (spar
 		if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
 			cfg.ServiceAccount = v
 		}
-		return spark.NewK8sExecutor(cfg, plat), cfg
+		return spark.NewK8sExecutor(cfg, plat, blobs), cfg
 	}
 	if mode == "docker" {
 		return spark.NewDockerExecutor(cfg, plat), cfg

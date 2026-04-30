@@ -480,6 +480,11 @@ export JAISCLOUD_K8S_SA=spark-sa
 | `JAISCLOUD_BOOTSTRAP_IMAGE` | `amazon/aws-cli:2.18` | Init container image used to run EMR bootstrap scripts |
 | `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES` | `1048576` | Maximum allowed size per bootstrap script (1 MiB) |
 | `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` | `/etc/pki,/home/hadoop` | Comma-separated filesystem prefixes made writable by bootstrap init containers (one `emptyDir` volume per prefix) |
+| `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` | `auto` | Cluster deploy-mode policy: `auto` (enable when pod templates provided), `always`, `never` |
+| `JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING` | `true` | Strip scheduling fields from merged pod templates before upload |
+| `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN` | `leave` | What `Close()` does to running cluster-mode Jobs: `leave` (suspend) or `delete` |
+| `JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES` | `262144` | Maximum size per pod-template YAML (256 KiB) |
+| `JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET` | `jaiscloud-spark-templates` | S3 bucket for merged executor pod templates |
 
 ### EMR bootstrap actions (K8s mode)
 
@@ -644,6 +649,59 @@ Cluster size controls resource allocation:
 | `small` (default) | 1 | 500m / 1Gi | 500m / 1Gi |
 | `medium` | 2 | 1 / 2Gi | 1 / 2Gi |
 | `large` | 4 | 2 / 4Gi | 2 / 4Gi |
+
+### 5. Spark K8s cluster-mode (pod templates)
+
+By default the `K8sExecutor` runs `spark-submit --deploy-mode cluster`, which places the **driver inside the K8s Job Pod** (Spark's "cluster" mode). For large jobs you can also supply driver and executor pod templates so Spark uses its native `--conf spark.kubernetes.driver.podTemplateFile` / `--conf spark.kubernetes.executor.podTemplateFile` mechanism.
+
+#### How cluster-mode policy works
+
+`JAISCLOUD_SPARK_K8S_CLUSTER_MODE` controls when cluster deploy-mode is actually engaged:
+
+| Policy | Behaviour |
+|---|---|
+| `auto` (default) | Enable cluster deploy-mode when the job includes pod-template `--conf` entries; fall back to local mode otherwise |
+| `always` | Always enable cluster deploy-mode, even if no pod templates are provided |
+| `never` | Always use local mode; pod-template `--conf` entries are stripped before submission |
+
+When cluster mode is active, `SparkSubmitArgs` (Pattern 3) generates:
+
+```
+--master k8s://<JAISCLOUD_K8S_APISERVER>
+--deploy-mode cluster
+--conf spark.kubernetes.driver.podTemplateFile=<s3-uri>
+--conf spark.kubernetes.executor.podTemplateFile=<s3-uri>
+```
+
+The executor pod template is merged from the job-supplied template and uploaded to the S3 store (`JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET`). The upload URI is injected as a `--conf` entry so the Spark driver can fetch it at runtime. If `createJob` fails after the upload, the template blob is automatically cleaned up.
+
+#### Requirements for cluster-mode to succeed
+
+| Requirement | How to satisfy |
+|---|---|
+| `JAISCLOUD_K8S_SA` set | Spark driver needs RBAC to create executor Pods; without a service account the driver Pod fails at admission |
+| Spark image pre-loaded | With `ImagePullPolicy=Never` (default for local clusters), the image must exist on the node; without this, executor Pods fail to start |
+| `JAISCLOUD_K8S_S3_ENDPOINT` set | When the JAR URI is `s3://...`, the driver must reach the S3 store; without this the fetch fails silently |
+| `--master k8s://...` in `sparkSubmitParameters` | Spark must know the cluster API server; without it the driver picks its default master which is almost certainly wrong |
+
+JaisCloud logs a structured `WARN` at Job submission time if any of these are missing, making misconfigs visible before the Job reaches Kubernetes:
+
+```
+WARN spark k8s: cluster-mode job has no ServiceAccount — driver pod will have no RBAC to create executor pods; set JAISCLOUD_K8S_SA
+WARN spark k8s: cluster-mode job using default image with ImagePullPolicy=Never — pre-pull apache/spark:3.5.0 or set JAISCLOUD_SPARK_IMAGE
+WARN spark k8s: cluster-mode job references an s3:// JAR URI but JAISCLOUD_K8S_S3_ENDPOINT is unset — driver will fail to fetch the JAR
+WARN spark k8s: cluster mode active but no --master arg found — add --master k8s://<api-server> to sparkSubmitParameters
+```
+
+#### Troubleshooting cluster-mode failures
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Job submitted but step stays `RUNNING` forever | Driver Pod `Pending` due to image pull failure | Pre-pull the Spark image: `docker pull apache/spark:3.5.0 && kind load docker-image apache/spark:3.5.0` |
+| Step immediately `FAILED` | Driver Pod `Error` or `CrashLoopBackOff` | `kubectl logs -n <ns> -l spark-role=driver --tail=100` |
+| Step `FAILED` with "template cleanup failed" | Executor template upload succeeded but `createJob` failed | Check K8s API server connectivity; look for RBAC errors |
+| `always` mode but Spark ignores pod templates | No `--master k8s://...` in step args | Add `--master k8s://<api-server>` to `sparkSubmitParameters` |
+| `always` mode + no pod templates provided | Driver submits but no executor template is uploaded | Expected — driver uses its built-in defaults; supply template confs to customise |
 
 ---
 

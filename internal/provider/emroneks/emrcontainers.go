@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/model"
@@ -36,7 +38,8 @@ type EMRContainersProvider struct {
 	executor    spark.SparkExecutor // nil = instant completion
 	executorCfg spark.SparkConfig
 	poller      *spark.StatusPoller
-	jobRefs     sync.Map // sparkJobID → jobRef
+	jobRefs     sync.Map           // sparkJobID → jobRef
+	fetcher     blobfs.BlobFetcher // nil = cluster mode unavailable
 }
 
 // Option configures EMRContainersProvider.
@@ -50,6 +53,12 @@ func WithExecutor(ex spark.SparkExecutor, cfg spark.SparkConfig) Option {
 // WithPoller attaches a StatusPoller.
 func WithPoller(pol *spark.StatusPoller) Option {
 	return func(p *EMRContainersProvider) { p.poller = pol }
+}
+
+// WithBlobFetcher wires a BlobFetcher for cluster-mode pod-template loading.
+// Without this option, cluster mode is unavailable (AllowClusterMode stays false).
+func WithBlobFetcher(f blobfs.BlobFetcher) Option {
+	return func(p *EMRContainersProvider) { p.fetcher = f }
 }
 
 // SetPoller sets the poller after construction.
@@ -322,26 +331,52 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 				}
 			}
 		}
-		// Extract --conf flags from the ConfigurationOverrides.applicationConfiguration
-		// (spark-defaults properties). sparkSubmitParameters --conf flag are parsed
-		// later by BuildSparkJob and take precedence (last-wins).
-		var configOverrides []string
-		if co, ok := nr.Params["configurationOverrides"].(map[string]any); ok {
-			if appConfs, ok := co["applicationConfiguration"].([]any); ok {
-				for _, ac := range appConfs {
-					acMap, ok := ac.(map[string]any)
-					if !ok {
-						continue
-					}
-					if props, ok := acMap["properties"].(map[string]any); ok {
-						for k, v := range props {
-							if s, ok := v.(string); ok {
-								configOverrides = append(configOverrides, "--conf", k+"="+s)
-							}
-						}
-					}
+		// Flatten configurationOverrides into a map for template URI extraction
+		// and --conf injection. The inline loop below reproduces the old behaviour
+		// for non-template confs; template keys are consumed by extractTemplateURIs.
+		overrideConfs := flattenAppConfiguration(nr.Params)
+		driverURI, executorURI := extractTemplateURIs(overrideConfs, sparkParams)
+
+		// Fetch pod-template bytes when cluster mode is engaged.
+		var driverBytes, execBytes []byte
+		if p.fetcher != nil && shouldEngageClusterMode(p.executorCfg, driverURI, executorURI) {
+			if driverURI != "" {
+				b, ferr := p.fetcher.Fetch(ctx, driverURI)
+				if ferr != nil {
+					slog.Warn("emroneks: driver template fetch failed; falling back to local mode",
+						"uri", driverURI, "err", ferr)
+				} else if int64(len(b)) > p.executorCfg.PodTemplateMaxBytes {
+					slog.Warn("emroneks: driver template exceeds max bytes; falling back to local mode",
+						"uri", driverURI, "size", len(b), "max", p.executorCfg.PodTemplateMaxBytes)
+				} else {
+					driverBytes = b
 				}
 			}
+			if executorURI != "" {
+				b, ferr := p.fetcher.Fetch(ctx, executorURI)
+				if ferr != nil {
+					slog.Warn("emroneks: executor template fetch failed; falling back to local mode",
+						"uri", executorURI, "err", ferr)
+				} else if int64(len(b)) > p.executorCfg.PodTemplateMaxBytes {
+					slog.Warn("emroneks: executor template exceeds max bytes; falling back to local mode",
+						"uri", executorURI, "size", len(b), "max", p.executorCfg.PodTemplateMaxBytes)
+				} else {
+					execBytes = b
+				}
+			}
+		}
+
+		// Rebuild configOverrides as --conf flags for non-template spark properties.
+		// Template URI keys are consumed by extractTemplateURIs and handled separately
+		// via cluster-mode upload; including them here would inject stale URIs into args.
+		const driverTemplateKey = "spark.kubernetes.driver.podTemplateFile"
+		const execTemplateKey = "spark.kubernetes.executor.podTemplateFile"
+		var configOverrides []string
+		for k, v := range overrideConfs {
+			if k == driverTemplateKey || k == execTemplateKey {
+				continue
+			}
+			configOverrides = append(configOverrides, "--conf", k+"="+v)
 		}
 		// Prepend config overrides to user-supplied spark params so that they take precedence.
 		if len(configOverrides) > 0 {
@@ -354,6 +389,10 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		}
 
 		job := spark.BuildSparkJob(id, entryPoint, "", args, sparkParams, p.executorCfg)
+		job.DriverTemplateBytes = driverBytes
+		job.ExecutorTemplateBytes = execBytes
+		job.AllowClusterMode = len(driverBytes) > 0 || len(execBytes) > 0 ||
+			p.executorCfg.ClusterMode == "always"
 		if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
 			jr.State = "FAILED"
 			p.saveJobRun(ctx, jr)

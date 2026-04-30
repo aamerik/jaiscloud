@@ -283,6 +283,20 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 | `--blob-dir` | `JAISCLOUD_BLOB_DIR` | _(empty)_ | Directory for S3 blob bytes (full mode, optional) |
 | `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | _(empty)_ | Container orchestrator: `mock` / `docker` / `k8s` |
 
+### Spark K8s cluster-mode (pod templates)
+
+When `JAISCLOUD_EXECUTOR_MODE=k8s`, the following variables control whether `StartJobRun` / `AddJobFlowSteps` runs Spark in K8s cluster deploy-mode (driver runs as a real K8s Pod) or local-mode inside the spark-submit container.
+
+| Env var | Default | Description |
+|---|---|---|
+| `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` | `auto` | `auto` — enable when a pod template is provided; `always` — always use cluster deploy-mode; `never` — always use local mode |
+| `JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING` | `true` | Strip `nodeSelector`, `tolerations`, `affinity`, and `topologySpreadConstraints` from merged pod templates (prevents node-assignment conflicts) |
+| `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN` | `leave` | What `Close()` does to running cluster-mode Jobs: `leave` — leave running; `delete` — delete immediately |
+| `JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES` | `262144` | Maximum allowed size per pod-template YAML (256 KiB default) |
+| `JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET` | `jaiscloud-spark-templates` | S3 bucket used to store merged executor pod templates; auto-created on first use |
+
+> **Required for cluster mode:** `JAISCLOUD_K8S_SA` (service account) must be set, and the Spark image must be pre-loaded in the cluster when `ImagePullPolicy=Never`. Missing either will produce a startup `WARN` and the Job will fail inside Kubernetes. See the [DEVELOPER_GUIDE](DEVELOPER_GUIDE.md#spark-k8s-cluster-mode-pod-templates) for a full checklist.
+
 ### Platform Runtime Layer
 
 The Platform Runtime Layer injects TLS trust, extra volumes, and environment variables uniformly into every JaisCloud-managed container or pod — without coupling the configuration to any specific executor.
