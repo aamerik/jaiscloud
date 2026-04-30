@@ -35,8 +35,27 @@ type Container struct {
 }
 
 type EnvVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name      string        `json:"name"`
+	Value     string        `json:"value,omitempty"`
+	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
+}
+
+type EnvVarSource struct {
+	SecretKeyRef    *SecretKeySelector    `json:"secretKeyRef,omitempty"`
+	ConfigMapKeyRef *ConfigMapKeySelector `json:"configMapKeyRef,omitempty"`
+	FieldRef        *ObjectFieldSelector  `json:"fieldRef,omitempty"`
+}
+
+type SecretKeySelector struct {
+	Name     string `json:"name"`
+	Key      string `json:"key"`
+	Optional *bool  `json:"optional,omitempty"`
+}
+
+type ConfigMapKeySelector struct {
+	Name     string `json:"name"`
+	Key      string `json:"key"`
+	Optional *bool  `json:"optional,omitempty"`
 }
 
 type VolumeMount struct {

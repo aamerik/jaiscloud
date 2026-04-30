@@ -2,7 +2,11 @@
 // running Spark jobs in various environments (mock, k8s, local, docker, remote).
 package spark
 
-import "context"
+import (
+	"context"
+
+	"jaiscloud/internal/k8stypes"
+)
 
 // SparkState mirrors EMR step/job-run states.
 type SparkState string
@@ -44,6 +48,23 @@ type SparkJob struct {
 
 	// Config is the resolved executor configuration for this job.
 	Config SparkConfig
+
+	// Bootstrap fragments — set by the EMR provider after resolving bootstrap
+	// actions. Executor reads these and injects them into the batch Job manifest.
+	// All nil when no bootstrap actions are configured.
+	ExtraInitContainers []k8stypes.Container
+	ExtraVolumes        []k8stypes.Volume
+	ExtraMainMounts     []k8stypes.VolumeMount
+
+	// Pod template bytes — pre-merged by the EMRContainers provider.
+	// Executor writes each to a ConfigMap and injects configmap:// spark confs.
+	// Nil when no pod template is configured.
+	DriverTemplateBytes   []byte
+	ExecutorTemplateBytes []byte
+
+	// AllowClusterMode enables Spark cluster-deploy-mode (driver runs as K8s Pod).
+	// When false (default), spark-submit is rewritten to local[*] client mode.
+	AllowClusterMode bool
 }
 
 // SparkStatus is the current status of a submitted job.

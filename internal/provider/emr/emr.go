@@ -6,18 +6,52 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
+
+// BootstrapAction is a typed representation of an EMR bootstrap action.
+// Parsed from the RunJobFlow request and used by the bootstrap resolver.
+type BootstrapAction struct {
+	Name   string
+	S3Path string
+	Args   []string
+}
+
+// parsedBootstrapActions converts the stored []map[string]any bootstrap
+// actions into typed BootstrapAction values for the resolver.
+func parsedBootstrapActions(raw []map[string]any) []BootstrapAction {
+	out := make([]BootstrapAction, 0, len(raw))
+	for _, ba := range raw {
+		name, _ := ba["Name"].(string)
+		script, _ := ba["ScriptBootstrapAction"].(map[string]any)
+		if script == nil {
+			script = map[string]any{}
+		}
+		path, _ := script["Path"].(string)
+		var args []string
+		if rawArgs, ok := script["Args"].([]any); ok {
+			for _, a := range rawArgs {
+				if s, ok := a.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+		out = append(out, BootstrapAction{Name: name, S3Path: path, Args: args})
+	}
+	return out
+}
 
 // jobRef identifies the store resource a Spark job maps to and carries the
 // request context needed to publish EventBus events from async callbacks.
@@ -31,12 +65,14 @@ type jobRef struct {
 
 // EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
 type EMRProvider struct {
-	resources   store.ResourceStore
-	bus         *events.EventBus
-	executor    spark.SparkExecutor // nil = instant completion
-	executorCfg spark.SparkConfig
-	poller      *spark.StatusPoller // nil when executor is nil
-	jobRefs     sync.Map            // jobID → jobRef
+	resources      store.ResourceStore
+	bus            *events.EventBus
+	executor       spark.SparkExecutor // nil = instant completion
+	executorCfg    spark.SparkConfig
+	poller         *spark.StatusPoller // nil when executor is nil
+	jobRefs        sync.Map            // jobID → jobRef
+	bootstrapFetch blobfs.BlobFetcher  // nil = bootstrap disabled
+	bootstrapCfg   BootstrapConfig
 }
 
 // Option configures EMRProvider.
@@ -45,6 +81,13 @@ type Option func(*EMRProvider)
 // WithExecutor attaches a SparkExecutor and its config to the provider.
 func WithExecutor(ex spark.SparkExecutor, cfg spark.SparkConfig) Option {
 	return func(p *EMRProvider) { p.executor = ex; p.executorCfg = cfg }
+}
+
+// WithBootstrap attaches a BlobFetcher and BootstrapConfig to the provider.
+// When set, AddJobFlowSteps resolves bootstrap actions into k8stypes fragments
+// and sets them on the SparkJob before calling Submit.
+func WithBootstrap(fetcher blobfs.BlobFetcher, cfg BootstrapConfig) Option {
+	return func(p *EMRProvider) { p.bootstrapFetch = fetcher; p.bootstrapCfg = cfg }
 }
 
 // WithPoller attaches a StatusPoller.
@@ -414,6 +457,23 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 			if p.executor != nil {
 				jar, mainClass, args := extractHadoopJarStep(m)
 				job := spark.BuildSparkJob(sid, jar, mainClass, args, "", p.executorCfg)
+
+				// Resolve bootstrap actions into k8stypes fragments and attach
+				// them to the job so the K8s executor can inject them into the manifest.
+				if p.bootstrapFetch != nil && len(c.BootstrapActions) > 0 {
+					sparkEnv := bootstrapSparkEnv(p.executorCfg)
+					typed := parsedBootstrapActions(c.BootstrapActions)
+					initCtrs, vols, mounts, resolveErr := Resolve(ctx, p.bootstrapFetch, p.bootstrapCfg, typed, sparkEnv)
+					if resolveErr != nil {
+						slog.Error("emr: bootstrap resolve failed, marking step FAILED", "step", sid, "err", resolveErr)
+						step["Status"].(map[string]any)["State"] = "FAILED"
+						continue
+					}
+					job.ExtraInitContainers = initCtrs
+					job.ExtraVolumes = vols
+					job.ExtraMainMounts = mounts
+				}
+
 				if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
 					// Mark failed immediately — don't block the API response
 					step["Status"].(map[string]any)["State"] = "FAILED"

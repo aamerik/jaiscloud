@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"jaiscloud/internal/k8stypes"
+	"jaiscloud/internal/platform"
 )
 
 // fakeK8s runs an httptest.TLSServer that fakes the K8s batch/v1 Jobs API.
@@ -516,6 +519,189 @@ func TestK8sExecutor_CleanupOrphans_ResumesSuspendedJobs(t *testing.T) {
 	}
 	if _, ok := exec.jobs.Load("job-susp-1"); !ok {
 		t.Error("resumed job should be adopted in jobs map")
+	}
+}
+
+// ── buildJobManifest: bootstrap fragment injection ────────────────────────────
+
+func makeInitCtr(name string) container {
+	zero := int64(0)
+	return container{
+		Name:    name,
+		Image:   "amazon/aws-cli:2.18",
+		Command: []string{"/bin/sh", "-c"},
+		Args:    []string{"echo " + name},
+		SecurityContext: &k8stypes.SecurityContext{RunAsUser: &zero},
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_NoExtras(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	job := SparkJob{JobID: "j-1", JarURI: "s3://b/app.jar", Config: exec.cfg}
+
+	manifest, err := exec.buildJobManifest("spark-j-1", job)
+	if err != nil {
+		t.Fatalf("buildJobManifest: %v", err)
+	}
+	if len(manifest.Spec.Template.Spec.InitContainers) != 0 {
+		t.Errorf("expected no init containers when no extras; got %d", len(manifest.Spec.Template.Spec.InitContainers))
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_InitContainersPrepended(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	job := SparkJob{
+		JobID:  "j-boot",
+		JarURI: "s3://b/app.jar",
+		Config: exec.cfg,
+		ExtraInitContainers: []container{
+			makeInitCtr("bootstrap-stage-certs"),
+			makeInitCtr("bootstrap-init-hadoop"),
+		},
+		ExtraVolumes: []volume{
+			{Name: "bootstrap-prefix-etc-pki", EmptyDir: &k8stypes.EmptyDirVol{}},
+			{Name: "bootstrap-prefix-home-hadoop", EmptyDir: &k8stypes.EmptyDirVol{}},
+		},
+		ExtraMainMounts: []volumeMount{
+			{Name: "bootstrap-prefix-etc-pki", MountPath: "/etc/pki"},
+			{Name: "bootstrap-prefix-home-hadoop", MountPath: "/home/hadoop"},
+		},
+	}
+
+	manifest, err := exec.buildJobManifest("spark-j-boot", job)
+	if err != nil {
+		t.Fatalf("buildJobManifest: %v", err)
+	}
+
+	spec := manifest.Spec.Template.Spec
+	if len(spec.InitContainers) != 2 {
+		t.Fatalf("expected 2 init containers; got %d", len(spec.InitContainers))
+	}
+	if spec.InitContainers[0].Name != "bootstrap-stage-certs" {
+		t.Errorf("first init container should be bootstrap-stage-certs; got %q", spec.InitContainers[0].Name)
+	}
+	if spec.InitContainers[1].Name != "bootstrap-init-hadoop" {
+		t.Errorf("second init container should be bootstrap-init-hadoop; got %q", spec.InitContainers[1].Name)
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_VolumesAppended(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	job := SparkJob{
+		JobID:  "j-vols",
+		JarURI: "s3://b/app.jar",
+		Config: exec.cfg,
+		ExtraInitContainers: []container{makeInitCtr("bootstrap-test")},
+		ExtraVolumes: []volume{
+			{Name: "bootstrap-prefix-etc-pki", EmptyDir: &k8stypes.EmptyDirVol{}},
+		},
+	}
+
+	manifest, err := exec.buildJobManifest("spark-j-vols", job)
+	if err != nil {
+		t.Fatalf("buildJobManifest: %v", err)
+	}
+
+	found := false
+	for _, v := range manifest.Spec.Template.Spec.Volumes {
+		if v.Name == "bootstrap-prefix-etc-pki" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("extra volume not found in manifest volumes: %v", manifest.Spec.Template.Spec.Volumes)
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_MainMountsAppended(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	job := SparkJob{
+		JobID:  "j-mounts",
+		JarURI: "s3://b/app.jar",
+		Config: exec.cfg,
+		ExtraInitContainers: []container{makeInitCtr("bootstrap-test")},
+		ExtraVolumes:        []volume{{Name: "bootstrap-prefix-etc-pki", EmptyDir: &k8stypes.EmptyDirVol{}}},
+		ExtraMainMounts:     []volumeMount{{Name: "bootstrap-prefix-etc-pki", MountPath: "/etc/pki"}},
+	}
+
+	manifest, err := exec.buildJobManifest("spark-j-mounts", job)
+	if err != nil {
+		t.Fatalf("buildJobManifest: %v", err)
+	}
+
+	found := false
+	for _, m := range manifest.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == "/etc/pki" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("extra main mount not found in container volumeMounts: %v", manifest.Spec.Template.Spec.Containers[0].VolumeMounts)
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_VolumeConflict(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	// Inject a platform volume named "conflict-vol" so buildJobManifest populates
+	// spec.Volumes before the ExtraVolumes conflict check runs.
+	exec.platform = &platform.PlatformConfig{
+		TLS: platform.TLSConfig{Enabled: false},
+		Volumes: []platform.VolumeSpec{{
+			Name:   "conflict-vol",
+			Source: platform.VolumeSource{Kind: "emptyDir", EmptyDir: &platform.EmptyDirSource{}},
+			Mounts: []platform.MountSpec{{MountPath: "/conflict"}},
+		}},
+	}
+
+	job := SparkJob{
+		JobID:               "j-conflict",
+		JarURI:              "s3://b/app.jar",
+		Config:              exec.cfg,
+		ExtraInitContainers: []container{makeInitCtr("bootstrap-conflict")},
+		ExtraVolumes:        []volume{{Name: "conflict-vol", EmptyDir: &k8stypes.EmptyDirVol{}}},
+	}
+
+	if _, err := exec.buildJobManifest("spark-j-conflict", job); err == nil {
+		t.Error("expected volume conflict error from buildJobManifest; got nil")
+	}
+}
+
+func TestBuildJobManifest_Bootstrap_OrderPreserved(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	ctrs := []container{
+		makeInitCtr("bootstrap-first"),
+		makeInitCtr("bootstrap-second"),
+		makeInitCtr("bootstrap-third"),
+	}
+	job := SparkJob{
+		JobID:               "j-order",
+		JarURI:              "s3://b/app.jar",
+		Config:              exec.cfg,
+		ExtraInitContainers: ctrs,
+		ExtraVolumes:        []volume{{Name: "bootstrap-prefix-tmp", EmptyDir: &k8stypes.EmptyDirVol{}}},
+	}
+
+	manifest, err := exec.buildJobManifest("spark-j-order", job)
+	if err != nil {
+		t.Fatalf("buildJobManifest: %v", err)
+	}
+
+	inits := manifest.Spec.Template.Spec.InitContainers
+	if len(inits) != 3 {
+		t.Fatalf("expected 3 init containers; got %d", len(inits))
+	}
+	if inits[0].Name != "bootstrap-first" || inits[1].Name != "bootstrap-second" || inits[2].Name != "bootstrap-third" {
+		t.Errorf("init container order wrong: %v", []string{inits[0].Name, inits[1].Name, inits[2].Name})
 	}
 }
 
