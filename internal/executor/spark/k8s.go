@@ -390,6 +390,21 @@ func jobFailureMessage(s batchJobStatus) string {
 	return ""
 }
 
+// checkVolumeConflicts returns an error if any volume in extra shares a name
+// with an existing volume in spec.Volumes.
+func checkVolumeConflicts(existing, extra []volume) error {
+	names := make(map[string]struct{}, len(existing))
+	for _, v := range existing {
+		names[v.Name] = struct{}{}
+	}
+	for _, v := range extra {
+		if _, dup := names[v.Name]; dup {
+			return fmt.Errorf("volume name conflict: %q already exists in pod spec", v.Name)
+		}
+	}
+	return nil
+}
+
 // buildJobManifest constructs a batch/v1 Job that runs spark-submit.
 func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) (batchJob, error) {
 	backoffLimit := 0
@@ -434,6 +449,18 @@ func (e *K8sExecutor) buildJobManifest(jobName string, job SparkJob) (batchJob, 
 	}
 
 	spec.Containers = []container{ctr}
+
+	// Inject provider-resolved bootstrap fragments (classic EMR bootstrap actions).
+	// Only present when the EMR provider called Resolve; zero cost otherwise.
+	if len(job.ExtraInitContainers) > 0 {
+		if err := checkVolumeConflicts(spec.Volumes, job.ExtraVolumes); err != nil {
+			return batchJob{}, fmt.Errorf("bootstrap volume conflict: %w", err)
+		}
+		// Prepend: bootstrap runs before any cloud-transform or platform init containers.
+		spec.InitContainers = append(job.ExtraInitContainers, spec.InitContainers...)
+		spec.Volumes = append(spec.Volumes, job.ExtraVolumes...)
+		spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, job.ExtraMainMounts...)
+	}
 
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by": "jaiscloud",

@@ -257,7 +257,7 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 
 	all := paginateItems(matched, q.ExclusiveStartKey, q.Limit)
 	var lastKey string
-	if q.Limit > 0 && len(matched) == q.Limit {
+	if q.Limit > 0 && len(all) == q.Limit {
 		b, _ := json.Marshal(all[len(all)-1])
 		lastKey = string(b)
 	}

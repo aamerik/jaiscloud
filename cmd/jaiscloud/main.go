@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -276,8 +277,39 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		slog.Info("spark executor enabled", "mode", cfg.ExecutorMode)
 	}
 
+	// Bootstrap resolver — wired into the EMR provider so AddJobFlowSteps can
+	// inject bootstrap scripts as init containers when using the K8s executor.
+	s3Fetcher := blobfs.NewS3BlobFetcher(s.blobs)
+	bootstrapPrefixes := []string{"/etc/pki", "/home/hadoop"}
+	if v := os.Getenv("JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES"); v != "" {
+		bootstrapPrefixes = nil
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				bootstrapPrefixes = append(bootstrapPrefixes, p)
+			}
+		}
+	}
+	bootstrapImage := "amazon/aws-cli:2.18"
+	if v := os.Getenv("JAISCLOUD_BOOTSTRAP_IMAGE"); v != "" {
+		bootstrapImage = v
+	}
+	bootstrapMaxBytes := int64(1024 * 1024)
+	if v := os.Getenv("JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES"); v != "" {
+		if n, parseErr := strconv.ParseInt(v, 10, 64); parseErr == nil {
+			bootstrapMaxBytes = n
+		} else {
+			slog.Warn("invalid JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES; using default 1 MiB", "value", v, "err", parseErr)
+		}
+	}
+	bootstrapCfg := emrprovider.BootstrapConfig{
+		Image:    bootstrapImage,
+		MaxBytes: bootstrapMaxBytes,
+		Prefixes: bootstrapPrefixes,
+	}
+
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
+	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
 	if sparkExec != nil {
 		emrOpts = append(emrOpts, emrprovider.WithExecutor(sparkExec, sparkCfg))
 		emrcOpts = append(emrcOpts, emrcontainersprovider.WithExecutor(sparkExec, sparkCfg))
