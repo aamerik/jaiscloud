@@ -18,7 +18,8 @@ func TestAWSResolveSparkCommand_Pattern1_EMRContainers(t *testing.T) {
 	}
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	if cmd.Binary != "/opt/spark/bin/spark-submit" {
 		t.Errorf("binary: got %q, want /opt/spark/bin/spark-submit", cmd.Binary)
@@ -40,7 +41,8 @@ func TestAWSResolveSparkCommand_Pattern2_CommandRunner(t *testing.T) {
 	}
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	if cmd.Binary != "/opt/spark/bin/spark-submit" {
 		t.Errorf("binary: got %q, want /opt/spark/bin/spark-submit", cmd.Binary)
@@ -62,7 +64,8 @@ func TestAWSResolveSparkCommand_Pattern3_RealJar(t *testing.T) {
 		Config:    cfg,
 	}
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	if cmd.Binary != "/opt/spark/bin/spark-submit" {
 		t.Errorf("binary: got %q, want /opt/spark/bin/spark-submit", cmd.Binary)
@@ -88,7 +91,8 @@ func TestAWSResolveSparkCommand_StripIncompatibleConfs(t *testing.T) {
 	cfg.AWSAccessKey = "test"
 	cfg.AWSSecretKey = "test"
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	for i, a := range cmd.Args {
 		if a == "--conf" && i+1 < len(cmd.Args) {
@@ -122,7 +126,8 @@ func TestAWSResolveSparkCommand_NoS3InjectionWhenEndpointEmpty(t *testing.T) {
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 	// S3Endpoint intentionally empty
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	for i, a := range cmd.Args {
 		if a == "--conf" && i+1 < len(cmd.Args) {
@@ -142,7 +147,8 @@ func TestAWSResolveSparkCommand_MissingMasterPrepended(t *testing.T) {
 	}
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	assertMaster(t, cmd.Args, "local[*]")
 }
@@ -158,7 +164,8 @@ func TestAWSResolveSparkCommand_S3InjectionPresent(t *testing.T) {
 	cfg.AWSAccessKey = "minioadmin"
 	cfg.AWSSecretKey = "minioadmin"
 
-	cmd := AWSResolveSparkCommand(job, cfg)
+	cmd, err := AWSResolveSparkCommand(job, cfg)
+	if err != nil { t.Fatal(err) }
 
 	found := false
 	for i, a := range cmd.Args {

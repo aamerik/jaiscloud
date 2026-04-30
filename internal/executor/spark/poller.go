@@ -122,7 +122,11 @@ func (p *StatusPoller) pollAll(ctx context.Context) {
 			j.lastState = status.State
 			p.mu.Unlock()
 
-			slog.Info("poller: job state changed", "jobID", j.jobID, "from", old, "to", status.State)
+			if status.State == StateFailed {
+				slog.Warn("poller: job failed", "jobID", j.jobID, "from", old, "message", status.Message)
+			} else {
+				slog.Info("poller: job state changed", "jobID", j.jobID, "from", old, "to", status.State)
+			}
 			if p.onChange != nil {
 				p.onChange(StateChangeEvent{JobID: j.jobID, OldState: old, NewState: status.State, Message: status.Message})
 			}

@@ -41,7 +41,10 @@ func (e *DockerExecutor) Submit(ctx context.Context, job SparkJob) error {
 	if err != nil {
 		return err
 	}
-	resolved := transform.ResolveCommand(job, e.cfg)
+	resolved, err := transform.ResolveCommand(job, e.cfg)
+	if err != nil {
+		return err
+	}
 
 	dj := &dockerJob{state: StateRunning}
 	runCtx, cancel := context.WithCancel(context.Background())

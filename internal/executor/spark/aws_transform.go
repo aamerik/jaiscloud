@@ -1,8 +1,11 @@
 package spark
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/model"
 )
@@ -16,21 +19,59 @@ func (awsTransform) Cloud() model.Cloud { return model.CloudAWS }
 
 func (awsTransform) Rewrite(uri string, _ SparkConfig) string { return uri } // s3a:// is native on AWS
 
-func (t awsTransform) ResolveCommand(job SparkJob, cfg SparkConfig) SparkSubmitCommand {
+func (t awsTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
 	return AWSResolveSparkCommand(job, cfg)
+}
+
+func (awsTransform) UploadTemplate(
+	ctx context.Context, blobs blobfs.BlobStore, cfg SparkConfig, jobID string, body []byte,
+) (string, string, error) {
+	if blobs == nil {
+		return "", "", fmt.Errorf("cluster mode: no blob store wired — pass blobfs.BlobStore to NewK8sExecutor")
+	}
+	bucket := cfg.TemplateBucket
+	if bucket == "" {
+		bucket = "jaiscloud-spark-templates"
+	}
+	key := fmt.Sprintf("pod-templates/%s-executor.yaml", sanitizeLabel(jobID))
+	if err := blobs.Put(ctx, bucket, key, body); err != nil {
+		return "", "", fmt.Errorf("put executor template into %s/%s: %w", bucket, key, err)
+	}
+	return fmt.Sprintf("s3://%s/%s", bucket, key), bucket + "/" + key, nil
+}
+
+func (awsTransform) DeleteTemplate(ctx context.Context, blobs blobfs.BlobStore, cleanupKey string) error {
+	if blobs == nil {
+		return nil
+	}
+	parts := strings.SplitN(cleanupKey, "/", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("cluster mode: invalid cleanup key %q", cleanupKey)
+	}
+	return blobs.Delete(ctx, parts[0], parts[1])
+}
+
+func (awsTransform) DriverFetchEnv(cfg SparkConfig) []envVar {
+	return []envVar{
+		{Name: "AWS_ENDPOINT_URL", Value: cfg.S3Endpoint},
+		{Name: "AWS_ACCESS_KEY_ID", Value: cfg.AWSAccessKey},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: cfg.AWSSecretKey},
+		{Name: "AWS_REGION", Value: cfg.Region},
+		{Name: "AWS_S3_FORCE_PATH_STYLE", Value: "true"},
+	}
 }
 
 func (awsTransform) PodEnv(cfg SparkConfig) []k8stypes.EnvVar {
 	if cfg.S3Endpoint == "" {
 		return nil
 	}
-	return toEnvVars(map[string]string{
-		"AWS_ENDPOINT_URL":          cfg.S3Endpoint,
-		"AWS_REGION":                cfg.Region,
-		"AWS_ACCESS_KEY_ID":         cfg.AWSAccessKey,
-		"AWS_SECRET_ACCESS_KEY":     cfg.AWSSecretKey,
-		"AWS_S3_FORCE_PATH_STYLE":   "true",
-	})
+	return []k8stypes.EnvVar{
+		{Name: "AWS_ENDPOINT_URL", Value: cfg.S3Endpoint},
+		{Name: "AWS_REGION", Value: cfg.Region},
+		{Name: "AWS_ACCESS_KEY_ID", Value: cfg.AWSAccessKey},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: cfg.AWSSecretKey},
+		{Name: "AWS_S3_FORCE_PATH_STYLE", Value: "true"},
+	}
 }
 
 func (awsTransform) PodVolumes(cfg SparkConfig) ([]k8stypes.Volume, []k8stypes.VolumeMount) {
@@ -68,21 +109,18 @@ type SparkSubmitCommand struct {
 	Image  string   // resolved container image
 }
 
-// AWSResolveSparkCommand resolves a SparkJob from an AWS EMR/EMR-Containers
-// API call into a container command + args for local execution.
-//
-// It handles three AWS-specific patterns:
-//   - Pattern 1: EMR Containers StartJobRun (JarURI = absolute path entry point)
-//   - Pattern 2: EMR AddJobFlowSteps with command-runner.jar
-//   - Pattern 3: EMR AddJobFlowSteps with a real JAR
-//
-// Then applies devbox transformations when S3Endpoint is configured:
-//   - Rewrites --master (yarn/k8s → local[*]) for container execution
-//   - Strips incompatible Spark confs (extraListeners, sql.extensions)
-//   - Injects S3/EMRFS endpoint and credential configuration
-func AWSResolveSparkCommand(job SparkJob, cfg SparkConfig) SparkSubmitCommand {
+// AWSResolveSparkCommand resolves a SparkJob into a container command + args.
+// Handles three EMR submission patterns; applies devbox S3 conf when S3Endpoint
+// is configured. Returns an error when cluster mode is active and the --master
+// value is incompatible with Spark K8s cluster mode (see resolveMasterArgs).
+func AWSResolveSparkCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
 	image := resolveImage(job, cfg)
-	binary, args := resolveAWSPattern(job, cfg, image)
+	binary, rawArgs := resolveAWSPattern(job, cfg, image)
+
+	args, err := resolveMasterArgs(job, rawArgs)
+	if err != nil {
+		return SparkSubmitCommand{}, err
+	}
 
 	if cfg.S3Endpoint != "" {
 		args = stripSparkConfs(args,
@@ -92,7 +130,7 @@ func AWSResolveSparkCommand(job SparkJob, cfg SparkConfig) SparkSubmitCommand {
 		args = insertBeforeJar(args, awsDevboxSparkConfs(cfg, image))
 	}
 
-	return SparkSubmitCommand{Binary: binary, Args: args, Image: image}
+	return SparkSubmitCommand{Binary: binary, Args: args, Image: image}, nil
 }
 
 // resolveAWSPattern detects which EMR submission pattern was used and
@@ -114,7 +152,7 @@ func resolveAWSPattern(job SparkJob, cfg SparkConfig, image string) (string, []s
 		if useAlt && entryPoint == defaultBinary {
 			entryPoint = altBinary
 		}
-		return entryPoint, rewriteSparkMaster(job.Args)
+		return entryPoint, job.Args
 
 	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
 		// Pattern 2: command-runner.jar (EMR classic / AddJobFlowSteps)
@@ -122,11 +160,11 @@ func resolveAWSPattern(job SparkJob, cfg SparkConfig, image string) (string, []s
 		if useAlt && resolved == defaultBinary {
 			resolved = altBinary
 		}
-		return resolved, rewriteSparkMaster(job.Args[1:])
+		return resolved, job.Args[1:]
 
 	default:
 		// Pattern 3: real JAR — build full spark-submit invocation
-		return binary, rewriteSparkMaster(SparkSubmitArgs(job))
+		return binary, SparkSubmitArgs(job)
 	}
 }
 

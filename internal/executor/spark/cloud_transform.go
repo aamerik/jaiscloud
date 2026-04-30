@@ -1,13 +1,45 @@
 package spark
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/model"
 )
+
+// CloudExecutorTemplateIO bundles cloud-specific operations for cluster-mode
+// executor pod-template management: uploading the merged executor template to
+// a cloud-native object store and emitting the env the driver container needs
+// to fetch that template at runtime.
+//
+// AWS → s3:// URI + AWS_ENDPOINT_URL/credentials env.
+// Azure → abfss:// URI + AZURE_STORAGE_ACCOUNT env (future).
+// GCP → gs:// URI + GOOGLE_APPLICATION_CREDENTIALS env (future).
+type CloudExecutorTemplateIO interface {
+	// UploadTemplate writes merged executor spec bytes to the cloud-native
+	// blob store and returns (uri, cleanupKey). cleanupKey is an opaque
+	// string the caller hands back to DeleteTemplate on job terminal state.
+	UploadTemplate(
+		ctx context.Context,
+		blobs blobfs.BlobStore,
+		cfg SparkConfig,
+		jobID string,
+		body []byte,
+	) (uri, cleanupKey string, err error)
+
+	// DeleteTemplate removes the template blob identified by cleanupKey.
+	// Best-effort: callers log but do not propagate failures.
+	DeleteTemplate(ctx context.Context, blobs blobfs.BlobStore, cleanupKey string) error
+
+	// DriverFetchEnv returns env vars the driver container needs so Spark's
+	// internal K8s scheduler can fetch the uploaded template. First-wins
+	// semantics against any env PodEnv already set.
+	DriverFetchEnv(cfg SparkConfig) []envVar
+}
 
 // CloudSparkTransform encapsulates all cloud-specific contributions to a
 // Spark K8s Job manifest. Implementations register themselves via init().
@@ -17,10 +49,12 @@ type CloudSparkTransform interface {
 	// cloud's native scheme. It receives cfg so it can use cloud-specific
 	// identifiers (e.g. Azure storage account). Idempotent.
 	Rewrite(uri string, cfg SparkConfig) string
-	ResolveCommand(job SparkJob, cfg SparkConfig) SparkSubmitCommand
+	ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error)
 	PodEnv(cfg SparkConfig) []envVar
 	PodVolumes(cfg SparkConfig) ([]volume, []volumeMount)
 	SparkConfs(cfg SparkConfig) []string
+
+	CloudExecutorTemplateIO
 }
 
 // transformsMu guards transforms against concurrent access (e.g. parallel tests).

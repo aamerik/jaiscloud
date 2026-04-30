@@ -2,6 +2,8 @@ package spark
 
 import (
 	"os"
+	"strconv"
+	"strings"
 
 	"jaiscloud/internal/model"
 )
@@ -132,6 +134,13 @@ type SparkConfig struct {
 	GCPServiceAccountKeyPath string
 	GCPServiceAccountSecret  string
 	GCPStorageEndpoint       string
+
+	// Cluster-mode config (captured from env in SparkConfigFrom; never read via os.Getenv at runtime)
+	ClusterMode         string // "auto" (default) | "always" | "never"
+	StripScheduling     bool   // strip node-selector/tolerations/affinity from templates; default true
+	ClusterShutdown     string // "leave" (default) | "delete" — what Close() does to cluster-mode jobs
+	PodTemplateMaxBytes int64  // max bytes per pod-template YAML; default 262144 (256 KiB)
+	TemplateBucket      string // S3 bucket for uploaded executor templates; default "jaiscloud-spark-templates"
 }
 
 // SparkConfigFrom builds a SparkConfig from the executor mode and optional overrides.
@@ -186,6 +195,30 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 	cfg.GCPServiceAccountKeyPath = os.Getenv("JAISCLOUD_GCP_SERVICE_ACCOUNT_KEY_PATH")
 	cfg.GCPServiceAccountSecret = os.Getenv("JAISCLOUD_GCP_SERVICE_ACCOUNT_SECRET")
 	cfg.GCPStorageEndpoint = os.Getenv("JAISCLOUD_GCP_STORAGE_ENDPOINT")
+
+	// Cluster-mode knobs
+	cfg.ClusterMode = strings.ToLower(os.Getenv("JAISCLOUD_SPARK_K8S_CLUSTER_MODE"))
+	if cfg.ClusterMode != "always" && cfg.ClusterMode != "never" {
+		cfg.ClusterMode = "auto"
+	}
+	cfg.StripScheduling = true
+	if os.Getenv("JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING") == "false" {
+		cfg.StripScheduling = false
+	}
+	cfg.ClusterShutdown = strings.ToLower(os.Getenv("JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN"))
+	if cfg.ClusterShutdown != "delete" {
+		cfg.ClusterShutdown = "leave"
+	}
+	cfg.PodTemplateMaxBytes = 262144
+	if v := os.Getenv("JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			cfg.PodTemplateMaxBytes = n
+		}
+	}
+	cfg.TemplateBucket = os.Getenv("JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET")
+	if cfg.TemplateBucket == "" {
+		cfg.TemplateBucket = "jaiscloud-spark-templates"
+	}
 
 	for _, o := range overrides {
 		o(&cfg)

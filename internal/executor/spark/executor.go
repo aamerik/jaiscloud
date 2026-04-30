@@ -65,6 +65,11 @@ type SparkJob struct {
 	// AllowClusterMode enables Spark cluster-deploy-mode (driver runs as K8s Pod).
 	// When false (default), spark-submit is rewritten to local[*] client mode.
 	AllowClusterMode bool
+
+	// ExecutorTemplateBlobKey is the opaque cleanup key returned by
+	// CloudExecutorTemplateIO.UploadTemplate. Stored here so cleanupOrphans
+	// can call DeleteTemplate on restart without re-uploading.
+	ExecutorTemplateBlobKey string
 }
 
 // SparkStatus is the current status of a submitted job.
@@ -99,7 +104,7 @@ type SparkExecutor interface {
 func NewExecutor(mode string, cfg SparkConfig) SparkExecutor {
 	switch mode {
 	case "k8s":
-		return NewK8sExecutor(cfg, nil)
+		return NewK8sExecutor(cfg, nil, nil)
 	case "docker":
 		return NewDockerExecutor(cfg, nil)
 	default:

@@ -1,3 +1,19 @@
+// Package blobfs provides the BlobFetcher interface for URI-addressed
+// read-only access to blob storage.
+//
+// Current implementations:
+//   - S3BlobFetcher: handles s3:// and s3a:// URIs via the local S3 store.
+//
+// Future implementations (not yet provided):
+//   - AzureBlobFetcher: would handle abfss:// URIs via Azure Data Lake Storage.
+//   - GCSBlobFetcher: would handle gs:// URIs via Google Cloud Storage.
+//
+// To add support for a new URI scheme, implement BlobFetcher and either:
+//
+//	(a) register it in a scheme-keyed map at construction time, or
+//	(b) pass it directly to the consumer (PodTemplateLoader, bootstrap.Resolve).
+//
+// The interface is deliberately small to keep implementations thin.
 package blobfs
 
 import (

@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"fmt"
+
 	"jaiscloud/internal/k8stypes"
 )
 
@@ -20,7 +22,7 @@ func ApplyK8s(spec *k8stypes.PodSpec, ctr *k8stypes.Container, cfg *PlatformConf
 		if cfg.TLS.ClientCert != nil {
 			caVols = append(caVols, caVolumes([]CASource{*cfg.TLS.ClientCert})...)
 		}
-		if err := checkVolumeConflicts(spec.Volumes, caVols); err != nil {
+		if err := CheckVolumeConflicts(spec.Volumes, caVols); err != nil {
 			return err
 		}
 		spec.Volumes = append(spec.Volumes, caVols...)
@@ -29,7 +31,7 @@ func ApplyK8s(spec *k8stypes.PodSpec, ctr *k8stypes.Container, cfg *PlatformConf
 			// Init container.
 			if ic := m.InitContainer(&cfg.TLS, ""); ic != nil {
 				mVols := m.Volumes()
-				if err := checkVolumeConflicts(spec.Volumes, mVols); err != nil {
+				if err := CheckVolumeConflicts(spec.Volumes, mVols); err != nil {
 					return err
 				}
 				spec.Volumes = append(spec.Volumes, mVols...)
@@ -43,14 +45,15 @@ func ApplyK8s(spec *k8stypes.PodSpec, ctr *k8stypes.Container, cfg *PlatformConf
 
 	// ── Platform extra volumes ────────────────────────────────────────────────
 	platformVols := platformVolumes(cfg.Volumes)
-	if err := checkVolumeConflicts(spec.Volumes, platformVols); err != nil {
+	if err := CheckVolumeConflicts(spec.Volumes, platformVols); err != nil {
 		return err
 	}
 	spec.Volumes = append(spec.Volumes, platformVols...)
 
+	var platformMounts []k8stypes.VolumeMount
 	for _, vs := range cfg.Volumes {
 		for _, mnt := range vs.Mounts {
-			ctr.VolumeMounts = append(ctr.VolumeMounts, k8stypes.VolumeMount{
+			platformMounts = append(platformMounts, k8stypes.VolumeMount{
 				Name:      vs.Name,
 				MountPath: mnt.MountPath,
 				SubPath:   mnt.SubPath,
@@ -58,6 +61,10 @@ func ApplyK8s(spec *k8stypes.PodSpec, ctr *k8stypes.Container, cfg *PlatformConf
 			})
 		}
 	}
+	if err := CheckMountPathConflicts(ctr.VolumeMounts, platformMounts); err != nil {
+		return fmt.Errorf("platform.ApplyK8s: %w", err)
+	}
+	ctr.VolumeMounts = append(ctr.VolumeMounts, platformMounts...)
 
 	// ── Platform extra env ────────────────────────────────────────────────────
 	ctr.Env = MergeEnv(ctr.Env, ExtraEnv(cfg.Env))
