@@ -205,6 +205,15 @@ func (e *K8sExecutor) OnClusterModeOrphanDelete(cb func(jobID, reason string)) {
 	e.onClusterModeOrphanDelete = cb
 }
 
+// NotifyTerminal must be called by the provider's OnStateChange when a job
+// reaches a terminal state (COMPLETED or FAILED). It deletes any uploaded
+// executor pod-template blob and removes the job entry. Best-effort: errors
+// log WARN but never propagate. Safe to call multiple times (idempotent via
+// LoadAndDelete). Also called internally by Cancel().
+func (e *K8sExecutor) NotifyTerminal(ctx context.Context, jobID string) {
+	e.forgetAndDeleteExecutorTemplate(ctx, jobID)
+}
+
 // forgetAndDeleteExecutorTemplate is called on terminal job state (completion,
 // failure, cancel). Loads the jobEntry, dispatches DeleteTemplate, and removes
 // the entry. Best-effort: errors log WARN but never propagate.
@@ -589,7 +598,7 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 		if e.cfg.ServiceAccount == "" {
 			slog.Warn("spark k8s: cluster-mode job has no ServiceAccount — "+
 				"driver pod will lack RBAC to create executor pods; "+
-				"set JAISCLOUD_K8S_SERVICE_ACCOUNT or spark.kubernetes.authenticate.driver.serviceAccountName",
+				"set JAISCLOUD_K8S_SA or spark.kubernetes.authenticate.driver.serviceAccountName",
 				"job_id", job.JobID)
 		}
 		if e.cfg.Image == DefaultImage {

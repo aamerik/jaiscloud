@@ -1011,6 +1011,9 @@ func (p *EMRProvider) OnStateChange(ev spark.StateChangeEvent) {
 	p.updateStepState(context.Background(), jr.clusterID, jr.resourceID, string(ev.NewState), ev.Message, jr.region, jr.accountID, jr.cloud)
 	if ev.NewState.IsTerminal() {
 		p.jobRefs.Delete(ev.JobID)
+		if k8s, ok := p.executor.(*spark.K8sExecutor); ok {
+			k8s.NotifyTerminal(context.Background(), ev.JobID)
+		}
 	}
 }
 

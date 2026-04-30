@@ -8,9 +8,35 @@ import (
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 )
+
+// recordingTransform is a minimal CloudSparkTransform stub that records
+// DeleteTemplate calls. All other methods are no-ops.
+type recordingTransform struct {
+	deletedKeys []string
+	deleteErr   error
+}
+
+func (r *recordingTransform) Cloud() model.Cloud { return model.CloudAWS }
+func (r *recordingTransform) Rewrite(uri string, _ SparkConfig) string { return uri }
+func (r *recordingTransform) ResolveCommand(_ SparkJob, _ SparkConfig) (SparkSubmitCommand, error) {
+	return SparkSubmitCommand{Binary: "/opt/spark/bin/spark-submit"}, nil
+}
+func (r *recordingTransform) PodEnv(_ SparkConfig) []envVar           { return nil }
+func (r *recordingTransform) PodVolumes(_ SparkConfig) ([]volume, []volumeMount) { return nil, nil }
+func (r *recordingTransform) SparkConfs(_ SparkConfig) []string        { return nil }
+func (r *recordingTransform) UploadTemplate(_ context.Context, _ blobfs.BlobStore, _ SparkConfig, _ string, _ []byte) (string, string, error) {
+	return "", "", nil
+}
+func (r *recordingTransform) DeleteTemplate(_ context.Context, _ blobfs.BlobStore, key string) error {
+	r.deletedKeys = append(r.deletedKeys, key)
+	return r.deleteErr
+}
+func (r *recordingTransform) DriverFetchEnv(_ SparkConfig) []envVar { return nil }
 
 // fakeK8s runs an httptest.TLSServer that fakes the K8s batch/v1 Jobs API.
 type fakeK8s struct {
@@ -764,5 +790,96 @@ func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
 	}
 	if _, ok := exec.jobEntries.Load("jid-suspended"); !ok {
 		t.Error("resumed job should be adopted")
+	}
+}
+
+// ── NotifyTerminal ────────────────────────────────────────────────────────────
+
+func TestK8sExecutor_NotifyTerminal_DeletesBlobAndRemovesEntry(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	rt := &recordingTransform{}
+	exec.jobEntries.Store("job-nt1", &jobEntry{
+		name:       "spark-job-nt1",
+		cleanupKey: "templates/exec-nt1.yaml",
+		transform:  rt,
+	})
+
+	exec.NotifyTerminal(context.Background(), "job-nt1")
+
+	if len(rt.deletedKeys) != 1 || rt.deletedKeys[0] != "templates/exec-nt1.yaml" {
+		t.Errorf("expected DeleteTemplate(%q), got %v", "templates/exec-nt1.yaml", rt.deletedKeys)
+	}
+	if _, ok := exec.jobEntries.Load("job-nt1"); ok {
+		t.Error("job entry must be removed from map after NotifyTerminal")
+	}
+}
+
+func TestK8sExecutor_NotifyTerminal_NoCleanupKey_SkipsDelete(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	rt := &recordingTransform{}
+	// cleanupKey is empty — no template was uploaded for this job.
+	exec.jobEntries.Store("job-nt2", &jobEntry{
+		name:      "spark-job-nt2",
+		transform: rt,
+	})
+
+	exec.NotifyTerminal(context.Background(), "job-nt2")
+
+	if len(rt.deletedKeys) != 0 {
+		t.Errorf("expected no DeleteTemplate call when cleanupKey is empty, got %v", rt.deletedKeys)
+	}
+	// Entry must still be removed.
+	if _, ok := exec.jobEntries.Load("job-nt2"); ok {
+		t.Error("job entry must be removed even when cleanupKey is empty")
+	}
+}
+
+func TestK8sExecutor_NotifyTerminal_Idempotent(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	rt := &recordingTransform{}
+	exec.jobEntries.Store("job-nt3", &jobEntry{
+		name:       "spark-job-nt3",
+		cleanupKey: "templates/exec-nt3.yaml",
+		transform:  rt,
+	})
+
+	exec.NotifyTerminal(context.Background(), "job-nt3")
+	exec.NotifyTerminal(context.Background(), "job-nt3") // second call must be a no-op
+
+	if len(rt.deletedKeys) != 1 {
+		t.Errorf("expected exactly 1 DeleteTemplate call, got %d", len(rt.deletedKeys))
+	}
+}
+
+func TestK8sExecutor_NotifyTerminal_UnknownJob_NoOp(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+
+	// Must not panic or return error for a job never submitted.
+	exec.NotifyTerminal(context.Background(), "nonexistent")
+}
+
+func TestK8sExecutor_Cancel_DeletesBlobAndRemovesEntry(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	rt := &recordingTransform{}
+	exec.jobEntries.Store("job-cancel-blob", &jobEntry{
+		name:       "spark-cancel-blob",
+		cleanupKey: "templates/exec-cancel.yaml",
+		transform:  rt,
+	})
+
+	if err := exec.Cancel(context.Background(), "job-cancel-blob"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if len(rt.deletedKeys) != 1 || rt.deletedKeys[0] != "templates/exec-cancel.yaml" {
+		t.Errorf("expected Cancel to delete blob, got %v", rt.deletedKeys)
+	}
+	if _, ok := exec.jobEntries.Load("job-cancel-blob"); ok {
+		t.Error("job entry must be removed after Cancel")
 	}
 }
