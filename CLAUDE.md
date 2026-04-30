@@ -8,7 +8,8 @@ JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wi
 **Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.  
 **Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.  
 **Phase 2.5 (complete):** KMS (envelope crypto, grants, rotation); SecretsManager (AES-GCM at rest via KMS); SSM Parameter Store (SecureString via KMS); API Gateway REST management plane + execute-api invoke plane (MOCK, AWS_PROXY, HTTP_PROXY); Lambda Docker/K8s executors; CloudFormation with full intrinsics engine (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, conditions, mappings), topological sort, and real resource dispatch for 9 AWS resource types.  
-**Phase 2.5 patch (complete):** Lambda K8s executor rewritten to warm-pod-per-function model (matching Docker executor); Spark K8s executor `Close()` suspends tracked Jobs instead of deleting them; `cleanupOrphans()` re-adopts running/suspended Jobs on restart; HTTPS server with auto-generated cloud-aware TLS cert (ECDSA P-256, 10-year, DNS SANs per cloud); S3 virtual-hosted-style parsing (`mybucket.s3.<region>.amazonaws.com`); IAM `AssumeRole`/`GetFederationToken` `PackedPolicySize` computed correctly; SSM `GetParameterHistory` now decrypts SecureString values; `DeleteFunction` tears down warm container/pod; `LambdaExecutor` interface extended with `DeleteFunction` + `Reset`; test suite reorganised under `tests/full_mode/aws/`; `docker-compose.yml` + K8s RBAC manifest + Lambda echo image added.
+**Phase 2.5 patch (complete):** Lambda K8s executor rewritten to warm-pod-per-function model (matching Docker executor); Spark K8s executor `Close()` suspends tracked Jobs instead of deleting them; `cleanupOrphans()` re-adopts running/suspended Jobs on restart; HTTPS server with auto-generated cloud-aware TLS cert (ECDSA P-256, 10-year, DNS SANs per cloud); S3 virtual-hosted-style parsing (`mybucket.s3.<region>.amazonaws.com`); IAM `AssumeRole`/`GetFederationToken` `PackedPolicySize` computed correctly; SSM `GetParameterHistory` now decrypts SecureString values; `DeleteFunction` tears down warm container/pod; `LambdaExecutor` interface extended with `DeleteFunction` + `Reset`; test suite reorganised under `tests/full_mode/aws/`; `docker-compose.yml` + K8s RBAC manifest + Lambda echo image added.  
+**Phase 2.5 patch 2 (complete):** EMR classic bootstrap actions (`RunJobFlow.BootstrapActions`) materialised as Kubernetes init containers when `EXECUTOR_MODE=k8s`; `BlobFetcher` interface + `S3BlobFetcher` in `blobfs` so bootstrap scripts are fetched from the S3 store; `k8stypes.EnvVar.ValueFrom` support (SecretKeyRef, ConfigMapKeyRef, FieldRef); `SparkJob` extended with `ExtraInitContainers`, `ExtraVolumes`, `ExtraMainMounts` fragment fields so the EMR provider can inject bootstrap fragments without importing the executor package; host-package-manager commands (`yum`, `apt-get`, `systemctl`, etc.) automatically commented out from bootstrap scripts; DynamoDB `Query` `LastEvaluatedKey` pagination bug fixed (`len(matched)` → `len(all)`).
 
 ---
 
@@ -73,6 +74,7 @@ internal/
   admin/                # /_jaiscloud/* endpoints
                         # Resetter, Snapshotter interfaces
   blobfs/               # BlobStore interface: MemoryBlobStore, LocalFSBlobStore
+                        # BlobFetcher interface: S3BlobFetcher (fetches bootstrap scripts by s3:// URI)
   clock/                # Clock interface: RealClock, FixedClock, OffsetClock
   config/               # Config struct; Viper loading; env prefix JAISCLOUD_
   events/               # In-process EventBus (subscribe/publish)
@@ -89,6 +91,7 @@ internal/
     container/          # ECS provider
     dns/                # Route53 provider
     emr/                # EMRProvider — RunJobFlow, steps, tags; wires SparkExecutor + StatusPoller
+                        # bootstrap.go — Resolve() fetches + scrubs bootstrap scripts → init containers
     emroneks/           # EMRContainersProvider — virtual clusters, job runs; wires SparkExecutor
     function/           # FunctionProvider — Lambda (echo/Docker/K8s invoke)
     iam/                # IAMProvider + STS (roles, policies, users, access keys)
@@ -345,6 +348,25 @@ spec:
 
 The `StatusPoller` goroutine polls the Job every `SparkConfig.PollInterval` (default 5 s) and fires `OnStateChange` to update the EMR step state (`PENDING → RUNNING → COMPLETED / FAILED`).
 
+**Bootstrap actions:** When `RunJobFlow` includes `BootstrapActions` and `EXECUTOR_MODE=k8s`, the EMR provider calls `bootstrap.Resolve()` before submitting. Each bootstrap action becomes a K8s init container that runs before `spark-submit`:
+
+```yaml
+initContainers:
+  - name: bootstrap-{sanitized-action-name}
+    image: amazon/aws-cli:2.18          # JAISCLOUD_BOOTSTRAP_IMAGE
+    command: ["/bin/sh", "-c"]
+    args: ["printf '%s' '<b64-script>' | base64 -d | /bin/sh -s -- <args>"]
+    securityContext:
+      runAsUser: 0                       # root so scripts can write to /etc/pki, /home/hadoop
+    volumeMounts:
+      - name: bootstrap-prefix-etc-pki
+        mountPath: /etc/pki
+      - name: bootstrap-prefix-home-hadoop
+        mountPath: /home/hadoop
+```
+
+One `emptyDir` volume is created per prefix (`JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES`, default `/etc/pki,/home/hadoop`) and mounted into both init containers and the main `spark-submit` container. Host-only commands (`yum`, `apt-get`, `dnf`, `rpm`, `systemctl`, `service`, `chkconfig`, `update-rc.d`) are automatically commented out with `# [jaiscloud-skip]`. If bootstrap script fetch or resolution fails the step is immediately marked `FAILED`.
+
 **Suspend/resume lifecycle:** `K8sExecutor.Close()` suspends all tracked Jobs (strategic-merge-patch `spec.suspend: true`) instead of deleting them, preserving partial progress across server restarts. On startup, `cleanupOrphans()` lists all `app.kubernetes.io/managed-by=jaiscloud` Jobs: terminal Jobs are deleted, suspended Jobs are unsuspended and re-adopted into the live jobs map, running Jobs are adopted directly.
 
 ---
@@ -374,6 +396,8 @@ S3 object **bodies** are stored in `BlobStore`, separate from the metadata in Po
 | Full (when wired) | `LocalFSBlobStore` | `JAISCLOUD_BLOB_DIR` on local filesystem |
 
 `LocalFSBlobStore` is fully implemented at [internal/blobfs/](internal/blobfs/) but the `main.go` wire-up still uses `MemoryBlobStore`. Swap `NewMemoryBlobStore()` for `NewLocalFSBlobStore(cfg.BlobDir)` in `startCmd` to enable persistent blob storage.
+
+**`BlobFetcher` interface** (`internal/blobfs/blobfetch.go`) provides URI-addressed read-only access to the blob store. `S3BlobFetcher` parses `s3://` and `s3a://` URIs and delegates to the underlying `BlobStore`. Used by the EMR bootstrap resolver to fetch bootstrap scripts by their S3 path without importing the S3 provider.
 
 ---
 
@@ -423,6 +447,10 @@ JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300  # Docker warm container idle timeout
 JAISCLOUD_KMS_MASTER_KEY=    # 32-byte hex KEK; if unset DEK stored plaintext (dev only)
 JAISCLOUD_APIGW_PROXY_TIMEOUT=30s    # HTTP_PROXY integration timeout
 JAISCLOUD_APIGW_ALLOW_PRIVATE_HOSTS= # true to allow RFC-1918 HTTP_PROXY targets
+# EMR bootstrap actions (K8s executor only)
+JAISCLOUD_BOOTSTRAP_IMAGE=amazon/aws-cli:2.18  # init container image for bootstrap scripts
+JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES=1048576   # max size per bootstrap script (default 1 MiB)
+JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES=/etc/pki,/home/hadoop  # comma-separated emptyDir mount paths
 ```
 
 > **Config loading:** `config.Load()` reads from the global Viper instance. All `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not a local `viper.New()` instance) or flags will be silently ignored and defaults used.
@@ -521,6 +549,7 @@ The `SparkExecutor` interface drives EMR step execution and EMR-on-EKS job runs:
 - **`K8sExecutor`** — submits real `batch/v1 Jobs` to Kubernetes via stdlib HTTP (no client-go). Reads auth from in-cluster service account or `JAISCLOUD_K8S_*` env vars. `Close()` **suspends** (not deletes) tracked Jobs; `cleanupOrphans()` on startup re-adopts or deletes orphaned Jobs.
 - **`StatusPoller`** — single background goroutine; polls non-terminal jobs at a configurable interval; fires `OnStateChange` callbacks. `Stop()` is safe to call multiple times (`sync.Once`).
 - **`SparkSubmitArgs`** — builds the full `spark-submit` argument list including `--master k8s://`, `--deploy-mode cluster`, container image, namespace, service account, resource profile, and S3 event-log args.
+- **`SparkJob` fragment fields** — `ExtraInitContainers`, `ExtraVolumes`, `ExtraMainMounts` carry pre-built K8s fragments from the EMR provider (bootstrap init containers + emptyDir volumes). The executor injects them into the pod spec in `buildJobManifest` after cloud/platform layers are applied. Volume name conflicts are detected via `checkVolumeConflicts` and cause `buildJobManifest` to return an error.
 
 EMR and EMRContainers providers accept a `WithExecutor(exec, cfg)` option. When an executor is wired, `AddJobFlowSteps` / `StartJobRun` call `Submit`, and state changes from the `StatusPoller` feed back via `OnStateChange`. Without an executor, steps complete instantly (mock behaviour).
 
@@ -626,6 +655,10 @@ S3 and Lambda are always detected via SigV4 (REST, no `Action` param).
 ### DynamoDB pagination determinism
 
 Both `MemoryDynamoDBItemStore` and `PostgresDynamoDBItemStore` sort all matching items by `itemPKHash` (a stable string key derived from sorted attribute name=value pairs) before applying `ExclusiveStartKey` / `Limit`. This guarantees consistent cursor behaviour across requests regardless of map iteration order or Postgres heap scan order. The postgres implementation uses `ORDER BY pk_hash` in SQL and delegates page slicing to the same `paginateItems` helper used by the memory store.
+
+### DynamoDB `LastEvaluatedKey` — page-full check
+
+`MemoryDynamoDBItemStore.Query` sets `LastEvaluatedKey` when the returned **page** is full (`len(all) == q.Limit`), not when the pre-pagination match count equals the limit. The distinction matters: if 5 items match a key condition and `Limit=2`, `paginateItems` returns 2 items (`all`); the pre-pagination slice (`matched`) has 5. Checking `len(matched) == q.Limit` would be `5 == 2 → false`, suppressing `LastEvaluatedKey` incorrectly. `Scan` and both Postgres paths already used `len(all)` — only the memory `Query` path had the bug.
 
 ### DynamoDB wire protocol: x-amz-crc32
 

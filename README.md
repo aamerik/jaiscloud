@@ -62,13 +62,13 @@ s3.create_bucket(Bucket="my-bucket")
 |---|---|---|
 | Amazon S3 | ✅ Full | Buckets, objects, multipart, batch delete, chunked encoding, Iceberg/S3A compatible |
 | Amazon SQS | ✅ Full | All 17 operations, FIFO, DLQ, JSON + Query/XML protocols |
-| Amazon DynamoDB | ✅ Full | CRUD, expressions, batch ops, streams, composite keys |
+| Amazon DynamoDB | ✅ Full | CRUD, expressions, batch ops, streams, composite keys, cursor pagination |
 | Amazon SNS | ✅ Full | Topics, subscriptions, SQS fan-out with MessageAttributes |
 | Amazon EventBridge | ✅ Full | Rules, targets, event pattern matching, SQS delivery |
 | AWS IAM + STS | ✅ Full | Roles, policies, users, access keys, AssumeRole, GetCallerIdentity |
 | AWS Lambda | ✅ Full | Echo / Docker warm pool / K8s warm pod (Pod + ClusterIP Service per function) |
 | AWS Glue Data Catalog | ✅ Full | Databases, tables, partitions, Iceberg metadata CAS |
-| Amazon EMR (on EC2) | ✅ Full | Clusters, steps, instance fleets/groups; mock or real K8s Spark |
+| Amazon EMR (on EC2) | ✅ Full | Clusters, steps, instance fleets/groups; bootstrap actions as K8s init containers; mock or real K8s Spark |
 | Amazon EMR on EKS | ✅ Full | Virtual clusters, job runs, managed endpoints; mock or real K8s |
 | AWS KMS | ✅ Full | Keys, aliases, grants, envelope crypto (AES-256-GCM), rotation |
 | AWS Secrets Manager | ✅ Full | Secrets, versions, rotation, KMS-encrypted at rest |

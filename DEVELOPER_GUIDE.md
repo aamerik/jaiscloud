@@ -477,6 +477,28 @@ export JAISCLOUD_K8S_SA=spark-sa
 | `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA cert. Unset = system roots. |
 | `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace for Jobs and Pods |
 | `JAISCLOUD_K8S_SA` | _(none)_ | Service account for the spark-submit Pod |
+| `JAISCLOUD_BOOTSTRAP_IMAGE` | `amazon/aws-cli:2.18` | Init container image used to run EMR bootstrap scripts |
+| `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES` | `1048576` | Maximum allowed size per bootstrap script (1 MiB) |
+| `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` | `/etc/pki,/home/hadoop` | Comma-separated filesystem prefixes made writable by bootstrap init containers (one `emptyDir` volume per prefix) |
+
+### EMR bootstrap actions (K8s mode)
+
+When a `RunJobFlow` request includes `BootstrapActions` and `EXECUTOR_MODE=k8s`, JaisCloud materialises each action as a K8s **init container** that runs before the `spark-submit` container. Scripts are fetched from the S3 store via the `BlobFetcher` interface (`s3://` and `s3a://` URIs supported).
+
+**What happens at `AddJobFlowSteps` time:**
+
+1. Each bootstrap script is fetched from the local S3 store by its `S3Path`.
+2. Host-package-manager commands (`yum`, `apt-get`, `apt`, `dnf`, `rpm`) and init-system commands (`systemctl`, `service`, `chkconfig`) are commented out with `# [jaiscloud-skip]` — they are no-ops inside a container.
+3. The patched script is base64-encoded and wrapped in a shell one-liner:
+   ```
+   printf '%s' '<b64>' | base64 -d | /bin/sh -s -- <action-args>
+   ```
+4. One `emptyDir` volume is created per prefix in `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` and mounted into every init container and the main `spark-submit` container so files written by bootstrap scripts are visible at job runtime.
+5. Init containers run as `runAsUser: 0` (root) so they can write to protected paths like `/etc/pki`.
+6. If any bootstrap script fails to fetch or exceeds `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES`, the step is immediately marked `FAILED`.
+
+**Volume naming:** `/etc/pki` → `bootstrap-prefix-etc-pki`, `/home/hadoop` → `bootstrap-prefix-home-hadoop`.  
+**Name conflicts:** If a bootstrap-injected volume name collides with a platform-injected volume, `buildJobManifest` returns an error and the step is marked `FAILED`.
 
 ### Prerequisites
 
