@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -115,7 +116,7 @@ func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *K8sExecuto
 		Timeout:   30 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}
-	invokeClient := &http.Client{Timeout: 5 * time.Minute}
+	invokeClient := &http.Client{Timeout: 16 * time.Minute}
 
 	e := &K8sExecutor{
 		cfg:      cfg,
@@ -147,6 +148,9 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					go e.removePod(context.Background(), req.FunctionName)
+				}
 				return nil, ctx.Err()
 			case <-time.After(backoff):
 				if backoff < 4*time.Second {
@@ -163,6 +167,10 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 
 		resp, err := e.invoke.Do(httpReq)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				go e.removePod(context.Background(), req.FunctionName)
+				return nil, ctx.Err()
+			}
 			slog.Warn("lambda k8s: invoke attempt failed", "attempt", attempt+1, "err", err)
 			continue
 		}

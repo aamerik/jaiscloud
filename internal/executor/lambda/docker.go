@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,6 +53,7 @@ func NewDockerExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *DockerE
 		nextPort:   9100,
 		done:       make(chan struct{}),
 		client: &http.Client{
+			Timeout: 16 * time.Minute,
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return (&net.Dialer{}).DialContext(ctx, "unix", dockerSocket)
@@ -82,14 +84,22 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte,
 
 	resp, err := e.client.Do(httpReq)
 	if err != nil {
-		// Container may have died — remove it and return the error.
-		e.removeContainer(req.FunctionName)
-		return nil, fmt.Errorf("lambda docker: invoke: %w", err)
+		switch {
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+			e.removeContainer(req.FunctionName)
+			return nil, ctx.Err()
+		default:
+			return nil, fmt.Errorf("lambda docker: invoke: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("lambda docker: read response: %w", err)
+	}
+	if resp.StatusCode >= 500 {
+		e.removeContainer(req.FunctionName)
+		return nil, fmt.Errorf("lambda docker: RIE returned HTTP %d", resp.StatusCode)
 	}
 
 	e.mu.Lock()

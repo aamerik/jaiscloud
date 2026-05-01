@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+
+	"jaiscloud/internal/reqctx"
 )
-
-type contextKey string
-
-const requestIDKey contextKey = "request_id"
 
 // RequestID injects a unique X-Request-Id header into each request/response.
 // If randSrc is nil, uses crypto-random source via math/rand default.
@@ -29,7 +27,7 @@ func RequestID(randSrc rand.Source) func(http.Handler) http.Handler {
 					id = fmt.Sprintf("%016x", rand.Int63())
 				}
 			}
-			ctx := context.WithValue(r.Context(), requestIDKey, id)
+			ctx := reqctx.WithRequestID(r.Context(), id)
 			w.Header().Set("X-Request-Id", id)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -37,9 +35,7 @@ func RequestID(randSrc rand.Source) func(http.Handler) http.Handler {
 }
 
 // GetRequestID retrieves the request ID from context.
+// Delegates to reqctx.GetRequestID; kept here so existing middleware callers compile unchanged.
 func GetRequestID(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return ""
+	return reqctx.GetRequestID(ctx)
 }

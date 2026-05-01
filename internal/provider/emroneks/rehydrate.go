@@ -18,6 +18,7 @@ type jobRunRehydrate struct {
 // Called at the end of New(...) when a poller is present.
 func (p *EMRContainersProvider) rehydratePoller(ctx context.Context) {
 	if p.poller == nil {
+		slog.Warn("emroneks: rehydratePoller called before SetPoller; skipping")
 		return
 	}
 	entries, err := p.resources.List(ctx, rtJobRun, "")
