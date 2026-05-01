@@ -257,9 +257,13 @@ func (c *APIGatewayCodec) Encode(nr *model.NormalizedRequest, resp *model.Provid
 func (c *APIGatewayCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	body, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"message": perr.Message,
 		"code":    perr.Code,
-	})
+	}
+	for k, v := range perr.Data {
+		out[k] = v
+	}
+	body, _ := json.Marshal(out)
 	return perr.HTTPStatus, h, body
 }

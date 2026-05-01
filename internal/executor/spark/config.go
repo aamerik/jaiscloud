@@ -1,9 +1,10 @@
 package spark
 
 import (
+	"fmt"
 	"os"
-	"strconv"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/model"
 )
@@ -61,8 +62,8 @@ const DefaultAPIServer = "https://kubernetes.default.svc"
 
 // SparkConfig holds executor-level configuration for a Spark job.
 type SparkConfig struct {
-	// Mode selects the executor: "mock", "k8s", "local", "docker", "remote".
-	Mode string
+	// SparkMode selects the executor: "mock", "k8s", "local", "docker", "remote".
+	SparkMode string
 
 	// Image is the Spark Docker image (k8s / docker executors).
 	Image string
@@ -135,12 +136,25 @@ type SparkConfig struct {
 	GCPServiceAccountSecret  string
 	GCPStorageEndpoint       string
 
+	// InstanceID uniquely identifies this JaisCloud deployment on a shared K8s
+	// cluster. Stamped as the jaiscloud.io/instance-id label on all managed Jobs
+	// so cleanupOrphans can skip Jobs belonging to other instances.
+	// Populated by main.go from config.LoadOrCreateInstanceID.
+	InstanceID string
+
+	// ClusterRestartPolicy controls what happens to cluster-mode Jobs that are
+	// still running when JaisCloud restarts. "adopt" (default) re-adopts them
+	// and re-Tracks them through the poller. "reap" deletes them and dispatches
+	// FAILED via OnRestartTerminal.
+	ClusterRestartPolicy string // "adopt" | "reap"
+
+	// ReconcileTimeout is how long the StatusPoller waits before declaring a
+	// 404-not-found Job as FAILED. Default 10 minutes.
+	ReconcileTimeout time.Duration
+
 	// Cluster-mode config (captured from env in SparkConfigFrom; never read via os.Getenv at runtime)
-	ClusterMode         string // "auto" (default) | "always" | "never"
-	StripScheduling     bool   // strip node-selector/tolerations/affinity from templates; default true
-	ClusterShutdown     string // "leave" (default) | "delete" — what Close() does to cluster-mode jobs
-	PodTemplateMaxBytes int64  // max bytes per pod-template YAML; default 262144 (256 KiB)
-	TemplateBucket      string // S3 bucket for uploaded executor templates; default "jaiscloud-spark-templates"
+	ClusterMode     string // "auto" (default) | "always" | "never"
+	ClusterShutdown string // "leave" (default) | "delete" — what Close() does to cluster-mode jobs
 }
 
 // SparkConfigFrom builds a SparkConfig from the executor mode and optional overrides.
@@ -153,7 +167,7 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 		profile = clusterSizeProfiles[SizeSmall]
 	}
 	cfg := SparkConfig{
-		Mode:      mode,
+		SparkMode: mode,
 		Image:     DefaultImage,
 		Namespace: "default",
 		APIServer: DefaultAPIServer,
@@ -201,27 +215,40 @@ func SparkConfigFrom(mode string, size ClusterSize, overrides ...func(*SparkConf
 	if cfg.ClusterMode != "always" && cfg.ClusterMode != "never" {
 		cfg.ClusterMode = "auto"
 	}
-	cfg.StripScheduling = true
-	if os.Getenv("JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING") == "false" {
-		cfg.StripScheduling = false
-	}
 	cfg.ClusterShutdown = strings.ToLower(os.Getenv("JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN"))
 	if cfg.ClusterShutdown != "delete" {
 		cfg.ClusterShutdown = "leave"
 	}
-	cfg.PodTemplateMaxBytes = 262144
-	if v := os.Getenv("JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			cfg.PodTemplateMaxBytes = n
-		}
+	cfg.ClusterRestartPolicy = strings.ToLower(os.Getenv("JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY"))
+	if cfg.ClusterRestartPolicy != "reap" {
+		cfg.ClusterRestartPolicy = "adopt"
 	}
-	cfg.TemplateBucket = os.Getenv("JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET")
-	if cfg.TemplateBucket == "" {
-		cfg.TemplateBucket = "jaiscloud-spark-templates"
-	}
+	cfg.ReconcileTimeout = durationEnv("JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT", 10*time.Minute)
 
 	for _, o := range overrides {
 		o(&cfg)
 	}
 	return cfg
+}
+
+// durationEnv reads a duration from an env var, returning def on parse failure or absence.
+func durationEnv(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+// ValidateSparkMode returns an error if m is not a supported Spark executor mode.
+func ValidateSparkMode(m string) error {
+	switch m {
+	case "", "mock", "k8s":
+		return nil
+	default:
+		return fmt.Errorf(
+			"Spark does not support executor mode %q (allowed: mock, k8s); "+
+				"set JAISCLOUD_SPARK_EXECUTOR_MODE to override JAISCLOUD_EXECUTOR_MODE", m)
+	}
 }

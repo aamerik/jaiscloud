@@ -55,6 +55,22 @@ func TestSparkConfigFrom_EnvImageOverride_FuncOverrideTakesPrecedence(t *testing
 	}
 }
 
+func TestValidateSparkMode_Allowed(t *testing.T) {
+	for _, m := range []string{"", "mock", "k8s"} {
+		if err := spark.ValidateSparkMode(m); err != nil {
+			t.Errorf("mode %q should be valid, got error: %v", m, err)
+		}
+	}
+}
+
+func TestValidateSparkMode_Disallowed(t *testing.T) {
+	for _, m := range []string{"docker", "local", "remote", "yarn"} {
+		if err := spark.ValidateSparkMode(m); err == nil {
+			t.Errorf("mode %q should be invalid, got nil error", m)
+		}
+	}
+}
+
 func TestSparkConfigFrom_Override(t *testing.T) {
 	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall, func(c *spark.SparkConfig) {
 		c.Namespace = "spark-jobs"

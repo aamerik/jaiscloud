@@ -159,6 +159,19 @@ func GCPResourceID(accountID string) func(resourceType, name string) string {
 	}
 }
 
+// ExecutorMode returns the effective executor mode for a subsystem.
+// Resolution: JAISCLOUD_{SUBSYSTEM}_EXECUTOR_MODE → JAISCLOUD_EXECUTOR_MODE → defaultMode.
+func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
+	key := "JAISCLOUD_" + strings.ToUpper(subsystem) + "_EXECUTOR_MODE"
+	if v := os.Getenv(key); v != "" {
+		return v, key
+	}
+	if v := os.Getenv("JAISCLOUD_EXECUTOR_MODE"); v != "" {
+		return v, "JAISCLOUD_EXECUTOR_MODE"
+	}
+	return defaultMode, "default"
+}
+
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
 	viper.SetDefault("mode", "lite")

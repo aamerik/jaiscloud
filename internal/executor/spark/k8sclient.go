@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -146,9 +147,10 @@ type batchJob struct {
 }
 
 type jobMeta struct {
-	Name      string            `json:"name"`
-	Namespace string            `json:"namespace,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
+	Name        string            `json:"name"`
+	Namespace   string            `json:"namespace,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type jobSpec struct {
@@ -175,20 +177,27 @@ type batchJobStatus struct {
 	Conditions []jobCondition `json:"conditions,omitempty"`
 }
 
+// jobListMeta is the metadata subset returned when listing Jobs.
+// Annotations are included so cleanupOrphans can read the raw job-ID annotation
+// (jaiscloud.io/job-id-raw) added by buildJobManifest.
+type jobListMeta struct {
+	Name        string            `json:"name"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// jobListSpec is the spec subset returned when listing Jobs.
+type jobListSpec struct {
+	Suspend *bool `json:"suspend,omitempty"`
+}
+
 // jobListItem is used when listing jobs (lighter than full batchJob).
+// Status embeds batchJobStatus so mapJobStatus/jobFailureMessage work directly
+// on list items without a separate get-by-name round-trip.
 type jobListItem struct {
-	Metadata struct {
-		Name   string            `json:"name"`
-		Labels map[string]string `json:"labels"`
-	} `json:"metadata"`
-	Spec struct {
-		Suspend *bool `json:"suspend"`
-	} `json:"spec"`
-	Status struct {
-		Succeeded int `json:"succeeded"`
-		Failed    int `json:"failed"`
-		Active    int `json:"active"`
-	} `json:"status"`
+	Metadata jobListMeta    `json:"metadata"`
+	Spec     jobListSpec    `json:"spec"`
+	Status   batchJobStatus `json:"status"`
 }
 
 type jobCondition struct {
@@ -196,6 +205,17 @@ type jobCondition struct {
 	Status  string `json:"status"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// k8sClientInterface abstracts the K8s API operations used by K8sExecutor.
+// It allows tests to inject a fakeK8sClient without a live cluster.
+type k8sClientInterface interface {
+	createJob(ctx context.Context, job batchJob) error
+	getJob(ctx context.Context, name string) (*batchJob, error)
+	deleteJob(ctx context.Context, name string) error
+	listJobs(ctx context.Context, labelSelector string) ([]jobListItem, error)
+	suspendJob(ctx context.Context, name string) error
+	unsuspendJob(ctx context.Context, name string) error
 }
 
 // ── API operations ──────────────────────────────────────────────────────────
@@ -248,22 +268,46 @@ func (c *k8sClient) deleteJob(ctx context.Context, name string) error {
 }
 
 // listJobs lists batch/v1 Jobs matching the given label selector.
+// It follows K8s list continuation tokens to page through large clusters.
 func (c *k8sClient) listJobs(ctx context.Context, labelSelector string) ([]jobListItem, error) {
-	url := c.jobsURL()
-	if labelSelector != "" {
-		url += "?labelSelector=" + labelSelector
+	const maxItems = 10_000
+	var all []jobListItem
+	continueToken := ""
+	for {
+		url := c.jobsURL()
+		sep := "?"
+		if labelSelector != "" {
+			url += sep + "labelSelector=" + labelSelector
+			sep = "&"
+		}
+		if continueToken != "" {
+			url += sep + "continue=" + continueToken
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("k8s: new request: %w", err)
+		}
+		var result struct {
+			Metadata struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
+			Items []jobListItem `json:"items"`
+		}
+		if err := c.do(req, &result); err != nil {
+			return nil, err
+		}
+		all = append(all, result.Items...)
+		if len(all) >= maxItems {
+			slog.Warn("spark k8s: listJobs: safety cap reached; some jobs may be skipped",
+				"cap", maxItems)
+			break
+		}
+		if result.Metadata.Continue == "" {
+			break
+		}
+		continueToken = result.Metadata.Continue
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("k8s: new request: %w", err)
-	}
-	var result struct {
-		Items []jobListItem `json:"items"`
-	}
-	if err := c.do(req, &result); err != nil {
-		return nil, err
-	}
-	return result.Items, nil
+	return all, nil
 }
 
 // suspendJob patches a Job to set spec.suspend=true.
@@ -286,8 +330,42 @@ func (c *k8sClient) patchJobSuspend(ctx context.Context, name string, suspend bo
 	return c.do(req, nil)
 }
 
+// ErrJobNotFound is returned by k8sclient operations when the K8s API server
+// replies 404 for the named Job. Use errors.Is(err, ErrJobNotFound).
+var ErrJobNotFound = fmt.Errorf("k8s job not found")
+
+// k8sAPIError wraps a non-2xx response from the apiserver. It unwraps to
+// ErrJobNotFound on 404 so callers can use errors.Is for that case.
+type k8sAPIError struct {
+	Method     string
+	URL        string
+	StatusCode int
+	Body       string
+}
+
+func (e *k8sAPIError) Error() string {
+	return fmt.Sprintf("k8s api: %s %s: HTTP %d: %s", e.Method, e.URL, e.StatusCode, e.Body)
+}
+
+// Unwrap allows errors.Is(err, ErrJobNotFound) on 404 responses.
+func (e *k8sAPIError) Unwrap() error {
+	if e.StatusCode == 404 {
+		return ErrJobNotFound
+	}
+	return nil
+}
+
+// encodeLabelSelector URL-encodes a raw K8s label selector string for use in
+// query parameters. Only "=" (%3D) and "/" (%2F) are escaped — commas are
+// preserved because K8s accepts literal commas in query strings.
+func encodeLabelSelector(raw string) string {
+	s := strings.ReplaceAll(raw, "=", "%3D")
+	s = strings.ReplaceAll(s, "/", "%2F")
+	return s
+}
+
 // do executes an HTTP request. If out is non-nil the response body is decoded
-// into it. HTTP 4xx/5xx are returned as errors.
+// into it. HTTP 4xx/5xx are returned as *k8sAPIError (use errors.Is for ErrJobNotFound).
 func (c *k8sClient) do(req *http.Request, out any) error {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -297,7 +375,12 @@ func (c *k8sClient) do(req *http.Request, out any) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("k8s: %s %s: HTTP %d: %s", req.Method, req.URL.Path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return &k8sAPIError{
+			Method:     req.Method,
+			URL:        req.URL.String(),
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(body)),
+		}
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

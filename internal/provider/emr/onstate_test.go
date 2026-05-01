@@ -62,21 +62,13 @@ func TestEMRProvider_OnStateChange_UnknownJob_NoOp(t *testing.T) {
 	})
 }
 
-// TestEMRProvider_OnStateChange_Terminal_NotifiesK8sExecutor verifies that when
-// the executor is a *K8sExecutor, NotifyTerminal is called on terminal state,
-// removing the job entry from the executor's internal tracking map.
-func TestEMRProvider_OnStateChange_Terminal_NotifiesK8sExecutor(t *testing.T) {
-	// Build a K8sExecutor with no K8s client (nil client is fine — NotifyTerminal
-	// only calls forgetAndDeleteExecutorTemplate which doesn't touch the client).
+// TestEMRProvider_OnStateChange_Terminal_K8sExecutor verifies that when the
+// executor is a *K8sExecutor, jobRefs is cleaned up on terminal state.
+func TestEMRProvider_OnStateChange_Terminal_K8sExecutor(t *testing.T) {
 	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall)
 	cfg.Cloud = model.CloudAWS
-	k8sExec := spark.NewK8sExecutor(cfg, nil, nil)
+	k8sExec := spark.NewK8sExecutor(cfg, nil)
 
-	// Pre-populate a job entry by direct store so we can verify cleanup.
-	// We use Submit to get a real entry... but Submit needs a client.
-	// Instead verify idempotency: NotifyTerminal on an unknown job is a no-op,
-	// so calling it does not panic — and after OnStateChange the jobRefs entry
-	// is gone regardless.
 	p := newMinimalEMRProvider(k8sExec)
 	p.jobRefs.Store("job-k8s", jobRef{clusterID: "ck8s", resourceID: "sk8s", cloud: model.CloudAWS})
 
@@ -85,18 +77,14 @@ func TestEMRProvider_OnStateChange_Terminal_NotifiesK8sExecutor(t *testing.T) {
 		NewState: spark.StateFailed,
 	})
 
-	// jobRefs must be cleaned up.
 	if _, ok := p.jobRefs.Load("job-k8s"); ok {
 		t.Error("jobRefs entry must be removed after terminal OnStateChange with K8sExecutor")
 	}
-	// NotifyTerminal on a non-tracked executor job is a no-op — no panic means
-	// the type assertion and call path are both exercised correctly.
 }
 
-// TestEMRProvider_OnStateChange_Terminal_MockExecutor_NoK8sCall verifies that
-// when the executor is a MockExecutor (not K8sExecutor), the type assertion
-// short-circuits cleanly without calling NotifyTerminal.
-func TestEMRProvider_OnStateChange_Terminal_MockExecutor_NoK8sCall(t *testing.T) {
+// TestEMRProvider_OnStateChange_Terminal_MockExecutor verifies that jobRefs is
+// cleaned up on terminal state when using MockExecutor.
+func TestEMRProvider_OnStateChange_Terminal_MockExecutor(t *testing.T) {
 	mockExec := spark.NewMockExecutor()
 	p := newMinimalEMRProvider(mockExec)
 	p.jobRefs.Store("job-mock", jobRef{clusterID: "cmock", resourceID: "smock", cloud: model.CloudAWS})
@@ -106,7 +94,6 @@ func TestEMRProvider_OnStateChange_Terminal_MockExecutor_NoK8sCall(t *testing.T)
 		NewState: spark.StateCompleted,
 	})
 
-	// jobRefs must still be cleaned up.
 	if _, ok := p.jobRefs.Load("job-mock"); ok {
 		t.Error("jobRefs entry must be removed even with MockExecutor")
 	}

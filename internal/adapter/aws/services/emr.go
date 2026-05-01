@@ -50,9 +50,13 @@ func (c *EMRCodec) Encode(_ *model.NormalizedRequest, resp *model.ProviderRespon
 func (c *EMRCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/x-amz-json-1.1")
-	body, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"__type":  perr.Code,
 		"message": perr.Message,
-	})
+	}
+	for k, v := range perr.Data {
+		out[k] = v
+	}
+	body, _ := json.Marshal(out)
 	return perr.HTTPStatus, h, body
 }

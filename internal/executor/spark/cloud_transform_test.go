@@ -1,7 +1,6 @@
 package spark
 
 import (
-	"strings"
 	"testing"
 
 	"jaiscloud/internal/model"
@@ -28,75 +27,72 @@ func TestSelectTransform_Unknown(t *testing.T) {
 	}
 }
 
-func TestRewriteS3aToABFS_WithBucket(t *testing.T) {
-	got := rewriteS3aToABFS("s3a://mybucket/some/key.parquet", "mystorageacct")
-	want := "abfss://mybucket@mystorageacct.dfs.core.windows.net/some/key.parquet"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestRewriteS3aToABFS_BucketOnly(t *testing.T) {
-	got := rewriteS3aToABFS("s3a://mybucket", "acct")
-	want := "abfss://mybucket@acct.dfs.core.windows.net"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestRewriteS3aToABFS_NonS3APassthrough(t *testing.T) {
-	uri := "gs://bucket/key"
-	if got := rewriteS3aToABFS(uri, "acct"); got != uri {
-		t.Errorf("non-s3a URI should pass through unchanged, got %q", got)
-	}
-}
-
-func TestRewriteS3aToABFS_PlainArgPassthrough(t *testing.T) {
-	arg := "--master"
-	if got := rewriteS3aToABFS(arg, "acct"); got != arg {
-		t.Errorf("plain arg should pass through unchanged, got %q", got)
-	}
-}
-
-func TestRewriteS3aToGCS(t *testing.T) {
-	got := rewriteS3aToGCS("s3a://bucket/path/to/file.jar")
-	want := "gs://bucket/path/to/file.jar"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestRewriteS3aToGCS_NonS3APassthrough(t *testing.T) {
-	uri := "abfss://bucket@acct.dfs.core.windows.net/key"
-	if got := rewriteS3aToGCS(uri); got != uri {
-		t.Errorf("non-s3a URI should pass through unchanged, got %q", got)
-	}
-}
-
-func TestRewriteURIs_GCP(t *testing.T) {
-	tr, _ := selectTransform(model.CloudGCP)
-	args := []string{"--class", "com.example.Main", "s3a://bucket/app.jar", "s3a://bucket/data"}
-	got := rewriteURIs(tr, args, SparkConfig{})
-	for i, a := range got {
-		if strings.HasPrefix(a, "s3a://") {
-			t.Errorf("arg[%d] still has s3a:// prefix after rewrite: %q", i, a)
-		}
-	}
-	if got[0] != "--class" {
-		t.Errorf("non-URI arg[0] changed: got %q, want %q", got[0], "--class")
-	}
-	if got[2] != "gs://bucket/app.jar" {
-		t.Errorf("arg[2]: got %q, want %q", got[2], "gs://bucket/app.jar")
-	}
-}
-
-func TestRewriteURIs_AWS_Passthrough(t *testing.T) {
+func TestValidateURIs_AWS_S3AAllowed(t *testing.T) {
 	tr, _ := selectTransform(model.CloudAWS)
 	args := []string{"s3a://bucket/app.jar", "--master", "local[*]"}
-	got := rewriteURIs(tr, args, SparkConfig{})
-	for i := range args {
-		if got[i] != args[i] {
-			t.Errorf("AWS rewrite should be identity; arg[%d]: got %q, want %q", i, got[i], args[i])
+	if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+		t.Errorf("s3a:// should be allowed on AWS, got: %v", err)
+	}
+}
+
+func TestValidateURIs_AWS_ABFSSRejected(t *testing.T) {
+	tr, _ := selectTransform(model.CloudAWS)
+	args := []string{"abfss://container@acct.dfs.core.windows.net/app.jar"}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err == nil {
+		t.Error("abfss:// should be rejected on AWS")
+	}
+}
+
+func TestValidateURIs_Azure_ABFSSAllowed(t *testing.T) {
+	tr, _ := selectTransform(model.CloudAzure)
+	args := []string{"abfss://container@acct.dfs.core.windows.net/app.jar"}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+		t.Errorf("abfss:// should be allowed on Azure, got: %v", err)
+	}
+}
+
+func TestValidateURIs_Azure_S3ARejected(t *testing.T) {
+	tr, _ := selectTransform(model.CloudAzure)
+	args := []string{"s3a://bucket/app.jar"}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err == nil {
+		t.Error("s3a:// should be rejected on Azure")
+	}
+}
+
+func TestValidateURIs_GCP_GSAllowed(t *testing.T) {
+	tr, _ := selectTransform(model.CloudGCP)
+	args := []string{"gs://bucket/app.jar"}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+		t.Errorf("gs:// should be allowed on GCP, got: %v", err)
+	}
+}
+
+func TestValidateURIs_GCP_S3Rejected(t *testing.T) {
+	tr, _ := selectTransform(model.CloudGCP)
+	args := []string{"s3://bucket/app.jar"}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err == nil {
+		t.Error("s3:// should be rejected on GCP")
+	}
+}
+
+func TestValidateURIs_BarePathAllowedOnAllClouds(t *testing.T) {
+	args := []string{"/opt/spark/examples/jars/spark-examples.jar", "--class", "App"}
+	for _, cloud := range []model.Cloud{model.CloudAWS, model.CloudAzure, model.CloudGCP} {
+		tr, _ := selectTransform(cloud)
+		if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+			t.Errorf("cloud=%s: bare path should be allowed, got: %v", cloud, err)
 		}
+	}
+}
+
+func TestValidateURIs_HTTPSkipped(t *testing.T) {
+	// https:// is in schemesToSkip — should not be flagged even on AWS.
+	tr, _ := selectTransform(model.CloudAWS)
+	args := []string{"--conf", "spark.kubernetes.container.image=myregistry.example.com/spark:3.5.0",
+		"--conf", "spark.driver.extraJavaOptions=-Djava.net.useSystemProxies=true",
+		"https://example.com/should-be-skipped",
+	}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+		t.Errorf("https:// should be skipped, got: %v", err)
 	}
 }

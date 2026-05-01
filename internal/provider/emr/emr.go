@@ -103,6 +103,7 @@ func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *E
 	for _, o := range opts {
 		o(p)
 	}
+	p.rehydratePoller(context.Background())
 	return p
 }
 
@@ -456,7 +457,9 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 
 			if p.executor != nil {
 				jar, mainClass, args := extractHadoopJarStep(m)
+				args, allowCluster := rewriteYARNToK8s(args)
 				job := spark.BuildSparkJob(sid, jar, mainClass, args, "", p.executorCfg)
+				job.AllowClusterMode = allowCluster
 
 				// Resolve bootstrap actions into k8stypes fragments and attach
 				// them to the job so the K8s executor can inject them into the manifest.
@@ -1011,9 +1014,6 @@ func (p *EMRProvider) OnStateChange(ev spark.StateChangeEvent) {
 	p.updateStepState(context.Background(), jr.clusterID, jr.resourceID, string(ev.NewState), ev.Message, jr.region, jr.accountID, jr.cloud)
 	if ev.NewState.IsTerminal() {
 		p.jobRefs.Delete(ev.JobID)
-		if k8s, ok := p.executor.(*spark.K8sExecutor); ok {
-			k8s.NotifyTerminal(context.Background(), ev.JobID)
-		}
 	}
 }
 
@@ -1022,8 +1022,6 @@ func (p *EMRProvider) Reset() {
 	p.jobRefs.Range(func(k, _ any) bool { p.jobRefs.Delete(k); return true })
 	switch ex := p.executor.(type) {
 	case *spark.MockExecutor:
-		ex.Reset()
-	case *spark.DockerExecutor:
 		ex.Reset()
 	case *spark.K8sExecutor:
 		ex.Reset()
@@ -1312,5 +1310,29 @@ func fleetID() string   { return randID("if-", 13) }
 
 func nowUnix() float64 {
 	return float64(time.Now().Unix())
+}
+
+// rewriteYARNToK8s substitutes "--master yarn" with "--master k8s://kubernetes.default.svc"
+// in EMR-on-EC2 step args. This is an emulation lie — EMR classic uses YARN but JaisCloud
+// routes through the K8s executor. If --master is already k8s://, local[*], or absent, no change.
+// The caller must also set AllowClusterMode=true so the K8s executor accepts the k8s:// master.
+func rewriteYARNToK8s(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	rewrote := false
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--master" && i+1 < len(args) && args[i+1] == "yarn" {
+			out = append(out, "--master", "k8s://kubernetes.default.svc")
+			i++
+			rewrote = true
+			continue
+		}
+		if args[i] == "--master=yarn" {
+			out = append(out, "--master=k8s://kubernetes.default.svc")
+			rewrote = true
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out, rewrote
 }
 

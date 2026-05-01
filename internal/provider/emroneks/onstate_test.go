@@ -61,13 +61,12 @@ func TestEMRContainersProvider_OnStateChange_UnknownJob_NoOp(t *testing.T) {
 	})
 }
 
-// TestEMRContainersProvider_OnStateChange_Terminal_NotifiesK8sExecutor verifies
-// that when the executor is a *K8sExecutor, NotifyTerminal is called on terminal
-// state, removing the job entry from the executor's internal tracking map.
-func TestEMRContainersProvider_OnStateChange_Terminal_NotifiesK8sExecutor(t *testing.T) {
+// TestEMRContainersProvider_OnStateChange_Terminal_K8sExecutor verifies that
+// jobRefs is cleaned up on terminal state when using K8sExecutor.
+func TestEMRContainersProvider_OnStateChange_Terminal_K8sExecutor(t *testing.T) {
 	cfg := spark.SparkConfigFrom("k8s", spark.SizeSmall)
 	cfg.Cloud = model.CloudAWS
-	k8sExec := spark.NewK8sExecutor(cfg, nil, nil)
+	k8sExec := spark.NewK8sExecutor(cfg, nil)
 
 	p := newMinimalEMRCProvider(k8sExec)
 	p.jobRefs.Store("jr-k8s", jobRef{vcID: "vck8s", jrID: "jrk8s", cloud: model.CloudAWS})
@@ -77,18 +76,14 @@ func TestEMRContainersProvider_OnStateChange_Terminal_NotifiesK8sExecutor(t *tes
 		NewState: spark.StateFailed,
 	})
 
-	// jobRefs must be cleaned up.
 	if _, ok := p.jobRefs.Load("jr-k8s"); ok {
 		t.Error("jobRefs entry must be removed after terminal OnStateChange with K8sExecutor")
 	}
-	// NotifyTerminal on a non-tracked executor job is a no-op — no panic confirms
-	// the type assertion and call path are both exercised correctly.
 }
 
-// TestEMRContainersProvider_OnStateChange_Terminal_MockExecutor_NoK8sCall verifies
-// that with a MockExecutor the type assertion short-circuits without calling
-// NotifyTerminal, and jobRefs is still cleaned up.
-func TestEMRContainersProvider_OnStateChange_Terminal_MockExecutor_NoK8sCall(t *testing.T) {
+// TestEMRContainersProvider_OnStateChange_Terminal_MockExecutor verifies that
+// jobRefs is cleaned up on terminal state when using MockExecutor.
+func TestEMRContainersProvider_OnStateChange_Terminal_MockExecutor(t *testing.T) {
 	mockExec := spark.NewMockExecutor()
 	p := newMinimalEMRCProvider(mockExec)
 	p.jobRefs.Store("jr-mock", jobRef{vcID: "vcmock", jrID: "jrmock", cloud: model.CloudAWS})

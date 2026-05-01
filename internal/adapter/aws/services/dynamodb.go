@@ -67,10 +67,14 @@ func (c *DynamoDBCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Pro
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/x-amz-json-1.0")
-	b, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"__type":  code,
 		"message": perr.Message,
-	})
+	}
+	for k, v := range perr.Data {
+		out[k] = v
+	}
+	b, _ := json.Marshal(out)
 	return perr.HTTPStatus, h, b
 }
 

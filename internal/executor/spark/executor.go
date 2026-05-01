@@ -1,9 +1,10 @@
 // Package spark defines the SparkExecutor interface and related types for
-// running Spark jobs in various environments (mock, k8s, local, docker, remote).
+// running Spark jobs in Kubernetes or mock environments.
 package spark
 
 import (
 	"context"
+	"fmt"
 
 	"jaiscloud/internal/k8stypes"
 )
@@ -56,14 +57,8 @@ type SparkJob struct {
 	ExtraVolumes        []k8stypes.Volume
 	ExtraMainMounts     []k8stypes.VolumeMount
 
-	// Pod template bytes — pre-merged by the EMRContainers provider.
-	// Executor writes each to a ConfigMap and injects configmap:// spark confs.
-	// Nil when no pod template is configured.
-	DriverTemplateBytes   []byte
-	ExecutorTemplateBytes []byte
-
 	// AllowClusterMode enables Spark cluster-deploy-mode (driver runs as K8s Pod).
-	// When false (default), spark-submit is rewritten to local[*] client mode.
+	// When false (default), spark-submit args are left as-is for mock mode.
 	AllowClusterMode bool
 }
 
@@ -93,16 +88,16 @@ type SparkExecutor interface {
 }
 
 // NewExecutor creates a SparkExecutor for the given mode.
-// mode: "mock" (default), "k8s", "local", "docker", "remote".
-// For K8s/Docker executors with a platform config, use NewK8sExecutor /
-// NewDockerExecutor directly.
-func NewExecutor(mode string, cfg SparkConfig) SparkExecutor {
+// Supported modes: "" / "mock" → MockExecutor; "k8s" → K8sExecutor.
+// Any other mode returns an error — Docker, local, and remote Spark executor
+// modes have been removed; only k8s and mock are supported.
+func NewExecutor(mode string, cfg SparkConfig) (SparkExecutor, error) {
 	switch mode {
+	case "", "mock":
+		return NewMockExecutor(), nil
 	case "k8s":
-		return NewK8sExecutor(cfg, nil, nil)
-	case "docker":
-		return NewDockerExecutor(cfg, nil)
+		return NewK8sExecutor(cfg, nil), nil
 	default:
-		return NewMockExecutor()
+		return nil, fmt.Errorf("unknown Spark executor mode %q (allowed: mock, k8s)", mode)
 	}
 }

@@ -102,10 +102,18 @@ func TestGCPTransform_SparkConfs_StorageEndpoint(t *testing.T) {
 	}
 }
 
-func TestGCPTransform_Rewrite(t *testing.T) {
-	got := gcpTransform{}.Rewrite("s3a://my-bucket/data/file.parquet", SparkConfig{})
-	want := "gs://my-bucket/data/file.parquet"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+func TestGCPTransform_ValidateURIs_GSAllowed(t *testing.T) {
+	args := []string{"gs://my-bucket/data/file.parquet"}
+	tr := gcpTransform{}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err != nil {
+		t.Errorf("gs:// should be allowed on GCP, got: %v", err)
+	}
+}
+
+func TestGCPTransform_ValidateURIs_S3aRejected(t *testing.T) {
+	args := []string{"s3a://my-bucket/data/file.parquet"}
+	tr := gcpTransform{}
+	if err := tr.ValidateURIs(args, SparkConfig{}); err == nil {
+		t.Error("s3a:// should be rejected on GCP")
 	}
 }

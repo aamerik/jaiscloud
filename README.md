@@ -290,12 +290,14 @@ When `JAISCLOUD_EXECUTOR_MODE=k8s`, the following variables control whether `Sta
 | Env var | Default | Description |
 |---|---|---|
 | `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` | `auto` | `auto` — enable when a pod template is provided; `always` — always use cluster deploy-mode; `never` — always use local mode |
-| `JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING` | `true` | Strip `nodeSelector`, `tolerations`, `affinity`, and `topologySpreadConstraints` from merged pod templates (prevents node-assignment conflicts) |
 | `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN` | `leave` | What `Close()` does to running cluster-mode Jobs: `leave` — leave running; `delete` — delete immediately |
-| `JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES` | `262144` | Maximum allowed size per pod-template YAML (256 KiB default) |
-| `JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET` | `jaiscloud-spark-templates` | S3 bucket used to store merged executor pod templates; auto-created on first use |
+| `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY` | `adopt` | On restart: `adopt` — re-track running cluster-mode Jobs; `reap` — delete them and dispatch FAILED |
+| `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` | `10m` | How long a Job may be missing from the K8s API before it is marked FAILED |
+| `JAISCLOUD_INSTANCE_ID` | _(auto UUID)_ | Override instance identity used to label managed K8s resources; useful for CI isolation |
 
 > **Required for cluster mode:** `JAISCLOUD_K8S_SA` (service account) must be set, and the Spark image must be pre-loaded in the cluster when `ImagePullPolicy=Never`. Missing either will produce a startup `WARN` and the Job will fail inside Kubernetes. See the [DEVELOPER_GUIDE](DEVELOPER_GUIDE.md#spark-k8s-cluster-mode-pod-templates) for a full checklist.
+
+> **Pod templates:** JaisCloud passes pod templates verbatim to Spark — no merging or rewriting. Callers must supply templates sized for the target cluster. See [Devbox-compatible pod template requirements](DEVELOPER_GUIDE.md#devbox-compatible-pod-template-requirements).
 
 ### Platform Runtime Layer
 

@@ -2,7 +2,7 @@ package spark
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,20 +11,16 @@ import (
 	"sync"
 	"time"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/platform"
 )
 
 // dnsNameRe matches characters that are NOT allowed in a K8s DNS label.
 var dnsNameRe = regexp.MustCompile(`[^a-z0-9-]`)
 
-// jobEntry tracks a submitted K8s batch Job alongside metadata needed for
-// executor-template cleanup on terminal state.
+// jobEntry tracks a submitted K8s batch Job.
 type jobEntry struct {
 	name          string // K8s Job name
-	cleanupKey    string // opaque blob key for DeleteTemplate; empty when no template was uploaded
-	transform     CloudSparkTransform
-	isClusterMode bool // true when the job was submitted in Spark K8s cluster deploy-mode
+	isClusterMode bool   // true when the job was submitted in Spark K8s cluster deploy-mode
 }
 
 // K8sExecutor runs Spark jobs as Kubernetes batch/v1 Jobs.
@@ -37,18 +33,17 @@ type jobEntry struct {
 //  2. In-cluster service account at /var/run/secrets/kubernetes.io/serviceaccount/
 //  3. Unauthenticated (development only)
 type K8sExecutor struct {
-	cfg                     SparkConfig
-	platform                *platform.PlatformConfig
-	client                  *k8sClient
-	blobs                   blobfs.BlobStore
-	jobEntries              sync.Map // jobID (string) → *jobEntry
-	onClusterModeOrphanDelete func(jobID, reason string)
+	cfg               SparkConfig
+	platform          *platform.PlatformConfig
+	client            k8sClientInterface
+	jobEntries        sync.Map // jobID (string) → *jobEntry
+	onRestartTerminal func(jobID string, state SparkState, message string)
+	onJobAdopted      func(jobID string, state SparkState)
 }
 
 // NewK8sExecutor builds a K8sExecutor. Auth and TLS config are resolved from
-// env vars and in-cluster service account files. plat may be nil; blobs may be nil
-// (cluster mode will error if nil and a template upload is attempted).
-func NewK8sExecutor(cfg SparkConfig, plat *platform.PlatformConfig, blobs blobfs.BlobStore) *K8sExecutor {
+// env vars and in-cluster service account files. plat may be nil.
+func NewK8sExecutor(cfg SparkConfig, plat *platform.PlatformConfig) *K8sExecutor {
 	apiURL := cfg.APIServer
 	if apiURL == "" {
 		apiURL = DefaultAPIServer
@@ -64,20 +59,21 @@ func NewK8sExecutor(cfg SparkConfig, plat *platform.PlatformConfig, blobs blobfs
 		// Non-fatal: log and fall through with a nil client.
 		// Submit will return an error if the client is nil.
 		fmt.Fprintf(os.Stderr, "[K8sExecutor] init error: %v\n", err)
-		return &K8sExecutor{cfg: cfg, blobs: blobs}
+		return &K8sExecutor{cfg: cfg}
 	}
-	e := &K8sExecutor{cfg: cfg, platform: plat, client: client, blobs: blobs}
+	e := &K8sExecutor{cfg: cfg, platform: plat, client: client}
 	slog.Info("spark k8s: executor initialised",
 		"cluster_mode", cfg.ClusterMode,
-		"strip_scheduling", cfg.StripScheduling,
 		"cluster_shutdown", cfg.ClusterShutdown,
+		"cluster_restart_policy", cfg.ClusterRestartPolicy,
 		"namespace", cfg.Namespace,
 		"service_account", cfg.ServiceAccount,
 		"image", cfg.Image,
-		"template_bucket", cfg.TemplateBucket,
 		"s3_endpoint_set", cfg.S3Endpoint != "",
 	)
-	go e.cleanupOrphans()
+	// Synchronous: must complete before NewK8sExecutor returns so providers can
+	// safely call Submit without racing the orphan re-adoption scan (G3).
+	e.cleanupOrphans()
 	return e
 }
 
@@ -120,27 +116,18 @@ func (e *K8sExecutor) Submit(ctx context.Context, job SparkJob) error {
 	}
 
 	jobName := k8sJobName(job.JobID)
-	manifest, transform, cleanupKey, err := e.buildJobManifest(ctx, jobName, job)
+	manifest, err := e.buildJobManifest(ctx, jobName, job)
 	if err != nil {
 		return fmt.Errorf("K8sExecutor: build manifest for %s: %w", jobName, err)
 	}
 
 	if err := e.client.createJob(ctx, manifest); err != nil {
-		// Clean up the uploaded executor template blob so it doesn't leak.
-		if cleanupKey != "" && transform != nil {
-			if derr := transform.DeleteTemplate(ctx, e.blobs, cleanupKey); derr != nil {
-				slog.Warn("spark k8s: template cleanup failed after createJob error",
-					"job", jobName, "cleanup_key", cleanupKey, "err", derr)
-			}
-		}
 		return fmt.Errorf("K8sExecutor: create job %s: %w", jobName, err)
 	}
 
-	clusterModeActive := job.AllowClusterMode && e.cfg.Mode == "k8s"
+	clusterModeActive := job.AllowClusterMode && e.cfg.SparkMode == "k8s"
 	e.jobEntries.Store(job.JobID, &jobEntry{
 		name:          jobName,
-		cleanupKey:    cleanupKey,
-		transform:     transform,
 		isClusterMode: clusterModeActive,
 	})
 	slog.Info("spark k8s: submitted job",
@@ -150,7 +137,6 @@ func (e *K8sExecutor) Submit(ctx context.Context, job SparkJob) error {
 		"namespace", e.cfg.Namespace,
 		"image", manifest.Spec.Template.Spec.Containers[0].Image,
 		"service_account", manifest.Spec.Template.Spec.ServiceAccountName,
-		"executor_template_uploaded", cleanupKey != "",
 	)
 	return nil
 }
@@ -169,6 +155,10 @@ func (e *K8sExecutor) Status(ctx context.Context, jobID string) (SparkStatus, er
 
 	k8sJob, err := e.client.getJob(ctx, jobName)
 	if err != nil {
+		// Propagate ErrJobNotFound unwrapped so the poller can use errors.Is.
+		if errors.Is(err, ErrJobNotFound) {
+			return SparkStatus{}, fmt.Errorf("K8sExecutor: get job %s: %w", jobName, ErrJobNotFound)
+		}
 		return SparkStatus{}, fmt.Errorf("K8sExecutor: get job %s: %w", jobName, err)
 	}
 
@@ -195,41 +185,22 @@ func (e *K8sExecutor) Cancel(ctx context.Context, jobID string) error {
 	if err := e.client.deleteJob(ctx, jobName); err != nil {
 		return fmt.Errorf("K8sExecutor: delete job %s: %w", jobName, err)
 	}
-	e.forgetAndDeleteExecutorTemplate(ctx, jobID)
+	e.jobEntries.Delete(jobID)
 	return nil
 }
 
-// OnClusterModeOrphanDelete registers a callback fired when cleanupOrphans deletes
-// a cluster-mode Job at startup. Providers use this to emit a terminal state event.
-func (e *K8sExecutor) OnClusterModeOrphanDelete(cb func(jobID, reason string)) {
-	e.onClusterModeOrphanDelete = cb
+// OnRestartTerminal registers a callback fired when cleanupOrphans observes a
+// terminal or cluster-mode-reaped Job at startup. Providers use this to
+// dispatch terminal state via their OnStateChange chain.
+func (e *K8sExecutor) OnRestartTerminal(cb func(jobID string, state SparkState, message string)) {
+	e.onRestartTerminal = cb
 }
 
-// NotifyTerminal must be called by the provider's OnStateChange when a job
-// reaches a terminal state (COMPLETED or FAILED). It deletes any uploaded
-// executor pod-template blob and removes the job entry. Best-effort: errors
-// log WARN but never propagate. Safe to call multiple times (idempotent via
-// LoadAndDelete). Also called internally by Cancel().
-func (e *K8sExecutor) NotifyTerminal(ctx context.Context, jobID string) {
-	e.forgetAndDeleteExecutorTemplate(ctx, jobID)
-}
-
-// forgetAndDeleteExecutorTemplate is called on terminal job state (completion,
-// failure, cancel). Loads the jobEntry, dispatches DeleteTemplate, and removes
-// the entry. Best-effort: errors log WARN but never propagate.
-func (e *K8sExecutor) forgetAndDeleteExecutorTemplate(ctx context.Context, jobID string) {
-	v, ok := e.jobEntries.LoadAndDelete(jobID)
-	if !ok {
-		return
-	}
-	entry, _ := v.(*jobEntry)
-	if entry == nil || entry.cleanupKey == "" || entry.transform == nil {
-		return
-	}
-	if err := entry.transform.DeleteTemplate(ctx, e.blobs, entry.cleanupKey); err != nil {
-		slog.Warn("spark k8s: template cleanup failed on terminal state",
-			"job_id", jobID, "cleanup_key", entry.cleanupKey, "err", err)
-	}
+// OnJobAdopted registers a callback fired when cleanupOrphans re-adopts a
+// running or unsuspended Job at startup. Providers use this to call
+// poller.Track for the adopted jobID.
+func (e *K8sExecutor) OnJobAdopted(cb func(jobID string, state SparkState)) {
+	e.onJobAdopted = cb
 }
 
 // Close suspends non-cluster-mode Jobs so they survive a server restart.
@@ -269,15 +240,22 @@ func (e *K8sExecutor) Close() error {
 	return nil
 }
 
-// cleanupOrphans runs at startup to re-adopt or delete jobs from previous runs.
+// cleanupOrphans runs synchronously at startup to re-adopt or delete jobs from
+// previous runs. It must complete before NewK8sExecutor returns (G3).
 func (e *K8sExecutor) cleanupOrphans() {
 	if e.client == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// No fixed timeout: use a background context so a slow apiserver doesn't
+	// truncate the list. Individual per-job ops use a short deadline (G4).
+	ctx := context.Background()
 
-	items, err := e.client.listJobs(ctx, "app.kubernetes.io%2Fmanaged-by%3Djaiscloud")
+	selector := encodeLabelSelector("app.kubernetes.io/managed-by=jaiscloud")
+	if e.cfg.InstanceID != "" {
+		selector = encodeLabelSelector(
+			"app.kubernetes.io/managed-by=jaiscloud,jaiscloud.io/instance-id=" + e.cfg.InstanceID)
+	}
+	items, err := e.client.listJobs(ctx, selector)
 	if err != nil {
 		slog.Warn("spark k8s: cleanupOrphans: list jobs failed", "err", err)
 		return
@@ -286,57 +264,109 @@ func (e *K8sExecutor) cleanupOrphans() {
 	for _, item := range items {
 		name := item.Metadata.Name
 		labels := item.Metadata.Labels
-		jobID := labels["jaiscloud-job-id"]
+
+		// Raw job ID from annotation (G1); fall back to sanitized label for pre-Phase-7 Jobs.
+		jobID := item.Metadata.Annotations["jaiscloud.io/job-id-raw"]
+		if jobID == "" {
+			jobID = labels["jaiscloud-job-id"]
+		}
 		if jobID == "" {
 			jobID = name
 		}
 
-		// Cluster-mode Jobs: always delete on restart (driver pod is gone; no resume).
+		opCtx, opCancel := context.WithTimeout(ctx, 10*time.Second)
+
 		if labels["jaiscloud.io/spark-deploy-mode"] == "cluster" {
-			if err := e.client.deleteJob(ctx, name); err != nil {
-				slog.Warn("spark k8s: cleanupOrphans: delete cluster-mode job failed", "job", name, "err", err)
+			// Belt-and-suspenders: skip jobs from other instances even if the
+			// selector didn't filter them (e.g. pre-Phase-7 jobs, test fakes).
+			if e.cfg.InstanceID != "" && labels["jaiscloud.io/instance-id"] != e.cfg.InstanceID {
+				slog.Debug("spark k8s: cleanupOrphans: skipping cluster-mode job from other instance",
+					"job", name,
+					"their_id", labels["jaiscloud.io/instance-id"],
+					"our_id", e.cfg.InstanceID)
+				opCancel()
 				continue
 			}
-			slog.Info("spark k8s: cleanupOrphans: deleted cluster-mode job", "job", name)
-
-			// Decode blob cleanup key (encoded with "_" → "/" at write time).
-			if encoded := labels["jaiscloud.io/executor-template-key"]; encoded != "" {
-				cleanupKey := strings.ReplaceAll(encoded, "_", "/")
-				if transform, terr := selectTransform(e.cfg.Cloud); terr == nil {
-					if err := transform.DeleteTemplate(ctx, e.blobs, cleanupKey); err != nil {
-						slog.Warn("spark k8s: cleanupOrphans: template cleanup failed",
-							"job", name, "cleanup_key", cleanupKey, "err", err)
-					}
-				}
-			}
-
-			if e.onClusterModeOrphanDelete != nil {
-				e.onClusterModeOrphanDelete(jobID, "JaisCloud restarted — cluster-mode job reaped")
-			}
+			e.handleClusterModeOrphan(opCtx, name, jobID, item)
+			opCancel()
 			continue
 		}
 
+		// Step-mode (non-cluster) Job.
 		isTerminal := item.Status.Succeeded > 0 || item.Status.Failed > 0
 		isSuspended := item.Spec.Suspend != nil && *item.Spec.Suspend
 
 		switch {
 		case isTerminal:
-			if err := e.client.deleteJob(ctx, name); err != nil {
+			state := mapJobStatus(item.Status)
+			msg := jobFailureMessage(item.Status)
+			if e.onRestartTerminal != nil {
+				e.onRestartTerminal(jobID, state, msg)
+			}
+			if err := e.client.deleteJob(opCtx, name); err != nil {
 				slog.Warn("spark k8s: cleanupOrphans: delete terminal job failed", "job", name, "err", err)
 			} else {
-				slog.Info("spark k8s: cleanupOrphans: deleted terminal job", "job", name)
+				slog.Info("spark k8s: cleanupOrphans: deleted terminal job", "job", name, "state", state)
 			}
 		case isSuspended:
-			if err := e.client.unsuspendJob(ctx, name); err != nil {
+			if err := e.client.unsuspendJob(opCtx, name); err != nil {
 				slog.Warn("spark k8s: cleanupOrphans: unsuspend job failed", "job", name, "err", err)
 			} else {
 				e.jobEntries.Store(jobID, &jobEntry{name: name})
+				if e.onJobAdopted != nil {
+					e.onJobAdopted(jobID, StateRunning)
+				}
 				slog.Info("spark k8s: cleanupOrphans: resumed suspended job", "job", name)
 			}
 		default:
 			e.jobEntries.Store(jobID, &jobEntry{name: name})
+			if e.onJobAdopted != nil {
+				e.onJobAdopted(jobID, StateRunning)
+			}
 			slog.Info("spark k8s: cleanupOrphans: re-adopted running job", "job", name)
 		}
+		opCancel()
+	}
+}
+
+// handleClusterModeOrphan applies ClusterRestartPolicy to a cluster-mode Job
+// found at startup. Terminal Jobs always dispatch real state; running Jobs are
+// adopted or reaped depending on cfg.ClusterRestartPolicy.
+func (e *K8sExecutor) handleClusterModeOrphan(ctx context.Context, name, jobID string, item jobListItem) {
+	isTerminal := item.Status.Succeeded > 0 || item.Status.Failed > 0
+	if isTerminal {
+		// R6/R7: dispatch the real terminal state, not a hard-coded FAILED.
+		state := mapJobStatus(item.Status)
+		msg := jobFailureMessage(item.Status)
+		if e.onRestartTerminal != nil {
+			e.onRestartTerminal(jobID, state, msg)
+		}
+		if err := e.client.deleteJob(ctx, name); err != nil {
+			slog.Warn("spark k8s: cleanupOrphans: delete terminal cluster-mode job failed", "job", name, "err", err)
+		} else {
+			slog.Info("spark k8s: cleanupOrphans: deleted terminal cluster-mode job", "job", name, "state", state)
+		}
+		return
+	}
+
+	// R5: still running — honour the restart policy.
+	switch e.cfg.ClusterRestartPolicy {
+	case "reap":
+		if e.onRestartTerminal != nil {
+			e.onRestartTerminal(jobID, StateFailed,
+				"reaped on restart per JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY=reap")
+		}
+		if err := e.client.deleteJob(ctx, name); err != nil {
+			slog.Warn("spark k8s: cleanupOrphans: reap cluster-mode job failed", "job", name, "err", err)
+		} else {
+			slog.Info("spark k8s: cleanupOrphans: reaped running cluster-mode job", "job", name)
+		}
+	default: // "adopt"
+		e.jobEntries.Store(jobID, &jobEntry{name: name, isClusterMode: true})
+		if e.onJobAdopted != nil {
+			e.onJobAdopted(jobID, StateRunning)
+		}
+		slog.Info("spark k8s: cleanupOrphans: re-adopted running cluster-mode job", "job", name)
 	}
 }
 
@@ -357,13 +387,39 @@ func sanitizeLabel(s string) string {
 	return result
 }
 
-// Reset clears the in-memory job map. Real K8s Jobs are left running so that
-// a JaisCloud reset does not affect live cluster workloads.
+// Reset deletes every tracked K8s Job and clears the in-memory map, returning
+// the cluster to a known-empty baseline. It also sweeps for any instance-owned
+// Jobs that escaped the map (e.g. Submit crashed mid-store).
 func (e *K8sExecutor) Reset() {
-	e.jobEntries.Range(func(k, _ any) bool {
+	if e.client == nil {
+		e.jobEntries.Range(func(k, _ any) bool { e.jobEntries.Delete(k); return true })
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	e.jobEntries.Range(func(k, v any) bool {
+		if entry, ok := v.(*jobEntry); ok && entry != nil {
+			if err := e.client.deleteJob(ctx, entry.name); err != nil {
+				slog.Warn("spark k8s: Reset: delete job failed", "job", entry.name, "err", err)
+			}
+		}
 		e.jobEntries.Delete(k)
 		return true
 	})
+
+	// Sweep for instance-owned Jobs that escaped the map.
+	if e.cfg.InstanceID != "" {
+		selector := encodeLabelSelector(
+			"app.kubernetes.io/managed-by=jaiscloud,jaiscloud.io/instance-id=" + e.cfg.InstanceID)
+		if items, err := e.client.listJobs(ctx, selector); err == nil {
+			for _, item := range items {
+				if err := e.client.deleteJob(ctx, item.Metadata.Name); err != nil {
+					slog.Warn("spark k8s: Reset: sweep delete failed", "job", item.Metadata.Name, "err", err)
+				}
+			}
+		}
+	}
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -380,55 +436,6 @@ func resolveContainerBinary(name string) string {
 	default:
 		return name // assume it's a path or a well-known binary in the image
 	}
-}
-
-// rewriteSparkMaster rewrites spark-submit args for execution inside a container.
-// Any --master that is not already local[*]/local[N] is replaced with local[*].
-// --deploy-mode cluster is rewritten to --deploy-mode client.
-// If no --master is present, --master local[*] --deploy-mode client is prepended.
-func rewriteSparkMaster(args []string) []string {
-	out := make([]string, 0, len(args))
-	skip := false
-	hasMaster := false
-	for i, a := range args {
-		if skip {
-			skip = false
-			continue
-		}
-		// Two-token form: --master <value>
-		if a == "--master" && i+1 < len(args) {
-			hasMaster = true
-			master := args[i+1]
-			if strings.HasPrefix(master, "local") {
-				out = append(out, "--master", master)
-			} else {
-				out = append(out, "--master", "local[*]")
-			}
-			skip = true
-			continue
-		}
-		// Single-token form: --master=<value>
-		if strings.HasPrefix(a, "--master=") {
-			hasMaster = true
-			master := strings.TrimPrefix(a, "--master=")
-			if strings.HasPrefix(master, "local") {
-				out = append(out, a)
-			} else {
-				out = append(out, "--master=local[*]")
-			}
-			continue
-		}
-		if a == "--deploy-mode" && i+1 < len(args) && args[i+1] == "cluster" {
-			out = append(out, "--deploy-mode", "client")
-			skip = true
-			continue
-		}
-		out = append(out, a)
-	}
-	if !hasMaster {
-		out = append([]string{"--master", "local[*]", "--deploy-mode", "client"}, out...)
-	}
-	return out
 }
 
 // insertBeforeJar inserts extra args before the first .jar argument in a
@@ -524,26 +531,27 @@ func jobFailureMessage(s batchJobStatus) string {
 }
 
 // buildJobManifest constructs a batch/v1 Job that runs spark-submit.
-// Returns the manifest, the cloud transform used, and an executor-template cleanup key
-// (non-empty only when an executor template was uploaded in cluster mode).
-func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job SparkJob) (batchJob, CloudSparkTransform, string, error) {
+func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job SparkJob) (batchJob, error) {
 	backoffLimit := 0
 	ttl := 3600
 
 	transform, err := selectTransform(e.cfg.Cloud)
 	if err != nil {
-		return batchJob{}, nil, "", err
+		return batchJob{}, err
 	}
 
 	cmd, err := transform.ResolveCommand(job, e.cfg)
 	if err != nil {
-		return batchJob{}, nil, "", fmt.Errorf("K8sExecutor: resolve command for %s: %w", jobName, err)
+		return batchJob{}, fmt.Errorf("K8sExecutor: resolve command for %s: %w", jobName, err)
 	}
 
-	// URI rewriting applied once across all argument sources.
-	cmd.Args = rewriteURIs(transform, cmd.Args, e.cfg)
-	cloudConfs := rewriteURIs(transform, transform.SparkConfs(e.cfg), e.cfg)
-	extraConfs := rewriteURIs(transform, e.cfg.ExtraSparkConfs, e.cfg)
+	// Validate URIs: fail fast if storage schemes don't match the configured cloud.
+	if err := transform.ValidateURIs(cmd.Args, e.cfg); err != nil {
+		return batchJob{}, err
+	}
+
+	cloudConfs := transform.SparkConfs(e.cfg)
+	extraConfs := e.cfg.ExtraSparkConfs
 
 	cmd.Args = insertBeforeJar(cmd.Args, cloudConfs)
 	cmd.Args = insertBeforeJar(cmd.Args, extraConfs)
@@ -568,7 +576,7 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 
 	// Platform layer: TLS, generic volumes, env — applied after cloud contributions.
 	if err := platform.ApplyK8s(&spec, &ctr, e.platform); err != nil {
-		return batchJob{}, nil, "", fmt.Errorf("platform apply: %w", err)
+		return batchJob{}, fmt.Errorf("platform apply: %w", err)
 	}
 
 	spec.Containers = []container{ctr}
@@ -577,7 +585,7 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 	// Only present when the EMR provider called Resolve; zero cost otherwise.
 	if len(job.ExtraInitContainers) > 0 {
 		if err := platform.CheckVolumeConflicts(spec.Volumes, job.ExtraVolumes); err != nil {
-			return batchJob{}, nil, "", fmt.Errorf("bootstrap volume conflict: %w", err)
+			return batchJob{}, fmt.Errorf("bootstrap volume conflict: %w", err)
 		}
 		// Prepend: bootstrap runs before any cloud-transform or platform init containers.
 		spec.InitContainers = append(job.ExtraInitContainers, spec.InitContainers...)
@@ -586,10 +594,10 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 	}
 
 	// ── Cluster-mode block ─────────────────────────────────────────────────────
-	clusterModeActive := job.AllowClusterMode && e.cfg.Mode == "k8s"
+	clusterModeActive := job.AllowClusterMode && e.cfg.SparkMode == "k8s"
 	if job.AllowClusterMode && !clusterModeActive {
 		slog.Info("spark: cluster mode requested but executor mode is not k8s; running local",
-			"job_id", job.JobID, "executor_mode", e.cfg.Mode)
+			"job_id", job.JobID, "executor_mode", e.cfg.SparkMode)
 	}
 
 	// Validate cluster-mode config early so misconfiguration is visible before
@@ -621,88 +629,32 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 		spec.Containers[0].Args = stripTemplateFileConfs(spec.Containers[0].Args)
 	}
 
-	var execTemplateKey string
-
-	// Driver template merge (cluster mode only).
-	if clusterModeActive && len(job.DriverTemplateBytes) > 0 {
-		driverTmpl, terr := unmarshalTemplateBytes(job.DriverTemplateBytes)
-		if terr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("parse driver template: %w", terr)
-		}
-		if terr := MergeDriver(&spec, &spec.Containers[0], driverTmpl); terr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("merge driver template: %w", terr)
-		}
-	}
-
-	// Executor template merge + upload via cloud transform (cluster mode only).
-	if clusterModeActive && len(job.ExecutorTemplateBytes) > 0 {
-		execTmpl, terr := unmarshalTemplateBytes(job.ExecutorTemplateBytes)
-		if terr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("parse executor template: %w", terr)
-		}
-		mergedExec, terr := MergeExecutor(execTmpl)
-		if terr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("merge executor template: %w", terr)
-		}
-		if e.cfg.StripScheduling {
-			StripSchedulingFields(mergedExec)
-		}
-		if len(mergedExec.Containers) > 0 {
-			ApplyResourceProfile(mergedExec, &mergedExec.Containers[0], nil, e.cfg.Resources)
-		}
-		body, jerr := json.Marshal(mergedExec)
-		if jerr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("marshal merged executor spec: %w", jerr)
-		}
-		execURI, cleanupKey, uerr := transform.UploadTemplate(ctx, e.blobs, e.cfg, job.JobID, body)
-		if uerr != nil {
-			return batchJob{}, nil, "", fmt.Errorf("upload executor template: %w", uerr)
-		}
-		execTemplateKey = cleanupKey
-		spec.Containers[0].Args = setOrAppendConf(
-			spec.Containers[0].Args,
-			"spark.kubernetes.executor.podTemplateFile",
-			execURI,
-		)
-	}
-
-	// Driver fetch env: cloud-specific credentials the driver's Spark scheduler
-	// needs to fetch the uploaded executor template. First-wins against PodEnv.
-	if clusterModeActive {
-		fetchEnv := transform.DriverFetchEnv(e.cfg)
-		spec.Containers[0].Env = appendIfAbsent(spec.Containers[0].Env, fetchEnv)
-	}
-
-	// Driver fitness: strip scheduling fields + apply resource cap.
-	if clusterModeActive {
-		if e.cfg.StripScheduling {
-			StripSchedulingFields(&spec)
-		}
-		spec.Containers[0].Args = ApplyResourceProfile(
-			&spec, &spec.Containers[0], spec.Containers[0].Args, e.cfg.Resources,
-		)
-	}
-
-	// ── Labels ────────────────────────────────────────────────────────────────
+	// ── Labels + annotations ──────────────────────────────────────────────────
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by": "jaiscloud",
 		"jaiscloud-cloud":              string(e.cfg.Cloud),
 		"jaiscloud-job-id":             sanitizeLabel(job.JobID),
 	}
+	if e.cfg.InstanceID != "" {
+		labels["jaiscloud.io/instance-id"] = e.cfg.InstanceID
+	}
 	if clusterModeActive {
 		labels["jaiscloud.io/spark-deploy-mode"] = "cluster"
 	}
-	if execTemplateKey != "" {
-		labels["jaiscloud.io/executor-template-key"] = strings.ReplaceAll(execTemplateKey, "/", "_")
+	// Store the raw job ID in an annotation so cleanupOrphans can recover it
+	// even when sanitizeLabel has collapsed characters (G1).
+	annotations := map[string]string{
+		"jaiscloud.io/job-id-raw": job.JobID,
 	}
 
 	return batchJob{
 		APIVersion: "batch/v1",
 		Kind:       "Job",
 		Metadata: jobMeta{
-			Name:      jobName,
-			Namespace: e.cfg.Namespace,
-			Labels:    labels,
+			Name:        jobName,
+			Namespace:   e.cfg.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: jobSpec{
 			BackoffLimit:            &backoffLimit,
@@ -712,5 +664,5 @@ func (e *K8sExecutor) buildJobManifest(ctx context.Context, jobName string, job 
 				Spec:     spec,
 			},
 		},
-	}, transform, execTemplateKey, nil
+	}, nil
 }

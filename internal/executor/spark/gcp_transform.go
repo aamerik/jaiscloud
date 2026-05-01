@@ -1,10 +1,6 @@
 package spark
 
 import (
-	"context"
-	"fmt"
-
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/model"
 )
@@ -17,7 +13,15 @@ func init() { RegisterTransform(model.CloudGCP, gcpTransform{}) }
 
 func (gcpTransform) Cloud() model.Cloud { return model.CloudGCP }
 
-func (gcpTransform) Rewrite(uri string, _ SparkConfig) string { return rewriteS3aToGCS(uri) }
+var gcpAllowedSchemes = map[string]bool{
+	"gs":    true,
+	"file":  true, "local": true,
+	"": true,
+}
+
+func (gcpTransform) ValidateURIs(args []string, cfg SparkConfig) error {
+	return validateAgainstAllowlist(model.CloudGCP, gcpAllowedSchemes, args)
+}
 
 func (gcpTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
 	image := resolveImage(job, cfg)
@@ -28,14 +32,6 @@ func (gcpTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCo
 	}
 	return SparkSubmitCommand{Binary: binary, Args: args, Image: image}, nil
 }
-
-func (gcpTransform) UploadTemplate(_ context.Context, _ blobfs.BlobStore, _ SparkConfig, _ string, _ []byte) (string, string, error) {
-	return "", "", fmt.Errorf("cluster mode on GCP is not yet supported — upload via gs:// not implemented")
-}
-
-func (gcpTransform) DeleteTemplate(_ context.Context, _ blobfs.BlobStore, _ string) error { return nil }
-
-func (gcpTransform) DriverFetchEnv(_ SparkConfig) []envVar { return nil }
 
 func (gcpTransform) PodEnv(cfg SparkConfig) []k8stypes.EnvVar {
 	m := map[string]string{

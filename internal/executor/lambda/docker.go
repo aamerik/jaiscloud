@@ -17,9 +17,8 @@ import (
 )
 
 const (
-	dockerSocket     = "/var/run/docker.sock"
-	invocationPort   = 8080
-	containerPrefix  = "jc-lambda-"
+	dockerSocket   = "/var/run/docker.sock"
+	invocationPort = 8080
 )
 
 // warmContainer holds the state of a running Docker container for one function.
@@ -156,7 +155,8 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 }
 
 func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, image string, hostPort int) (string, error) {
-	name := containerPrefix + sanitizeName(req.FunctionName)
+	pfx := instancePrefix(e.cfg.InstanceID)
+	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
 	env := []string{
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", req.FunctionName),
@@ -316,6 +316,8 @@ func (e *DockerExecutor) DeleteFunction(_ context.Context, name string) {
 }
 
 // Reset tears down all warm containers without stopping the GC goroutine.
+// After the map pass it sweeps by instance prefix to catch containers that
+// are live on the daemon but missing from the in-memory map (LG5).
 func (e *DockerExecutor) Reset() {
 	e.mu.Lock()
 	names := make([]string, 0, len(e.containers))
@@ -326,15 +328,25 @@ func (e *DockerExecutor) Reset() {
 	for _, name := range names {
 		e.removeContainer(name)
 	}
+	// Best-effort sweep for escaped containers.
+	e.removeContainersByPrefix(instancePrefix(e.cfg.InstanceID))
 }
 
-// cleanupOrphans stops and removes any Docker containers whose names start with
-// containerPrefix that were left over from a previous process.
+// cleanupOrphans stops and removes Docker containers from previous runs.
+// Only containers whose names start with this instance's prefix are removed
+// so multiple JaisCloud instances on the same Docker daemon don't cross-reap (LG4).
 func (e *DockerExecutor) cleanupOrphans() {
+	pfx := instancePrefix(e.cfg.InstanceID)
+	e.removeContainersByPrefix(pfx)
+}
+
+// removeContainersByPrefix lists and removes all containers whose names match prefix.
+func (e *DockerExecutor) removeContainersByPrefix(pfx string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("http://localhost/v1.41/containers/json?all=true&filters={\"name\":[\"%s\"]}", containerPrefix)
+	filterVal := fmt.Sprintf(`{"name":["%s"]}`, pfx)
+	url := "http://localhost/v1.41/containers/json?all=true&filters=" + filterVal
 	body, status, err := e.dockerCall(ctx, http.MethodGet, url, nil)
 	if err != nil || status >= 300 {
 		return
@@ -348,6 +360,7 @@ func (e *DockerExecutor) cleanupOrphans() {
 	for _, item := range items {
 		e.dockerCall(ctx, http.MethodPost, fmt.Sprintf("http://localhost/v1.41/containers/%s/stop", item.Id), nil)
 		e.dockerCall(ctx, http.MethodDelete, fmt.Sprintf("http://localhost/v1.41/containers/%s?force=true", item.Id), nil)
+		slog.Info("lambda docker: cleaned up orphan container", "id", item.Id[:12])
 	}
 }
 
