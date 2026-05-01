@@ -126,13 +126,14 @@ func startCmd() *cobra.Command {
 				Cloud:      string(cfg.Cloud),
 				Region:     cfg.Region,
 				AccountID:  cfg.AccountID,
+				StateDir:   stateDir,
 			})
 
 			var certs certstore.CertStore
-			if cfg.Mode == config.ModeFull {
-				pgStore := s.resources.(*store.PostgresResourceStore)
-				certs = certstore.NewPostgresCertStore(pgStore.Pool())
+			if fsCS, err := certstore.NewFilesystemCertStore(stateDir); err == nil {
+				certs = fsCS
 			} else {
+				slog.Warn("certstore: using in-memory store; TLS cert will regenerate on restart")
 				certs = certstore.NewMemoryCertStore()
 			}
 
@@ -372,9 +373,10 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	secretProv := secretprovider.New(s.secrets, kmsEncryptor)
 	paramProv := paramprovider.New(s.parameters, kmsEncryptor)
 
-	// Build Lambda executor. Same ExecutorMode drives Lambda and Spark.
+	// Build Lambda executor. Mode resolved via config.ExecutorMode (subsystem override first).
+	lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
 	lambdaCfg := lambdaexec.DefaultLambdaConfig()
-	lambdaCfg.Mode = cfg.ExecutorMode
+	lambdaCfg.Mode = lambdaMode
 	lambdaCfg.Region = cfg.Region
 	lambdaCfg.InstanceID = instanceID
 	if cfg.LambdaImage != "" {
@@ -389,8 +391,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if v := os.Getenv("JAISCLOUD_ENDPOINT"); v != "" {
 		lambdaCfg.JaisCloudEndpoint = v
 	}
+	lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
 	var lambdaExec lambdaexec.LambdaExecutor
-	switch cfg.ExecutorMode {
+	switch lambdaMode {
 	case "docker":
 		lambdaExec = lambdaexec.NewDockerExecutor(lambdaCfg, platformCfg)
 	case "k8s":
@@ -398,12 +401,12 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	default:
 		lambdaExec = lambdaexec.NewExecutor(lambdaCfg)
 	}
-	slog.Info("lambda executor", "mode", cfg.ExecutorMode)
+	slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
 	prevCleanup := cleanup
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
 
 	// Named provider variables so registerCFNHandlers can reference them.
-	funcP := functionprovider.NewWithExecutor(s.resources, lambdaExec)
+	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
 	notifP := notification.New(s.resources, s.messages, bus)
@@ -891,6 +894,7 @@ func importCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			host, _ := cmd.Flags().GetString("host")
 			input, _ := cmd.Flags().GetString("input")
+			newInstance, _ := cmd.Flags().GetBool("new-instance")
 
 			var data []byte
 			var err error
@@ -903,8 +907,11 @@ func importCmd() *cobra.Command {
 				return fmt.Errorf("read input: %w", err)
 			}
 
-			resp, err := http.Post(host+"/_jaiscloud/import", "application/json",
-				bytes.NewReader(data))
+			url := host + "/_jaiscloud/import"
+			if newInstance {
+				url += "?new_instance=true"
+			}
+			resp, err := http.Post(url, "application/json", bytes.NewReader(data))
 			if err != nil {
 				return fmt.Errorf("import: %w", err)
 			}
@@ -919,6 +926,7 @@ func importCmd() *cobra.Command {
 	}
 	cmd.Flags().String("host", "http://localhost:4566", "Emulator host URL")
 	cmd.Flags().StringP("input", "i", "-", "Input file (default: stdin)")
+	cmd.Flags().Bool("new-instance", false, "Assign a fresh instance ID on import (blocks snapshots with KMS key material)")
 	return cmd
 }
 

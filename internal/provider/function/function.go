@@ -5,12 +5,15 @@ package function
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -19,8 +22,13 @@ const resourceType = "lambda_functions"
 
 // FunctionProvider handles all Lambda operations.
 type FunctionProvider struct {
-	resources store.ResourceStore
-	executor  lambdaexec.LambdaExecutor // nil → MockExecutor behaviour (echo)
+	resources          store.ResourceStore
+	executor           lambdaexec.LambdaExecutor // nil → MockExecutor behaviour (echo)
+	concurrencyLimit   int64
+	syncPayloadMax     int64
+	asyncPayloadMax    int64
+	responsePayloadMax int64
+	activeInvocations  atomic.Int64
 }
 
 // New constructs a FunctionProvider with a mock (echo) executor.
@@ -31,6 +39,18 @@ func New(resources store.ResourceStore) *FunctionProvider {
 // NewWithExecutor constructs a FunctionProvider with the given executor.
 func NewWithExecutor(resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *FunctionProvider {
 	return &FunctionProvider{resources: resources, executor: exec}
+}
+
+// NewWithLimits constructs a FunctionProvider with concurrency and payload-size limits.
+func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig) *FunctionProvider {
+	return &FunctionProvider{
+		resources:          resources,
+		executor:           exec,
+		concurrencyLimit:   cfg.ConcurrencyLimit,
+		syncPayloadMax:     cfg.SyncPayloadMax,
+		asyncPayloadMax:    cfg.AsyncPayloadMax,
+		responsePayloadMax: cfg.ResponsePayloadMax,
+	}
 }
 
 func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
@@ -44,6 +64,22 @@ func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 		"Function.UpdateFunctionCode":         p.UpdateFunctionCode,
 		"Function.InvokeFunction":             p.InvokeFunction,
 	}
+}
+
+const (
+	lambdaMinTimeoutSecs = 1
+	lambdaMaxTimeoutSecs = 900
+)
+
+func validateLambdaTimeout(t int) error {
+	if t < lambdaMinTimeoutSecs || t > lambdaMaxTimeoutSecs {
+		return model.NewProviderError(
+			"InvalidParameterValueException",
+			fmt.Sprintf("1 validation error detected: Value '%d' at 'timeout' failed to satisfy constraint: Member must be between %d and %d (inclusive)",
+				t, lambdaMinTimeoutSecs, lambdaMaxTimeoutSecs),
+			400)
+	}
+	return nil
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -142,6 +178,9 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		case int:
 			timeout = v
 		}
+	}
+	if err := validateLambdaTimeout(timeout); err != nil {
+		return nil, err
 	}
 	memSize := 128
 	if m, ok := nr.Params["MemorySize"]; ok {
@@ -251,6 +290,19 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 	if env := parseEnvVars(nr.Params); env != nil {
 		cfg.Environment = env
 	}
+	if t, ok := nr.Params["Timeout"]; ok {
+		var newTimeout int
+		switch v := t.(type) {
+		case float64:
+			newTimeout = int(v)
+		case int:
+			newTimeout = v
+		}
+		if err := validateLambdaTimeout(newTimeout); err != nil {
+			return nil, err
+		}
+		cfg.Timeout = newTimeout
+	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
 
 	if err := p.saveConfig(ctx, cfg); err != nil {
@@ -282,10 +334,47 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
-	if strings.EqualFold(strParam(nr.Params, "_invocation_type"), "Event") {
+
+	isAsync := strings.EqualFold(strParam(nr.Params, "_invocation_type"), "Event")
+	payload, _ := nr.Params["_payload"].([]byte)
+
+	// Request-side size check — before consuming a concurrency slot.
+	maxReq := p.syncPayloadMax
+	if isAsync {
+		maxReq = p.asyncPayloadMax
+	}
+	if maxReq > 0 && int64(len(payload)) > maxReq {
+		return nil, model.NewProviderError(
+			"RequestEntityTooLargeException",
+			fmt.Sprintf("Request must be smaller than %d bytes for the InvokeFunction operation", maxReq),
+			413)
+	}
+
+	// Async: short-circuit after payload check, before consuming a slot.
+	if isAsync {
 		return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 	}
-	payload, _ := nr.Params["_payload"].([]byte)
+
+	// Concurrency slot.
+	current := p.activeInvocations.Add(1)
+	defer p.activeInvocations.Add(-1)
+
+	if p.concurrencyLimit > 0 && current > p.concurrencyLimit {
+		return nil, model.NewProviderError(
+			"TooManyRequestsException",
+			"Rate Exceeded.",
+			429,
+		)
+	}
+
+	// Context deadline from function timeout.
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	invCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	req := lambdaexec.InvokeRequest{
 		FunctionName: cfg.FunctionName,
 		Runtime:      cfg.Runtime,
@@ -295,10 +384,50 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		EnvVars:      cfg.Environment,
 		Payload:      payload,
 	}
-	result, err := p.executor.Invoke(ctx, req)
+	result, err := p.executor.Invoke(invCtx, req)
 	if err != nil {
+		// AWS-shaped timeout envelope.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(invCtx.Err(), context.DeadlineExceeded) {
+			reqID := reqctx.GetRequestID(ctx)
+			if reqID == "" {
+				reqID = "00000000-0000-0000-0000-000000000000"
+			}
+			body := map[string]any{
+				"errorMessage": fmt.Sprintf("%s %s Task timed out after %.2f seconds",
+					nr.Clock.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+					reqID,
+					timeout.Seconds()),
+				"errorType": "Runtime.TimeoutError",
+			}
+			timeoutBody, _ := json.Marshal(body)
+			return &model.ProviderResponse{
+				HTTPStatus: 200,
+				Data: map[string]any{
+					"_function_error": "Unhandled",
+					"_payload":        timeoutBody,
+				},
+			}, nil
+		}
 		return nil, model.NewProviderError("ServiceException", "invocation failed: "+err.Error(), 500)
 	}
+
+	// Response-side size check.
+	if p.responsePayloadMax > 0 && int64(len(result)) > p.responsePayloadMax {
+		body := map[string]any{
+			"errorMessage": fmt.Sprintf("Response payload size (%d bytes) exceeded maximum allowed payload size (%d bytes).",
+				len(result), p.responsePayloadMax),
+			"errorType": "Function.ResponseSizeTooLarge",
+		}
+		oversizePayload, _ := json.Marshal(body)
+		return &model.ProviderResponse{
+			HTTPStatus: 200,
+			Data: map[string]any{
+				"_function_error": "Unhandled",
+				"_payload":        oversizePayload,
+			},
+		}, nil
+	}
+
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
 		Data:       map[string]any{"_payload": result},

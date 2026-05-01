@@ -84,6 +84,121 @@ func TestLoadOrCreateInstanceID_ReadsExistingFile(t *testing.T) {
 	}
 }
 
+func TestWriteInstanceID_AtomicAndReadBack(t *testing.T) {
+	t.Setenv("JAISCLOUD_INSTANCE_ID", "")
+	dir := t.TempDir()
+
+	require := func(cond bool, msg string) {
+		t.Helper()
+		if !cond {
+			t.Fatal(msg)
+		}
+	}
+
+	err := WriteInstanceID(dir, "my-custom-id")
+	require(err == nil, "WriteInstanceID should not error")
+
+	// No .tmp file should persist.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("stale .tmp file found: %s", e.Name())
+		}
+	}
+
+	// ReadBack: LoadOrCreateInstanceID should return the written value.
+	id, src := LoadOrCreateInstanceID(dir)
+	require(id == "my-custom-id", "id mismatch: "+id)
+	require(src == "file", "source mismatch: "+src)
+}
+
+func TestWriteInstanceID_Overwrites(t *testing.T) {
+	t.Setenv("JAISCLOUD_INSTANCE_ID", "")
+	dir := t.TempDir()
+
+	_ = WriteInstanceID(dir, "first")
+	_ = WriteInstanceID(dir, "second")
+
+	id, _ := LoadOrCreateInstanceID(dir)
+	if id != "second" {
+		t.Fatalf("got %q, want second", id)
+	}
+}
+
+func TestGenerateNewInstanceID_WritesValidUUID(t *testing.T) {
+	t.Setenv("JAISCLOUD_INSTANCE_ID", "")
+	dir := t.TempDir()
+
+	id, err := GenerateNewInstanceID(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("id must not be empty")
+	}
+	parts := strings.Split(id, "-")
+	if len(parts) != 5 {
+		t.Errorf("expected UUID with 5 parts, got %v", parts)
+	}
+
+	// File should contain the same UUID.
+	persisted, _ := LoadOrCreateInstanceID(dir)
+	if persisted != id {
+		t.Errorf("persisted id %q differs from returned id %q", persisted, id)
+	}
+}
+
+func TestGenerateNewInstanceID_AlwaysGeneratesNewID(t *testing.T) {
+	t.Setenv("JAISCLOUD_INSTANCE_ID", "")
+	dir := t.TempDir()
+
+	id1, _ := GenerateNewInstanceID(dir)
+	id2, _ := GenerateNewInstanceID(dir)
+
+	if id1 == id2 {
+		t.Error("GenerateNewInstanceID should produce a different UUID each call")
+	}
+}
+
+func TestExecutorMode_LambdaSpecificOverride(t *testing.T) {
+	t.Setenv("JAISCLOUD_EXECUTOR_MODE", "docker")
+	t.Setenv("JAISCLOUD_LAMBDA_EXECUTOR_MODE", "mock")
+
+	mode, src := ExecutorMode("lambda", "mock")
+	if mode != "mock" {
+		t.Errorf("mode: got %q, want mock", mode)
+	}
+	if src != "JAISCLOUD_LAMBDA_EXECUTOR_MODE" {
+		t.Errorf("source: got %q, want JAISCLOUD_LAMBDA_EXECUTOR_MODE", src)
+	}
+}
+
+func TestExecutorMode_FallsBackToGeneric(t *testing.T) {
+	t.Setenv("JAISCLOUD_EXECUTOR_MODE", "k8s")
+	t.Setenv("JAISCLOUD_LAMBDA_EXECUTOR_MODE", "")
+
+	mode, src := ExecutorMode("lambda", "mock")
+	if mode != "k8s" {
+		t.Errorf("mode: got %q, want k8s", mode)
+	}
+	if src != "JAISCLOUD_EXECUTOR_MODE" {
+		t.Errorf("source: got %q, want JAISCLOUD_EXECUTOR_MODE", src)
+	}
+}
+
+func TestExecutorMode_FallsBackToDefault(t *testing.T) {
+	t.Setenv("JAISCLOUD_EXECUTOR_MODE", "")
+	t.Setenv("JAISCLOUD_LAMBDA_EXECUTOR_MODE", "")
+
+	mode, src := ExecutorMode("lambda", "mock")
+	if mode != "mock" {
+		t.Errorf("mode: got %q, want mock", mode)
+	}
+	if src != "default" {
+		t.Errorf("source: got %q, want default", src)
+	}
+}
+
 func TestNewUUIDv4_Format(t *testing.T) {
 	id, err := newUUIDv4()
 	if err != nil {

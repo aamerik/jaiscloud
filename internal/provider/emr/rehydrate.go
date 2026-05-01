@@ -21,6 +21,7 @@ type clusterRehydrate struct {
 // Called at the end of New(...) when a poller is present.
 func (p *EMRProvider) rehydratePoller(ctx context.Context) {
 	if p.poller == nil {
+		slog.Warn("emr: rehydratePoller called before SetPoller; skipping")
 		return
 	}
 	entries, err := p.resources.List(ctx, rtCluster, "")

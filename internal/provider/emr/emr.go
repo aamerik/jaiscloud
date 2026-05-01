@@ -96,14 +96,18 @@ func WithPoller(pol *spark.StatusPoller) Option {
 }
 
 // SetPoller sets the poller after construction (used when both providers share one poller).
-func (p *EMRProvider) SetPoller(pol *spark.StatusPoller) { p.poller = pol }
+func (p *EMRProvider) SetPoller(pol *spark.StatusPoller) {
+	p.poller = pol
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	p.rehydratePoller(ctx)
+}
 
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRProvider {
 	p := &EMRProvider{resources: resources, bus: bus}
 	for _, o := range opts {
 		o(p)
 	}
-	p.rehydratePoller(context.Background())
 	return p
 }
 

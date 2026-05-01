@@ -1,6 +1,10 @@
 package lambda
 
-import "os"
+import (
+	"log/slog"
+	"os"
+	"strconv"
+)
 
 // LambdaConfig holds executor-wide configuration shared by all functions.
 type LambdaConfig struct {
@@ -28,6 +32,15 @@ type LambdaConfig struct {
 	// Stamped as a label on all managed Lambda pods and containers.
 	// Populated by main.go from config.LoadOrCreateInstanceID.
 	InstanceID string
+
+	// ConcurrencyLimit caps account-level concurrent invocations (0 = unlimited).
+	ConcurrencyLimit int64
+	// SyncPayloadMax is the max sync invocation payload in bytes (0 = unlimited).
+	SyncPayloadMax int64
+	// AsyncPayloadMax is the max async invocation payload in bytes (0 = unlimited).
+	AsyncPayloadMax int64
+	// ResponsePayloadMax is the max response payload in bytes (0 = unlimited).
+	ResponsePayloadMax int64
 }
 
 // regionOrDefault returns r if non-empty, else "us-east-1".
@@ -56,6 +69,29 @@ func DefaultLambdaConfig() LambdaConfig {
 		cfg.ServiceAccount = v
 	}
 	return cfg
+}
+
+// LambdaConfigFrom populates a LambdaConfig with values from environment variables.
+func LambdaConfigFrom(base LambdaConfig) LambdaConfig {
+	base.ConcurrencyLimit = int64Env("JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT", 1000)
+	base.SyncPayloadMax = int64Env("JAISCLOUD_LAMBDA_SYNC_PAYLOAD_MAX_BYTES", 6*1024*1024)
+	base.AsyncPayloadMax = int64Env("JAISCLOUD_LAMBDA_ASYNC_PAYLOAD_MAX_BYTES", 256*1024)
+	base.ResponsePayloadMax = int64Env("JAISCLOUD_LAMBDA_RESPONSE_PAYLOAD_MAX_BYTES", 6*1024*1024)
+	return base
+}
+
+// int64Env reads an env var as int64, returning def on empty or parse failure.
+func int64Env(name string, def int64) int64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		slog.Warn("lambda config: invalid env var; using default", "name", name, "value", v, "default", def)
+		return def
+	}
+	return n
 }
 
 // runtimeImages maps Lambda runtime identifiers to their default public ECR images.

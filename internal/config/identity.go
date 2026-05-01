@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -100,6 +101,51 @@ func LoadOrCreateInstanceID(stateDir string) (id, source string) {
 		"id", uid,
 		"hint", "set JAISCLOUD_STATE_DIR to a persistent path so the ID survives restarts")
 	return uid, "generated"
+}
+
+// WriteInstanceID atomically persists the given instance ID to <stateDir>/instance-id.
+func WriteInstanceID(stateDir, id string) error {
+	if stateDir == "" {
+		return errors.New("config: state dir empty")
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("config: mkdir %s: %w", stateDir, err)
+	}
+	path := filepath.Join(stateDir, "instance-id")
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("config: open instance-id tmp: %w", err)
+	}
+	if _, err := fmt.Fprintln(f, id); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: write instance-id: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: fsync instance-id: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: close instance-id: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: rename instance-id: %w", err)
+	}
+	return nil
+}
+
+// GenerateNewInstanceID forces a fresh UUID to <stateDir>/instance-id,
+// overwriting any existing value. Used by admin import --new-instance.
+func GenerateNewInstanceID(stateDir string) (string, error) {
+	id, err := newUUIDv4()
+	if err != nil {
+		return "", err
+	}
+	return id, WriteInstanceID(stateDir, id)
 }
 
 // newUUIDv4 returns an RFC 4122 version-4 UUID using crypto/rand.
