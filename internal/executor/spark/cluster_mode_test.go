@@ -79,10 +79,11 @@ func TestFindMasterArg_MasterAtEnd_NoValue(t *testing.T) {
 
 // ── resolveMasterArgs ─────────────────────────────────────────────────────────
 
-func TestResolveMasterArgs_ClusterModeOff_RewritesToLocal(t *testing.T) {
+func TestResolveMasterArgs_ClusterModeOff_PassesThrough(t *testing.T) {
+	// When AllowClusterMode is false, args pass through unchanged.
 	job := SparkJob{
 		AllowClusterMode: false,
-		Config:           SparkConfig{Mode: "k8s"},
+		Config:           SparkConfig{SparkMode: "k8s"},
 	}
 	args := []string{"--master", "k8s://host:6443", "--class", "App"}
 	got, err := resolveMasterArgs(job, args)
@@ -90,15 +91,16 @@ func TestResolveMasterArgs_ClusterModeOff_RewritesToLocal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	master, ok := findMasterArg(got)
-	if !ok || master != "local[*]" {
-		t.Errorf("expected --master local[*] when cluster mode off, got %q (args: %v)", master, got)
+	if !ok || master != "k8s://host:6443" {
+		t.Errorf("expected --master k8s://host:6443 (unchanged), got %q (args: %v)", master, got)
 	}
 }
 
-func TestResolveMasterArgs_NonK8sMode_RewritesToLocal(t *testing.T) {
+func TestResolveMasterArgs_MockMode_PassesThrough(t *testing.T) {
+	// Mock executor ignores args; resolveMasterArgs leaves them unchanged.
 	job := SparkJob{
 		AllowClusterMode: true,
-		Config:           SparkConfig{Mode: "docker"}, // not k8s
+		Config:           SparkConfig{SparkMode: "mock"},
 	}
 	args := []string{"--master", "k8s://host:6443"}
 	got, err := resolveMasterArgs(job, args)
@@ -106,15 +108,15 @@ func TestResolveMasterArgs_NonK8sMode_RewritesToLocal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	master, ok := findMasterArg(got)
-	if !ok || master != "local[*]" {
-		t.Errorf("expected --master rewritten to local[*] for docker mode, got %q", master)
+	if !ok || master != "k8s://host:6443" {
+		t.Errorf("expected --master unchanged for mock mode, got %q", master)
 	}
 }
 
 func TestResolveMasterArgs_ClusterMode_K8sMaster_Preserved(t *testing.T) {
 	job := SparkJob{
 		AllowClusterMode: true,
-		Config:           SparkConfig{Mode: "k8s"},
+		Config:           SparkConfig{SparkMode: "k8s"},
 	}
 	args := []string{"--master", "k8s://https://127.0.0.1:6443", "--class", "App"}
 	got, err := resolveMasterArgs(job, args)
@@ -130,7 +132,7 @@ func TestResolveMasterArgs_ClusterMode_K8sMaster_Preserved(t *testing.T) {
 func TestResolveMasterArgs_ClusterMode_LocalMaster_Preserved(t *testing.T) {
 	job := SparkJob{
 		AllowClusterMode: true,
-		Config:           SparkConfig{Mode: "k8s"},
+		Config:           SparkConfig{SparkMode: "k8s"},
 	}
 	args := []string{"--master", "local[*]"}
 	got, err := resolveMasterArgs(job, args)
@@ -146,7 +148,7 @@ func TestResolveMasterArgs_ClusterMode_LocalMaster_Preserved(t *testing.T) {
 func TestResolveMasterArgs_ClusterMode_IncompatibleMaster_Error(t *testing.T) {
 	job := SparkJob{
 		AllowClusterMode: true,
-		Config:           SparkConfig{Mode: "k8s"},
+		Config:           SparkConfig{SparkMode: "k8s"},
 	}
 	args := []string{"--master", "yarn"}
 	_, err := resolveMasterArgs(job, args)
@@ -161,7 +163,7 @@ func TestResolveMasterArgs_ClusterMode_IncompatibleMaster_Error(t *testing.T) {
 func TestResolveMasterArgs_ClusterMode_NoMaster_ReturnsArgsUnchanged(t *testing.T) {
 	job := SparkJob{
 		AllowClusterMode: true,
-		Config:           SparkConfig{Mode: "k8s"},
+		Config:           SparkConfig{SparkMode: "k8s"},
 	}
 	args := []string{"--class", "com.example.App", "s3://bucket/app.jar"}
 	got, err := resolveMasterArgs(job, args)

@@ -1,10 +1,8 @@
 package spark
 
 import (
-	"context"
 	"fmt"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/model"
 )
@@ -15,8 +13,14 @@ func init() { RegisterTransform(model.CloudAzure, azureTransform{}) }
 
 func (azureTransform) Cloud() model.Cloud { return model.CloudAzure }
 
-func (azureTransform) Rewrite(uri string, cfg SparkConfig) string {
-	return rewriteS3aToABFS(uri, cfg.AzureStorageAccount)
+var azureAllowedSchemes = map[string]bool{
+	"abfss": true, "abfs": true,
+	"file": true, "local": true,
+	"": true,
+}
+
+func (azureTransform) ValidateURIs(args []string, cfg SparkConfig) error {
+	return validateAgainstAllowlist(model.CloudAzure, azureAllowedSchemes, args)
 }
 
 func (azureTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
@@ -28,14 +32,6 @@ func (azureTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmit
 	}
 	return SparkSubmitCommand{Binary: binary, Args: args, Image: image}, nil
 }
-
-func (azureTransform) UploadTemplate(_ context.Context, _ blobfs.BlobStore, _ SparkConfig, _ string, _ []byte) (string, string, error) {
-	return "", "", fmt.Errorf("cluster mode on Azure is not yet supported — upload via abfss:// not implemented")
-}
-
-func (azureTransform) DeleteTemplate(_ context.Context, _ blobfs.BlobStore, _ string) error { return nil }
-
-func (azureTransform) DriverFetchEnv(_ SparkConfig) []envVar { return nil }
 
 func (azureTransform) PodEnv(cfg SparkConfig) []k8stypes.EnvVar {
 	m := map[string]string{

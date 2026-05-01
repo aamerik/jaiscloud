@@ -24,6 +24,10 @@ type LambdaConfig struct {
 	Region string
 	// Cloud is used for metadata labels on managed pods/containers.
 	Cloud string
+	// InstanceID uniquely identifies this JaisCloud deployment.
+	// Stamped as a label on all managed Lambda pods and containers.
+	// Populated by main.go from config.LoadOrCreateInstanceID.
+	InstanceID string
 }
 
 // regionOrDefault returns r if non-empty, else "us-east-1".

@@ -7,13 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/model"
@@ -38,8 +36,7 @@ type EMRContainersProvider struct {
 	executor    spark.SparkExecutor // nil = instant completion
 	executorCfg spark.SparkConfig
 	poller      *spark.StatusPoller
-	jobRefs     sync.Map           // sparkJobID → jobRef
-	fetcher     blobfs.BlobFetcher // nil = cluster mode unavailable
+	jobRefs     sync.Map // sparkJobID → jobRef
 }
 
 // Option configures EMRContainersProvider.
@@ -55,12 +52,6 @@ func WithPoller(pol *spark.StatusPoller) Option {
 	return func(p *EMRContainersProvider) { p.poller = pol }
 }
 
-// WithBlobFetcher wires a BlobFetcher for cluster-mode pod-template loading.
-// Without this option, cluster mode is unavailable (AllowClusterMode stays false).
-func WithBlobFetcher(f blobfs.BlobFetcher) Option {
-	return func(p *EMRContainersProvider) { p.fetcher = f }
-}
-
 // SetPoller sets the poller after construction.
 func (p *EMRContainersProvider) SetPoller(pol *spark.StatusPoller) { p.poller = pol }
 
@@ -69,6 +60,7 @@ func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *E
 	for _, o := range opts {
 		o(p)
 	}
+	p.rehydratePoller(context.Background())
 	return p
 }
 
@@ -332,43 +324,12 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 			}
 		}
 		// Flatten configurationOverrides into a map for template URI extraction
-		// and --conf injection. The inline loop below reproduces the old behaviour
-		// for non-template confs; template keys are consumed by extractTemplateURIs.
+		// and --conf injection. Template URI keys are stripped from the conf args
+		// to avoid injecting stale URIs.
 		overrideConfs := flattenAppConfiguration(nr.Params)
 		driverURI, executorURI := extractTemplateURIs(overrideConfs, sparkParams)
 
-		// Fetch pod-template bytes when cluster mode is engaged.
-		var driverBytes, execBytes []byte
-		if p.fetcher != nil && shouldEngageClusterMode(p.executorCfg, driverURI, executorURI) {
-			if driverURI != "" {
-				b, ferr := p.fetcher.Fetch(ctx, driverURI)
-				if ferr != nil {
-					slog.Warn("emroneks: driver template fetch failed; falling back to local mode",
-						"uri", driverURI, "err", ferr)
-				} else if int64(len(b)) > p.executorCfg.PodTemplateMaxBytes {
-					slog.Warn("emroneks: driver template exceeds max bytes; falling back to local mode",
-						"uri", driverURI, "size", len(b), "max", p.executorCfg.PodTemplateMaxBytes)
-				} else {
-					driverBytes = b
-				}
-			}
-			if executorURI != "" {
-				b, ferr := p.fetcher.Fetch(ctx, executorURI)
-				if ferr != nil {
-					slog.Warn("emroneks: executor template fetch failed; falling back to local mode",
-						"uri", executorURI, "err", ferr)
-				} else if int64(len(b)) > p.executorCfg.PodTemplateMaxBytes {
-					slog.Warn("emroneks: executor template exceeds max bytes; falling back to local mode",
-						"uri", executorURI, "size", len(b), "max", p.executorCfg.PodTemplateMaxBytes)
-				} else {
-					execBytes = b
-				}
-			}
-		}
-
 		// Rebuild configOverrides as --conf flags for non-template spark properties.
-		// Template URI keys are consumed by extractTemplateURIs and handled separately
-		// via cluster-mode upload; including them here would inject stale URIs into args.
 		const driverTemplateKey = "spark.kubernetes.driver.podTemplateFile"
 		const execTemplateKey = "spark.kubernetes.executor.podTemplateFile"
 		var configOverrides []string
@@ -389,10 +350,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		}
 
 		job := spark.BuildSparkJob(id, entryPoint, "", args, sparkParams, p.executorCfg)
-		job.DriverTemplateBytes = driverBytes
-		job.ExecutorTemplateBytes = execBytes
-		job.AllowClusterMode = len(driverBytes) > 0 || len(execBytes) > 0 ||
-			p.executorCfg.ClusterMode == "always"
+		job.AllowClusterMode = shouldEngageClusterMode(p.executorCfg, driverURI, executorURI)
 		if submitErr := p.executor.Submit(ctx, job); submitErr != nil {
 			jr.State = "FAILED"
 			p.saveJobRun(ctx, jr)
@@ -621,9 +579,6 @@ func (p *EMRContainersProvider) OnStateChange(ev spark.StateChangeEvent) {
 	p.updateJobRunState(context.Background(), jr.vcID, jr.jrID, string(ev.NewState), ev.Message, jr.region, jr.accountID, jr.cloud)
 	if ev.NewState.IsTerminal() {
 		p.jobRefs.Delete(ev.JobID)
-		if k8s, ok := p.executor.(*spark.K8sExecutor); ok {
-			k8s.NotifyTerminal(context.Background(), ev.JobID)
-		}
 	}
 }
 
@@ -632,8 +587,6 @@ func (p *EMRContainersProvider) Reset() {
 	p.jobRefs.Range(func(k, _ any) bool { p.jobRefs.Delete(k); return true })
 	switch ex := p.executor.(type) {
 	case *spark.MockExecutor:
-		ex.Reset()
-	case *spark.DockerExecutor:
 		ex.Reset()
 	case *spark.K8sExecutor:
 		ex.Reset()

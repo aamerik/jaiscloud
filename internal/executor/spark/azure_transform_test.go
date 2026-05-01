@@ -132,25 +132,21 @@ func TestAzureTransform_SparkConfs_Empty_NoAccount(t *testing.T) {
 	}
 }
 
-func TestAzureTransform_Rewrite_S3aToABFS(t *testing.T) {
-	cfg := azureCfgSharedKey() // AzureStorageAccount = "mystorageacct"
+func TestAzureTransform_ValidateURIs_ABFSSAllowed(t *testing.T) {
 	tr := azureTransform{}
-
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"s3a://mybucket/path/to/file", "abfss://mybucket@mystorageacct.dfs.core.windows.net/path/to/file"},
-		{"s3a://mybucket", "abfss://mybucket@mystorageacct.dfs.core.windows.net"},
-		{"gs://other/path", "gs://other/path"},    // non-s3a passthrough
-		{"s3://native/key", "s3://native/key"},    // non-s3a passthrough
-		{"", ""},                                  // empty passthrough
+	cfg := azureCfgSharedKey()
+	args := []string{"abfss://container@mystorageacct.dfs.core.windows.net/app.jar"}
+	if err := tr.ValidateURIs(args, cfg); err != nil {
+		t.Errorf("abfss:// should be allowed on Azure, got: %v", err)
 	}
-	for _, tt := range tests {
-		got := tr.Rewrite(tt.input, cfg)
-		if got != tt.want {
-			t.Errorf("Rewrite(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+}
+
+func TestAzureTransform_ValidateURIs_S3Rejected(t *testing.T) {
+	tr := azureTransform{}
+	cfg := azureCfgSharedKey()
+	args := []string{"s3a://bucket/app.jar"}
+	if err := tr.ValidateURIs(args, cfg); err == nil {
+		t.Error("s3a:// should be rejected on Azure")
 	}
 }
 

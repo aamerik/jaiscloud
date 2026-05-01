@@ -147,29 +147,37 @@ func (c *SQSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	}
 
 	if nr != nil && nr.GetMeta("sqs_protocol") == "json" {
-		return encodeJSONError(awsCode, perr.Message, perr.HTTPStatus)
+		return encodeJSONError(awsCode, perr.Message, perr.HTTPStatus, perr.Data)
 	}
-	return encodeXMLError(awsCode, perr.Message, perr.HTTPStatus)
+	return encodeXMLError(awsCode, perr.Message, perr.HTTPStatus, perr.Data)
 }
 
-func encodeJSONError(code, msg string, status int) (int, http.Header, []byte) {
+func encodeJSONError(code, msg string, status int, data map[string]any) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/x-amz-json-1.0")
-	body, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"__type":  code,
 		"message": msg,
-	})
+	}
+	for k, v := range data {
+		out[k] = v
+	}
+	body, _ := json.Marshal(out)
 	return status, h, body
 }
 
-func encodeXMLError(code, msg string, status int) (int, http.Header, []byte) {
+func encodeXMLError(code, msg string, status int, data map[string]any) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
+	var extra strings.Builder
+	for k, v := range data {
+		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
-			`<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error>`+
+			`<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message>%s</Error>`+
 			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId></ErrorResponse>`,
-		xmlEscape(code), xmlEscape(msg),
+		xmlEscape(code), xmlEscape(msg), extra.String(),
 	)
 	return status, h, []byte(body)
 }

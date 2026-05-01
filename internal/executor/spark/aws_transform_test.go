@@ -6,6 +6,7 @@ import (
 )
 
 func TestAWSResolveSparkCommand_Pattern1_EMRContainers(t *testing.T) {
+	// Pattern 1: absolute path entry point — args pass through unchanged (no rewriting).
 	job := SparkJob{
 		JobID:  "jr-001",
 		JarURI: "/opt/spark/bin/spark-submit",
@@ -24,10 +25,12 @@ func TestAWSResolveSparkCommand_Pattern1_EMRContainers(t *testing.T) {
 	if cmd.Binary != "/opt/spark/bin/spark-submit" {
 		t.Errorf("binary: got %q, want /opt/spark/bin/spark-submit", cmd.Binary)
 	}
-	assertMaster(t, cmd.Args, "local[*]")
+	// Args pass through unchanged — caller supplies --master; no rewriting.
+	assertMaster(t, cmd.Args, "yarn")
 }
 
 func TestAWSResolveSparkCommand_Pattern2_CommandRunner(t *testing.T) {
+	// Pattern 2: command-runner.jar — args pass through after extracting the binary.
 	job := SparkJob{
 		JobID:  "s-001",
 		JarURI: "command-runner.jar",
@@ -51,10 +54,12 @@ func TestAWSResolveSparkCommand_Pattern2_CommandRunner(t *testing.T) {
 	if len(cmd.Args) > 0 && cmd.Args[0] == "spark-submit" {
 		t.Errorf("spark-submit binary should not remain as args[0], args=%v", cmd.Args)
 	}
-	assertMaster(t, cmd.Args, "local[*]")
+	// Args pass through unchanged — caller supplies --master; no rewriting.
+	assertMaster(t, cmd.Args, "yarn")
 }
 
 func TestAWSResolveSparkCommand_Pattern3_RealJar(t *testing.T) {
+	// Pattern 3: real JAR — SparkSubmitArgs builds full spark-submit invocation with k8s:// master.
 	cfg := SparkConfigFrom("k8s", SizeSmall)
 	cfg.Image = "apache/spark:3.5.0"
 	job := SparkJob{
@@ -70,7 +75,11 @@ func TestAWSResolveSparkCommand_Pattern3_RealJar(t *testing.T) {
 	if cmd.Binary != "/opt/spark/bin/spark-submit" {
 		t.Errorf("binary: got %q, want /opt/spark/bin/spark-submit", cmd.Binary)
 	}
-	assertMaster(t, cmd.Args, "local[*]")
+	// SparkSubmitArgs adds --master k8s://... when mode=k8s.
+	master, ok := findMasterArg(cmd.Args)
+	if !ok || !strings.HasPrefix(master, "k8s://") {
+		t.Errorf("expected --master k8s://... in args, got %q (args: %v)", master, cmd.Args)
+	}
 }
 
 func TestAWSResolveSparkCommand_StripIncompatibleConfs(t *testing.T) {
@@ -139,7 +148,8 @@ func TestAWSResolveSparkCommand_NoS3InjectionWhenEndpointEmpty(t *testing.T) {
 	}
 }
 
-func TestAWSResolveSparkCommand_MissingMasterPrepended(t *testing.T) {
+func TestAWSResolveSparkCommand_MissingMaster_PassesThrough(t *testing.T) {
+	// Pattern 2 without --master: args pass through; no master is prepended.
 	job := SparkJob{
 		JobID:  "j-nomaster",
 		JarURI: "command-runner.jar",
@@ -150,7 +160,12 @@ func TestAWSResolveSparkCommand_MissingMasterPrepended(t *testing.T) {
 	cmd, err := AWSResolveSparkCommand(job, cfg)
 	if err != nil { t.Fatal(err) }
 
-	assertMaster(t, cmd.Args, "local[*]")
+	// No --master was supplied and args pass through without rewriting.
+	for i, a := range cmd.Args {
+		if a == "--master" && i+1 < len(cmd.Args) {
+			t.Errorf("unexpected --master %q in args: %v", cmd.Args[i+1], cmd.Args)
+		}
+	}
 }
 
 func TestAWSResolveSparkCommand_S3InjectionPresent(t *testing.T) {

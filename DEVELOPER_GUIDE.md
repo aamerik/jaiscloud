@@ -481,10 +481,10 @@ export JAISCLOUD_K8S_SA=spark-sa
 | `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES` | `1048576` | Maximum allowed size per bootstrap script (1 MiB) |
 | `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` | `/etc/pki,/home/hadoop` | Comma-separated filesystem prefixes made writable by bootstrap init containers (one `emptyDir` volume per prefix) |
 | `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` | `auto` | Cluster deploy-mode policy: `auto` (enable when pod templates provided), `always`, `never` |
-| `JAISCLOUD_SPARK_K8S_STRIP_SCHEDULING` | `true` | Strip scheduling fields from merged pod templates before upload |
 | `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN` | `leave` | What `Close()` does to running cluster-mode Jobs: `leave` (suspend) or `delete` |
-| `JAISCLOUD_SPARK_K8S_POD_TEMPLATE_MAX_BYTES` | `262144` | Maximum size per pod-template YAML (256 KiB) |
-| `JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET` | `jaiscloud-spark-templates` | S3 bucket for merged executor pod templates |
+| `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY` | `adopt` | On restart, `adopt` re-tracks running cluster-mode Jobs; `reap` deletes them and dispatches FAILED |
+| `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` | `10m` | How long a Job may be missing from the K8s API before the poller marks it FAILED |
+| `JAISCLOUD_INSTANCE_ID` | _(auto-generated UUID)_ | Override the instance identity used to label managed K8s resources; useful for CI isolation |
 
 ### EMR bootstrap actions (K8s mode)
 
@@ -673,7 +673,7 @@ When cluster mode is active, `SparkSubmitArgs` (Pattern 3) generates:
 --conf spark.kubernetes.executor.podTemplateFile=<s3-uri>
 ```
 
-The executor pod template is merged from the job-supplied template and uploaded to the S3 store (`JAISCLOUD_SPARK_K8S_TEMPLATE_BUCKET`). The upload URI is injected as a `--conf` entry so the Spark driver can fetch it at runtime. If `createJob` fails after the upload, the template blob is automatically cleaned up.
+JaisCloud passes pod templates verbatim to Spark — no merging or rewriting is performed. Callers are responsible for supplying templates that are compatible with the target cluster (see "Devbox-compatible pod template requirements" below).
 
 #### Requirements for cluster-mode to succeed
 
@@ -702,6 +702,35 @@ WARN spark k8s: cluster mode active but no --master arg found — add --master k
 | Step `FAILED` with "template cleanup failed" | Executor template upload succeeded but `createJob` failed | Check K8s API server connectivity; look for RBAC errors |
 | `always` mode but Spark ignores pod templates | No `--master k8s://...` in step args | Add `--master k8s://<api-server>` to `sparkSubmitParameters` |
 | `always` mode + no pod templates provided | Driver submits but no executor template is uploaded | Expected — driver uses its built-in defaults; supply template confs to customise |
+
+### Devbox-compatible pod template requirements
+
+JaisCloud passes pod templates verbatim to Spark. This matches real-AWS behaviour. Callers must supply templates that schedule on the target Kubernetes cluster.
+
+For a devbox (kind/minikube, single-node, typically 8–16 GiB RAM):
+- `containers[*].resources.requests.memory` ≤ 1 GiB per container
+- `containers[*].resources.requests.cpu` ≤ 1
+- No `nodeSelector` (or one that matches a label the devbox cluster provides)
+- No production tolerations; `spec.tolerations: []` or empty
+
+A production-shaped template (24Gi memory, `r5.4xlarge` nodeSelector) will leave pods in `Pending` forever on a devbox. JaisCloud does not silently fit templates. Callers should parametrize their template rendering for the target environment (e.g. a devbox profile in `PodTemplateBuilder`).
+
+### Multi-instance restart recovery
+
+Each JaisCloud process stamps a stable `jaiscloud.io/instance-id` label on every K8s resource it creates (Spark Jobs, Lambda Pods, Lambda Services). On restart, `cleanupOrphans` filters strictly by this label so two JaisCloud instances on the same cluster never cross-reap each other's resources.
+
+**Spark restart behaviour** (controlled by `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY`):
+
+| Policy | Behaviour for running cluster-mode Jobs |
+|---|---|
+| `adopt` (default) | Re-tracked in `jobEntries`; `OnJobAdopted` fires so the provider re-registers them in the poller |
+| `reap` | Deleted immediately; `OnRestartTerminal(FAILED)` fires so EMR/EMR-on-EKS rows transition to FAILED |
+
+Terminal Jobs (both step-mode and cluster-mode) always fire `OnRestartTerminal` with the real final state (`COMPLETED` or `FAILED`) and are deleted.
+
+**Stale-Job reconciliation:** if a Job disappears from the K8s API (deleted externally) while the poller is tracking it, the poller sets `missingSince` on the first 404. After `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` (default 10 min) of persistent absence, the step/job-run is marked `FAILED`.
+
+**Provider rehydration:** at startup, EMR and EMR-on-EKS providers call `rehydratePoller()` to re-track any non-terminal steps/job-runs that were in the resource store from before the restart. This ensures the poller catches up without requiring a separate migration step.
 
 ---
 
@@ -1379,11 +1408,11 @@ export JAISCLOUD_PLATFORM_ENV_FILE=/etc/jaiscloud/extra-env.json
 
 The `CloudSparkTransform` registry (`internal/executor/spark/cloud_transform.go`) decouples cloud-specific Spark contributions from the executor. Each cloud registers itself via `init()` and is selected at manifest build time from `SparkConfig.Cloud` (derived from `--cloud` / `JAISCLOUD_CLOUD`).
 
-| Cloud | Transform | URI rewrite | Auth mechanism |
+| Cloud | Transform | URI validation | Auth mechanism |
 |---|---|---|---|
-| `aws` | `awsTransform` | `s3a://` → `s3a://` (identity) | S3 endpoint env + Hadoop S3A confs |
-| `azure` | `azureTransform` | `s3a://` → `abfss://bucket@account.dfs.core.windows.net/` | SharedKey or OAuth/Workload Identity |
-| `gcp` | `gcpTransform` | `s3a://` → `gs://` | Service account key file or K8s Secret |
+| `aws` | `awsTransform` | `s3://`, `s3a://` accepted; others rejected | S3 endpoint env + Hadoop S3A confs |
+| `azure` | `azureTransform` | `abfss://` accepted; `s3a://` rejected | SharedKey or OAuth/Workload Identity |
+| `gcp` | `gcpTransform` | `gs://` accepted; `s3a://` rejected | Service account key file or K8s Secret |
 
 Each transform contributes:
 - `ResolveCommand` — binary path + rewritten `spark-submit` args

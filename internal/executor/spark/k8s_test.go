@@ -8,35 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
-	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 )
-
-// recordingTransform is a minimal CloudSparkTransform stub that records
-// DeleteTemplate calls. All other methods are no-ops.
-type recordingTransform struct {
-	deletedKeys []string
-	deleteErr   error
-}
-
-func (r *recordingTransform) Cloud() model.Cloud { return model.CloudAWS }
-func (r *recordingTransform) Rewrite(uri string, _ SparkConfig) string { return uri }
-func (r *recordingTransform) ResolveCommand(_ SparkJob, _ SparkConfig) (SparkSubmitCommand, error) {
-	return SparkSubmitCommand{Binary: "/opt/spark/bin/spark-submit"}, nil
-}
-func (r *recordingTransform) PodEnv(_ SparkConfig) []envVar           { return nil }
-func (r *recordingTransform) PodVolumes(_ SparkConfig) ([]volume, []volumeMount) { return nil, nil }
-func (r *recordingTransform) SparkConfs(_ SparkConfig) []string        { return nil }
-func (r *recordingTransform) UploadTemplate(_ context.Context, _ blobfs.BlobStore, _ SparkConfig, _ string, _ []byte) (string, string, error) {
-	return "", "", nil
-}
-func (r *recordingTransform) DeleteTemplate(_ context.Context, _ blobfs.BlobStore, key string) error {
-	r.deletedKeys = append(r.deletedKeys, key)
-	return r.deleteErr
-}
-func (r *recordingTransform) DriverFetchEnv(_ SparkConfig) []envVar { return nil }
 
 // fakeK8s runs an httptest.TLSServer that fakes the K8s batch/v1 Jobs API.
 type fakeK8s struct {
@@ -163,14 +137,15 @@ func TestK8sExecutor_Submit(t *testing.T) {
 	if containers[0].Command[0] != "/opt/spark/bin/spark-submit" {
 		t.Errorf("unexpected container command: %v", containers[0].Command)
 	}
+	// Pattern 3 (real JAR) via SparkSubmitArgs — --master k8s://... is added.
 	hasMaster := false
 	for i, a := range containers[0].Args {
-		if a == "--master" && i+1 < len(containers[0].Args) && containers[0].Args[i+1] == "local[*]" {
+		if a == "--master" && i+1 < len(containers[0].Args) && strings.HasPrefix(containers[0].Args[i+1], "k8s://") {
 			hasMaster = true
 		}
 	}
 	if !hasMaster {
-		t.Errorf("expected --master local[*] in args, got %v", containers[0].Args)
+		t.Errorf("expected --master k8s://... in args, got %v", containers[0].Args)
 	}
 	if _, ok := exec.jobEntries.Load(job.JobID); !ok {
 		t.Error("expected job to be tracked in executor map after submit")
@@ -335,69 +310,6 @@ func TestK8sJobName_Truncation(t *testing.T) {
 	}
 }
 
-// ── rewriteSparkMaster ───────────────────────────────────────────────────────
-
-func TestRewriteSparkMaster(t *testing.T) {
-	cases := []struct {
-		name           string
-		in             []string
-		wantMaster     string
-		wantDeployMode string
-	}{
-		{
-			name:       "yarn_rewritten_to_local",
-			in:         []string{"--master", "yarn", "--class", "Main", "app.jar"},
-			wantMaster: "local[*]",
-		},
-		{
-			name:       "k8s_rewritten_to_local",
-			in:         []string{"--master", "k8s://https://kubernetes.default.svc"},
-			wantMaster: "local[*]",
-		},
-		{
-			name:       "local_star_preserved",
-			in:         []string{"--master", "local[*]", "--class", "Main"},
-			wantMaster: "local[*]",
-		},
-		{
-			name:       "local_n_preserved",
-			in:         []string{"--master", "local[2]", "--class", "Main"},
-			wantMaster: "local[2]",
-		},
-		{
-			name:           "deploy_mode_cluster_rewritten",
-			in:             []string{"--master", "local[*]", "--deploy-mode", "cluster"},
-			wantMaster:     "local[*]",
-			wantDeployMode: "client",
-		},
-		{
-			name:           "no_master_prepended",
-			in:             []string{"--class", "Main", "app.jar"},
-			wantMaster:     "local[*]",
-			wantDeployMode: "client",
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out := rewriteSparkMaster(c.in)
-			master, deployMode := "", ""
-			for i, a := range out {
-				if a == "--master" && i+1 < len(out) {
-					master = out[i+1]
-				}
-				if a == "--deploy-mode" && i+1 < len(out) {
-					deployMode = out[i+1]
-				}
-			}
-			if master != c.wantMaster {
-				t.Errorf("master: got %q, want %q (args: %v)", master, c.wantMaster, out)
-			}
-			if c.wantDeployMode != "" && deployMode != c.wantDeployMode {
-				t.Errorf("deploy-mode: got %q, want %q (args: %v)", deployMode, c.wantDeployMode, out)
-			}
-		})
-	}
-}
 
 // ── EMR Containers pattern ───────────────────────────────────────────────────
 
@@ -432,12 +344,13 @@ func TestK8sExecutor_Submit_EMRContainersPattern(t *testing.T) {
 	if containers[0].Command[0] != "/opt/spark/bin/spark-submit" {
 		t.Errorf("unexpected command: %v", containers[0].Command)
 	}
+	// Pattern 1 (absolute path): args pass through unchanged — --master yarn is preserved.
 	hasMaster := false
 	for i, a := range containers[0].Args {
 		if a == "--master" && i+1 < len(containers[0].Args) {
 			hasMaster = true
-			if containers[0].Args[i+1] != "local[*]" {
-				t.Errorf("expected --master local[*], got %q", containers[0].Args[i+1])
+			if containers[0].Args[i+1] != "yarn" {
+				t.Errorf("expected --master yarn (unchanged), got %q", containers[0].Args[i+1])
 			}
 		}
 	}
@@ -475,15 +388,8 @@ func TestK8sExecutor_CleanupOrphans_ReAdoptsRunningJobs(t *testing.T) {
 	fk := newFakeK8s(t)
 	fk.listItems = []jobListItem{
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-running-job", Labels: map[string]string{"jaiscloud-job-id": "job-run-1"}},
-			Status: struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-				Active    int `json:"active"`
-			}{Active: 1},
+			Metadata: jobListMeta{Name: "spark-running-job", Labels: map[string]string{"jaiscloud-job-id": "job-run-1"}},
+			Status:   batchJobStatus{Active: 1},
 		},
 	}
 	exec := newTestK8sExecutor(t, fk)
@@ -501,15 +407,8 @@ func TestK8sExecutor_CleanupOrphans_DeletesTerminalJobs(t *testing.T) {
 	fk := newFakeK8s(t)
 	fk.listItems = []jobListItem{
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-done-job", Labels: map[string]string{"jaiscloud-job-id": "job-done-1"}},
-			Status: struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-				Active    int `json:"active"`
-			}{Succeeded: 1},
+			Metadata: jobListMeta{Name: "spark-done-job", Labels: map[string]string{"jaiscloud-job-id": "job-done-1"}},
+			Status:   batchJobStatus{Succeeded: 1},
 		},
 	}
 	exec := newTestK8sExecutor(t, fk)
@@ -528,13 +427,8 @@ func TestK8sExecutor_CleanupOrphans_ResumesSuspendedJobs(t *testing.T) {
 	fk := newFakeK8s(t)
 	fk.listItems = []jobListItem{
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-suspended-job", Labels: map[string]string{"jaiscloud-job-id": "job-susp-1"}},
-			Spec: struct {
-				Suspend *bool `json:"suspend"`
-			}{Suspend: &suspend},
+			Metadata: jobListMeta{Name: "spark-suspended-job", Labels: map[string]string{"jaiscloud-job-id": "job-susp-1"}},
+			Spec:     jobListSpec{Suspend: &suspend},
 		},
 	}
 	exec := newTestK8sExecutor(t, fk)
@@ -545,6 +439,53 @@ func TestK8sExecutor_CleanupOrphans_ResumesSuspendedJobs(t *testing.T) {
 	}
 	if _, ok := exec.jobEntries.Load("job-susp-1"); !ok {
 		t.Error("resumed job should be adopted in jobs map")
+	}
+}
+
+func TestK8sExecutor_CleanupOrphans_SkipsClusterModeJobFromOtherInstance(t *testing.T) {
+	// Two cluster-mode jobs: one from our instance, one from another.
+	// Only ours should be reaped.
+	ourID := "instance-A"
+	otherID := "instance-B"
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name: "spark-ours",
+				Labels: map[string]string{
+					"jaiscloud-job-id":              "job-ours",
+					"jaiscloud.io/spark-deploy-mode": "cluster",
+					"jaiscloud.io/instance-id":       ourID,
+				},
+			},
+		},
+		{
+			Metadata: jobListMeta{
+				Name: "spark-theirs",
+				Labels: map[string]string{
+					"jaiscloud-job-id":              "job-theirs",
+					"jaiscloud.io/spark-deploy-mode": "cluster",
+					"jaiscloud.io/instance-id":       otherID,
+				},
+			},
+		},
+	}
+	cfg := SparkConfigFrom("k8s", SizeSmall)
+	cfg.InstanceID = ourID
+	cfg.ClusterRestartPolicy = "reap" // use reap so we can observe the deletion
+	exec := &K8sExecutor{cfg: cfg, client: fk.client}
+
+	var callbackJobs []string
+	exec.OnRestartTerminal(func(jobID string, _ SparkState, _ string) {
+		callbackJobs = append(callbackJobs, jobID)
+	})
+	exec.cleanupOrphans()
+
+	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-ours" {
+		t.Errorf("only our cluster-mode job should be deleted, got: %v", fk.deleted)
+	}
+	if len(callbackJobs) != 1 || callbackJobs[0] != "job-ours" {
+		t.Errorf("callback should fire only for our job, got: %v", callbackJobs)
 	}
 }
 
@@ -566,7 +507,7 @@ func TestBuildJobManifest_Bootstrap_NoExtras(t *testing.T) {
 	exec := newTestK8sExecutor(t, fk)
 	job := SparkJob{JobID: "j-1", JarURI: "s3://b/app.jar", Config: exec.cfg}
 
-	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-1", job)
+	manifest, err := exec.buildJobManifest(context.Background(), "spark-j-1", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -597,7 +538,7 @@ func TestBuildJobManifest_Bootstrap_InitContainersPrepended(t *testing.T) {
 		},
 	}
 
-	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-boot", job)
+	manifest, err := exec.buildJobManifest(context.Background(), "spark-j-boot", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -628,7 +569,7 @@ func TestBuildJobManifest_Bootstrap_VolumesAppended(t *testing.T) {
 		},
 	}
 
-	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-vols", job)
+	manifest, err := exec.buildJobManifest(context.Background(), "spark-j-vols", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -657,7 +598,7 @@ func TestBuildJobManifest_Bootstrap_MainMountsAppended(t *testing.T) {
 		ExtraMainMounts:     []volumeMount{{Name: "bootstrap-prefix-etc-pki", MountPath: "/etc/pki"}},
 	}
 
-	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-mounts", job)
+	manifest, err := exec.buildJobManifest(context.Background(), "spark-j-mounts", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -695,7 +636,7 @@ func TestBuildJobManifest_Bootstrap_VolumeConflict(t *testing.T) {
 		ExtraVolumes:        []volume{{Name: "conflict-vol", EmptyDir: &k8stypes.EmptyDirVol{}}},
 	}
 
-	if _, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-conflict", job); err == nil {
+	if _, err := exec.buildJobManifest(context.Background(), "spark-j-conflict", job); err == nil {
 		t.Error("expected volume conflict error from buildJobManifest; got nil")
 	}
 }
@@ -717,7 +658,7 @@ func TestBuildJobManifest_Bootstrap_OrderPreserved(t *testing.T) {
 		ExtraVolumes:        []volume{{Name: "bootstrap-prefix-tmp", EmptyDir: &k8stypes.EmptyDirVol{}}},
 	}
 
-	manifest, _, _, err := exec.buildJobManifest(context.Background(), "spark-j-order", job)
+	manifest, err := exec.buildJobManifest(context.Background(), "spark-j-order", job)
 	if err != nil {
 		t.Fatalf("buildJobManifest: %v", err)
 	}
@@ -736,35 +677,16 @@ func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
 	fk := newFakeK8s(t)
 	fk.listItems = []jobListItem{
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-running", Labels: map[string]string{"jaiscloud-job-id": "jid-running"}},
-			Status: struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-				Active    int `json:"active"`
-			}{Active: 1},
+			Metadata: jobListMeta{Name: "spark-running", Labels: map[string]string{"jaiscloud-job-id": "jid-running"}},
+			Status:   batchJobStatus{Active: 1},
 		},
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-terminal", Labels: map[string]string{"jaiscloud-job-id": "jid-terminal"}},
-			Status: struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-				Active    int `json:"active"`
-			}{Failed: 1},
+			Metadata: jobListMeta{Name: "spark-terminal", Labels: map[string]string{"jaiscloud-job-id": "jid-terminal"}},
+			Status:   batchJobStatus{Failed: 1},
 		},
 		{
-			Metadata: struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			}{Name: "spark-suspended", Labels: map[string]string{"jaiscloud-job-id": "jid-suspended"}},
-			Spec: struct {
-				Suspend *bool `json:"suspend"`
-			}{Suspend: &suspend},
+			Metadata: jobListMeta{Name: "spark-suspended", Labels: map[string]string{"jaiscloud-job-id": "jid-suspended"}},
+			Spec:     jobListSpec{Suspend: &suspend},
 		},
 	}
 	exec := newTestK8sExecutor(t, fk)
@@ -793,93 +715,221 @@ func TestK8sExecutor_CleanupOrphans_MixedStates(t *testing.T) {
 	}
 }
 
-// ── NotifyTerminal ────────────────────────────────────────────────────────────
+// ── OnRestartTerminal ─────────────────────────────────────────────────────────
 
-func TestK8sExecutor_NotifyTerminal_DeletesBlobAndRemovesEntry(t *testing.T) {
+func TestK8sExecutor_OnRestartTerminal_ClusterModeOrphan_Reap(t *testing.T) {
 	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name: "spark-cluster-job",
+				Labels: map[string]string{
+					"jaiscloud-job-id":               "job-cluster-1",
+					"jaiscloud.io/spark-deploy-mode": "cluster",
+				},
+			},
+		},
+	}
 	exec := newTestK8sExecutor(t, fk)
-	rt := &recordingTransform{}
-	exec.jobEntries.Store("job-nt1", &jobEntry{
-		name:       "spark-job-nt1",
-		cleanupKey: "templates/exec-nt1.yaml",
-		transform:  rt,
+	exec.cfg.ClusterRestartPolicy = "reap"
+
+	var cbJobID string
+	var cbState SparkState
+	var cbMsg string
+	exec.OnRestartTerminal(func(jobID string, state SparkState, message string) {
+		cbJobID = jobID
+		cbState = state
+		cbMsg = message
 	})
 
-	exec.NotifyTerminal(context.Background(), "job-nt1")
+	exec.cleanupOrphans()
 
-	if len(rt.deletedKeys) != 1 || rt.deletedKeys[0] != "templates/exec-nt1.yaml" {
-		t.Errorf("expected DeleteTemplate(%q), got %v", "templates/exec-nt1.yaml", rt.deletedKeys)
+	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-cluster-job" {
+		t.Errorf("cluster-mode job should be deleted, got: %v", fk.deleted)
 	}
-	if _, ok := exec.jobEntries.Load("job-nt1"); ok {
-		t.Error("job entry must be removed from map after NotifyTerminal")
+	if cbJobID != "job-cluster-1" {
+		t.Errorf("OnRestartTerminal callback: jobID=%q, want %q", cbJobID, "job-cluster-1")
+	}
+	if cbState != StateFailed {
+		t.Errorf("OnRestartTerminal callback: state=%q, want FAILED", cbState)
+	}
+	if cbMsg == "" {
+		t.Error("OnRestartTerminal callback: message should be non-empty")
 	}
 }
 
-func TestK8sExecutor_NotifyTerminal_NoCleanupKey_SkipsDelete(t *testing.T) {
+func TestK8sExecutor_OnRestartTerminal_ClusterModeOrphan_Adopt(t *testing.T) {
 	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name: "spark-cluster-job",
+				Labels: map[string]string{
+					"jaiscloud-job-id":               "job-cluster-1",
+					"jaiscloud.io/spark-deploy-mode": "cluster",
+				},
+			},
+		},
+	}
 	exec := newTestK8sExecutor(t, fk)
-	rt := &recordingTransform{}
-	// cleanupKey is empty — no template was uploaded for this job.
-	exec.jobEntries.Store("job-nt2", &jobEntry{
-		name:      "spark-job-nt2",
-		transform: rt,
+	// default ClusterRestartPolicy is "adopt"
+
+	var adoptedJobs []string
+	exec.OnJobAdopted(func(jobID string, _ SparkState) {
+		adoptedJobs = append(adoptedJobs, jobID)
+	})
+	var terminalJobs []string
+	exec.OnRestartTerminal(func(jobID string, _ SparkState, _ string) {
+		terminalJobs = append(terminalJobs, jobID)
 	})
 
-	exec.NotifyTerminal(context.Background(), "job-nt2")
+	exec.cleanupOrphans()
 
-	if len(rt.deletedKeys) != 0 {
-		t.Errorf("expected no DeleteTemplate call when cleanupKey is empty, got %v", rt.deletedKeys)
+	if len(fk.deleted) != 0 {
+		t.Errorf("adopt policy: no jobs should be deleted, got: %v", fk.deleted)
 	}
-	// Entry must still be removed.
-	if _, ok := exec.jobEntries.Load("job-nt2"); ok {
-		t.Error("job entry must be removed even when cleanupKey is empty")
+	if len(terminalJobs) != 0 {
+		t.Errorf("adopt policy: OnRestartTerminal should not fire, got: %v", terminalJobs)
+	}
+	if len(adoptedJobs) != 1 || adoptedJobs[0] != "job-cluster-1" {
+		t.Errorf("adopt policy: OnJobAdopted should fire for job-cluster-1, got: %v", adoptedJobs)
+	}
+	// Entry should be in jobEntries
+	if _, ok := exec.jobEntries.Load("job-cluster-1"); !ok {
+		t.Error("adopt policy: job should be in jobEntries after adoption")
 	}
 }
 
-func TestK8sExecutor_NotifyTerminal_Idempotent(t *testing.T) {
+func TestK8sExecutor_OnRestartTerminal_ClusterModeOrphan_TerminalDispatchesRealState(t *testing.T) {
 	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name: "spark-cluster-completed",
+				Labels: map[string]string{
+					"jaiscloud-job-id":               "job-cluster-done",
+					"jaiscloud.io/spark-deploy-mode": "cluster",
+				},
+			},
+			Status: batchJobStatus{
+				Succeeded:  1,
+				Conditions: []jobCondition{{Type: "Complete", Status: "True"}},
+			},
+		},
+	}
 	exec := newTestK8sExecutor(t, fk)
-	rt := &recordingTransform{}
-	exec.jobEntries.Store("job-nt3", &jobEntry{
-		name:       "spark-job-nt3",
-		cleanupKey: "templates/exec-nt3.yaml",
-		transform:  rt,
+
+	var cbState SparkState
+	exec.OnRestartTerminal(func(_ string, state SparkState, _ string) {
+		cbState = state
 	})
 
-	exec.NotifyTerminal(context.Background(), "job-nt3")
-	exec.NotifyTerminal(context.Background(), "job-nt3") // second call must be a no-op
+	exec.cleanupOrphans()
 
-	if len(rt.deletedKeys) != 1 {
-		t.Errorf("expected exactly 1 DeleteTemplate call, got %d", len(rt.deletedKeys))
+	if cbState != StateCompleted {
+		t.Errorf("terminal cluster-mode job should dispatch COMPLETED, got %q", cbState)
+	}
+	if len(fk.deleted) != 1 {
+		t.Errorf("terminal job should be deleted, got: %v", fk.deleted)
 	}
 }
 
-func TestK8sExecutor_NotifyTerminal_UnknownJob_NoOp(t *testing.T) {
+func TestK8sExecutor_Cancel_RemovesEntry(t *testing.T) {
 	fk := newFakeK8s(t)
 	exec := newTestK8sExecutor(t, fk)
-
-	// Must not panic or return error for a job never submitted.
-	exec.NotifyTerminal(context.Background(), "nonexistent")
-}
-
-func TestK8sExecutor_Cancel_DeletesBlobAndRemovesEntry(t *testing.T) {
-	fk := newFakeK8s(t)
-	exec := newTestK8sExecutor(t, fk)
-	rt := &recordingTransform{}
-	exec.jobEntries.Store("job-cancel-blob", &jobEntry{
-		name:       "spark-cancel-blob",
-		cleanupKey: "templates/exec-cancel.yaml",
-		transform:  rt,
+	exec.jobEntries.Store("job-cancel-simple", &jobEntry{
+		name: "spark-cancel-simple",
 	})
 
-	if err := exec.Cancel(context.Background(), "job-cancel-blob"); err != nil {
+	if err := exec.Cancel(context.Background(), "job-cancel-simple"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	if len(rt.deletedKeys) != 1 || rt.deletedKeys[0] != "templates/exec-cancel.yaml" {
-		t.Errorf("expected Cancel to delete blob, got %v", rt.deletedKeys)
+	if len(fk.deleted) != 1 || fk.deleted[0] != "spark-cancel-simple" {
+		t.Errorf("expected Cancel to delete job, got %v", fk.deleted)
 	}
-	if _, ok := exec.jobEntries.Load("job-cancel-blob"); ok {
+	if _, ok := exec.jobEntries.Load("job-cancel-simple"); ok {
 		t.Error("job entry must be removed after Cancel")
+	}
+}
+
+// ── Phase 7: OnJobAdopted, Reset, stale-job reconciliation ──────────────────
+
+func TestK8sExecutor_CleanupOrphans_OnJobAdopted_FiredForRunning(t *testing.T) {
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name:   "spark-running",
+				Labels: map[string]string{"jaiscloud-job-id": "job-run-1"},
+			},
+			Status: batchJobStatus{Active: 1},
+		},
+		{
+			Metadata: jobListMeta{
+				Name:   "spark-suspended",
+				Labels: map[string]string{"jaiscloud-job-id": "job-susp-1"},
+			},
+			Spec: jobListSpec{Suspend: func() *bool { b := true; return &b }()},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+
+	var adopted []string
+	exec.OnJobAdopted(func(jobID string, _ SparkState) {
+		adopted = append(adopted, jobID)
+	})
+	exec.cleanupOrphans()
+
+	if len(adopted) != 2 {
+		t.Errorf("expected 2 adopted jobs, got: %v", adopted)
+	}
+}
+
+func TestK8sExecutor_CleanupOrphans_OnRestartTerminal_FiredForTerminalStepJobs(t *testing.T) {
+	fk := newFakeK8s(t)
+	fk.listItems = []jobListItem{
+		{
+			Metadata: jobListMeta{
+				Name:   "spark-terminal",
+				Labels: map[string]string{"jaiscloud-job-id": "job-terminal-1"},
+			},
+			Status: batchJobStatus{
+				Failed:     1,
+				Conditions: []jobCondition{{Type: "Failed", Status: "True", Message: "BackoffLimitExceeded"}},
+			},
+		},
+	}
+	exec := newTestK8sExecutor(t, fk)
+
+	var cbState SparkState
+	exec.OnRestartTerminal(func(_ string, state SparkState, _ string) {
+		cbState = state
+	})
+	exec.cleanupOrphans()
+
+	if cbState != StateFailed {
+		t.Errorf("terminal step-mode job should dispatch FAILED, got %q", cbState)
+	}
+	if len(fk.deleted) != 1 {
+		t.Errorf("terminal job should be deleted, got: %v", fk.deleted)
+	}
+}
+
+func TestK8sExecutor_Reset_DeletesTrackedJobs(t *testing.T) {
+	fk := newFakeK8s(t)
+	exec := newTestK8sExecutor(t, fk)
+	exec.jobEntries.Store("job-a", &jobEntry{name: "spark-a"})
+	exec.jobEntries.Store("job-b", &jobEntry{name: "spark-b"})
+
+	exec.Reset()
+
+	if len(fk.deleted) != 2 {
+		t.Errorf("Reset should delete both tracked jobs, got %v", fk.deleted)
+	}
+	count := 0
+	exec.jobEntries.Range(func(_, _ any) bool { count++; return true })
+	if count != 0 {
+		t.Errorf("jobEntries should be empty after Reset, got %d entries", count)
 	}
 }

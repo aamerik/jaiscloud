@@ -106,10 +106,20 @@ type ProviderError struct {
 	Code       string // canonical code, e.g. "NotFound", "InvalidParameter"
 	Message    string
 	HTTPStatus int
+	// Data carries additional structured fields merged into the error body by
+	// codecs (e.g. Reason, Type, LimitType for throttle errors). nil is safe.
+	Data map[string]any
 }
 
 func (e *ProviderError) Error() string {
 	return fmt.Sprintf("%s: %s (HTTP %d)", e.Code, e.Message, e.HTTPStatus)
+}
+
+// WithData attaches structured fields to the error for codec-level serialization.
+// Returns the receiver so callers can chain: NewProviderError(...).WithData(...)
+func (e *ProviderError) WithData(data map[string]any) *ProviderError {
+	e.Data = data
+	return e
 }
 
 func NewProviderError(code, message string, httpStatus int) *ProviderError {

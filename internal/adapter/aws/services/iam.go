@@ -63,13 +63,17 @@ func (c *IAMCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	if code == "" {
 		code = perr.Code
 	}
+	var extra strings.Builder
+	for k, v := range perr.Data {
+		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
-			`<Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error>`+
+			`<Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message>%s</Error>`+
 			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId>`+
 			`</ErrorResponse>`,
-		xmlEscape(code), xmlEscape(perr.Message),
+		xmlEscape(code), xmlEscape(perr.Message), extra.String(),
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }

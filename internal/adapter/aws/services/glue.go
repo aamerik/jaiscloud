@@ -56,10 +56,14 @@ func (c *GlueCodec) EncodeError(_ *model.NormalizedRequest, perr *model.Provider
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/x-amz-json-1.1")
-	b, _ := json.Marshal(map[string]any{
+	out := map[string]any{
 		"__type":  code,
 		"Message": perr.Message,
-	})
+	}
+	for k, v := range perr.Data {
+		out[k] = v
+	}
+	b, _ := json.Marshal(out)
 	return perr.HTTPStatus, h, b
 }
 

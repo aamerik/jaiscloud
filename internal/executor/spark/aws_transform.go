@@ -1,11 +1,8 @@
 package spark
 
 import (
-	"context"
-	"fmt"
 	"strings"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/model"
 )
@@ -17,48 +14,18 @@ func init() { RegisterTransform(model.CloudAWS, awsTransform{}) }
 
 func (awsTransform) Cloud() model.Cloud { return model.CloudAWS }
 
-func (awsTransform) Rewrite(uri string, _ SparkConfig) string { return uri } // s3a:// is native on AWS
+var awsAllowedSchemes = map[string]bool{
+	"s3": true, "s3a": true,
+	"file": true, "local": true,
+	"": true,
+}
+
+func (awsTransform) ValidateURIs(args []string, cfg SparkConfig) error {
+	return validateAgainstAllowlist(model.CloudAWS, awsAllowedSchemes, args)
+}
 
 func (t awsTransform) ResolveCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
 	return AWSResolveSparkCommand(job, cfg)
-}
-
-func (awsTransform) UploadTemplate(
-	ctx context.Context, blobs blobfs.BlobStore, cfg SparkConfig, jobID string, body []byte,
-) (string, string, error) {
-	if blobs == nil {
-		return "", "", fmt.Errorf("cluster mode: no blob store wired — pass blobfs.BlobStore to NewK8sExecutor")
-	}
-	bucket := cfg.TemplateBucket
-	if bucket == "" {
-		bucket = "jaiscloud-spark-templates"
-	}
-	key := fmt.Sprintf("pod-templates/%s-executor.yaml", sanitizeLabel(jobID))
-	if err := blobs.Put(ctx, bucket, key, body); err != nil {
-		return "", "", fmt.Errorf("put executor template into %s/%s: %w", bucket, key, err)
-	}
-	return fmt.Sprintf("s3://%s/%s", bucket, key), bucket + "/" + key, nil
-}
-
-func (awsTransform) DeleteTemplate(ctx context.Context, blobs blobfs.BlobStore, cleanupKey string) error {
-	if blobs == nil {
-		return nil
-	}
-	parts := strings.SplitN(cleanupKey, "/", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("cluster mode: invalid cleanup key %q", cleanupKey)
-	}
-	return blobs.Delete(ctx, parts[0], parts[1])
-}
-
-func (awsTransform) DriverFetchEnv(cfg SparkConfig) []envVar {
-	return []envVar{
-		{Name: "AWS_ENDPOINT_URL", Value: cfg.S3Endpoint},
-		{Name: "AWS_ACCESS_KEY_ID", Value: cfg.AWSAccessKey},
-		{Name: "AWS_SECRET_ACCESS_KEY", Value: cfg.AWSSecretKey},
-		{Name: "AWS_REGION", Value: cfg.Region},
-		{Name: "AWS_S3_FORCE_PATH_STYLE", Value: "true"},
-	}
 }
 
 func (awsTransform) PodEnv(cfg SparkConfig) []k8stypes.EnvVar {
@@ -115,7 +82,7 @@ type SparkSubmitCommand struct {
 // value is incompatible with Spark K8s cluster mode (see resolveMasterArgs).
 func AWSResolveSparkCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, error) {
 	image := resolveImage(job, cfg)
-	binary, rawArgs := resolveAWSPattern(job, cfg, image)
+	binary, rawArgs := resolveAWSPattern(job, cfg)
 
 	args, err := resolveMasterArgs(job, rawArgs)
 	if err != nil {
@@ -134,33 +101,21 @@ func AWSResolveSparkCommand(job SparkJob, cfg SparkConfig) (SparkSubmitCommand, 
 }
 
 // resolveAWSPattern detects which EMR submission pattern was used and
-// returns the spark-submit binary path and rewritten args.
-func resolveAWSPattern(job SparkJob, cfg SparkConfig, image string) (string, []string) {
-	defaultBinary := resolveContainerBinary("spark-submit")
-	altBinary := cfg.SparkSubmitPath
-	useAlt := altBinary != "" && strings.Contains(strings.ToLower(image), "emr")
-
-	binary := defaultBinary
-	if useAlt {
-		binary = altBinary
+// returns the spark-submit binary path and args.
+func resolveAWSPattern(job SparkJob, cfg SparkConfig) (string, []string) {
+	binary := resolveContainerBinary("spark-submit")
+	if cfg.SparkSubmitPath != "" {
+		binary = cfg.SparkSubmitPath
 	}
 
 	switch {
 	case strings.HasPrefix(job.JarURI, "/") && len(job.Args) > 0:
 		// Pattern 1: absolute path entry point (EMR Containers / StartJobRun)
-		entryPoint := job.JarURI
-		if useAlt && entryPoint == defaultBinary {
-			entryPoint = altBinary
-		}
-		return entryPoint, job.Args
+		return job.JarURI, job.Args
 
 	case job.JarURI == "command-runner.jar" && len(job.Args) > 0:
 		// Pattern 2: command-runner.jar (EMR classic / AddJobFlowSteps)
-		resolved := resolveContainerBinary(job.Args[0])
-		if useAlt && resolved == defaultBinary {
-			resolved = altBinary
-		}
-		return resolved, job.Args[1:]
+		return resolveContainerBinary(job.Args[0]), job.Args[1:]
 
 	default:
 		// Pattern 3: real JAR — build full spark-submit invocation

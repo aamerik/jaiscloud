@@ -401,11 +401,15 @@ func s3MetaHeaders(data map[string]any) http.Header {
 func (c *S3Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/xml")
+	var extra strings.Builder
+	for k, v := range perr.Data {
+		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
-			`<Error><Code>%s</Code><Message>%s</Message>`+
+			`<Error><Code>%s</Code><Message>%s</Message>%s`+
 			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId></Error>`,
-		xmlEscape(perr.Code), xmlEscape(perr.Message),
+		xmlEscape(perr.Code), xmlEscape(perr.Message), extra.String(),
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }

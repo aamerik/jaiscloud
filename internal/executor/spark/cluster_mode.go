@@ -15,18 +15,16 @@ var ErrIncompatibleMasterInClusterMode = errors.New(
 	"--master value incompatible with Spark K8s cluster mode; allowed: k8s://..., local[*], local[N]",
 )
 
-// resolveMasterArgs preserves spark-submit master/deploy-mode args when cluster
-// mode is active and the master is a compatible value. Otherwise rewrites to local[*].
+// resolveMasterArgs validates spark-submit master/deploy-mode args when cluster
+// mode is active. When cluster mode is not active the args are left unchanged
+// (mock executor ignores them; K8s client-mode is not supported).
 //
-// Cluster mode is preserved when:
+// Cluster mode validation is active when:
 //   - job.AllowClusterMode == true AND
-//   - job.Config.Mode == "k8s" (cluster mode requires K8s executor) AND
-//   - the --master arg is in the whitelist (k8s://..., local[*], local[N])
-//
-// Docker and mock executors always fall back to local[*] regardless of AllowClusterMode.
+//   - job.Config.SparkMode == "k8s"
 func resolveMasterArgs(job SparkJob, args []string) ([]string, error) {
-	if !job.AllowClusterMode || job.Config.Mode != "k8s" {
-		return rewriteSparkMaster(args), nil
+	if !job.AllowClusterMode || job.Config.SparkMode != "k8s" {
+		return args, nil
 	}
 	master, ok := findMasterArg(args)
 	if !ok {

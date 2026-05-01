@@ -2,7 +2,6 @@ package services
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -136,6 +135,13 @@ func (c *LambdaCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRe
 func (c *LambdaCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	body := fmt.Sprintf(`{"message":%q,"__type":%q}`, perr.Message, perr.Code)
-	return perr.HTTPStatus, h, []byte(body)
+	out := map[string]any{
+		"message": perr.Message,
+		"__type":  perr.Code,
+	}
+	for k, v := range perr.Data {
+		out[k] = v
+	}
+	body, _ := json.Marshal(out)
+	return perr.HTTPStatus, h, body
 }

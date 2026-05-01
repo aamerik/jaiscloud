@@ -109,7 +109,11 @@ func startCmd() *cobra.Command {
 				return fmt.Errorf("platform config: %w", err)
 			}
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek, platformCfg)
+			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
+			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
+			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
+
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
@@ -117,6 +121,12 @@ func startCmd() *cobra.Command {
 				return err
 			}
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter)
+			adminHandler.SetMeta(admin.HandlerMeta{
+				InstanceID: instanceID,
+				Cloud:      string(cfg.Cloud),
+				Region:     cfg.Region,
+				AccountID:  cfg.AccountID,
+			})
 
 			var certs certstore.CertStore
 			if cfg.Mode == config.ModeFull {
@@ -266,15 +276,16 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
-	// Build spark executor. cfg.ExecutorMode drives both Spark and Lambda.
-	// "" / "mock" → instant mock completion (nil exec); "docker" / "k8s" → real executor.
-	sparkExec, sparkCfg := buildSparkExecutor(cfg.ExecutorMode, cfg.Cloud, platformCfg, s.blobs)
+	// Build spark executor. Effective mode resolved via config.ExecutorMode (subsystem override first).
+	sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
+	sparkExec, sparkCfg := buildSparkExecutor(sparkMode, cfg.Cloud, platformCfg)
+	sparkCfg.InstanceID = instanceID
 	if sparkExec != nil {
-		slog.Info("spark executor enabled", "mode", cfg.ExecutorMode)
+		slog.Info("spark executor enabled", "mode", sparkMode, "source", sparkModeSrc)
 	}
 
 	// Bootstrap resolver — wired into the EMR provider so AddJobFlowSteps can
@@ -310,7 +321,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
 	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
-	emrcOpts = append(emrcOpts, emrcontainersprovider.WithBlobFetcher(s3Fetcher))
 	if sparkExec != nil {
 		emrOpts = append(emrOpts, emrprovider.WithExecutor(sparkExec, sparkCfg))
 		emrcOpts = append(emrcOpts, emrcontainersprovider.WithExecutor(sparkExec, sparkCfg))
@@ -319,22 +329,26 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	emrP := emrprovider.New(s.resources, bus, emrOpts...)
 	emrcP := emrcontainersprovider.New(s.resources, bus, emrcOpts...)
 
-	if k8sExec, ok := sparkExec.(*spark.K8sExecutor); ok {
-		k8sExec.OnClusterModeOrphanDelete(func(jobID, reason string) {
-			ev := spark.StateChangeEvent{JobID: jobID, NewState: spark.StateFailed, Message: reason}
-			emrP.OnStateChange(ev)
-			emrcP.OnStateChange(ev)
-		})
-	}
-
 	cleanup := func() {}
 	if sparkExec != nil {
 		poller := spark.NewStatusPoller(sparkExec, 5*time.Second, func(ev spark.StateChangeEvent) {
 			emrP.OnStateChange(ev)
 			emrcP.OnStateChange(ev)
-		})
+		}).WithReconcileTimeout(sparkCfg.ReconcileTimeout)
 		emrP.SetPoller(poller)
 		emrcP.SetPoller(poller)
+
+		if k8sExec, ok := sparkExec.(*spark.K8sExecutor); ok {
+			k8sExec.OnRestartTerminal(func(jobID string, state spark.SparkState, msg string) {
+				ev := spark.StateChangeEvent{JobID: jobID, NewState: state, Message: msg}
+				emrP.OnStateChange(ev)
+				emrcP.OnStateChange(ev)
+			})
+			k8sExec.OnJobAdopted(func(jobID string, state spark.SparkState) {
+				poller.Track(jobID, state)
+			})
+		}
+
 		poller.Start(ctx)
 		cleanup = func() {
 			emrP.Shutdown(context.Background())
@@ -362,6 +376,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	lambdaCfg := lambdaexec.DefaultLambdaConfig()
 	lambdaCfg.Mode = cfg.ExecutorMode
 	lambdaCfg.Region = cfg.Region
+	lambdaCfg.InstanceID = instanceID
 	if cfg.LambdaImage != "" {
 		lambdaCfg.DefaultImage = cfg.LambdaImage
 	}
@@ -425,33 +440,30 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 // buildSparkExecutor creates a SparkExecutor for the given mode.
 // Returns (nil, zero) when mode is "" or "off" — instant completion remains the default.
-func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig, blobs blobfs.BlobStore) (spark.SparkExecutor, spark.SparkConfig) {
-	if mode == "" || mode == "off" {
+// Supported modes: "mock", "k8s". "docker", "local", "remote" are not supported for Spark.
+func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig) (spark.SparkExecutor, spark.SparkConfig) {
+	if err := spark.ValidateSparkMode(mode); err != nil {
+		slog.Error("invalid Spark executor mode — falling back to mock", "err", err)
+		return nil, spark.SparkConfig{}
+	}
+	if mode == "" || mode == "off" || mode == "mock" {
 		return nil, spark.SparkConfig{}
 	}
 	cfg := spark.SparkConfigFrom(mode, spark.SizeSmall)
 	cfg.Cloud = model.Cloud(cloud)
-	// Generic image override — applies to both docker and k8s modes.
-	// JAISCLOUD_K8S_SPARK_IMAGE (legacy) is read by SparkConfigFrom; this wins if set.
 	if v := os.Getenv("JAISCLOUD_SPARK_IMAGE"); v != "" {
 		cfg.Image = v
 	}
-	if mode == "k8s" {
-		if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
-			cfg.APIServer = v
-		}
-		if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
-			cfg.Namespace = v
-		}
-		if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
-			cfg.ServiceAccount = v
-		}
-		return spark.NewK8sExecutor(cfg, plat, blobs), cfg
+	if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
+		cfg.APIServer = v
 	}
-	if mode == "docker" {
-		return spark.NewDockerExecutor(cfg, plat), cfg
+	if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
+		cfg.Namespace = v
 	}
-	return spark.NewExecutor(mode, cfg), cfg
+	if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
+		cfg.ServiceAccount = v
+	}
+	return spark.NewK8sExecutor(cfg, plat), cfg
 }
 
 // registerCFNHandlers wires real resource provisioning for the 9 most common

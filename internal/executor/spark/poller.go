@@ -2,9 +2,12 @@ package spark
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // StateChangeEvent is emitted by the StatusPoller on every job state transition.
@@ -28,27 +31,49 @@ type trackedJob struct {
 // StatusPoller polls a SparkExecutor for job state changes and notifies via callbacks.
 // It runs a single background goroutine that polls all tracked jobs at the given interval.
 type StatusPoller struct {
-	executor SparkExecutor
-	interval time.Duration
-	onChange OnStateChange
+	executor         SparkExecutor
+	interval         time.Duration
+	reconcileTimeout time.Duration
+	onChange         OnStateChange
+	clk              clock.Clock
 
-	mu       sync.Mutex
-	jobs     map[string]*trackedJob
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	mu           sync.Mutex
+	jobs         map[string]*trackedJob
+	missingSince map[string]time.Time // jobID → first 404 timestamp
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
 }
 
 // NewStatusPoller creates a StatusPoller that polls executor every interval.
 // onChange is called on each state transition; may be nil.
+// reconcileTimeout is taken from SparkConfig; pass 0 to use the default (10 min).
 func NewStatusPoller(executor SparkExecutor, interval time.Duration, onChange OnStateChange) *StatusPoller {
 	return &StatusPoller{
-		executor: executor,
-		interval: interval,
-		onChange: onChange,
-		jobs:     make(map[string]*trackedJob),
-		stopCh:   make(chan struct{}),
+		executor:         executor,
+		interval:         interval,
+		reconcileTimeout: 10 * time.Minute,
+		onChange:         onChange,
+		clk:              clock.RealClock{},
+		jobs:             make(map[string]*trackedJob),
+		missingSince:     make(map[string]time.Time),
+		stopCh:           make(chan struct{}),
 	}
+}
+
+// WithReconcileTimeout sets the duration after which a persistently 404-ing
+// Job is declared FAILED. Used by main.go to honour SparkConfig.ReconcileTimeout.
+func (p *StatusPoller) WithReconcileTimeout(d time.Duration) *StatusPoller {
+	if d > 0 {
+		p.reconcileTimeout = d
+	}
+	return p
+}
+
+// WithClock replaces the real clock (useful in tests for deterministic time).
+func (p *StatusPoller) WithClock(c clock.Clock) *StatusPoller {
+	p.clk = c
+	return p
 }
 
 // Track starts polling for the given jobID, using initialState as the known state.
@@ -112,9 +137,18 @@ func (p *StatusPoller) pollAll(ctx context.Context) {
 	for _, j := range snapshot {
 		status, err := p.executor.Status(ctx, j.jobID)
 		if err != nil {
-			slog.Warn("poller: status check failed", "jobID", j.jobID, "err", err)
+			if errors.Is(err, ErrJobNotFound) {
+				p.handleMissing(j)
+			} else {
+				slog.Warn("poller: status check failed", "jobID", j.jobID, "err", err)
+			}
 			continue
 		}
+
+		// Job is reachable — clear any missing-since timestamp.
+		p.mu.Lock()
+		delete(p.missingSince, j.jobID)
+		p.mu.Unlock()
 
 		if status.State != j.lastState {
 			old := j.lastState
@@ -133,6 +167,41 @@ func (p *StatusPoller) pollAll(ctx context.Context) {
 		}
 	}
 }
+
+// handleMissing records or acts on a 404 for the given job.
+func (p *StatusPoller) handleMissing(j *trackedJob) {
+	now := p.clk.Now()
+	p.mu.Lock()
+	first, seen := p.missingSince[j.jobID]
+	if !seen {
+		p.missingSince[j.jobID] = now
+		p.mu.Unlock()
+		slog.Warn("poller: k8s job not found; starting reconcile timer", "jobID", j.jobID)
+		return
+	}
+	if now.Sub(first) < p.reconcileTimeout {
+		p.mu.Unlock()
+		return
+	}
+	// Reconcile timeout expired — declare the job FAILED.
+	j.lastState = StateFailed
+	delete(p.missingSince, j.jobID)
+	p.mu.Unlock()
+
+	slog.Warn("poller: k8s job missing beyond reconcile timeout; declaring FAILED",
+		"jobID", j.jobID, "timeout", p.reconcileTimeout)
+	if p.onChange != nil {
+		p.onChange(StateChangeEvent{
+			JobID:    j.jobID,
+			OldState: StateRunning,
+			NewState: StateFailed,
+			Message:  "k8s job no longer exists; reconciled by status poller",
+		})
+	}
+}
+
+// PollAll runs one poll cycle synchronously. Exported for testing.
+func (p *StatusPoller) PollAll(ctx context.Context) { p.pollAll(ctx) }
 
 // CurrentState returns the last known state for a job, or "" if not tracked.
 func (p *StatusPoller) CurrentState(jobID string) SparkState {

@@ -22,12 +22,31 @@ import (
 )
 
 const (
-	riePort   = 8080
-	riePath   = "/2015-03-31/functions/function/invocations"
-	podPrefix = "jc-lambda-"
-	svcPrefix = "jc-lambda-"
-	labelApp  = "jaiscloud-lambda"
+	riePort  = 8080
+	riePath  = "/2015-03-31/functions/function/invocations"
+	labelApp = "jaiscloud-lambda"
 )
+
+// instancePrefix returns the instance-scoped pod/service prefix.
+// Format: jc-lambda-<instanceID[:8]>-
+// Falls back to "jc-lambda-" when InstanceID is empty (dev/test mode).
+func instancePrefix(instanceID string) string {
+	if len(instanceID) >= 8 {
+		return "jc-lambda-" + instanceID[:8] + "-"
+	}
+	if instanceID != "" {
+		return "jc-lambda-" + instanceID + "-"
+	}
+	return "jc-lambda-"
+}
+
+// encodeLabelSelector builds a K8s label selector query param value by
+// escaping "=" as %3D and "/" as %2F. Commas are preserved (K8s uses them
+// to separate requirements). Never pass the result through url.QueryEscape.
+func encodeLabelSelector(raw string) string {
+	s := strings.ReplaceAll(raw, "=", "%3D")
+	return strings.ReplaceAll(s, "/", "%2F")
+}
 
 type warmPod struct {
 	podName  string
@@ -172,6 +191,8 @@ func (e *K8sExecutor) DeleteFunction(ctx context.Context, name string) {
 }
 
 // Reset destroys all warm pods (called on /_jaiscloud/reset).
+// After clearing the in-memory map it performs a label-filtered sweep to
+// catch any pods that are live on the cluster but missing from the map (LG5).
 func (e *K8sExecutor) Reset() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -184,6 +205,15 @@ func (e *K8sExecutor) Reset() {
 	for _, name := range names {
 		e.removePod(ctx, name)
 	}
+
+	if e.k8s == nil || e.cfg.InstanceID == "" {
+		return
+	}
+	ns := e.cfg.Namespace
+	rawSel := fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
+	sel := encodeLabelSelector(rawSel)
+	e.sweepResources(ns, "pods", sel)
+	e.sweepResources(ns, "services", sel)
 }
 
 // Close stops the GC goroutine and destroys all warm pods.
@@ -238,8 +268,9 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	ns := e.cfg.Namespace
 	image := ImageForRuntime(req, e.cfg)
 	sanitized := sanitizePodName(req.FunctionName)
-	podName := podPrefix + sanitized + "-" + shortID()
-	svcName := svcPrefix + sanitized
+	pfx := instancePrefix(e.cfg.InstanceID)
+	podName := pfx + sanitized + "-" + shortID()
+	svcName := pfx + sanitized
 
 	env := []k8stypes.EnvVar{
 		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: req.FunctionName},
@@ -291,13 +322,18 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		}
 	}
 
+	podLabels := map[string]string{
+		"app":                      labelApp,
+		"function":                 sanitized,
+		"jaiscloud.io/instance-id": e.cfg.InstanceID,
+	}
 	podManifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
 		"metadata": map[string]any{
 			"name":      podName,
 			"namespace": ns,
-			"labels":    map[string]string{"app": labelApp, "function": sanitized},
+			"labels":    podLabels,
 		},
 		"spec": podSpec,
 	}
@@ -314,18 +350,26 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		Port       int `json:"port"`
 		TargetPort int `json:"targetPort"`
 	}
+	svcLabels := map[string]string{
+		"app":                      labelApp,
+		"function":                 sanitized,
+		"jaiscloud.io/instance-id": e.cfg.InstanceID,
+	}
 	svcManifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
 		"metadata": map[string]any{
 			"name":      svcName,
 			"namespace": ns,
-			"labels":    map[string]string{"app": labelApp, "function": sanitized},
+			"labels":    svcLabels,
 		},
 		"spec": map[string]any{
-			"type":     "ClusterIP",
-			"selector": map[string]string{"function": sanitized},
-			"ports":    []svcPort{{Port: riePort, TargetPort: riePort}},
+			"type": "ClusterIP",
+			"selector": map[string]string{
+				"function":                 sanitized,
+				"jaiscloud.io/instance-id": e.cfg.InstanceID,
+			},
+			"ports": []svcPort{{Port: riePort, TargetPort: riePort}},
 		},
 	}
 	svcBody, _ := json.Marshal(svcManifest)
@@ -442,43 +486,64 @@ func (e *K8sExecutor) gcOnce() {
 }
 
 // cleanupOrphans deletes pods and services from previous runs on startup.
+// Only resources labeled with this instance's ID are touched (LG1 / LR2).
 func (e *K8sExecutor) cleanupOrphans() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	ns := e.cfg.Namespace
+	rawSel := fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
+	sel := encodeLabelSelector(rawSel)
 
-	// Delete orphaned pods.
-	podURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods?labelSelector=app=%s", e.cfg.APIServer, ns, labelApp)
-	if body, status, err := e.k8sGet(ctx, podURL); err == nil && status == 200 {
+	e.sweepResources(ns, "pods", sel)
+	e.sweepResources(ns, "services", sel)
+}
+
+// sweepResources lists and deletes all K8s resources of the given kind matching
+// the label selector. Paginates via metadata.continue (LG3).
+func (e *K8sExecutor) sweepResources(ns, kind, encodedSelector string) {
+	const maxItems = 10_000
+	continueToken := ""
+	deleted := 0
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		baseURL := fmt.Sprintf("%s/api/v1/namespaces/%s/%s?labelSelector=%s&limit=500",
+			e.cfg.APIServer, ns, kind, encodedSelector)
+		if continueToken != "" {
+			baseURL += "&continue=" + continueToken
+		}
+		body, status, err := e.k8sGet(ctx, baseURL)
+		cancel()
+		if err != nil || status != 200 {
+			slog.Warn("lambda k8s: cleanupOrphans list failed", "kind", kind, "status", status, "err", err)
+			return
+		}
 		var list struct {
+			Metadata struct {
+				Continue string `json:"continue"`
+			} `json:"metadata"`
 			Items []struct {
-				Metadata struct{ Name string `json:"name"` } `json:"metadata"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
 			} `json:"items"`
 		}
-		if json.Unmarshal(body, &list) == nil {
-			for _, item := range list.Items {
-				url := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s", e.cfg.APIServer, ns, item.Metadata.Name)
-				e.k8sDelete(ctx, url)
-				slog.Info("lambda k8s: cleaned up orphan pod", "pod", item.Metadata.Name)
-			}
+		if json.Unmarshal(body, &list) != nil {
+			return
 		}
-	}
-
-	// Delete orphaned services.
-	svcURL := fmt.Sprintf("%s/api/v1/namespaces/%s/services?labelSelector=app=%s", e.cfg.APIServer, ns, labelApp)
-	if body, status, err := e.k8sGet(ctx, svcURL); err == nil && status == 200 {
-		var list struct {
-			Items []struct {
-				Metadata struct{ Name string `json:"name"` } `json:"metadata"`
-			} `json:"items"`
+		for _, item := range list.Items {
+			opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			url := fmt.Sprintf("%s/api/v1/namespaces/%s/%s/%s", e.cfg.APIServer, ns, kind, item.Metadata.Name)
+			e.k8sDelete(opCtx, url)
+			opCancel()
+			slog.Info("lambda k8s: cleaned up orphan", "kind", kind, "name", item.Metadata.Name)
+			deleted++
 		}
-		if json.Unmarshal(body, &list) == nil {
-			for _, item := range list.Items {
-				url := fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s", e.cfg.APIServer, ns, item.Metadata.Name)
-				e.k8sDelete(ctx, url)
-				slog.Info("lambda k8s: cleaned up orphan service", "svc", item.Metadata.Name)
-			}
+		if deleted >= maxItems {
+			slog.Warn("lambda k8s: cleanupOrphans safety cap reached", "kind", kind, "count", deleted)
+			return
 		}
+		if list.Metadata.Continue == "" {
+			return
+		}
+		continueToken = list.Metadata.Continue
 	}
 }
 
