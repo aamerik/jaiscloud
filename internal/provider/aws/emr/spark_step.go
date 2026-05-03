@@ -10,12 +10,12 @@ import (
 
 // runSparkSubmitStep executes a spark-submit step via sparkhelpers.SubmitClientMode.
 // Runs in a goroutine; publishes state transitions via emitStepStateChange.
-func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, clusterID, stepID string, stepCfg map[string]any) {
-	p.emitStepStateChange(clusterID, stepID, "RUNNING", "")
+func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
+	p.emitStepStateChange(h, clusterID, stepID, "RUNNING", "")
 
 	argv := extractStepArgv(stepCfg)
 	if len(argv) == 0 {
-		p.emitStepStateChange(clusterID, stepID, "FAILED", "empty HadoopJarStep.Args")
+		p.emitStepStateChange(h, clusterID, stepID, "FAILED", "empty HadoopJarStep.Args")
 		return
 	}
 
@@ -25,7 +25,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, clusterID, stepID 
 	ep, sparkArgs, userArgs, err := parseSparkSubmitArgv(translated)
 	if err != nil {
 		slog.Warn("emr: failed to parse spark-submit args", "step", stepID, "err", err)
-		p.emitStepStateChange(clusterID, stepID, "FAILED", err.Error())
+		p.emitStepStateChange(h, clusterID, stepID, "FAILED", err.Error())
 		_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err))
 		return
 	}
@@ -38,22 +38,24 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, clusterID, stepID 
 	job := sparkhelpers.ClientModeJob{
 		JobID:           stepID,
 		Namespace:       ns,
+		Image:           p.sparkImage,
 		EntryPoint:      ep,
 		SparkSubmitArgs: sparkArgs,
 		JarArgs:         userArgs,
 		PlatformOverlay: p.platformCfg,
+		IdentityMutator: p.identityMutator,
 		Labels: map[string]string{
-			"jaiscloud.io/provider":          "emr",
-			"jaiscloud.io/cluster-id":        clusterID,
-			"jaiscloud.io/step-id":           stepID,
-			"app.kubernetes.io/managed-by":   "jaiscloud",
+			"jaiscloud.io/provider":        "emr",
+			"jaiscloud.io/cluster-id":      clusterID,
+			"jaiscloud.io/step-id":         stepID,
+			"app.kubernetes.io/managed-by": "jaiscloud",
 		},
 	}
 
 	handle, err := sparkhelpers.SubmitClientMode(ctx, p.k8sClient, job)
 	if err != nil {
 		slog.Warn("emr: SubmitClientMode failed", "step", stepID, "err", err)
-		p.emitStepStateChange(clusterID, stepID, "FAILED", err.Error())
+		p.emitStepStateChange(h, clusterID, stepID, "FAILED", err.Error())
 		_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err))
 		return
 	}
@@ -61,7 +63,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, clusterID, stepID 
 	final, err := sparkhelpers.WaitTerminal(ctx, p.k8sClient, handle)
 	if err != nil {
 		slog.Warn("emr: WaitTerminal failed", "step", stepID, "err", err)
-		p.emitStepStateChange(clusterID, stepID, "FAILED", err.Error())
+		p.emitStepStateChange(h, clusterID, stepID, "FAILED", err.Error())
 		_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err))
 		return
 	}
@@ -71,7 +73,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, clusterID, stepID 
 	if state == "FAILED" {
 		reason = final.SparkReason
 	}
-	p.emitStepStateChange(clusterID, stepID, state, reason)
+	p.emitStepStateChange(h, clusterID, stepID, state, reason)
 	_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID,
 		k8shelpers.BuildSnapshot(final.Final, state))
 }

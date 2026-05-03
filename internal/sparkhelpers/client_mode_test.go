@@ -115,6 +115,7 @@ func TestSubmitClientMode(t *testing.T) {
 	job := ClientModeJob{
 		JobID:     "test-job-abc",
 		Namespace: "jaiscloud",
+		Image:     "spark-test:latest",
 		EntryPoint: JarEntryPoint{
 			JarURI:    "local:///opt/spark/app.jar",
 			MainClass: "com.test.Main",
@@ -163,6 +164,7 @@ func TestSubmitClientMode_WithPlatformOverlay(t *testing.T) {
 	job := ClientModeJob{
 		JobID:           "overlay-job",
 		Namespace:       "jaiscloud",
+		Image:           "spark-test:latest",
 		EntryPoint:      JarEntryPoint{JarURI: "local:///app.jar"},
 		PlatformOverlay: overlay,
 	}
@@ -186,6 +188,7 @@ func TestSubmitClientMode_CustomSparkSubmitPath(t *testing.T) {
 	job := ClientModeJob{
 		JobID:           "custom-path-job",
 		Namespace:       "jaiscloud",
+		Image:           "spark-test:latest",
 		EntryPoint:      JarEntryPoint{JarURI: "local:///app.jar"},
 		SparkSubmitPath: "/opt/spark/bin/spark-submit",
 	}
@@ -212,6 +215,7 @@ spec:
 	job := ClientModeJob{
 		JobID:                "exec-tpl-job",
 		Namespace:            "jaiscloud",
+		Image:                "spark-test:latest",
 		EntryPoint:           JarEntryPoint{JarURI: "local:///app.jar"},
 		CallerExecutorPodTpl: callerExecTpl,
 	}

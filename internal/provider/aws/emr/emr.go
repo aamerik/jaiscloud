@@ -10,15 +10,18 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
 
@@ -56,18 +59,23 @@ func parsedBootstrapActions(raw []map[string]any) []BootstrapAction {
 
 // EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
 type EMRProvider struct {
-	resources      store.ResourceStore
-	bus            *events.EventBus
-	k8sClient      kubernetes.Interface // nil = no k8s execution
-	platformCfg    *platform.PlatformConfig
-	namespace      string
-	mockMode       bool // true = instant COMPLETED, no k8s calls
-	bootstrapFetch blobfs.BlobFetcher // nil = bootstrap disabled
-	bootstrapCfg   BootstrapConfig
+	resources       store.ResourceStore
+	bus             *events.EventBus
+	k8sClient       kubernetes.Interface // nil = no k8s execution
+	platformCfg     *platform.PlatformConfig
+	namespace       string
+	identityMutator k8shelpers.IdentityMutator
+	bootstrapFetch  blobfs.BlobFetcher // nil = bootstrap disabled
+	bootstrapCfg    BootstrapConfig
+	// sparkImage is the container image for spark-submit driver pods.
+	// Defaults to "spark-emr-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMR_IMAGE.
+	sparkImage string
 	// ctx is the provider lifecycle context. runStep goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup // tracks in-flight runStep goroutines
+	patcherStop func()         // stops the executor OwnershipPatcher; nil when no k8s
 }
 
 // Option configures EMRProvider.
@@ -82,22 +90,51 @@ func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platfor
 	}
 }
 
-// WithMockMode sets instant-COMPLETED behaviour (no k8s calls).
-func WithMockMode() Option {
-	return func(p *EMRProvider) { p.mockMode = true }
-}
-
 // WithBootstrap attaches a BlobFetcher and BootstrapConfig to the provider.
 // When set, runSparkSubmitStep resolves bootstrap actions before submitting.
 func WithBootstrap(fetcher blobfs.BlobFetcher, cfg BootstrapConfig) Option {
 	return func(p *EMRProvider) { p.bootstrapFetch = fetcher; p.bootstrapCfg = cfg }
 }
 
+// WithSparkImage sets the container image used for spark-submit driver pods.
+// For real EMR-on-EC2 the image is pinned per release; in devbox use the local build.
+func WithSparkImage(image string) Option {
+	return func(p *EMRProvider) { p.sparkImage = image }
+}
+
+// WithIdentityMutator attaches a cloud-specific identity mutator (e.g. IRSA annotation injector)
+// that is applied to Spark driver pod specs before submission.
+func WithIdentityMutator(m k8shelpers.IdentityMutator) Option {
+	return func(p *EMRProvider) { p.identityMutator = m }
+}
+
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRProvider {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &EMRProvider{resources: resources, bus: bus, ctx: ctx, cancel: cancel}
+	p := &EMRProvider{
+		resources:  resources,
+		bus:        bus,
+		ctx:        ctx,
+		cancel:     cancel,
+		sparkImage: "spark-emr-7.9.0:devbox",
+	}
 	for _, o := range opts {
 		o(p)
+	}
+	if p.k8sClient != nil {
+		ns := p.namespace
+		if ns == "" {
+			ns = "jaiscloud"
+		}
+		stop, err := k8shelpers.StartOwnershipPatcher(p.ctx, p.k8sClient, k8shelpers.PatcherConfig{
+			Namespace:     ns,
+			LabelSelector: "spark-role=executor",
+			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolver(p.k8sClient, ns),
+		})
+		if err != nil {
+			slog.Warn("emr: failed to start ownership patcher", "err", err)
+		} else {
+			p.patcherStop = stop
+		}
 	}
 	return p
 }
@@ -324,6 +361,20 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCluster, ID: clusterID, Data: data}); err != nil {
 		return nil, err
 	}
+
+	h := newHandlerCtx(nr)
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.emitClusterStateChange(h, clusterID, name, "STARTING", "")
+		p.emitClusterStateChange(h, clusterID, name, "BOOTSTRAPPING", "")
+		if keepAlive {
+			p.emitClusterStateChange(h, clusterID, name, "WAITING", "")
+		} else {
+			p.emitClusterStateChange(h, clusterID, name, "TERMINATED", "")
+		}
+	}()
+
 	return provider.OK(map[string]any{"JobFlowId": clusterID, "ClusterArn": arn}), nil
 }
 
@@ -360,6 +411,7 @@ func (p *EMRProvider) ListClusters(ctx context.Context, nr *model.NormalizedRequ
 }
 
 func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	h := newHandlerCtx(nr)
 	ids := strSliceParam(nr.Params, "JobFlowIds")
 	for _, id := range ids {
 		c, err := p.loadCluster(ctx, id)
@@ -373,9 +425,11 @@ func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.Normalize
 				HTTPStatus: http.StatusBadRequest,
 			}
 		}
+		p.emitClusterStateChange(h, id, c.Name, "TERMINATING", "User requested termination")
 		c.Status.State = "TERMINATED"
 		c.Status.StateChangeReason = map[string]any{"Code": "USER_REQUEST", "Message": "User request"}
 		p.saveCluster(ctx, c)
+		p.emitClusterStateChange(h, id, c.Name, "TERMINATED", "User requested termination")
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -430,13 +484,22 @@ func (p *EMRProvider) SetVisibleToAllUsers(ctx context.Context, nr *model.Normal
 // ─── Step operations ──────────────────────────────────────────────────────────
 
 func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	h := newHandlerCtx(nr)
 	id := strParam(nr.Params, "JobFlowId")
 	c, err := p.loadCluster(ctx, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
 	stepIDs := []string{}
-	useK8s := p.k8sClient != nil && !p.mockMode
+	useK8s := p.k8sClient != nil
+
+	// Phase 1: create all step records in-memory.
+	type pendingStep struct {
+		id  string
+		cfg map[string]any
+	}
+	var k8sSteps []pendingStep
+
 	if raw, ok := nr.Params["Steps"].([]any); ok {
 		for _, s := range raw {
 			m, ok := s.(map[string]any)
@@ -451,17 +514,20 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 			sid := step["Id"].(string)
 			c.Steps = append(c.Steps, step)
 			stepIDs = append(stepIDs, sid)
-
 			if useK8s {
-				// Launch async step execution; state transitions are published via emitStepStateChange.
-				// p.ctx is cancelled by Shutdown() so the goroutine stops on server shutdown.
-				go p.runStep(p.ctx, id, sid, m)
+				k8sSteps = append(k8sSteps, pendingStep{id: sid, cfg: m})
 			}
 		}
 	}
+
+	// Phase 2: persist the cluster with all new steps before emitting events or
+	// launching goroutines. This guarantees updateStepRecord (called inside
+	// emitStepStateChange) can find the steps, and that PENDING is published
+	// before any goroutine can publish RUNNING.
 	p.saveCluster(ctx, c)
-	// Publish initial state events for newly added steps
-	newIDs := map[string]bool{}
+
+	// Phase 3: emit initial state for every newly added step.
+	newIDs := make(map[string]bool, len(stepIDs))
 	for _, sid := range stepIDs {
 		newIDs[sid] = true
 	}
@@ -470,27 +536,24 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 		if !newIDs[sid] {
 			continue
 		}
-		name, _ := step["Name"].(string)
 		status, _ := step["Status"].(map[string]any)
 		state, _ := status["State"].(string)
 		failReason := ""
 		if fd, ok := status["FailureDetails"].(map[string]any); ok {
 			failReason, _ = fd["Message"].(string)
 		}
-		p.bus.Publish(events.Event{
-			Type: events.EventEMRStepState,
-			Payload: events.EMRStepStateEvent{
-				JobFlowID:     id,
-				StepID:        sid,
-				Name:          name,
-				State:         state,
-				FailureReason: failReason,
-				Region:        nr.Region,
-				AccountID:     nr.AccountID,
-				Cloud:         nr.Cloud,
-			},
-		})
+		p.emitStepStateChange(h, id, sid, state, failReason)
 	}
+
+	// Phase 4: launch goroutines only after PENDING events are published.
+	for _, ps := range k8sSteps {
+		p.wg.Add(1)
+		go func(stepID string, stepCfg map[string]any) {
+			defer p.wg.Done()
+			p.runStep(p.ctx, h, id, stepID, stepCfg)
+		}(ps.id, ps.cfg)
+	}
+
 	return provider.OK(map[string]any{"StepIds": stepIDs}), nil
 }
 
@@ -535,6 +598,7 @@ func (p *EMRProvider) ListSteps(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	h := newHandlerCtx(nr)
 	clusterID := strParam(nr.Params, "ClusterId")
 	stepIDs := strSliceParam(nr.Params, "StepIds")
 	c, err := p.loadCluster(ctx, clusterID)
@@ -557,19 +621,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 			status["State"] = "CANCELLED"
 			c.Steps[i]["Status"] = status
 			cancelInfo = append(cancelInfo, map[string]any{"StepId": sid, "Status": "SUBMITTED"})
-			stepName, _ := c.Steps[i]["Name"].(string)
-			p.bus.Publish(events.Event{
-				Type: events.EventEMRStepState,
-				Payload: events.EMRStepStateEvent{
-					JobFlowID: clusterID,
-					StepID:    sid,
-					Name:      stepName,
-					State:     "CANCELLED",
-					Region:    nr.Region,
-					AccountID: nr.AccountID,
-					Cloud:     nr.Cloud,
-				},
-			})
+			p.emitStepStateChange(h, clusterID, sid, "CANCELLED", "")
 		} else {
 			cancelInfo = append(cancelInfo, map[string]any{
 				"StepId": sid,
@@ -921,10 +973,12 @@ func (p *EMRProvider) RemoveManagedScalingPolicy(ctx context.Context, nr *model.
 
 // updateStepRecord loads the cluster, finds the step, updates its state record,
 // and saves back. It does NOT publish bus events — callers do that separately.
-func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, newState, message string) string {
+// Returns (stepName, true) on success. Returns ("", false) on cluster load failure.
+// A step with an empty Name field returns ("", true) — that is valid.
+func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, newState, message string) (string, bool) {
 	c, err := p.loadCluster(ctx, clusterID)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	now := nowUnix()
 	stepName := ""
@@ -953,16 +1007,21 @@ func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, n
 		break
 	}
 	p.saveCluster(ctx, c)
-	return stepName
+	return stepName, true
 }
 
 // Reset wipes the resource store state (no executor to reset).
 func (p *EMRProvider) Reset() {}
 
 // Shutdown cancels the provider context, signalling all in-flight runStep
-// goroutines to stop after their current K8s operation completes.
+// goroutines to stop after their current K8s operation completes, then
+// waits for all goroutines to exit before returning.
 func (p *EMRProvider) Shutdown(_ context.Context) {
+	if p.patcherStop != nil {
+		p.patcherStop()
+	}
 	p.cancel()
+	p.wg.Wait()
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────

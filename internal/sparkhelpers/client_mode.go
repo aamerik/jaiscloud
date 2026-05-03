@@ -2,7 +2,9 @@ package sparkhelpers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"unicode"
@@ -10,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	"jaiscloud/internal/k8shelpers"
@@ -87,13 +90,17 @@ func BuildClientModeArgs(job ClientModeJob) []string {
 
 // SubmitClientMode builds and submits a spark-submit k8s Job in client mode.
 // Steps:
-//  1. Builds executor pod template via BuildExecutorPodTemplate
-//  2. Creates ConfigMap spark-exec-tpl-<sanitized-jobID> with template YAML
-//  3. Builds main container (spark-submit) with driver resources
-//  4. Mounts ConfigMap via projected volume
-//  5. Calls k8shelpers.BuildPodSpec for platform overlay + driver template
-//  6. Calls k8shelpers.SubmitJob and returns the handle
+//  1. Validates required fields (Image)
+//  2. Builds executor pod template via BuildExecutorPodTemplate
+//  3. Creates ConfigMap spark-exec-tpl-<sanitized-jobID> with template YAML
+//  4. Builds main container (spark-submit) with driver resources
+//  5. Mounts ConfigMap via projected volume
+//  6. Calls k8shelpers.BuildPodSpec for platform overlay + driver template
+//  7. Calls k8shelpers.SubmitJob and returns the handle
 func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientModeJob) (k8shelpers.JobHandle, error) {
+	if job.Image == "" {
+		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: ClientModeJob.Image is required")
+	}
 	// 1. Build executor pod template YAML.
 	execTplYAML, err := BuildExecutorPodTemplate(ctx, k8s, job.PlatformOverlay, job.CallerExecutorPodTpl)
 	if err != nil {
@@ -125,13 +132,11 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 	if _, err := k8s.CoreV1().ConfigMaps(job.Namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: create executor template configmap: %w", err)
 	}
-	// If anything after this point fails, delete the ConfigMap so it doesn't
-	// linger without an owning Job. The deferred delete is a no-op on success
-	// because the Job's OwnerRef causes K8s GC to handle it instead.
-	cmCreated := true
+	// cmSubmitOK is set to true only after SubmitJob succeeds. Until then, the
+	// deferred cleanup deletes the orphaned ConfigMap on any error path.
+	cmSubmitOK := false
 	defer func() {
-		if cmCreated {
-			// Job was created successfully — K8s GC via OwnerRef handles cleanup.
+		if cmSubmitOK {
 			return
 		}
 		_ = k8s.CoreV1().ConfigMaps(job.Namespace).Delete(context.Background(), cmName, metav1.DeleteOptions{})
@@ -146,6 +151,7 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 	// Build main container.
 	mainContainer := corev1.Container{
 		Name:    "spark-submit",
+		Image:   job.Image,
 		Command: []string{sparkSubmitPath},
 		Args:    BuildClientModeArgs(job),
 		Env: []corev1.EnvVar{
@@ -240,13 +246,37 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 		OwnerRef:                job.OwnerHint,
 	}
 
-	// Signal the deferred cleanup that Job creation is in progress.
-	// If SubmitJob fails, cmCreated stays false and the defer deletes the ConfigMap.
-	cmCreated = false
 	handle, err := k8shelpers.SubmitJob(ctx, k8s, req)
 	if err != nil {
 		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: submit job: %w", err)
 	}
-	cmCreated = true // Job owns the ConfigMap via OwnerRef; K8s GC handles cleanup.
+	// Job created — patch CM owner so K8s GC cleans it up when the Job is GC'd.
+	// This is necessary when job.OwnerHint is nil (the common case for EMR steps),
+	// since the CM was created without ownerReferences in that path.
+	if err := patchCMOwner(ctx, k8s, job.Namespace, cmName, handle.JobName, handle.JobUID); err != nil {
+		slog.Warn("sparkhelpers: failed to set CM ownerReference — CM will leak if Job is GC'd",
+			"cm", cmName, "job", handle.JobName, "err", err)
+	}
+	cmSubmitOK = true
 	return handle, nil
+}
+
+// patchCMOwner patches a ConfigMap to set its ownerReferences to a batch/v1 Job.
+// This ensures the CM is garbage-collected by K8s when the Job is deleted.
+func patchCMOwner(ctx context.Context, k8s kubernetes.Interface, namespace, cmName, jobName string, jobUID k8stypes.UID) error {
+	isController := true
+	owner := metav1.OwnerReference{
+		APIVersion: "batch/v1",
+		Kind:       "Job",
+		Name:       jobName,
+		UID:        jobUID,
+		Controller: &isController,
+	}
+	ownerJSON, err := json.Marshal([]metav1.OwnerReference{owner})
+	if err != nil {
+		return err
+	}
+	patch := fmt.Sprintf(`{"metadata":{"ownerReferences":%s}}`, string(ownerJSON))
+	_, err = k8s.CoreV1().ConfigMaps(namespace).Patch(ctx, cmName, k8stypes.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
 }

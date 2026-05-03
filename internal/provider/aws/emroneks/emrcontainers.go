@@ -6,31 +6,40 @@ package emroneks
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log/slog"
+	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
 
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
 
 // EMRContainersProvider handles EMR on EKS: virtual clusters, job runs, managed endpoints.
 type EMRContainersProvider struct {
-	resources   store.ResourceStore
-	bus         *events.EventBus
-	k8sClient   kubernetes.Interface // nil = instant completion
-	platformCfg *platform.PlatformConfig
-	namespace   string
-	mockMode    bool // true = instant COMPLETED, no k8s calls
+	resources       store.ResourceStore
+	bus             *events.EventBus
+	k8sClient       kubernetes.Interface // nil = instant completion
+	platformCfg     *platform.PlatformConfig
+	namespace       string
+	identityMutator k8shelpers.IdentityMutator
+	// sparkImage is the container image for spark-submit driver pods.
+	// Defaults to "spark-emr-eks-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMREKS_IMAGE.
+	sparkImage string
 	// ctx is the provider lifecycle context. runJobRun goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup // tracks in-flight runJobRun goroutines
+	patcherStop func()         // stops the executor OwnershipPatcher; nil when no k8s
 }
 
 // Option configures EMRContainersProvider.
@@ -45,16 +54,45 @@ func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platfor
 	}
 }
 
-// WithMockMode sets instant-COMPLETED behaviour (no k8s calls).
-func WithMockMode() Option {
-	return func(p *EMRContainersProvider) { p.mockMode = true }
+// WithSparkImage sets the container image used for spark-submit driver pods.
+// For real EMR-on-EKS the image is derived from the releaseLabel; in devbox use the local build.
+func WithSparkImage(image string) Option {
+	return func(p *EMRContainersProvider) { p.sparkImage = image }
+}
+
+// WithIdentityMutator attaches a cloud-specific identity mutator (e.g. IRSA annotation injector)
+// that is applied to Spark driver pod specs before submission.
+func WithIdentityMutator(m k8shelpers.IdentityMutator) Option {
+	return func(p *EMRContainersProvider) { p.identityMutator = m }
 }
 
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRContainersProvider {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &EMRContainersProvider{resources: resources, bus: bus, ctx: ctx, cancel: cancel}
+	p := &EMRContainersProvider{
+		resources:  resources,
+		bus:        bus,
+		ctx:        ctx,
+		cancel:     cancel,
+		sparkImage: "spark-emr-eks-7.9.0:devbox",
+	}
 	for _, o := range opts {
 		o(p)
+	}
+	if p.k8sClient != nil {
+		ns := p.namespace
+		if ns == "" {
+			ns = "jaiscloud"
+		}
+		stop, err := k8shelpers.StartOwnershipPatcher(p.ctx, p.k8sClient, k8shelpers.PatcherConfig{
+			Namespace:     ns,
+			LabelSelector: "spark-role=executor",
+			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolver(p.k8sClient, ns),
+		})
+		if err != nil {
+			slog.Warn("emroneks: failed to start ownership patcher", "err", err)
+		} else {
+			p.patcherStop = stop
+		}
 	}
 	return p
 }
@@ -277,7 +315,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 	id := shortID()
 	name := strParam(nr.Params, "name")
 
-	useK8s := p.k8sClient != nil && !p.mockMode
+	useK8s := p.k8sClient != nil
 	initialState := "COMPLETED"
 	if useK8s {
 		initialState = "PENDING"
@@ -303,25 +341,18 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		return nil, err
 	}
 
+	h := newHandlerCtx(nr)
 	if useK8s {
 		// p.ctx is cancelled by Shutdown() so the goroutine stops on server shutdown.
-		go p.runJobRun(p.ctx, vcID, id, nr.Params)
+		params := nr.Params
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.runJobRun(p.ctx, h, vcID, id, params)
+		}()
 	} else {
 		// Instant completion path — transition to COMPLETED and publish event.
-		jr.State = "COMPLETED"
-		p.saveJobRun(ctx, jr)
-		p.bus.Publish(events.Event{
-			Type: events.EventEMRJobRunState,
-			Payload: events.EMRJobRunStateEvent{
-				VirtualClusterID: vcID,
-				JobRunID:         id,
-				Name:             name,
-				State:            "COMPLETED",
-				Region:           nr.Region,
-				AccountID:        nr.AccountID,
-				Cloud:            nr.Cloud,
-			},
-		})
+		p.emitJobRunStateChange(h, vcID, id, "COMPLETED", "")
 	}
 
 	return provider.OK(map[string]any{
@@ -333,26 +364,18 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 }
 
 func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	h := newHandlerCtx(nr)
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	jobID := pathID(nr, "jobRunId", "id")
 	jr, err := p.loadJobRun(ctx, vcID, jobID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
-	jr.State = "CANCELLED"
-	p.saveJobRun(ctx, jr)
-	p.bus.Publish(events.Event{
-		Type: events.EventEMRJobRunState,
-		Payload: events.EMRJobRunStateEvent{
-			VirtualClusterID: vcID,
-			JobRunID:         jobID,
-			Name:             jr.Name,
-			State:            "CANCELLED",
-			Region:           nr.Region,
-			AccountID:        nr.AccountID,
-			Cloud:            nr.Cloud,
-		},
-	})
+	// Emit CANCEL_PENDING first (real AWS does this for in-progress jobs),
+	// then immediately CANCELLED since we don't have an async cancel path.
+	p.emitJobRunStateChange(h, vcID, jobID, "CANCEL_PENDING", "")
+	p.emitJobRunStateChange(h, vcID, jobID, "CANCELLED", "")
+	_ = jr // loaded to validate existence
 	return provider.OK(map[string]any{"id": jobID, "virtualClusterId": vcID}), nil
 }
 
@@ -484,11 +507,15 @@ func (p *EMRContainersProvider) ListTagsForResource(ctx context.Context, nr *mod
 // Reset is a no-op — state lives in the resource store, not in-memory maps.
 func (p *EMRContainersProvider) Reset() {}
 
-// Shutdown is a no-op — no background goroutines owned by this provider.
 // Shutdown cancels the provider context, signalling all in-flight runJobRun
-// goroutines to stop after their current K8s operation completes.
+// goroutines to stop after their current K8s operation completes, then
+// waits for all goroutines to exit before returning.
 func (p *EMRContainersProvider) Shutdown(_ context.Context) {
+	if p.patcherStop != nil {
+		p.patcherStop()
+	}
 	p.cancel()
+	p.wg.Wait()
 }
 
 // ─── Store helpers ────────────────────────────────────────────────────────────
@@ -504,7 +531,9 @@ func (p *EMRContainersProvider) loadVC(ctx context.Context, id string) (virtualC
 
 func (p *EMRContainersProvider) saveVC(ctx context.Context, vc virtualCluster) {
 	data, _ := json.Marshal(vc)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtVirtualCluster, ID: vc.ID, Data: data})
+	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtVirtualCluster, ID: vc.ID, Data: data}); err != nil {
+		slog.Warn("emroneks: failed to persist virtual cluster", "vcID", vc.ID, "err", err)
+	}
 }
 
 func (p *EMRContainersProvider) loadJobRun(ctx context.Context, vcID, jobID string) (jobRun, error) {
@@ -518,7 +547,9 @@ func (p *EMRContainersProvider) loadJobRun(ctx context.Context, vcID, jobID stri
 
 func (p *EMRContainersProvider) saveJobRun(ctx context.Context, jr jobRun) {
 	data, _ := json.Marshal(jr)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtJobRun, ID: jr.VirtualClusterID + "/" + jr.ID, Data: data})
+	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtJobRun, ID: jr.VirtualClusterID + "/" + jr.ID, Data: data}); err != nil {
+		slog.Warn("emroneks: failed to persist job run", "vcID", jr.VirtualClusterID, "jobRunID", jr.ID, "err", err)
+	}
 }
 
 func (p *EMRContainersProvider) loadEndpoint(ctx context.Context, vcID, epID string) (managedEndpoint, error) {
@@ -532,7 +563,9 @@ func (p *EMRContainersProvider) loadEndpoint(ctx context.Context, vcID, epID str
 
 func (p *EMRContainersProvider) saveEndpoint(ctx context.Context, me managedEndpoint) {
 	data, _ := json.Marshal(me)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtManagedEndpoint, ID: me.VirtualClusterID + "/" + me.ID, Data: data})
+	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtManagedEndpoint, ID: me.VirtualClusterID + "/" + me.ID, Data: data}); err != nil {
+		slog.Warn("emroneks: failed to persist managed endpoint", "vcID", me.VirtualClusterID, "epID", me.ID, "err", err)
+	}
 }
 
 // ─── Param helpers ────────────────────────────────────────────────────────────
@@ -575,6 +608,12 @@ func parseTags(params map[string]any) map[string]string {
 	return out
 }
 
+const idChars = "abcdefghijklmnopqrstuvwxyz0123456789"
+
 func shortID() string {
-	return fmt.Sprintf("%016x", time.Now().UnixNano())
+	b := make([]byte, 12)
+	for i := range b {
+		b[i] = idChars[rand.Intn(len(idChars))]
+	}
+	return string(b)
 }

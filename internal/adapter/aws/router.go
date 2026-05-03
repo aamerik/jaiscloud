@@ -47,7 +47,30 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 		}
 	}
 
+	// Priority 4: Granite path-based RPC — /service/<ver>/operation/<Action>.
+	// Used by AWS SDK v2 for CloudWatch (service="monitoring").
+	if graniteAction := graniteActionFromPath(r.URL.Path); graniteAction != "" {
+		if svc := actionToService[graniteAction]; svc != "" {
+			return svc, SourceAction
+		}
+	}
+
 	return "", SourceUnknown
+}
+
+// graniteActionFromPath extracts the action name from an AWS SDK v2 Granite URL:
+// /service/<GraniteServiceVersion>/operation/<Action>.
+// Returns "" if the path doesn't match that shape.
+func graniteActionFromPath(path string) string {
+	const opMarker = "/operation/"
+	if !strings.HasPrefix(path, "/service/") {
+		return ""
+	}
+	i := strings.Index(path, opMarker)
+	if i < 0 {
+		return ""
+	}
+	return path[i+len(opMarker):]
 }
 
 // extractSigV4Service parses the service name from an AWS SigV4 Authorization header.

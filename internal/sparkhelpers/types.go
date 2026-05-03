@@ -44,6 +44,9 @@ type ResourceProfile struct {
 type ClientModeJob struct {
 	JobID             string
 	Namespace         string
+	// Image is the container image for the spark-submit driver pod. Required —
+	// no sensible default exists (EMR and EMR-on-EKS use different images).
+	Image             string
 	EntryPoint        EntryPoint
 	SparkSubmitArgs   []string
 	JarArgs           []string

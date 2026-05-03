@@ -1721,3 +1721,210 @@ awslocal sqs create-queue --queue-name my-queue
 awslocal s3 ls
 awslocal emr list-clusters
 ```
+
+---
+
+## Contributing Code
+
+### Adding a new AWS service
+
+All AWS service wiring flows from a single source of truth: the `awsServices` slice in [internal/adapter/aws/services.go](internal/adapter/aws/services.go). Adding one `ServiceDescriptor` entry here automatically updates service detection, SigV4 allow-list, Action routing, and gateway provider mapping.
+
+**Step 1 — Register the service descriptor:**
+
+```go
+// internal/adapter/aws/services.go
+{
+    SigV4Name:      "my-service",       // matches Authorization scope
+    TargetPrefix:   "MyService",        // for JSON/Target; "" for Query or REST
+    ProviderPrefix: "MyService",        // prefix for Registry dispatch ("MyService.CreateFoo")
+    QueryActions:   []string{},         // for Query-protocol services only
+},
+```
+
+**Step 2 — Implement the codec:**
+
+Create `internal/adapter/aws/services/myservice.go`. Choose the protocol that matches the real AWS SDK:
+
+- JSON/Target (DynamoDB-style): embed `BaseCodec`, implement `Decode` to read `X-Amz-Target`, `Encode` to write `application/x-amz-json-1.1`.
+- Query/XML (SQS-style): parse form body, `Action=` param.
+- REST/JSON (Lambda-style): extract action from path + HTTP method.
+
+Register in `buildAWSAdapter()` in `cmd/jaiscloud/main.go`:
+```go
+"my-service": &services.MyServiceCodec{},
+```
+
+**Step 3 — Implement the provider:**
+
+Create `internal/provider/aws/myservice/myservice.go`. Follow the struct pattern used by every other provider:
+
+```go
+type MyServiceProvider struct {
+    resources store.ResourceStore
+    bus       *events.EventBus
+}
+
+func New(resources store.ResourceStore, bus *events.EventBus) *MyServiceProvider { ... }
+
+func (p *MyServiceProvider) Routes() map[string]provider.HandlerFunc {
+    return map[string]provider.HandlerFunc{
+        "MyService.CreateFoo": p.CreateFoo,
+    }
+}
+```
+
+**Step 4 — Wire in `main.go`:**
+
+```go
+myServiceProvider := myservice.New(resources, bus)
+for action, h := range myServiceProvider.Routes() {
+    registry.Register(action, h)
+}
+```
+
+**Step 5 — Add the ARN format** (if needed):
+
+```go
+// internal/config/config.go — awsARNFormatters map
+"my-service-resource": func(region, accountID, name string) string {
+    return fmt.Sprintf("arn:aws:my-service:%s:%s:resource/%s", region, accountID, name)
+},
+```
+
+Providers must never call `fmt.Sprintf("arn:aws:...")` directly — always use `nr.ResourceID("my-service-resource", name)`.
+
+---
+
+### Adding a new operation to an existing provider
+
+1. Add the handler method to the provider struct (matches `provider.HandlerFunc` signature).
+2. Add the route in `Routes()`.
+3. Parameters arrive pre-decoded in `nr.Params` as `map[string]any`. Type-assert with the two-value form: `name, _ := nr.Params["Name"].(string)`.
+4. Return `provider.OK(map[string]any{...})` for success; return `nil, &model.ProviderError{Code: "...", Message: "...", HTTPStatus: 404}` for errors.
+
+---
+
+### Provider layout conventions
+
+**Cloud-specific vs. cloud-agnostic:**
+- Providers that implement AWS-specific semantics (EMR, EC2, CloudFormation) live under `internal/provider/aws/`.
+- Providers that could apply to any cloud (SQS, DynamoDB, S3, Lambda, EventBridge) live directly under `internal/provider/`.
+
+**Struct fields:** Keep the struct small. Standard fields: `resources store.ResourceStore`, `bus *events.EventBus`. For providers with background goroutines: `ctx context.Context`, `cancel context.CancelFunc`, `wg sync.WaitGroup`.
+
+**Options pattern:** Use `With*` option functions for optional dependencies (e.g. `WithIdentityMutator`). This keeps constructors stable and avoids nil checks scattered through handler code.
+
+---
+
+### EMR provider patterns
+
+#### `handlerCtx` — preserve cloud provenance in goroutines
+
+`NormalizedRequest` must not be read from goroutines after the handler returns. Capture the triplet at handler entry:
+
+```go
+h := newHandlerCtx(nr)  // {cloud, region, accountID}
+```
+
+Pass `h` into all goroutines and `emit*` helpers. The type is defined in `emr/events.go` and `emroneks/events.go`.
+
+#### WaitGroup lifecycle
+
+Every `go func` that does real work must bracket with `p.wg.Add(1)` + `defer p.wg.Done()`. `Shutdown()` calls `p.cancel()` then `p.wg.Wait()` — there is no timeout, so goroutines must be written to exit promptly on `ctx.Done()`.
+
+```go
+p.wg.Add(1)
+go func() {
+    defer p.wg.Done()
+    // check ctx.Done() at blocking points
+}()
+```
+
+#### State event ordering
+
+State transitions for steps must be emitted in strict order: PENDING before RUNNING. The pattern in `AddJobFlowSteps` is four explicit phases:
+
+1. Build in-memory records.
+2. Persist the cluster (`saveCluster`).
+3. Emit all PENDING events.
+4. Launch goroutines (which will emit RUNNING).
+
+Never launch goroutines before PENDING events are emitted — the goroutine's first action is to emit the next state, which would arrive out of order.
+
+#### `emitStepStateChange` / `emitClusterStateChange`
+
+These helpers in `emr/events.go` call `updateStepRecord` (returns `(string, bool)`) and then publish to the EventBus. If `updateStepRecord` returns `ok=false`, log at ERROR but still publish the event so downstream subscribers are not blocked.
+
+---
+
+### sparkhelpers / k8shelpers patterns
+
+#### `SubmitClientMode` — the only Spark submission path
+
+Do not implement your own Job creation. Call `sparkhelpers.SubmitClientMode(ctx, k8s, job)` with a `ClientModeJob`:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `Image` | Yes | spark-submit container image |
+| `EntryPoint` | Yes | JAR or Python file URI |
+| `SparkSubmitArgs` | Yes | `--conf` entries, executor counts |
+| `JarArgs` | No | Arguments after the entry point |
+| `IdentityMutator` | No | Cloud-specific pod identity (IRSA, MI, WI) |
+| `PlatformOverlay` | No | TLS init containers, CA env vars, volume mounts |
+| `OwnerHint` | No | Used by OwnershipPatcher to backfill executor ownerRefs |
+
+`SubmitClientMode` creates a ConfigMap for the executor pod template, creates the `batch/v1 Job`, then patches the ConfigMap's `ownerReferences` to point at the Job. If Job creation fails the ConfigMap is cleaned up.
+
+#### `BuildPodSpec` and `IdentityMutator`
+
+`k8shelpers.BuildPodSpec` takes `ctx` and `k8s kubernetes.Interface` and passes them to the `IdentityMutator` callback. Pass `nil` for both only when `IdentityMutator` is `nil`.
+
+```go
+type IdentityMutator func(ctx context.Context, k8s kubernetes.Interface, tpl *corev1.PodTemplateSpec) error
+```
+
+The mutator is the extension point for cloud-specific identity injection — do not special-case cloud names inside `BuildPodSpec`.
+
+#### `StartOwnershipPatcher`
+
+Start it in the provider's `New()` when a k8s client is present, stop it in `Shutdown()`. It watches executor pods (label `spark-role=executor`) and patches `ownerReferences` back to the parent Job. Without it, executor pods are orphaned and never GC'd.
+
+```go
+if k8sClient != nil {
+    stop := k8shelpers.StartOwnershipPatcher(ctx, k8sClient, namespace, resolver)
+    p.patcherStop = stop
+}
+```
+
+---
+
+### EventBridge envelope conventions
+
+When adding a new EMR-style state-change event:
+
+1. Add an event type constant to `internal/events/events.go`.
+2. Add the payload struct with `Cloud model.Cloud` field.
+3. Add a `build*Envelope` function in `internal/provider/events/eventbridge.go` that:
+   - Sets `source` as `string(ev.Cloud) + ".emr"` (never hardcoded `"aws.emr"`).
+   - Puts `stateChangeReason` as a **nested object** `{"code": ..., "message": ...}` in `detail` — do not also emit `stateChangeCode` as a top-level key.
+   - Only includes optional string fields (`arn`, `stateDetails`, `createdBy`) when non-empty.
+4. Subscribe in `eventbridge.go`'s `subscribeToStateChanges()`.
+
+**Severity mapping** (`"ERROR"` / `"WARN"` / `"INFO"`) is derived from the terminal state string — terminal failure states map to `"ERROR"`, cancellation to `"WARN"`, success to `"INFO"`.
+
+---
+
+### Common mistakes
+
+| Mistake | Correct approach |
+|---|---|
+| `fmt.Sprintf("arn:aws:...")` in a provider | `nr.ResourceID("type", name)` |
+| Reading `nr` from a goroutine after handler return | Capture `handlerCtx` at handler entry |
+| Launching goroutines before emitting PENDING events | Four-phase pattern: build → save → emit → launch |
+| Returning `"" , nil` from record loaders to signal not-found | Return `(string, bool)` so callers distinguish empty-name from load failure |
+| Adding `stateChangeCode` as a top-level EventBridge detail key | Nest it inside `stateChangeReason: {code, message}` |
+| Hardcoding `"aws.emr"` as EventBridge source | `string(ev.Cloud) + ".emr"` |
+| Creating a ConfigMap without ownerReferences | Patch ownerReferences to the Job after `SubmitJob` succeeds |
+| Skipping `wg.Add` for background goroutines | Every goroutine that does work must pair with `wg.Add(1)` + `defer wg.Done()` |
+| A new service missing from the `buildAWSAdapter()` codec map | Add `"sigv4name": &services.MyCodec{}` — detection and routing silently fail without it |

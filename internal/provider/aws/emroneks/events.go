@@ -2,16 +2,34 @@ package emroneks
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/model"
 )
 
+// handlerCtx captures the cloud/region/account triplet from a NormalizedRequest
+// at handler entry so downstream goroutines can publish state-change events
+// without losing provenance.
+type handlerCtx struct {
+	cloud     model.Cloud
+	region    string
+	accountID string
+}
+
+func newHandlerCtx(nr *model.NormalizedRequest) handlerCtx {
+	return handlerCtx{cloud: nr.Cloud, region: nr.Region, accountID: nr.AccountID}
+}
+
 // emitJobRunStateChange updates the job-run record in the store and publishes
-// an EMRJobRunState event on the bus.
-func (p *EMRContainersProvider) emitJobRunStateChange(vcID, jrID, state, reason string) {
+// an EMRJobRunState event on the bus with full cloud/region/account provenance.
+func (p *EMRContainersProvider) emitJobRunStateChange(h handlerCtx, vcID, jrID, state, reason string) {
 	ctx := context.Background()
 	jr, err := p.loadJobRun(ctx, vcID, jrID)
 	if err != nil {
+		slog.Warn("emroneks: emitJobRunStateChange — failed to load job run",
+			"vcID", vcID, "jobRunID", jrID, "state", state, "err", err)
 		return
 	}
 	jr.State = state
@@ -26,7 +44,14 @@ func (p *EMRContainersProvider) emitJobRunStateChange(vcID, jrID, state, reason 
 			JobRunID:         jrID,
 			Name:             jr.Name,
 			State:            state,
+			ReleaseLabel:     jr.ReleaseLabel,
+			ExecutionRoleArn: jr.ExecutionRole,
 			FailureReason:    reason,
+			CreatedAt:        jr.CreatedAt,
+			UpdatedAt:        time.Now().UTC(),
+			Region:           h.region,
+			AccountID:        h.accountID,
+			Cloud:            h.cloud,
 		},
 	})
 }

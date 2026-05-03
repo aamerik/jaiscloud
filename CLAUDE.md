@@ -4,14 +4,7 @@
 
 JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wire protocols (Query/XML, JSON/Target, REST) so any AWS SDK can point at it without modification.
 
-**Phase 0 (complete):** SQS — all 32 integration tests pass.  
-**Phase 1 (complete):** IAM/STS, SNS, DynamoDB, S3, Lambda; BlobFS; PostgreSQL stores; export/import; Prometheus metrics.  
-**Phase 2 (complete):** ResourceManager with deletion guards; Multi-cloud adapter model (AWS default, Azure/GCP stubs); EMR/EMR-on-EKS built-in providers with SparkExecutor (mock + k8s); Prometheus cloud label.  
-**Phase 2.5 (complete):** KMS (envelope crypto, grants, rotation); SecretsManager (AES-GCM at rest via KMS); SSM Parameter Store (SecureString via KMS); API Gateway REST management plane + execute-api invoke plane (MOCK, AWS_PROXY, HTTP_PROXY); Lambda Docker/K8s executors; CloudFormation with full intrinsics engine (Ref, Fn::GetAtt, Fn::Sub, Fn::Join, conditions, mappings), topological sort, and real resource dispatch for 9 AWS resource types.  
-**Phase 2.5 patch (complete):** Lambda K8s executor rewritten to warm-pod-per-function model (matching Docker executor); Spark K8s executor `Close()` suspends tracked Jobs instead of deleting them; `cleanupOrphans()` re-adopts running/suspended Jobs on restart; HTTPS server with auto-generated cloud-aware TLS cert (ECDSA P-256, 10-year, DNS SANs per cloud); S3 virtual-hosted-style parsing (`mybucket.s3.<region>.amazonaws.com`); IAM `AssumeRole`/`GetFederationToken` `PackedPolicySize` computed correctly; SSM `GetParameterHistory` now decrypts SecureString values; `DeleteFunction` tears down warm container/pod; `LambdaExecutor` interface extended with `DeleteFunction` + `Reset`; test suite reorganised under `tests/full_mode/aws/`; `docker-compose.yml` + K8s RBAC manifest + Lambda echo image added.  
-**Phase 2.5 patch 2 (complete):** EMR classic bootstrap actions (`RunJobFlow.BootstrapActions`) materialised as Kubernetes init containers when `EXECUTOR_MODE=k8s`; `BlobFetcher` interface + `S3BlobFetcher` in `blobfs` so bootstrap scripts are fetched from the S3 store; `k8stypes.EnvVar.ValueFrom` support (SecretKeyRef, ConfigMapKeyRef, FieldRef); `SparkJob` extended with `ExtraInitContainers`, `ExtraVolumes`, `ExtraMainMounts` fragment fields so the EMR provider can inject bootstrap fragments without importing the executor package; host-package-manager commands (`yum`, `apt-get`, `systemctl`, etc.) automatically commented out from bootstrap scripts; DynamoDB `Query` `LastEvaluatedKey` pagination bug fixed (`len(matched)` → `len(all)`).  
-**Phase 2.5 patch 3 (complete):** Spark K8s cluster deploy-mode with per-cloud pod-template merging. `CloudSparkTransform` extended with `CloudExecutorTemplateIO` sub-interface (`UploadTemplate`, `DeleteTemplate`, `DriverFetchEnv`); AWS implementation uploads merged executor pod-template YAML to the S3 store and injects the S3 URI as `spark.kubernetes.executor.podTemplateFile`. `buildJobManifest` returns `(batchJob, CloudSparkTransform, cleanupKey, error)` — transform is returned so `Submit` can clean up the uploaded blob if `createJob` fails. `jobEntry` struct stores `isClusterMode bool` so `Close()` detects cluster-mode Jobs without K8s API calls. `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` controls policy (`auto`/`always`/`never`). `resolveMasterArgs` whitelists `--master` values for cluster mode and logs a structured `WARN` when none is found. Diagnostic `WARN` logs emitted at submission time for missing service account, default image with `ImagePullPolicy=Never`, and missing S3 endpoint with an `s3://` JAR URI. `rewriteSparkMaster` handles both `--master X` and `--master=X` forms. `pollAll` logs failed-state transitions at `WARN` level (not `INFO`). `OnClusterModeOrphanDelete` callback wired in `main.go` so orphaned cluster-mode Jobs propagate `FAILED` state to both EMR and EMR-on-EKS providers. `ApplyResourceProfile` uses executor CPU/memory when `args == nil` (executor-side merge). `AWSSparkTransform.PodEnv` uses a deterministic slice instead of a map to avoid non-deterministic env-var ordering.  
-**Phase 2.5 patch 4 (complete):** Multi-instance restart recovery. Spark `K8sExecutor.cleanupOrphans()` is now synchronous (completes before `New()` returns); paginates Job lists with continuation tokens (safety cap 10 K); stamps every managed Job with `jaiscloud.io/job-id-raw` annotation + `jaiscloud.io/instance-id` label; `ClusterRestartPolicy` (`adopt`/`reap`) controls what happens to cluster-mode Jobs on restart; `StatusPoller` reconciles stale-missing Jobs after `ReconcileTimeout` (default 10 min); `Reset()` performs a label-filtered K8s sweep for escaped Jobs. Lambda K8s executor stamps all pods and services with `jaiscloud.io/instance-id`; `cleanupOrphans` and `Reset` filter by instance ID; service names are instance-scoped (`jc-lambda-<id[:8]>-<fn>`); pod/service list uses pagination. Lambda Docker executor includes `<instanceID[:8]>` in container names so instances on a shared daemon don't cross-reap. EMR and EMR-on-EKS providers call `rehydratePoller()` on startup to re-track non-terminal steps/job-runs into the `StatusPoller`. Export envelope upgraded to schema v2 (`schema_version`, `instance_id`, `cloud`, `region`, `account_id`); import validates cloud identity and accepts both v1 and v2 envelopes. `OnJobAdopted` callback lets providers re-track adopted Jobs into the poller without restarting.
+**Implemented services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
 
 ---
 
@@ -28,21 +21,17 @@ go 1.26.2
 
 ```
 cmd/jaiscloud/          # main.go — wires everything together, Cobra CLI
-docs/                   # Architecture, LLD, phase plan documents
+docs/                   # Architecture, LLD, design documents
 internal/
-  executor/spark/
-    executor.go         # SparkExecutor interface, SparkJob, SparkState, NewExecutor factory
-    config.go           # SparkConfig, ClusterSize (Small/Medium/Large), SparkConfigFrom
-    mock.go             # MockExecutor — immediate COMPLETED, ForceState, Reset
-    k8s.go              # K8sExecutor — submits batch/v1 Jobs to Kubernetes
-    k8sclient.go        # stdlib K8s HTTP client (no client-go)
-    command.go          # SparkSubmitArgs — builds --master k8s:// arg list
-    poller.go           # StatusPoller — background goroutine, OnStateChange callback
   adapter/              # Cloud wire-protocol layer (no business logic)
     adapter.go          # CloudAdapter interface (Cloud, DetectAndDecode, ServiceToProvider); Codec interface
     aws/
       aws.go            # AWSAdapter — Cloud(), DetectAndDecode(), ServiceToProvider()
-      router.go         # DetectService — data-driven via services.go (X-Amz-Target / SigV4 / Action)
+      router.go         # DetectService — data-driven via services.go
+                        #   Priority 1: X-Amz-Target header
+                        #   Priority 2: SigV4 Authorization scope
+                        #   Priority 3: Action= query/body param
+                        #   Priority 4: Granite path /service/<ver>/operation/<Action> (CloudWatch SDK v2)
       services.go       # ServiceDescriptor + awsServices registry — single source of truth for all
                         #   service metadata (SigV4Name, TargetPrefix, QueryActions, ProviderPrefix).
                         #   Derived maps built at init(): targetPrefixToService, knownSigV4Services,
@@ -52,23 +41,26 @@ internal/
         iam.go          # IAMCodec: Query/XML (handles STS too)
         sns.go          # SNSCodec: Query/XML
         dynamodb.go     # DynamoDBCodec: JSON/Target
-        s3.go           # S3Codec: REST path-style, XML responses
+        s3.go           # S3Codec: REST path-style + virtual-hosted-style, XML responses
         lambda.go       # LambdaCodec: REST JSON
-        glue.go         # GlueCodec
-        ec2.go          # EC2Codec
-        route53.go      # Route53Codec
-        rds.go          # RDSCodec
-        elasticache.go  # ElastiCacheCodec
-        ecs.go          # ECSCodec
-        dynamodbstreams.go # DynamoDBStreamsCodec
-        cloudformation.go  # CloudFormationCodec
-        emr.go          # EMRCodec
-        emrcontainers.go   # EMRContainersCodec
+        glue.go         # GlueCodec: JSON/Target
+        ec2.go          # EC2Codec: Query/XML
+        route53.go      # Route53Codec: REST/XML
+        rds.go          # RDSCodec: Query/XML
+        elasticache.go  # ElastiCacheCodec: Query/XML
+        ecs.go          # ECSCodec: JSON/Target
+        eks.go          # EKSCodec: REST/JSON
+        dynamodbstreams.go # DynamoDBStreamsCodec: JSON/Target
+        cloudformation.go  # CloudFormationCodec: Query/XML
+        cloudwatch.go   # CloudWatchCodec: form-body + Granite path Action extraction
+        emr.go          # EMRCodec: JSON/Target
+        emrcontainers.go   # EMRContainersCodec: REST/JSON
         eventbridge.go  # EventBridgeCodec: JSON/Target (X-Amz-Target: AWSEvents.*)
         kms.go          # KMSCodec: JSON/Target
         secretsmanager.go  # SecretsManagerCodec: JSON/Target
         ssm.go          # SSMCodec: JSON/Target
         apigateway.go   # APIGatewayCodec: REST JSON (management plane path routing)
+        executeapi.go   # ExecuteAPICodec: execute-api invoke plane
     azure/
       azure.go          # AzureAdapter stub — Cloud(), DetectAndDecode() (501), ServiceToProvider() (passthrough)
     gcp/
@@ -77,39 +69,51 @@ internal/
                         # Resetter, Snapshotter interfaces
   blobfs/               # BlobStore interface: MemoryBlobStore, LocalFSBlobStore
                         # BlobFetcher interface: S3BlobFetcher (fetches bootstrap scripts by s3:// URI)
-                        # URI scheme support is AWS-only (s3://, s3a://); Azure (abfss://) and GCP (gs://) require future fetcher implementations.
   clock/                # Clock interface: RealClock, FixedClock, OffsetClock
   config/               # Config struct; Viper loading; env prefix JAISCLOUD_
   events/               # In-process EventBus (subscribe/publish)
   gateway/              # HTTP server (Chi), middleware, request dispatch
     server.go           # Server — holds single CloudAdapter; handleCloudRequest
     middleware/         # Recovery, RequestID, Logging, Metrics (Prometheus + cloud label)
+  k8shelpers/           # Generic K8s helpers (no Spark/EMR concepts)
+    platform_overlay.go # BuildPodSpec — layered pod spec assembly; IdentityMutator callback type
+    ownership_patcher.go # StartOwnershipPatcher — watches executor pods, patches ownerReferences
   model/                # Shared types: NormalizedRequest, ProviderResponse, ProviderError
+  platform/             # PlatformConfig — TLS init containers, env fragments, volume mounts
   provider/             # Business logic layer
     provider.go         # HandlerFunc type, OK() helper
     registry.go         # Registry — Dispatch (exact match → error)
-    cache/              # ElastiCache provider
+    aws/                # AWS-specific provider implementations
+      apigw/            # APIGatewayProvider — REST API management plane + execute-api invoke
+      cache/            # ElastiCache provider (metadata only)
+      cloudwatch/       # CloudWatchProvider — metrics (in-memory ring), alarms
+      compute/          # EC2 provider (metadata only)
+      container/        # ECS provider (metadata only)
+      dns/              # Route53 provider (metadata only)
+      eks/              # EKS provider (metadata only)
+      emr/              # EMRProvider — RunJobFlow, steps, tags
+                        #   bootstrap.go  — Resolve() fetches + scrubs bootstrap scripts → init containers
+                        #   events.go     — handlerCtx, emitStepStateChange, emitClusterStateChange
+                        #   spark_step.go — runSparkSubmitStep via sparkhelpers.SubmitClientMode
+                        #   step_dispatch.go — runStep dispatcher (spark vs. generic stub)
+                        #   rehydrate.go  — rehydratePoller() re-tracks non-terminal steps on startup
+      emroneks/         # EMRContainersProvider — virtual clusters, job runs
+                        #   events.go  — handlerCtx, emitJobRunStateChange
+                        #   jobrun.go  — runJobRun via sparkhelpers.SubmitClientMode
+      iam/              # IAMProvider + STS (roles, policies, users, access keys)
+      rds/              # RDS provider (metadata only)
+      stack/            # CloudFormation provider
+        cloudformation.go # StackProvider — CreateStack, UpdateStack, DeleteStack, Describe, List
+        intrinsics.go   # CloudFormation intrinsic function resolver (Ref, Fn::*, conditions)
+        topsort.go      # Kahn's topological sort for DependsOn + implicit Ref/GetAtt deps
+        dispatch.go     # CFNResourceDispatcher — per-resource-type create/delete handlers
     catalog/            # Glue Data Catalog provider
-    compute/            # EC2 provider
-    container/          # ECS provider
-    dns/                # Route53 provider
-    emr/                # EMRProvider — RunJobFlow, steps, tags; wires SparkExecutor + StatusPoller
-                        # bootstrap.go — Resolve() fetches + scrubs bootstrap scripts → init containers
-    emroneks/           # EMRContainersProvider — virtual clusters, job runs; wires SparkExecutor
+    events/             # EventBridgeProvider — rules, targets, event delivery to SQS
     function/           # FunctionProvider — Lambda (echo/Docker/K8s invoke)
-    iam/                # IAMProvider + STS (roles, policies, users, access keys)
     notification/       # SNSProvider (topics, subscriptions, fan-out to SQS)
     object/             # ObjectProvider — S3 (buckets, objects, multipart)
     queue/              # QueueProvider — SQS (all 17 operations)
-    rds/                # RDS provider
-    stack/              # CloudFormation provider
-      cloudformation.go # StackProvider — CreateStack, UpdateStack, DeleteStack, Describe, List
-      intrinsics.go     # CloudFormation intrinsic function resolver (Ref, Fn::*, conditions)
-      topsort.go        # Kahn's topological sort for DependsOn + implicit Ref/GetAtt deps
-      dispatch.go       # CFNResourceDispatcher — per-resource-type create/delete handlers
     table/              # TableProvider — DynamoDB (tables, items, expressions, streams)
-    events/             # EventBridgeProvider — rules, targets, event delivery to SQS
-    apigw/              # APIGatewayProvider — REST API management plane + execute-api invoke
     key/                # KeyProvider — KMS (keys, aliases, grants, envelope crypto, rotation)
     secret/             # SecretProvider — SecretsManager (secrets, versions, rotation)
     param/              # ParameterProvider — SSM Parameter Store (put/get/history/path)
@@ -117,6 +121,13 @@ internal/
     manager.go          # Manager — CheckParent, AcquireDelete, RegisterRules, Reset
     deletionlock.go     # DeletionLock — thread-safe per-resource deletion marks
     adapter.go          # StoreAdapter — bridges store.ResourceStore → resourcemgr.ResourceStore
+  sparkhelpers/         # Spark-specific helpers built on top of k8shelpers
+    client_mode.go      # SubmitClientMode, WaitTerminal, ClientModeJob, Final
+    emr_yarn_translate.go # TranslateEMREC2YarnArgs — YARN master → k8s client mode
+    executor_template.go  # BuildExecutorTemplate — merged executor pod-template YAML
+    patcher.go          # MakeExecutorOwnerResolver — closure for executor pod ownership lookup
+    terminal_classify.go  # ClassifyTerminal — maps pod exit codes to SparkReason strings
+    types.go            # Handle, OwnerRefHint, shared types
   store/                # Resource metadata
     store.go            # ResourceStore interface
     memory.go           # MemoryResourceStore (sync.RWMutex, Snapshot/Restore)
@@ -130,6 +141,7 @@ internal/
       stream/           # MemoryStreamStore (DynamoDB Streams)
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2
+  full_mode/aws/        # Full-mode e2e tests (build-tagged)
 ```
 
 ---
@@ -143,22 +155,23 @@ HTTP request
   → gateway.Server.handleCloudRequest
       → cloudAdapter.DetectAndDecode     (single adapter selected at startup from cfg.Cloud)
           → <ServiceCodec>.Decode        (SQS/IAM/SNS → Query/XML; DynamoDB → JSON/Target;
-                                          S3/Lambda → REST)
+                                          S3/Lambda → REST; CloudWatch → form-body or Granite path)
       → inject: nr.Clock, nr.Region, nr.AccountID, nr.Cloud, nr.ResourceID (all clouds)
       → middleware.WithRequestLabels(ctx, cloud, service, action)
       → Registry.Dispatch("ProviderPrefix.Action", nr)
-          → exact match: built-in provider handler (EMR, EMRContainers, etc.)
+          → exact match: built-in provider handler
               → EMRProvider / EMRContainersProvider
-                  → SparkExecutor (mock or k8s, wired at startup)
-                  → StatusPoller
+                  → sparkhelpers.SubmitClientMode (K8s executor)
+                  → k8shelpers.BuildPodSpec (platform overlay + identity mutator)
       → <ServiceCodec>.Encode            (XML or JSON or raw bytes)
   → HTTP response
 ```
 
 Key design rules:
 - **No layer imports its caller.** The `model` package breaks the cycle between `gateway` and `adapter`.
-- **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection. For multi-cloud applications that need both AWS and GCP simultaneously, run two instances on different ports (e.g. `--port 4566 --cloud aws` and `--port 4567 --cloud gcp`). A `docker-compose` example shipping in Phase 5 documents this pattern.
-- **Executors are wired at startup.** `JAISCLOUD_EXECUTOR_MODE` controls the container orchestrator for both Spark and Lambda executors; providers receive it via the `WithExecutor` option.
+- **Single cloud per instance.** `cfg.Cloud` is set once at startup; one `CloudAdapter` is constructed; no per-request cloud detection.
+- **Executors are wired at startup.** `JAISCLOUD_EXECUTOR_MODE` controls the container orchestrator for both Spark and Lambda executors.
+- **AWS providers live under `internal/provider/aws/`.** Cloud-agnostic providers (SQS, DynamoDB, S3, Lambda, EventBridge, etc.) live directly under `internal/provider/`.
 
 ### Single-cloud adapter model
 
@@ -212,7 +225,9 @@ This mapping is defined once in `internal/adapter/aws/services.go` (`awsServices
 | `rds` | `RDS` | RDSCodec (Query/XML) |
 | `elasticache` | `ElastiCache` | ElastiCacheCodec (Query/XML) |
 | `ecs` | `ECS` | ECSCodec (JSON/Target) |
+| `eks` | `EKS` | EKSCodec (REST/JSON) |
 | `cloudformation` | `CloudFormation` | CloudFormationCodec (Query/XML) |
+| `monitoring` | `CloudWatch` | CloudWatchCodec (form-body + Granite path) |
 | `emr` | `EMR` | EMRCodec (JSON/Target) |
 | `emr-containers` | `EMRContainers` | EMRContainersCodec (REST/JSON) |
 | `events` | `EventBridge` | EventBridgeCodec (JSON/Target) |
@@ -239,17 +254,14 @@ Executor behaviour is controlled by a single env var: `JAISCLOUD_EXECUTOR_MODE` 
 | Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s Pod + ClusterIP Service** per function (warm pool) |
 | EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per step | **K8s `batch/v1 Job`** per step |
 | EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per job run | **K8s `batch/v1 Job`** per job run |
-| EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
+| CloudWatch | In-memory metric ring + alarm store | In-memory metric ring + PostgreSQL alarms | — | — |
+| EC2 / VPC / Route53 / EKS | Metadata only | Metadata only | — | — |
 | RDS | Metadata only | Metadata only | — | — |
 | ElastiCache | Metadata only | Metadata only | — | — |
 | ECS | Metadata only | Metadata only | — | — |
 | API Gateway | In-memory resource store | PostgreSQL rows | — | — |
 | CloudFormation | In-memory stack store + real resource dispatch | PostgreSQL rows + real resource dispatch | — | — |
 | Glue / EventBridge | In-memory maps | PostgreSQL rows | — | — |
-| EC2 / VPC / Route53 | Metadata only | Metadata only | — | — |
-| RDS | Metadata only | Metadata only | — | — |
-| ElastiCache | Metadata only | Metadata only | — | — |
-| ECS | Metadata only | Metadata only | — | — |
 
 > \* `LocalFSBlobStore` is implemented and wired in `main.go` when `--blob-dir` is set. Without `--blob-dir`, `MemoryBlobStore` is used even in full mode and S3 blobs are lost on restart.
 
@@ -261,7 +273,7 @@ Each distinct function gets **one warm Docker container** that is reused across 
 
 ```
 docker run -d
-  --name jc-lambda-{functionName}-{shortID}
+  --name jc-lambda-{shortInstanceID}-{functionName}
   --network jaiscloud-net
   -p {hostPort}:{INVOCATION_PORT}
   -e AWS_LAMBDA_FUNCTION_NAME={name}
@@ -295,12 +307,12 @@ docker run -d
 
 ### Lambda — K8s executor (`JAISCLOUD_EXECUTOR_MODE=k8s`)
 
-Each distinct function gets **one warm Pod + ClusterIP Service** that is reused across invocations until idle beyond the keep-alive timeout — matching the Docker executor pattern. Invocations POST to the Lambda RIE endpoint (`/2015-03-31/functions/function/invocations`, port 8080) on the ClusterIP Service.
+Each distinct function gets **one warm Pod + ClusterIP Service** that is reused across invocations until idle beyond the keep-alive timeout. Invocations POST to the Lambda RIE endpoint (`/2015-03-31/functions/function/invocations`, port 8080) on the ClusterIP Service.
 
 ```
-Pod name:    jc-lambda-{sanitized-name}-{shortID}   (namespace: jaiscloud)
-Service name: jc-lambda-{sanitized-name}             (ClusterIP, port 8080)
-Labels:      app=jaiscloud-lambda, function={name}
+Pod name:     jc-lambda-{instanceID[:8]}-{sanitized-name}   (namespace: jaiscloud)
+Service name: jc-lambda-{instanceID[:8]}-{sanitized-name}   (ClusterIP, port 8080)
+Labels:       app=jaiscloud-lambda, function={name}, jaiscloud.io/instance-id={instanceID}
 ```
 
 **Pod/Service lifecycle:**
@@ -312,7 +324,7 @@ Labels:      app=jaiscloud-lambda, function={name}
 | `DeleteFunction` | Delete Pod + Service |
 | Idle > `JAISCLOUD_LAMBDA_KEEPALIVE_SECS` (default 300 s) | GC goroutine deletes Pod + Service |
 | Server shutdown (`Close()`) | All warm Pods + Services deleted |
-| Server restart (startup `cleanupOrphans`) | Orphaned `app=jaiscloud-lambda` Pods + Services deleted |
+| Server restart (startup `cleanupOrphans`) | Instance-scoped `app=jaiscloud-lambda` Pods + Services deleted |
 
 ---
 
@@ -327,8 +339,9 @@ metadata:
   namespace: {SparkConfig.Namespace}   # default: "jaiscloud"
   labels:
     app: jaiscloud-spark
-    cluster: {clusterID}
-    step: {stepID}
+    jaiscloud.io/instance-id: {instanceID}
+  annotations:
+    jaiscloud.io/job-id-raw: {stepID}
 spec:
   ttlSecondsAfterFinished: 600
   backoffLimit: 0
@@ -349,7 +362,7 @@ spec:
             - {step args...}
 ```
 
-The `StatusPoller` goroutine polls the Job every `SparkConfig.PollInterval` (default 5 s) and fires `OnStateChange` to update the EMR step state (`PENDING → RUNNING → COMPLETED / FAILED`).
+The `StatusPoller` goroutine polls the Job at a configurable interval and fires `OnStateChange` to update the EMR step state (`PENDING → RUNNING → COMPLETED / FAILED`).
 
 **Bootstrap actions:** When `RunJobFlow` includes `BootstrapActions` and `EXECUTOR_MODE=k8s`, the EMR provider calls `bootstrap.Resolve()` before submitting. Each bootstrap action becomes a K8s init container that runs before `spark-submit`:
 
@@ -360,7 +373,7 @@ initContainers:
     command: ["/bin/sh", "-c"]
     args: ["printf '%s' '<b64-script>' | base64 -d | /bin/sh -s -- <args>"]
     securityContext:
-      runAsUser: 0                       # root so scripts can write to /etc/pki, /home/hadoop
+      runAsUser: 0
     volumeMounts:
       - name: bootstrap-prefix-etc-pki
         mountPath: /etc/pki
@@ -368,9 +381,11 @@ initContainers:
         mountPath: /home/hadoop
 ```
 
-One `emptyDir` volume is created per prefix (`JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES`, default `/etc/pki,/home/hadoop`) and mounted into both init containers and the main `spark-submit` container. Host-only commands (`yum`, `apt-get`, `dnf`, `rpm`, `systemctl`, `service`, `chkconfig`, `update-rc.d`) are automatically commented out with `# [jaiscloud-skip]`. If bootstrap script fetch or resolution fails the step is immediately marked `FAILED`.
+One `emptyDir` volume is created per prefix (`JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES`, default `/etc/pki,/home/hadoop`) and mounted into both init containers and the main `spark-submit` container. Host-only commands (`yum`, `apt-get`, `dnf`, `rpm`, `systemctl`, `service`, `chkconfig`, `update-rc.d`) are automatically commented out with `# [jaiscloud-skip]`.
 
-**Suspend/resume lifecycle:** `K8sExecutor.Close()` suspends all tracked Jobs (strategic-merge-patch `spec.suspend: true`) instead of deleting them, preserving partial progress across server restarts. On startup, `cleanupOrphans()` lists all `app.kubernetes.io/managed-by=jaiscloud` Jobs: terminal Jobs are deleted, suspended Jobs are unsuspended and re-adopted into the live jobs map, running Jobs are adopted directly.
+**Suspend/resume lifecycle:** `K8sExecutor.Close()` suspends all tracked Jobs (`spec.suspend: true`) instead of deleting them, preserving partial progress across server restarts. On startup, `cleanupOrphans()` lists all `app.kubernetes.io/managed-by=jaiscloud` Jobs: terminal Jobs are deleted, suspended Jobs are unsuspended and re-adopted, running Jobs are adopted directly.
+
+**Cluster state transitions:** `RunJobFlow` emits `STARTING → BOOTSTRAPPING → WAITING` (or `TERMINATED` on error). `TerminateJobFlows` emits `TERMINATING → TERMINATED`. All transitions publish `EventEMRClusterState` on the EventBus, which EventBridgeProvider converts to "EMR Cluster State Change" envelopes.
 
 ---
 
@@ -378,13 +393,13 @@ One `emptyDir` volume is created per prefix (`JAISCLOUD_BOOTSTRAP_RELOCATE_PREFI
 
 Each `StartJobRun` on a virtual cluster submits the same `batch/v1 Job` pattern as EMR steps (above), with the job named `jc-emrc-{virtualClusterID[:8]}-{jobRunID[:8]}` and labels `app: jaiscloud-emrc`.
 
+`CancelJobRun` emits `CANCEL_PENDING` before `CANCELLED` to match the real EMR on EKS state machine.
+
 ---
 
-### RDS, ElastiCache, ECS — metadata only (current)
+### RDS, ElastiCache, ECS, EKS — metadata only (current)
 
-These services currently store resource definitions (instance configs, cluster configs, task definitions) as JSON blobs in `jc_resources` (PostgreSQL in full mode, in-memory map in lite mode). **No real database processes or containers are started.** This is the same pattern as LocalStack's basic tier for these services.
-
-Real container provisioning (e.g. spinning up a PostgreSQL container for each `CreateDBInstance` call, or a Redis container for each `CreateCacheCluster`) is planned as a future enhancement triggered by a dedicated executor flag (e.g. `JAISCLOUD_RDS_MODE=docker`), following the same executor pattern used for Lambda and Spark.
+These services currently store resource definitions (instance configs, cluster configs, task definitions) as JSON blobs in `jc_resources`. **No real compute is started.** Real container provisioning is a planned future enhancement.
 
 ---
 
@@ -419,12 +434,6 @@ go build -o jaiscloud ./cmd/jaiscloud/
 # Run via docker-compose (postgres on 5433, jaiscloud on 4566)
 make up-docker      # start detached (builds image first)
 make down-docker    # stop and remove
-
-# Run with options
-./jaiscloud start --port 4566 --region us-east-1 --metrics
-
-# Run in GCP cloud mode (stub — returns 501 for all requests)
-./jaiscloud start --cloud gcp
 
 # Enable all executors via K8s (Spark + Lambda)
 JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud start --mode full --dsn "postgres://..."
@@ -502,9 +511,6 @@ go test -race ./tests/integration/
 ./jaiscloud start --mode full --dsn "postgres://..." &
 go test -race ./tests/integration/
 
-# Point at a different host
-JAISCLOUD_HOST=http://localhost:9000 go test ./tests/integration/
-
 # Full-mode e2e via Makefile (docker-compose handles server + postgres)
 make test-e2e-lambda-docker      # Lambda Docker warm-pool (tag: lambda_e2e)
 make test-e2e-lambda-k8s         # Lambda K8s warm-pod (tag: lambda_e2e)
@@ -547,26 +553,78 @@ All full-mode e2e tests live under `tests/full_mode/aws/`:
 | `PostgresS3ObjectMetaStore` | `jc_s3_objects` |
 | `MemoryBlobStore` | in-memory blob bytes |
 
-> **Note:** Even in full mode, blob bytes (`BlobStore`) use `MemoryBlobStore`. `LocalFSBlobStore` is implemented but not yet wired into `main.go`. Swap the `NewMemoryBlobStore()` call in `startCmd` for `NewLocalFSBlobStore(dir)` to enable on-disk blob persistence.
-
 ---
 
-## Spark executor (`internal/executor/spark/`)
+## sparkhelpers / k8shelpers design decisions
 
-The `SparkExecutor` interface drives EMR step execution and EMR-on-EKS job runs:
+### EMR execution is cloud-specific — no abstract executor interface
 
-- **`MockExecutor`** — immediate `COMPLETED`, supports `ForceState` and `Reset` for tests.
-- **`K8sExecutor`** — submits real `batch/v1 Jobs` to Kubernetes via stdlib HTTP (no client-go). Reads auth from in-cluster service account or `JAISCLOUD_K8S_*` env vars. `Close()` **suspends** (not deletes) tracked Jobs; `cleanupOrphans()` on startup re-adopts or deletes orphaned Jobs.
-- **`StatusPoller`** — single background goroutine; polls non-terminal jobs at a configurable interval; fires `OnStateChange` callbacks. `Stop()` is safe to call multiple times (`sync.Once`). Failed-state transitions are logged at `WARN` level; all other transitions at `INFO`.
-- **`SparkSubmitArgs`** — builds the full `spark-submit` argument list including `--master k8s://`, `--deploy-mode cluster`, container image, namespace, service account, resource profile, and S3 event-log args. When `job.Config.Mode == "k8s"` and `job.AllowClusterMode == true`, Pattern 3 generates `--master k8s://...` so the Spark driver runs as a real K8s Pod.
-- **`SparkJob` fragment fields** — `ExtraInitContainers`, `ExtraVolumes`, `ExtraMainMounts` carry pre-built K8s fragments from the EMR provider (bootstrap init containers + emptyDir volumes). The executor injects them into the pod spec in `buildJobManifest` after cloud/platform layers are applied. Volume name conflicts are detected via `checkVolumeConflicts` and cause `buildJobManifest` to return an error.
-- **`buildJobManifest`** — returns `(batchJob, CloudSparkTransform, cleanupKey string, error)`. The transform is returned so `Submit` can call `transform.DeleteTemplate` if `createJob` fails.
-- **`jobEntry`** — tracks a submitted Job with `name`, `cleanupKey`, `transform`, `isClusterMode bool`, and the raw `jobID`. `isClusterMode` lets `Close()` choose shutdown behaviour without K8s API calls; the raw jobID is stored in the `jaiscloud.io/job-id-raw` annotation so `cleanupOrphans` can reconstruct the map key exactly on restart.
-- **`CloudSparkTransform`** — per-cloud contributions to the K8s Job manifest (env vars, `--conf` entries). Executor pod-template merging and `CloudExecutorTemplateIO` were removed in Phase 2.5 patch 4; callers supply templates verbatim and JaisCloud passes them through unchanged.
+`internal/k8shelpers` is a generic K8s helper library (no EMR/Spark concepts). `internal/sparkhelpers` adds Spark-specific logic on top. EMR and EMR-on-EKS providers wire these directly — there is no `SparkExecutor` interface or factory abstraction. If a future provider (e.g. Dataproc) needs Spark execution, it creates its own wiring in its own package, not a shared interface.
 
-EMR and EMRContainers providers accept a `WithExecutor(exec, cfg)` option. When an executor is wired, `AddJobFlowSteps` / `StartJobRun` call `Submit`, and state changes from the `StatusPoller` feed back via `OnStateChange`. Without an executor, steps complete instantly (mock behaviour).
+### `sparkhelpers.SubmitClientMode` and `ClientModeJob`
 
-`JAISCLOUD_EXECUTOR_MODE` controls which executor is created at startup for both Spark and Lambda: `""` / unset = instant mock completion, `"mock"` = MockExecutor, `"docker"` = DockerExecutor, `"k8s"` = K8sExecutor.
+`ClientModeJob` is the input to `SubmitClientMode`. Key fields:
+
+| Field | Purpose |
+|---|---|
+| `Image` | spark-submit container image (provider's `sparkImage` / `emrImage`) |
+| `IdentityMutator` | `k8shelpers.IdentityMutator` — cloud-specific pod identity (IRSA, Azure MI, GCP WI) |
+| `PlatformOverlay` | `*platform.PlatformConfig` — TLS init containers, CA env vars, volume mounts |
+| `EntryPoint` | JAR or Python file URI |
+| `SparkSubmitArgs` | `--conf` entries, `--num-executors`, etc. |
+| `JarArgs` | arguments passed after the entry point |
+
+`SubmitClientMode` creates a ConfigMap for the executor pod template before creating the Job. If `createJob` fails, the ConfigMap is explicitly deleted in a deferred cleanup, preventing orphaned ConfigMaps.
+
+### `BuildPodSpec` and `IdentityMutator`
+
+`k8shelpers.BuildPodSpec` accepts `ctx context.Context` and `k8s kubernetes.Interface` and passes them to the `IdentityMutator` callback. This is required because real cloud identity wiring (IRSA, Azure Managed Identity, GCP Workload Identity) needs to make K8s API calls and must respect request deadlines. Passing `nil` for both is safe only when `IdentityMutator` is `nil`.
+
+```go
+type IdentityMutator func(ctx context.Context, k8s kubernetes.Interface, tpl *corev1.PodTemplateSpec) error
+```
+
+Both EMR providers accept `WithIdentityMutator(m k8shelpers.IdentityMutator)` as a constructor option.
+
+### `OwnershipPatcher` — executor pod ownership
+
+Spark executor pods are created by the Spark driver (inside the batch/v1 Job pod) and have no ownerReference. `k8shelpers.StartOwnershipPatcher` watches pods with label `spark-role=executor` and patches ownerReferences back to the parent Job using a caller-supplied resolver.
+
+`sparkhelpers.MakeExecutorOwnerResolver` implements the resolver: it reads the pod's `spark-app-selector` label, lists driver pods matching `spark-app-id=<selector>`, and returns an `OwnerRefHint` pointing at the driver pod's owning Job.
+
+Both EMR providers start the OwnershipPatcher in `New()` when a k8s client is present, and stop it via `patcherStop()` in `Shutdown()`.
+
+### Provider goroutine lifecycle — `handlerCtx` + `WaitGroup`
+
+`EMRProvider` and `EMRContainersProvider` capture a `handlerCtx` at handler entry:
+
+```go
+type handlerCtx struct {
+    cloud     model.Cloud
+    region    string
+    accountID string
+}
+
+func newHandlerCtx(nr *model.NormalizedRequest) handlerCtx {
+    return handlerCtx{cloud: nr.Cloud, region: nr.Region, accountID: nr.AccountID}
+}
+```
+
+This lets goroutines publish state-change events with correct cloud provenance without holding a reference to `NormalizedRequest`.
+
+All `runStep` / `runJobRun` goroutines use `p.wg.Add(1)` + `defer p.wg.Done()`. `Shutdown()` calls `p.cancel()` then `p.wg.Wait()`, ensuring all in-flight goroutines complete before the server exits.
+
+```go
+func (p *EMRProvider) Shutdown(_ context.Context) {
+    if p.patcherStop != nil { p.patcherStop() }
+    p.cancel()
+    p.wg.Wait()
+}
+```
+
+### Best-effort vs. critical error handling
+
+Operations that must not silently lose state (cluster/step persistence) log at `WARN` on error. Operations that are inherently best-effort (log collection for Spark exit classification, terminal snapshot persistence) log at `WARN` but do not fail the parent operation.
 
 ---
 
@@ -607,37 +665,9 @@ defer handle.Release()
 | `PolicyForceTerminate` | 1 | Calls `ForceTerminate(ctx, store, child)` for each child. |
 | `PolicyCascade` | 2 (lowest) | Calls `CascadeDelete(ctx, store, child)` or falls back to `store.Delete`. |
 
-### RegisterRules
-
-Providers call `rm.RegisterRules([]resourcemgr.DeleteGuardRule{...})` at construction time to register their own resource dependency rules. Thread-safe.
-
 ### StoreAdapter (`internal/resourcemgr/adapter.go`)
 
 Bridges `store.ResourceStore` (host type) to `resourcemgr.ResourceStore` (internal interface). `Exists` maps `store.ErrNotFound` to `false` rather than returning an error.
-
----
-
-## k8shelpers / sparkhelpers design decisions
-
-### EMR execution is intentionally cloud-specific — no abstract executor interface
-
-`internal/k8shelpers` is a generic K8s helper library (no EMR/Spark concepts). `internal/sparkhelpers` adds Spark-specific logic on top. EMR and EMR-on-EKS providers wire these directly — there is no `SparkExecutor` interface or factory abstraction. This is deliberate: the old `internal/executor/spark/` abstraction added indirection without benefit since no non-EMR provider ever used it. If a future provider (e.g. Dataproc) needs Spark execution, it creates its own wiring in its own package, not a shared interface.
-
-### `BuildPodSpec` takes `ctx` and `kubernetes.Interface` for identity mutators
-
-`k8shelpers.BuildPodSpec` accepts `ctx context.Context` and `k8s kubernetes.Interface` and passes them to the `IdentityMutator` callback. This is required because real cloud identity wiring (IRSA, Azure Managed Identity, GCP Workload Identity) needs to make K8s API calls (e.g. reading ServiceAccount annotations) and must respect request deadlines. Passing `nil` for both is safe only when `IdentityMutator` is `nil`.
-
-### Provider goroutine lifecycle — cancellable context via `Shutdown()`
-
-`EMRProvider` and `EMRContainersProvider` own a `context.Context` created in `New()`. All `runStep` / `runJobRun` goroutines receive `p.ctx` rather than `context.Background()`. When the server calls `Shutdown(ctx)`, `p.cancel()` is invoked, causing in-flight goroutines to stop at the next K8s API call or context check. This enables graceful drain on server restart without leaking goroutines.
-
-### ConfigMap cleanup on SubmitJob failure
-
-`sparkhelpers.SubmitClientMode` creates a ConfigMap for the executor pod template before creating the Job. If `SubmitJob` fails, the ConfigMap is explicitly deleted in a deferred cleanup, preventing orphaned ConfigMaps in the namespace. On success, the Job's `OwnerReference` points to the ConfigMap, and K8s garbage collection handles cleanup automatically when the Job is GC'd.
-
-### Best-effort vs. critical error handling
-
-Operations that must not silently lose state (cluster/step persistence via `saveCluster`) log at `WARN` on error rather than swallowing. Operations that are inherently best-effort (log collection for Spark exit classification, terminal snapshot persistence) log at `WARN` but do not fail the parent operation — the system degrades gracefully rather than failing the step.
 
 ---
 
@@ -645,16 +675,21 @@ Operations that must not silently lose state (cluster/step persistence via `save
 
 ### AWS service detection order
 
-Detection is data-driven. All service metadata (target prefixes, SigV4 names, Query-protocol actions) is declared once in [internal/adapter/aws/services.go](internal/adapter/aws/services.go) as `ServiceDescriptor` entries in `awsServices`. Four lookup maps are derived at `init()` time. `DetectService` in [router.go](internal/adapter/aws/router.go) consults those maps — no hardcoded strings.
+Detection is data-driven. All service metadata is declared once in [internal/adapter/aws/services.go](internal/adapter/aws/services.go) as `ServiceDescriptor` entries in `awsServices`. Four lookup maps are derived at `init()` time. `DetectService` in [router.go](internal/adapter/aws/router.go) consults those maps — no hardcoded strings.
 
 Priority:
-1. `X-Amz-Target` header — looked up in `targetPrefixToService` map (JSON/Target services: SQS, DynamoDB, Glue, ECS, EMR, EventBridge, DynamoDB Streams)
-2. SigV4 `Authorization` scope — service token checked against `knownSigV4Services` set (all services)
-3. `Action=` query/body param — looked up in `actionToService` map (Query-protocol services: SQS, IAM, STS, SNS)
-
-S3 and Lambda are always detected via SigV4 (REST, no `Action` param).
+1. `X-Amz-Target` header — `targetPrefixToService` map (JSON/Target services: SQS, DynamoDB, Glue, ECS, EMR, EventBridge, DynamoDB Streams, KMS, SecretsManager, SSM)
+2. SigV4 `Authorization` scope — `knownSigV4Services` set (all services)
+3. `Action=` query/body param — `actionToService` map (Query-protocol services: SQS, IAM, STS, SNS, EC2, CloudFormation, RDS, ElastiCache)
+4. Granite path `/service/<ver>/operation/<Action>` — matched when `SigV4Name` resolves but action is empty (AWS SDK v2 CloudWatch)
 
 **Adding a new service:** add one `ServiceDescriptor` entry to `awsServices` in `services.go`. Service detection, SigV4 allow-list, Action routing, and gateway provider mapping all update automatically.
+
+### CloudWatch Granite URL routing
+
+AWS SDK v2 routes CloudWatch requests to `/service/monitoring/operation/<Action>` instead of using `Action=` in the body. `router.go` priority 4 handles this: when the URL path matches `/service/<sigv4name>/operation/<action>`, the action is extracted from the path and the service is resolved from the SigV4 name.
+
+`CloudWatchCodec.Decode` extracts the `Action` from either the form body (SDK v1 style) or the Granite path (SDK v2 style) using the same fallback logic.
 
 ### S3 action detection
 
@@ -665,9 +700,11 @@ S3 and Lambda are always detected via SigV4 (REST, no `Action` param).
 - `?uploads` on POST → `CreateMultipartUpload`, on GET → `ListMultipartUploads`
 - `?delete` on POST → `DeleteObjects` (XML body parsed for keys)
 
+S3 also handles virtual-hosted-style URLs (`mybucket.s3.<region>.amazonaws.com`) — the bucket is extracted from the Host header before path parsing.
+
 ### Lambda invoke
 
-`InvokeFunction` echoes the payload back unchanged — no subprocess is spawned. Useful for testing fan-out pipelines that invoke Lambda as a sink.
+`InvokeFunction` echoes the payload back unchanged in echo mode. Useful for testing fan-out pipelines that invoke Lambda as a sink.
 
 ### FIFO deduplication (SQS)
 
@@ -679,37 +716,35 @@ S3 and Lambda are always detected via SigV4 (REST, no `Action` param).
 
 ### SNS fan-out
 
-`SNSProvider.Publish` wraps the message in a JSON envelope and calls `SQSMessageStore.Send` for each SQS subscription. Each SQS delivery is assigned a **new unique `MessageID`**; the SNS notification ID is embedded in the envelope body only. Reusing the SNS ID as the SQS row key would conflict on the `(id, queue_url)` primary key when delivering to N queues.
+`SNSProvider.Publish` wraps the message in a JSON envelope and calls `SQSMessageStore.Send` for each SQS subscription. Each SQS delivery is assigned a **new unique `MessageID`**; the SNS notification ID is embedded in the envelope body only.
 
 ### SNS MessageAttributes pass-through
 
-`SNS.Publish` extracts `MessageAttributes` from the Query protocol form (`MessageAttributes.entry.N.{Name,Value.DataType,Value.StringValue}`) via `SNSCodec.Decode`. The provider passes them through in the SQS envelope JSON under `"MessageAttributes"` so downstream consumers can read them after receiving from SQS.
+`SNS.Publish` extracts `MessageAttributes` from the Query protocol form and passes them through in the SQS envelope JSON under `"MessageAttributes"` so downstream consumers can read them after receiving from SQS.
 
 ### DynamoDB pk hash
 
-`TableProvider` computes a stable hash from key attributes only (in schema-defined order) and passes it explicitly to `DynamoDBItemStore`. The store never auto-computes hashes — the provider is the sole authority.
+`TableProvider` computes a stable hash from key attributes only (in schema-defined order) and passes it explicitly to `DynamoDBItemStore`. The store never auto-computes hashes.
 
 ### DynamoDB pagination determinism
 
-Both `MemoryDynamoDBItemStore` and `PostgresDynamoDBItemStore` sort all matching items by `itemPKHash` (a stable string key derived from sorted attribute name=value pairs) before applying `ExclusiveStartKey` / `Limit`. This guarantees consistent cursor behaviour across requests regardless of map iteration order or Postgres heap scan order. The postgres implementation uses `ORDER BY pk_hash` in SQL and delegates page slicing to the same `paginateItems` helper used by the memory store.
+Both `MemoryDynamoDBItemStore` and `PostgresDynamoDBItemStore` sort all matching items by `itemPKHash` before applying `ExclusiveStartKey` / `Limit`. This guarantees consistent cursor behaviour regardless of map iteration order or Postgres heap scan order.
 
 ### DynamoDB `LastEvaluatedKey` — page-full check
 
-`MemoryDynamoDBItemStore.Query` sets `LastEvaluatedKey` when the returned **page** is full (`len(all) == q.Limit`), not when the pre-pagination match count equals the limit. The distinction matters: if 5 items match a key condition and `Limit=2`, `paginateItems` returns 2 items (`all`); the pre-pagination slice (`matched`) has 5. Checking `len(matched) == q.Limit` would be `5 == 2 → false`, suppressing `LastEvaluatedKey` incorrectly. `Scan` and both Postgres paths already used `len(all)` — only the memory `Query` path had the bug.
+`MemoryDynamoDBItemStore.Query` sets `LastEvaluatedKey` when the returned **page** is full (`len(all) == q.Limit`), not when the pre-pagination match count equals the limit.
 
 ### DynamoDB wire protocol: x-amz-crc32
 
-Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK v2 validates this header; without it the SDK does not cleanly drain the response body, causing a "failed to close HTTP response body" warning and potential connection-reuse problems. `DynamoDBCodec.Encode` computes and sets this header on every response.
+Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK v2 validates this header; without it the SDK does not cleanly drain the response body. `DynamoDBCodec.Encode` computes and sets this header on every response.
 
 ### Postgres SQS: composite primary key
 
-`jc_sqs_messages` uses a composite primary key `(id, queue_url)` so the same `MessageID` can appear in multiple queues (e.g. SNS fan-out). Migration `005_sqs_fix_pk.sql` upgrades existing installs that have the old single-column `id` primary key.
+`jc_sqs_messages` uses a composite primary key `(id, queue_url)` so the same `MessageID` can appear in multiple queues (e.g. SNS fan-out). Migration `005_sqs_fix_pk.sql` upgrades existing installs.
 
-`MessageAttributes` are stored in the `msg_attributes JSONB` column. The postgres `Send` serialises them; `Receive` deserialises them. The column exists in migration 002 but was unused before Phase 1 fixes.
+### Postgres connection pool
 
-### Postgres connection pool (HikariCP equivalent)
-
-`NewPostgresResourceStore` configures `pgxpool` with production-ready defaults before the first ping:
+`NewPostgresResourceStore` configures `pgxpool` with production-ready defaults:
 
 | Setting | Value | Purpose |
 |---|---|---|
@@ -720,7 +755,7 @@ Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK
 | `HealthCheckPeriod` | 30 s | Proactive dead-connection detection |
 | `ConnectTimeout` | 5 s | Per-attempt TCP timeout |
 
-**Startup retry:** the server retries the initial `Ping` up to 10 times with exponential backoff (500 ms → 8 s) and logs a `WARN` on each attempt. This lets JaisCloud start before the database is ready (e.g., `docker-compose` spin-up order, Kubernetes init ordering). Context cancellation (SIGINT during startup) stops the retry loop immediately.
+**Startup retry:** the server retries the initial `Ping` up to 10 times with exponential backoff (500 ms → 8 s).
 
 ### Postgres error classification
 
@@ -731,12 +766,6 @@ Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK
 | `pgx.ErrNoRows` | `store.ErrNotFound` |
 | Unique violation (23505) | `store.ErrAlreadyExists` |
 | Connection class 08xx / 57xx, `net.Error` | `store.ErrStorageUnavailable` |
-
-Providers call `provider.StoreNotFoundError(err, code, msg)` after every store read. This helper returns a 400 `ProviderError` only when `errors.Is(err, store.ErrNotFound)` is true. Any other error (including `ErrStorageUnavailable`) is returned unwrapped so the gateway emits a **500 Internal Error** instead of a misleading 404.
-
-### Postgres ResourceStore: prefix matching
-
-`PostgresResourceStore.List` uses `LIKE '%prefix%'` (contains) to match the behaviour of `MemoryResourceStore.List` (`strings.Contains`). Queue IDs are full URLs (`http://localhost:4566/000000000000/<name>`), so a queue-name prefix must be matched as a substring, not a prefix of the full URL.
 
 ### Admin endpoints
 
@@ -750,7 +779,7 @@ Providers call `provider.StoreNotFoundError(err, code, msg)` after every store r
 
 ### Snapshot / Restore
 
-Stores implement `admin.Snapshotter` (`Snapshot() (json.RawMessage, error)` + `Restore(json.RawMessage) error`) and are registered with `adminHandler.RegisterSnapshotter(name, store)`. Currently `MemoryResourceStore` is snapshotted under key `"resources"`.
+Stores implement `admin.Snapshotter` (`Snapshot() (json.RawMessage, error)` + `Restore(json.RawMessage) error`) and are registered with `adminHandler.RegisterSnapshotter(name, store)`. Export envelope is schema v2 (`schema_version`, `instance_id`, `cloud`, `region`, `account_id`); import validates cloud identity and accepts both v1 and v2 envelopes.
 
 ### HTTP response: Content-Length
 
@@ -764,21 +793,12 @@ All time-sensitive code receives a `clock.Clock` from `NormalizedRequest.Clock`.
 
 The Metrics middleware (`internal/gateway/middleware/metrics.go`) records `jaiscloud_requests_total{cloud,service,action,status}` and `jaiscloud_request_duration_seconds{cloud,service,action}`.
 
-Labels are injected by the gateway after decoding each request:
-
-```go
-r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
-```
-
-Requests without labels (admin endpoints, unrecognised paths) fall back to `cloud="unknown"`, `service="unknown"`, `action=<HTTP method>`.
-
 ### Multi-cloud extensibility: dependency injection for cloud-specific formatting
 
 **Rule: providers must never hard-code cloud-specific resource identifier formats (AWS ARNs, Azure resource IDs, etc.).**
 
 When a provider needs a cloud-specific resource ID, it must use the injected function on `NormalizedRequest` rather than calling `fmt.Sprintf("arn:aws:...")` directly.
 
-**Pattern — use `NormalizedRequest.ResourceID`:**
 ```go
 // WRONG — couples provider to AWS:
 arn := fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
@@ -789,19 +809,11 @@ arn := nr.ResourceID("dynamodb-table", name)
 
 **Where each piece lives:**
 - `internal/model/model.go` — declares `ResourceID func(resourceType, name string) string` on `NormalizedRequest`
-- `internal/config/config.go` — `awsARNFormatters` map + `AWSResourceID(region, accountID)` returns the AWS implementation; `AzureResourceID` / `GCPResourceID` return stub functions that return the name unchanged
-- `internal/gateway/server.go` — injects `nr.ResourceID` for **all clouds** via a switch (AWS gets full ARN formatters; Azure/GCP get their stub functions); `nr.ResourceID` is therefore always non-nil after the gateway
-- `internal/provider/*/` — calls `nr.ResourceID("type", name)` unconditionally; no `"arn:aws:"` literals, no nil checks
+- `internal/config/config.go` — `awsARNFormatters` map + `AWSResourceID(region, accountID)` returns the AWS implementation
+- `internal/gateway/server.go` — injects `nr.ResourceID` for all clouds; always non-nil after the gateway
+- `internal/provider/*/` — calls `nr.ResourceID("type", name)` unconditionally; no `"arn:aws:"` literals
 
-**Adding a new resource type:** add one entry to `awsARNFormatters` in `config.go`:
-```go
-"my-service-resource": func(r, a, n string) string {
-    return fmt.Sprintf("arn:aws:myservice:%s:%s:resource/%s", r, a, n)
-},
-```
-An Azure adapter injects its own function that formats Azure resource IDs; providers don't need to change.
-
-The same DI principle applies to any other cloud-specific customisation point: define an interface or function type in `internal/model/`, implement it per cloud in the adapter/config layer, and inject it via `NormalizedRequest` or the provider constructor.
+**Adding a new resource type:** add one entry to `awsARNFormatters` in `config.go`.
 
 ---
 
@@ -813,15 +825,19 @@ The same DI principle applies to any other cloud-specific customisation point: d
 
 **Target storage:** `eb_target` resource type. Key = `"<ruleName>/<targetId>"` so all targets for a rule are listed with a single `List(ctx, "eb_target", ruleName+"/")` call.
 
-**Target type resolution (`resolveTargetMeta`):** ARN parsing happens **once at `PutTargets` time** where `nr.Cloud` is available. The resolved `TargetType` (`"sqs"`) and `QueueName` are stored in `targetData`. The delivery path (`deliverToTarget`) is cloud-agnostic — it reads only pre-resolved fields.
+**Target type resolution (`resolveTargetMeta`):** ARN parsing happens **once at `PutTargets` time** where `nr.Cloud` is available. The resolved `TargetType` (`"sqs"`) and `QueueName` are stored in `targetData`. The delivery path (`deliverToTarget`) is cloud-agnostic.
 
-**Event delivery:** `deliverEvent` lists all `ENABLED` rules, matches the event envelope against `EventPattern` using `matchesPattern`, then calls `deliverToTarget` for each matching target.
+**EMR envelope format (real-AWS parity):**
 
-**EMR integration:** `EMRProvider.CancelSteps` and `EMRContainersProvider.CancelJobRun` publish `EventEMRStepState` / `EventEMRJobRunState` on the `EventBus`. `EventBridgeProvider.subscribeToEventBus` subscribes at construction time and converts these domain events into EventBridge envelopes. The event `source` is derived as `string(ev.Cloud) + ".emr"` — not hardcoded — so it is correct for any cloud.
+- **Step state change** (`EventEMRStepState`): `detail-type: "EMR Step Status Change"`, `source: "<cloud>.emr"`, `detail` contains `stepId`, `clusterId`, `state`, `severity` (derived from terminal state), `actionOnFailure`, `stateChangeReason: {code, message}` (nested object), `createdTime`, `endTime`.
+- **Job run state change** (`EventEMRJobRunState`): `detail-type: "EMR Containers Job Run State Change"`, `detail` contains `jobRunId`, `virtualClusterId`, `state`, `releaseLabel`, `executionRoleArn`, `stateChangeReason: {code, message}`.
+- **Cluster state change** (`EventEMRClusterState`): `detail-type: "EMR Cluster State Change"`, `detail` contains `clusterId`, `name`, `state`, `severity`, `message`, `stateChangeCode`, `stateChangeReason: {code, message}`.
 
-**`PutEvents` action:** allows tests and callers to inject arbitrary events directly into the rule-matching pipeline without triggering EMR state changes.
+`severity` values: `"ERROR"` for FAILED/TERMINATED_WITH_ERRORS, `"WARN"` for CANCELLED/INTERRUPTED, `"INFO"` otherwise.
 
-**`atomic.Uint64` event counter:** `newEventID()` uses `eventCounter.Add(1)` — thread-safe without a mutex.
+The event `source` is `string(ev.Cloud) + ".emr"` — not hardcoded — so it is correct for any cloud.
+
+**`PutEvents` action:** allows tests and callers to inject arbitrary events directly into the rule-matching pipeline.
 
 ---
 
@@ -837,4 +853,5 @@ The same DI principle applies to any other cloud-specific customisation point: d
 | `github.com/aws/aws-sdk-go-v2` | Integration test client |
 | `github.com/aws/aws-sdk-go-v2/service/eventbridge` | EventBridge integration test client |
 | `github.com/stretchr/testify` | Test assertions |
-| `github.com/jaiscloud/plugin-sdk` | Plugin SDK (local `replace` → `./sdk`) |
+| `k8s.io/client-go` | Kubernetes API client (k8shelpers, sparkhelpers) |
+| `sigs.k8s.io/yaml` | YAML marshaling for pod templates |

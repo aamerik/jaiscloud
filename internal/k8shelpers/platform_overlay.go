@@ -195,8 +195,7 @@ var (
 )
 
 // RegisterOptOutToken adds a cloud-specific opt-out token to the allowlist.
-// Must be called before any BuildPodSpec invocation. Not goroutine-safe
-// with concurrent BuildPodSpec calls.
+// Safe to call concurrently with BuildPodSpec.
 func RegisterOptOutToken(token string) {
 	optOutMu.Lock()
 	defer optOutMu.Unlock()

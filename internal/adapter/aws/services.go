@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/adapter"
+	"jaiscloud/internal/adapter/aws/services"
 )
 
 // ServiceDescriptor captures every piece of per-service metadata needed by the
@@ -126,6 +127,29 @@ var awsServices = []ServiceDescriptor{
 	{
 		SigV4Name:      "execute-api",
 		ProviderPrefix: "Gateway",
+	},
+	{
+		SigV4Name:      "monitoring",
+		ProviderPrefix: "CloudWatch",
+		Codec:          func() adapter.Codec { return &services.CloudWatchCodec{} },
+		QueryActions: []string{
+			"PutMetricData",
+			"GetMetricStatistics",
+			"GetMetricData",
+			"ListMetrics",
+			"PutMetricAlarm",
+			"DescribeAlarms",
+			"DescribeAlarmsForMetric",
+			"DeleteAlarms",
+			"SetAlarmState",
+			"GetDashboard",
+			"ListDashboards",
+			"PutDashboard",
+			"DeleteDashboards",
+			"TagResource",
+			"UntagResource",
+			"ListTagsForResource",
+		},
 	},
 }
 

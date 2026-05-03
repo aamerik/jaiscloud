@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -351,27 +350,28 @@ func (p *EventBridgeProvider) subscribeToEventBus() {
 		}
 		p.deliverEvent(context.Background(), buildEMRJobRunEnvelope(ev))
 	})
+
+	p.bus.Subscribe(events.EventEMRClusterState, func(e events.Event) {
+		ev, ok := e.Payload.(events.EMRClusterStateEvent)
+		if !ok {
+			return
+		}
+		p.deliverEvent(context.Background(), buildEMRClusterEnvelope(ev))
+	})
 }
 
 // deliverEvent matches envelope against all ENABLED rules and sends to matching SQS targets.
 func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[string]any) {
-	source, _ := envelope["source"].(string)
-	detailType, _ := envelope["detail-type"].(string)
-	fmt.Fprintf(os.Stderr, "[EventBridge] deliverEvent source=%q detail-type=%q\n", source, detailType)
 	entries, _ := p.resources.List(ctx, resTypeRule, "")
-	fmt.Fprintf(os.Stderr, "[EventBridge] checking %d rules\n", len(entries))
 	for _, e := range entries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
 			continue
 		}
 		if rule.State != "ENABLED" {
-			fmt.Fprintf(os.Stderr, "[EventBridge] rule %q state=%s (skipping)\n", rule.Name, rule.State)
 			continue
 		}
-		matched := matchesPattern(rule.EventPattern, envelope)
-		fmt.Fprintf(os.Stderr, "[EventBridge] rule %q matched=%v pattern=%s\n", rule.Name, matched, rule.EventPattern)
-		if !matched {
+		if !matchesPattern(rule.EventPattern, envelope) {
 			continue
 		}
 		targets, _ := p.resources.List(ctx, resTypeTarget, rule.Name+"/")
@@ -389,77 +389,76 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 // Uses pre-resolved TargetType/QueueURL — no resource-store lookup, no cloud coupling.
 // The placeholder host in QueueURL is replaced with the actual localhost:port at delivery time.
 func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData, envelope map[string]any) {
-	fmt.Fprintf(os.Stderr, "[EventBridge] deliverToTarget id=%q type=%q queueURL=%q\n", td.ID, td.TargetType, td.QueueURL)
 	if td.TargetType != "sqs" || td.QueueURL == "" {
-		fmt.Fprintf(os.Stderr, "[EventBridge] skipping unsupported target type=%q\n", td.TargetType)
 		return
 	}
 	host := fmt.Sprintf("localhost:%d", p.port)
 	queueURL := strings.Replace(td.QueueURL, jaiscloudHostPlaceholder, host, 1)
 	body, _ := json.Marshal(envelope)
-	_, err := p.messages.Send(ctx, sqsstore.SQSMessage{
+	_, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
 		QueueURL:  queueURL,
 		MessageID: newEventID(),
 		Body:      string(body),
 	})
-	fmt.Fprintf(os.Stderr, "[EventBridge] SQS send to %q err=%v\n", queueURL, err)
 }
 
 // ─── event envelope builders ──────────────────────────────────────────────────
 
-func stateDetailsForStep(state, failureReason string) string {
+// deriveSeverity returns the EventBridge severity label for a terminal state.
+func deriveSeverity(state string) string {
 	switch state {
-	case "COMPLETED":
-		return "Step completed successfully"
-	case "FAILED":
-		if failureReason != "" {
-			return failureReason
-		}
-		return "Step failed"
-	case "CANCELLED":
-		return "Step was cancelled"
+	case "FAILED", "TERMINATED_WITH_ERRORS":
+		return "ERROR"
+	case "CANCELLED", "INTERRUPTED":
+		return "WARN"
 	default:
-		return state
+		return "INFO"
 	}
 }
 
-func stateDetailsForJobRun(state, failureReason string) string {
-	switch state {
-	case "COMPLETED":
-		return "Job run completed successfully"
-	case "FAILED":
-		if failureReason != "" {
-			return failureReason
-		}
-		return "Job run failed"
-	case "CANCELLED":
-		return "Job run was cancelled"
-	default:
-		return state
-	}
+// stateChangeReasonObj builds the nested {code, message} object that real AWS
+// puts in detail.stateChangeReason for both step and cluster events.
+func stateChangeReasonObj(code, message string) map[string]any {
+	return map[string]any{"code": code, "message": message}
 }
 
 // buildEMRStepEnvelope builds an EventBridge envelope for an EMR step state change.
-// The source is derived from ev.Cloud so the envelope is correct for any cloud.
+// Matches real AWS "EMR Step Status Change" schema.
 func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 	name := ev.Name
 	if name == "" {
 		name = "emr-step-" + ev.StepID
 	}
+	severity := ev.Severity
+	if severity == "" {
+		severity = deriveSeverity(ev.State)
+	}
+	msg := ev.Message
+	if msg == "" {
+		msg = ev.FailureReason
+	}
 	detail := map[string]any{
-		"clusterId":    ev.JobFlowID,
-		"stepId":       ev.StepID,
-		"state":        ev.State,
-		"severity":     "INFO",
-		"name":         name,
-		"stateDetails": stateDetailsForStep(ev.State, ev.FailureReason),
+		"clusterId":         ev.JobFlowID,
+		"stepId":            ev.StepID,
+		"name":              name,
+		"state":             ev.State,
+		"severity":          severity,
+		"message":           msg,
+		"stateChangeReason": stateChangeReasonObj(ev.StateChangeCode, ev.StateChangeReason),
+	}
+	if ev.ActionOnFailure != "" {
+		detail["actionOnFailure"] = ev.ActionOnFailure
+	}
+	eventTime := ev.OccurredAt
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
 	}
 	return map[string]any{
 		"version":     "0",
 		"id":          newEventID(),
 		"source":      string(ev.Cloud) + ".emr",
 		"account":     ev.AccountID,
-		"time":        time.Now().UTC().Format(time.RFC3339),
+		"time":        eventTime.Format(time.RFC3339),
 		"region":      ev.Region,
 		"resources":   []any{},
 		"detail-type": "EMR Step Status Change",
@@ -468,6 +467,7 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 }
 
 // buildEMRJobRunEnvelope builds an EventBridge envelope for an EMR Containers job run state change.
+// Matches real AWS "EMR Job Run State Change" schema.
 func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 	name := ev.Name
 	if name == "" {
@@ -476,20 +476,74 @@ func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 	detail := map[string]any{
 		"virtualClusterId": ev.VirtualClusterID,
 		"id":               ev.JobRunID,
-		"state":            ev.State,
-		"severity":         "INFO",
 		"name":             name,
-		"stateDetails":     stateDetailsForJobRun(ev.State, ev.FailureReason),
+		"state":            ev.State,
+		"releaseLabel":     ev.ReleaseLabel,
+		"executionRoleArn": ev.ExecutionRoleArn,
+	}
+	if ev.ARN != "" {
+		detail["arn"] = ev.ARN
+	}
+	if ev.StateDetails != "" {
+		detail["stateDetails"] = ev.StateDetails
+	}
+	if ev.CreatedBy != "" {
+		detail["createdBy"] = ev.CreatedBy
+	}
+	if !ev.CreatedAt.IsZero() {
+		detail["createdAt"] = ev.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if !ev.UpdatedAt.IsZero() {
+		detail["updatedAt"] = ev.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	if ev.FailureReason != "" {
+		detail["failureReason"] = ev.FailureReason
+	}
+	eventTime := ev.UpdatedAt
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
 	}
 	return map[string]any{
 		"version":     "0",
 		"id":          newEventID(),
 		"source":      string(ev.Cloud) + ".emr-containers",
 		"account":     ev.AccountID,
-		"time":        time.Now().UTC().Format(time.RFC3339),
+		"time":        eventTime.Format(time.RFC3339),
 		"region":      ev.Region,
 		"resources":   []any{},
 		"detail-type": "EMR Job Run State Change",
+		"detail":      detail,
+	}
+}
+
+// buildEMRClusterEnvelope builds an EventBridge envelope for an EMR cluster state change.
+// Matches real AWS "EMR Cluster State Change" schema.
+func buildEMRClusterEnvelope(ev events.EMRClusterStateEvent) map[string]any {
+	severity := ev.Severity
+	if severity == "" {
+		severity = deriveSeverity(ev.State)
+	}
+	detail := map[string]any{
+		"clusterId":         ev.ClusterID,
+		"name":              ev.Name,
+		"state":             ev.State,
+		"severity":          severity,
+		"message":           ev.Message,
+		"stateChangeReason": stateChangeReasonObj(ev.StateChangeCode, ev.StateChangeReason),
+	}
+	eventTime := ev.OccurredAt
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
+	}
+	return map[string]any{
+		"version":     "0",
+		"id":          newEventID(),
+		"source":      string(ev.Cloud) + ".emr",
+		"account":     ev.AccountID,
+		"time":        eventTime.Format(time.RFC3339),
+		"region":      ev.Region,
+		"resources":   []any{},
+		"detail-type": "EMR Cluster State Change",
 		"detail":      detail,
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"jaiscloud/internal/provider"
 	apigwprovider "jaiscloud/internal/provider/aws/apigw"
 	cacheprovider "jaiscloud/internal/provider/aws/cache"
+	cloudwatchprovider "jaiscloud/internal/provider/aws/cloudwatch"
 	"jaiscloud/internal/provider/aws/catalog"
 	"jaiscloud/internal/provider/aws/compute"
 	containerprovider "jaiscloud/internal/provider/aws/container"
@@ -316,6 +317,12 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
 	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
+	if v := os.Getenv("JAISCLOUD_SPARK_EMR_IMAGE"); v != "" {
+		emrOpts = append(emrOpts, emrprovider.WithSparkImage(v))
+	}
+	if v := os.Getenv("JAISCLOUD_SPARK_EMREKS_IMAGE"); v != "" {
+		emrcOpts = append(emrcOpts, emrcontainersprovider.WithSparkImage(v))
+	}
 
 	// Wire K8s client into EMR providers when spark mode is k8s.
 	if sparkMode == "k8s" {
@@ -416,6 +423,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(eksprovider.New(s.resources).Routes())
 	registry.RegisterAll(eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port).Routes())
 	registry.RegisterAll(apigwprovider.New(s.resources).Routes())
+	registry.RegisterAll(cloudwatchprovider.New(s.resources, bus).Routes())
 
 	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup
 }
@@ -708,6 +716,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 		"eks":              &services.EKSCodec{},
 		"apigateway":       &services.APIGatewayCodec{},
 		"execute-api":      &services.ExecuteAPICodec{},
+		"monitoring":       &services.CloudWatchCodec{},
 	})
 }
 

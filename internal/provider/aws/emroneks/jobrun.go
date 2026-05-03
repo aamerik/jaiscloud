@@ -10,12 +10,12 @@ import (
 
 // runJobRun executes a StartJobRun via sparkhelpers.SubmitClientMode.
 // Runs in a goroutine; publishes state transitions via emitJobRunStateChange.
-func (p *EMRContainersProvider) runJobRun(ctx context.Context, vcID, jrID string, params map[string]any) {
-	p.emitJobRunStateChange(vcID, jrID, "RUNNING", "")
+func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx, vcID, jrID string, params map[string]any) {
+	p.emitJobRunStateChange(h, vcID, jrID, "RUNNING", "")
 
 	ep, sparkArgs, jarArgs := extractJobRunEntryPoint(params)
 	if ep == nil {
-		p.emitJobRunStateChange(vcID, jrID, "FAILED", "no sparkSubmitJobDriver in jobDriver")
+		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", "no sparkSubmitJobDriver in jobDriver")
 		return
 	}
 
@@ -27,10 +27,12 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, vcID, jrID string
 	job := sparkhelpers.ClientModeJob{
 		JobID:           jrID,
 		Namespace:       ns,
+		Image:           p.sparkImage,
 		EntryPoint:      ep,
 		SparkSubmitArgs: sparkArgs,
 		JarArgs:         jarArgs,
 		PlatformOverlay: p.platformCfg,
+		IdentityMutator: p.identityMutator,
 		Labels: map[string]string{
 			"jaiscloud.io/provider":        "emroneks",
 			"jaiscloud.io/vc-id":           vcID,
@@ -42,7 +44,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, vcID, jrID string
 	handle, err := sparkhelpers.SubmitClientMode(ctx, p.k8sClient, job)
 	if err != nil {
 		slog.Warn("emroneks: SubmitClientMode failed", "jobRun", jrID, "err", err)
-		p.emitJobRunStateChange(vcID, jrID, "FAILED", err.Error())
+		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emroneks/jobruns", jrID,
 			k8shelpers.BuildSnapshotFromError(err))
 		return
@@ -51,7 +53,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, vcID, jrID string
 	final, err := sparkhelpers.WaitTerminal(ctx, p.k8sClient, handle)
 	if err != nil {
 		slog.Warn("emroneks: WaitTerminal failed", "jobRun", jrID, "err", err)
-		p.emitJobRunStateChange(vcID, jrID, "FAILED", err.Error())
+		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emroneks/jobruns", jrID,
 			k8shelpers.BuildSnapshotFromError(err))
 		return
@@ -62,7 +64,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, vcID, jrID string
 	if state == "FAILED" {
 		reason = final.SparkReason
 	}
-	p.emitJobRunStateChange(vcID, jrID, state, reason)
+	p.emitJobRunStateChange(h, vcID, jrID, state, reason)
 	_ = k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emroneks/jobruns", jrID,
 		k8shelpers.BuildSnapshot(final.Final, state))
 }
