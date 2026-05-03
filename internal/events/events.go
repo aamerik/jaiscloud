@@ -1,17 +1,20 @@
 package events
 
 import (
-	"jaiscloud/internal/model"
 	"sync"
+	"time"
+
+	"jaiscloud/internal/model"
 )
 
 // EventType identifies the kind of event.
 type EventType string
 
 const (
-	EventMessageDLQ    EventType = "message.dlq"    // message moved to DLQ
-	EventEMRStepState  EventType = "emr.step.state" // EMR step state changed
-	EventEMRJobRunState EventType = "emr.jobrun.state" // EMR Containers job run state changed
+	EventMessageDLQ      EventType = "message.dlq"       // message moved to DLQ
+	EventEMRStepState    EventType = "emr.step.state"    // EMR step state changed
+	EventEMRJobRunState  EventType = "emr.jobrun.state"  // EMR Containers job run state changed
+	EventEMRClusterState EventType = "emr.cluster.state" // EMR cluster state changed
 )
 
 // Event is a domain event published by a provider.
@@ -28,27 +31,58 @@ type DLQEvent struct {
 }
 
 // EMRStepStateEvent is emitted when an EMR step transitions state.
+// Extended to match real AWS "EMR Step Status Change" EventBridge schema.
 type EMRStepStateEvent struct {
-	JobFlowID     string
-	StepID        string
-	Name          string
-	State         string
-	FailureReason string
-	Region        string
-	AccountID     string
-	Cloud         model.Cloud
+	JobFlowID         string    // → detail.clusterId
+	StepID            string    // → detail.stepId
+	Name              string    // → detail.name
+	State             string    // → detail.state
+	ActionOnFailure   string    // CONTINUE | CANCEL_AND_WAIT | TERMINATE_CLUSTER
+	Message           string    // human-readable transition message
+	StateChangeCode   string    // e.g. "USER_REQUEST", "STEP_FAILURE"
+	StateChangeReason string    // free-form (becomes detail.stateChangeReason JSON {code,message})
+	FailureReason     string    // kept for backward compat; feeds detail.message for FAILED
+	Severity          string    // INFO | WARN | ERROR (derived if empty)
+	Region            string
+	AccountID         string
+	Cloud             model.Cloud
+	OccurredAt        time.Time // event time (provider sets; envelope reads)
 }
 
 // EMRJobRunStateEvent is emitted when an EMR Containers job run transitions state.
+// Extended to match real AWS "EMR Job Run State Change" EventBridge schema.
 type EMRJobRunStateEvent struct {
-	VirtualClusterID string
-	JobRunID         string
-	Name             string
-	State            string
-	FailureReason    string
+	VirtualClusterID string    // → detail.virtualClusterId
+	JobRunID         string    // → detail.id
+	Name             string    // → detail.name
+	State            string    // → detail.state
+	ARN              string    // arn:aws:emr-containers:<region>:<account>:/virtualclusters/<vc>/jobruns/<id>
+	ReleaseLabel     string    // e.g. "emr-7.9.0-latest"
+	ExecutionRoleArn string    // from StartJobRun input
+	FailureReason    string    // pre-existing
+	StateDetails     string    // long-form state narrative
+	CreatedBy        string    // assumed-role ARN of caller
+	CreatedAt        time.Time // job-run creation timestamp
+	UpdatedAt        time.Time // transition timestamp
 	Region           string
 	AccountID        string
 	Cloud            model.Cloud
+}
+
+// EMRClusterStateEvent is emitted when an EMR cluster transitions state.
+// Matches real AWS "EMR Cluster State Change" EventBridge schema.
+type EMRClusterStateEvent struct {
+	ClusterID         string // → detail.clusterId
+	Name              string // → detail.name
+	State             string // STARTING | BOOTSTRAPPING | RUNNING | WAITING | TERMINATING | TERMINATED | TERMINATED_WITH_ERRORS
+	Message           string // → detail.message
+	StateChangeCode   string // e.g. "USER_REQUEST", "ALL_STEPS_COMPLETED"
+	StateChangeReason string // free-form (becomes detail.stateChangeReason JSON)
+	Severity          string // INFO | WARN | ERROR
+	Region            string
+	AccountID         string
+	Cloud             model.Cloud
+	OccurredAt        time.Time
 }
 
 // Handler is a function that handles an event.

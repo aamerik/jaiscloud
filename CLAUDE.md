@@ -617,6 +617,30 @@ Bridges `store.ResourceStore` (host type) to `resourcemgr.ResourceStore` (intern
 
 ---
 
+## k8shelpers / sparkhelpers design decisions
+
+### EMR execution is intentionally cloud-specific — no abstract executor interface
+
+`internal/k8shelpers` is a generic K8s helper library (no EMR/Spark concepts). `internal/sparkhelpers` adds Spark-specific logic on top. EMR and EMR-on-EKS providers wire these directly — there is no `SparkExecutor` interface or factory abstraction. This is deliberate: the old `internal/executor/spark/` abstraction added indirection without benefit since no non-EMR provider ever used it. If a future provider (e.g. Dataproc) needs Spark execution, it creates its own wiring in its own package, not a shared interface.
+
+### `BuildPodSpec` takes `ctx` and `kubernetes.Interface` for identity mutators
+
+`k8shelpers.BuildPodSpec` accepts `ctx context.Context` and `k8s kubernetes.Interface` and passes them to the `IdentityMutator` callback. This is required because real cloud identity wiring (IRSA, Azure Managed Identity, GCP Workload Identity) needs to make K8s API calls (e.g. reading ServiceAccount annotations) and must respect request deadlines. Passing `nil` for both is safe only when `IdentityMutator` is `nil`.
+
+### Provider goroutine lifecycle — cancellable context via `Shutdown()`
+
+`EMRProvider` and `EMRContainersProvider` own a `context.Context` created in `New()`. All `runStep` / `runJobRun` goroutines receive `p.ctx` rather than `context.Background()`. When the server calls `Shutdown(ctx)`, `p.cancel()` is invoked, causing in-flight goroutines to stop at the next K8s API call or context check. This enables graceful drain on server restart without leaking goroutines.
+
+### ConfigMap cleanup on SubmitJob failure
+
+`sparkhelpers.SubmitClientMode` creates a ConfigMap for the executor pod template before creating the Job. If `SubmitJob` fails, the ConfigMap is explicitly deleted in a deferred cleanup, preventing orphaned ConfigMaps in the namespace. On success, the Job's `OwnerReference` points to the ConfigMap, and K8s garbage collection handles cleanup automatically when the Job is GC'd.
+
+### Best-effort vs. critical error handling
+
+Operations that must not silently lose state (cluster/step persistence via `saveCluster`) log at `WARN` on error rather than swallowing. Operations that are inherently best-effort (log collection for Spark exit classification, terminal snapshot persistence) log at `WARN` but do not fail the parent operation — the system degrades gracefully rather than failing the step.
+
+---
+
 ## Key conventions
 
 ### AWS service detection order

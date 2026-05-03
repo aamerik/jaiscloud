@@ -1,0 +1,21 @@
+# Input: only platform overlay (no caller template).
+# Platform TLS enabled with one CA source from a configMap.
+platform:
+  tls:
+    enabled: true
+    truststorePassword: "changeit"
+    caSources:
+      - name: "jaiscloud"
+        source:
+          kind: "configMap"
+          name: "jaiscloud-ca-cert"
+          key: "ca.crt"
+base:
+  mainContainer:
+    name: "spark-submit"
+    image: "apache/spark:3.5"
+    command: ["spark-submit"]
+  namespace: "test"
+  labels:
+    app: "test"
+callerTemplate: ""
