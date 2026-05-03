@@ -29,7 +29,12 @@ func isSparkSubmitStep(argv []string) bool {
 
 // runGenericStepStub transitions non-Spark steps to RUNNING then FAILED,
 // since JaisCloud does not yet support arbitrary Hadoop steps.
-func (p *EMRProvider) runGenericStepStub(ctx context.Context, h handlerCtx, clusterID, stepID string, _ map[string]any) {
+func (p *EMRProvider) runGenericStepStub(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
+	actionOnFailure, _ := stepCfg["ActionOnFailure"].(string)
+	if actionOnFailure == "" {
+		actionOnFailure = "CONTINUE"
+	}
 	p.emitStepStateChange(h, clusterID, stepID, "RUNNING", "")
-	p.emitStepStateChange(h, clusterID, stepID, "FAILED", "non-Spark step types deferred to Phase 2")
+	p.emitStepStateChange(h, clusterID, stepID, "FAILED", "non-Spark step types deferred to a future phase")
+	p.cascadeOnStepFailure(ctx, h, clusterID, stepID, actionOnFailure)
 }

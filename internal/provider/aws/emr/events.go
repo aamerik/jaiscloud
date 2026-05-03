@@ -98,6 +98,65 @@ func (p *EMRProvider) emitStepStateChange(h handlerCtx, clusterID, stepID, state
 	})
 }
 
+// cancelStepIfPending applies CANCELLED to a step only if its current stored
+// state is PENDING. The check and update happen inside a single loadCluster
+// call, closing the CANCEL_AND_WAIT TOCTOU window vs concurrent runStep
+// promotion (PENDING→RUNNING between snapshot and emit).
+func (p *EMRProvider) cancelStepIfPending(ctx context.Context, h handlerCtx, clusterID, stepID, reason string) {
+	c, err := p.loadCluster(ctx, clusterID)
+	if err != nil {
+		slog.Error("emr: cancelStepIfPending — failed to load cluster",
+			"clusterId", clusterID, "stepId", stepID, "err", err)
+		return
+	}
+	now := nowUnix()
+	stepName := ""
+	applied := false
+	for i, raw := range c.Steps {
+		sid, _ := raw["Id"].(string)
+		if sid != stepID {
+			continue
+		}
+		stepName, _ = raw["Name"].(string)
+		status, _ := raw["Status"].(map[string]any)
+		if st, _ := status["State"].(string); st != "PENDING" {
+			return // concurrent runStep already advanced — skip
+		}
+		status["State"] = "CANCELLED"
+		timeline, _ := status["Timeline"].(map[string]any)
+		if timeline == nil {
+			timeline = map[string]any{}
+			status["Timeline"] = timeline
+		}
+		timeline["EndDateTime"] = now
+		c.Steps[i] = raw
+		applied = true
+		break
+	}
+	if !applied {
+		return
+	}
+	p.saveCluster(ctx, c)
+	code, detailReason := deriveStepReason("CANCELLED", reason)
+	p.bus.Publish(events.Event{
+		Type: events.EventEMRStepState,
+		Payload: events.EMRStepStateEvent{
+			JobFlowID:         clusterID,
+			StepID:            stepID,
+			Name:              stepName,
+			State:             "CANCELLED",
+			FailureReason:     reason,
+			Message:           detailReason,
+			StateChangeCode:   code,
+			StateChangeReason: detailReason,
+			Region:            h.region,
+			AccountID:         h.accountID,
+			Cloud:             h.cloud,
+			OccurredAt:        time.Now().UTC(),
+		},
+	})
+}
+
 // emitClusterStateChange publishes an EMRClusterState event on the bus.
 func (p *EMRProvider) emitClusterStateChange(h handlerCtx, clusterID, name, state, message string) {
 	code, detailReason := deriveClusterReason(state, message)

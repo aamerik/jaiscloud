@@ -71,7 +71,7 @@ func TestEMRC_ListVirtualClusters(t *testing.T) {
 
 // ─── Job Runs ─────────────────────────────────────────────────────────────────
 
-func TestEMRC_StartDescribeCancelJobRun(t *testing.T) {
+func TestEMRC_StartDescribeJobRun(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
 	c := newEMRContainersClient(t)
@@ -110,13 +110,48 @@ func TestEMRC_StartDescribeCancelJobRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, jobID, aws.ToString(descOut.JobRun.Id))
 	assert.Equal(t, "my-job", aws.ToString(descOut.JobRun.Name))
+}
 
-	cancelOut, err := c.CancelJobRun(ctx, &awsemrc.CancelJobRunInput{
+// TestEMRC_CancelJobRun_TerminalStateRejected verifies that attempting to cancel
+// an already-terminal job returns ValidationException (real-AWS parity).
+// In mock mode (no k8s) StartJobRun immediately completes the job.
+func TestEMRC_CancelJobRun_TerminalStateRejected(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newEMRContainersClient(t)
+
+	vcOut, err := c.CreateVirtualCluster(ctx, &awsemrc.CreateVirtualClusterInput{
+		Name: aws.String("cancel-vc"),
+		ContainerProvider: &types.ContainerProvider{
+			Type: types.ContainerProviderTypeEks,
+			Id:   aws.String("eks-cluster"),
+		},
+	})
+	require.NoError(t, err)
+	vcID := aws.ToString(vcOut.Id)
+
+	runOut, err := c.StartJobRun(ctx, &awsemrc.StartJobRunInput{
+		VirtualClusterId: aws.String(vcID),
+		Name:             aws.String("instant-complete-job"),
+		ReleaseLabel:     aws.String("emr-6.10.0-latest"),
+		ExecutionRoleArn: aws.String("arn:aws:iam::000000000000:role/EMRContainersRole"),
+		JobDriver: &types.JobDriver{
+			SparkSubmitJobDriver: &types.SparkSubmitJobDriver{
+				EntryPoint: aws.String("s3://my-bucket/app.py"),
+			},
+		},
+	})
+	require.NoError(t, err)
+	jobID := aws.ToString(runOut.Id)
+
+	// In mock mode the job immediately reaches COMPLETED — cancelling it must
+	// return ValidationException, matching real EMR on EKS behavior.
+	_, cancelErr := c.CancelJobRun(ctx, &awsemrc.CancelJobRunInput{
 		VirtualClusterId: aws.String(vcID),
 		Id:               aws.String(jobID),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, jobID, aws.ToString(cancelOut.Id))
+	require.Error(t, cancelErr)
+	assert.Contains(t, cancelErr.Error(), "ValidationException")
 }
 
 func TestEMRC_ListJobRuns(t *testing.T) {

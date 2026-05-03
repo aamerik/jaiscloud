@@ -59,14 +59,13 @@ func parsedBootstrapActions(raw []map[string]any) []BootstrapAction {
 
 // EMRProvider handles EMR clusters, job flows, steps, instance groups/fleets.
 type EMRProvider struct {
-	resources       store.ResourceStore
-	bus             *events.EventBus
-	k8sClient       kubernetes.Interface // nil = no k8s execution
-	platformCfg     *platform.PlatformConfig
-	namespace       string
-	identityMutator k8shelpers.IdentityMutator
-	bootstrapFetch  blobfs.BlobFetcher // nil = bootstrap disabled
-	bootstrapCfg    BootstrapConfig
+	resources      store.ResourceStore
+	bus            *events.EventBus
+	k8sClient      kubernetes.Interface // nil = no k8s execution
+	platformCfg    *platform.PlatformConfig
+	namespace      string
+	bootstrapFetch blobfs.BlobFetcher // nil = bootstrap disabled
+	bootstrapCfg   BootstrapConfig
 	// sparkImage is the container image for spark-submit driver pods.
 	// Defaults to "spark-emr-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMR_IMAGE.
 	sparkImage string
@@ -100,12 +99,6 @@ func WithBootstrap(fetcher blobfs.BlobFetcher, cfg BootstrapConfig) Option {
 // For real EMR-on-EC2 the image is pinned per release; in devbox use the local build.
 func WithSparkImage(image string) Option {
 	return func(p *EMRProvider) { p.sparkImage = image }
-}
-
-// WithIdentityMutator attaches a cloud-specific identity mutator (e.g. IRSA annotation injector)
-// that is applied to Spark driver pod specs before submission.
-func WithIdentityMutator(m k8shelpers.IdentityMutator) Option {
-	return func(p *EMRProvider) { p.identityMutator = m }
 }
 
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRProvider {
@@ -1008,6 +1001,99 @@ func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, n
 	}
 	p.saveCluster(ctx, c)
 	return stepName, true
+}
+
+// cascadeOnStepFailure applies ActionOnFailure semantics after a step reaches FAILED.
+// Call only from the goroutine that just emitted the FAILED event.
+//
+// TERMINATE_CLUSTER / TERMINATE_JOB_FLOW:
+//   - All non-terminal steps → INTERRUPTED.
+//   - Cluster → TERMINATING → TERMINATED_WITH_ERRORS.
+//
+// CANCEL_AND_WAIT:
+//   - All PENDING steps → CANCELLED.
+//   - Cluster state unchanged.
+//
+// CONTINUE (default): no-op.
+//
+// Each emit* call does its own load-mutate-save on the cluster row, so this
+// method always reloads fresh before any cluster-level write (single-writer rule).
+func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
+	clusterID, failedStepID, actionOnFailure string) {
+
+	switch actionOnFailure {
+	case "TERMINATE_CLUSTER", "TERMINATE_JOB_FLOW":
+		// Snapshot the step list before the loop; emit loops mutate the store.
+		snapshot, err := p.loadCluster(ctx, clusterID)
+		if err != nil {
+			slog.Error("emr: cascadeOnStepFailure — failed to load cluster",
+				"clusterId", clusterID, "stepId", failedStepID, "err", err)
+			return
+		}
+		reason := "Step " + failedStepID + " failed; ActionOnFailure=" + actionOnFailure
+		for _, raw := range snapshot.Steps {
+			sid, _ := raw["Id"].(string)
+			if sid == "" || sid == failedStepID {
+				continue
+			}
+			status, _ := raw["Status"].(map[string]any)
+			state, _ := status["State"].(string)
+			if isTerminalStepState(state) {
+				continue
+			}
+			p.emitStepStateChange(h, clusterID, sid, "INTERRUPTED",
+				"Cluster terminated due to TERMINATE_CLUSTER on step "+failedStepID)
+		}
+
+		// Reload fresh before writing cluster status so we don't clobber the
+		// INTERRUPTED step states written by the emit loop above.
+		c, err := p.loadCluster(ctx, clusterID)
+		if err != nil {
+			slog.Error("emr: cascadeOnStepFailure — reload after step emits failed",
+				"clusterId", clusterID, "err", err)
+			return
+		}
+		p.emitClusterStateChange(h, clusterID, c.Name, "TERMINATING", reason)
+
+		// Reload again before writing terminal cluster state — emitClusterStateChange
+		// currently only publishes on the bus, but reload anyway for defensive consistency.
+		c, err = p.loadCluster(ctx, clusterID)
+		if err != nil {
+			slog.Error("emr: cascadeOnStepFailure — reload before terminal write failed",
+				"clusterId", clusterID, "err", err)
+			return
+		}
+		c.Status.State = "TERMINATED_WITH_ERRORS"
+		c.Status.StateChangeReason = map[string]any{
+			"Code":    "STEP_FAILURE",
+			"Message": reason,
+		}
+		p.saveCluster(ctx, c)
+		p.emitClusterStateChange(h, clusterID, c.Name, "TERMINATED_WITH_ERRORS", reason)
+
+	case "CANCEL_AND_WAIT":
+		// Snapshot provides the step ID list; cancelStepIfPending re-checks each
+		// step's state atomically (load→check→save) to guard against concurrent
+		// runStep goroutines that may have promoted a step from PENDING→RUNNING
+		// between the snapshot read and the per-step cancel write.
+		snapshot, err := p.loadCluster(ctx, clusterID)
+		if err != nil {
+			slog.Error("emr: cascadeOnStepFailure — failed to load cluster",
+				"clusterId", clusterID, "stepId", failedStepID, "err", err)
+			return
+		}
+		for _, raw := range snapshot.Steps {
+			sid, _ := raw["Id"].(string)
+			if sid == "" || sid == failedStepID {
+				continue
+			}
+			p.cancelStepIfPending(ctx, h, clusterID, sid,
+				"Step "+failedStepID+" failed with ActionOnFailure=CANCEL_AND_WAIT")
+		}
+
+	default:
+		// CONTINUE or unrecognised — no cascade.
+	}
 }
 
 // Reset wipes the resource store state (no executor to reset).

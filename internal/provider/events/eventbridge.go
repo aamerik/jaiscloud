@@ -456,7 +456,7 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 	return map[string]any{
 		"version":     "0",
 		"id":          newEventID(),
-		"source":      string(ev.Cloud) + ".emr",
+		"source":      awsSource(ev.Cloud, "emr"),
 		"account":     ev.AccountID,
 		"time":        eventTime.Format(time.RFC3339),
 		"region":      ev.Region,
@@ -506,7 +506,7 @@ func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 	return map[string]any{
 		"version":     "0",
 		"id":          newEventID(),
-		"source":      string(ev.Cloud) + ".emr-containers",
+		"source":      awsSource(ev.Cloud, "emr-containers"),
 		"account":     ev.AccountID,
 		"time":        eventTime.Format(time.RFC3339),
 		"region":      ev.Region,
@@ -538,7 +538,7 @@ func buildEMRClusterEnvelope(ev events.EMRClusterStateEvent) map[string]any {
 	return map[string]any{
 		"version":     "0",
 		"id":          newEventID(),
-		"source":      string(ev.Cloud) + ".emr",
+		"source":      awsSource(ev.Cloud, "emr"),
 		"account":     ev.AccountID,
 		"time":        eventTime.Format(time.RFC3339),
 		"region":      ev.Region,
@@ -604,6 +604,17 @@ func matchOneOf(options []any, val any) bool {
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+// awsSource returns "<cloud>.<service>" for use as the EventBridge envelope source.
+// Falls back to "aws" when cloud is empty — defense against a missed handlerCtx
+// threading that would produce source=".emr" and cause rule matches to silently drop.
+// Scoped to AWS providers; GCP/Azure providers use their own narrow helpers.
+func awsSource(cloud model.Cloud, service string) string {
+	if cloud == "" {
+		return "aws." + service
+	}
+	return string(cloud) + "." + service
+}
 
 var eventCounter atomic.Uint64
 

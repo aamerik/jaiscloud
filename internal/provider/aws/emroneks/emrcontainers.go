@@ -6,6 +6,7 @@ package emroneks
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"net/http"
@@ -25,12 +26,11 @@ import (
 
 // EMRContainersProvider handles EMR on EKS: virtual clusters, job runs, managed endpoints.
 type EMRContainersProvider struct {
-	resources       store.ResourceStore
-	bus             *events.EventBus
-	k8sClient       kubernetes.Interface // nil = instant completion
-	platformCfg     *platform.PlatformConfig
-	namespace       string
-	identityMutator k8shelpers.IdentityMutator
+	resources   store.ResourceStore
+	bus         *events.EventBus
+	k8sClient   kubernetes.Interface // nil = instant completion
+	platformCfg *platform.PlatformConfig
+	namespace   string
 	// sparkImage is the container image for spark-submit driver pods.
 	// Defaults to "spark-emr-eks-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMREKS_IMAGE.
 	sparkImage string
@@ -40,6 +40,15 @@ type EMRContainersProvider struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup // tracks in-flight runJobRun goroutines
 	patcherStop func()         // stops the executor OwnershipPatcher; nil when no k8s
+
+	// cancelsMu guards both cancels and cancelClaimed.
+	cancelsMu sync.Mutex
+	// cancels maps jobRunID → CancelFunc that signals the per-jobrun context in runJobRun.
+	cancels map[string]context.CancelFunc
+	// cancelClaimed is the set of jobRunIDs for which a CancelJobRun is already
+	// executing. Exactly one goroutine may own a cancel for any given job run;
+	// concurrent callers see the job as "CANCEL_PENDING" and return idempotent OK.
+	cancelClaimed map[string]bool
 }
 
 // Option configures EMRContainersProvider.
@@ -60,12 +69,6 @@ func WithSparkImage(image string) Option {
 	return func(p *EMRContainersProvider) { p.sparkImage = image }
 }
 
-// WithIdentityMutator attaches a cloud-specific identity mutator (e.g. IRSA annotation injector)
-// that is applied to Spark driver pod specs before submission.
-func WithIdentityMutator(m k8shelpers.IdentityMutator) Option {
-	return func(p *EMRContainersProvider) { p.identityMutator = m }
-}
-
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRContainersProvider {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &EMRContainersProvider{
@@ -74,6 +77,8 @@ func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *E
 		ctx:        ctx,
 		cancel:     cancel,
 		sparkImage: "spark-emr-eks-7.9.0:devbox",
+		cancels:       make(map[string]context.CancelFunc),
+		cancelClaimed: make(map[string]bool),
 	}
 	for _, o := range opts {
 		o(p)
@@ -130,13 +135,14 @@ const (
 // ─── Virtual Cluster types ────────────────────────────────────────────────────
 
 type virtualCluster struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	State      string            `json:"state"` // RUNNING, TERMINATING, TERMINATED, ARRESTED
-	EksCluster string            `json:"eksCluster"`
-	Namespace  string            `json:"namespace"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	Tags       map[string]string `json:"tags"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	State              string            `json:"state"` // RUNNING, TERMINATING, TERMINATED, ARRESTED
+	EksCluster         string            `json:"eksCluster"`
+	Namespace          string            `json:"namespace"`
+	ServiceAccountName string            `json:"serviceAccountName"` // bound SA for IRSA
+	CreatedAt          time.Time         `json:"createdAt"`
+	Tags               map[string]string `json:"tags"`
 }
 
 func (vc virtualCluster) toWire(resourceID func(string, string) string) map[string]any {
@@ -162,16 +168,17 @@ func (vc virtualCluster) toWire(resourceID func(string, string) string) map[stri
 // ─── Job Run types ────────────────────────────────────────────────────────────
 
 type jobRun struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	VirtualClusterID string            `json:"virtualClusterId"`
-	State            string            `json:"state"` // PENDING, SUBMITTED, RUNNING, FAILED, CANCELLED, CANCEL_PENDING, COMPLETED
-	FailureReason    string            `json:"failureReason,omitempty"`
-	ReleaseLabel     string            `json:"releaseLabel"`
-	ExecutionRole    string            `json:"executionRoleArn"`
-	CreatedAt        time.Time         `json:"createdAt"`
-	Tags             map[string]string `json:"tags"`
-	JobDriver        map[string]any    `json:"jobDriver"`
+	ID               string                `json:"id"`
+	Name             string                `json:"name"`
+	VirtualClusterID string                `json:"virtualClusterId"`
+	State            string                `json:"state"` // PENDING, SUBMITTED, RUNNING, FAILED, CANCELLED, CANCEL_PENDING, COMPLETED
+	FailureReason    string                `json:"failureReason,omitempty"`
+	ReleaseLabel     string                `json:"releaseLabel"`
+	ExecutionRole    string                `json:"executionRoleArn"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	Tags             map[string]string     `json:"tags"`
+	JobDriver        map[string]any        `json:"jobDriver"`
+	JobHandle        *k8shelpers.JobHandle `json:"jobHandle,omitempty"` // internal — excluded from toWire
 }
 
 func (jr jobRun) toWire(resourceID func(string, string) string) map[string]any {
@@ -186,6 +193,7 @@ func (jr jobRun) toWire(resourceID func(string, string) string) map[string]any {
 		"createdAt":        jr.CreatedAt.Format(time.RFC3339),
 		"tags":             jr.Tags,
 		"jobDriver":        jr.JobDriver,
+		// JobHandle is internal state; never included in API responses.
 	}
 	if jr.FailureReason != "" {
 		m["failureReason"] = jr.FailureReason
@@ -230,25 +238,30 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, nr *mo
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "name is required", HTTPStatus: http.StatusBadRequest}
 	}
 
-	eksCluster, namespace := "", "default"
+	eksCluster, namespace, sa := "", "default", ""
 	if cp, ok := nr.Params["containerProvider"].(map[string]any); ok {
 		eksCluster = strParamFromMap(cp, "id")
 		if info, ok := cp["info"].(map[string]any); ok {
 			if eks, ok := info["eksInfo"].(map[string]any); ok {
 				namespace = strParamFromMap(eks, "namespace")
+				sa = strParamFromMap(eks, "serviceAccountName")
 			}
 		}
+	}
+	if sa == "" {
+		sa = "jaiscloud-emroneks-" + sanitizeSAName(name)
 	}
 
 	id := shortID()
 	vc := virtualCluster{
-		ID:         id,
-		Name:       name,
-		State:      "RUNNING",
-		EksCluster: eksCluster,
-		Namespace:  namespace,
-		CreatedAt:  time.Now().UTC(),
-		Tags:       parseTags(nr.Params),
+		ID:                 id,
+		Name:               name,
+		State:              "RUNNING",
+		EksCluster:         eksCluster,
+		Namespace:          namespace,
+		ServiceAccountName: sa,
+		CreatedAt:          time.Now().UTC(),
+		Tags:               parseTags(nr.Params),
 	}
 	data, _ := json.Marshal(vc)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtVirtualCluster, ID: id, Data: data}); err != nil {
@@ -308,12 +321,14 @@ func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, nr *mod
 
 func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
-	if _, err := p.loadVC(ctx, vcID); err != nil {
+	vc, err := p.loadVC(ctx, vcID)
+	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
 
 	id := shortID()
 	name := strParam(nr.Params, "name")
+	executionRoleArn := strParam(nr.Params, "executionRoleArn")
 
 	useK8s := p.k8sClient != nil
 	initialState := "COMPLETED"
@@ -327,7 +342,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		VirtualClusterID: vcID,
 		State:            initialState,
 		ReleaseLabel:     strParam(nr.Params, "releaseLabel"),
-		ExecutionRole:    strParam(nr.Params, "executionRoleArn"),
+		ExecutionRole:    executionRoleArn,
 		CreatedAt:        time.Now().UTC(),
 		Tags:             parseTags(nr.Params),
 	}
@@ -348,7 +363,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			p.runJobRun(p.ctx, h, vcID, id, params)
+			p.runJobRun(p.ctx, h, vc, id, executionRoleArn, params)
 		}()
 	} else {
 		// Instant completion path — transition to COMPLETED and publish event.
@@ -367,15 +382,81 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 	h := newHandlerCtx(nr)
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	jobID := pathID(nr, "jobRunId", "id")
+
+	// Claim ownership of this cancellation under the mutex.
+	// If another CancelJobRun already claimed it, return idempotent immediately —
+	// this prevents N concurrent callers from all seeing State=PENDING and each
+	// emitting CANCEL_PENDING+CANCELLED.
+	p.cancelsMu.Lock()
+	if p.cancelClaimed[jobID] {
+		p.cancelsMu.Unlock()
+		return provider.OK(map[string]any{"id": jobID, "virtualClusterId": vcID}), nil
+	}
+	p.cancelClaimed[jobID] = true
+	runCancel, inFlight := p.cancels[jobID]
+	p.cancelsMu.Unlock()
+
+	defer func() {
+		p.cancelsMu.Lock()
+		delete(p.cancelClaimed, jobID)
+		p.cancelsMu.Unlock()
+	}()
+
 	jr, err := p.loadJobRun(ctx, vcID, jobID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
-	// Emit CANCEL_PENDING first (real AWS does this for in-progress jobs),
-	// then immediately CANCELLED since we don't have an async cancel path.
-	p.emitJobRunStateChange(h, vcID, jobID, "CANCEL_PENDING", "")
-	p.emitJobRunStateChange(h, vcID, jobID, "CANCELLED", "")
-	_ = jr // loaded to validate existence
+
+	switch jr.State {
+	case "COMPLETED", "FAILED", "CANCELLED":
+		return nil, &model.ProviderError{
+			Code:       "ValidationException",
+			Message:    fmt.Sprintf("Job run is already in terminal state %s", jr.State),
+			HTTPStatus: http.StatusBadRequest,
+		}
+
+	case "CANCEL_PENDING":
+		// Idempotent — state already transitioning.
+		return provider.OK(map[string]any{"id": jobID, "virtualClusterId": vcID}), nil
+
+	case "PENDING", "SUBMITTED":
+		// Two-phase: CANCEL_PENDING synchronously, then async delete + CANCELLED.
+		p.emitJobRunStateChange(h, vcID, jobID, "CANCEL_PENDING", "User requested cancellation")
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			if inFlight {
+				runCancel()
+			}
+			if jr.JobHandle != nil {
+				if cancelErr := k8shelpers.Cancel(p.ctx, p.k8sClient, *jr.JobHandle); cancelErr != nil {
+					slog.Error("emroneks: k8shelpers.Cancel failed", "jobRun", jobID, "err", cancelErr)
+				}
+			}
+			// emitJobRunStateChange is the single-writer for jr.State.
+			p.emitJobRunStateChange(h, vcID, jobID, "CANCELLED", "Job run cancelled")
+		}()
+
+	case "RUNNING":
+		// Driver is up — direct transition; signal goroutine and delete Job.
+		if inFlight {
+			runCancel()
+		}
+		if jr.JobHandle != nil {
+			if cancelErr := k8shelpers.Cancel(p.ctx, p.k8sClient, *jr.JobHandle); cancelErr != nil {
+				slog.Error("emroneks: k8shelpers.Cancel failed", "jobRun", jobID, "err", cancelErr)
+			}
+		}
+		p.emitJobRunStateChange(h, vcID, jobID, "CANCELLED", "Job run cancelled")
+
+	default:
+		return nil, &model.ProviderError{
+			Code:       "ValidationException",
+			Message:    fmt.Sprintf("Unsupported state %s", jr.State),
+			HTTPStatus: http.StatusBadRequest,
+		}
+	}
+
 	return provider.OK(map[string]any{"id": jobID, "virtualClusterId": vcID}), nil
 }
 
