@@ -11,10 +11,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
-
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"jaiscloud/internal/adapter"
 	awsadapter "jaiscloud/internal/adapter/aws"
 	"jaiscloud/internal/adapter/aws/services"
@@ -24,7 +24,6 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
-	"jaiscloud/internal/executor/spark"
 	"jaiscloud/internal/gateway"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -34,13 +33,13 @@ import (
 	containerprovider "jaiscloud/internal/provider/container"
 	"jaiscloud/internal/provider/dns"
 	eksprovider "jaiscloud/internal/provider/eks"
-	emrprovider "jaiscloud/internal/provider/emr"
+	emrprovider "jaiscloud/internal/provider/aws/emr"
 	apigwprovider "jaiscloud/internal/provider/apigw"
 	keyprovider "jaiscloud/internal/key"
 	secretprovider "jaiscloud/internal/secret"
 	paramprovider "jaiscloud/internal/parameter"
 	lambdaexec "jaiscloud/internal/executor/lambda"
-	emrcontainersprovider "jaiscloud/internal/provider/emroneks"
+	emrcontainersprovider "jaiscloud/internal/provider/aws/emroneks"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
 	iamprovider "jaiscloud/internal/provider/iam"
@@ -281,13 +280,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
-	// Build spark executor. Effective mode resolved via config.ExecutorMode (subsystem override first).
-	sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
-	sparkExec, sparkCfg := buildSparkExecutor(sparkMode, cfg.Cloud, platformCfg)
-	sparkCfg.InstanceID = instanceID
-	if sparkExec != nil {
-		slog.Info("spark executor enabled", "mode", sparkMode, "source", sparkModeSrc)
-	}
+	// Resolve spark executor mode for K8s wiring.
+	sparkMode, _ := config.ExecutorMode("spark", "mock")
 
 	// Bootstrap resolver — wired into the EMR provider so AddJobFlowSteps can
 	// inject bootstrap scripts as init containers when using the K8s executor.
@@ -322,40 +316,25 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
 	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
-	if sparkExec != nil {
-		emrOpts = append(emrOpts, emrprovider.WithExecutor(sparkExec, sparkCfg))
-		emrcOpts = append(emrcOpts, emrcontainersprovider.WithExecutor(sparkExec, sparkCfg))
+
+	// Wire K8s client into EMR providers when spark mode is k8s.
+	if sparkMode == "k8s" {
+		k8sNS := os.Getenv("JAISCLOUD_K8S_NAMESPACE")
+		if k8sNS == "" {
+			k8sNS = "jaiscloud"
+		}
+		if k8sClient, err := buildK8sClient(); err != nil {
+			slog.Warn("emr: failed to build k8s client; falling back to mock", "err", err)
+		} else {
+			emrOpts = append(emrOpts, emrprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+			emrcOpts = append(emrcOpts, emrcontainersprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+		}
 	}
 
 	emrP := emrprovider.New(s.resources, bus, emrOpts...)
 	emrcP := emrcontainersprovider.New(s.resources, bus, emrcOpts...)
 
 	cleanup := func() {}
-	if sparkExec != nil {
-		poller := spark.NewStatusPoller(sparkExec, 5*time.Second, func(ev spark.StateChangeEvent) {
-			emrP.OnStateChange(ev)
-			emrcP.OnStateChange(ev)
-		}).WithReconcileTimeout(sparkCfg.ReconcileTimeout)
-		emrP.SetPoller(poller)
-		emrcP.SetPoller(poller)
-
-		if k8sExec, ok := sparkExec.(*spark.K8sExecutor); ok {
-			k8sExec.OnRestartTerminal(func(jobID string, state spark.SparkState, msg string) {
-				ev := spark.StateChangeEvent{JobID: jobID, NewState: state, Message: msg}
-				emrP.OnStateChange(ev)
-				emrcP.OnStateChange(ev)
-			})
-			k8sExec.OnJobAdopted(func(jobID string, state spark.SparkState) {
-				poller.Track(jobID, state)
-			})
-		}
-
-		poller.Start(ctx)
-		cleanup = func() {
-			emrP.Shutdown(context.Background())
-			emrcP.Shutdown(context.Background())
-		}
-	}
 
 	// tableProvider is created once so both Routes() and StreamRoutes() share state.
 	tableProvider := table.NewWithStreams(s.resources, s.dynamo, streams)
@@ -441,32 +420,27 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup
 }
 
-// buildSparkExecutor creates a SparkExecutor for the given mode.
-// Returns (nil, zero) when mode is "" or "off" — instant completion remains the default.
-// Supported modes: "mock", "k8s". "docker", "local", "remote" are not supported for Spark.
-func buildSparkExecutor(mode, cloud string, plat *platform.PlatformConfig) (spark.SparkExecutor, spark.SparkConfig) {
-	if err := spark.ValidateSparkMode(mode); err != nil {
-		slog.Error("invalid Spark executor mode — falling back to mock", "err", err)
-		return nil, spark.SparkConfig{}
+// buildK8sClient constructs a kubernetes.Interface using in-cluster config if
+// available, falling back to JAISCLOUD_K8S_APISERVER + JAISCLOUD_K8S_TOKEN env vars.
+func buildK8sClient() (kubernetes.Interface, error) {
+	// Try in-cluster first (works when JaisCloud runs inside a Pod).
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return kubernetes.NewForConfig(cfg)
 	}
-	if mode == "" || mode == "off" || mode == "mock" {
-		return nil, spark.SparkConfig{}
+	// Fall back to env-var overrides (dev / kind / minikube).
+	apiServer := os.Getenv("JAISCLOUD_K8S_APISERVER")
+	if apiServer == "" {
+		apiServer = "https://kubernetes.default.svc"
 	}
-	cfg := spark.SparkConfigFrom(mode, spark.SizeSmall)
-	cfg.Cloud = model.Cloud(cloud)
-	if v := os.Getenv("JAISCLOUD_SPARK_IMAGE"); v != "" {
-		cfg.Image = v
+	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
+	cfg := &rest.Config{
+		Host:        apiServer,
+		BearerToken: token,
+		TLSClientConfig: rest.TLSClientConfig{
+			Insecure: true, // acceptable in dev/test clusters
+		},
 	}
-	if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
-		cfg.APIServer = v
-	}
-	if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
-		cfg.Namespace = v
-	}
-	if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
-		cfg.ServiceAccount = v
-	}
-	return spark.NewK8sExecutor(cfg, plat), cfg
+	return kubernetes.NewForConfig(cfg)
 }
 
 // registerCFNHandlers wires real resource provisioning for the 9 most common
