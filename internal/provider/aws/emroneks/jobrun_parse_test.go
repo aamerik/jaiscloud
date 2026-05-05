@@ -1,6 +1,7 @@
 package emroneks
 
 import (
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/sparkhelpers"
@@ -92,8 +93,8 @@ func TestExtractJobRunEntryPoint_EntryPointArguments(t *testing.T) {
 	params := map[string]any{
 		"jobDriver": map[string]any{
 			"sparkSubmitJobDriver": map[string]any{
-				"entryPoint":            "app.jar",
-				"entryPointArguments":   []any{"--input", "/data", "--output", "/out"},
+				"entryPoint":          "app.jar",
+				"entryPointArguments": []any{"--input", "/data", "--output", "/out"},
 			},
 		},
 	}
@@ -196,15 +197,6 @@ func TestFinalToJobRunState(t *testing.T) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func splitOnFirst(s, sep string) []string {
-	idx := len(s)
-	for i := range s {
-		if s[i] == sep[0] {
-			idx = i
-			break
-		}
-	}
-	if idx == len(s) {
-		return []string{s}
-	}
-	return []string{s[:idx], s[idx+1:]}
+	parts := strings.SplitN(s, sep, 2)
+	return parts
 }

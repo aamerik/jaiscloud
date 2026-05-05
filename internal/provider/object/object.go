@@ -49,9 +49,9 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.DeleteObject": p.DeleteObject,
 		"Object.CopyObject":   p.CopyObject,
 		// Listing
-		"Object.ListObjectsV1":  p.ListObjectsV1,
-		"Object.ListObjectsV2":  p.ListObjectsV2,
-		"Object.DeleteObjects":  p.DeleteObjects,
+		"Object.ListObjectsV1": p.ListObjectsV1,
+		"Object.ListObjectsV2": p.ListObjectsV2,
+		"Object.DeleteObjects": p.DeleteObjects,
 		// Multipart
 		"Object.CreateMultipartUpload":   p.CreateMultipartUpload,
 		"Object.UploadPart":              p.UploadPart,
@@ -138,7 +138,7 @@ func crc32Base64FromHash(h *crc32State) string {
 // crc32State wraps hash/crc32 as an io.Writer so it can feed a TeeReader.
 type crc32State struct{ h hash.Hash32 }
 
-func newCRC32() *crc32State        { return &crc32State{h: crc32.NewIEEE()} }
+func newCRC32() *crc32State                       { return &crc32State{h: crc32.NewIEEE()} }
 func (c *crc32State) Write(p []byte) (int, error) { return c.h.Write(p) }
 func (c *crc32State) Sum32() uint32               { return c.h.Sum32() }
 
@@ -229,13 +229,13 @@ func (a *awsChunkedReader) Read(p []byte) (int, error) {
 // the number of concurrent open file descriptors to O(1).
 
 type seqPartReader struct {
-	ctx     context.Context
-	blobs   blobfs.BlobStore
-	bucket  string
+	ctx      context.Context
+	blobs    blobfs.BlobStore
+	bucket   string
 	uploadID string
-	parts   []s3store.PartMeta
-	idx     int
-	current io.ReadCloser
+	parts    []s3store.PartMeta
+	idx      int
+	current  io.ReadCloser
 }
 
 func (s *seqPartReader) Read(p []byte) (int, error) {
@@ -642,8 +642,13 @@ func (p *ObjectProvider) DeleteObjects(ctx context.Context, nr *model.Normalized
 	for _, k := range keys {
 		km, _ := k.(map[string]any)
 		key, _ := km["Key"].(string)
-		// Metadata-first: same ordering as DeleteObject to avoid torn state.
-		_ = p.meta.DeleteObjectMeta(ctx, bucket, key)
+		// On Metadarta failure skip the blob delete - a visible object with a
+		// missing blob is worse than leaving both intact.
+		if err := p.meta.DeleteObjectMeta(ctx, bucket, key); err != nil {
+			slog.Warn("object: meta delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
+			continue
+		}
+
 		if err := p.blobs.Delete(ctx, bucket, key); err != nil {
 			slog.Warn("object: blob delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
 		}

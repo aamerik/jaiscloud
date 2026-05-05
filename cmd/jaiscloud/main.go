@@ -6,16 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
-	"github.com/go-chi/chi/v5"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"jaiscloud/internal/adapter"
 	awsadapter "jaiscloud/internal/adapter/aws"
 	"jaiscloud/internal/adapter/aws/services"
@@ -23,42 +13,53 @@ import (
 	gcpadapter "jaiscloud/internal/adapter/gcp"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
+	keyprovider "jaiscloud/internal/key"
 	"jaiscloud/internal/model"
+	paramprovider "jaiscloud/internal/parameter"
+	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
 	apigwprovider "jaiscloud/internal/provider/aws/apigw"
 	cacheprovider "jaiscloud/internal/provider/aws/cache"
-	cloudwatchprovider "jaiscloud/internal/provider/aws/cloudwatch"
 	"jaiscloud/internal/provider/aws/catalog"
+	cloudwatchprovider "jaiscloud/internal/provider/aws/cloudwatch"
 	"jaiscloud/internal/provider/aws/compute"
 	containerprovider "jaiscloud/internal/provider/aws/container"
 	"jaiscloud/internal/provider/aws/dns"
 	eksprovider "jaiscloud/internal/provider/aws/eks"
 	emrprovider "jaiscloud/internal/provider/aws/emr"
 	emrcontainersprovider "jaiscloud/internal/provider/aws/emroneks"
-	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	iamprovider "jaiscloud/internal/provider/aws/iam"
 	rdsprovider "jaiscloud/internal/provider/aws/rds"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	stackprovider "jaiscloud/internal/provider/aws/stack"
-	keyprovider "jaiscloud/internal/key"
-	secretprovider "jaiscloud/internal/secret"
-	paramprovider "jaiscloud/internal/parameter"
-	lambdaexec "jaiscloud/internal/executor/lambda"
 	eventsprovider "jaiscloud/internal/provider/events"
 	functionprovider "jaiscloud/internal/provider/function"
 	"jaiscloud/internal/provider/notification"
 	objectprovider "jaiscloud/internal/provider/object"
 	"jaiscloud/internal/provider/queue"
 	"jaiscloud/internal/provider/table"
-	"jaiscloud/internal/certstore"
-	"jaiscloud/internal/platform"
+	secretprovider "jaiscloud/internal/secret"
 	"jaiscloud/internal/store"
 	dynamostore "jaiscloud/internal/store/aws/dynamodb"
 	s3store "jaiscloud/internal/store/aws/s3"
 	sqsstore "jaiscloud/internal/store/aws/sqs"
 	streamstore "jaiscloud/internal/store/stream"
+	"log/slog"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const version = "0.2.0"
@@ -142,11 +143,9 @@ func startCmd() *cobra.Command {
 			var gatewayOpts []func(*gateway.Server)
 			if cfg.Cloud == "aws" && cfg.IMDSEnabled {
 				imdsCfg := awsadapter.IMDSConfig{
-					Region:          cfg.Region,
-					AccountID:       cfg.AccountID,
-					RoleName:        "jaiscloud-emulator-role",
-					AccessKeyID:     "test",
-					SecretAccessKey: "test",
+					Region:    cfg.Region,
+					AccountID: cfg.AccountID,
+					RoleName:  "jaiscloud-emulator-role",
 				}
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
 					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
@@ -403,12 +402,10 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 			imdsEP = cfg.AWSEmulatorEndpoint
 		}
 		emulatorCfg := &sparkaws.AWSEmulatorConfig{
-			Region:          cfg.Region,
-			AccountID:       cfg.AccountID,
-			S3Endpoint:      cfg.AWSEmulatorEndpoint,
-			IMDSEndpoint:    imdsEP,
-			AccessKeyID:     "test",
-			SecretAccessKey: "test",
+			Region:       cfg.Region,
+			AccountID:    cfg.AccountID,
+			S3Endpoint:   cfg.AWSEmulatorEndpoint,
+			IMDSEndpoint: imdsEP,
 		}
 		emrOpts = append(emrOpts, emrprovider.WithAWSEmulator(emulatorCfg))
 		emrcOpts = append(emrcOpts, emrcontainersprovider.WithAWSEmulator(emulatorCfg))
@@ -800,13 +797,13 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 		"ecs":             &services.ECSCodec{},
 		"dynamodbstreams": &services.DynamoDBStreamsCodec{},
 		"cloudformation":  &services.CloudFormationCodec{},
-		"emr":              &services.EMRCodec{},
-		"emr-containers":   &services.EMRContainersCodec{},
-		"events":           &services.EventBridgeCodec{},
-		"eks":              &services.EKSCodec{},
-		"apigateway":       &services.APIGatewayCodec{},
-		"execute-api":      &services.ExecuteAPICodec{},
-		"monitoring":       &services.CloudWatchCodec{},
+		"emr":             &services.EMRCodec{},
+		"emr-containers":  &services.EMRContainersCodec{},
+		"events":          &services.EventBridgeCodec{},
+		"eks":             &services.EKSCodec{},
+		"apigateway":      &services.APIGatewayCodec{},
+		"execute-api":     &services.ExecuteAPICodec{},
+		"monitoring":      &services.CloudWatchCodec{},
 	})
 }
 
@@ -1002,4 +999,3 @@ func importCmd() *cobra.Command {
 	cmd.Flags().Bool("new-instance", false, "Assign a fresh instance ID on import (blocks snapshots with KMS key material)")
 	return cmd
 }
-
