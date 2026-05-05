@@ -49,10 +49,10 @@ func DriverEnv(cfg *AWSEmulatorConfig) []corev1.EnvVar {
 	return env
 }
 
-// DriverSparkConfs returns spark-submit --conf tokens for s3a wiring.
-// Tokens are pre-paired as "--conf", "key=value".
-// Returns nil when cfg is nil.
-func DriverSparkConfs(cfg *AWSEmulatorConfig) []string {
+// DriverSparkConfsFromEnv returns spark-submit --conf tokens for s3a wiring.
+// Accepts pre-computed driverEnv (from DriverEnv) so callers that already hold
+// the slice avoid a second computation. Returns nil when cfg is nil.
+func DriverSparkConfsFromEnv(cfg *AWSEmulatorConfig, driverEnv []corev1.EnvVar) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -66,6 +66,7 @@ func DriverSparkConfs(cfg *AWSEmulatorConfig) []string {
 	}
 	ssl := sslEnabledFromScheme(cfg.S3Endpoint)
 	confs := []string{
+		"--conf", "spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem",
 		"--conf", "spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
 		"--conf", fmt.Sprintf("spark.hadoop.fs.s3a.access.key=%s", akid),
 		"--conf", fmt.Sprintf("spark.hadoop.fs.s3a.secret.key=%s", sak),
@@ -81,10 +82,17 @@ func DriverSparkConfs(cfg *AWSEmulatorConfig) []string {
 	}
 	// Mirror every driver env var into spark.executorEnv.* so executor pods
 	// inherit the same AWS wiring.
-	for _, e := range DriverEnv(cfg) {
+	for _, e := range driverEnv {
 		confs = append(confs, "--conf", fmt.Sprintf("spark.executorEnv.%s=%s", e.Name, e.Value))
 	}
 	return confs
+}
+
+// DriverSparkConfs returns spark-submit --conf tokens for s3a wiring.
+// Use DriverSparkConfsFromEnv when DriverEnv has already been computed to avoid
+// computing it twice per job submission.
+func DriverSparkConfs(cfg *AWSEmulatorConfig) []string {
+	return DriverSparkConfsFromEnv(cfg, DriverEnv(cfg))
 }
 
 // sslEnabledFromScheme returns true iff the endpoint URL uses https.

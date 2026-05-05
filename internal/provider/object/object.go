@@ -425,12 +425,15 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 
 	rc, err := p.blobs.GetStream(ctx, bucket, key, offset, length)
 	if err != nil {
-		// Blob miss — may be a concurrent delete. Recheck metadata: if it's
-		// gone too return a clean 404; otherwise surface the blob error.
+		// Blob miss — may be a concurrent delete racing with our metadata read.
+		// Recheck metadata: if it's also gone, this is a clean concurrent delete → 404.
+		// If metadata is still present the blob is missing without a delete → 500.
 		if _, recheckErr := p.meta.GetObjectMeta(ctx, bucket, key); recheckErr != nil {
 			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 		}
-		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+		slog.Error("object: blob missing but metadata present — possible storage corruption",
+			"bucket", bucket, "key", key, "err", err)
+		return nil, model.NewProviderError("InternalError", "Internal server error", 500)
 	}
 
 	data := map[string]any{
@@ -518,10 +521,16 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
-	// Metadata-first: after this line GetObject returns 404 so no client ever
-	// sees a dangling metadata entry pointing at a deleted blob.
-	_ = p.meta.DeleteObjectMeta(ctx, bucket, key)
-	// Best-effort blob delete. Orphaned blobs are not visible via GetObject.
+	// Metadata-first: after this succeeds, GetObject returns 404 immediately so
+	// no caller ever sees metadata present + blob absent (torn state).
+	if err := p.meta.DeleteObjectMeta(ctx, bucket, key); err != nil {
+		// Only log; don't delete the blob — that would create the reverse torn state
+		// (metadata present, blob gone). Real S3 returns 204 for missing keys so we
+		// swallow the error and return success regardless.
+		slog.Warn("object: metadata delete failed", "bucket", bucket, "key", key, "err", err)
+		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	}
+	// Best-effort blob delete. Any orphaned blob is invisible via GetObject.
 	if err := p.blobs.Delete(ctx, bucket, key); err != nil {
 		slog.Warn("object: blob delete failed after metadata delete", "bucket", bucket, "key", key, "err", err)
 	}
@@ -633,8 +642,11 @@ func (p *ObjectProvider) DeleteObjects(ctx context.Context, nr *model.Normalized
 	for _, k := range keys {
 		km, _ := k.(map[string]any)
 		key, _ := km["Key"].(string)
-		_ = p.blobs.Delete(ctx, bucket, key)
+		// Metadata-first: same ordering as DeleteObject to avoid torn state.
 		_ = p.meta.DeleteObjectMeta(ctx, bucket, key)
+		if err := p.blobs.Delete(ctx, bucket, key); err != nil {
+			slog.Warn("object: blob delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
+		}
 		deleted = append(deleted, map[string]any{"Key": key})
 	}
 	if deleted == nil {

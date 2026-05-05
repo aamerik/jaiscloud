@@ -64,18 +64,20 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 		labels["jaiscloud.io/instance-id"] = p.instanceID
 	}
 
+	driverEnv := sparkaws.DriverEnv(p.awsEmulator)
 	job := sparkhelpers.ClientModeJob{
-		JobID:           jrID,
-		Namespace:       ns,
-		Image:           p.sparkImage,
-		EntryPoint:      ep,
-		SparkSubmitArgs: sparkArgs,
-		JarArgs:         jarArgs,
-		PlatformOverlay: p.platformCfg,
-		IdentityMutator: identityMutator,
-		ExtraDriverEnv:  sparkaws.DriverEnv(p.awsEmulator),
-		ExtraSparkConfs: sparkaws.DriverSparkConfs(p.awsEmulator),
-		Labels:          labels,
+		JobID:              jrID,
+		Namespace:          ns,
+		Image:              p.sparkImage,
+		EntryPoint:         ep,
+		SparkSubmitArgs:    sparkArgs,
+		JarArgs:            jarArgs,
+		PlatformOverlay:    p.platformCfg,
+		IdentityMutator:    identityMutator,
+		ServiceAccountName: p.serviceAccountName,
+		ExtraDriverEnv:     driverEnv,
+		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(p.awsEmulator, driverEnv),
+		Labels:             labels,
 	}
 
 	handle, err := sparkhelpers.SubmitClientMode(runCtx, p.k8sClient, job)

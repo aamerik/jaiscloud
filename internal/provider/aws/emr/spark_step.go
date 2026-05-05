@@ -61,17 +61,19 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		labels["jaiscloud.io/instance-id"] = p.instanceID
 	}
 
+	driverEnv := sparkaws.DriverEnv(p.awsEmulator)
 	job := sparkhelpers.ClientModeJob{
-		JobID:           stepID,
-		Namespace:       ns,
-		Image:           p.sparkImage,
-		EntryPoint:      ep,
-		SparkSubmitArgs: sparkArgs,
-		JarArgs:         userArgs,
-		PlatformOverlay: p.platformCfg,
-		ExtraDriverEnv:  sparkaws.DriverEnv(p.awsEmulator),
-		ExtraSparkConfs: sparkaws.DriverSparkConfs(p.awsEmulator),
-		Labels:          labels,
+		JobID:              stepID,
+		Namespace:          ns,
+		Image:              p.sparkImage,
+		EntryPoint:         ep,
+		SparkSubmitArgs:    sparkArgs,
+		JarArgs:            userArgs,
+		PlatformOverlay:    p.platformCfg,
+		ServiceAccountName: p.serviceAccountName,
+		ExtraDriverEnv:     driverEnv,
+		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(p.awsEmulator, driverEnv),
+		Labels:             labels,
 	}
 
 	handle, err := sparkhelpers.SubmitClientMode(ctx, p.k8sClient, job)

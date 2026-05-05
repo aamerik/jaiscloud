@@ -140,7 +140,7 @@ func startCmd() *cobra.Command {
 			}
 
 			var gatewayOpts []func(*gateway.Server)
-			if cfg.Cloud == "aws" && (cfg.IMDSEnabled || cfg.AWSEmulatorEndpoint != "") {
+			if cfg.Cloud == "aws" && cfg.IMDSEnabled {
 				imdsCfg := awsadapter.IMDSConfig{
 					Region:          cfg.Region,
 					AccountID:       cfg.AccountID,
@@ -389,6 +389,12 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// Stamp instance ID on Spark driver pods for multi-instance isolation.
 	emrOpts = append(emrOpts, emrprovider.WithInstanceID(instanceID))
 	emrcOpts = append(emrcOpts, emrcontainersprovider.WithInstanceID(instanceID))
+
+	// Wire K8s service account for Spark driver pods when configured.
+	if cfg.K8sSparkSA != "" {
+		emrOpts = append(emrOpts, emrprovider.WithServiceAccountName(cfg.K8sSparkSA))
+		emrcOpts = append(emrcOpts, emrcontainersprovider.WithServiceAccountName(cfg.K8sSparkSA))
+	}
 
 	// Wire AWS emulator config into Spark driver pods when endpoint is set.
 	if cfg.AWSEmulatorEndpoint != "" && cfg.Cloud == "aws" {

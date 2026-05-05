@@ -69,9 +69,10 @@ type EMRProvider struct {
 	bootstrapCfg   BootstrapConfig
 	// sparkImage is the container image for spark-submit driver pods.
 	// Defaults to "spark-emr-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMR_IMAGE.
-	sparkImage  string
-	awsEmulator *sparkaws.AWSEmulatorConfig
-	instanceID  string
+	sparkImage         string
+	awsEmulator        *sparkaws.AWSEmulatorConfig
+	instanceID         string
+	serviceAccountName string
 	// ctx is the provider lifecycle context. runStep goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
 	ctx         context.Context
@@ -106,6 +107,13 @@ func WithAWSEmulator(cfg *sparkaws.AWSEmulatorConfig) Option {
 // WithInstanceID sets the instance ID stamped on Spark driver pod labels.
 func WithInstanceID(id string) Option {
 	return func(p *EMRProvider) { p.instanceID = id }
+}
+
+// WithServiceAccountName sets the Kubernetes service account for Spark driver pods.
+// Applied as a fallback only when the IdentityMutator (IRSA/Workload Identity) does
+// not set one.
+func WithServiceAccountName(sa string) Option {
+	return func(p *EMRProvider) { p.serviceAccountName = sa }
 }
 
 // WithSparkImage sets the container image used for spark-submit driver pods.

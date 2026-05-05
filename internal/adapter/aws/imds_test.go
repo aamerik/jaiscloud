@@ -126,3 +126,71 @@ func TestIMDS_UnknownPathReturns404(t *testing.T) {
 		t.Fatalf("status=%d want 404", rec.Code)
 	}
 }
+
+func TestIMDS_InstanceIDEndpoint(t *testing.T) {
+	r := newIMDSRouter(IMDSConfig{Region: "us-east-1"})
+	req := httptest.NewRequest(http.MethodGet, "/latest/meta-data/instance-id", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status=%d want 200", rec.Code)
+	}
+	if body := rec.Body.String(); body == "" {
+		t.Fatal("instance-id body must not be empty")
+	}
+}
+
+func TestIMDS_RegionShortcut(t *testing.T) {
+	r := newIMDSRouter(IMDSConfig{Region: "sa-east-1"})
+	req := httptest.NewRequest(http.MethodGet, "/latest/meta-data/region", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "sa-east-1" {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIMDS_DefaultRoleName(t *testing.T) {
+	// When RoleName is empty the implementation falls back to "jaiscloud-emulator-role".
+	r := newIMDSRouter(IMDSConfig{Region: "us-east-1"})
+	req := httptest.NewRequest(http.MethodGet, "/latest/meta-data/iam/security-credentials/", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status=%d want 200", rec.Code)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "jaiscloud-emulator-role" {
+		t.Fatalf("default role=%q want jaiscloud-emulator-role", body)
+	}
+}
+
+func TestIMDS_SessionTokenInCredentials(t *testing.T) {
+	r := newIMDSRouter(IMDSConfig{
+		Region:          "us-east-1",
+		RoleName:        "my-role",
+		AccessKeyID:     "AKID",
+		SecretAccessKey: "SAK",
+		SessionToken:    "tok123",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/latest/meta-data/iam/security-credentials/my-role", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var creds map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &creds); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	if creds["Token"] != "tok123" {
+		t.Errorf("Token=%v want tok123", creds["Token"])
+	}
+}
+
+func TestIMDS_TokenTTLEchoed(t *testing.T) {
+	r := newIMDSRouter(IMDSConfig{Region: "us-east-1"})
+	req := httptest.NewRequest(http.MethodPut, "/latest/api/token", nil)
+	req.Header.Set("X-Aws-Ec2-Metadata-Token-Ttl-Seconds", "300")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Aws-Ec2-Metadata-Token-Ttl-Seconds"); got != "300" {
+		t.Fatalf("TTL header=%q want 300", got)
+	}
+}

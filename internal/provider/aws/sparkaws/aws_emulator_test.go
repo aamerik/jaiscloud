@@ -77,6 +77,25 @@ func TestDriverSparkConfs_NilConfigReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestDriverSparkConfsFromEnv_NilConfigReturnsEmpty(t *testing.T) {
+	if got := DriverSparkConfsFromEnv(nil, nil); got != nil {
+		t.Fatalf("DriverSparkConfsFromEnv(nil, nil) = %v, want nil", got)
+	}
+}
+
+func TestDriverSparkConfsFromEnv_PrecomputedEnvUsed(t *testing.T) {
+	cfg := &AWSEmulatorConfig{Region: "us-east-1", S3Endpoint: "http://emu:4566"}
+	driverEnv := DriverEnv(cfg)
+	confsA := confMap(DriverSparkConfs(cfg))
+	confsB := confMap(DriverSparkConfsFromEnv(cfg, driverEnv))
+	// Both must produce the same set of executor env mirrors.
+	for k, v := range confsA {
+		if confsB[k] != v {
+			t.Errorf("key %q: DriverSparkConfs=%q DriverSparkConfsFromEnv=%q", k, v, confsB[k])
+		}
+	}
+}
+
 func TestDriverSparkConfs_SSLDerivedFromScheme(t *testing.T) {
 	httpConfs := confMap(DriverSparkConfs(&AWSEmulatorConfig{
 		Region: "us-east-1", S3Endpoint: "http://emu:4566",
@@ -98,6 +117,7 @@ func TestDriverSparkConfs_RequiredKeysPresent(t *testing.T) {
 		S3Endpoint: "http://emu:4566",
 	}))
 	for _, key := range []string{
+		"spark.hadoop.fs.s3a.impl",
 		"spark.hadoop.fs.s3a.aws.credentials.provider",
 		"spark.hadoop.fs.s3a.access.key",
 		"spark.hadoop.fs.s3a.secret.key",
