@@ -3,6 +3,8 @@ package sparkhelpers
 import (
 	"io"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/platform"
 )
@@ -65,6 +67,15 @@ type ClientModeJob struct {
 	TTLSecondsAfterFinished *int32
 	// SparkSubmitPath overrides the spark-submit binary path (default: "spark-submit").
 	SparkSubmitPath string
+	// ExtraDriverEnv are env vars appended to the spark-submit driver container.
+	// Providers build this from cloud-specific emulator config; sparkhelpers
+	// is cloud-agnostic and forwards unchanged.
+	ExtraDriverEnv []corev1.EnvVar
+	// ExtraSparkConfs are spark-submit flag tokens (already paired as "--conf",
+	// "key=value") prepended before the caller's SparkSubmitArgs so caller
+	// confs win via Spark's last-value-wins semantics.
+	ExtraSparkConfs []string
+	ServiceAccountName string
 }
 
 // Final is the terminal result of a Spark client-mode job.

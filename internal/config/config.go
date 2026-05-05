@@ -43,6 +43,28 @@ type Config struct {
 	LambdaNetwork       string // Docker network for Lambda containers (default: "jaiscloud-net")
 	LambdaKeepaliveSecs int    // Docker warm container idle timeout in seconds (default: 300)
 
+	// AWS emulator wiring for Spark drivers. When set, Spark driver pods route
+	// S3/IMDS/creds calls at this HTTP(S) endpoint instead of real AWS. Works
+	// against any K8s cluster and any S3-compatible endpoint; s3a SSL is
+	// derived from the URL scheme.
+	AWSEmulatorEndpoint string
+	// S3VirtualHostBases are host suffixes the S3 codec treats as virtual-hosted
+	// bases (in addition to amazonaws.com). Comma-separated env var.
+	S3VirtualHostBases []string
+
+	// IMDSEnabled turns on the AWS instance-metadata emulator endpoints at the
+	// gateway. Requires Cloud == "aws". Independent of executor mode so the
+	// same flag works for bare-metal SDK consumers pointing their metadata
+	// service endpoint at JaisCloud.
+	IMDSEnabled bool
+
+	// K8s/Spark image configuration
+	K8sNamespace     string
+	K8sSparkImage    string
+	K8sSparkSA       string
+	SparkEMRImage    string
+	SparkEMREKSImage string
+
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
 	Tracing bool // emit OTel traces to stdout
@@ -159,6 +181,20 @@ func GCPResourceID(accountID string) func(resourceType, name string) string {
 	}
 }
 
+// splitCSV splits a comma-separated string into trimmed, non-empty tokens.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // ExecutorMode returns the effective executor mode for a subsystem.
 // Resolution: JAISCLOUD_{SUBSYSTEM}_EXECUTOR_MODE → JAISCLOUD_EXECUTOR_MODE → defaultMode.
 func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
@@ -187,6 +223,14 @@ func Load() (*Config, error) {
 	}
 	viper.SetDefault("executor_mode", "")
 	viper.SetDefault("kms_master_key", "")
+	viper.SetDefault("k8s_namespace", "jaiscloud")
+	viper.SetDefault("k8s_spark_image", "")
+	viper.SetDefault("k8s_spark_sa", "")
+	viper.SetDefault("spark_emr_image", "")
+	viper.SetDefault("spark_emreks_image", "")
+	viper.SetDefault("aws_emulator_endpoint", "")
+	viper.SetDefault("s3_virtual_host_bases", "")
+	viper.SetDefault("imds_enabled", false)
 	viper.SetDefault("lambda_image", "")
 	viper.SetDefault("lambda_network", "jaiscloud-net")
 	viper.SetDefault("lambda_keepalive_secs", 300)
@@ -211,6 +255,14 @@ func Load() (*Config, error) {
 		BlobDir:       viper.GetString("blob_dir"),
 		ExecutorMode:        viper.GetString("executor_mode"),
 		KMSMasterKey:        viper.GetString("kms_master_key"),
+		K8sNamespace:        viper.GetString("k8s_namespace"),
+		K8sSparkImage:       viper.GetString("k8s_spark_image"),
+		K8sSparkSA:          viper.GetString("k8s_spark_sa"),
+		SparkEMRImage:       viper.GetString("spark_emr_image"),
+		SparkEMREKSImage:    viper.GetString("spark_emreks_image"),
+		AWSEmulatorEndpoint: viper.GetString("aws_emulator_endpoint"),
+		S3VirtualHostBases:  splitCSV(viper.GetString("s3_virtual_host_bases")),
+		IMDSEnabled:         viper.GetBool("imds_enabled"),
 		LambdaImage:         viper.GetString("lambda_image"),
 		LambdaNetwork:       viper.GetString("lambda_network"),
 		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),

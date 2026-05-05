@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"jaiscloud/internal/k8shelpers"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 )
 
@@ -51,6 +52,18 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 
 	identityMutator := buildIRSAMutator(ns, vc.ServiceAccountName, executionRoleArn)
 
+	labels := map[string]string{
+		"jaiscloud.io/provider":        "emroneks",
+		"jaiscloud.io/vc-id":           vcID,
+		"jaiscloud.io/vc-name":         vc.Name,
+		"jaiscloud.io/job-run-id":      jrID,
+		"jaiscloud.io/spark-id":        jrID,
+		"app.kubernetes.io/managed-by": "jaiscloud",
+	}
+	if p.instanceID != "" {
+		labels["jaiscloud.io/instance-id"] = p.instanceID
+	}
+
 	job := sparkhelpers.ClientModeJob{
 		JobID:           jrID,
 		Namespace:       ns,
@@ -60,12 +73,9 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 		JarArgs:         jarArgs,
 		PlatformOverlay: p.platformCfg,
 		IdentityMutator: identityMutator,
-		Labels: map[string]string{
-			"jaiscloud.io/provider":        "emroneks",
-			"jaiscloud.io/vc-id":           vcID,
-			"jaiscloud.io/job-run-id":      jrID,
-			"app.kubernetes.io/managed-by": "jaiscloud",
-		},
+		ExtraDriverEnv:  sparkaws.DriverEnv(p.awsEmulator),
+		ExtraSparkConfs: sparkaws.DriverSparkConfs(p.awsEmulator),
+		Labels:          labels,
 	}
 
 	handle, err := sparkhelpers.SubmitClientMode(runCtx, p.k8sClient, job)

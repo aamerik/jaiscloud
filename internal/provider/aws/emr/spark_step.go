@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"jaiscloud/internal/k8shelpers"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 )
 
@@ -49,6 +50,17 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		ns = "jaiscloud"
 	}
 
+	labels := map[string]string{
+		"jaiscloud.io/provider":        "emr",
+		"jaiscloud.io/cluster-id":      clusterID,
+		"jaiscloud.io/step-id":         stepID,
+		"jaiscloud.io/spark-id":        stepID,
+		"app.kubernetes.io/managed-by": "jaiscloud",
+	}
+	if p.instanceID != "" {
+		labels["jaiscloud.io/instance-id"] = p.instanceID
+	}
+
 	job := sparkhelpers.ClientModeJob{
 		JobID:           stepID,
 		Namespace:       ns,
@@ -57,12 +69,9 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		SparkSubmitArgs: sparkArgs,
 		JarArgs:         userArgs,
 		PlatformOverlay: p.platformCfg,
-		Labels: map[string]string{
-			"jaiscloud.io/provider":        "emr",
-			"jaiscloud.io/cluster-id":      clusterID,
-			"jaiscloud.io/step-id":         stepID,
-			"app.kubernetes.io/managed-by": "jaiscloud",
-		},
+		ExtraDriverEnv:  sparkaws.DriverEnv(p.awsEmulator),
+		ExtraSparkConfs: sparkaws.DriverSparkConfs(p.awsEmulator),
+		Labels:          labels,
 	}
 
 	handle, err := sparkhelpers.SubmitClientMode(ctx, p.k8sClient, job)

@@ -70,6 +70,9 @@ func BuildClientModeArgs(job ClientModeJob) []string {
 		"--conf", "spark.driver.bindAddress=0.0.0.0",
 	}
 
+	// Cloud-specific confs prepended so caller's SparkSubmitArgs win (last-value-wins).
+	args = append(args, job.ExtraSparkConfs...)
+
 	// Caller's extra spark-submit args.
 	args = append(args, job.SparkSubmitArgs...)
 
@@ -154,7 +157,7 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 		Image:   job.Image,
 		Command: []string{sparkSubmitPath},
 		Args:    BuildClientModeArgs(job),
-		Env: []corev1.EnvVar{
+		Env: append([]corev1.EnvVar{
 			{
 				Name: "SPARK_DRIVER_POD_NAME",
 				ValueFrom: &corev1.EnvVarSource{
@@ -167,7 +170,7 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
 				},
 			},
-		},
+		}, job.ExtraDriverEnv...),
 	}
 
 	// Set driver resources if specified.
@@ -208,6 +211,11 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 	tpl, err := k8shelpers.BuildPodSpec(ctx, k8s, base, job.PlatformOverlay, job.CallerDriverPodTpl, job.IdentityMutator)
 	if err != nil {
 		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: build pod spec: %w", err)
+	}
+
+	// IdentityMutator wins; only fill ServiceAccountName if still empty.
+	if tpl.Spec.ServiceAccountName == "" {
+		tpl.Spec.ServiceAccountName = job.ServiceAccountName
 	}
 
 	// Add projected volume for executor template ConfigMap.

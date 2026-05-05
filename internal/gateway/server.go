@@ -41,15 +41,27 @@ type Server struct {
 	registry     *provider.Registry
 	cloudAdapter adapter.CloudAdapter
 	certs        certstore.CertStore
+	extraRoutes  []func(chi.Router)
 }
 
-func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, cloudAdapter adapter.CloudAdapter, certs certstore.CertStore) *Server {
+// WithExtraRoutes registers additional routes on the server's router before the
+// wildcard catch-all. Use it to attach cloud-specific routes (e.g. AWS IMDS).
+func WithExtraRoutes(attach func(chi.Router)) func(*Server) {
+	return func(s *Server) {
+		s.extraRoutes = append(s.extraRoutes, attach)
+	}
+}
+
+func NewServer(cfg *config.Config, adminHandler *admin.Handler, registry *provider.Registry, cloudAdapter adapter.CloudAdapter, certs certstore.CertStore, opts ...func(*Server)) *Server {
 	s := &Server{
 		cfg:          cfg,
 		adminHandler: adminHandler,
 		registry:     registry,
 		cloudAdapter: cloudAdapter,
 		certs:        certs,
+	}
+	for _, o := range opts {
+		o(s)
 	}
 	s.buildRouter()
 	return s
@@ -74,6 +86,12 @@ func (s *Server) buildRouter() {
 
 	if s.cfg.Metrics {
 		r.Handle("/metrics", promhttp.Handler())
+	}
+
+	// Cloud-specific extra routes (e.g. AWS IMDS). Attached before the
+	// wildcard so chi prioritises them regardless of registration order.
+	for _, attach := range s.extraRoutes {
+		attach(r)
 	}
 
 	r.HandleFunc("/*", s.handleCloudRequest)

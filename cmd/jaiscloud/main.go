@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
@@ -37,6 +38,7 @@ import (
 	eksprovider "jaiscloud/internal/provider/aws/eks"
 	emrprovider "jaiscloud/internal/provider/aws/emr"
 	emrcontainersprovider "jaiscloud/internal/provider/aws/emroneks"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	iamprovider "jaiscloud/internal/provider/aws/iam"
 	rdsprovider "jaiscloud/internal/provider/aws/rds"
 	stackprovider "jaiscloud/internal/provider/aws/stack"
@@ -137,7 +139,21 @@ func startCmd() *cobra.Command {
 				certs = certstore.NewMemoryCertStore()
 			}
 
-			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs)
+			var gatewayOpts []func(*gateway.Server)
+			if cfg.Cloud == "aws" && (cfg.IMDSEnabled || cfg.AWSEmulatorEndpoint != "") {
+				imdsCfg := awsadapter.IMDSConfig{
+					Region:          cfg.Region,
+					AccountID:       cfg.AccountID,
+					RoleName:        "jaiscloud-emulator-role",
+					AccessKeyID:     "test",
+					SecretAccessKey: "test",
+				}
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
+					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
+				}))
+			}
+
+			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs, gatewayOpts...)
 			_ = bus // bus is used internally by providers
 			return srv.ListenAndServe()
 		},
@@ -174,6 +190,22 @@ func startCmd() *cobra.Command {
 	Env var: JAISCLOUD_LAMBDA_NETWORK`)
 	cmd.Flags().Int("lambda-keepalive-secs", 300, `Docker warm container idle timeout in seconds.
 	Env var: JAISCLOUD_LAMBDA_KEEPALIVE_SECS`)
+	cmd.Flags().String("aws-emulator-endpoint", "", `AWS emulator endpoint for Spark driver pods (e.g. http://host:4566).
+	Env var: JAISCLOUD_AWS_EMULATOR_ENDPOINT`)
+	cmd.Flags().Bool("imds-enabled", false, `Enable the AWS instance-metadata emulator endpoints.
+	Env var: JAISCLOUD_IMDS_ENABLED`)
+	cmd.Flags().String("k8s-namespace", "jaiscloud", `Kubernetes namespace for Spark and Lambda workloads.
+	Env var: JAISCLOUD_K8S_NAMESPACE`)
+	cmd.Flags().String("k8s-spark-image", "", `Default container image for spark-submit driver pods.
+	Env var: JAISCLOUD_K8S_SPARK_IMAGE`)
+	cmd.Flags().String("k8s-spark-sa", "", `Kubernetes service account for Spark driver pods.
+	Env var: JAISCLOUD_K8S_SPARK_SA`)
+	cmd.Flags().String("spark-emr-image", "", `Container image for EMR on EC2 spark-submit pods (overrides k8s-spark-image).
+	Env var: JAISCLOUD_SPARK_EMR_IMAGE`)
+	cmd.Flags().String("spark-emreks-image", "", `Container image for EMR on EKS spark-submit pods (overrides k8s-spark-image).
+	Env var: JAISCLOUD_SPARK_EMREKS_IMAGE`)
+	cmd.Flags().String("s3-virtual-host-bases", "", `Comma-separated host suffixes treated as S3 virtual-hosted bases.
+	Env var: JAISCLOUD_S3_VIRTUAL_HOST_BASES`)
 
 	return cmd
 }
@@ -198,6 +230,14 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("lambda_image", cmd.Flags().Lookup("lambda-image"))
 	viper.BindPFlag("lambda_network", cmd.Flags().Lookup("lambda-network"))
 	viper.BindPFlag("lambda_keepalive_secs", cmd.Flags().Lookup("lambda-keepalive-secs"))
+	viper.BindPFlag("aws_emulator_endpoint", cmd.Flags().Lookup("aws-emulator-endpoint"))
+	viper.BindPFlag("imds_enabled", cmd.Flags().Lookup("imds-enabled"))
+	viper.BindPFlag("k8s_namespace", cmd.Flags().Lookup("k8s-namespace"))
+	viper.BindPFlag("k8s_spark_image", cmd.Flags().Lookup("k8s-spark-image"))
+	viper.BindPFlag("k8s_spark_sa", cmd.Flags().Lookup("k8s-spark-sa"))
+	viper.BindPFlag("spark_emr_image", cmd.Flags().Lookup("spark-emr-image"))
+	viper.BindPFlag("spark_emreks_image", cmd.Flags().Lookup("spark-emreks-image"))
+	viper.BindPFlag("s3_virtual_host_bases", cmd.Flags().Lookup("s3-virtual-host-bases"))
 }
 
 // appStores holds all store instances that the server depends on.
@@ -314,19 +354,63 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		Prefixes: bootstrapPrefixes,
 	}
 
+	// Resolve EMR/EMRonEKS spark images from config (with fallback to shared image).
+	emrImage := cfg.SparkEMRImage
+	if emrImage == "" {
+		emrImage = cfg.K8sSparkImage
+	}
+	emrcImage := cfg.SparkEMREKSImage
+	if emrcImage == "" {
+		emrcImage = cfg.K8sSparkImage
+	}
+
+	// Fail-fast when k8s executor is selected but no image is configured.
+	if sparkMode == "k8s" {
+		if emrImage == "" {
+			slog.Error("emr: JAISCLOUD_K8S_SPARK_IMAGE (or JAISCLOUD_SPARK_EMR_IMAGE) is required when executor mode is k8s")
+			os.Exit(1)
+		}
+		if emrcImage == "" {
+			slog.Error("emroneks: JAISCLOUD_K8S_SPARK_IMAGE (or JAISCLOUD_SPARK_EMREKS_IMAGE) is required when executor mode is k8s")
+			os.Exit(1)
+		}
+	}
+
 	var emrOpts []emrprovider.Option
 	var emrcOpts []emrcontainersprovider.Option
 	emrOpts = append(emrOpts, emrprovider.WithBootstrap(s3Fetcher, bootstrapCfg))
-	if v := os.Getenv("JAISCLOUD_SPARK_EMR_IMAGE"); v != "" {
-		emrOpts = append(emrOpts, emrprovider.WithSparkImage(v))
+	if emrImage != "" {
+		emrOpts = append(emrOpts, emrprovider.WithSparkImage(emrImage))
 	}
-	if v := os.Getenv("JAISCLOUD_SPARK_EMREKS_IMAGE"); v != "" {
-		emrcOpts = append(emrcOpts, emrcontainersprovider.WithSparkImage(v))
+	if emrcImage != "" {
+		emrcOpts = append(emrcOpts, emrcontainersprovider.WithSparkImage(emrcImage))
+	}
+
+	// Stamp instance ID on Spark driver pods for multi-instance isolation.
+	emrOpts = append(emrOpts, emrprovider.WithInstanceID(instanceID))
+	emrcOpts = append(emrcOpts, emrcontainersprovider.WithInstanceID(instanceID))
+
+	// Wire AWS emulator config into Spark driver pods when endpoint is set.
+	if cfg.AWSEmulatorEndpoint != "" && cfg.Cloud == "aws" {
+		imdsEP := ""
+		if cfg.IMDSEnabled {
+			imdsEP = cfg.AWSEmulatorEndpoint
+		}
+		emulatorCfg := &sparkaws.AWSEmulatorConfig{
+			Region:          cfg.Region,
+			AccountID:       cfg.AccountID,
+			S3Endpoint:      cfg.AWSEmulatorEndpoint,
+			IMDSEndpoint:    imdsEP,
+			AccessKeyID:     "test",
+			SecretAccessKey: "test",
+		}
+		emrOpts = append(emrOpts, emrprovider.WithAWSEmulator(emulatorCfg))
+		emrcOpts = append(emrcOpts, emrcontainersprovider.WithAWSEmulator(emulatorCfg))
 	}
 
 	// Wire K8s client into EMR providers when spark mode is k8s.
 	if sparkMode == "k8s" {
-		k8sNS := os.Getenv("JAISCLOUD_K8S_NAMESPACE")
+		k8sNS := cfg.K8sNamespace
 		if k8sNS == "" {
 			k8sNS = "jaiscloud"
 		}

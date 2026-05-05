@@ -13,6 +13,7 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -424,6 +425,11 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 
 	rc, err := p.blobs.GetStream(ctx, bucket, key, offset, length)
 	if err != nil {
+		// Blob miss — may be a concurrent delete. Recheck metadata: if it's
+		// gone too return a clean 404; otherwise surface the blob error.
+		if _, recheckErr := p.meta.GetObjectMeta(ctx, bucket, key); recheckErr != nil {
+			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+		}
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
 
@@ -512,8 +518,13 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
-	_ = p.blobs.Delete(ctx, bucket, key)
+	// Metadata-first: after this line GetObject returns 404 so no client ever
+	// sees a dangling metadata entry pointing at a deleted blob.
 	_ = p.meta.DeleteObjectMeta(ctx, bucket, key)
+	// Best-effort blob delete. Orphaned blobs are not visible via GetObject.
+	if err := p.blobs.Delete(ctx, bucket, key); err != nil {
+		slog.Warn("object: blob delete failed after metadata delete", "bucket", bucket, "key", key, "err", err)
+	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 

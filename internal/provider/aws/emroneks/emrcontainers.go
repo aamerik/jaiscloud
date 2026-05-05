@@ -20,6 +20,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
@@ -33,7 +34,9 @@ type EMRContainersProvider struct {
 	namespace   string
 	// sparkImage is the container image for spark-submit driver pods.
 	// Defaults to "spark-emr-eks-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMREKS_IMAGE.
-	sparkImage string
+	sparkImage  string
+	awsEmulator *sparkaws.AWSEmulatorConfig
+	instanceID  string
 	// ctx is the provider lifecycle context. runJobRun goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
 	ctx         context.Context
@@ -67,6 +70,16 @@ func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platfor
 // For real EMR-on-EKS the image is derived from the releaseLabel; in devbox use the local build.
 func WithSparkImage(image string) Option {
 	return func(p *EMRContainersProvider) { p.sparkImage = image }
+}
+
+// WithAWSEmulator wires AWS emulator endpoint config into Spark driver pods.
+func WithAWSEmulator(cfg *sparkaws.AWSEmulatorConfig) Option {
+	return func(p *EMRContainersProvider) { p.awsEmulator = cfg }
+}
+
+// WithInstanceID sets the instance ID stamped on Spark driver pod labels.
+func WithInstanceID(id string) Option {
+	return func(p *EMRContainersProvider) { p.instanceID = id }
 }
 
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRContainersProvider {

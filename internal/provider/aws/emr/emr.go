@@ -21,6 +21,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
+	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
@@ -68,7 +69,9 @@ type EMRProvider struct {
 	bootstrapCfg   BootstrapConfig
 	// sparkImage is the container image for spark-submit driver pods.
 	// Defaults to "spark-emr-7.9.0:devbox"; override via WithSparkImage or JAISCLOUD_SPARK_EMR_IMAGE.
-	sparkImage string
+	sparkImage  string
+	awsEmulator *sparkaws.AWSEmulatorConfig
+	instanceID  string
 	// ctx is the provider lifecycle context. runStep goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
 	ctx         context.Context
@@ -93,6 +96,16 @@ func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platfor
 // When set, runSparkSubmitStep resolves bootstrap actions before submitting.
 func WithBootstrap(fetcher blobfs.BlobFetcher, cfg BootstrapConfig) Option {
 	return func(p *EMRProvider) { p.bootstrapFetch = fetcher; p.bootstrapCfg = cfg }
+}
+
+// WithAWSEmulator wires AWS emulator endpoint config into Spark driver pods.
+func WithAWSEmulator(cfg *sparkaws.AWSEmulatorConfig) Option {
+	return func(p *EMRProvider) { p.awsEmulator = cfg }
+}
+
+// WithInstanceID sets the instance ID stamped on Spark driver pod labels.
+func WithInstanceID(id string) Option {
+	return func(p *EMRProvider) { p.instanceID = id }
 }
 
 // WithSparkImage sets the container image used for spark-submit driver pods.
