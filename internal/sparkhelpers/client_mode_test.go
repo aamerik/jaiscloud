@@ -2,6 +2,7 @@ package sparkhelpers
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,7 @@ func TestBuildClientModeArgs_JAR(t *testing.T) {
 	job := ClientModeJob{
 		JobID:     "test-job-1",
 		Namespace: "default",
+		Image:     "spark:3.5",
 		EntryPoint: JarEntryPoint{
 			JarURI:    "s3://bucket/app.jar",
 			MainClass: "com.example.Main",
@@ -30,8 +32,8 @@ func TestBuildClientModeArgs_JAR(t *testing.T) {
 
 	args := BuildClientModeArgs(job)
 
-	// Verify mandatory leading args.
-	require.GreaterOrEqual(t, len(args), 12)
+	// Fixed leading tokens must always be first.
+	require.GreaterOrEqual(t, len(args), 10)
 	assert.Equal(t, "--master", args[0])
 	assert.Equal(t, defaultMaster, args[1])
 	assert.Equal(t, "--deploy-mode", args[2])
@@ -42,21 +44,21 @@ func TestBuildClientModeArgs_JAR(t *testing.T) {
 	assert.Equal(t, "spark.kubernetes.driver.pod.name=$(SPARK_DRIVER_POD_NAME)", args[7])
 	assert.Equal(t, "--conf", args[8])
 	assert.Equal(t, "spark.kubernetes.executor.podTemplateFile=file:///jaiscloud/spark/executor-template.yaml", args[9])
-	assert.Equal(t, "--conf", args[10])
-	assert.Equal(t, "spark.driver.bindAddress=0.0.0.0", args[11])
 
-	// Caller args.
-	assert.Equal(t, "--conf", args[12])
-	assert.Equal(t, "spark.driver.memory=2g", args[13])
+	// Remaining conf pairs and caller args verified by key-based lookup — more
+	// resilient to new confs being inserted in the fixed section.
+	cm := argsConfMap(args)
+	assert.Equal(t, "spark:3.5", cm["spark.kubernetes.container.image"])
+	assert.Equal(t, "0.0.0.0", cm["spark.driver.bindAddress"])
+	assert.Equal(t, "2g", cm["spark.driver.memory"], "caller SparkSubmitArgs must appear in confs")
 
-	// Entry-point pre-args and jar.
-	assert.Equal(t, "--class", args[14])
-	assert.Equal(t, "com.example.Main", args[15])
-	assert.Equal(t, "s3://bucket/app.jar", args[16])
-
-	// Jar positional args.
-	assert.Equal(t, "--input", args[17])
-	assert.Equal(t, "s3://bucket/data", args[18])
+	// Entry-point and jar args must be last.
+	n := len(args)
+	assert.Equal(t, "s3://bucket/data", args[n-1])
+	assert.Equal(t, "--input", args[n-2])
+	assert.Equal(t, "s3://bucket/app.jar", args[n-3])
+	assert.Equal(t, "com.example.Main", args[n-4])
+	assert.Equal(t, "--class", args[n-5])
 }
 
 // TestBuildClientModeArgs_Python verifies argv for a Python entry point.
@@ -200,6 +202,114 @@ func TestSubmitClientMode_CustomSparkSubmitPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, k8sJob.Spec.Template.Spec.Containers, 1)
 	assert.Equal(t, []string{"/opt/spark/bin/spark-submit"}, k8sJob.Spec.Template.Spec.Containers[0].Command)
+}
+
+// ─── new BuildClientModeArgs tests ───────────────────────────────────────────
+
+// TestBuildClientModeArgs_PodTemplateContainerName verifies the executor pod
+// template container name conf is emitted so Spark injects image/command into
+// the right container.
+func TestBuildClientModeArgs_PodTemplateContainerName(t *testing.T) {
+	args := BuildClientModeArgs(ClientModeJob{
+		JobID: "j", Namespace: "ns", Image: "img:1",
+		EntryPoint: JarEntryPoint{JarURI: "app.jar"},
+	})
+	cm := argsConfMap(args)
+	assert.Equal(t, "spark-kubernetes-executor",
+		cm["spark.kubernetes.executor.podTemplateContainerName"])
+}
+
+// TestBuildClientModeArgs_ContainerImageConf verifies spark.kubernetes.container.image
+// is injected so executor pods use the correct image without an explicit --conf.
+func TestBuildClientModeArgs_ContainerImageConf(t *testing.T) {
+	args := BuildClientModeArgs(ClientModeJob{
+		JobID: "j", Namespace: "ns", Image: "spark-custom:3.5",
+		EntryPoint: JarEntryPoint{JarURI: "app.jar"},
+	})
+	assert.Equal(t, "spark-custom:3.5", argsConfMap(args)["spark.kubernetes.container.image"])
+}
+
+// TestBuildClientModeArgs_ServiceAccountDefault verifies fallback to "default".
+func TestBuildClientModeArgs_ServiceAccountDefault(t *testing.T) {
+	args := BuildClientModeArgs(ClientModeJob{
+		JobID: "j", Namespace: "ns", Image: "img:1",
+		EntryPoint: JarEntryPoint{JarURI: "app.jar"},
+	})
+	assert.Equal(t, "default",
+		argsConfMap(args)["spark.kubernetes.authenticate.executor.serviceAccountName"])
+}
+
+// TestBuildClientModeArgs_ServiceAccountExplicit verifies that a non-empty
+// ServiceAccountName is forwarded to the executor SA conf.
+func TestBuildClientModeArgs_ServiceAccountExplicit(t *testing.T) {
+	args := BuildClientModeArgs(ClientModeJob{
+		JobID: "j", Namespace: "ns", Image: "img:1",
+		ServiceAccountName: "spark-sa",
+		EntryPoint:         JarEntryPoint{JarURI: "app.jar"},
+	})
+	assert.Equal(t, "spark-sa",
+		argsConfMap(args)["spark.kubernetes.authenticate.executor.serviceAccountName"])
+}
+
+// TestBuildClientModeArgs_ClientConfPrecedence verifies that Spark's
+// last-value-wins semantics give user-supplied SparkSubmitArgs precedence over
+// JaisCloud's ExtraSparkConfs defaults. This applies to both EMR on EC2
+// (spark_step.go) and EMR on EKS (jobrun.go), which both route through
+// BuildClientModeArgs with ExtraSparkConfs from sparkaws.DriverSparkConfsFromEnv.
+func TestBuildClientModeArgs_ClientConfPrecedence(t *testing.T) {
+	const jaisCloudEndpoint = "http://jaiscloud:4566"
+	const userEndpoint = "http://my-custom-minio:9000"
+
+	job := ClientModeJob{
+		JobID:     "j",
+		Namespace: "ns",
+		Image:     "img:1",
+		EntryPoint: JarEntryPoint{JarURI: "app.jar"},
+		// JaisCloud injects its own s3a endpoint via ExtraSparkConfs.
+		ExtraSparkConfs: []string{
+			"--conf", "spark.hadoop.fs.s3a.endpoint=" + jaisCloudEndpoint,
+		},
+		// User wants a different endpoint — must win because it's appended later.
+		SparkSubmitArgs: []string{
+			"--conf", "spark.hadoop.fs.s3a.endpoint=" + userEndpoint,
+		},
+	}
+
+	args := BuildClientModeArgs(job)
+
+	// Find last occurrence of the key in the argv — that's what Spark honours.
+	lastValue := ""
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--conf" {
+			kv := args[i+1]
+			if len(kv) > len("spark.hadoop.fs.s3a.endpoint=") &&
+				kv[:len("spark.hadoop.fs.s3a.endpoint=")] == "spark.hadoop.fs.s3a.endpoint=" {
+				lastValue = kv[len("spark.hadoop.fs.s3a.endpoint="):]
+			}
+		}
+	}
+	assert.Equal(t, userEndpoint, lastValue,
+		"SparkSubmitArgs must appear after ExtraSparkConfs so user conf wins via last-value-wins")
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+// argsConfMap extracts --conf key=value pairs from a spark-submit argv slice
+// into a map of key → value. When the same key appears more than once, the
+// last occurrence wins (matching Spark's own last-value-wins behaviour).
+func argsConfMap(args []string) map[string]string {
+	out := make(map[string]string)
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "--conf" {
+			continue
+		}
+		kv := args[i+1]
+		if eq := strings.IndexByte(kv, '='); eq >= 0 {
+			out[kv[:eq]] = kv[eq+1:]
+		}
+		i++ // skip the value token
+	}
+	return out
 }
 
 // TestSubmitClientMode_ExecutorConfigMapHasTemplate verifies executor template is in ConfigMap.

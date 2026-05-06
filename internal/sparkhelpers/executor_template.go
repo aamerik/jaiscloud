@@ -27,7 +27,8 @@ func BuildExecutorPodTemplate(ctx context.Context, k8s kubernetes.Interface, ove
 	// Build with an empty main container — Spark fills image/command.
 	base := k8shelpers.PodSpecInput{
 		MainContainer: corev1.Container{
-			Name: "spark-executor",
+			Name:            "spark-kubernetes-executor",
+			ImagePullPolicy: corev1.PullIfNotPresent,
 		},
 	}
 

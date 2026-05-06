@@ -53,7 +53,7 @@ func TestBuildExecutorPodTemplate_CallerTplOnly(t *testing.T) {
 spec:
   serviceAccountName: spark-sa
   containers:
-  - name: spark-executor
+  - name: spark-kubernetes-executor
     image: spark:3.5
 `)
 	got, err := BuildExecutorPodTemplate(context.Background(), nil, nil, callerTpl)
@@ -63,4 +63,89 @@ spec:
 	var tpl corev1.PodTemplateSpec
 	require.NoError(t, yaml.Unmarshal(got, &tpl))
 	assert.Equal(t, "spark-sa", tpl.Spec.ServiceAccountName)
+}
+
+// ─── container name ───────────────────────────────────────────────────────────
+
+func TestBuildExecutorPodTemplate_ContainerNameIsSparkKubernetesExecutor_WithOverlay(t *testing.T) {
+	// Real Spark injects the executor image/command into the container named
+	// exactly "spark-kubernetes-executor". Any other name causes the pod to
+	// spin up with no entrypoint and immediately fail.
+	overlay := &platform.PlatformConfig{
+		TLS: platform.TLSConfig{
+			Enabled: true,
+			CASources: []platform.CASource{{
+				Name:   "ca",
+				Source: platform.CASourceRef{Kind: "configMap", Name: "ca-cm", Key: "ca.crt"},
+			}},
+		},
+	}
+	got, err := BuildExecutorPodTemplate(context.Background(), nil, overlay, nil)
+	require.NoError(t, err)
+
+	var tpl corev1.PodTemplateSpec
+	require.NoError(t, yaml.Unmarshal(got, &tpl))
+	require.NotEmpty(t, tpl.Spec.Containers, "expected main container in output")
+	assert.Equal(t, "spark-kubernetes-executor", tpl.Spec.Containers[0].Name)
+}
+
+func TestBuildExecutorPodTemplate_ContainerNameNotOverriddenByCallerTpl(t *testing.T) {
+	// BuildPodSpec merges callerTpl containers by position (index 0), not by
+	// name. A callerTpl that still uses the old "spark-executor" name must not
+	// replace the canonical "spark-kubernetes-executor" name in the output.
+	callerTpl := []byte(`
+spec:
+  containers:
+  - name: spark-executor
+    image: spark:3.5
+`)
+	got, err := BuildExecutorPodTemplate(context.Background(), nil, nil, callerTpl)
+	require.NoError(t, err)
+
+	var tpl corev1.PodTemplateSpec
+	require.NoError(t, yaml.Unmarshal(got, &tpl))
+	require.NotEmpty(t, tpl.Spec.Containers)
+	assert.Equal(t, "spark-kubernetes-executor", tpl.Spec.Containers[0].Name,
+		"container name must not be overwritten by callerTpl")
+}
+
+// ─── ImagePullPolicy ──────────────────────────────────────────────────────────
+
+func TestBuildExecutorPodTemplate_ImagePullPolicyIfNotPresent_WithOverlay(t *testing.T) {
+	overlay := &platform.PlatformConfig{
+		TLS: platform.TLSConfig{
+			Enabled: true,
+			CASources: []platform.CASource{{
+				Name:   "ca",
+				Source: platform.CASourceRef{Kind: "configMap", Name: "ca-cm", Key: "ca.crt"},
+			}},
+		},
+	}
+	got, err := BuildExecutorPodTemplate(context.Background(), nil, overlay, nil)
+	require.NoError(t, err)
+
+	var tpl corev1.PodTemplateSpec
+	require.NoError(t, yaml.Unmarshal(got, &tpl))
+	require.NotEmpty(t, tpl.Spec.Containers)
+	assert.Equal(t, corev1.PullIfNotPresent, tpl.Spec.Containers[0].ImagePullPolicy)
+}
+
+func TestBuildExecutorPodTemplate_ImagePullPolicyIfNotPresent_WithCallerTpl(t *testing.T) {
+	// ImagePullPolicy is not in the BuildPodSpec merge table, so the base value
+	// (PullIfNotPresent) must survive regardless of what the callerTpl specifies.
+	callerTpl := []byte(`
+spec:
+  containers:
+  - name: spark-kubernetes-executor
+    image: spark:3.5
+    imagePullPolicy: Always
+`)
+	got, err := BuildExecutorPodTemplate(context.Background(), nil, nil, callerTpl)
+	require.NoError(t, err)
+
+	var tpl corev1.PodTemplateSpec
+	require.NoError(t, yaml.Unmarshal(got, &tpl))
+	require.NotEmpty(t, tpl.Spec.Containers)
+	assert.Equal(t, corev1.PullIfNotPresent, tpl.Spec.Containers[0].ImagePullPolicy,
+		"ImagePullPolicy is not merged from callerTpl — base PullIfNotPresent must win")
 }

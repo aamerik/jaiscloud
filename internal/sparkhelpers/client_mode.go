@@ -25,6 +25,13 @@ const (
 	executorTemplatePath  = "/jaiscloud/spark/executor-template.yaml"
 )
 
+func nonEmptyOr(s, def string) string {
+	if s != "" {
+		return s
+	}
+	return def
+}
+
 // sanitizeJobID lowercases the jobID, replaces non-alphanumeric chars with '-',
 // and truncates to 52 chars (to stay within k8s 63-char limit with prefix).
 func sanitizeJobID(jobID string) string {
@@ -67,7 +74,15 @@ func BuildClientModeArgs(job ClientModeJob) []string {
 		"--conf", fmt.Sprintf("spark.kubernetes.namespace=%s", job.Namespace),
 		"--conf", "spark.kubernetes.driver.pod.name=$(SPARK_DRIVER_POD_NAME)",
 		"--conf", fmt.Sprintf("spark.kubernetes.executor.podTemplateFile=file://%s", executorTemplatePath),
+		"--conf", "spark.kubernetes.executor.podTemplateContainerName=spark-kubernetes-executor",
+		"--conf", fmt.Sprintf("spark.kubernetes.container.image=%s", job.Image),
+		"--conf", "spark.kubernetes.authenticate.executor.serviceAccountName=" + nonEmptyOr(job.ServiceAccountName, "default"),
 		"--conf", "spark.driver.bindAddress=0.0.0.0",
+		"--conf", "spark.driver.host=$(SPARK_DRIVER_BIND_ADDRESS)",
+		"--conf", "spark.kubernetes.driver.request.cores=200m",
+		"--conf", "spark.kubernetes.driver.limit.cores=1000m",
+		"--conf", "spark.kubernetes.executor.request.cores=200m",
+		"--conf", "spark.kubernetes.executor.limit.cores=1000m", // Minimal executor CPU limit to avoid scheduling issues.
 	}
 
 	// Cloud-specific confs prepended so caller's SparkSubmitArgs win (last-value-wins).
@@ -153,10 +168,11 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 
 	// Build main container.
 	mainContainer := corev1.Container{
-		Name:    "spark-submit",
-		Image:   job.Image,
-		Command: []string{sparkSubmitPath},
-		Args:    BuildClientModeArgs(job),
+		Name:            "spark-submit",
+		Image:           job.Image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{sparkSubmitPath},
+		Args:            BuildClientModeArgs(job),
 		Env: append([]corev1.EnvVar{
 			{
 				Name: "SPARK_DRIVER_POD_NAME",
