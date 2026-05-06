@@ -76,6 +76,7 @@ func BuildClientModeArgs(job ClientModeJob) []string {
 		"--conf", fmt.Sprintf("spark.kubernetes.executor.podTemplateFile=file://%s", executorTemplatePath),
 		"--conf", "spark.kubernetes.executor.podTemplateContainerName=spark-kubernetes-executor",
 		"--conf", fmt.Sprintf("spark.kubernetes.container.image=%s", job.Image),
+		"--conf", "spark.kubernetes.container.image.pullPolicy=IfNotPresent",
 		"--conf", "spark.kubernetes.authenticate.executor.serviceAccountName=" + nonEmptyOr(job.ServiceAccountName, "default"),
 		"--conf", "spark.driver.bindAddress=0.0.0.0",
 		"--conf", "spark.driver.host=$(SPARK_DRIVER_BIND_ADDRESS)",
