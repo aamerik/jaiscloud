@@ -27,6 +27,19 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
   - [Extra environment variables](#extra-environment-variables)
   - [Docker mode behaviour](#docker-mode-behaviour)
   - [Kubernetes mode behaviour](#kubernetes-mode-behaviour)
+- [Spark Kubernetes Configuration Reference](#spark-kubernetes-configuration-reference)
+  - [JAISCLOUD_EXECUTOR_MODE](#jaiscloud_executor_mode)
+  - [JAISCLOUD_K8S_SA vs JAISCLOUD_K8S_SPARK_SA](#jaiscloud_k8s_sa-vs-jaiscloud_k8s_spark_sa)
+  - [JAISCLOUD_K8S_NAMESPACE](#jaiscloud_k8s_namespace)
+  - [JAISCLOUD_SPARK_K8S_CLUSTER_MODE](#jaiscloud_spark_k8s_cluster_mode)
+  - [JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN](#jaiscloud_spark_k8s_cluster_shutdown)
+  - [JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY](#jaiscloud_spark_k8s_cluster_restart_policy)
+  - [JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT](#jaiscloud_spark_k8s_reconcile_timeout)
+  - [JAISCLOUD_INSTANCE_ID](#jaiscloud_instance_id)
+- [AWS Emulator Wiring for Spark Driver Pods](#aws-emulator-wiring-for-spark-driver-pods)
+  - [IMDS emulator](#imds-emulator)
+  - [Spark conf precedence](#spark-conf-precedence)
+- [S3 Virtual-Hosted Style Routing](#s3-virtual-hosted-style-routing)
 - [Multi-Cloud Spark Transforms](#multi-cloud-spark-transforms)
   - [Azure](#azure-spark-transform)
   - [GCP](#gcp-spark-transform)
@@ -477,6 +490,10 @@ export JAISCLOUD_K8S_SA=spark-sa
 | `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA cert. Unset = system roots. |
 | `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace for Jobs and Pods |
 | `JAISCLOUD_K8S_SA` | _(none)_ | Service account for the spark-submit Pod |
+| `JAISCLOUD_K8S_SPARK_SA` | _(none)_ | Kubernetes service account forwarded as `spark.kubernetes.authenticate.executor.serviceAccountName`; controls executor pod RBAC |
+| `JAISCLOUD_AWS_EMULATOR_ENDPOINT` | _(none)_ | JaisCloud endpoint reachable from Spark pods (e.g. `http://jaiscloud.jaiscloud.svc:4566`). When set, injects S3 + credentials configuration into Spark driver pods so they can reach the local S3 store. |
+| `JAISCLOUD_IMDS_ENABLED` | `false` | When `true`, exposes `/latest/meta-data/` IMDS emulator routes and injects the IMDS endpoint into Spark driver pods. When `false`, `AWS_EC2_METADATA_DISABLED=true` is injected instead. |
+| `JAISCLOUD_S3_VIRTUAL_HOST_BASES` | _(none)_ | Comma-separated host suffixes recognised as S3 virtual-hosted bases (e.g. `jaiscloud.devbox.local,s3.local`). See [S3 virtual-hosted style routing](#s3-virtual-hosted-style-routing). |
 | `JAISCLOUD_BOOTSTRAP_IMAGE` | `amazon/aws-cli:2.18` | Init container image used to run EMR bootstrap scripts |
 | `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES` | `1048576` | Maximum allowed size per bootstrap script (1 MiB) |
 | `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` | `/etc/pki,/home/hadoop` | Comma-separated filesystem prefixes made writable by bootstrap init containers (one `emptyDir` volume per prefix) |
@@ -731,6 +748,403 @@ Terminal Jobs (both step-mode and cluster-mode) always fire `OnRestartTerminal` 
 **Stale-Job reconciliation:** if a Job disappears from the K8s API (deleted externally) while the poller is tracking it, the poller sets `missingSince` on the first 404. After `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` (default 10 min) of persistent absence, the step/job-run is marked `FAILED`.
 
 **Provider rehydration:** at startup, EMR and EMR-on-EKS providers call `rehydratePoller()` to re-track any non-terminal steps/job-runs that were in the resource store from before the restart. This ensures the poller catches up without requiring a separate migration step.
+
+---
+
+## Spark Kubernetes Configuration Reference
+
+This section explains each Spark-related env var in detail — why it exists, what to set it to, and what breaks when it is wrong.
+
+---
+
+### `JAISCLOUD_EXECUTOR_MODE`
+
+**What it controls:** the compute backend used for every Spark job (EMR on EC2 steps and EMR on EKS job runs) and every Lambda invocation.
+
+| Value | Behaviour |
+|---|---|
+| _(unset)_ or `mock` | Jobs complete immediately with `COMPLETED`; no real compute. Use for unit tests, CI, local dev when you just need the API to work. |
+| `docker` | Each job runs in a Docker container on the local machine. Requires Docker. Use when you want to run a real Spark job on a dev laptop without a K8s cluster. |
+| `k8s` | Each job creates a `batch/v1 Job` on a Kubernetes cluster. Use for devbox-on-K8s, staging, or any environment that has `kubectl` access. |
+
+**Common mistake:** leaving `JAISCLOUD_EXECUTOR_MODE` unset and wondering why Spark jobs finish instantly — that is mock mode working as designed. Set `k8s` to get real execution.
+
+```bash
+# Explicit mock (same as leaving unset)
+JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start
+
+# Real K8s execution
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud start
+```
+
+---
+
+### `JAISCLOUD_K8S_SA` vs `JAISCLOUD_K8S_SPARK_SA`
+
+These two variables look similar but control entirely different service accounts in different K8s namespaces.
+
+| Variable | Which pod uses it | What it grants |
+|---|---|---|
+| `JAISCLOUD_K8S_SA` | The `spark-submit` Job pod itself (created by JaisCloud) | Must be able to create Pods and ConfigMaps, and list/watch Pods — so the Spark driver can spawn executor pods |
+| `JAISCLOUD_K8S_SPARK_SA` | The Spark executor pods (created by the Spark driver inside the cluster) | Forwarded as `spark.kubernetes.authenticate.executor.serviceAccountName`; needs permissions to read ConfigMaps in the Spark namespace |
+
+**In practice:**
+
+```bash
+# The spark-submit pod runs as this SA — must have RBAC to create executor pods
+JAISCLOUD_K8S_SA=spark-driver-sa
+
+# Executor pods run as this SA — must have RBAC to read ConfigMaps
+JAISCLOUD_K8S_SPARK_SA=spark-executor-sa
+```
+
+If you only set `JAISCLOUD_K8S_SA` and leave `JAISCLOUD_K8S_SPARK_SA` unset, executor pods run as the `default` service account, which usually lacks the permissions to read Spark's executor ConfigMap. The symptom is executor pods starting but immediately crashing with a "Forbidden" error in the logs.
+
+**Minimum RBAC for `JAISCLOUD_K8S_SPARK_SA`:**
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-executor
+  namespace: jaiscloud
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+```
+
+---
+
+### `JAISCLOUD_K8S_NAMESPACE`
+
+**What it controls:** the Kubernetes namespace where JaisCloud creates Spark `batch/v1 Jobs`, executor ConfigMaps, Lambda Pods, and Lambda Services.
+
+**Default:** `jaiscloud`
+
+Set this when you want Spark and Lambda workloads isolated in a different namespace than the JaisCloud server itself, or when your cluster policy requires workloads in a specific namespace:
+
+```bash
+JAISCLOUD_K8S_NAMESPACE=spark-jobs ./jaiscloud start
+```
+
+The namespace must already exist and have the RBAC from `deploy/k8s/rbac.yaml` applied. If the namespace does not exist, Job creation silently fails and steps stay in `RUNNING` forever until the reconcile timeout fires.
+
+---
+
+### `JAISCLOUD_SPARK_K8S_CLUSTER_MODE`
+
+**What it controls:** when JaisCloud uses Spark's `--deploy-mode client` (driver runs inside the Job pod) vs engages the full K8s cluster deploy-mode (`--deploy-mode cluster`, where the driver spawns independently and Spark manages the pod lifecycle natively).
+
+> **Background:** JaisCloud's `SubmitClientMode` always uses `--deploy-mode client`. "Cluster mode" in this context refers to JaisCloud's own cluster-mode policy — whether to inject pod-template `--conf` entries that activate Spark's native K8s pod-template mechanism.
+
+| Value | Behaviour | When to use |
+|---|---|---|
+| `auto` *(default)* | Engage cluster deploy-mode only when the job already contains `spark.kubernetes.driver.podTemplateFile` or `spark.kubernetes.executor.podTemplateFile` `--conf` entries | Most setups — the caller controls whether templates are injected |
+| `always` | Always inject pod-template confs, even for jobs that don't include them | When you want JaisCloud to manage pod templates for all jobs, e.g. enforcing a standard TLS template |
+| `never` | Strip any pod-template `--conf` entries and always use bare `spark-submit` | Debugging, or when your Spark image does not support pod templates |
+
+**When does `auto` activate?** When the step args or `sparkSubmitParameters` contain `--conf spark.kubernetes.driver.podTemplateFile=...` or `--conf spark.kubernetes.executor.podTemplateFile=...`. JaisCloud detects those and enables the full template pipeline.
+
+---
+
+### `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN`
+
+**What it controls:** what happens to running Spark `batch/v1 Jobs` when `jaiscloud` process exits cleanly (`Close()` is called, e.g. `SIGTERM`).
+
+| Value | What happens on shutdown | When to use |
+|---|---|---|
+| `leave` *(default)* | Running Jobs are **suspended** (`spec.suspend: true`). Pods stop immediately but the Job object and its status are preserved. On the next startup, JaisCloud re-adopts them (see `CLUSTER_RESTART_POLICY`). | Dev/devbox — you want in-progress jobs to survive a server restart |
+| `delete` | Running Jobs and all their Pods are **deleted immediately**. Steps in `RUNNING` will be marked `FAILED` by the reconcile timeout on next startup (they won't be in K8s anymore). | CI — clean teardown, no orphaned resources between test runs |
+
+**What `leave` looks like:**
+
+```bash
+# After server shutdown with CLUSTER_SHUTDOWN=leave:
+kubectl get jobs -n jaiscloud
+NAME                        COMPLETIONS   DURATION   AGE   SUSPEND
+jc-spark-abc-123            0/1           2m         5m    True   ← suspended, not deleted
+```
+
+On next startup JaisCloud unsuspends these jobs and continues polling them.
+
+---
+
+### `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY`
+
+**What it controls:** what JaisCloud does with Spark Jobs it finds in Kubernetes at **startup** that belong to the current instance (matching `jaiscloud.io/instance-id` label) but are not yet terminal.
+
+| Value | Behaviour | When to use |
+|---|---|---|
+| `adopt` *(default)* | Suspended Jobs are unsuspended and re-tracked in the poller. Running Jobs are adopted directly. State-change events fire when they complete. | Dev/devbox — you want interrupted jobs to resume and their EMR step states to update correctly |
+| `reap` | All non-terminal Jobs are deleted immediately. The corresponding steps/job-runs are marked `FAILED` in the EMR store. | CI teardown, or when stale jobs from a previous run should never affect the new run |
+
+**The interact with `CLUSTER_SHUTDOWN`:**
+
+| `CLUSTER_SHUTDOWN` | `CLUSTER_RESTART_POLICY` | Net result on restart |
+|---|---|---|
+| `leave` | `adopt` *(default)* | In-progress jobs resume where they left off |
+| `leave` | `reap` | In-progress jobs are deleted and steps marked FAILED |
+| `delete` | `adopt` | Nothing to adopt — no jobs survive shutdown |
+| `delete` | `reap` | Nothing to reap — no jobs survive shutdown |
+
+For most dev workflows, leave both at their defaults (`leave` + `adopt`).
+
+---
+
+### `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT`
+
+**What it controls:** how long the poller waits before giving up on a Spark Job that has disappeared from Kubernetes.
+
+**Default:** `10m`
+
+**When it fires:** if a tracked Job returns 404 from the K8s API (e.g. deleted externally with `kubectl delete job`), the poller records `missingSince`. After `RECONCILE_TIMEOUT` of continuous absence, the corresponding EMR step or job run is marked `FAILED`.
+
+This exists because Kubernetes does not guarantee immediate consistency — a 404 might be a brief API hiccup rather than a real deletion. The timeout distinguishes a transient blip from a genuinely missing job.
+
+**When to change it:**
+
+```bash
+# Shorter timeout for CI — fail fast when jobs are externally cleaned up
+JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=2m ./jaiscloud start
+
+# Longer timeout for flaky clusters with intermittent API server unavailability
+JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=30m ./jaiscloud start
+```
+
+If steps are flipping to `FAILED` unexpectedly in a healthy cluster, increase this value. If steps stay `RUNNING` too long after being externally deleted, decrease it.
+
+---
+
+### `JAISCLOUD_INSTANCE_ID`
+
+**What it controls:** the UUID stamped as `jaiscloud.io/instance-id` on every K8s resource JaisCloud creates (Spark Jobs, Lambda Pods, Lambda Services).
+
+**Default:** auto-generated stable UUID (persisted in-memory for the lifetime of the process)
+
+**Why it exists:** if two JaisCloud instances run against the same K8s cluster (e.g. two developers sharing a devbox cluster, or parallel CI jobs), `cleanupOrphans` on startup would otherwise delete each other's resources. The instance ID ensures each instance only touches its own resources.
+
+**When to set it manually:**
+
+```bash
+# CI — give each CI job a stable, reproducible instance ID so cleanup is deterministic
+JAISCLOUD_INSTANCE_ID=ci-run-${CI_JOB_ID} ./jaiscloud start
+
+# Staging — fix the ID so that rolling restarts re-adopt the same set of jobs
+JAISCLOUD_INSTANCE_ID=staging-primary ./jaiscloud start
+```
+
+**Do not** set this to the same value for two concurrently running instances — they will fight over each other's K8s resources.
+
+---
+
+## AWS Emulator Wiring for Spark Driver Pods
+
+When Spark jobs run in K8s mode, the driver pod needs to reach JaisCloud's S3 endpoint and obtain AWS credentials. Set `JAISCLOUD_AWS_EMULATOR_ENDPOINT` to the endpoint that Spark pods can reach from inside the cluster:
+
+```bash
+export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://jaiscloud.jaiscloud.svc:4566
+export JAISCLOUD_EXECUTOR_MODE=k8s
+./jaiscloud start --mode full --dsn "postgres://..."
+```
+
+JaisCloud then injects the following into every spark-submit pod:
+
+| Injected item | What it sets |
+|---|---|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars | Fixed dev credentials matching `JAISCLOUD_ACCOUNT_ID` |
+| `HADOOP_AWS_S3_ENDPOINT` env var | `JAISCLOUD_AWS_EMULATOR_ENDPOINT` |
+| `spark.hadoop.fs.s3a.impl` `--conf` | `org.apache.hadoop.fs.s3a.S3AFileSystem` |
+| `spark.hadoop.fs.s3a.endpoint` `--conf` | `JAISCLOUD_AWS_EMULATOR_ENDPOINT` |
+| `spark.hadoop.fs.s3a.aws.credentials.provider` `--conf` | `SimpleAWSCredentialsProvider` |
+| `spark.hadoop.fs.s3a.path.style.access` `--conf` | `true` |
+| `spark.executorEnv.*` `--conf` | mirrors all driver env vars to executor pods |
+
+The `spark.hadoop.fs.s3a.impl` conf is required — without it Hadoop uses the default S3A provider which may not be present or may try to resolve real AWS endpoints.
+
+### IMDS emulator
+
+The IMDS emulator exposes `GET /latest/meta-data/` endpoints so Spark jobs that read region or credentials from IMDS work correctly against JaisCloud.
+
+Enable it:
+
+```bash
+./jaiscloud start --imds-enabled
+# or
+JAISCLOUD_IMDS_ENABLED=true ./jaiscloud start
+```
+
+When `--aws-emulator-endpoint` is also set, JaisCloud injects `AWS_EC2_METADATA_SERVICE_ENDPOINT=<endpoint>` into Spark driver pods so they hit the local IMDS emulator instead of `169.254.169.254`.
+
+When IMDS is **disabled** (the default), JaisCloud injects `AWS_EC2_METADATA_DISABLED=true` into Spark driver pods so Hadoop's credential chain skips IMDS and falls through to the explicitly configured `SimpleAWSCredentialsProvider`.
+
+### Spark conf precedence
+
+JaisCloud's injected `--conf` tokens (`ExtraSparkConfs`) are prepended before user-supplied `--conf` entries (`SparkSubmitArgs`). Because Spark processes `--conf` left to right and last-value-wins, user confs always override JaisCloud defaults:
+
+```
+spark-submit
+  --conf spark.hadoop.fs.s3a.endpoint=http://jaiscloud:4566   ← JaisCloud default
+  --conf spark.hadoop.fs.s3a.endpoint=http://my-minio:9000   ← user SparkSubmitArgs (wins)
+```
+
+This applies to both EMR on EC2 (`HadoopJarStep` args) and EMR on EKS (`sparkSubmitParameters`).
+
+---
+
+## S3 Virtual-Hosted Style Routing
+
+### Why you need this
+
+AWS S3 supports two URL styles:
+
+| Style | URL pattern | Example |
+|---|---|---|
+| Path-style | `http://<host>/<bucket>/<key>` | `http://localhost:4566/mybucket/data.csv` |
+| Virtual-hosted | `http://<bucket>.<host>/<key>` | `http://mybucket.s3.us-east-1.amazonaws.com/data.csv` |
+
+**AWS SDK v2 defaults to virtual-hosted style.** When the SDK is pointed at a custom endpoint (e.g. JaisCloud), it constructs requests like:
+
+```
+PUT http://mybucket.jaiscloud.devbox.local:4566/data.csv
+Host: mybucket.jaiscloud.devbox.local:4566
+```
+
+JaisCloud's S3 codec needs to know that `jaiscloud.devbox.local` is the base hostname so it can strip the `mybucket.` prefix and route the request correctly. Without `JAISCLOUD_S3_VIRTUAL_HOST_BASES`, the codec sees no matching pattern and falls back to path-style — which means `mybucket` is treated as the first path segment of `jaiscloud.devbox.local`, and the request fails.
+
+**You do NOT need this if:**
+- Your SDK is configured to use `UsePathStyle = true` (explicit path-style override)
+- Your SDK endpoint is `http://localhost:4566` and you are using Go SDK v2 with `UsePathStyle = true` or boto3 with `addressing_style='path'`
+
+**You DO need this if:**
+- You are running JaisCloud in Kubernetes with a DNS name (e.g. `jaiscloud.jaiscloud.svc.cluster.local`) and the SDK defaults to virtual-hosted style
+- You are running a Spark job that uses `spark.hadoop.fs.s3a.*` — Hadoop's S3A client uses virtual-hosted style by default unless `fs.s3a.path.style.access=true` is set
+- You are testing code that constructs S3 URLs by hand using virtual-hosted format
+
+---
+
+### What value to pass
+
+The base is the hostname that JaisCloud is reachable at, **without** any bucket prefix. Pass exactly the DNS name your clients will use:
+
+| Deployment | Clients use | Set base to |
+|---|---|---|
+| Local dev, localhost | `http://localhost:4566` | _(not needed — use path-style)_ |
+| K8s in-cluster | `http://jaiscloud.jaiscloud.svc.cluster.local:4566` | `jaiscloud.jaiscloud.svc.cluster.local` |
+| K8s with short DNS | `http://jaiscloud.jaiscloud.svc:4566` | `jaiscloud.jaiscloud.svc` |
+| Custom devbox DNS | `http://s3.devbox.internal:4566` | `s3.devbox.internal` |
+| Multiple aliases | Both of the above | `jaiscloud.jaiscloud.svc,s3.devbox.internal` |
+
+The port is **not** part of the base. JaisCloud strips `:port` from the Host header before matching.
+
+---
+
+### Configuration
+
+```bash
+# CLI flag
+./jaiscloud start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local"
+
+# Multiple bases (comma-separated)
+./jaiscloud start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local,s3.devbox.local"
+
+# Environment variable (same syntax)
+JAISCLOUD_S3_VIRTUAL_HOST_BASES=jaiscloud.jaiscloud.svc.cluster.local ./jaiscloud start
+```
+
+---
+
+### How it works
+
+For each incoming request, the codec:
+1. Takes the `Host` header (e.g. `mybucket.jaiscloud.jaiscloud.svc.cluster.local:4566`)
+2. Strips any `:port` suffix → `mybucket.jaiscloud.jaiscloud.svc.cluster.local`
+3. Checks whether the result ends with `.<base>` for each configured base
+4. If it matches, the prefix before `.<base>` is the bucket name; the URL path is the key
+
+```
+Host: mybucket.jaiscloud.jaiscloud.svc.cluster.local:4566
+Path: /prefix/data.csv
+
+  → strip port → mybucket.jaiscloud.jaiscloud.svc.cluster.local
+  → ends with ".jaiscloud.jaiscloud.svc.cluster.local"? yes
+  → bucket = "mybucket"
+  → key    = "prefix/data.csv"
+```
+
+A request to the bare base hostname (no bucket prefix, e.g. `jaiscloud.jaiscloud.svc.cluster.local`) falls through to path-style routing, so `ListBuckets` and similar bucket-level operations work correctly.
+
+---
+
+### AWS SDK configuration examples
+
+#### Go SDK v2
+
+```go
+import (
+    "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+cfg, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithBaseEndpoint("http://jaiscloud.jaiscloud.svc.cluster.local:4566"),
+)
+s3Client := s3.NewFromConfig(cfg)
+// SDK v2 uses virtual-hosted style by default — no extra option needed.
+// JaisCloud sees: Host: mybucket.jaiscloud.jaiscloud.svc.cluster.local:4566
+```
+
+To force path-style instead (no base needed):
+
+```go
+s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+    o.UsePathStyle = true
+})
+// JaisCloud sees: GET http://jaiscloud.jaiscloud.svc.cluster.local:4566/mybucket/key
+```
+
+#### Python boto3
+
+```python
+import boto3
+
+# Virtual-hosted style (requires JAISCLOUD_S3_VIRTUAL_HOST_BASES)
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://jaiscloud.jaiscloud.svc.cluster.local:4566',
+    region_name='us-east-1',
+    config=boto3.session.Config(s3={'addressing_style': 'virtual'}),
+)
+
+# Path-style (no base config needed)
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://jaiscloud.jaiscloud.svc.cluster.local:4566',
+    region_name='us-east-1',
+    config=boto3.session.Config(s3={'addressing_style': 'path'}),
+)
+```
+
+#### Hadoop / Spark S3A
+
+Spark's S3A client uses virtual-hosted style by default. Set the endpoint and either configure the base in JaisCloud, or disable virtual-hosted style on the Spark side:
+
+```
+# Option A — configure the base in JaisCloud (recommended for cluster-mode)
+JAISCLOUD_S3_VIRTUAL_HOST_BASES=jaiscloud.jaiscloud.svc.cluster.local
+
+# Option B — tell Spark to use path-style (no base needed)
+spark.hadoop.fs.s3a.path.style.access=true
+```
+
+When using `JAISCLOUD_AWS_EMULATOR_ENDPOINT`, JaisCloud automatically injects `spark.hadoop.fs.s3a.path.style.access=true` into Spark driver pods, so you typically do **not** need to set `JAISCLOUD_S3_VIRTUAL_HOST_BASES` for Spark jobs submitted through EMR.
+
+---
+
+### Priority over AWS SDK form
+
+Real AWS virtual-hosted URLs match `*.s3.<region>.amazonaws.com`. JaisCloud checks that pattern first. Custom base matching only applies when the AWS form does not match, so there is no risk of collision even if you set a base like `s3.us-east-1.amazonaws.com`.
 
 ---
 

@@ -76,10 +76,33 @@ func s3ChecksumCRC32(body []byte) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// S3Codec handles S3 REST wire format (path-style URLs).
-type S3Codec struct{}
+// S3Codec handles S3 REST wire format (path-style and virtual-hosted URLs).
+// VirtualHostBases lists host suffixes (e.g. jaiscloud.devbox.svc.cluster.local)
+// that the codec treats as virtual-hosted: "bucket.<base>" -> bucket extracted
+// from the hostname, key from the URL path.
+type S3Codec struct {
+	VirtualHostBases []string
+}
 
 func (c *S3Codec) ServiceName() string { return "s3" }
+
+// extractVirtualHostedBucket returns the bucket name when the request host
+// matches one of the configured VirtualHostBases (strips port first).
+// Returns "" if no base matches.
+func (c *S3Codec) extractVirtualHostedBucket(host string) string {
+	// Strip port suffix if present.
+	h := host
+	if idx := strings.LastIndexByte(h, ':'); idx >= 0 {
+		h = h[:idx]
+	}
+	for _, base := range c.VirtualHostBases {
+		suffix := "." + base
+		if strings.HasSuffix(h, suffix) {
+			return h[:len(h)-len(suffix)]
+		}
+	}
+	return ""
+}
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
@@ -95,6 +118,10 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if host := r.Host; strings.Contains(host, ".s3.") {
 		// Virtual-hosted: "mybucket.s3.us-east-1.amazonaws.com"
 		bucket = host[:strings.Index(host, ".s3.")]
+		key = strings.TrimPrefix(r.URL.Path, "/")
+	} else if b := c.extractVirtualHostedBucket(r.Host); b != "" {
+		// Virtual-hosted with custom base: "mybucket.jaiscloud.devbox.svc.cluster.local[:port]"
+		bucket = b
 		key = strings.TrimPrefix(r.URL.Path, "/")
 	} else {
 		// Path-style: /{bucket}/{key...}

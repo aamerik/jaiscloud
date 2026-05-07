@@ -765,7 +765,7 @@ func registerCFNHandlers(
 func buildAdapter(cfg *config.Config) (adapter.CloudAdapter, error) {
 	switch cfg.Cloud {
 	case "aws", "":
-		return buildAWSAdapter(), nil
+		return buildAWSAdapter(cfg.S3VirtualHostBases), nil
 	case "azure":
 		return azureadapter.New(), nil
 	case "gcp":
@@ -776,7 +776,7 @@ func buildAdapter(cfg *config.Config) (adapter.CloudAdapter, error) {
 }
 
 // buildAWSAdapter constructs all AWS service codecs and returns the wired adapter.
-func buildAWSAdapter() *awsadapter.AWSAdapter {
+func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 	iamCodec := &services.IAMCodec{}
 	return awsadapter.NewAdapter(map[string]adapter.Codec{
 		"kms":             &services.KMSCodec{},
@@ -787,7 +787,7 @@ func buildAWSAdapter() *awsadapter.AWSAdapter {
 		"sts":             iamCodec,
 		"sns":             &services.SNSCodec{},
 		"dynamodb":        &services.DynamoDBCodec{},
-		"s3":              &services.S3Codec{},
+		"s3":              &services.S3Codec{VirtualHostBases: s3VirtualHostBases},
 		"lambda":          &services.LambdaCodec{},
 		"glue":            &services.GlueCodec{},
 		"ec2":             services.NewEC2Codec("ec2"),

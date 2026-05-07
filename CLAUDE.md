@@ -459,6 +459,13 @@ JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300  # Docker warm container idle timeout
 JAISCLOUD_KMS_MASTER_KEY=    # 32-byte hex KEK; if unset DEK stored plaintext (dev only)
 JAISCLOUD_APIGW_PROXY_TIMEOUT=30s    # HTTP_PROXY integration timeout
 JAISCLOUD_APIGW_ALLOW_PRIVATE_HOSTS= # true to allow RFC-1918 HTTP_PROXY targets
+# S3 virtual-hosted style routing
+JAISCLOUD_S3_VIRTUAL_HOST_BASES=     # comma-separated host suffixes, e.g. "jaiscloud.devbox.local,s3.local"
+# IMDS emulator (AWS Cloud only)
+JAISCLOUD_IMDS_ENABLED=false         # true to expose /_/latest/meta-data/* IMDS endpoints
+# AWS emulator wiring for Spark driver pods (K8s executor only)
+JAISCLOUD_AWS_EMULATOR_ENDPOINT=     # JaisCloud S3/API endpoint reachable from Spark pods, e.g. http://jaiscloud.jaiscloud.svc:4566
+JAISCLOUD_K8S_SPARK_SA=             # K8s service account for spark-submit pods (default: "default")
 # EMR bootstrap actions (K8s executor only)
 JAISCLOUD_BOOTSTRAP_IMAGE=amazon/aws-cli:2.18  # init container image for bootstrap scripts
 JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES=1048576   # max size per bootstrap script (default 1 MiB)
@@ -571,10 +578,44 @@ All full-mode e2e tests live under `tests/full_mode/aws/`:
 | `IdentityMutator` | `k8shelpers.IdentityMutator` — cloud-specific pod identity (IRSA, Azure MI, GCP WI) |
 | `PlatformOverlay` | `*platform.PlatformConfig` — TLS init containers, CA env vars, volume mounts |
 | `EntryPoint` | JAR or Python file URI |
-| `SparkSubmitArgs` | `--conf` entries, `--num-executors`, etc. |
+| `SparkSubmitArgs` | user-supplied `--conf` entries, `--num-executors`, etc. (appended last — wins over `ExtraSparkConfs`) |
+| `ExtraSparkConfs` | JaisCloud-injected `--conf` tokens (e.g. from `sparkaws.DriverSparkConfsFromEnv`), prepended before `SparkSubmitArgs` |
+| `ExtraDriverEnv` | extra `corev1.EnvVar` entries added to the spark-submit container |
+| `ServiceAccountName` | Kubernetes service account for the spark-submit pod (falls back to `"default"`) |
 | `JarArgs` | arguments passed after the entry point |
 
+**Spark conf precedence:** `BuildClientModeArgs` emits confs in order: fixed JaisCloud confs → `ExtraSparkConfs` → `SparkSubmitArgs`. Because Spark uses last-value-wins semantics, user-supplied `SparkSubmitArgs` always override JaisCloud defaults for the same key.
+
+**Built-in confs emitted by `BuildClientModeArgs`:**
+- `spark.kubernetes.namespace` — from `ClientModeJob.Namespace`
+- `spark.kubernetes.driver.pod.name` — `$(SPARK_DRIVER_POD_NAME)` env-var ref
+- `spark.kubernetes.executor.podTemplateFile` — `file:///jaiscloud/spark/executor-template.yaml`
+- `spark.kubernetes.executor.podTemplateContainerName` — `spark-kubernetes-executor`
+- `spark.kubernetes.container.image` — from `ClientModeJob.Image`
+- `spark.kubernetes.authenticate.executor.serviceAccountName` — from `ServiceAccountName` (default `"default"`)
+- `spark.driver.bindAddress` — `0.0.0.0`
+
 `SubmitClientMode` creates a ConfigMap for the executor pod template before creating the Job. If `createJob` fails, the ConfigMap is explicitly deleted in a deferred cleanup, preventing orphaned ConfigMaps.
+
+### `sparkaws` — AWS emulator wiring for Spark driver pods
+
+`internal/provider/aws/sparkaws` injects JaisCloud's own endpoint coordinates into Spark driver pods so they can reach S3, IMDS, and AWS credentials inside the cluster.
+
+`AWSEmulatorConfig` fields:
+- `S3Endpoint` — `spark.hadoop.fs.s3a.endpoint` value (and `HADOOP_AWS_S3_ENDPOINT` env var)
+- `IMDSEndpoint` — `AWS_EC2_METADATA_SERVICE_ENDPOINT` env var (empty → `AWS_EC2_METADATA_DISABLED=true`)
+- `AccessKeyID`, `SecretAccessKey` — `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars
+
+Key functions:
+- `DriverEnv(cfg)` — returns `[]corev1.EnvVar` for the driver container
+- `DriverSparkConfs(cfg)` — returns `--conf` tokens including `spark.hadoop.fs.s3a.impl`, `spark.hadoop.fs.s3a.endpoint`, credentials provider, and `spark.executorEnv.*` mirrors
+- `DriverSparkConfsFromEnv(cfg, driverEnv)` — same but accepts pre-computed env to avoid calling `DriverEnv` twice per job submission
+
+Both EMR providers compute `driverEnv := sparkaws.DriverEnv(p.awsEmulator)` once, then pass it to both `ClientModeJob.ExtraDriverEnv` and `sparkaws.DriverSparkConfsFromEnv(...)`.
+
+### Executor pod template — `BuildExecutorPodTemplate`
+
+`sparkhelpers.BuildExecutorPodTemplate` produces YAML for `spark.kubernetes.executor.podTemplateFile`. The base container is always named `"spark-kubernetes-executor"` (the canonical name Spark requires to inject its image and command). `ImagePullPolicy` is set to `corev1.PullIfNotPresent` on the base container; it is **not** in the `BuildPodSpec` merge table, so callerTpl cannot override it.
 
 ### `BuildPodSpec` and `IdentityMutator`
 
@@ -584,7 +625,11 @@ All full-mode e2e tests live under `tests/full_mode/aws/`:
 type IdentityMutator func(ctx context.Context, k8s kubernetes.Interface, tpl *corev1.PodTemplateSpec) error
 ```
 
-Both EMR providers accept `WithIdentityMutator(m k8shelpers.IdentityMutator)` as a constructor option.
+Both EMR providers accept the following constructor options:
+- `WithIdentityMutator(m k8shelpers.IdentityMutator)` — cloud-specific pod identity wiring
+- `WithAWSEmulator(cfg *sparkaws.AWSEmulatorConfig)` — inject JaisCloud's S3/IMDS/credentials endpoint into driver pods
+- `WithServiceAccountName(sa string)` — set the Kubernetes service account for spark-submit pods
+- `WithInstanceID(id string)` — override the instance ID stamped on managed K8s resources
 
 ### `OwnershipPatcher` — executor pod ownership
 
@@ -700,7 +745,18 @@ AWS SDK v2 routes CloudWatch requests to `/service/monitoring/operation/<Action>
 - `?uploads` on POST → `CreateMultipartUpload`, on GET → `ListMultipartUploads`
 - `?delete` on POST → `DeleteObjects` (XML body parsed for keys)
 
-S3 also handles virtual-hosted-style URLs (`mybucket.s3.<region>.amazonaws.com`) — the bucket is extracted from the Host header before path parsing.
+S3 handles two virtual-hosted-style URL forms, in priority order:
+
+1. **AWS SDK form** — host matches `*.s3.<region>.amazonaws.com` or `*.s3.amazonaws.com`: the bucket is extracted from the Host header prefix before path parsing.
+2. **Custom base form** — `S3Codec.VirtualHostBases []string`: `extractVirtualHostedBucket` strips any `:port` suffix then checks whether `host` ends with `.<base>`. If it does, the prefix before `.<base>` is the bucket. Configured via `--s3-virtual-host-bases` / `JAISCLOUD_S3_VIRTUAL_HOST_BASES` (comma-separated). Empty base list → path-style only.
+
+Both forms fall back to **path-style** (`/<bucket>/<key>`) when neither matches.
+
+### S3 object store: race-condition ordering
+
+`DeleteObject` and `DeleteObjects` delete **metadata before blob** so `GetObject` never observes a dangling metadata row with a missing blob. If metadata deletion succeeds but blob deletion fails, the object is gone (metadata was the authoritative existence check).
+
+`GetObject` distinguishes a clean concurrent delete from storage corruption: when the blob fetch returns not-found, the provider rechecks metadata. If metadata is also gone (concurrent delete), it returns 404. If metadata is still present but blob is absent, it returns 500 (storage inconsistency).
 
 ### Lambda invoke
 
