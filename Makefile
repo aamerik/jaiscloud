@@ -31,7 +31,10 @@ JAISCLOUD_HOST ?= http://localhost:$(JAISCLOUD_PORT)
 # Narrow any test target to a single test: make test-e2e-emrcontainers-k8s TEST_RUN=TestSparkJob_K8s_CancelJobRun
 TEST_RUN ?= .
 
-IMAGE := jaiscloud
+IMAGE             := jaiscloud
+# Public image used by up-docker and up-k8s. Override with a locally built image
+# (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud:latest to make.
+JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
 
 .PHONY: help build test docker clean \
         server-lite server-full server-docker server-k8s server-full-all \
@@ -127,17 +130,18 @@ stop-server: ## Stop background jaiscloud process and clean up Lambda/Spark reso
 
 ##@ Containerized server lifecycle
 
-up-docker: _check-docker-prereq docker ## Start JaisCloud + Postgres via docker-compose (detached)
-	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
+up-docker: _check-docker-prereq ## Start JaisCloud + Postgres via docker-compose (detached)
+	JAISCLOUD_IMAGE=$(JAISCLOUD_IMAGE) \
+	  JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
 	  JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE) \
 	  JAISCLOUD_LAMBDA_IMAGE=$(LAMBDA_IMAGE) \
-	  docker-compose up -d --build
+	  docker-compose up -d
 	$(MAKE) _wait-docker
 
 down-docker: ## Stop and remove docker-compose services
 	docker-compose down --remove-orphans
 
-up-k8s: _check-k8s-prereq docker ## Deploy JaisCloud + Postgres to K8s  (docker-desktop)
+up-k8s: _check-k8s-prereq ## Deploy JaisCloud + Postgres to K8s  (docker-desktop)
 	kubectl apply -f deploy/k8s/namespace.yaml
 	kubectl apply -f deploy/k8s/rbac.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml

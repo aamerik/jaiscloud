@@ -58,9 +58,8 @@ spec:
       terminationGracePeriodSeconds: 45
       containers:
         - name: jaiscloud
-          image: jaiscloud:latest
-          # Use local image built by deploy.sh — never pull from a registry
-          imagePullPolicy: Never
+          image: ghcr.io/jaisrajms/jaiscloud:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 4566
           envFrom:

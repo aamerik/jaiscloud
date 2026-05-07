@@ -250,7 +250,7 @@ Executor behaviour is controlled by a single env var: `JAISCLOUD_EXECUTOR_MODE` 
 |---|---|---|---|---|
 | SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
 | DynamoDB + Streams | In-memory maps | PostgreSQL rows | PostgreSQL rows | PostgreSQL rows |
-| S3 | In-memory maps + `MemoryBlobStore` | PostgreSQL rows + `LocalFSBlobStore`* | same | same |
+| S3 | In-memory maps + `MemoryBlobStore` | PostgreSQL rows + `LocalFSBlobStore` (default `~/.jaiscloud/blobs`) | same | same |
 | Lambda | Echo response (mock) | Echo response (mock) | **Docker container** per function (warm pool) | **K8s Pod + ClusterIP Service** per function (warm pool) |
 | EMR on EC2 steps | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per step | **K8s `batch/v1 Job`** per step |
 | EMR on EKS job runs | Instant `COMPLETED` (mock) | Instant `COMPLETED` (mock) | **Docker container** per job run | **K8s `batch/v1 Job`** per job run |
@@ -410,10 +410,9 @@ S3 object **bodies** are stored in `BlobStore`, separate from the metadata in Po
 | Mode | BlobStore | Where blobs live |
 |---|---|---|
 | Lite | `MemoryBlobStore` | In-process heap; lost on restart |
-| Full (current) | `MemoryBlobStore` | In-process heap; lost on restart |
-| Full (when wired) | `LocalFSBlobStore` | `JAISCLOUD_BLOB_DIR` on local filesystem |
+| Full | `LocalFSBlobStore` | `JAISCLOUD_BLOB_DIR` (default `~/.jaiscloud/blobs`); survives restarts |
 
-`LocalFSBlobStore` is fully implemented at [internal/blobfs/](internal/blobfs/) but the `main.go` wire-up still uses `MemoryBlobStore`. Swap `NewMemoryBlobStore()` for `NewLocalFSBlobStore(cfg.BlobDir)` in `startCmd` to enable persistent blob storage.
+`LocalFSBlobStore` is wired automatically in full mode via `blobfs.NewLocalFSBlobStore(cfg.BlobDir)` in `initStores`. The default directory is `~/.jaiscloud/blobs` (set in `config.go`). Override with `--blob-dir /path/to/dir` or `JAISCLOUD_BLOB_DIR`.
 
 **`BlobFetcher` interface** (`internal/blobfs/blobfetch.go`) provides URI-addressed read-only access to the blob store. `S3BlobFetcher` parses `s3://` and `s3a://` URIs and delegates to the underlying `BlobStore`. Used by the EMR bootstrap resolver to fetch bootstrap scripts by their S3 path without importing the S3 provider.
 
@@ -483,9 +482,10 @@ JAISCLOUD_INSTANCE_ID=                        # override the auto-generated inst
 
 > **Startup executor log:** on startup the server logs the active executor mode. An unset `JAISCLOUD_EXECUTOR_MODE` silently defaults to mock — the startup log is the first place to check:
 > ```
-> INFO  executor  lambda=mock  spark=mock
-> INFO  store     mode=full  blob=memory [WARN: LocalFSBlobStore not wired — S3 blobs lost on restart]
-> INFO  kms       master-key=unset  dek=plaintext [WARN: dev mode only]
+> INFO  executor    lambda=mock  spark=mock
+> INFO  blob storage  dir=/home/user/.jaiscloud/blobs
+> INFO  kms         master-key=unset  dek=plaintext [WARN: dev mode only]
+> INFO  jaiscloud started  port=4566  mode=full
 > ```
 
 ### CLI commands
@@ -558,7 +558,7 @@ All full-mode e2e tests live under `tests/full_mode/aws/`:
 | `PostgresSQSMessageStore` | `jc_sqs_messages`, `jc_sqs_dedup` |
 | `PostgresDynamoDBItemStore` | `jc_dynamodb_items` |
 | `PostgresS3ObjectMetaStore` | `jc_s3_objects` |
-| `MemoryBlobStore` | in-memory blob bytes |
+| `LocalFSBlobStore` | blob files under `JAISCLOUD_BLOB_DIR` (full mode) or in-memory (lite mode) |
 
 ---
 

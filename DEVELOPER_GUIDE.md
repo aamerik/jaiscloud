@@ -1,15 +1,48 @@
 # Developer Guide
 
-This guide covers everything you need to build, run, and extend JaisCloud locally.
+JaisCloud is a local AWS emulator written in Go. Point any AWS SDK at `http://localhost:4566` and it speaks the same wire protocol as real AWS — SQS, S3, DynamoDB, Lambda, EMR, and more — without touching the internet.
 
-**Contents**
+This guide walks you from a fresh clone to a running server, then through progressively more realistic setups: in-memory for unit tests, PostgreSQL-backed for persistence, and real Spark jobs submitted to a Kubernetes cluster.
+
+---
+
+## Which setup do I need?
+
+Read this table first. Pick the row that matches your goal, then jump to that section.
+
+You can run JaisCloud two ways:
+
+- **From source** — build the Go binary yourself (`go build ./cmd/jaiscloud/`). Good for development and debugging.
+- **Via Docker / Kubernetes** — use the pre-built image. No Go required at all.
+
+| Goal | Mode | Run from source | Run via Docker / K8s |
+|---|---|---|---|
+| Run unit tests / CI pipelines | **Lite** (in-memory) | Go | Docker only |
+| Build and test AWS integrations locally | **Lite** or **Full** | Go + Docker (Postgres) | Docker only |
+| State survives server restarts | **Full** (PostgreSQL) | Go + Docker | Docker only |
+| Run EMR/Spark API calls that return mock results instantly | **Full + Mock executor** | Go + Docker | Docker only |
+| Actually run a Spark job end-to-end | **Full + K8s executor** | Go + Docker + K8s | Docker + K8s |
+
+If you are new to JaisCloud and want the fastest start, pull the public image and run it:
+
+```bash
+docker pull ghcr.io/jaisrajms/jaiscloud:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud:latest
+curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
+```
+
+If you are developing JaisCloud itself or need to iterate quickly on code changes, build from source with `go build -o jaiscloud ./cmd/jaiscloud/`.
+
+---
+
+## Contents
+
 - [Prerequisites](#prerequisites)
-- [Docker Image](#docker-image)
-- [Running in Lite Mode](#running-in-lite-mode)
-- [Running in Full Mode (PostgreSQL)](#running-in-full-mode-postgresql)
-- [Running on Kubernetes](#running-on-local-kubernetes)
-- [EMR Spark Cluster — Mock Mode](#emr-spark-cluster--mock-mode)
-- [EMR Spark Cluster — Kubernetes Mode](#emr-spark-cluster--kubernetes-mode)
+- [Mode 1 — Lite (in-memory, no dependencies)](#mode-1--lite-in-memory-no-dependencies)
+- [Mode 2 — Full (PostgreSQL persistence)](#mode-2--full-postgresql-persistence)
+- [Mode 3 — JaisCloud on Kubernetes](#mode-3--jaiscloud-on-kubernetes)
+- [EMR Spark — Mock Mode (instant results)](#emr-spark--mock-mode-instant-results)
+- [EMR Spark — Kubernetes Executor (real Spark jobs)](#emr-spark--kubernetes-executor-real-spark-jobs)
 - [Running Tests](#running-tests)
   - [Unit tests](#unit-tests-no-server-needed)
   - [Integration tests (lite mode)](#integration-tests)
@@ -49,164 +82,184 @@ This guide covers everything you need to build, run, and extend JaisCloud locall
 
 ## Prerequisites
 
-- **Go 1.26+** — `go version` should print `go1.26` or higher
-- **Docker** — for full mode and Spark cluster setup
-- **kubectl** — for Kubernetes sections
-- **AWS CLI** — for smoke-testing via the command line
+You need different tools depending on which mode you are using. Install only what you need for your current goal.
 
-Quick install check:
+### Always required
+
+**Go 1.26+** — JaisCloud is a Go binary. Check your version:
+
 ```bash
 go version
+# Expected: go version go1.26.x ...
+```
+
+If Go is not installed or out of date: https://go.dev/dl/
+
+### Required for Full mode and Spark
+
+**Docker** — needed to run PostgreSQL (full mode) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud:latest`.
+
+```bash
 docker version
+# Expected: Client: Docker Engine - Community, Version: 24.x or higher
+```
+
+### Required for Spark K8s executor only
+
+**kubectl** — the Kubernetes CLI, used to check Spark job pods.
+
+```bash
 kubectl version --client
+# Expected: Client Version: v1.28.x or higher
+```
+
+**A Kubernetes cluster** — Docker Desktop (easiest), kind, or minikube. See [Mode 3](#mode-3--jaiscloud-on-kubernetes) for setup.
+
+### Optional (for smoke testing only)
+
+**AWS CLI** — useful for manually calling JaisCloud via the command line, but not required to run the server.
+
+```bash
 aws --version
+# Expected: aws-cli/2.x.x
 ```
 
 ---
 
-## Docker Image
+## Mode 1 — Lite (in-memory, no dependencies)
 
-JaisCloud ships a single Docker image built on `scratch` (CGO_ENABLED=0, fully static). It supports both lite and full mode at runtime via environment variables.
+**What it is:** JaisCloud keeps all state in RAM. No database, no Docker, no external services. Everything resets when the server stops. This is the right choice for unit tests, CI, and first-time setup.
 
-```bash
-# Build
-make docker
+**What you need:** Go only.
 
-# Override the version tag
-make docker VERSION=1.2.3
+### Step 1 — Build the binary
 
-# Push to a registry
-make docker REGISTRY=ghcr.io/myorg
-```
-
-| Property | Value |
-|---|---|
-| Base image | `scratch` |
-| Binary | CGO_ENABLED=0, fully static |
-| Persistence | In-memory (lite) or PostgreSQL (full) |
-| Image size | ~10 MB |
-
-Run in lite mode (default):
+From the repo root:
 
 ```bash
-docker run -p 4566:4566 jaiscloud:latest
-```
-
-Run in full mode (PostgreSQL):
-
-```bash
-docker run -p 4566:4566 \
-  -e JAISCLOUD_MODE=full \
-  -e JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@host.docker.internal:5432/jaiscloud \
-  jaiscloud:latest
-```
-
-With Docker Compose — use the included `docker-compose.yml` at the repo root:
-
-```bash
-make up-docker       # builds image, starts postgres (port 5433) + jaiscloud (port 4566)
-make down-docker     # stops and removes services
-```
-
-Or directly:
-
-```bash
-docker-compose up -d
-docker-compose down
-```
-
----
-
-## Running in Lite Mode
-
-Lite mode keeps everything in memory. No external dependencies. State is lost when the server stops. This is the right choice for unit tests and CI pipelines.
-
-### 1. Build the binary
-
-```bash
-# From the repo root
 go build -o jaiscloud ./cmd/jaiscloud/
 ```
 
-### 2. Start the server
+This produces a `jaiscloud` binary in the current directory. You must rebuild after any code change — never run a stale binary.
+
+### Step 2 — Start the server
 
 ```bash
 ./jaiscloud start
 ```
 
-You should see:
+Expected output:
 ```
-INFO jaiscloud started port=4566 mode=lite
+INFO  executor  lambda=mock  spark=mock
+INFO  jaiscloud started  port=4566  mode=lite
 ```
 
-### 3. Verify it is running
+The server is now listening on port 4566. Leave this terminal open, or run it in the background with `./jaiscloud start &`.
+
+### Step 3 — Verify it is running
 
 ```bash
 ./jaiscloud doctor
-# OK: jaiscloud is running at http://localhost:4566
+```
 
+Expected:
+```
+OK: jaiscloud is running at http://localhost:4566
+```
+
+Or use curl directly:
+
+```bash
 curl http://localhost:4566/_jaiscloud/health
 # {"status":"ok"}
 ```
 
-### 4. Try a quick smoke test
+### Step 4 — Try it with the AWS CLI
+
+The AWS CLI talks to JaisCloud the same way it talks to real AWS. The only difference is `--endpoint-url`.
 
 ```bash
-# Create an SQS queue
+# Create a queue
 aws --endpoint-url http://localhost:4566 \
     --region us-east-1 \
     --no-cli-pager \
-    sqs create-queue --queue-name test-queue
+    sqs create-queue --queue-name hello-queue
 
 # Send a message
 aws --endpoint-url http://localhost:4566 \
     --region us-east-1 \
     --no-cli-pager \
     sqs send-message \
-    --queue-url http://localhost:4566/000000000000/test-queue \
-    --message-body "hello"
+    --queue-url http://localhost:4566/000000000000/hello-queue \
+    --message-body "hello from jaiscloud"
 
-# Receive the message
+# Receive it back
 aws --endpoint-url http://localhost:4566 \
     --region us-east-1 \
     --no-cli-pager \
     sqs receive-message \
-    --queue-url http://localhost:4566/000000000000/test-queue
+    --queue-url http://localhost:4566/000000000000/hello-queue
 ```
 
-### 5. Useful flags
+You should see a JSON response containing your message body `"hello from jaiscloud"`.
 
-| Flag | Description |
-|---|---|
-| `--port 9000` | Change the listen port |
-| `--region eu-west-1` | Change the region reported in responses |
-| `--log-level debug` | Verbose request/response logging |
-| `--metrics` | Enable Prometheus metrics at `/metrics` |
-| `--deterministic --seed 42` | Reproducible random IDs (useful for golden-file tests) |
-
-### 6. Wipe state between tests
+### Step 5 — Reset state between tests
 
 ```bash
 curl -X POST http://localhost:4566/_jaiscloud/reset
 ```
 
-This is what integration tests call automatically via `resetState(t)`. You can call it from any script to get a clean slate without restarting the server.
+This wipes all in-memory state. Useful between test runs without restarting the server. Integration tests call this automatically.
+
+### Useful flags
+
+| Flag | What it does |
+|---|---|
+| `--port 9000` | Listen on a different port |
+| `--region eu-west-1` | Change the region reported in responses |
+| `--log-level debug` | Print every request and response (very verbose) |
+| `--metrics` | Enable Prometheus metrics at `http://localhost:4566/metrics` |
 
 ---
 
-## Running in Full Mode (PostgreSQL)
+## Mode 2 — Full (PostgreSQL persistence)
 
-Full mode persists all state — queues, topics, tables, S3 objects, IAM resources, SQS messages — in a PostgreSQL database. State survives server restarts. Use this for shared dev environments or long-running integration setups.
+**What it is:** JaisCloud stores all state in PostgreSQL. State survives server restarts. Use this when you need a persistent dev environment, shared team setup, or you are testing restart behaviour.
 
-### 1. Start PostgreSQL
+**What you need:** Go + Docker.
 
-The quickest way is via docker-compose (port 5433 on the host):
+**What is different from Lite:** the only difference is where data lives. All AWS APIs work identically. You just add `--mode full` and a database connection string.
+
+### Step 1 — Start PostgreSQL
+
+The repo includes a Docker Compose file that starts both PostgreSQL and JaisCloud together. That is the easiest path.
+
+**Option A — Docker Compose (recommended)**
 
 ```bash
 make up-docker
 ```
 
-Or start postgres manually with Docker:
+This pulls `ghcr.io/jaisrajms/jaiscloud:latest`, starts PostgreSQL on port 5433, and starts JaisCloud on port 4566. Skip to the verify step.
+
+> **Using a locally built image?** Run `make docker` first, then pass the image override: `JAISCLOUD_IMAGE=jaiscloud:latest make up-docker`.
+
+To stop:
+```bash
+make down-docker
+```
+
+To wipe all data and start fresh:
+```bash
+docker-compose down -v    # -v removes the postgres data volume
+make up-docker
+```
+
+---
+
+**Option B — Run the binary yourself**
+
+If you want to run the Go binary directly (e.g. for debugging or hot-reload during development), start PostgreSQL separately:
 
 ```bash
 docker run -d \
@@ -218,130 +271,163 @@ docker run -d \
   postgres:16-alpine
 ```
 
-Or if PostgreSQL is already installed locally:
-```bash
-createdb jaiscloud
-```
-
-Wait a few seconds for the container to be ready, then test the connection:
+Wait for it to be ready (takes about 5 seconds):
 ```bash
 docker exec jaiscloud-pg pg_isready -U jaiscloud
 # /var/run/postgresql:5432 - accepting connections
 ```
 
-### 2. Start JaisCloud in full mode
+### Step 2 — Start JaisCloud in full mode
 
 ```bash
+go build -o jaiscloud ./cmd/jaiscloud/
 ./jaiscloud start \
   --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
-The server runs SQL migrations automatically on every startup — no manual schema setup needed. You will see:
+Expected output:
 ```
-INFO starting in full mode dsn=postgres://...
-INFO jaiscloud started port=4566 mode=full
+INFO  executor   lambda=mock  spark=mock
+INFO  store      mode=full
+INFO  blob storage  dir=/Users/yourname/.jaiscloud/blobs
+INFO  jaiscloud started  port=4566  mode=full
 ```
 
-### 3. Verify
+> **Where do S3 blobs go?** In full mode, S3 object *bodies* are written to `~/.jaiscloud/blobs` on the local filesystem (a `LocalFSBlobStore`). They survive server restarts. S3 *metadata* (bucket names, keys, sizes, ETags) goes into PostgreSQL. You can change the blob directory with `--blob-dir /path/to/dir` or `JAISCLOUD_BLOB_DIR`. In lite mode, blobs are in memory and lost when the server stops.
+
+JaisCloud runs SQL migrations automatically on every startup — no manual schema setup is needed.
+
+### Step 3 — Verify persistence
+
+Create a resource, restart the server, and confirm it is still there:
 
 ```bash
-./jaiscloud doctor
-./jaiscloud env     # shows JAISCLOUD_MODE=full and JAISCLOUD_DSN=...
+# Create a queue
+aws --endpoint-url http://localhost:4566 --region us-east-1 \
+    sqs create-queue --queue-name persist-test
+
+# Stop and restart the server (Ctrl+C then restart, or kill & restart if running in background)
+./jaiscloud start --mode full --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
+
+# Queue should still be there
+aws --endpoint-url http://localhost:4566 --region us-east-1 \
+    sqs get-queue-url --queue-name persist-test
+# {"QueueUrl":"http://localhost:4566/000000000000/persist-test"}
 ```
 
-### 4. Using Docker Compose (recommended for local dev)
+### Useful env vars for full mode
 
-The repo includes a `docker-compose.yml` at the root. Start with:
+You can use environment variables instead of flags:
 
 ```bash
-make up-docker            # builds jaiscloud image, starts postgres + server
-make down-docker          # stop and remove services
-docker-compose down -v    # wipe all data (postgres volume)
+export JAISCLOUD_MODE=full
+export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
+./jaiscloud start
 ```
 
-Postgres is exposed on host port **5433** (to avoid conflicts with local Postgres). JaisCloud is on port **4566**.
+### Connection string format
 
-To view logs:
-```bash
-docker-compose logs -f jaiscloud
+```
+postgres://<user>:<password>@<host>:<port>/<database>
 ```
 
-### 5. Connection string reference
-
-| Component | Example | Notes |
+| Part | Default in this guide | Notes |
 |---|---|---|
-| User | `jaiscloud` | postgres role |
-| Password | `jaiscloud` | postgres password |
-| Host | `localhost` | hostname or IP |
-| Port | `5432` | default postgres port |
-| Database | `jaiscloud` | must already exist |
-
-Full DSN: `postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud`
-
-Via environment variable: `JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud`
+| user | `jaiscloud` | The PostgreSQL role |
+| password | `jaiscloud` | Change this in production |
+| host | `localhost` | Use `host.docker.internal` from inside Docker |
+| port | `5433` | Docker Compose maps container port 5432 → host port 5433 |
+| database | `jaiscloud` | Must exist before starting |
 
 ---
 
-## Running on Local Kubernetes
+## Mode 3 — JaisCloud on Kubernetes
 
-`deploy/deploy.sh` is a one-click script that builds the Docker image, deploys JaisCloud and PostgreSQL to a local Kubernetes cluster, and runs a smoke test.
+**What this is:** running the JaisCloud server itself inside a Kubernetes cluster. This is separate from running Spark jobs on K8s (covered in [EMR Spark — Kubernetes Executor](#emr-spark--kubernetes-executor-real-spark-jobs)).
 
-### Prerequisites
+**When to use this:**
+- You want a shared JaisCloud instance accessible to multiple pods in the same cluster
+- You are testing services that run inside K8s and need to call AWS APIs
+- You want Spark jobs to submit to K8s (the JaisCloud server needs to reach the K8s API)
 
-- Docker Desktop with Kubernetes enabled (Settings → Kubernetes → Enable Kubernetes)
-- `kubectl` pointing at the `docker-desktop` context
+**What you need:** Docker Desktop with Kubernetes enabled, or kind / minikube.
+
+### Step 1 — Enable Kubernetes
+
+**Docker Desktop (easiest):**
+
+Open Docker Desktop → Settings → Kubernetes → check "Enable Kubernetes" → Apply & Restart. Wait for the Kubernetes status indicator to show green.
 
 Verify:
 ```bash
-kubectl config current-context   # should print: docker-desktop
+kubectl config current-context
+# docker-desktop
 ```
 
-### Deploy with Makefile (recommended)
+**kind or minikube:**
 
 ```bash
-make up-k8s     # builds image, applies all manifests, waits for ready
-make down-k8s   # removes deployment and cleans up Lambda/Spark resources
+# kind
+kind create cluster --name jaiscloud-dev
+
+# minikube
+minikube start
 ```
 
-This applies manifests in order: `namespace.yaml` → `rbac.yaml` → `postgres.yaml` → `jaiscloud.yaml`.
-
-### One-click deploy (legacy script)
+### Step 2 — Deploy with Make
 
 ```bash
-./deploy/deploy.sh
+make up-k8s
 ```
 
-The script:
-1. Builds the `jaiscloud:latest` Docker image from the repo root `Dockerfile`
-2. Creates the `jaiscloud` namespace
-3. Deploys PostgreSQL with a 1 Gi PersistentVolumeClaim (`postgres-pvc`)
-4. Deploys JaisCloud in full mode with a 5 Gi PersistentVolumeClaim for S3 blob bytes (`jaiscloud-blobs-pvc`)
-5. Wires JaisCloud to the postgres pod via cluster-internal DNS
-6. Waits for both rollouts to complete
-7. Smoke-tests `/_jaiscloud/health`
+This runs in order:
+1. Pulls `ghcr.io/jaisrajms/jaiscloud:latest` from the GitHub Container Registry
+2. Applies `deploy/k8s/namespace.yaml` — creates the `jaiscloud` namespace
+3. Applies `deploy/k8s/rbac.yaml` — grants JaisCloud permission to create Spark Jobs and Lambda Pods
+4. Applies `deploy/k8s/postgres.yaml` — starts a PostgreSQL pod
+5. Applies `deploy/k8s/jaiscloud.yaml` — starts JaisCloud in full mode, wired to the postgres pod
 
-When complete the server is reachable at:
+Wait for both pods to be running:
+```bash
+kubectl get pods -n jaiscloud
+# NAME                         READY   STATUS    RESTARTS
+# jaiscloud-xxxx               1/1     Running   0
+# postgres-xxxx                1/1     Running   0
+```
 
-| URL | Description |
-|---|---|
-| `http://localhost:4566` | AWS-compatible endpoint |
-| `http://localhost:4566/_jaiscloud/health` | Liveness check |
-| `http://localhost:4566/metrics` | Prometheus metrics |
+### Step 3 — Reach the server
 
-### Command reference
+Docker Desktop exposes the LoadBalancer service on localhost automatically. Check the port:
 
-| Command | Workloads | PVCs (data) |
-|---|---|---|
-| `./deploy/deploy.sh` | Created / updated | Created if absent, existing data kept |
-| `./deploy/deploy.sh --delete` | Removed | **Kept** — data survives |
-| `./deploy/deploy.sh --reset` | Removed | **Deleted** — all data wiped |
+```bash
+kubectl get svc -n jaiscloud jaiscloud
+# NAME        TYPE           EXTERNAL-IP   PORT(S)
+# jaiscloud   LoadBalancer   localhost     4566:xxxxx/TCP
+```
 
-### Port forwarding (non-Docker-Desktop clusters)
+The server is now at `http://localhost:4566`.
 
-On minikube or kind the external IP stays `<pending>`. Use port-forward instead:
+For kind or minikube (external IP stays `<pending>`), use port-forward instead:
 ```bash
 kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
+```
+
+### Step 4 — Verify
+
+```bash
+./jaiscloud doctor
+# OK: jaiscloud is running at http://localhost:4566
+
+curl http://localhost:4566/_jaiscloud/health
+# {"status":"ok"}
+```
+
+### Teardown
+
+```bash
+make down-k8s       # removes the deployment; keeps persistent volumes
+make down-k8s WIPE=true   # removes deployment AND wipes all data
 ```
 
 ### Viewing logs
@@ -353,43 +439,47 @@ kubectl logs -n jaiscloud deployment/postgres -f
 
 ---
 
-## EMR Spark Cluster — Mock Mode
+## EMR Spark — Mock Mode (instant results)
 
-The built-in EMR and EMR-on-EKS providers use a `MockExecutor` by default (`JAISCLOUD_SPARK_MODE=off` or unset). In this mode, Spark jobs complete immediately without any actual Spark cluster. This is what you want for most local development and all unit tests.
+**What this is:** EMR (`RunJobFlow`, `AddJobFlowSteps`) and EMR on EKS (`StartJobRun`) work as full AWS-compatible APIs, but Spark jobs complete instantly with `COMPLETED` status. No actual Spark process runs.
 
-### 1. Start JaisCloud
+**When to use this:** whenever you need the EMR API to work (your code creates clusters, submits steps, polls status) but you do not need to execute real Spark code. This covers most unit tests and integration tests.
 
-```bash
-./jaiscloud start --mode full \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
-```
+**What you need:** JaisCloud running in lite or full mode.
 
-You should see:
-```
-INFO jaiscloud started port=4566 mode=full
-```
+### How to enable
 
-### 2. Submit an EMR job
+This is the default. You do not need to set anything:
 
 ```bash
-# Create an EMR cluster
-aws --endpoint-url http://localhost:4566 \
-    --region us-east-1 \
-    --no-cli-pager \
+./jaiscloud start   # mock executor is on by default
+```
+
+To be explicit:
+```bash
+JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start
+```
+
+### Try it — EMR on EC2 (classic)
+
+```bash
+# 1. Create a cluster
+CLUSTER_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
     emr run-job-flow \
-    --name "my-cluster" \
+    --name "test-cluster" \
     --release-label emr-6.10.0 \
     --instance-groups '[{"InstanceRole":"MASTER","InstanceType":"m5.xlarge","InstanceCount":1}]' \
-    --service-role EMR_DefaultRole
+    --service-role EMR_DefaultRole \
+    --query 'JobFlowId' --output text)
 
-# Note the JobFlowId from the output, e.g. j-ABC123
+echo "Cluster ID: $CLUSTER_ID"
 
-# Add a step (Spark job)
-aws --endpoint-url http://localhost:4566 \
-    --region us-east-1 \
-    --no-cli-pager \
+# 2. Add a Spark step
+STEP_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
     emr add-steps \
-    --cluster-id j-ABC123 \
+    --cluster-id $CLUSTER_ID \
     --steps '[{
       "Name": "my-spark-job",
       "ActionOnFailure": "CONTINUE",
@@ -397,357 +487,240 @@ aws --endpoint-url http://localhost:4566 \
         "Jar": "s3://my-bucket/my-app.jar",
         "Args": ["--input", "s3://my-bucket/data"]
       }
-    }]'
+    }]' \
+    --query 'StepIds[0]' --output text)
 
-# Check step status
+echo "Step ID: $STEP_ID"
+
+# 3. Check status — will be COMPLETED immediately in mock mode
 aws --endpoint-url http://localhost:4566 \
-    --region us-east-1 \
-    --no-cli-pager \
+    --region us-east-1 --no-cli-pager \
     emr describe-step \
-    --cluster-id j-ABC123 \
-    --step-id s-XXXX
+    --cluster-id $CLUSTER_ID \
+    --step-id $STEP_ID \
+    --query 'Step.Status.State' --output text
+# COMPLETED
 ```
 
-In mock mode, all steps complete with `COMPLETED` state immediately.
-
-### 4. Submit an EMR on EKS (virtual cluster) job
+### Try it — EMR on EKS (virtual clusters)
 
 ```bash
-# Create a virtual cluster
-aws --endpoint-url http://localhost:4566 \
-    --region us-east-1 \
-    --no-cli-pager \
+# 1. Create a virtual cluster
+VC_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
     emr-containers create-virtual-cluster \
     --name my-vc \
-    --container-provider '{"id":"my-eks-cluster","type":"EKS","info":{"eksInfo":{"namespace":"spark-jobs"}}}'
+    --container-provider '{"id":"my-eks-cluster","type":"EKS","info":{"eksInfo":{"namespace":"spark-jobs"}}}' \
+    --query 'id' --output text)
 
-# Note the id from the output, e.g. vc-ABC123
-
-# Start a job run
-aws --endpoint-url http://localhost:4566 \
-    --region us-east-1 \
-    --no-cli-pager \
+# 2. Start a job run
+JOB_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
     emr-containers start-job-run \
-    --virtual-cluster-id vc-ABC123 \
+    --virtual-cluster-id $VC_ID \
     --name my-job \
     --execution-role-arn arn:aws:iam::000000000000:role/SparkRole \
     --release-label emr-6.10.0-latest \
-    --job-driver '{"sparkSubmitJobDriver":{"entryPoint":"s3://my-bucket/app.jar","sparkSubmitParameters":"--class com.example.App"}}'
+    --job-driver '{"sparkSubmitJobDriver":{"entryPoint":"s3://my-bucket/app.jar","sparkSubmitParameters":"--class com.example.App"}}' \
+    --query 'id' --output text)
+
+# 3. Check status
+aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
+    emr-containers describe-job-run \
+    --virtual-cluster-id $VC_ID \
+    --id $JOB_ID \
+    --query 'jobRun.state' --output text
+# COMPLETED
 ```
-
-### 5. Controlling mock behaviour
-
-The default (no `JAISCLOUD_SPARK_MODE` set) uses the mock executor, which completes jobs immediately.
-
-Set `JAISCLOUD_EXECUTOR_MODE=mock` explicitly if you want to be explicit:
-```bash
-JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start --mode full --dsn "postgres://..."
-```
-
-For real K8s submission, set `JAISCLOUD_EXECUTOR_MODE=k8s` — see the next section.
 
 ---
 
-## EMR Spark Cluster — Kubernetes Mode
+## EMR Spark — Kubernetes Executor (real Spark jobs)
 
-In **Kubernetes mode** (`JAISCLOUD_SPARK_MODE=k8s`), the `K8sExecutor` submits real `batch/v1 Jobs` to a Kubernetes cluster. Each `RunJobFlow` or `StartJobRun` call creates a K8s Job that runs `spark-submit --deploy-mode cluster` inside the configured Spark image. No `client-go` dependency is needed — the executor uses stdlib HTTP only.
+**What this is:** when you submit an EMR step or job run, JaisCloud creates a real Kubernetes `batch/v1 Job` that runs `spark-submit` inside your Spark Docker image. The Spark driver starts, spawns executor pods, runs your code, and produces real output.
+
+**When to use this:** end-to-end testing of actual Spark logic — reading from S3, writing Parquet, running transformations. Not needed just to test EMR API calls.
+
+**What you need:**
+- JaisCloud running (lite or full mode)
+- A Kubernetes cluster (Docker Desktop, kind, or minikube — see [Mode 3](#mode-3--jaiscloud-on-kubernetes))
+- A Spark Docker image accessible from the cluster
 
 ### How it works
 
-1. `K8sExecutor.Submit` creates a `batch/v1 Job` named `spark-<sanitized-job-id>` (max 63 chars).
-2. Spark creates the driver Pod; the driver spawns executor Pods.
-3. `StatusPoller` polls the Job every 5 s and maps K8s conditions → `SparkState` (`RUNNING` / `COMPLETED` / `FAILED`).
-4. `TerminateJobFlows` / `CancelJobRun` deletes the Job with `propagationPolicy=Background`, cascading to all Pods.
-5. Completed Jobs self-delete after 1 hour (`ttlSecondsAfterFinished: 3600`).
-
-### Auth — in-cluster (JaisCloud running inside a pod)
-
-Only one env var is needed. The service account token, CA cert, and API server URL are auto-detected from the standard pod mount:
-
-```bash
-export JAISCLOUD_EXECUTOR_MODE=k8s
-# JAISCLOUD_K8S_NAMESPACE and JAISCLOUD_K8S_SA are optional
+```
+Your code calls EMR AddJobFlowSteps
+  → JaisCloud receives the step
+  → Creates a batch/v1 Job in Kubernetes
+  → Job pod runs: spark-submit --master k8s://... --conf ...
+  → Spark driver spawns executor pods
+  → Executors complete; Job reaches Succeeded/Failed
+  → JaisCloud polls Job status and updates step state to COMPLETED/FAILED
 ```
 
-### Auth — out-of-cluster (local dev, CI)
+### Step 1 — Set up RBAC in Kubernetes
 
-```bash
-export JAISCLOUD_EXECUTOR_MODE=k8s
-export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443        # kubectl cluster-info
-export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa --duration=24h)
-export JAISCLOUD_K8S_CA_FILE=$HOME/.kube/ca.crt              # or unset for system roots
-export JAISCLOUD_K8S_NAMESPACE=spark-jobs
-export JAISCLOUD_K8S_SA=spark-sa
-```
-
-### Environment variable reference
-
-| Variable | Default | Description |
-|---|---|---|
-| `JAISCLOUD_EXECUTOR_MODE` | `mock` | Set to `k8s` to enable real cluster submission |
-| `JAISCLOUD_K8S_APISERVER` | `https://kubernetes.default.svc` | K8s API server URL |
-| `JAISCLOUD_K8S_TOKEN` | in-cluster token file | Bearer token: literal string or path to a file (re-read per request for rotation) |
-| `JAISCLOUD_K8S_CA_FILE` | in-cluster CA path | PEM CA cert. Unset = system roots. |
-| `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace for Jobs and Pods |
-| `JAISCLOUD_K8S_SA` | _(none)_ | Service account for the spark-submit Pod |
-| `JAISCLOUD_K8S_SPARK_SA` | _(none)_ | Kubernetes service account forwarded as `spark.kubernetes.authenticate.executor.serviceAccountName`; controls executor pod RBAC |
-| `JAISCLOUD_AWS_EMULATOR_ENDPOINT` | _(none)_ | JaisCloud endpoint reachable from Spark pods (e.g. `http://jaiscloud.jaiscloud.svc:4566`). When set, injects S3 + credentials configuration into Spark driver pods so they can reach the local S3 store. |
-| `JAISCLOUD_IMDS_ENABLED` | `false` | When `true`, exposes `/latest/meta-data/` IMDS emulator routes and injects the IMDS endpoint into Spark driver pods. When `false`, `AWS_EC2_METADATA_DISABLED=true` is injected instead. |
-| `JAISCLOUD_S3_VIRTUAL_HOST_BASES` | _(none)_ | Comma-separated host suffixes recognised as S3 virtual-hosted bases (e.g. `jaiscloud.devbox.local,s3.local`). See [S3 virtual-hosted style routing](#s3-virtual-hosted-style-routing). |
-| `JAISCLOUD_BOOTSTRAP_IMAGE` | `amazon/aws-cli:2.18` | Init container image used to run EMR bootstrap scripts |
-| `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES` | `1048576` | Maximum allowed size per bootstrap script (1 MiB) |
-| `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` | `/etc/pki,/home/hadoop` | Comma-separated filesystem prefixes made writable by bootstrap init containers (one `emptyDir` volume per prefix) |
-| `JAISCLOUD_SPARK_K8S_CLUSTER_MODE` | `auto` | Cluster deploy-mode policy: `auto` (enable when pod templates provided), `always`, `never` |
-| `JAISCLOUD_SPARK_K8S_CLUSTER_SHUTDOWN` | `leave` | What `Close()` does to running cluster-mode Jobs: `leave` (suspend) or `delete` |
-| `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY` | `adopt` | On restart, `adopt` re-tracks running cluster-mode Jobs; `reap` deletes them and dispatches FAILED |
-| `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` | `10m` | How long a Job may be missing from the K8s API before the poller marks it FAILED |
-| `JAISCLOUD_INSTANCE_ID` | _(auto-generated UUID)_ | Override the instance identity used to label managed K8s resources; useful for CI isolation |
-
-### EMR bootstrap actions (K8s mode)
-
-When a `RunJobFlow` request includes `BootstrapActions` and `EXECUTOR_MODE=k8s`, JaisCloud materialises each action as a K8s **init container** that runs before the `spark-submit` container. Scripts are fetched from the S3 store via the `BlobFetcher` interface (`s3://` and `s3a://` URIs supported).
-
-**What happens at `AddJobFlowSteps` time:**
-
-1. Each bootstrap script is fetched from the local S3 store by its `S3Path`.
-2. Host-package-manager commands (`yum`, `apt-get`, `apt`, `dnf`, `rpm`) and init-system commands (`systemctl`, `service`, `chkconfig`) are commented out with `# [jaiscloud-skip]` — they are no-ops inside a container.
-3. The patched script is base64-encoded and wrapped in a shell one-liner:
-   ```
-   printf '%s' '<b64>' | base64 -d | /bin/sh -s -- <action-args>
-   ```
-4. One `emptyDir` volume is created per prefix in `JAISCLOUD_BOOTSTRAP_RELOCATE_PREFIXES` and mounted into every init container and the main `spark-submit` container so files written by bootstrap scripts are visible at job runtime.
-5. Init containers run as `runAsUser: 0` (root) so they can write to protected paths like `/etc/pki`.
-6. If any bootstrap script fails to fetch or exceeds `JAISCLOUD_BOOTSTRAP_SCRIPT_MAX_BYTES`, the step is immediately marked `FAILED`.
-
-**Volume naming:** `/etc/pki` → `bootstrap-prefix-etc-pki`, `/home/hadoop` → `bootstrap-prefix-home-hadoop`.  
-**Name conflicts:** If a bootstrap-injected volume name collides with a platform-injected volume, `buildJobManifest` returns an error and the step is marked `FAILED`.
-
-### Prerequisites
-
-- A Kubernetes cluster (local: kind, minikube, or Docker Desktop)
-- A namespace for Spark jobs
-- A Spark Docker image accessible from the cluster (default: `apache/spark:3.5.0`)
-
-### 1. Prepare the namespace and RBAC
-
-Use the included manifests which create the `jaiscloud` namespace and grant full executor permissions:
+JaisCloud needs permission to create Jobs. The Spark driver (running inside the Job pod) needs permission to create executor pods. Apply the included manifest which handles both:
 
 ```bash
 kubectl apply -f deploy/k8s/namespace.yaml
 kubectl apply -f deploy/k8s/rbac.yaml
 ```
 
-Or create manually and apply custom RBAC — JaisCloud needs to manage Jobs; the spark-submit Pod needs to manage Pods:
+This creates two service accounts in the `jaiscloud` namespace:
 
-```yaml
-# jaiscloud-rbac.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: jaiscloud-spark
-  namespace: spark-jobs
-rules:
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["create", "get", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jaiscloud-spark
-  namespace: spark-jobs
-subjects:
-- kind: ServiceAccount
-  name: jaiscloud-sa
-  namespace: spark-jobs
-roleRef:
-  kind: Role
-  name: jaiscloud-spark
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: spark-driver
-  namespace: spark-jobs
-rules:
-- apiGroups: [""]
-  resources: ["pods", "pods/log", "services", "configmaps"]
-  verbs: ["create", "get", "list", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: spark-driver
-  namespace: spark-jobs
-subjects:
-- kind: ServiceAccount
-  name: spark-sa
-  namespace: spark-jobs
-roleRef:
-  kind: Role
-  name: spark-driver
-  apiGroup: rbac.authorization.k8s.io
-```
+| Service account | Used by | Needs |
+|---|---|---|
+| `jaiscloud` | JaisCloud server | Create/delete batch/v1 Jobs and ConfigMaps |
+| `spark-driver` | Spark driver pod | Create/delete Pods, Services, ConfigMaps |
+
+### Step 2 — Pre-pull the Spark image (local clusters only)
+
+Local clusters (Docker Desktop, kind, minikube) use `ImagePullPolicy: IfNotPresent`. The image must already exist on the node or pod scheduling will fail.
 
 ```bash
-kubectl apply -f jaiscloud-rbac.yaml
+# Pull the image locally
+docker pull apache/spark:3.5.0
+
+# For kind: load the image into the cluster
+kind load docker-image apache/spark:3.5.0
+
+# For minikube
+minikube image load apache/spark:3.5.0
+
+# Docker Desktop: the image is automatically available (it shares Docker's image store)
 ```
 
-### 2. Start JaisCloud in K8s mode
+### Step 3 — Start JaisCloud with K8s executor
+
+You need the K8s API server URL. Get it from kubectl:
+
+```bash
+kubectl cluster-info
+# Kubernetes control plane is running at https://127.0.0.1:6443
+```
+
+Create a service account token for JaisCloud to authenticate:
+
+```bash
+kubectl create token jaiscloud -n jaiscloud --duration=24h
+# eyJhbGciOiJSUzI1NiIs...  (copy this)
+```
+
+Start the server:
 
 ```bash
 export JAISCLOUD_EXECUTOR_MODE=k8s
 export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
-export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n spark-jobs --duration=24h)
-export JAISCLOUD_K8S_NAMESPACE=spark-jobs
-export JAISCLOUD_K8S_SA=spark-sa
+export JAISCLOUD_K8S_TOKEN=<paste token here>
+export JAISCLOUD_K8S_NAMESPACE=jaiscloud
+export JAISCLOUD_K8S_SA=spark-driver              # SA for the spark-submit pod
+export JAISCLOUD_K8S_SPARK_SA=spark-driver         # SA for executor pods
 
 ./jaiscloud start --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
-### 3. Submit a job
+Expected output:
+```
+INFO  executor    lambda=k8s  spark=k8s
+INFO  blob storage  dir=/home/yourname/.jaiscloud/blobs
+INFO  jaiscloud started  port=4566  mode=full
+```
 
-Same AWS CLI commands as in mock mode:
+> **Why two service accounts?** `JAISCLOUD_K8S_SA` is the service account the Spark *driver pod* runs as — it needs permission to create executor pods. `JAISCLOUD_K8S_SPARK_SA` is forwarded to Spark as the service account for *executor pods*. They can be the same SA (as above) or different ones if you want finer-grained RBAC. See [JAISCLOUD_K8S_SA vs JAISCLOUD_K8S_SPARK_SA](#jaiscloud_k8s_sa-vs-jaiscloud_k8s_spark_sa) for details.
+
+### Step 4 — Submit a job and watch it run
 
 ```bash
-# Create an EMR cluster (maps to a logical Spark job group)
-CLUSTER_ID=$(aws --endpoint-url http://localhost:4566 emr create-cluster \
-  --name "my-spark-cluster" \
-  --release-label emr-6.15.0 \
-  --instance-type m5.xlarge \
-  --instance-count 2 \
-  --service-role EMR_DefaultRole \
-  --query 'JobFlowId' --output text)
+# Create an EMR cluster
+CLUSTER_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
+    emr run-job-flow \
+    --name "real-spark-cluster" \
+    --release-label emr-6.15.0 \
+    --instance-groups '[{"InstanceRole":"MASTER","InstanceType":"m5.xlarge","InstanceCount":1}]' \
+    --service-role EMR_DefaultRole \
+    --query 'JobFlowId' --output text)
 
-# Add a step — this triggers K8sExecutor.Submit → batch/v1 Job creation
-aws --endpoint-url http://localhost:4566 emr add-steps \
-  --cluster-id $CLUSTER_ID \
-  --steps Type=Spark,Name="MyJob",\
-ActionOnFailure=CONTINUE,\
-Args=[--class,com.example.App,s3://my-bucket/app.jar,arg1,arg2]
+# Add a step using SparkPi (bundled with Apache Spark image)
+STEP_ID=$(aws --endpoint-url http://localhost:4566 \
+    --region us-east-1 --no-cli-pager \
+    emr add-steps \
+    --cluster-id $CLUSTER_ID \
+    --steps '[{
+      "Name": "SparkPi",
+      "ActionOnFailure": "CONTINUE",
+      "HadoopJarStep": {
+        "Jar": "command-runner.jar",
+        "Args": ["spark-submit", "--class", "org.apache.spark.examples.SparkPi",
+                 "local:///opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar", "100"]
+      }
+    }]' \
+    --query 'StepIds[0]' --output text)
+
+echo "Watching step $STEP_ID..."
 ```
 
-Watch the Job appear in the cluster:
+Watch Kubernetes in a second terminal:
 
 ```bash
-kubectl get jobs -n spark-jobs -l app.kubernetes.io/managed-by=jaiscloud
-kubectl describe job spark-j-<id> -n spark-jobs
-kubectl logs -n spark-jobs -l spark-role=driver --tail=100
+# See the Job appear
+kubectl get jobs -n jaiscloud -w
+
+# See the pods
+kubectl get pods -n jaiscloud -w
+
+# Read the driver logs
+kubectl logs -n jaiscloud -l spark-role=driver --tail=50 -f
 ```
 
-### 4. Understanding the generated spark-submit command
+Poll until the step completes (takes 1–3 minutes on first run due to image scheduling):
 
-The plugin constructs the following `spark-submit` arguments for k8s mode:
-
-```
-spark-submit \
-  --master k8s://https://<JAISCLOUD_K8S_APISERVER> \
-  --deploy-mode cluster \
-  --conf spark.kubernetes.container.image=apache/spark:3.5.0 \
-  --conf spark.kubernetes.namespace=spark-jobs \
-  --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark-sa \
-  --conf spark.driver.cores=500m \
-  --conf spark.driver.memory=1Gi \
-  --conf spark.executor.cores=500m \
-  --conf spark.executor.memory=1Gi \
-  --conf spark.executor.instances=1 \
-  --conf spark.eventLog.enabled=true \         # only if JAISCLOUD_SPARK_S3_LOG_URI is set
-  --conf spark.eventLog.dir=s3://my-bucket/spark-logs \
-  --class com.example.App \
-  s3://my-bucket/app.jar arg1 arg2
+```bash
+watch -n 3 "aws --endpoint-url http://localhost:4566 --region us-east-1 \
+    emr describe-step --cluster-id $CLUSTER_ID --step-id $STEP_ID \
+    --query 'Step.Status.State' --output text"
+# PENDING → RUNNING → COMPLETED
 ```
 
-Cluster size controls resource allocation:
+### Step 5 — Wire S3 so Spark can read your data (optional)
 
-| Size | Executors | Driver CPU / Mem | Executor CPU / Mem |
-|---|---|---|---|
-| `small` (default) | 1 | 500m / 1Gi | 500m / 1Gi |
-| `medium` | 2 | 1 / 2Gi | 1 / 2Gi |
-| `large` | 4 | 2 / 4Gi | 2 / 4Gi |
+If your Spark job reads from `s3://` URIs, Spark needs to know to use JaisCloud's S3 endpoint instead of real AWS.
 
-### 5. Spark K8s cluster-mode (pod templates)
+Set this env var before starting JaisCloud:
 
-By default the `K8sExecutor` runs `spark-submit --deploy-mode cluster`, which places the **driver inside the K8s Job Pod** (Spark's "cluster" mode). For large jobs you can also supply driver and executor pod templates so Spark uses its native `--conf spark.kubernetes.driver.podTemplateFile` / `--conf spark.kubernetes.executor.podTemplateFile` mechanism.
+```bash
+export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://jaiscloud.jaiscloud.svc:4566
+```
 
-#### How cluster-mode policy works
+JaisCloud will automatically inject the right S3 configuration (`fs.s3a.endpoint`, credentials, etc.) into every Spark driver pod. See [AWS Emulator Wiring for Spark Driver Pods](#aws-emulator-wiring-for-spark-driver-pods) for the full details.
 
-`JAISCLOUD_SPARK_K8S_CLUSTER_MODE` controls when cluster deploy-mode is actually engaged:
+### Troubleshooting
 
-| Policy | Behaviour |
+| Symptom | What to check |
 |---|---|
-| `auto` (default) | Enable cluster deploy-mode when the job includes pod-template `--conf` entries; fall back to local mode otherwise |
-| `always` | Always enable cluster deploy-mode, even if no pod templates are provided |
-| `never` | Always use local mode; pod-template `--conf` entries are stripped before submission |
+| Step stays `PENDING` forever | Check `kubectl get jobs -n jaiscloud` — if no Job appears, the server likely cannot reach the K8s API. Check `JAISCLOUD_K8S_APISERVER` and the token. |
+| Step stays `RUNNING` forever | Check `kubectl get pods -n jaiscloud` — if pods are `Pending`, the image may not be loaded. Run `kubectl describe pod <name>` to see the event. |
+| Step goes to `FAILED` immediately | Check driver logs: `kubectl logs -n jaiscloud -l spark-role=driver --tail=100` |
+| `Forbidden` creating pods | The driver SA lacks RBAC. Re-apply `deploy/k8s/rbac.yaml`. Check: `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:spark-driver` |
+| Image pull error | Pre-pull with `docker pull apache/spark:3.5.0` and load with `kind load docker-image apache/spark:3.5.0` |
 
-When cluster mode is active, `SparkSubmitArgs` (Pattern 3) generates:
+### Environment variable quick-reference
 
-```
---master k8s://<JAISCLOUD_K8S_APISERVER>
---deploy-mode cluster
---conf spark.kubernetes.driver.podTemplateFile=<s3-uri>
---conf spark.kubernetes.executor.podTemplateFile=<s3-uri>
-```
-
-JaisCloud passes pod templates verbatim to Spark — no merging or rewriting is performed. Callers are responsible for supplying templates that are compatible with the target cluster (see "Devbox-compatible pod template requirements" below).
-
-#### Requirements for cluster-mode to succeed
-
-| Requirement | How to satisfy |
-|---|---|
-| `JAISCLOUD_K8S_SA` set | Spark driver needs RBAC to create executor Pods; without a service account the driver Pod fails at admission |
-| Spark image pre-loaded | With `ImagePullPolicy=Never` (default for local clusters), the image must exist on the node; without this, executor Pods fail to start |
-| `JAISCLOUD_K8S_S3_ENDPOINT` set | When the JAR URI is `s3://...`, the driver must reach the S3 store; without this the fetch fails silently |
-| `--master k8s://...` in `sparkSubmitParameters` | Spark must know the cluster API server; without it the driver picks its default master which is almost certainly wrong |
-
-JaisCloud logs a structured `WARN` at Job submission time if any of these are missing, making misconfigs visible before the Job reaches Kubernetes:
-
-```
-WARN spark k8s: cluster-mode job has no ServiceAccount — driver pod will have no RBAC to create executor pods; set JAISCLOUD_K8S_SA
-WARN spark k8s: cluster-mode job using default image with ImagePullPolicy=Never — pre-pull apache/spark:3.5.0 or set JAISCLOUD_SPARK_IMAGE
-WARN spark k8s: cluster-mode job references an s3:// JAR URI but JAISCLOUD_K8S_S3_ENDPOINT is unset — driver will fail to fetch the JAR
-WARN spark k8s: cluster mode active but no --master arg found — add --master k8s://<api-server> to sparkSubmitParameters
-```
-
-#### Troubleshooting cluster-mode failures
-
-| Symptom | Likely cause | Fix |
+| Variable | What to set | Why |
 |---|---|---|
-| Job submitted but step stays `RUNNING` forever | Driver Pod `Pending` due to image pull failure | Pre-pull the Spark image: `docker pull apache/spark:3.5.0 && kind load docker-image apache/spark:3.5.0` |
-| Step immediately `FAILED` | Driver Pod `Error` or `CrashLoopBackOff` | `kubectl logs -n <ns> -l spark-role=driver --tail=100` |
-| Step `FAILED` with "template cleanup failed" | Executor template upload succeeded but `createJob` failed | Check K8s API server connectivity; look for RBAC errors |
-| `always` mode but Spark ignores pod templates | No `--master k8s://...` in step args | Add `--master k8s://<api-server>` to `sparkSubmitParameters` |
-| `always` mode + no pod templates provided | Driver submits but no executor template is uploaded | Expected — driver uses its built-in defaults; supply template confs to customise |
+| `JAISCLOUD_EXECUTOR_MODE` | `k8s` | Enables the K8s executor |
+| `JAISCLOUD_K8S_APISERVER` | `https://127.0.0.1:6443` | K8s API server URL (from `kubectl cluster-info`) |
+| `JAISCLOUD_K8S_TOKEN` | output of `kubectl create token` | Auth token to create Jobs |
+| `JAISCLOUD_K8S_CA_FILE` | path to CA cert, or unset | TLS verification for the API server (unset = use system roots) |
+| `JAISCLOUD_K8S_NAMESPACE` | `jaiscloud` | Namespace where Spark Jobs are created |
+| `JAISCLOUD_K8S_SA` | `spark-driver` | Service account for the spark-submit Job pod |
+| `JAISCLOUD_K8S_SPARK_SA` | `spark-driver` | Service account for executor pods |
+| `JAISCLOUD_AWS_EMULATOR_ENDPOINT` | `http://jaiscloud.jaiscloud.svc:4566` | Inject S3 endpoint into driver pods (needed for `s3://` JAR URIs) |
 
-### Devbox-compatible pod template requirements
-
-JaisCloud passes pod templates verbatim to Spark. This matches real-AWS behaviour. Callers must supply templates that schedule on the target Kubernetes cluster.
-
-For a devbox (kind/minikube, single-node, typically 8–16 GiB RAM):
-- `containers[*].resources.requests.memory` ≤ 1 GiB per container
-- `containers[*].resources.requests.cpu` ≤ 1
-- No `nodeSelector` (or one that matches a label the devbox cluster provides)
-- No production tolerations; `spec.tolerations: []` or empty
-
-A production-shaped template (24Gi memory, `r5.4xlarge` nodeSelector) will leave pods in `Pending` forever on a devbox. JaisCloud does not silently fit templates. Callers should parametrize their template rendering for the target environment (e.g. a devbox profile in `PodTemplateBuilder`).
-
-### Multi-instance restart recovery
-
-Each JaisCloud process stamps a stable `jaiscloud.io/instance-id` label on every K8s resource it creates (Spark Jobs, Lambda Pods, Lambda Services). On restart, `cleanupOrphans` filters strictly by this label so two JaisCloud instances on the same cluster never cross-reap each other's resources.
-
-**Spark restart behaviour** (controlled by `JAISCLOUD_SPARK_K8S_CLUSTER_RESTART_POLICY`):
-
-| Policy | Behaviour for running cluster-mode Jobs |
-|---|---|
-| `adopt` (default) | Re-tracked in `jobEntries`; `OnJobAdopted` fires so the provider re-registers them in the poller |
-| `reap` | Deleted immediately; `OnRestartTerminal(FAILED)` fires so EMR/EMR-on-EKS rows transition to FAILED |
-
-Terminal Jobs (both step-mode and cluster-mode) always fire `OnRestartTerminal` with the real final state (`COMPLETED` or `FAILED`) and are deleted.
-
-**Stale-Job reconciliation:** if a Job disappears from the K8s API (deleted externally) while the poller is tracking it, the poller sets `missingSince` on the first 404. After `JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT` (default 10 min) of persistent absence, the step/job-run is marked `FAILED`.
-
-**Provider rehydration:** at startup, EMR and EMR-on-EKS providers call `rehydratePoller()` to re-track any non-terminal steps/job-runs that were in the resource store from before the restart. This ensures the poller catches up without requiring a separate migration step.
+For a full explanation of every variable, see [Spark Kubernetes Configuration Reference](#spark-kubernetes-configuration-reference).
 
 ---
 
