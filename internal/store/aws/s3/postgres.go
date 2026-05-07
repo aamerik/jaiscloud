@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -99,11 +101,11 @@ func (s *PostgresS3ObjectMetaStore) PutObjectMeta(ctx context.Context, bucket, k
 		meta.LastModified = time.Now().UTC()
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_s3_objects (bucket, key, etag, size, content_type, last_modified, metadata, storage_class, version_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (bucket, key) DO UPDATE
-			SET etag=$3, size=$4, content_type=$5, last_modified=$6, metadata=$7, storage_class=$8, version_id=$9
-	`, bucket, key, meta.ETag, meta.Size, meta.ContentType, meta.LastModified, json.RawMessage(metaRaw), meta.StorageClass, meta.VersionID)
+			SET etag=$3, crc32=$4, size=$5, content_type=$6, last_modified=$7, metadata=$8, storage_class=$9, version_id=$10
+	`, bucket, key, meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified, json.RawMessage(metaRaw), meta.StorageClass, meta.VersionID)
 	return err
 }
 
@@ -111,9 +113,9 @@ func (s *PostgresS3ObjectMetaStore) GetObjectMeta(ctx context.Context, bucket, k
 	var m ObjectMeta
 	var metaRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT key, etag, size, content_type, last_modified, metadata, storage_class, version_id
+		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id
 		FROM jc_s3_objects WHERE bucket=$1 AND key=$2
-	`, bucket, key).Scan(&m.Key, &m.ETag, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID)
+	`, bucket, key).Scan(&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ObjectMeta{}, fmt.Errorf("NoSuchKey")
 	}
@@ -129,16 +131,49 @@ func (s *PostgresS3ObjectMetaStore) DeleteObjectMeta(ctx context.Context, bucket
 	return err
 }
 
+// prefixRange returns [low, high) string bounds for a prefix scan.
+// All keys with the given prefix satisfy: key >= low AND key < high.
+// Returns high="" when the prefix ends in all 0xFF bytes (no finite upper bound).
+func prefixRange(prefix string) (low, high string) {
+	if prefix == "" {
+		return "", ""
+	}
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < 0xFF {
+			b[i]++
+			return prefix, string(b[:i+1])
+		}
+		b[i] = 0
+	}
+	return prefix, "" // all bytes were 0xFF
+}
+
 func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, string, error) {
 	if maxKeys <= 0 {
 		maxKeys = 1000
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT key, etag, size, content_type, last_modified, metadata, storage_class
-		FROM jc_s3_objects
-		WHERE bucket=$1 AND key LIKE $2 AND key > $3
-		ORDER BY key LIMIT $4
-	`, bucket, prefix+"%", marker, maxKeys+1)
+
+	low, high := prefixRange(prefix)
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	const sel = `SELECT key, etag, size, content_type, last_modified, metadata, storage_class FROM jc_s3_objects WHERE bucket=$1`
+	switch {
+	case prefix == "" && marker == "":
+		rows, err = s.pool.Query(ctx, sel+` ORDER BY key LIMIT $2`, bucket, maxKeys+1)
+	case prefix == "" && marker != "":
+		rows, err = s.pool.Query(ctx, sel+` AND key > $2 ORDER BY key LIMIT $3`, bucket, marker, maxKeys+1)
+	case prefix != "" && marker == "" && high != "":
+		rows, err = s.pool.Query(ctx, sel+` AND key >= $2 AND key < $3 ORDER BY key LIMIT $4`, bucket, low, high, maxKeys+1)
+	case prefix != "" && marker == "" && high == "":
+		rows, err = s.pool.Query(ctx, sel+` AND key >= $2 ORDER BY key LIMIT $3`, bucket, low, maxKeys+1)
+	case prefix != "" && marker != "" && high != "":
+		rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 AND key < $4 ORDER BY key LIMIT $5`, bucket, marker, low, high, maxKeys+1)
+	default: // prefix != "" && marker != "" && high == ""
+		rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 ORDER BY key LIMIT $4`, bucket, marker, low, maxKeys+1)
+	}
 	if err != nil {
 		return nil, nil, false, "", err
 	}
@@ -182,7 +217,7 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 	for cp := range commonPrefixes {
 		cpList = append(cpList, cp)
 	}
-	sortStrings(cpList)
+	sort.Strings(cpList)
 
 	nextMarker := ""
 	if truncated {
@@ -215,17 +250,21 @@ func (s *PostgresS3ObjectMetaStore) CompleteMultipart(ctx context.Context, bucke
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var parts []PartMeta
 	for rows.Next() {
 		var p PartMeta
 		if err := rows.Scan(&p.PartNumber, &p.ETag, &p.Size); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		parts = append(parts, p)
 	}
+	rows.Close() // explicit close before Err() — required for correct pgx/v5 error state
+	if err := rows.Err(); err != nil {
+		return nil, err // upload row preserved; caller can retry CompleteMultipart
+	}
 	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_uploads WHERE upload_id=$1`, uploadID)
-	return parts, rows.Err()
+	return parts, nil
 }
 
 func (s *PostgresS3ObjectMetaStore) AbortMultipart(ctx context.Context, uploadID string) error {
@@ -252,7 +291,24 @@ func (s *PostgresS3ObjectMetaStore) GetMultipartMeta(ctx context.Context, upload
 
 func (s *PostgresS3ObjectMetaStore) Reset() {
 	ctx := context.Background()
-	s.pool.Exec(ctx, `DELETE FROM jc_s3_objects`)
-	s.pool.Exec(ctx, `DELETE FROM jc_s3_buckets`)
-	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_uploads`)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		slog.Warn("s3 reset: begin transaction failed", "err", err)
+		return
+	}
+	defer tx.Rollback(ctx) // no-op after Commit; safe to defer
+	for _, stmt := range []string{
+		`DELETE FROM jc_s3_multipart_parts`,
+		`DELETE FROM jc_s3_multipart_uploads`,
+		`DELETE FROM jc_s3_objects`,
+		`DELETE FROM jc_s3_buckets`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			slog.Warn("s3 reset: exec failed", "stmt", stmt, "err", err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("s3 reset: commit failed", "err", err)
+	}
 }

@@ -290,3 +290,45 @@ func TestDeleteObjects_EmptyBodyReturnsEmptyDeleted(t *testing.T) {
 		t.Fatalf("want empty Deleted, got %v", deleted)
 	}
 }
+
+// ─── GetBucketLocation ────────────────────────────────────────────────────────
+
+func TestGetBucketLocation_UsEast1ReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	meta := s3store.NewMemoryS3ObjectMetaStore()
+	p := New(meta, blobfs.NewMemoryBlobStore())
+	_ = meta.CreateBucket(ctx, "b", nil)
+
+	nr := &model.NormalizedRequest{
+		Region: "us-east-1",
+		Params: map[string]any{"_bucket": "b"},
+	}
+	resp, err := p.GetBucketLocation(ctx, nr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lc, _ := resp.Data["LocationConstraint"].(string)
+	if lc != "" {
+		t.Fatalf("us-east-1 must return empty LocationConstraint, got %q", lc)
+	}
+}
+
+func TestGetBucketLocation_OtherRegionReturnsRegion(t *testing.T) {
+	ctx := context.Background()
+	meta := s3store.NewMemoryS3ObjectMetaStore()
+	p := New(meta, blobfs.NewMemoryBlobStore())
+	_ = meta.CreateBucket(ctx, "b", nil)
+
+	nr := &model.NormalizedRequest{
+		Region: "eu-west-1",
+		Params: map[string]any{"_bucket": "b"},
+	}
+	resp, err := p.GetBucketLocation(ctx, nr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lc, _ := resp.Data["LocationConstraint"].(string)
+	if lc != "eu-west-1" {
+		t.Fatalf("non-us-east-1 must return region name, got %q", lc)
+	}
+}

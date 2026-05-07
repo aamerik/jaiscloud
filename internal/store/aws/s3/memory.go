@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -85,8 +86,8 @@ func (s *MemoryS3ObjectMetaStore) ListBuckets(_ context.Context) ([]map[string]a
 func (s *MemoryS3ObjectMetaStore) PutObjectMeta(_ context.Context, bucket, key string, meta ObjectMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.objects[bucket] == nil {
-		s.objects[bucket] = make(map[string]ObjectMeta)
+	if _, exists := s.buckets[bucket]; !exists {
+		return fmt.Errorf("NoSuchBucket")
 	}
 	meta.Key = key
 	if meta.LastModified.IsZero() {
@@ -249,12 +250,16 @@ func (s *MemoryS3ObjectMetaStore) CompleteMultipart(_ context.Context, bucket, k
 	if !ok {
 		return nil, fmt.Errorf("NoSuchUpload")
 	}
-	// Return parts in order.
-	var parts []PartMeta
-	for i := 1; i <= len(u.Parts); i++ {
-		if p, ok := u.Parts[i]; ok {
-			parts = append(parts, p)
-		}
+	// Return parts in ascending part-number order.
+	// Sort explicit part numbers to handle non-contiguous uploads (e.g. parts 1, 3, 5).
+	nums := make([]int, 0, len(u.Parts))
+	for n := range u.Parts {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	parts := make([]PartMeta, 0, len(nums))
+	for _, n := range nums {
+		parts = append(parts, u.Parts[n])
 	}
 	delete(s.uploads, uploadID)
 	return parts, nil

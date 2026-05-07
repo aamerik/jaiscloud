@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS jc_s3_objects (
     bucket        TEXT        NOT NULL,
     key           TEXT        NOT NULL,
     etag          TEXT        NOT NULL,
+    crc32         TEXT        NOT NULL DEFAULT '',
     size          BIGINT      NOT NULL DEFAULT 0,
     content_type  TEXT        NOT NULL DEFAULT 'application/octet-stream',
     last_modified TIMESTAMPTZ NOT NULL DEFAULT now(),

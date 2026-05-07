@@ -156,6 +156,24 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if rng := r.Header.Get("Range"); rng != "" {
 		params["_range"] = rng
 	}
+	if md := r.Header.Get("X-Amz-Metadata-Directive"); md != "" {
+		params["_metadata_directive"] = md
+	}
+	if csr := r.Header.Get("X-Amz-Copy-Source-Range"); csr != "" {
+		params["_copy_source_range"] = csr
+	}
+	if v := r.Header.Get("If-Match"); v != "" {
+		params["_cond_if_match"] = v
+	}
+	if v := r.Header.Get("If-None-Match"); v != "" {
+		params["_cond_if_none_match"] = v
+	}
+	if v := r.Header.Get("If-Modified-Since"); v != "" {
+		params["_cond_if_modified_since"] = v
+	}
+	if v := r.Header.Get("If-Unmodified-Since"); v != "" {
+		params["_cond_if_unmodified_since"] = v
+	}
 	// Capture x-amz-meta-* user metadata headers.
 	for k, vs := range r.Header {
 		lower := strings.ToLower(k)
@@ -269,6 +287,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 		return "HeadObject"
 	case http.MethodPut:
 		switch {
+		case hasCopySource && query.Has("partNumber"):
+			return "UploadPartCopy"
 		case hasCopySource:
 			return "CopyObject"
 		case query.Has("partNumber"):
@@ -326,6 +346,18 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 				h.Set("x-amz-meta-"+k, v)
 			}
 		}
+		// Response header overrides (response-content-disposition etc.)
+		if overrides, ok := resp.Data["_response_overrides"].(map[string]string); ok {
+			for k, v := range overrides {
+				h.Set(k, v)
+			}
+		}
+		// Content-Range for partial content responses.
+		if start, ok := resp.Data["_range_start"].(int64); ok {
+			end, _ := resp.Data["_range_end"].(int64)
+			total, _ := resp.Data["_range_total"].(int64)
+			h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
+		}
 		// CRC32: prefer value stored at upload time; fall back to computing from body.
 		if crc32v, ok := resp.Data["_crc32"].(string); ok && crc32v != "" {
 			h.Set("x-amz-checksum-crc32", crc32v)
@@ -343,6 +375,11 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
 		}
 		return status, h, body
+	}
+
+	// 304 Not Modified — ETag/Last-Modified headers, no body.
+	if resp.HTTPStatus == 304 {
+		return 304, s3MetaHeaders(resp.Data), nil
 	}
 
 	// HeadObject / HeadBucket — headers only, no body
@@ -420,6 +457,14 @@ func s3MetaHeaders(data map[string]any) http.Header {
 	if cl, ok := data["ContentLength"]; ok {
 		h.Set("Content-Length", fmt.Sprintf("%v", cl))
 	}
+	if md, ok := data["_metadata"].(map[string]string); ok {
+		for k, v := range md {
+			h.Set("x-amz-meta-"+k, v)
+		}
+	}
+	if region, ok := data["_region"].(string); ok && region != "" {
+		h.Set("x-amz-bucket-region", region)
+	}
 	return h
 }
 
@@ -473,6 +518,9 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString(xmlTag("Name", str(data["Name"])))
 		sb.WriteString(xmlTag("Prefix", str(data["Prefix"])))
 		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
+		if et := str(data["EncodingType"]); et != "" {
+			sb.WriteString(xmlTag("EncodingType", et))
+		}
 		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
 		sb.WriteString(xmlTag("Marker", str(data["Marker"])))
 		if nm := str(data["_nextPageToken"]); nm != "" && str(data["Delimiter"]) != "" {
@@ -504,6 +552,9 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString(xmlTag("Prefix", str(data["Prefix"])))
 		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
 		sb.WriteString(xmlTag("KeyCount", str(data["KeyCount"])))
+		if et := str(data["EncodingType"]); et != "" {
+			sb.WriteString(xmlTag("EncodingType", et))
+		}
 		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
 		if nct := str(data["_nextPageToken"]); nct != "" {
 			sb.WriteString(xmlTag("NextContinuationToken", nct))
@@ -529,9 +580,14 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString("</ListBucketResult>")
 
 	case "GetBucketLocation":
-		sb.WriteString(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-		sb.WriteString(xmlEscape(str(data["LocationConstraint"])))
-		sb.WriteString(`</LocationConstraint>`)
+		lc := str(data["LocationConstraint"])
+		if lc == "" {
+			sb.WriteString(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
+		} else {
+			sb.WriteString(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+			sb.WriteString(xmlEscape(lc))
+			sb.WriteString(`</LocationConstraint>`)
+		}
 
 	case "GetBucketVersioning":
 		sb.WriteString(`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
@@ -590,6 +646,14 @@ func s3BuildXML(action string, data map[string]any) []byte {
 			sb.WriteString(xmlTag("ETag", str(result["ETag"])))
 			sb.WriteString(xmlTag("LastModified", str(result["LastModified"])))
 			sb.WriteString("</CopyObjectResult>")
+		}
+
+	case "UploadPartCopy":
+		if result, ok := data["CopyPartResult"].(map[string]any); ok {
+			sb.WriteString(`<CopyPartResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+			sb.WriteString(xmlTag("ETag", str(result["ETag"])))
+			sb.WriteString(xmlTag("LastModified", str(result["LastModified"])))
+			sb.WriteString("</CopyPartResult>")
 		}
 	}
 

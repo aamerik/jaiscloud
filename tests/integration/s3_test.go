@@ -309,7 +309,8 @@ func TestS3_GetBucketLocation(t *testing.T) {
 		Bucket: aws.String("loc-bucket"),
 	})
 	require.NoError(t, err)
-	assert.NotEmpty(t, string(out.LocationConstraint))
+	// AWS returns empty LocationConstraint for us-east-1 (the default region).
+	assert.Equal(t, types.BucketLocationConstraint(""), out.LocationConstraint)
 }
 
 func TestS3_DeleteBucketNotEmpty(t *testing.T) {

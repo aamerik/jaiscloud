@@ -14,6 +14,7 @@ import (
 	"hash/crc32"
 	"io"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +56,7 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		// Multipart
 		"Object.CreateMultipartUpload":   p.CreateMultipartUpload,
 		"Object.UploadPart":              p.UploadPart,
+		"Object.UploadPartCopy":          p.UploadPartCopy,
 		"Object.CompleteMultipartUpload": p.CompleteMultipartUpload,
 		"Object.AbortMultipartUpload":    p.AbortMultipartUpload,
 		"Object.ListMultipartUploads":    p.ListMultipartUploads,
@@ -277,8 +279,8 @@ func (s *seqPartReader) Close() error {
 
 func (p *ObjectProvider) CreateBucket(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
-	if bucket == "" {
-		return nil, model.NewProviderError("InvalidBucketName", "Bucket name is required", 400)
+	if !isValidBucketName(bucket) {
+		return nil, model.NewProviderError("InvalidBucketName", "The specified bucket is not valid", 400)
 	}
 	if err := p.meta.CreateBucket(ctx, bucket, nil); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
@@ -322,7 +324,11 @@ func (p *ObjectProvider) GetBucketLocation(ctx context.Context, nr *model.Normal
 	if _, err := p.meta.GetBucket(ctx, bucket); err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
-	return provider.OK(map[string]any{"LocationConstraint": nr.Region}), nil
+	region := nr.Region
+	if region == "us-east-1" {
+		region = ""
+	}
+	return provider.OK(map[string]any{"LocationConstraint": region}), nil
 }
 
 func (p *ObjectProvider) HeadBucket(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -330,7 +336,7 @@ func (p *ObjectProvider) HeadBucket(ctx context.Context, nr *model.NormalizedReq
 	if _, err := p.meta.GetBucket(ctx, bucket); err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"_region": nr.Region}}, nil
 }
 
 // ─── Objects ──────────────────────────────────────────────────────────────────
@@ -374,7 +380,10 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		Metadata:     extractUserMetadata(nr.Params),
 	}
 	if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
-		return nil, err
+		if strings.Contains(err.Error(), "NoSuchBucket") {
+			return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+		}
+		return nil, model.NewProviderError("InternalError", err.Error(), 500)
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
 		"ETag":          etagVal,
@@ -406,6 +415,11 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
+	if resp304, pe := checkConditions(nr, m); pe != nil {
+		return nil, pe
+	} else if resp304 != nil {
+		return resp304, nil
+	}
 
 	status := 200
 	var offset, length int64 = 0, -1
@@ -436,10 +450,14 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("InternalError", "Internal server error", 500)
 	}
 
+	ct := m.ContentType
+	if rct := strParam(nr.Params, "response-content-type"); rct != "" {
+		ct = rct
+	}
 	data := map[string]any{
 		"_stream":       rc,
 		"_passthrough":  true,
-		"_content_type": m.ContentType,
+		"_content_type": ct,
 		"ETag":          m.ETag,
 		"_crc32":        m.CRC32,
 		"ContentLength": contentLength,
@@ -447,9 +465,27 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	}
 	if status == 206 {
 		data["_status"] = status
+		data["_range_start"] = offset
+		data["_range_end"] = offset + length - 1
+		data["_range_total"] = m.Size
 	}
 	if len(m.Metadata) > 0 {
 		data["_metadata"] = m.Metadata
+	}
+	overrides := map[string]string{}
+	for _, pair := range [][2]string{
+		{"response-content-disposition", "Content-Disposition"},
+		{"response-content-language", "Content-Language"},
+		{"response-content-encoding", "Content-Encoding"},
+		{"response-cache-control", "Cache-Control"},
+		{"response-expires", "Expires"},
+	} {
+		if v := strParam(nr.Params, pair[0]); v != "" {
+			overrides[pair[1]] = v
+		}
+	}
+	if len(overrides) > 0 {
+		data["_response_overrides"] = overrides
 	}
 	return &model.ProviderResponse{HTTPStatus: status, Data: data}, nil
 }
@@ -510,12 +546,21 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+	if resp304, pe := checkConditions(nr, m); pe != nil {
+		return nil, pe
+	} else if resp304 != nil {
+		return resp304, nil
+	}
+	data := map[string]any{
 		"ETag":          m.ETag,
 		"ContentLength": m.Size,
 		"ContentType":   m.ContentType,
 		"LastModified":  m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
-	}}, nil
+	}
+	if len(m.Metadata) > 0 {
+		data["_metadata"] = m.Metadata
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: data}, nil
 }
 
 func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -559,10 +604,21 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 	_ = p.blobs.Put(ctx, dstBucket, dstKey, data)
 	etagVal := etag(data)
 	now := time.Now().UTC()
-	_ = p.meta.PutObjectMeta(ctx, dstBucket, dstKey, s3store.ObjectMeta{
+	dstMeta := s3store.ObjectMeta{
 		Key: dstKey, ETag: etagVal, CRC32: crc32Base64(data), Size: srcMeta.Size,
-		ContentType: srcMeta.ContentType, LastModified: now, StorageClass: "STANDARD",
-	})
+		LastModified: now, StorageClass: "STANDARD",
+	}
+	if strParam(nr.Params, "_metadata_directive") == "REPLACE" {
+		dstMeta.ContentType = strParam(nr.Params, "_content_type")
+		if dstMeta.ContentType == "" {
+			dstMeta.ContentType = "application/octet-stream"
+		}
+		dstMeta.Metadata = extractUserMetadata(nr.Params)
+	} else {
+		dstMeta.ContentType = srcMeta.ContentType
+		dstMeta.Metadata = srcMeta.Metadata
+	}
+	_ = p.meta.PutObjectMeta(ctx, dstBucket, dstKey, dstMeta)
 	return provider.OK(map[string]any{
 		"CopyObjectResult": map[string]any{
 			"ETag":         etagVal,
@@ -591,11 +647,15 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 	if delimiter == "" {
 		delimiter = strParam(nr.Params, "Delimiter")
 	}
-	marker := strParam(nr.Params, "marker")
+	marker := strParam(nr.Params, "marker") // ListObjectsV1
 	if marker == "" {
-		marker = strParam(nr.Params, "continuation-token")
+		marker = strParam(nr.Params, "continuation-token") // ListObjectsV2 subsequent pages
+	}
+	if marker == "" {
+		marker = strParam(nr.Params, "start-after") // ListObjectsV2 first page with StartAfter
 	}
 	maxKeys := intParam(nr.Params, "max-keys", 1000)
+	encodingType := strParam(nr.Params, "encoding-type")
 
 	objects, commonPrefixes, truncated, nextMarker, err := p.meta.ListObjectMeta(ctx, bucket, prefix, delimiter, marker, maxKeys)
 	if err != nil {
@@ -604,8 +664,12 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 
 	var contents []map[string]any
 	for _, obj := range objects {
+		k := obj.Key
+		if encodingType == "url" {
+			k = urlEncode(k)
+		}
 		contents = append(contents, map[string]any{
-			"Key":          obj.Key,
+			"Key":          k,
 			"ETag":         obj.ETag,
 			"Size":         obj.Size,
 			"LastModified": obj.LastModified.Format(time.RFC3339),
@@ -617,15 +681,23 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 	}
 
 	result := map[string]any{
-		"Name":           bucket,
-		"Prefix":         prefix,
-		"Delimiter":      delimiter,
-		"MaxKeys":        maxKeys,
-		"IsTruncated":    truncated,
-		"Contents":       contents,
-		"CommonPrefixes": commonPrefixes,
-		"Marker":         marker,
+		"Name":        bucket,
+		"Prefix":      prefix,
+		"Delimiter":   delimiter,
+		"MaxKeys":     maxKeys,
+		"IsTruncated": truncated,
+		"Contents":    contents,
+		"Marker":      marker,
 	}
+	if encodingType == "url" {
+		result["EncodingType"] = "url"
+		result["Prefix"] = urlEncode(prefix)
+		result["Delimiter"] = urlEncode(delimiter)
+		for i, cp := range commonPrefixes {
+			commonPrefixes[i] = urlEncode(cp)
+		}
+	}
+	result["CommonPrefixes"] = commonPrefixes
 	if v2 {
 		result["KeyCount"] = len(contents)
 	}
@@ -673,7 +745,14 @@ func (p *ObjectProvider) CreateMultipartUpload(ctx context.Context, nr *model.No
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 	uploadID := newUploadID()
-	if err := p.meta.InitMultipart(ctx, bucket, key, uploadID, nil); err != nil {
+	uploadMeta := map[string]any{}
+	if ct := strParam(nr.Params, "_content_type"); ct != "" {
+		uploadMeta["content-type"] = ct
+	}
+	if um := extractUserMetadata(nr.Params); len(um) > 0 {
+		uploadMeta["user-metadata"] = um
+	}
+	if err := p.meta.InitMultipart(ctx, bucket, key, uploadID, uploadMeta); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -722,6 +801,7 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	key := strParam(nr.Params, "_key")
 	uploadID := strParam(nr.Params, "uploadId")
 
+	_, _, uploadMeta, _ := p.meta.GetMultipartMeta(ctx, uploadID)
 	parts, err := p.meta.CompleteMultipart(ctx, bucket, key, uploadID)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchUpload", "The specified upload does not exist", 404)
@@ -738,7 +818,8 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	}
 	defer seq.Close()
 
-	etagVal, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
+	multipartETag := computeMultipartETag(parts)
+	_, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -749,9 +830,10 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		_ = p.blobs.Delete(ctx, bucket+"/__parts__", partKey)
 	}
 
+	ct, userMeta := extractUploadMeta(uploadMeta)
 	_ = p.meta.PutObjectMeta(ctx, bucket, key, s3store.ObjectMeta{
-		Key: key, ETag: etagVal, CRC32: crc32Val, Size: totalSize,
-		ContentType: "application/octet-stream", LastModified: time.Now().UTC(),
+		Key: key, ETag: multipartETag, CRC32: crc32Val, Size: totalSize,
+		ContentType: ct, Metadata: userMeta, LastModified: time.Now().UTC(),
 		StorageClass: "STANDARD",
 	})
 
@@ -759,7 +841,7 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		"Location": fmt.Sprintf("http://s3.amazonaws.com/%s/%s", bucket, key),
 		"Bucket":   bucket,
 		"Key":      key,
-		"ETag":     etagVal,
+		"ETag":     multipartETag,
 	}), nil
 }
 
@@ -775,4 +857,155 @@ func (p *ObjectProvider) ListMultipartUploads(ctx context.Context, nr *model.Nor
 
 func (p *ObjectProvider) ListParts(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{"Parts": []any{}}), nil
+}
+
+func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	uploadID := strParam(nr.Params, "uploadId")
+	partNumber := intParam(nr.Params, "partNumber", 0)
+
+	src := strings.TrimPrefix(strParam(nr.Params, "_copy_source"), "/")
+	parts := strings.SplitN(src, "/", 2)
+	if len(parts) != 2 {
+		return nil, model.NewProviderError("InvalidArgument", "Invalid copy source", 400)
+	}
+	srcBucket, srcKey := parts[0], parts[1]
+
+	var offset, length int64 = 0, -1
+	if rng := strParam(nr.Params, "_copy_source_range"); rng != "" {
+		srcMeta, err := p.meta.GetObjectMeta(ctx, srcBucket, srcKey)
+		if err != nil {
+			return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
+		}
+		if s, e, ok := parseByteRange(rng, srcMeta.Size); ok {
+			offset, length = s, e-s+1
+		}
+	}
+
+	rc, err := p.blobs.GetStream(ctx, srcBucket, srcKey, offset, length)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
+	}
+	partKey := fmt.Sprintf("%s/part%d", uploadID, partNumber)
+	etagVal, _, size, err := p.writeChecksums(ctx, bucket+"/__parts__", partKey, rc)
+	rc.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.meta.PutPart(ctx, uploadID, partNumber, s3store.PartMeta{
+		PartNumber: partNumber, ETag: etagVal, Size: size,
+	}); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	return provider.OK(map[string]any{
+		"CopyPartResult": map[string]any{
+			"ETag":         etagVal,
+			"LastModified": now.Format(time.RFC3339),
+		},
+	}), nil
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+func isValidBucketName(name string) bool {
+	n := len(name)
+	if n < 3 || n > 63 {
+		return false
+	}
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			return false
+		}
+	}
+	if name[0] == '-' || name[0] == '.' || name[n-1] == '-' || name[n-1] == '.' {
+		return false
+	}
+	return !strings.Contains(name, "..")
+}
+
+// computeMultipartETag computes the S3 multipart ETag: hex(md5(concat(binary_etags))) + "-N".
+func computeMultipartETag(parts []s3store.PartMeta) string {
+	h := md5.New()
+	for _, p := range parts {
+		raw := strings.Trim(p.ETag, `"`)
+		if b, err := hex.DecodeString(raw); err == nil {
+			h.Write(b)
+		} else {
+			h.Write([]byte(raw))
+		}
+	}
+	return fmt.Sprintf(`"%x-%d"`, h.Sum(nil), len(parts))
+}
+
+// extractUploadMeta recovers ContentType and user metadata from an InitMultipart meta map.
+func extractUploadMeta(m map[string]any) (contentType string, metadata map[string]string) {
+	contentType = "application/octet-stream"
+	if m == nil {
+		return
+	}
+	if ct, ok := m["content-type"].(string); ok && ct != "" {
+		contentType = ct
+	}
+	switch um := m["user-metadata"].(type) {
+	case map[string]string:
+		metadata = um
+	case map[string]interface{}:
+		metadata = make(map[string]string, len(um))
+		for k, v := range um {
+			if s, ok := v.(string); ok {
+				metadata[k] = s
+			}
+		}
+	}
+	return
+}
+
+// checkConditions evaluates S3 conditional request headers against object metadata.
+// Returns (304 response, nil) for Not Modified, (nil, 412 error) for Precondition Failed,
+// or (nil, nil) when all conditions are satisfied.
+func checkConditions(nr *model.NormalizedRequest, m s3store.ObjectMeta) (*model.ProviderResponse, error) {
+	etagRaw := strings.Trim(m.ETag, `"`)
+	notModifiedResp := func() *model.ProviderResponse {
+		return &model.ProviderResponse{HTTPStatus: 304, Data: map[string]any{
+			"ETag":        m.ETag,
+			"ContentType": m.ContentType,
+			"LastModified": m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
+		}}
+	}
+	if v := strParam(nr.Params, "_cond_if_match"); v != "" {
+		if v != "*" && strings.Trim(v, `"`) != etagRaw {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
+	}
+	if v := strParam(nr.Params, "_cond_if_none_match"); v != "" {
+		if v == "*" || strings.Trim(v, `"`) == etagRaw {
+			return notModifiedResp(), nil
+		}
+	}
+	if v := strParam(nr.Params, "_cond_if_modified_since"); v != "" {
+		if t, err := parseHTTPDate(v); err == nil && !m.LastModified.After(t) {
+			return notModifiedResp(), nil
+		}
+	}
+	if v := strParam(nr.Params, "_cond_if_unmodified_since"); v != "" {
+		if t, err := parseHTTPDate(v); err == nil && m.LastModified.After(t) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
+	}
+	return nil, nil
+}
+
+func parseHTTPDate(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC1123, "Mon, 02-Jan-2006 15:04:05 MST", time.ANSIC} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid HTTP date: %q", s)
+}
+
+func urlEncode(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
