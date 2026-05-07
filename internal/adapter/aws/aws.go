@@ -66,7 +66,7 @@ func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	if err != nil {
 		slog.Error("aws: decode failed", "service", service, "err", err,
 			"method", r.Method, "path", r.URL.Path)
-		return nil, nil, err
+		return nil, codec, err
 	}
 	return nr, codec, nil
 }

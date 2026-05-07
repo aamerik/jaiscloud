@@ -279,7 +279,7 @@ func (s *seqPartReader) Close() error {
 
 func (p *ObjectProvider) CreateBucket(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
-	if !isValidBucketName(bucket) {
+	if bucket == "" {
 		return nil, model.NewProviderError("InvalidBucketName", "The specified bucket is not valid", 400)
 	}
 	if err := p.meta.CreateBucket(ctx, bucket, nil); err != nil {
@@ -324,11 +324,7 @@ func (p *ObjectProvider) GetBucketLocation(ctx context.Context, nr *model.Normal
 	if _, err := p.meta.GetBucket(ctx, bucket); err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
-	region := nr.Region
-	if region == "us-east-1" {
-		region = ""
-	}
-	return provider.OK(map[string]any{"LocationConstraint": region}), nil
+	return provider.OK(map[string]any{"LocationConstraint": nr.Region}), nil
 }
 
 func (p *ObjectProvider) HeadBucket(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -415,7 +411,7 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
-	if resp304, pe := checkConditions(nr, m); pe != nil {
+	if resp304, pe := checkConditions(nr, objectCondMeta{ETag: m.ETag, LastModified: m.LastModified, ContentType: m.ContentType}); pe != nil {
 		return nil, pe
 	} else if resp304 != nil {
 		return resp304, nil
@@ -546,7 +542,7 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
-	if resp304, pe := checkConditions(nr, m); pe != nil {
+	if resp304, pe := checkConditions(nr, objectCondMeta{ETag: m.ETag, LastModified: m.LastModified, ContentType: m.ContentType}); pe != nil {
 		return nil, pe
 	} else if resp304 != nil {
 		return resp304, nil
@@ -818,7 +814,11 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	}
 	defer seq.Close()
 
-	multipartETag := computeMultipartETag(parts)
+	partETags := make([]string, len(parts))
+	for i, p := range parts {
+		partETags[i] = p.ETag
+	}
+	multipartETag := computeMultipartETag(partETags)
 	_, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
 	if err != nil {
 		return nil, err
@@ -837,8 +837,12 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		StorageClass: "STANDARD",
 	})
 
+	scheme := "http"
+	if nr.Raw.TLS != nil {
+		scheme = "https"
+	}
 	return provider.OK(map[string]any{
-		"Location": fmt.Sprintf("http://s3.amazonaws.com/%s/%s", bucket, key),
+		"Location": fmt.Sprintf("%s://%s/%s/%s", scheme, nr.Raw.Host, bucket, key),
 		"Bucket":   bucket,
 		"Key":      key,
 		"ETag":     multipartETag,
@@ -909,34 +913,18 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-func isValidBucketName(name string) bool {
-	n := len(name)
-	if n < 3 || n > 63 {
-		return false
-	}
-	for _, c := range name {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
-			return false
-		}
-	}
-	if name[0] == '-' || name[0] == '.' || name[n-1] == '-' || name[n-1] == '.' {
-		return false
-	}
-	return !strings.Contains(name, "..")
-}
-
 // computeMultipartETag computes the S3 multipart ETag: hex(md5(concat(binary_etags))) + "-N".
-func computeMultipartETag(parts []s3store.PartMeta) string {
+func computeMultipartETag(etags []string) string {
 	h := md5.New()
-	for _, p := range parts {
-		raw := strings.Trim(p.ETag, `"`)
+	for _, e := range etags {
+		raw := strings.Trim(e, `"`)
 		if b, err := hex.DecodeString(raw); err == nil {
 			h.Write(b)
 		} else {
 			h.Write([]byte(raw))
 		}
 	}
-	return fmt.Sprintf(`"%x-%d"`, h.Sum(nil), len(parts))
+	return fmt.Sprintf(`"%x-%d"`, h.Sum(nil), len(etags))
 }
 
 // extractUploadMeta recovers ContentType and user metadata from an InitMultipart meta map.
@@ -962,20 +950,34 @@ func extractUploadMeta(m map[string]any) (contentType string, metadata map[strin
 	return
 }
 
-// checkConditions evaluates S3 conditional request headers against object metadata.
+// objectCondMeta holds the fields needed for conditional-request evaluation.
+// Using a local type keeps checkConditions decoupled from the store package.
+type objectCondMeta struct {
+	ETag         string
+	LastModified time.Time
+	ContentType  string
+}
+
+// checkConditions evaluates conditional request headers per RFC 7232 §6 ordering:
+// If-Match → If-Unmodified-Since → If-None-Match → If-Modified-Since.
 // Returns (304 response, nil) for Not Modified, (nil, 412 error) for Precondition Failed,
 // or (nil, nil) when all conditions are satisfied.
-func checkConditions(nr *model.NormalizedRequest, m s3store.ObjectMeta) (*model.ProviderResponse, error) {
+func checkConditions(nr *model.NormalizedRequest, m objectCondMeta) (*model.ProviderResponse, error) {
 	etagRaw := strings.Trim(m.ETag, `"`)
 	notModifiedResp := func() *model.ProviderResponse {
 		return &model.ProviderResponse{HTTPStatus: 304, Data: map[string]any{
-			"ETag":        m.ETag,
-			"ContentType": m.ContentType,
+			"ETag":         m.ETag,
+			"ContentType":  m.ContentType,
 			"LastModified": m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
 		}}
 	}
 	if v := strParam(nr.Params, "_cond_if_match"); v != "" {
 		if v != "*" && strings.Trim(v, `"`) != etagRaw {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
+	}
+	if v := strParam(nr.Params, "_cond_if_unmodified_since"); v != "" {
+		if t, err := parseHTTPDate(v); err == nil && m.LastModified.After(t) {
 			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 	}
@@ -987,11 +989,6 @@ func checkConditions(nr *model.NormalizedRequest, m s3store.ObjectMeta) (*model.
 	if v := strParam(nr.Params, "_cond_if_modified_since"); v != "" {
 		if t, err := parseHTTPDate(v); err == nil && !m.LastModified.After(t) {
 			return notModifiedResp(), nil
-		}
-	}
-	if v := strParam(nr.Params, "_cond_if_unmodified_since"); v != "" {
-		if t, err := parseHTTPDate(v); err == nil && m.LastModified.After(t) {
-			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 	}
 	return nil, nil

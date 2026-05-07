@@ -293,12 +293,14 @@ func TestDeleteObjects_EmptyBodyReturnsEmptyDeleted(t *testing.T) {
 
 // ─── GetBucketLocation ────────────────────────────────────────────────────────
 
-func TestGetBucketLocation_UsEast1ReturnsEmpty(t *testing.T) {
+func TestGetBucketLocation_ReturnsRegionAsIs(t *testing.T) {
 	ctx := context.Background()
 	meta := s3store.NewMemoryS3ObjectMetaStore()
 	p := New(meta, blobfs.NewMemoryBlobStore())
 	_ = meta.CreateBucket(ctx, "b", nil)
 
+	// Provider returns the region unchanged; the S3 codec translates us-east-1 → ""
+	// in s3BuildXML so the wire response is spec-compliant.
 	nr := &model.NormalizedRequest{
 		Region: "us-east-1",
 		Params: map[string]any{"_bucket": "b"},
@@ -308,8 +310,8 @@ func TestGetBucketLocation_UsEast1ReturnsEmpty(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	lc, _ := resp.Data["LocationConstraint"].(string)
-	if lc != "" {
-		t.Fatalf("us-east-1 must return empty LocationConstraint, got %q", lc)
+	if lc != "us-east-1" {
+		t.Fatalf("provider must return region as-is, got %q", lc)
 	}
 }
 

@@ -212,12 +212,34 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 		}
 	}
 
+	if action == "CreateBucket" && !isValidBucketName(bucket) {
+		return nil, model.NewProviderError("InvalidBucketName", "The specified bucket is not valid", 400)
+	}
+
 	return &model.NormalizedRequest{
 		Service: "s3",
 		Action:  action,
 		Params:  params,
 		Raw:     r,
 	}, nil
+}
+
+// isValidBucketName enforces AWS S3 bucket naming rules:
+// 3–63 chars, lowercase alphanumeric/hyphens/dots, no leading/trailing hyphens or dots, no "..".
+func isValidBucketName(name string) bool {
+	n := len(name)
+	if n < 3 || n > 63 {
+		return false
+	}
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			return false
+		}
+	}
+	if name[0] == '-' || name[0] == '.' || name[n-1] == '-' || name[n-1] == '.' {
+		return false
+	}
+	return !strings.Contains(name, "..")
 }
 
 func s3DetectAction(method, bucket, key string, query url.Values, headers http.Header) string {
@@ -581,6 +603,10 @@ func s3BuildXML(action string, data map[string]any) []byte {
 
 	case "GetBucketLocation":
 		lc := str(data["LocationConstraint"])
+		// S3 wire protocol represents us-east-1 as an empty LocationConstraint element.
+		if lc == "us-east-1" {
+			lc = ""
+		}
 		if lc == "" {
 			sb.WriteString(`<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
 		} else {
