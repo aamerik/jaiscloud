@@ -475,6 +475,9 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
 		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
 		sb.WriteString(xmlTag("Marker", str(data["Marker"])))
+		if nm := str(data["_nextPageToken"]); nm != "" && str(data["Delimiter"]) != "" {
+			sb.WriteString(xmlTag("NextMarker", nm))
+		}
 		if contents, ok := data["Contents"].([]map[string]any); ok {
 			for _, obj := range contents {
 				sb.WriteString("<Contents>")
@@ -502,6 +505,9 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
 		sb.WriteString(xmlTag("KeyCount", str(data["KeyCount"])))
 		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
+		if nct := str(data["_nextPageToken"]); nct != "" {
+			sb.WriteString(xmlTag("NextContinuationToken", nct))
+		}
 		if contents, ok := data["Contents"].([]map[string]any); ok {
 			for _, obj := range contents {
 				sb.WriteString("<Contents>")

@@ -597,7 +597,7 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 	}
 	maxKeys := intParam(nr.Params, "max-keys", 1000)
 
-	objects, commonPrefixes, truncated, err := p.meta.ListObjectMeta(ctx, bucket, prefix, delimiter, marker, maxKeys)
+	objects, commonPrefixes, truncated, nextMarker, err := p.meta.ListObjectMeta(ctx, bucket, prefix, delimiter, marker, maxKeys)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
@@ -624,9 +624,16 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 		"IsTruncated":    truncated,
 		"Contents":       contents,
 		"CommonPrefixes": commonPrefixes,
+		"Marker":         marker,
 	}
 	if v2 {
 		result["KeyCount"] = len(contents)
+	}
+	// Pass the opaque next-page token to the codec using a cloud-neutral key.
+	// The codec translates it to the cloud-specific field name (e.g. AWS
+	// NextContinuationToken for V2, NextMarker for V1).
+	if truncated && nextMarker != "" {
+		result["_nextPageToken"] = nextMarker
 	}
 	return provider.OK(result), nil
 }

@@ -10,10 +10,10 @@ import (
 
 // MemoryS3ObjectMetaStore is an in-memory S3ObjectMetaStore.
 type MemoryS3ObjectMetaStore struct {
-	mu       sync.RWMutex
-	buckets  map[string]map[string]any   // bucketName → meta
-	objects  map[string]map[string]ObjectMeta // bucketName → key → meta
-	uploads  map[string]multipartUpload  // uploadID → upload
+	mu      sync.RWMutex
+	buckets map[string]map[string]any        // bucketName → meta
+	objects map[string]map[string]ObjectMeta // bucketName → key → meta
+	uploads map[string]multipartUpload       // uploadID → upload
 }
 
 type multipartUpload struct {
@@ -119,12 +119,12 @@ func (s *MemoryS3ObjectMetaStore) DeleteObjectMeta(_ context.Context, bucket, ke
 	return nil
 }
 
-func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, error) {
+func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	objs, ok := s.objects[bucket]
 	if !ok {
-		return nil, nil, false, fmt.Errorf("NoSuchBucket")
+		return nil, nil, false, "", fmt.Errorf("NoSuchBucket")
 	}
 	if maxKeys <= 0 {
 		maxKeys = 1000
@@ -141,8 +141,12 @@ func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, pref
 	sortStrings(keys)
 
 	// Apply marker (pagination).
-	start := 0
-	if marker != "" {
+	// If no key is strictly greater than the marker (marker is at or past the last
+	// key), return an empty slice rather than wrapping around to the beginning.
+	start := len(keys)
+	if marker == "" {
+		start = 0
+	} else {
 		for i, k := range keys {
 			if k > marker {
 				start = i
@@ -153,9 +157,19 @@ func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, pref
 	keys = keys[start:]
 
 	// Apply delimiter (common prefixes).
+	// AWS counts both result keys and unique common prefixes toward maxKeys.
 	commonPrefixes := map[string]bool{}
 	var result []ObjectMeta
-	for _, k := range keys {
+	truncated := false
+	var lastExaminedKey string
+	breakIdx := len(keys)
+	for i, k := range keys {
+		if len(result)+len(commonPrefixes) >= maxKeys {
+			truncated = true
+			breakIdx = i
+			break
+		}
+		lastExaminedKey = k
 		if delimiter != "" {
 			// Find delimiter after prefix.
 			rest := k[len(prefix):]
@@ -167,9 +181,6 @@ func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, pref
 			}
 		}
 		result = append(result, objs[k])
-		if len(result) >= maxKeys {
-			break
-		}
 	}
 
 	var cpList []string
@@ -178,8 +189,24 @@ func (s *MemoryS3ObjectMetaStore) ListObjectMeta(_ context.Context, bucket, pref
 	}
 	sortStrings(cpList)
 
-	truncated := len(result) >= maxKeys
-	return result, cpList, truncated, nil
+	nextMarker := ""
+	if truncated {
+		// Advance nextMarker past all keys in the same common prefix group as
+		// the last item on this page.  Without this, using nextMarker as the
+		// continuation-token would re-emit the last common prefix on the next page.
+		if delimiter != "" && len(cpList) > 0 {
+			lastCP := cpList[len(cpList)-1]
+			for _, k := range keys[breakIdx:] {
+				if strings.HasPrefix(k, lastCP) {
+					lastExaminedKey = k
+				} else {
+					break
+				}
+			}
+		}
+		nextMarker = lastExaminedKey
+	}
+	return result, cpList, truncated, nextMarker, nil
 }
 
 func sortStrings(ss []string) {

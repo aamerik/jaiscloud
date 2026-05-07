@@ -724,3 +724,154 @@ func TestS3_BatchDeleteObjects(t *testing.T) {
 	require.Len(t, listOut.Contents, 1)
 	assert.Equal(t, "b", aws.ToString(listOut.Contents[0].Key))
 }
+
+// TestS3_ListObjectsV2_TruncationCommonPrefixesCountTowardMaxKeys is the core regression test.
+// AWS counts both result keys AND unique common prefixes toward MaxKeys. The old code only counted
+// result keys, so listings with a delimiter would over-return and report truncated=false incorrectly.
+//
+// Setup: 5 keys under 3 top-level "directories" (a/*, b/*, c/*), delimiter="/", MaxKeys=2.
+// Expected: 2 common prefixes returned (a/, b/), IsTruncated=true (c/ not returned).
+func TestS3_ListObjectsV2_TruncationCommonPrefixesCountTowardMaxKeys(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("trunc-cp-bucket")})
+	require.NoError(t, err)
+
+	for _, k := range []string{"a/1", "a/2", "b/1", "b/2", "c/1"} {
+		_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: aws.String("trunc-cp-bucket"),
+			Key:    aws.String(k),
+			Body:   strings.NewReader("x"),
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket:    aws.String("trunc-cp-bucket"),
+		Delimiter: aws.String("/"),
+		MaxKeys:   aws.Int32(2),
+	})
+	require.NoError(t, err)
+
+	assert.True(t, aws.ToBool(out.IsTruncated), "expected IsTruncated=true: common prefixes must count toward MaxKeys")
+	assert.Len(t, out.Contents, 0, "expected 0 result keys: all items under delimited prefixes")
+	require.Len(t, out.CommonPrefixes, 2, "expected exactly 2 common prefixes: a/ and b/")
+	assert.Equal(t, "a/", aws.ToString(out.CommonPrefixes[0].Prefix))
+	assert.Equal(t, "b/", aws.ToString(out.CommonPrefixes[1].Prefix))
+}
+
+// TestS3_ListObjectsV2_TruncationMixedKeysAndPrefixes verifies that bare keys and common
+// prefixes together fill the MaxKeys budget, leaving later items unreturned with IsTruncated=true.
+//
+// Setup: a/1 (yields prefix a/), b (bare key), c/1 (yields prefix c/), d (bare key).
+// Sorted: a/1, b, c/1, d → a/ (prefix), b (key), c/ (prefix) = 3 → MaxKeys=3 → truncated, d excluded.
+func TestS3_ListObjectsV2_TruncationMixedKeysAndPrefixes(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("trunc-mixed-bucket")})
+	require.NoError(t, err)
+
+	for _, k := range []string{"a/1", "b", "c/1", "d"} {
+		_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: aws.String("trunc-mixed-bucket"),
+			Key:    aws.String(k),
+			Body:   strings.NewReader("x"),
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket:    aws.String("trunc-mixed-bucket"),
+		Delimiter: aws.String("/"),
+		MaxKeys:   aws.Int32(3),
+	})
+	require.NoError(t, err)
+
+	assert.True(t, aws.ToBool(out.IsTruncated), "expected IsTruncated=true: d is beyond the 3-item boundary")
+	// AWS KeyCount counts only keys in Contents; total page size = keys + prefixes.
+	total := len(out.Contents) + len(out.CommonPrefixes)
+	assert.Equal(t, 3, total, "expected 3 items (keys + common prefixes) filling MaxKeys=3")
+	for _, obj := range out.Contents {
+		assert.NotEqual(t, "d", aws.ToString(obj.Key), "d must not appear in a truncated page")
+	}
+}
+
+// TestS3_ListObjectsV2_PaginationWithDelimiter verifies that ContinuationToken-based
+// pagination works correctly after a truncated delimiter listing, returning remaining prefixes.
+func TestS3_ListObjectsV2_PaginationWithDelimiter(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("page-delim-bucket")})
+	require.NoError(t, err)
+
+	// 4 top-level "directories", 2 files each
+	for _, prefix := range []string{"a", "b", "c", "d"} {
+		for _, suffix := range []string{"1", "2"} {
+			_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+				Bucket: aws.String("page-delim-bucket"),
+				Key:    aws.String(prefix + "/" + suffix),
+				Body:   strings.NewReader("x"),
+			})
+			require.NoError(t, err)
+		}
+	}
+
+	// Paginate with MaxKeys=2 per page; collect all common prefixes.
+	var allPrefixes []string
+	var token *string
+	for {
+		out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket:            aws.String("page-delim-bucket"),
+			Delimiter:         aws.String("/"),
+			MaxKeys:           aws.Int32(2),
+			ContinuationToken: token,
+		})
+		require.NoError(t, err)
+		for _, cp := range out.CommonPrefixes {
+			allPrefixes = append(allPrefixes, aws.ToString(cp.Prefix))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		token = out.NextContinuationToken
+	}
+
+	assert.Equal(t, []string{"a/", "b/", "c/", "d/"}, allPrefixes,
+		"all 4 directories must be returned across pages without duplicates or gaps")
+}
+
+// TestS3_ListObjectsV2_ExactBoundaryNotTruncated verifies that when the result count
+// equals MaxKeys exactly, IsTruncated is false (no more items exist).
+func TestS3_ListObjectsV2_ExactBoundaryNotTruncated(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newS3Client(t)
+
+	_, err := c.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String("exact-bound-bucket")})
+	require.NoError(t, err)
+
+	for _, k := range []string{"a/1", "b/1"} {
+		_, err = c.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: aws.String("exact-bound-bucket"),
+			Key:    aws.String(k),
+			Body:   strings.NewReader("x"),
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket:    aws.String("exact-bound-bucket"),
+		Delimiter: aws.String("/"),
+		MaxKeys:   aws.Int32(2),
+	})
+	require.NoError(t, err)
+
+	assert.False(t, aws.ToBool(out.IsTruncated), "IsTruncated must be false when result count == MaxKeys and no more items exist")
+	assert.Len(t, out.CommonPrefixes, 2)
+}

@@ -129,7 +129,7 @@ func (s *PostgresS3ObjectMetaStore) DeleteObjectMeta(ctx context.Context, bucket
 	return err
 }
 
-func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, error) {
+func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, string, error) {
 	if maxKeys <= 0 {
 		maxKeys = 1000
 	}
@@ -140,7 +140,7 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 		ORDER BY key LIMIT $4
 	`, bucket, prefix+"%", marker, maxKeys+1)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, false, "", err
 	}
 	defer rows.Close()
 
@@ -149,7 +149,7 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 		var m ObjectMeta
 		var metaRaw []byte
 		if err := rows.Scan(&m.Key, &m.ETag, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass); err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, "", err
 		}
 		json.Unmarshal(metaRaw, &m.Metadata)
 		all = append(all, m)
@@ -157,10 +157,16 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 
 	commonPrefixes := map[string]bool{}
 	var result []ObjectMeta
+	truncated := false
+	var lastExaminedKey string
 	for _, m := range all {
-		if len(result) >= maxKeys {
+		// AWS counts both result keys and unique common prefixes toward maxKeys.
+		// Stop when the page is full; remaining items mean the result is truncated.
+		if len(result)+len(commonPrefixes) >= maxKeys {
+			truncated = true
 			break
 		}
+		lastExaminedKey = m.Key
 		if delimiter != "" {
 			rest := m.Key[len(prefix):]
 			idx := strings.Index(rest, delimiter)
@@ -176,8 +182,13 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 	for cp := range commonPrefixes {
 		cpList = append(cpList, cp)
 	}
-	truncated := len(all) > maxKeys
-	return result, cpList, truncated, rows.Err()
+	sortStrings(cpList)
+
+	nextMarker := ""
+	if truncated {
+		nextMarker = lastExaminedKey
+	}
+	return result, cpList, truncated, nextMarker, rows.Err()
 }
 
 func (s *PostgresS3ObjectMetaStore) InitMultipart(ctx context.Context, bucket, key, uploadID string, meta map[string]any) error {

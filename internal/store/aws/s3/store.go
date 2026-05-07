@@ -41,7 +41,10 @@ type S3ObjectMetaStore interface {
 	PutObjectMeta(ctx context.Context, bucket, key string, meta ObjectMeta) error
 	GetObjectMeta(ctx context.Context, bucket, key string) (ObjectMeta, error)
 	DeleteObjectMeta(ctx context.Context, bucket, key string) error
-	ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, error)
+	// ListObjectMeta returns (objects, commonPrefixes, truncated, nextMarker, error).
+	// nextMarker is the last raw key examined on the page and must be used as the
+	// continuation-token / marker for the next page. It is empty when truncated=false.
+	ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, string, error)
 
 	// Multipart
 	InitMultipart(ctx context.Context, bucket, key, uploadID string, meta map[string]any) error
