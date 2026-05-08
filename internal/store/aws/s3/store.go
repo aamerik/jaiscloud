@@ -1,57 +1,9 @@
-// Package s3 provides the S3 object metadata store interface and implementations.
+// Package s3 provides AWS S3 metadata store implementations.
+// The canonical interface and types are defined in internal/store/object.
 package s3
 
-import (
-	"context"
-	"time"
-)
+import objectstore "jaiscloud/internal/store/object"
 
-// ObjectMeta holds metadata for a single S3 object.
-type ObjectMeta struct {
-	Key          string
-	ETag         string
-	// CRC32 is the base64-encoded IEEE CRC32 checksum of the object body,
-	// computed at upload time and echoed in GetObject responses.
-	CRC32        string
-	Size         int64
-	ContentType  string
-	LastModified time.Time
-	Metadata     map[string]string // x-amz-meta-* headers
-	StorageClass string
-	VersionID    string
-}
-
-// PartMeta holds metadata for a single multipart upload part.
-type PartMeta struct {
-	PartNumber int
-	ETag       string
-	Size       int64
-}
-
-// S3ObjectMetaStore manages S3 bucket and object metadata.
-// Actual object bytes are stored in blobfs.BlobStore.
-type S3ObjectMetaStore interface {
-	// Buckets
-	CreateBucket(ctx context.Context, bucket string, meta map[string]any) error
-	GetBucket(ctx context.Context, bucket string) (map[string]any, error)
-	DeleteBucket(ctx context.Context, bucket string) error
-	ListBuckets(ctx context.Context) ([]map[string]any, error)
-
-	// Objects
-	PutObjectMeta(ctx context.Context, bucket, key string, meta ObjectMeta) error
-	GetObjectMeta(ctx context.Context, bucket, key string) (ObjectMeta, error)
-	DeleteObjectMeta(ctx context.Context, bucket, key string) error
-	// ListObjectMeta returns (objects, commonPrefixes, truncated, nextMarker, error).
-	// nextMarker is the last raw key examined on the page and must be used as the
-	// continuation-token / marker for the next page. It is empty when truncated=false.
-	ListObjectMeta(ctx context.Context, bucket, prefix, delimiter, marker string, maxKeys int) ([]ObjectMeta, []string, bool, string, error)
-
-	// Multipart
-	InitMultipart(ctx context.Context, bucket, key, uploadID string, meta map[string]any) error
-	PutPart(ctx context.Context, uploadID string, partNumber int, part PartMeta) error
-	CompleteMultipart(ctx context.Context, bucket, key, uploadID string) ([]PartMeta, error)
-	AbortMultipart(ctx context.Context, uploadID string) error
-	GetMultipartMeta(ctx context.Context, uploadID string) (bucket, key string, meta map[string]any, err error)
-
-	Reset()
-}
+// Type aliases so memory.go and postgres.go use the canonical types without change.
+type ObjectMeta = objectstore.ObjectMeta
+type PartMeta = objectstore.PartMeta

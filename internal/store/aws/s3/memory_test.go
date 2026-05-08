@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	objectstore "jaiscloud/internal/store/object"
 )
 
-func setupBucketWithObjects(t *testing.T, store S3ObjectMetaStore, bucket string, keys []string) {
+func setupBucketWithObjects(t *testing.T, store objectstore.ObjectMetaStore, bucket string, keys []string) {
 	t.Helper()
 	ctx := context.Background()
 	if err := store.CreateBucket(ctx, bucket, nil); err != nil {

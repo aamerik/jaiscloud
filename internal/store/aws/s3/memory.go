@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,10 +13,12 @@ import (
 
 // MemoryS3ObjectMetaStore is an in-memory S3ObjectMetaStore.
 type MemoryS3ObjectMetaStore struct {
-	mu      sync.RWMutex
-	buckets map[string]map[string]any        // bucketName → meta
-	objects map[string]map[string]ObjectMeta // bucketName → key → meta
-	uploads map[string]multipartUpload       // uploadID → upload
+	mu               sync.RWMutex
+	buckets          map[string]map[string]any        // bucketName → meta
+	objects          map[string]map[string]ObjectMeta // bucketName → key → meta
+	uploads          map[string]multipartUpload       // uploadID → upload
+	versions         map[string]map[string][]ObjectMeta // bucket → key → versions (newest first)
+	versioningStatus map[string]string                  // bucket → "" | "Enabled" | "Suspended"
 }
 
 type multipartUpload struct {
@@ -26,10 +30,146 @@ type multipartUpload struct {
 
 func NewMemoryS3ObjectMetaStore() *MemoryS3ObjectMetaStore {
 	return &MemoryS3ObjectMetaStore{
-		buckets: make(map[string]map[string]any),
-		objects: make(map[string]map[string]ObjectMeta),
-		uploads: make(map[string]multipartUpload),
+		buckets:          make(map[string]map[string]any),
+		objects:          make(map[string]map[string]ObjectMeta),
+		uploads:          make(map[string]multipartUpload),
+		versions:         make(map[string]map[string][]ObjectMeta),
+		versioningStatus: make(map[string]string),
 	}
+}
+
+func newVersionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *MemoryS3ObjectMetaStore) UpdateBucketMeta(_ context.Context, bucket string, meta map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.buckets[bucket]; !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+	s.buckets[bucket] = meta
+	return nil
+}
+
+func (s *MemoryS3ObjectMetaStore) GetBucketVersioning(_ context.Context, bucket string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.buckets[bucket]; !ok {
+		return "", fmt.Errorf("NoSuchBucket")
+	}
+	return s.versioningStatus[bucket], nil
+}
+
+func (s *MemoryS3ObjectMetaStore) SetBucketVersioning(_ context.Context, bucket, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.buckets[bucket]; !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+	s.versioningStatus[bucket] = status
+	if s.versions[bucket] == nil {
+		s.versions[bucket] = make(map[string][]ObjectMeta)
+	}
+	return nil
+}
+
+func (s *MemoryS3ObjectMetaStore) PutObjectVersion(_ context.Context, bucket, key string, meta ObjectMeta) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.buckets[bucket]; !exists {
+		return "", fmt.Errorf("NoSuchBucket")
+	}
+	if s.versions[bucket] == nil {
+		s.versions[bucket] = make(map[string][]ObjectMeta)
+	}
+	vID := meta.VersionID
+	if vID == "" {
+		vID = newVersionID()
+	}
+	meta.Key = key
+	meta.VersionID = vID
+	if meta.LastModified.IsZero() {
+		meta.LastModified = time.Now().UTC()
+	}
+	// Mark all existing versions as not-latest.
+	existing := s.versions[bucket][key]
+	for i := range existing {
+		existing[i].IsLatest = false
+	}
+	meta.IsLatest = true
+	// Prepend (newest first).
+	s.versions[bucket][key] = append([]ObjectMeta{meta}, existing...)
+	return vID, nil
+}
+
+func (s *MemoryS3ObjectMetaStore) UpdateObjectVersion(_ context.Context, bucket, key string, meta ObjectMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vs := s.versions[bucket][key]
+	for i, v := range vs {
+		if v.VersionID == meta.VersionID {
+			vs[i] = meta
+			s.versions[bucket][key] = vs
+			return nil
+		}
+	}
+	return fmt.Errorf("NoSuchVersion")
+}
+
+func (s *MemoryS3ObjectMetaStore) GetObjectVersion(_ context.Context, bucket, key, versionID string) (ObjectMeta, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, v := range s.versions[bucket][key] {
+		if v.VersionID == versionID {
+			return v, nil
+		}
+	}
+	return ObjectMeta{}, fmt.Errorf("NoSuchVersion")
+}
+
+func (s *MemoryS3ObjectMetaStore) DeleteObjectVersion(_ context.Context, bucket, key, versionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vs := s.versions[bucket][key]
+	for i, v := range vs {
+		if v.VersionID == versionID {
+			s.versions[bucket][key] = append(vs[:i], vs[i+1:]...)
+			// If we deleted the latest, mark next as latest.
+			remaining := s.versions[bucket][key]
+			if len(remaining) > 0 {
+				remaining[0].IsLatest = true
+				s.versions[bucket][key] = remaining
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("NoSuchVersion")
+}
+
+func (s *MemoryS3ObjectMetaStore) ListObjectVersions(_ context.Context, bucket, prefix, keyMarker, _ string, maxKeys int) ([]ObjectMeta, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+	var keys []string
+	for k := range s.versions[bucket] {
+		if strings.HasPrefix(k, prefix) && k > keyMarker {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var result []ObjectMeta
+	for _, k := range keys {
+		result = append(result, s.versions[bucket][k]...)
+		if len(result) >= maxKeys {
+			return result[:maxKeys], true, nil
+		}
+	}
+	return result, false, nil
 }
 
 func (s *MemoryS3ObjectMetaStore) CreateBucket(_ context.Context, bucket string, meta map[string]any) error {
@@ -288,4 +428,6 @@ func (s *MemoryS3ObjectMetaStore) Reset() {
 	s.buckets = make(map[string]map[string]any)
 	s.objects = make(map[string]map[string]ObjectMeta)
 	s.uploads = make(map[string]multipartUpload)
+	s.versions = make(map[string]map[string][]ObjectMeta)
+	s.versioningStatus = make(map[string]string)
 }

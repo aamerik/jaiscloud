@@ -41,6 +41,7 @@ import (
 	functionprovider "jaiscloud/internal/provider/function"
 	"jaiscloud/internal/provider/notification"
 	objectprovider "jaiscloud/internal/provider/object"
+	objectstore "jaiscloud/internal/store/object"
 	"jaiscloud/internal/provider/queue"
 	"jaiscloud/internal/provider/table"
 	secretprovider "jaiscloud/internal/secret"
@@ -116,7 +117,7 @@ func startCmd() *cobra.Command {
 			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
@@ -150,6 +151,10 @@ func startCmd() *cobra.Command {
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
 					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
 				}))
+			}
+			// P2-6: Wire S3 CORS lookup so the gateway can intercept preflight requests.
+			if cfg.Cloud == "aws" {
+				gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(objectP.GetBucketCORSRules))
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs, gatewayOpts...)
@@ -244,7 +249,7 @@ type appStores struct {
 	resources  store.ResourceStore
 	messages   sqsstore.SQSMessageStore
 	dynamo     dynamostore.DynamoDBItemStore
-	s3Meta     s3store.S3ObjectMetaStore
+	s3Meta     objectstore.ObjectMetaStore
 	blobs      blobfs.BlobStore
 	secrets    secretprovider.SecretStore
 	parameters paramprovider.ParameterStore
@@ -316,7 +321,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func()) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -512,7 +517,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(apigwprovider.New(s.resources).Routes())
 	registry.RegisterAll(cloudwatchprovider.New(s.resources, bus).Routes())
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP
 }
 
 // buildK8sClient constructs a kubernetes.Interface using in-cluster config if

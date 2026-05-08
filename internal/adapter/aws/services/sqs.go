@@ -576,6 +576,7 @@ func str(v any) string {
 	return fmt.Sprintf("%v", v)
 }
 
+
 func batchResultList(v any) []map[string]any {
 	if v == nil {
 		return nil

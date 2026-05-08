@@ -1,8 +1,11 @@
 package services
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,4 +214,105 @@ func TestDecodeAWSChunked(t *testing.T) {
 		chunk = append(chunk, []byte("\r\n0\r\n\r\n")...)
 		assert.Equal(t, data, decodeAWSChunked(chunk))
 	})
+}
+
+// ─── Non-streaming actions with streaming-flagged request ─────────────────────
+// The AWS SDK sends Content-Encoding: aws-chunked even for small XML-body
+// operations like PutObjectLegalHold. The gateway marks those as "streaming"
+// and passes body=nil to the codec. The codec must re-read r.Body for any
+// action that is NOT PutObject/UploadPart.
+
+func TestDecode_PutObjectLegalHold_StreamingFlaggedRequest(t *testing.T) {
+	xmlBody := `<LegalHold xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>ON</Status></LegalHold>`
+	rawURL := "http://localhost:4566/my-bucket/obj.txt?legal-hold"
+	req, _ := http.NewRequest(http.MethodPut, rawURL, strings.NewReader(xmlBody))
+	req.Header.Set("Content-Encoding", "aws-chunked") // triggers streaming gate in gateway
+	req.Header.Set("Host", "localhost:4566")
+
+	c := &S3Codec{}
+	// Gateway skips io.ReadAll when Content-Encoding: aws-chunked → passes nil body
+	nr, err := c.Decode(req, nil)
+	require.NoError(t, err, "PutObjectLegalHold with nil body must not return MalformedXML")
+	assert.Equal(t, "PutObjectLegalHold", nr.Action)
+	// Codec must have re-read r.Body and stored it in _body
+	body, ok := nr.Params["_body"].([]byte)
+	require.True(t, ok, "_body must be a []byte")
+	assert.Equal(t, xmlBody, string(body))
+}
+
+func TestDecode_PutObjectRetention_StreamingFlaggedRequest(t *testing.T) {
+	xmlBody := `<Retention xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Mode>GOVERNANCE</Mode><RetainUntilDate>2027-01-01T00:00:00Z</RetainUntilDate></Retention>`
+	rawURL := "http://localhost:4566/my-bucket/obj.txt?retention"
+	req, _ := http.NewRequest(http.MethodPut, rawURL, strings.NewReader(xmlBody))
+	req.Header.Set("Content-Encoding", "aws-chunked")
+
+	c := &S3Codec{}
+	nr, err := c.Decode(req, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "PutObjectRetention", nr.Action)
+	body, ok := nr.Params["_body"].([]byte)
+	require.True(t, ok)
+	assert.Equal(t, xmlBody, string(body))
+}
+
+func TestDecode_PutObject_StreamingFlaggedRequest_BodyNotRead(t *testing.T) {
+	// For PutObject, body=nil must NOT be re-read from r.Body — that is the
+	// streaming provider's job.
+	rawURL := "http://localhost:4566/my-bucket/obj.txt"
+	req, _ := http.NewRequest(http.MethodPut, rawURL, strings.NewReader("blob data"))
+	req.Header.Set("Content-Encoding", "aws-chunked")
+
+	c := &S3Codec{}
+	nr, err := c.Decode(req, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "PutObject", nr.Action)
+	// _streaming must be true and _body must be nil — provider streams from nr.Raw.Body
+	_, streaming := nr.Params["_streaming"]
+	assert.True(t, streaming, "_streaming flag must be set for PutObject with nil body")
+	body := nr.Params["_body"]
+	assert.Nil(t, body, "_body must remain nil for PutObject so the provider can stream it")
+}
+
+// ─── P2-8: Presigned URL expiration ──────────────────────────────────────────
+
+func TestPresigned_ExpiredSigV4_403(t *testing.T) {
+	// X-Amz-Date in the past, expires in 1 second → already expired.
+	past := time.Now().Add(-10 * time.Minute)
+	dateStr := past.UTC().Format("20060102T150405Z")
+	rawURL := fmt.Sprintf(
+		"http://localhost:4566/bucket/key?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=%s&X-Amz-Expires=1&X-Amz-Signature=fake",
+		dateStr,
+	)
+	req, _ := http.NewRequest(http.MethodGet, rawURL, nil)
+	c := &S3Codec{}
+	_, err := c.Decode(req, nil)
+	require.Error(t, err, "expired presigned URL must return an error")
+}
+
+func TestPresigned_ValidSigV4_Succeeds(t *testing.T) {
+	// X-Amz-Date now, expires in 3600 seconds → still valid.
+	now := time.Now().UTC()
+	dateStr := now.Format("20060102T150405Z")
+	rawURL := fmt.Sprintf(
+		"http://localhost:4566/bucket/key?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=%s&X-Amz-Expires=3600&X-Amz-Signature=fake",
+		dateStr,
+	)
+	req, _ := http.NewRequest(http.MethodGet, rawURL, nil)
+	c := &S3Codec{}
+	nr, err := c.Decode(req, nil)
+	require.NoError(t, err, "valid presigned URL must not return an error")
+	assert.Equal(t, "GetObject", nr.Action)
+}
+
+func TestPresigned_ExpiredSigV2_403(t *testing.T) {
+	// Expires is a Unix timestamp in the past.
+	expiredUnix := time.Now().Add(-1 * time.Minute).Unix()
+	rawURL := fmt.Sprintf(
+		"http://localhost:4566/bucket/key?AWSAccessKeyId=AKID&Signature=fake&Expires=%d",
+		expiredUnix,
+	)
+	req, _ := http.NewRequest(http.MethodGet, rawURL, nil)
+	c := &S3Codec{}
+	_, err := c.Decode(req, nil)
+	require.Error(t, err, "expired SigV2 presigned URL must return an error")
 }

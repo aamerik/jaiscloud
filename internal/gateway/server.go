@@ -42,6 +42,9 @@ type Server struct {
 	cloudAdapter adapter.CloudAdapter
 	certs        certstore.CertStore
 	extraRoutes  []func(chi.Router)
+	// corsLookup returns the stored CORS rules for a given S3 bucket name.
+	// If nil, CORS preflight handling is disabled.
+	corsLookup func(bucket string) []map[string]any
 }
 
 // WithExtraRoutes registers additional routes on the server's router before the
@@ -49,6 +52,15 @@ type Server struct {
 func WithExtraRoutes(attach func(chi.Router)) func(*Server) {
 	return func(s *Server) {
 		s.extraRoutes = append(s.extraRoutes, attach)
+	}
+}
+
+// WithCORSLookup wires in a function that returns stored S3 CORS rules for a
+// bucket. When set, the server intercepts OPTIONS preflight requests and adds
+// Access-Control-* headers to regular S3 responses that carry an Origin header.
+func WithCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
+	return func(s *Server) {
+		s.corsLookup = fn
 	}
 }
 
@@ -137,6 +149,25 @@ func isS3StreamingUpload(r *http.Request) bool {
 }
 
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
+	// P2-6: CORS preflight — intercept before DetectAndDecode since OPTIONS
+	// requests have no SigV4 auth and would fail service detection.
+	if s.corsLookup != nil {
+		origin := r.Header.Get("Origin")
+		if origin != "" && r.Method == http.MethodOptions {
+			reqMethod := r.Header.Get("Access-Control-Request-Method")
+			bucket := corsExtractBucket(r)
+			rules := s.corsLookup(bucket)
+			rule, ok := corsMatchRule(rules, origin, reqMethod)
+			if !ok {
+				http.Error(w, "CORS request not allowed", http.StatusForbidden)
+				return
+			}
+			corsWritePreflightHeaders(w, rule, origin, r.Header.Get("Access-Control-Request-Headers"))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	streaming := isS3StreamingUpload(r)
 
 	// For streaming S3 uploads we intentionally leave r.Body unread here so
@@ -239,6 +270,14 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status, headers, respBody := codec.Encode(nr, resp)
+	// P2-6: Attach CORS headers to regular responses when Origin is present.
+	if s.corsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			bucket := corsExtractBucket(r)
+			rules := s.corsLookup(bucket)
+			CORSAddResponseHeaders(headers, rules, origin)
+		}
+	}
 	if stream, ok := resp.Data["_stream"].(io.ReadCloser); ok {
 		defer stream.Close()
 		writeStreamResponse(w, status, headers, stream)

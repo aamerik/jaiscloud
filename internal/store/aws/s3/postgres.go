@@ -52,6 +52,18 @@ func (s *PostgresS3ObjectMetaStore) GetBucket(ctx context.Context, bucket string
 	return meta, json.Unmarshal(raw, &meta)
 }
 
+func (s *PostgresS3ObjectMetaStore) UpdateBucketMeta(ctx context.Context, bucket string, meta map[string]any) error {
+	raw, _ := json.Marshal(meta)
+	tag, err := s.pool.Exec(ctx, `UPDATE jc_s3_buckets SET meta=$2 WHERE name=$1`, bucket, json.RawMessage(raw))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("NoSuchBucket")
+	}
+	return nil
+}
+
 func (s *PostgresS3ObjectMetaStore) DeleteBucket(ctx context.Context, bucket string) error {
 	// Check not empty.
 	var count int
@@ -91,6 +103,7 @@ func (s *PostgresS3ObjectMetaStore) ListBuckets(ctx context.Context) ([]map[stri
 
 func (s *PostgresS3ObjectMetaStore) PutObjectMeta(ctx context.Context, bucket, key string, meta ObjectMeta) error {
 	metaRaw, _ := json.Marshal(meta.Metadata)
+	tagsRaw, _ := json.Marshal(meta.Tags)
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
 	}
@@ -101,21 +114,28 @@ func (s *PostgresS3ObjectMetaStore) PutObjectMeta(ctx context.Context, bucket, k
 		meta.LastModified = time.Now().UTC()
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (bucket, key) DO UPDATE
-			SET etag=$3, crc32=$4, size=$5, content_type=$6, last_modified=$7, metadata=$8, storage_class=$9, version_id=$10
-	`, bucket, key, meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified, json.RawMessage(metaRaw), meta.StorageClass, meta.VersionID)
+			SET etag=$3, crc32=$4, size=$5, content_type=$6, last_modified=$7, metadata=$8, storage_class=$9, version_id=$10,
+			    tags=$11, encryption=$12, kms_key_id=$13, ssec_key_md5=$14, lock_mode=$15, lock_retain_until=$16, legal_hold_status=$17, acl=$18
+	`, bucket, key, meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified,
+		json.RawMessage(metaRaw), meta.StorageClass, meta.VersionID,
+		json.RawMessage(tagsRaw), meta.Encryption, meta.KMSKeyID, meta.SSECKeyMD5,
+		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL)
 	return err
 }
 
 func (s *PostgresS3ObjectMetaStore) GetObjectMeta(ctx context.Context, bucket, key string) (ObjectMeta, error) {
 	var m ObjectMeta
-	var metaRaw []byte
+	var metaRaw, tagsRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id
+		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id,
+		       tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl
 		FROM jc_s3_objects WHERE bucket=$1 AND key=$2
-	`, bucket, key).Scan(&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID)
+	`, bucket, key).Scan(
+		&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID,
+		&tagsRaw, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ObjectMeta{}, fmt.Errorf("NoSuchKey")
 	}
@@ -123,6 +143,7 @@ func (s *PostgresS3ObjectMetaStore) GetObjectMeta(ctx context.Context, bucket, k
 		return ObjectMeta{}, err
 	}
 	json.Unmarshal(metaRaw, &m.Metadata)
+	json.Unmarshal(tagsRaw, &m.Tags)
 	return m, nil
 }
 
@@ -289,6 +310,145 @@ func (s *PostgresS3ObjectMetaStore) GetMultipartMeta(ctx context.Context, upload
 	return bucket, key, meta, nil
 }
 
+func (s *PostgresS3ObjectMetaStore) GetBucketVersioning(ctx context.Context, bucket string) (string, error) {
+	meta, err := s.GetBucket(ctx, bucket)
+	if err != nil {
+		return "", err
+	}
+	status, _ := meta["versioning_status"].(string)
+	return status, nil
+}
+
+func (s *PostgresS3ObjectMetaStore) SetBucketVersioning(ctx context.Context, bucket, status string) error {
+	meta, err := s.GetBucket(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("NoSuchBucket")
+	}
+	meta["versioning_status"] = status
+	return s.UpdateBucketMeta(ctx, bucket, meta)
+}
+
+func (s *PostgresS3ObjectMetaStore) PutObjectVersion(ctx context.Context, bucket, key string, meta ObjectMeta) (string, error) {
+	metaRaw, _ := json.Marshal(meta.Metadata)
+	tagsRaw, _ := json.Marshal(meta.Tags)
+	if meta.ContentType == "" {
+		meta.ContentType = "application/octet-stream"
+	}
+	if meta.StorageClass == "" {
+		meta.StorageClass = "STANDARD"
+	}
+	if meta.LastModified.IsZero() {
+		meta.LastModified = time.Now().UTC()
+	}
+	if meta.VersionID == "" {
+		meta.VersionID = fmt.Sprintf("%016x%016x", time.Now().UnixNano(), time.Now().UnixNano()+1)
+	}
+	// Mark all existing as not-latest.
+	s.pool.Exec(ctx, `UPDATE jc_s3_object_versions SET is_latest=FALSE WHERE bucket=$1 AND key=$2`, bucket, key)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_s3_object_versions
+		  (bucket, key, version_id, is_delete_marker, is_latest, etag, crc32, size, content_type, last_modified, metadata, storage_class, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, tags)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		ON CONFLICT (bucket, key, version_id) DO UPDATE
+		  SET is_latest=$5, etag=$6, crc32=$7, size=$8, content_type=$9, last_modified=$10, metadata=$11
+	`, bucket, key, meta.VersionID, meta.IsDeleteMarker, true,
+		meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified,
+		json.RawMessage(metaRaw), meta.StorageClass, meta.Encryption, meta.KMSKeyID, meta.SSECKeyMD5,
+		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL, json.RawMessage(tagsRaw))
+	if err != nil {
+		return "", err
+	}
+	return meta.VersionID, nil
+}
+
+func (s *PostgresS3ObjectMetaStore) UpdateObjectVersion(ctx context.Context, bucket, key string, meta ObjectMeta) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_s3_object_versions
+		SET lock_mode=$1, lock_retain_until=$2, legal_hold_status=$3
+		WHERE bucket=$4 AND key=$5 AND version_id=$6
+	`, meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, bucket, key, meta.VersionID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("NoSuchVersion")
+	}
+	return nil
+}
+
+func (s *PostgresS3ObjectMetaStore) GetObjectVersion(ctx context.Context, bucket, key, versionID string) (ObjectMeta, error) {
+	var m ObjectMeta
+	var metaRaw, tagsRaw []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id,
+		       is_delete_marker, is_latest, lock_mode, lock_retain_until, legal_hold_status, acl, encryption, kms_key_id, ssec_key_md5, tags
+		FROM jc_s3_object_versions WHERE bucket=$1 AND key=$2 AND version_id=$3
+	`, bucket, key, versionID).Scan(
+		&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID,
+		&m.IsDeleteMarker, &m.IsLatest, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &tagsRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ObjectMeta{}, fmt.Errorf("NoSuchVersion")
+	}
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	json.Unmarshal(metaRaw, &m.Metadata)
+	json.Unmarshal(tagsRaw, &m.Tags)
+	return m, nil
+}
+
+func (s *PostgresS3ObjectMetaStore) DeleteObjectVersion(ctx context.Context, bucket, key, versionID string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_s3_object_versions WHERE bucket=$1 AND key=$2 AND version_id=$3`, bucket, key, versionID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("NoSuchVersion")
+	}
+	// Promote latest if needed.
+	s.pool.Exec(ctx, `
+		UPDATE jc_s3_object_versions SET is_latest=TRUE
+		WHERE bucket=$1 AND key=$2
+		  AND last_modified = (SELECT MAX(last_modified) FROM jc_s3_object_versions WHERE bucket=$1 AND key=$2)
+	`, bucket, key)
+	return nil
+}
+
+func (s *PostgresS3ObjectMetaStore) ListObjectVersions(ctx context.Context, bucket, prefix, keyMarker, _ string, maxKeys int) ([]ObjectMeta, bool, error) {
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id,
+		       is_delete_marker, is_latest, lock_mode, lock_retain_until, legal_hold_status, acl, encryption, kms_key_id, ssec_key_md5, tags
+		FROM jc_s3_object_versions
+		WHERE bucket=$1 AND key LIKE $2 AND key > $3
+		ORDER BY key, last_modified DESC
+		LIMIT $4
+	`, bucket, prefix+"%", keyMarker, maxKeys+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var result []ObjectMeta
+	for rows.Next() {
+		var m ObjectMeta
+		var metaRaw, tagsRaw []byte
+		if err := rows.Scan(
+			&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID,
+			&m.IsDeleteMarker, &m.IsLatest, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &tagsRaw); err != nil {
+			return nil, false, err
+		}
+		json.Unmarshal(metaRaw, &m.Metadata)
+		json.Unmarshal(tagsRaw, &m.Tags)
+		result = append(result, m)
+	}
+	if len(result) > maxKeys {
+		return result[:maxKeys], true, rows.Err()
+	}
+	return result, false, rows.Err()
+}
+
 func (s *PostgresS3ObjectMetaStore) Reset() {
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
@@ -300,6 +460,7 @@ func (s *PostgresS3ObjectMetaStore) Reset() {
 	for _, stmt := range []string{
 		`DELETE FROM jc_s3_multipart_parts`,
 		`DELETE FROM jc_s3_multipart_uploads`,
+		`DELETE FROM jc_s3_object_versions`,
 		`DELETE FROM jc_s3_objects`,
 		`DELETE FROM jc_s3_buckets`,
 	} {

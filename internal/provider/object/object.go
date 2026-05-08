@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -22,16 +24,16 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	s3store "jaiscloud/internal/store/aws/s3"
+	objectstore "jaiscloud/internal/store/object"
 )
 
 // ObjectProvider handles all S3 operations.
 type ObjectProvider struct {
-	meta  s3store.S3ObjectMetaStore
+	meta  objectstore.ObjectMetaStore
 	blobs blobfs.BlobStore
 }
 
-func New(meta s3store.S3ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvider {
+func New(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvider {
 	return &ObjectProvider{meta: meta, blobs: blobs}
 }
 
@@ -61,19 +63,41 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.AbortMultipartUpload":    p.AbortMultipartUpload,
 		"Object.ListMultipartUploads":    p.ListMultipartUploads,
 		"Object.ListParts":               p.ListParts,
-		// Tagging/versioning (stub)
-		"Object.PutObjectTagging":    p.stub,
-		"Object.GetObjectTagging":    p.stub,
-		"Object.DeleteObjectTagging": p.stub,
-		"Object.PutBucketTagging":    p.stub,
-		"Object.GetBucketTagging":    p.stub,
-		"Object.DeleteBucketTagging": p.stub,
-		"Object.PutBucketVersioning": p.stub,
-		"Object.GetBucketVersioning": p.stub,
-		"Object.GetBucketAcl":        p.stub,
-		"Object.PutBucketAcl":        p.stub,
-		"Object.GetObjectAcl":        p.stub,
-		"Object.PutObjectAcl":        p.stub,
+		// Tagging (P2-7)
+		"Object.PutObjectTagging":    p.PutObjectTagging,
+		"Object.GetObjectTagging":    p.GetObjectTagging,
+		"Object.DeleteObjectTagging": p.DeleteObjectTagging,
+		"Object.PutBucketTagging":    p.PutBucketTagging,
+		"Object.GetBucketTagging":    p.GetBucketTagging,
+		"Object.DeleteBucketTagging": p.DeleteBucketTagging,
+		// Encryption (P2-1)
+		"Object.PutBucketEncryption":    p.PutBucketEncryption,
+		"Object.GetBucketEncryption":    p.GetBucketEncryption,
+		"Object.DeleteBucketEncryption": p.DeleteBucketEncryption,
+		// Versioning (P2-2)
+		"Object.PutBucketVersioning": p.PutBucketVersioning,
+		"Object.GetBucketVersioning": p.GetBucketVersioning,
+		"Object.ListObjectVersions":  p.ListObjectVersions,
+		// Object Lock (P2-3)
+		"Object.PutObjectLockConfiguration": p.PutObjectLockConfiguration,
+		"Object.GetObjectLockConfiguration": p.GetObjectLockConfiguration,
+		"Object.PutObjectRetention":         p.PutObjectRetention,
+		"Object.GetObjectRetention":         p.GetObjectRetention,
+		"Object.PutObjectLegalHold":         p.PutObjectLegalHold,
+		"Object.GetObjectLegalHold":         p.GetObjectLegalHold,
+		// ACLs (P2-4)
+		"Object.GetBucketAcl":  p.GetBucketAcl,
+		"Object.PutBucketAcl":  p.PutBucketAcl,
+		"Object.GetObjectAcl":  p.GetObjectAcl,
+		"Object.PutObjectAcl":  p.PutObjectAcl,
+		// Lifecycle (P2-5)
+		"Object.PutBucketLifecycleConfiguration": p.PutBucketLifecycleConfiguration,
+		"Object.GetBucketLifecycleConfiguration": p.GetBucketLifecycleConfiguration,
+		"Object.DeleteBucketLifecycle":            p.DeleteBucketLifecycle,
+		// CORS (P2-6)
+		"Object.PutBucketCors":    p.PutBucketCors,
+		"Object.GetBucketCors":    p.GetBucketCors,
+		"Object.DeleteBucketCors": p.DeleteBucketCors,
 	}
 }
 
@@ -235,7 +259,7 @@ type seqPartReader struct {
 	blobs    blobfs.BlobStore
 	bucket   string
 	uploadID string
-	parts    []s3store.PartMeta
+	parts    []objectstore.PartMeta
 	idx      int
 	current  io.ReadCloser
 }
@@ -345,19 +369,33 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		contentType = "application/octet-stream"
 	}
 
+	// P2-2: Determine blob storage key before writing so versioned blobs land at
+	// the right path and GetObject can find them via blobKeyForVersion.
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+	var preVersionID string
+	blobKey := key
+	switch vStatus {
+	case objectstore.VersioningEnabled:
+		preVersionID = newVersionID()
+		blobKey = blobKeyForVersion(key, preVersionID)
+	case objectstore.VersioningSuspended:
+		preVersionID = "null"
+		blobKey = blobKeyForVersion(key, "null")
+	}
+
 	var etagVal, crc32Val string
 	var size int64
 
 	if _, streaming := nr.Params["_streaming"]; streaming {
 		// Streaming path: body arrives via nr.Raw.Body (gateway skipped io.ReadAll).
 		var err error
-		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket, key, bodyReader(nr))
+		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket, blobKey, bodyReader(nr))
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		body, _ := nr.Params["_body"].([]byte)
-		if err := p.blobs.Put(ctx, bucket, key, body); err != nil {
+		if err := p.blobs.Put(ctx, bucket, blobKey, body); err != nil {
 			return nil, err
 		}
 		etagVal = etag(body)
@@ -365,7 +403,7 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		size = int64(len(body))
 	}
 
-	meta := s3store.ObjectMeta{
+	meta := objectstore.ObjectMeta{
 		Key:          key,
 		ETag:         etagVal,
 		CRC32:        crc32Val,
@@ -375,16 +413,61 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		StorageClass: "STANDARD",
 		Metadata:     extractUserMetadata(nr.Params),
 	}
-	if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
-		if strings.Contains(err.Error(), "NoSuchBucket") {
-			return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	// P2-7: Tagging
+	if tagging := strParam(nr.Params, "_tagging"); tagging != "" {
+		if tags, err := parseTaggingHeader(tagging); err == nil {
+			if err := validateTags(tags, 10); err != nil {
+				return nil, model.NewProviderError("InvalidTag", err.Error(), 400)
+			}
+			meta.Tags = tags
 		}
-		return nil, model.NewProviderError("InternalError", err.Error(), 500)
 	}
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+	// P2-1: SSE
+	enc, kmsKey, ssecMD5, sseErr := p.resolveSSE(ctx, nr, bucket)
+	if sseErr != nil {
+		return nil, sseErr
+	}
+	meta.Encryption = enc
+	meta.KMSKeyID = kmsKey
+	meta.SSECKeyMD5 = ssecMD5
+	// P2-4: ACL
+	meta.ACL = resolveACL(strParam(nr.Params, "_acl"), nr.AccountID)
+
+	// P2-2: Versioning — use pre-generated versionID so metadata and blob agree.
+	var versionID string
+	if vStatus == objectstore.VersioningEnabled {
+		meta.VersionID = preVersionID
+		var verr error
+		versionID, verr = p.meta.PutObjectVersion(ctx, bucket, key, meta)
+		if verr != nil {
+			return nil, model.NewProviderError("InternalError", verr.Error(), 500)
+		}
+		if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
+			slog.Warn("versioned PutObject: failed to update current-object pointer", "bucket", bucket, "key", key, "err", err)
+		}
+	} else if vStatus == objectstore.VersioningSuspended {
+		meta.VersionID = "null"
+		versionID, _ = p.meta.PutObjectVersion(ctx, bucket, key, meta)
+		if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
+			slog.Warn("suspended PutObject: failed to update current-object pointer", "bucket", bucket, "key", key, "err", err)
+		}
+	} else {
+		if err := p.meta.PutObjectMeta(ctx, bucket, key, meta); err != nil {
+			if strings.Contains(err.Error(), "NoSuchBucket") {
+				return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+			}
+			return nil, model.NewProviderError("InternalError", err.Error(), 500)
+		}
+	}
+	respData := map[string]any{
 		"ETag":          etagVal,
 		"_server_crc32": crc32Val,
-	}}, nil
+	}
+	if versionID != "" {
+		respData["_version_id"] = versionID
+	}
+	sseResponseData(respData, enc, kmsKey, ssecMD5)
+	return &model.ProviderResponse{HTTPStatus: 200, Data: respData}, nil
 }
 
 // extractUserMetadata collects x-amz-meta-* headers stored under "_meta_*" params.
@@ -407,9 +490,47 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 
-	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
-	if err != nil {
-		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+	requestedVersionID := strParam(nr.Params, "versionId")
+	blobKey := key
+
+	var m objectstore.ObjectMeta
+	if (vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended) {
+		if requestedVersionID != "" {
+			var err error
+			m, err = p.meta.GetObjectVersion(ctx, bucket, key, requestedVersionID)
+			if err != nil {
+				return nil, model.NewProviderError("NoSuchVersion", "The specified version does not exist", 404)
+			}
+			if m.IsDeleteMarker {
+				return nil, model.NewProviderError("MethodNotAllowed", "The specified method is not allowed against this resource", 405)
+			}
+			blobKey = blobKeyForVersion(key, m.VersionID)
+		} else {
+			versions, _, _ := p.meta.ListObjectVersions(ctx, bucket, key, "", "", 100)
+			var found *objectstore.ObjectMeta
+			for i := range versions {
+				if versions[i].Key == key {
+					found = &versions[i]
+					break
+				}
+			}
+			if found == nil {
+				return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+			}
+			if found.IsDeleteMarker {
+				return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404).
+					WithData(map[string]any{"_delete_marker": true, "_version_id": found.VersionID})
+			}
+			m = *found
+			blobKey = blobKeyForVersion(key, m.VersionID)
+		}
+	} else {
+		var err error
+		m, err = p.meta.GetObjectMeta(ctx, bucket, key)
+		if err != nil {
+			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+		}
 	}
 	if resp304, pe := checkConditions(nr, objectCondMeta{ETag: m.ETag, LastModified: m.LastModified, ContentType: m.ContentType}); pe != nil {
 		return nil, pe
@@ -433,7 +554,7 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 		status = 206
 	}
 
-	rc, err := p.blobs.GetStream(ctx, bucket, key, offset, length)
+	rc, err := p.blobs.GetStream(ctx, bucket, blobKey, offset, length)
 	if err != nil {
 		// Blob miss — may be a concurrent delete racing with our metadata read.
 		// Recheck metadata: if it's also gone, this is a clean concurrent delete → 404.
@@ -467,6 +588,22 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	}
 	if len(m.Metadata) > 0 {
 		data["_metadata"] = m.Metadata
+	}
+	// P2-7: tagging count
+	if len(m.Tags) > 0 {
+		data["_tagging_count"] = len(m.Tags)
+	}
+	// P2-1: SSE headers
+	sseResponseData(data, m.Encryption, m.KMSKeyID, m.SSECKeyMD5)
+	// P2-2: version-id
+	if m.VersionID != "" {
+		data["_version_id"] = m.VersionID
+	}
+	// P2-5: lifecycle expiration
+	if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
+		if exp := computeLifecycleExpiration(bucketMeta, key, m.LastModified); exp != "" {
+			data["_expiration"] = exp
+		}
 	}
 	overrides := map[string]string{}
 	for _, pair := range [][2]string{
@@ -556,12 +693,68 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 	if len(m.Metadata) > 0 {
 		data["_metadata"] = m.Metadata
 	}
+	// P2-7: tagging count
+	if len(m.Tags) > 0 {
+		data["_tagging_count"] = len(m.Tags)
+	}
+	// P2-1: SSE headers
+	sseResponseData(data, m.Encryption, m.KMSKeyID, m.SSECKeyMD5)
+	// P2-2: version-id
+	if m.VersionID != "" {
+		data["_version_id"] = m.VersionID
+	}
+	// P2-5: lifecycle expiration
+	if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
+		if exp := computeLifecycleExpiration(bucketMeta, key, m.LastModified); exp != "" {
+			data["_expiration"] = exp
+		}
+	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: data}, nil
 }
 
 func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
+	requestedVersionID := strParam(nr.Params, "versionId")
+
+	// P2-2: Versioning path
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+	if vStatus == objectstore.VersioningEnabled {
+		if requestedVersionID != "" {
+			// Delete a specific version — check lock before deleting.
+			m, err := p.meta.GetObjectVersion(ctx, bucket, key, requestedVersionID)
+			if err == nil {
+				if lockErr := checkObjectLock(nr, m); lockErr != nil {
+					return nil, lockErr
+				}
+			}
+			_ = p.meta.DeleteObjectVersion(ctx, bucket, key, requestedVersionID)
+			_ = p.blobs.Delete(ctx, bucket, blobKeyForVersion(key, requestedVersionID))
+			return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{
+				"_version_id": requestedVersionID,
+			}}, nil
+		}
+		// No versionId: insert a delete marker.
+		marker := objectstore.ObjectMeta{
+			Key:            key,
+			IsDeleteMarker: true,
+			LastModified:   time.Now().UTC(),
+			StorageClass:   "STANDARD",
+		}
+		markerID, _ := p.meta.PutObjectVersion(ctx, bucket, key, marker)
+		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{
+			"_delete_marker": true,
+			"_version_id":    markerID,
+		}}, nil
+	}
+
+	// Non-versioned path — check lock first.
+	if m, err := p.meta.GetObjectMeta(ctx, bucket, key); err == nil {
+		if lockErr := checkObjectLock(nr, m); lockErr != nil {
+			return nil, lockErr
+		}
+	}
+
 	// Metadata-first: after this succeeds, GetObject returns 404 immediately so
 	// no caller ever sees metadata present + blob absent (torn state).
 	if err := p.meta.DeleteObjectMeta(ctx, bucket, key); err != nil {
@@ -576,6 +769,22 @@ func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedR
 		slog.Warn("object: blob delete failed after metadata delete", "bucket", bucket, "key", key, "err", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// checkObjectLock returns an error if the object is protected by a lock.
+func checkObjectLock(nr *model.NormalizedRequest, m objectstore.ObjectMeta) error {
+	if m.LegalHoldStatus == "ON" {
+		return model.NewProviderError("AccessDenied", "Object protected by legal hold", 403)
+	}
+	if m.LockRetainUntil != nil && time.Now().Before(*m.LockRetainUntil) {
+		if m.LockMode == "COMPLIANCE" {
+			return model.NewProviderError("AccessDenied", "Object locked in COMPLIANCE mode", 403)
+		}
+		if m.LockMode == "GOVERNANCE" && strParam(nr.Params, "_bypass_governance_retention") != "true" {
+			return model.NewProviderError("AccessDenied", "Object locked in GOVERNANCE mode", 403)
+		}
+	}
+	return nil
 }
 
 func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -597,10 +806,23 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
 	}
 
-	_ = p.blobs.Put(ctx, dstBucket, dstKey, data)
+	// P2-2: Determine dest blob key before writing.
+	dstVStatus, _ := p.meta.GetBucketVersioning(ctx, dstBucket)
+	var preDstVersionID string
+	dstBlobKey := dstKey
+	switch dstVStatus {
+	case objectstore.VersioningEnabled:
+		preDstVersionID = newVersionID()
+		dstBlobKey = blobKeyForVersion(dstKey, preDstVersionID)
+	case objectstore.VersioningSuspended:
+		preDstVersionID = "null"
+		dstBlobKey = blobKeyForVersion(dstKey, "null")
+	}
+
+	_ = p.blobs.Put(ctx, dstBucket, dstBlobKey, data)
 	etagVal := etag(data)
 	now := time.Now().UTC()
-	dstMeta := s3store.ObjectMeta{
+	dstMeta := objectstore.ObjectMeta{
 		Key: dstKey, ETag: etagVal, CRC32: crc32Base64(data), Size: srcMeta.Size,
 		LastModified: now, StorageClass: "STANDARD",
 	}
@@ -614,13 +836,57 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 		dstMeta.ContentType = srcMeta.ContentType
 		dstMeta.Metadata = srcMeta.Metadata
 	}
-	_ = p.meta.PutObjectMeta(ctx, dstBucket, dstKey, dstMeta)
-	return provider.OK(map[string]any{
+	// P2-7: Tagging directive
+	tagDirective := strParam(nr.Params, "_tagging_directive")
+	if strings.ToUpper(tagDirective) == "REPLACE" {
+		if tagging := strParam(nr.Params, "_tagging"); tagging != "" {
+			tags, _ := parseTaggingHeader(tagging)
+			dstMeta.Tags = tags
+		}
+	} else {
+		dstMeta.Tags = srcMeta.Tags
+	}
+	// P2-1: SSE on destination
+	enc, kmsKey, ssecMD5, sseErr := p.resolveSSE(ctx, nr, dstBucket)
+	if sseErr != nil {
+		return nil, sseErr
+	}
+	dstMeta.Encryption = enc
+	dstMeta.KMSKeyID = kmsKey
+	dstMeta.SSECKeyMD5 = ssecMD5
+	// P2-4: ACL
+	dstMeta.ACL = resolveACL(strParam(nr.Params, "_acl"), nr.AccountID)
+
+	// P2-2: Versioning — use pre-generated versionID.
+	var versionID string
+	if dstVStatus == objectstore.VersioningEnabled {
+		dstMeta.VersionID = preDstVersionID
+		versionID, _ = p.meta.PutObjectVersion(ctx, dstBucket, dstKey, dstMeta)
+		if err := p.meta.PutObjectMeta(ctx, dstBucket, dstKey, dstMeta); err != nil {
+			slog.Warn("versioned CopyObject: failed to update current-object pointer", "bucket", dstBucket, "key", dstKey, "err", err)
+		}
+	} else if dstVStatus == objectstore.VersioningSuspended {
+		dstMeta.VersionID = "null"
+		versionID, _ = p.meta.PutObjectVersion(ctx, dstBucket, dstKey, dstMeta)
+		if err := p.meta.PutObjectMeta(ctx, dstBucket, dstKey, dstMeta); err != nil {
+			slog.Warn("suspended CopyObject: failed to update current-object pointer", "bucket", dstBucket, "key", dstKey, "err", err)
+		}
+	} else {
+		if err := p.meta.PutObjectMeta(ctx, dstBucket, dstKey, dstMeta); err != nil {
+			slog.Warn("CopyObject: failed to put object meta", "bucket", dstBucket, "key", dstKey, "err", err)
+		}
+	}
+	respData := map[string]any{
 		"CopyObjectResult": map[string]any{
 			"ETag":         etagVal,
 			"LastModified": now.Format(time.RFC3339),
 		},
-	}), nil
+	}
+	if versionID != "" {
+		respData["_version_id"] = versionID
+	}
+	sseResponseData(respData, enc, kmsKey, ssecMD5)
+	return provider.OK(respData), nil
 }
 
 // ─── List ─────────────────────────────────────────────────────────────────────
@@ -784,7 +1050,7 @@ func (p *ObjectProvider) UploadPart(ctx context.Context, nr *model.NormalizedReq
 		size = int64(len(body))
 	}
 
-	if err := p.meta.PutPart(ctx, uploadID, partNumber, s3store.PartMeta{
+	if err := p.meta.PutPart(ctx, uploadID, partNumber, objectstore.PartMeta{
 		PartNumber: partNumber, ETag: etagVal, Size: size,
 	}); err != nil {
 		return nil, err
@@ -831,22 +1097,29 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	}
 
 	ct, userMeta := extractUploadMeta(uploadMeta)
-	_ = p.meta.PutObjectMeta(ctx, bucket, key, s3store.ObjectMeta{
+	// P2-1: SSE for completed multipart
+	enc, kmsKey, ssecMD5, _ := p.resolveSSE(ctx, nr, bucket)
+	finalMeta := objectstore.ObjectMeta{
 		Key: key, ETag: multipartETag, CRC32: crc32Val, Size: totalSize,
 		ContentType: ct, Metadata: userMeta, LastModified: time.Now().UTC(),
-		StorageClass: "STANDARD",
-	})
+		StorageClass: "STANDARD", Encryption: enc, KMSKeyID: kmsKey, SSECKeyMD5: ssecMD5,
+	}
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, finalMeta); err != nil {
+		slog.Warn("CompleteMultipartUpload: failed to put object meta", "bucket", bucket, "key", key, "err", err)
+	}
 
 	scheme := "http"
 	if nr.Raw.TLS != nil {
 		scheme = "https"
 	}
-	return provider.OK(map[string]any{
+	respData := map[string]any{
 		"Location": fmt.Sprintf("%s://%s/%s/%s", scheme, nr.Raw.Host, bucket, key),
 		"Bucket":   bucket,
 		"Key":      key,
 		"ETag":     multipartETag,
-	}), nil
+	}
+	sseResponseData(respData, enc, kmsKey, ssecMD5)
+	return provider.OK(respData), nil
 }
 
 func (p *ObjectProvider) AbortMultipartUpload(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -897,7 +1170,7 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 
-	if err := p.meta.PutPart(ctx, uploadID, partNumber, s3store.PartMeta{
+	if err := p.meta.PutPart(ctx, uploadID, partNumber, objectstore.PartMeta{
 		PartNumber: partNumber, ETag: etagVal, Size: size,
 	}); err != nil {
 		return nil, err
@@ -1005,4 +1278,826 @@ func parseHTTPDate(s string) (time.Time, error) {
 
 func urlEncode(s string) string {
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+// blobKeyForVersion returns the blob key for a versioned object.
+func newVersionID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// blobKeyForVersion returns the blob store key for a versioned object.
+// Versioned blobs are stored under the __jc_ver__ prefix so they never
+// collide with unversioned blob keys (which use the S3 key directly).
+// The null/empty versionID case maps to the same path as the unversioned key
+// (Suspended-mode behaviour: only one "null" version slot exists per key).
+func blobKeyForVersion(key, versionID string) string {
+	if versionID == "" || versionID == "null" {
+		return key
+	}
+	return "__jc_ver__/" + versionID + "/" + key
+}
+
+// ─── updateBucketConfig ───────────────────────────────────────────────────────
+
+func (p *ObjectProvider) updateBucketConfig(ctx context.Context, bucket string, mutate func(meta map[string]any)) error {
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	mutate(meta)
+	return p.meta.UpdateBucketMeta(ctx, bucket, meta)
+}
+
+// ─── Tagging helpers ──────────────────────────────────────────────────────────
+
+func validateTags(tags map[string]string, maxCount int) error {
+	if len(tags) > maxCount {
+		return fmt.Errorf("Object tags cannot be greater than %d", maxCount)
+	}
+	for k, v := range tags {
+		if len(k) < 1 || len(k) > 128 {
+			return fmt.Errorf("The TagKey you have provided is invalid")
+		}
+		if len(v) > 256 {
+			return fmt.Errorf("The TagValue you have provided is invalid")
+		}
+	}
+	return nil
+}
+
+// bucketTagsFromMeta extracts tags from bucket metadata, handling both
+// map[string]string (memory store) and map[string]any (postgres JSONB round-trip).
+func bucketTagsFromMeta(meta map[string]any) map[string]string {
+	tags := map[string]string{}
+	switch t := meta["tags"].(type) {
+	case map[string]string:
+		for k, v := range t {
+			tags[k] = v
+		}
+	case map[string]any:
+		for k, v := range t {
+			if s, ok := v.(string); ok {
+				tags[k] = s
+			}
+		}
+	}
+	return tags
+}
+
+func parseTaggingHeader(header string) (map[string]string, error) {
+	parsed, err := url.ParseQuery(header)
+	if err != nil {
+		return nil, err
+	}
+	tags := make(map[string]string, len(parsed))
+	for k, vs := range parsed {
+		if len(vs) > 0 {
+			tags[k] = vs[0]
+		}
+	}
+	return tags, nil
+}
+
+func parseTaggingXML(body []byte) (map[string]string, error) {
+	var req struct {
+		XMLName xml.Name `xml:"Tagging"`
+		TagSet  struct {
+			Tags []struct {
+				Key   string `xml:"Key"`
+				Value string `xml:"Value"`
+			} `xml:"Tag"`
+		} `xml:"TagSet"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	tags := make(map[string]string, len(req.TagSet.Tags))
+	for _, t := range req.TagSet.Tags {
+		tags[t.Key] = t.Value
+	}
+	return tags, nil
+}
+
+// ─── P2-7: Tagging handlers ───────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutObjectTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	body, _ := nr.Params["_body"].([]byte)
+	tags, err := parseTaggingXML(body)
+	if err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	if err := validateTags(tags, 10); err != nil {
+		return nil, model.NewProviderError("InvalidTag", err.Error(), 400)
+	}
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	m.Tags = tags
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetObjectTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	tags := m.Tags
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	return provider.OK(map[string]any{"Tags": tags}), nil
+}
+
+func (p *ObjectProvider) DeleteObjectTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	m.Tags = nil
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) PutBucketTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	tags, err := parseTaggingXML(body)
+	if err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	if err := validateTags(tags, 50); err != nil {
+		return nil, model.NewProviderError("InvalidTag", err.Error(), 400)
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["tags"] = tags
+	}); err != nil {
+		if strings.Contains(err.Error(), "NoSuchBucket") {
+			return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+		}
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	tags := bucketTagsFromMeta(meta)
+	return provider.OK(map[string]any{"Tags": tags}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketTagging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "tags")
+	}); err != nil {
+		if strings.Contains(err.Error(), "NoSuchBucket") {
+			return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+		}
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── P2-1: SSE ────────────────────────────────────────────────────────────────
+
+func (p *ObjectProvider) resolveSSE(ctx context.Context, nr *model.NormalizedRequest, bucket string) (encryption, kmsKeyID, ssecKeyMD5 string, err error) {
+	sseAlgo := strParam(nr.Params, "_server_side_encryption")
+	ssecAlgo := strParam(nr.Params, "_server_side_encryption_customer_algorithm")
+	if sseAlgo != "" && ssecAlgo != "" {
+		return "", "", "", model.NewProviderError("InvalidArgument",
+			"x-amz-server-side-encryption and SSE-C are mutually exclusive", 400)
+	}
+	if ssecAlgo != "" {
+		if ssecAlgo != "AES256" {
+			return "", "", "", model.NewProviderError("InvalidEncryptionAlgorithmError",
+				"The encryption request you specified is not valid. Supported value: AES256", 400)
+		}
+		keyB64 := strParam(nr.Params, "_server_side_encryption_customer_key")
+		keyMD5 := strParam(nr.Params, "_server_side_encryption_customer_key_md5")
+		keyBytes, decErr := base64.StdEncoding.DecodeString(keyB64)
+		if decErr != nil || len(keyBytes) != 32 {
+			return "", "", "", model.NewProviderError("InvalidArgument",
+				"The secret key was invalid for the specified algorithm", 400)
+		}
+		h := md5.Sum(keyBytes)
+		computedMD5 := base64.StdEncoding.EncodeToString(h[:])
+		if keyMD5 != computedMD5 {
+			return "", "", "", model.NewProviderError("InvalidArgument",
+				"The calculated MD5 hash of the key did not match the hash that was provided", 400)
+		}
+		return "AES256", "", computedMD5, nil
+	}
+	if sseAlgo != "" {
+		kmsKey := strParam(nr.Params, "_server_side_encryption_aws_kms_key_id")
+		return sseAlgo, kmsKey, "", nil
+	}
+	// No explicit SSE — apply bucket default.
+	bucketMeta, _ := p.meta.GetBucket(ctx, bucket)
+	if rule, ok := bucketMeta["encryption_rule"].(map[string]any); ok {
+		if algo, ok := rule["Algorithm"].(string); ok {
+			kmsKey, _ := rule["KMSKeyID"].(string)
+			return algo, kmsKey, "", nil
+		}
+	}
+	return "AES256", "", "", nil // AWS default since Jan 2023
+}
+
+func sseResponseData(data map[string]any, enc, kmsKey, ssecMD5 string) {
+	if enc != "" {
+		data["_sse"] = enc
+	}
+	if kmsKey != "" {
+		data["_sse_kms_key_id"] = kmsKey
+	}
+	if ssecMD5 != "" {
+		data["_ssec_algo"] = "AES256"
+		data["_ssec_key_md5"] = ssecMD5
+	}
+}
+
+func (p *ObjectProvider) PutBucketEncryption(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"ServerSideEncryptionConfiguration"`
+		Rules   []struct {
+			Apply struct {
+				SSEAlgorithm   string `xml:"SSEAlgorithm"`
+				KMSMasterKeyID string `xml:"KMSMasterKeyID"`
+			} `xml:"ApplyServerSideEncryptionByDefault"`
+			BucketKeyEnabled bool `xml:"BucketKeyEnabled"`
+		} `xml:"Rule"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil || len(req.Rules) == 0 {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	rule := map[string]any{"Algorithm": req.Rules[0].Apply.SSEAlgorithm}
+	if req.Rules[0].Apply.KMSMasterKeyID != "" {
+		rule["KMSKeyID"] = req.Rules[0].Apply.KMSMasterKeyID
+	}
+	if req.Rules[0].BucketKeyEnabled {
+		rule["BucketKeyEnabled"] = true
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["encryption_rule"] = rule
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketEncryption(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	rule, _ := meta["encryption_rule"].(map[string]any)
+	if rule == nil {
+		rule = map[string]any{"Algorithm": "AES256"}
+	}
+	return provider.OK(map[string]any{"EncryptionRule": rule}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketEncryption(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "encryption_rule")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── P2-2: Versioning ─────────────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutBucketVersioning(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"VersioningConfiguration"`
+		Status  string   `xml:"Status"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	if req.Status != objectstore.VersioningEnabled && req.Status != objectstore.VersioningSuspended {
+		return nil, model.NewProviderError("MalformedXML", "Status must be Enabled or Suspended", 400)
+	}
+	if err := p.meta.SetBucketVersioning(ctx, bucket, req.Status); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketVersioning(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	status, err := p.meta.GetBucketVersioning(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return provider.OK(map[string]any{"VersioningStatus": status}), nil
+}
+
+func (p *ObjectProvider) ListObjectVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	prefix := strParam(nr.Params, "prefix")
+	keyMarker := strParam(nr.Params, "key-marker")
+	versionIDMarker := strParam(nr.Params, "version-id-marker")
+	maxKeys := intParam(nr.Params, "max-keys", 1000)
+
+	versions, truncated, err := p.meta.ListObjectVersions(ctx, bucket, prefix, keyMarker, versionIDMarker, maxKeys)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	var items []map[string]any
+	for _, v := range versions {
+		items = append(items, map[string]any{
+			"Key":          v.Key,
+			"VersionId":    v.VersionID,
+			"IsLatest":     fmt.Sprintf("%v", v.IsLatest),
+			"LastModified": v.LastModified.UTC().Format(time.RFC3339),
+			"ETag":         v.ETag,
+			"Size":         fmt.Sprintf("%d", v.Size),
+			"StorageClass": v.StorageClass,
+			"IsDeleteMarker": v.IsDeleteMarker,
+		})
+	}
+	if items == nil {
+		items = []map[string]any{}
+	}
+	return provider.OK(map[string]any{
+		"Name":            bucket,
+		"Prefix":          prefix,
+		"KeyMarker":       keyMarker,
+		"VersionIdMarker": versionIDMarker,
+		"MaxKeys":         fmt.Sprintf("%d", maxKeys),
+		"IsTruncated":     fmt.Sprintf("%v", truncated),
+		"Versions":        items,
+	}), nil
+}
+
+// ─── P2-3: Object Lock ────────────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutObjectLockConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"ObjectLockConfiguration"`
+		Enabled string   `xml:"ObjectLockEnabled"`
+		Rule    struct {
+			DefaultRetention struct {
+				Mode string `xml:"Mode"`
+				Days int    `xml:"Days"`
+			} `xml:"DefaultRetention"`
+		} `xml:"Rule"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	lockConfig := map[string]any{
+		"ObjectLockEnabled": req.Enabled,
+		"DefaultMode":       req.Rule.DefaultRetention.Mode,
+		"DefaultDays":       req.Rule.DefaultRetention.Days,
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["object_lock_config"] = lockConfig
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetObjectLockConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	cfg, _ := meta["object_lock_config"].(map[string]any)
+	if cfg == nil {
+		cfg = map[string]any{"ObjectLockEnabled": "Disabled"}
+	}
+	return provider.OK(map[string]any{"ObjectLockConfig": cfg}), nil
+}
+
+func (p *ObjectProvider) PutObjectRetention(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName         xml.Name `xml:"Retention"`
+		Mode            string   `xml:"Mode"`
+		RetainUntilDate string   `xml:"RetainUntilDate"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	m.LockMode = req.Mode
+	if req.RetainUntilDate != "" {
+		t, err := time.Parse(time.RFC3339, req.RetainUntilDate)
+		if err == nil {
+			m.LockRetainUntil = &t
+		}
+	}
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
+		return nil, err
+	}
+	// Mirror the lock change into the version record so DeleteObject with a
+	// versionId sees the updated lock state.
+	if m.VersionID != "" {
+		_ = p.meta.UpdateObjectVersion(ctx, bucket, key, m)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetObjectRetention(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	data := map[string]any{"LockMode": m.LockMode}
+	if m.LockRetainUntil != nil {
+		data["RetainUntilDate"] = m.LockRetainUntil.UTC().Format(time.RFC3339)
+	}
+	return provider.OK(data), nil
+}
+
+func (p *ObjectProvider) PutObjectLegalHold(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"LegalHold"`
+		Status  string   `xml:"Status"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	m.LegalHoldStatus = req.Status
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
+		return nil, err
+	}
+	// Mirror the hold change into the version record so DeleteObject with a
+	// versionId sees the updated hold state.
+	if m.VersionID != "" {
+		_ = p.meta.UpdateObjectVersion(ctx, bucket, key, m)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetObjectLegalHold(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	status := m.LegalHoldStatus
+	if status == "" {
+		status = "OFF"
+	}
+	return provider.OK(map[string]any{"LegalHoldStatus": status}), nil
+}
+
+// ─── P2-4: ACLs ──────────────────────────────────────────────────────────────
+
+type s3ACL struct {
+	Owner  s3ACLOwner `json:"owner"`
+	Grants []s3Grant  `json:"grants"`
+}
+type s3ACLOwner struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+type s3Grant struct {
+	Permission string    `json:"permission"`
+	Grantee    s3Grantee `json:"grantee"`
+}
+type s3Grantee struct {
+	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+	URI  string `json:"uri,omitempty"`
+}
+
+func resolveACL(cannedACL, ownerID string) string {
+	if ownerID == "" {
+		ownerID = "owner"
+	}
+	acl := s3ACL{Owner: s3ACLOwner{ID: ownerID, DisplayName: ownerID}}
+	switch cannedACL {
+	case "public-read":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "READ", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/global/AllUsers"}},
+		}
+	case "public-read-write":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "READ", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/global/AllUsers"}},
+			{Permission: "WRITE", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/global/AllUsers"}},
+		}
+	case "authenticated-read":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "READ", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"}},
+		}
+	default: // "private" or ""
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+		}
+	}
+	raw, _ := json.Marshal(acl)
+	return string(raw)
+}
+
+func aclToResponseData(aclJSON, ownerID string) map[string]any {
+	var acl s3ACL
+	if err := json.Unmarshal([]byte(aclJSON), &acl); err != nil || len(acl.Grants) == 0 {
+		// Default: full control for owner
+		id := ownerID
+		if id == "" {
+			id = "owner"
+		}
+		return map[string]any{
+			"Owner":  map[string]any{"ID": id, "DisplayName": id},
+			"Grants": []map[string]any{{"GranteeType": "CanonicalUser", "GranteeID": id, "Permission": "FULL_CONTROL"}},
+		}
+	}
+	grants := make([]map[string]any, 0, len(acl.Grants))
+	for _, g := range acl.Grants {
+		grants = append(grants, map[string]any{
+			"GranteeType": g.Grantee.Type,
+			"GranteeID":   g.Grantee.ID,
+			"GranteeURI":  g.Grantee.URI,
+			"Permission":  g.Permission,
+		})
+	}
+	return map[string]any{
+		"Owner":  map[string]any{"ID": acl.Owner.ID, "DisplayName": acl.Owner.DisplayName},
+		"Grants": grants,
+	}
+}
+
+func (p *ObjectProvider) GetBucketAcl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	aclJSON, _ := meta["acl"].(string)
+	return provider.OK(aclToResponseData(aclJSON, nr.AccountID)), nil
+}
+
+func (p *ObjectProvider) PutBucketAcl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	cannedACL := strParam(nr.Params, "_acl")
+	aclJSON := resolveACL(cannedACL, nr.AccountID)
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["acl"] = aclJSON
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetObjectAcl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	return provider.OK(aclToResponseData(m.ACL, nr.AccountID)), nil
+}
+
+func (p *ObjectProvider) PutObjectAcl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	cannedACL := strParam(nr.Params, "_acl")
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	m.ACL = resolveACL(cannedACL, nr.AccountID)
+	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// ─── P2-5: Lifecycle ──────────────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutBucketLifecycleConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"LifecycleConfiguration"`
+		Rules   []struct {
+			ID     string `xml:"ID"`
+			Status string `xml:"Status"`
+			Filter struct {
+				Prefix string `xml:"Prefix"`
+			} `xml:"Filter"`
+			Expiration struct {
+				Days int    `xml:"Days"`
+				Date string `xml:"Date"`
+			} `xml:"Expiration"`
+		} `xml:"Rule"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	rules := make([]any, 0, len(req.Rules))
+	for _, r := range req.Rules {
+		rules = append(rules, map[string]any{
+			"ID": r.ID, "Status": r.Status,
+			"Prefix":         r.Filter.Prefix,
+			"ExpirationDays": r.Expiration.Days,
+			"ExpirationDate": r.Expiration.Date,
+		})
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["lifecycle_rules"] = rules
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketLifecycleConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	rules, _ := meta["lifecycle_rules"].([]any)
+	if rules == nil {
+		return nil, model.NewProviderError("NoSuchLifecycleConfiguration",
+			"The lifecycle configuration does not exist", 404)
+	}
+	return provider.OK(map[string]any{"LifecycleRules": rules}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketLifecycle(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "lifecycle_rules")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// computeLifecycleExpiration returns the x-amz-expiration header value if a matching
+// lifecycle rule is found. Returns "" if no rule matches.
+func computeLifecycleExpiration(bucketMeta map[string]any, key string, lastModified time.Time) string {
+	rulesRaw, ok := bucketMeta["lifecycle_rules"]
+	if !ok {
+		return ""
+	}
+	var rules []map[string]any
+	switch v := rulesRaw.(type) {
+	case []map[string]any:
+		rules = v
+	case []any:
+		for _, r := range v {
+			if m, ok := r.(map[string]any); ok {
+				rules = append(rules, m)
+			}
+		}
+	}
+	for _, rule := range rules {
+		status, _ := rule["Status"].(string)
+		if status != objectstore.VersioningEnabled {
+			continue
+		}
+		prefix, _ := rule["Prefix"].(string)
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		days := 0
+		switch d := rule["ExpirationDays"].(type) {
+		case int:
+			days = d
+		case float64:
+			days = int(d)
+		}
+		if days > 0 {
+			expiry := lastModified.Add(time.Duration(days) * 24 * time.Hour)
+			return fmt.Sprintf(`expiry-date="%s", rule-id="%s"`,
+				expiry.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
+				fmt.Sprint(rule["ID"]))
+		}
+	}
+	return ""
+}
+
+// ─── P2-6: CORS ───────────────────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutBucketCors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"CORSConfiguration"`
+		Rules   []struct {
+			AllowedOrigin []string `xml:"AllowedOrigin"`
+			AllowedMethod []string `xml:"AllowedMethod"`
+			AllowedHeader []string `xml:"AllowedHeader"`
+			ExposeHeader  []string `xml:"ExposeHeader"`
+			MaxAgeSeconds int      `xml:"MaxAgeSeconds"`
+		} `xml:"CORSRule"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	rules := make([]any, 0, len(req.Rules))
+	for _, r := range req.Rules {
+		rules = append(rules, map[string]any{
+			"AllowedOrigins": r.AllowedOrigin,
+			"AllowedMethods": r.AllowedMethod,
+			"AllowedHeaders": r.AllowedHeader,
+			"ExposeHeaders":  r.ExposeHeader,
+			"MaxAgeSeconds":  r.MaxAgeSeconds,
+		})
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["cors_rules"] = rules
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketCors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	rules, _ := meta["cors_rules"].([]any)
+	if rules == nil {
+		return nil, model.NewProviderError("NoSuchCORSConfiguration",
+			"The CORS configuration does not exist", 404)
+	}
+	return provider.OK(map[string]any{"CORSRules": rules}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketCors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "cors_rules")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// GetBucketCORSRules returns the CORS rules for a bucket (used by gateway CORS interceptor).
+func (p *ObjectProvider) GetBucketCORSRules(bucket string) []map[string]any {
+	meta, err := p.meta.GetBucket(context.Background(), bucket)
+	if err != nil {
+		return nil
+	}
+	switch v := meta["cors_rules"].(type) {
+	case []map[string]any:
+		return v
+	case []any:
+		var rules []map[string]any
+		for _, r := range v {
+			if m, ok := r.(map[string]any); ok {
+				rules = append(rules, m)
+			}
+		}
+		return rules
+	}
+	return nil
 }

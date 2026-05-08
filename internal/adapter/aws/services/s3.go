@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/model"
 )
@@ -135,7 +136,24 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	}
 
 	query := r.URL.Query()
+
+	// P2-8: Presigned URL expiration check.
+	if query.Has("X-Amz-Algorithm") || query.Has("X-Amz-Date") || query.Has("Expires") {
+		if err := checkPresignedExpiration(query); err != nil {
+			return nil, model.NewProviderError("AccessDenied", "Request has expired", 403)
+		}
+	}
+
 	action := s3DetectAction(r.Method, bucket, key, query, r.Header)
+
+	// The gateway skips io.ReadAll for streaming uploads (PutObject/UploadPart) so
+	// that large bodies can be streamed directly to the blob store. However, some
+	// operations (e.g. PutObjectLegalHold, PutObjectRetention) also trigger the
+	// streaming-upload headers (aws-chunked, STREAMING-AWS4-HMAC-SHA256-PAYLOAD) even
+	// though they carry small XML bodies. For those we read the body here.
+	if body == nil && !s3ActionIsStreaming(action) && r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+	}
 
 	params := map[string]any{
 		"_bucket": bucket,
@@ -173,6 +191,35 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	}
 	if v := r.Header.Get("If-Unmodified-Since"); v != "" {
 		params["_cond_if_unmodified_since"] = v
+	}
+	// P2-7: Tagging
+	if v := r.Header.Get("x-amz-tagging"); v != "" {
+		params["_tagging"] = v
+	}
+	if v := r.Header.Get("x-amz-tagging-directive"); v != "" {
+		params["_tagging_directive"] = v
+	}
+	// P2-4: ACL
+	if v := r.Header.Get("x-amz-acl"); v != "" {
+		params["_acl"] = v
+	}
+	// P2-3: Object Lock bypass
+	if v := r.Header.Get("x-amz-bypass-governance-retention"); v != "" {
+		params["_bypass_governance_retention"] = v
+	}
+	// P2-1: SSE headers
+	for _, hdr := range []string{
+		"x-amz-server-side-encryption",
+		"x-amz-server-side-encryption-aws-kms-key-id",
+		"x-amz-server-side-encryption-bucket-key-enabled",
+		"x-amz-server-side-encryption-customer-algorithm",
+		"x-amz-server-side-encryption-customer-key",
+		"x-amz-server-side-encryption-customer-key-MD5",
+	} {
+		if v := r.Header.Get(hdr); v != "" {
+			paramKey := "_" + strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(hdr, "x-amz-"), "-", "_"))
+			params[paramKey] = v
+		}
 	}
 	// Capture x-amz-meta-* user metadata headers.
 	for k, vs := range r.Header {
@@ -242,6 +289,14 @@ func isValidBucketName(name string) bool {
 	return !strings.Contains(name, "..")
 }
 
+// s3ActionIsStreaming reports whether an action legitimately has its body
+// consumed as a raw stream by the provider (i.e. the blob bytes themselves).
+// All other actions that carry a body use small XML payloads that must be
+// fully buffered before parsing.
+func s3ActionIsStreaming(action string) bool {
+	return action == "PutObject" || action == "UploadPart"
+}
+
 func s3DetectAction(method, bucket, key string, query url.Values, headers http.Header) string {
 	hasCopySource := headers.Get("X-Amz-Copy-Source") != ""
 
@@ -255,7 +310,18 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 		case http.MethodHead:
 			return "HeadBucket"
 		case http.MethodDelete:
-			return "DeleteBucket"
+			switch {
+			case query.Has("tagging"):
+				return "DeleteBucketTagging"
+			case query.Has("encryption"):
+				return "DeleteBucketEncryption"
+			case query.Has("lifecycle"):
+				return "DeleteBucketLifecycle"
+			case query.Has("cors"):
+				return "DeleteBucketCors"
+			default:
+				return "DeleteBucket"
+			}
 		case http.MethodPut:
 			switch {
 			case query.Has("acl"):
@@ -264,6 +330,14 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "PutBucketTagging"
 			case query.Has("versioning"):
 				return "PutBucketVersioning"
+			case query.Has("encryption"):
+				return "PutBucketEncryption"
+			case query.Has("object-lock"):
+				return "PutObjectLockConfiguration"
+			case query.Has("lifecycle"):
+				return "PutBucketLifecycleConfiguration"
+			case query.Has("cors"):
+				return "PutBucketCors"
 			default:
 				return "CreateBucket"
 			}
@@ -281,6 +355,16 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "GetBucketTagging"
 			case query.Has("versioning"):
 				return "GetBucketVersioning"
+			case query.Has("versions"):
+				return "ListObjectVersions"
+			case query.Has("encryption"):
+				return "GetBucketEncryption"
+			case query.Has("object-lock"):
+				return "GetObjectLockConfiguration"
+			case query.Has("lifecycle"):
+				return "GetBucketLifecycleConfiguration"
+			case query.Has("cors"):
+				return "GetBucketCors"
 			default:
 				return "ListObjectsV1"
 			}
@@ -302,6 +386,10 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 			return "GetObjectTagging"
 		case query.Has("acl"):
 			return "GetObjectAcl"
+		case query.Has("retention"):
+			return "GetObjectRetention"
+		case query.Has("legal-hold"):
+			return "GetObjectLegalHold"
 		default:
 			return "GetObject"
 		}
@@ -319,6 +407,10 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 			return "PutObjectTagging"
 		case query.Has("acl"):
 			return "PutObjectAcl"
+		case query.Has("retention"):
+			return "PutObjectRetention"
+		case query.Has("legal-hold"):
+			return "PutObjectLegalHold"
 		default:
 			return "PutObject"
 		}
@@ -388,6 +480,7 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 		if s, ok := resp.Data["_status"].(int); ok {
 			status = s
 		}
+		s3EmitVersionSSEHeaders(h, resp.Data)
 		// Streaming response: headers are set; gateway will io.Copy the stream.
 		if _, ok := resp.Data["_stream"].(io.ReadCloser); ok {
 			return status, h, nil
@@ -410,11 +503,17 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 		return resp.HTTPStatus, h, nil
 	}
 
-	// No-body responses
+	// No-body responses (DeleteObject/DeleteObjects/etc.)
 	if resp.HTTPStatus == 204 || resp.HTTPStatus == 0 {
 		h := http.Header{}
 		if etag, ok := resp.Data["ETag"].(string); ok {
 			h.Set("ETag", etag)
+		}
+		if vid, ok := resp.Data["_version_id"].(string); ok && vid != "" {
+			h.Set("x-amz-version-id", vid)
+		}
+		if dm, ok := resp.Data["_delete_marker"].(bool); ok && dm {
+			h.Set("x-amz-delete-marker", "true")
 		}
 		return 204, h, nil
 	}
@@ -440,6 +539,7 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 				h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(uploadedBody))
 			}
 		}
+		s3EmitVersionSSEHeaders(h, resp.Data)
 		return resp.HTTPStatus, h, nil
 	}
 
@@ -487,7 +587,37 @@ func s3MetaHeaders(data map[string]any) http.Header {
 	if region, ok := data["_region"].(string); ok && region != "" {
 		h.Set("x-amz-bucket-region", region)
 	}
+	s3EmitVersionSSEHeaders(h, data)
 	return h
+}
+
+// s3EmitVersionSSEHeaders emits x-amz-version-id, x-amz-delete-marker, SSE headers,
+// x-amz-tagging-count, and x-amz-expiration from resp.Data into h.
+func s3EmitVersionSSEHeaders(h http.Header, data map[string]any) {
+	if vid, ok := data["_version_id"].(string); ok && vid != "" {
+		h.Set("x-amz-version-id", vid)
+	}
+	if dm, ok := data["_delete_marker"].(bool); ok && dm {
+		h.Set("x-amz-delete-marker", "true")
+	}
+	if enc, ok := data["_sse"].(string); ok && enc != "" {
+		h.Set("x-amz-server-side-encryption", enc)
+	}
+	if kmsKey, ok := data["_sse_kms_key_id"].(string); ok && kmsKey != "" {
+		h.Set("x-amz-server-side-encryption-aws-kms-key-id", kmsKey)
+	}
+	if algo, ok := data["_ssec_algo"].(string); ok && algo != "" {
+		h.Set("x-amz-server-side-encryption-customer-algorithm", algo)
+	}
+	if ssecMD5, ok := data["_ssec_key_md5"].(string); ok && ssecMD5 != "" {
+		h.Set("x-amz-server-side-encryption-customer-key-MD5", ssecMD5)
+	}
+	if tc, ok := data["_tagging_count"].(int); ok && tc > 0 {
+		h.Set("x-amz-tagging-count", strconv.Itoa(tc))
+	}
+	if exp, ok := data["_expiration"].(string); ok && exp != "" {
+		h.Set("x-amz-expiration", exp)
+	}
 }
 
 // ─── EncodeError ──────────────────────────────────────────────────────────────
@@ -495,6 +625,15 @@ func s3MetaHeaders(data map[string]any) http.Header {
 func (c *S3Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/xml")
+	// Consume special header-emitting keys (e.g. delete marker on 404).
+	if dm, ok := perr.Data["_delete_marker"].(bool); ok && dm {
+		h.Set("x-amz-delete-marker", "true")
+		delete(perr.Data, "_delete_marker")
+	}
+	if vid, ok := perr.Data["_version_id"].(string); ok && vid != "" {
+		h.Set("x-amz-version-id", vid)
+		delete(perr.Data, "_version_id")
+	}
 	var extra strings.Builder
 	for k, v := range perr.Data {
 		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
@@ -616,20 +755,199 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		}
 
 	case "GetBucketVersioning":
-		sb.WriteString(`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`)
+		sb.WriteString(`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if status, ok := data["VersioningStatus"].(string); ok && status != "" {
+			sb.WriteString(xmlTag("Status", status))
+		}
+		sb.WriteString(`</VersioningConfiguration>`)
+
+	case "ListObjectVersions":
+		sb.WriteString(`<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Name", str(data["Name"])))
+		sb.WriteString(xmlTag("Prefix", str(data["Prefix"])))
+		sb.WriteString(xmlTag("KeyMarker", str(data["KeyMarker"])))
+		sb.WriteString(xmlTag("VersionIdMarker", str(data["VersionIdMarker"])))
+		sb.WriteString(xmlTag("MaxKeys", str(data["MaxKeys"])))
+		sb.WriteString(xmlTag("IsTruncated", str(data["IsTruncated"])))
+		if versions, ok := data["Versions"].([]map[string]any); ok {
+			for _, v := range versions {
+				isDM, _ := v["IsDeleteMarker"].(bool)
+				if isDM {
+					sb.WriteString("<DeleteMarker>")
+				} else {
+					sb.WriteString("<Version>")
+				}
+				sb.WriteString(xmlTag("Key", str(v["Key"])))
+				sb.WriteString(xmlTag("VersionId", str(v["VersionId"])))
+				sb.WriteString(xmlTag("IsLatest", str(v["IsLatest"])))
+				sb.WriteString(xmlTag("LastModified", str(v["LastModified"])))
+				if !isDM {
+					sb.WriteString(xmlTag("ETag", str(v["ETag"])))
+					sb.WriteString(xmlTag("Size", str(v["Size"])))
+					sb.WriteString(xmlTag("StorageClass", str(v["StorageClass"])))
+				}
+				if isDM {
+					sb.WriteString("</DeleteMarker>")
+				} else {
+					sb.WriteString("</Version>")
+				}
+			}
+		}
+		sb.WriteString("</ListVersionsResult>")
 
 	case "GetBucketAcl", "GetObjectAcl":
 		sb.WriteString(`<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-		sb.WriteString("<Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>")
+		if owner, ok := data["Owner"].(map[string]any); ok {
+			sb.WriteString("<Owner>")
+			sb.WriteString(xmlTag("ID", str(owner["ID"])))
+			sb.WriteString(xmlTag("DisplayName", str(owner["DisplayName"])))
+			sb.WriteString("</Owner>")
+		} else {
+			sb.WriteString("<Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>")
+		}
 		sb.WriteString("<AccessControlList>")
-		sb.WriteString("<Grant><Grantee xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"CanonicalUser\">")
-		sb.WriteString("<ID>owner</ID><DisplayName>owner</DisplayName></Grantee>")
-		sb.WriteString("<Permission>FULL_CONTROL</Permission></Grant>")
+		if grants, ok := data["Grants"].([]map[string]any); ok {
+			for _, g := range grants {
+				sb.WriteString("<Grant>")
+				granteeType := str(g["GranteeType"])
+				sb.WriteString(fmt.Sprintf(`<Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="%s">`, xmlEscape(granteeType)))
+				if granteeType == "CanonicalUser" {
+					sb.WriteString(xmlTag("ID", str(g["GranteeID"])))
+					sb.WriteString(xmlTag("DisplayName", str(g["GranteeID"])))
+				} else if granteeType == "Group" {
+					sb.WriteString(xmlTag("URI", str(g["GranteeURI"])))
+				}
+				sb.WriteString("</Grantee>")
+				sb.WriteString(xmlTag("Permission", str(g["Permission"])))
+				sb.WriteString("</Grant>")
+			}
+		} else {
+			sb.WriteString("<Grant><Grantee xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"CanonicalUser\">")
+			sb.WriteString("<ID>owner</ID><DisplayName>owner</DisplayName></Grantee>")
+			sb.WriteString("<Permission>FULL_CONTROL</Permission></Grant>")
+		}
 		sb.WriteString("</AccessControlList>")
 		sb.WriteString("</AccessControlPolicy>")
 
 	case "GetObjectTagging", "GetBucketTagging":
-		sb.WriteString(`<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet/></Tagging>`)
+		sb.WriteString(`<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>`)
+		if tags, ok := data["Tags"].(map[string]string); ok {
+			for k, v := range tags {
+				sb.WriteString("<Tag>")
+				sb.WriteString(xmlTag("Key", k))
+				sb.WriteString(xmlTag("Value", v))
+				sb.WriteString("</Tag>")
+			}
+		}
+		sb.WriteString("</TagSet></Tagging>")
+
+	case "GetBucketEncryption":
+		sb.WriteString(`<ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if rule, ok := data["EncryptionRule"].(map[string]any); ok {
+			sb.WriteString("<Rule><ApplyServerSideEncryptionByDefault>")
+			sb.WriteString(xmlTag("SSEAlgorithm", str(rule["Algorithm"])))
+			if kms, ok := rule["KMSKeyID"].(string); ok && kms != "" {
+				sb.WriteString(xmlTag("KMSMasterKeyID", kms))
+			}
+			sb.WriteString("</ApplyServerSideEncryptionByDefault>")
+			if bke, _ := rule["BucketKeyEnabled"].(bool); bke {
+				sb.WriteString(xmlTag("BucketKeyEnabled", "true"))
+			}
+			sb.WriteString("</Rule>")
+		}
+		sb.WriteString("</ServerSideEncryptionConfiguration>")
+
+	case "GetObjectLockConfiguration":
+		sb.WriteString(`<ObjectLockConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if cfg, ok := data["ObjectLockConfig"].(map[string]any); ok {
+			sb.WriteString(xmlTag("ObjectLockEnabled", str(cfg["ObjectLockEnabled"])))
+			if mode, ok := cfg["DefaultMode"].(string); ok && mode != "" {
+				sb.WriteString("<Rule><DefaultRetention>")
+				sb.WriteString(xmlTag("Mode", mode))
+				if days, ok := cfg["DefaultDays"].(int); ok && days > 0 {
+					sb.WriteString(xmlTag("Days", strconv.Itoa(days)))
+				}
+				sb.WriteString("</DefaultRetention></Rule>")
+			}
+		}
+		sb.WriteString("</ObjectLockConfiguration>")
+
+	case "GetObjectRetention":
+		sb.WriteString(`<Retention xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Mode", str(data["LockMode"])))
+		if rd, ok := data["RetainUntilDate"].(string); ok && rd != "" {
+			sb.WriteString(xmlTag("RetainUntilDate", rd))
+		}
+		sb.WriteString("</Retention>")
+
+	case "GetObjectLegalHold":
+		sb.WriteString(`<LegalHold xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("Status", str(data["LegalHoldStatus"])))
+		sb.WriteString("</LegalHold>")
+
+	case "GetBucketLifecycleConfiguration":
+		sb.WriteString(`<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if rules, ok := data["LifecycleRules"].([]any); ok {
+			for _, r := range rules {
+				rm, _ := r.(map[string]any)
+				if rm == nil {
+					continue
+				}
+				sb.WriteString("<Rule>")
+				sb.WriteString(xmlTag("ID", str(rm["ID"])))
+				sb.WriteString(xmlTag("Status", str(rm["Status"])))
+				if prefix := str(rm["Prefix"]); prefix != "" {
+					sb.WriteString("<Filter>")
+					sb.WriteString(xmlTag("Prefix", prefix))
+					sb.WriteString("</Filter>")
+				}
+				days := 0
+				switch d := rm["ExpirationDays"].(type) {
+				case int:
+					days = d
+				case float64:
+					days = int(d)
+				}
+				if days > 0 {
+					sb.WriteString("<Expiration>")
+					sb.WriteString(xmlTag("Days", strconv.Itoa(days)))
+					sb.WriteString("</Expiration>")
+				}
+				sb.WriteString("</Rule>")
+			}
+		}
+		sb.WriteString("</LifecycleConfiguration>")
+
+	case "GetBucketCors":
+		sb.WriteString(`<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if rules, ok := data["CORSRules"].([]any); ok {
+			for _, r := range rules {
+				rm, _ := r.(map[string]any)
+				if rm == nil {
+					continue
+				}
+				sb.WriteString("<CORSRule>")
+				for _, o := range toStringSlice(rm["AllowedOrigins"]) {
+					sb.WriteString(xmlTag("AllowedOrigin", o))
+				}
+				for _, m := range toStringSlice(rm["AllowedMethods"]) {
+					sb.WriteString(xmlTag("AllowedMethod", m))
+				}
+				for _, h := range toStringSlice(rm["AllowedHeaders"]) {
+					sb.WriteString(xmlTag("AllowedHeader", h))
+				}
+				for _, e := range toStringSlice(rm["ExposeHeaders"]) {
+					sb.WriteString(xmlTag("ExposeHeader", e))
+				}
+				if age, ok := rm["MaxAgeSeconds"].(int); ok && age > 0 {
+					sb.WriteString(xmlTag("MaxAgeSeconds", strconv.Itoa(age)))
+				} else if age, ok := rm["MaxAgeSeconds"].(float64); ok && age > 0 {
+					sb.WriteString(xmlTag("MaxAgeSeconds", strconv.Itoa(int(age))))
+				}
+				sb.WriteString("</CORSRule>")
+			}
+		}
+		sb.WriteString("</CORSConfiguration>")
 
 	case "CreateMultipartUpload":
 		sb.WriteString(`<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
@@ -684,4 +1002,53 @@ func s3BuildXML(action string, data map[string]any) []byte {
 	}
 
 	return []byte(sb.String())
+}
+
+// toStringSlice converts []string or []any (CORS rules stored as JSON) to []string.
+func toStringSlice(v any) []string {
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// ─── P2-8: Presigned URL expiration ──────────────────────────────────────────
+
+func checkPresignedExpiration(query url.Values) error {
+	// SigV4 presigned URL.
+	if dateStr := query.Get("X-Amz-Date"); dateStr != "" {
+		t, err := time.Parse("20060102T150405Z", dateStr)
+		if err != nil {
+			return nil // skip on parse error
+		}
+		expiresStr := query.Get("X-Amz-Expires")
+		expires, err := strconv.Atoi(expiresStr)
+		if err != nil {
+			return nil
+		}
+		if time.Now().After(t.Add(time.Duration(expires) * time.Second)) {
+			return fmt.Errorf("expired")
+		}
+		return nil
+	}
+	// SigV2 presigned URL.
+	if expiresStr := query.Get("Expires"); expiresStr != "" {
+		expiresUnix, err := strconv.ParseInt(expiresStr, 10, 64)
+		if err != nil {
+			return nil
+		}
+		if time.Now().Unix() > expiresUnix {
+			return fmt.Errorf("expired")
+		}
+	}
+	return nil
 }
