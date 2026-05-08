@@ -176,24 +176,45 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 	}
 
 	low, high := prefixRange(prefix)
-	var (
-		rows pgx.Rows
-		err  error
-	)
+
+	// When a delimiter is in use, multiple raw keys can collapse into a single
+	// common prefix, so SQL LIMIT would cut the candidate set too early.
+	// Without a delimiter each row maps 1:1 to a result, so LIMIT maxKeys+1 is safe.
 	const sel = `SELECT key, etag, size, content_type, last_modified, metadata, storage_class FROM jc_s3_objects WHERE bucket=$1`
-	switch {
-	case prefix == "" && marker == "":
-		rows, err = s.pool.Query(ctx, sel+` ORDER BY key LIMIT $2`, bucket, maxKeys+1)
-	case prefix == "" && marker != "":
-		rows, err = s.pool.Query(ctx, sel+` AND key > $2 ORDER BY key LIMIT $3`, bucket, marker, maxKeys+1)
-	case prefix != "" && marker == "" && high != "":
-		rows, err = s.pool.Query(ctx, sel+` AND key >= $2 AND key < $3 ORDER BY key LIMIT $4`, bucket, low, high, maxKeys+1)
-	case prefix != "" && marker == "" && high == "":
-		rows, err = s.pool.Query(ctx, sel+` AND key >= $2 ORDER BY key LIMIT $3`, bucket, low, maxKeys+1)
-	case prefix != "" && marker != "" && high != "":
-		rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 AND key < $4 ORDER BY key LIMIT $5`, bucket, marker, low, high, maxKeys+1)
-	default: // prefix != "" && marker != "" && high == ""
-		rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 ORDER BY key LIMIT $4`, bucket, marker, low, maxKeys+1)
+	var rows pgx.Rows
+	var err error
+	if delimiter == "" {
+		switch {
+		case prefix == "" && marker == "":
+			rows, err = s.pool.Query(ctx, sel+` ORDER BY key LIMIT $2`, bucket, maxKeys+1)
+		case prefix == "" && marker != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 ORDER BY key LIMIT $3`, bucket, marker, maxKeys+1)
+		case prefix != "" && marker == "" && high != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key >= $2 AND key < $3 ORDER BY key LIMIT $4`, bucket, low, high, maxKeys+1)
+		case prefix != "" && marker == "" && high == "":
+			rows, err = s.pool.Query(ctx, sel+` AND key >= $2 ORDER BY key LIMIT $3`, bucket, low, maxKeys+1)
+		case prefix != "" && marker != "" && high != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 AND key < $4 ORDER BY key LIMIT $5`, bucket, marker, low, high, maxKeys+1)
+		default:
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 ORDER BY key LIMIT $4`, bucket, marker, low, maxKeys+1)
+		}
+	} else {
+		// No SQL LIMIT when delimiter is set; the prefix-range filter (key >= low AND
+		// key < high) bounds the candidate set so we can read all and paginate in Go.
+		switch {
+		case prefix == "" && marker == "":
+			rows, err = s.pool.Query(ctx, sel+` ORDER BY key`, bucket)
+		case prefix == "" && marker != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 ORDER BY key`, bucket, marker)
+		case prefix != "" && marker == "" && high != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key >= $2 AND key < $3 ORDER BY key`, bucket, low, high)
+		case prefix != "" && marker == "" && high == "":
+			rows, err = s.pool.Query(ctx, sel+` AND key >= $2 ORDER BY key`, bucket, low)
+		case prefix != "" && marker != "" && high != "":
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 AND key < $4 ORDER BY key`, bucket, marker, low, high)
+		default:
+			rows, err = s.pool.Query(ctx, sel+` AND key > $2 AND key >= $3 ORDER BY key`, bucket, marker, low)
+		}
 	}
 	if err != nil {
 		return nil, nil, false, "", err
@@ -215,18 +236,17 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 	var result []ObjectMeta
 	truncated := false
 	var lastExaminedKey string
-	for _, m := range all {
-		// AWS counts both result keys and unique common prefixes toward maxKeys.
-		// Stop when the page is full; remaining items mean the result is truncated.
+	breakIdx := len(all)
+	for i, m := range all {
 		if len(result)+len(commonPrefixes) >= maxKeys {
 			truncated = true
+			breakIdx = i
 			break
 		}
 		lastExaminedKey = m.Key
 		if delimiter != "" {
 			rest := m.Key[len(prefix):]
-			idx := strings.Index(rest, delimiter)
-			if idx >= 0 {
+			if idx := strings.Index(rest, delimiter); idx >= 0 {
 				commonPrefixes[prefix+rest[:idx+len(delimiter)]] = true
 				continue
 			}
@@ -242,7 +262,28 @@ func (s *PostgresS3ObjectMetaStore) ListObjectMeta(ctx context.Context, bucket, 
 
 	nextMarker := ""
 	if truncated {
-		nextMarker = lastExaminedKey
+		// Advance nextMarker past all keys that share the last common prefix on this
+		// page. Without this, the next-page marker would re-emit the final CP.
+		if delimiter != "" && len(cpList) > 0 {
+			lastCP := cpList[len(cpList)-1]
+			endIdx := breakIdx
+			for i, m := range all[breakIdx:] {
+				if strings.HasPrefix(m.Key, lastCP) {
+					lastExaminedKey = m.Key
+					endIdx = breakIdx + i + 1
+				} else {
+					break
+				}
+			}
+			// If the advance consumed every remaining candidate, there are no more
+			// objects beyond this page — correct the truncated flag.
+			if endIdx >= len(all) {
+				truncated = false
+			}
+		}
+		if truncated {
+			nextMarker = lastExaminedKey
+		}
 	}
 	return result, cpList, truncated, nextMarker, rows.Err()
 }

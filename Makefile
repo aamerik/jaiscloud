@@ -24,9 +24,17 @@ JAISCLOUD_K8S_CLIENT_CERT_FILE  ?=
 JAISCLOUD_K8S_CLIENT_KEY_FILE   ?=
 
 # ─── Server knobs ─────────────────────────────────────────────────────────────
-JAISCLOUD_DSN  ?= postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
+JAISCLOUD_DSN  ?= postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
 JAISCLOUD_PORT ?= 4566
 JAISCLOUD_HOST ?= http://localhost:$(JAISCLOUD_PORT)
+
+# ─── Local Postgres container ─────────────────────────────────────────────────
+PG_CONTAINER ?= jaiscloud-postgres
+PG_VOLUME    ?= jaiscloud-postgres-data
+PG_PORT      ?= 5432
+PG_USER      ?= jaiscloud
+PG_PASSWORD  ?= jaiscloud
+PG_DB        ?= jaiscloud
 
 # Narrow any test target to a single test: make test-e2e-emrcontainers-k8s TEST_RUN=TestSparkJob_K8s_CancelJobRun
 TEST_RUN ?= .
@@ -39,6 +47,7 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
 .PHONY: help build test docker clean \
         server-lite server-full server-docker server-k8s server-full-all \
         stop-server up-docker down-docker up-k8s down-k8s \
+        postgres-up postgres-reset postgres-down \
         test-integration \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -46,7 +55,8 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
         test-e2e-cloudformation test-e2e-kms test-e2e-dynamodb test-e2e-persistence \
         test-e2e-iceberg \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
-        _build-for-e2e _restart-server-lite _wait-docker _start-k8s _stop-k8s \
+        _build-for-e2e _restart-server-lite _wait-docker _wait-postgres \
+        _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -71,9 +81,12 @@ help: ## Show this help  (tip: bare 'make' also works)
 	@printf "  %-30s  %s\n"  "------------------------------" "---------------------------------------------------"
 	@printf "  %-30s  %s\n"  "SPARK_IMAGE"   "apache/spark:3.5.0  — Spark container image"
 	@printf "  %-30s  %s\n"  "LAMBDA_IMAGE"  "public.ecr.aws/lambda/python:3.12  — Lambda image"
-	@printf "  %-30s  %s\n"  "JAISCLOUD_DSN" "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
+	@printf "  %-30s  %s\n"  "JAISCLOUD_DSN" "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
 	@printf "  %-30s  %s\n"  "K8S_NAMESPACE" "jaiscloud  — K8s namespace for Spark and Lambda jobs"
 	@printf "  %-30s  %s\n"  "TEST_RUN"      ".  — go test -run filter (any e2e target)"
+	@printf "  %-30s  %s\n"  "PG_CONTAINER"  "jaiscloud-postgres  — docker container name"
+	@printf "  %-30s  %s\n"  "PG_VOLUME"     "jaiscloud-postgres-data  — named volume for persistence"
+	@printf "  %-30s  %s\n"  "PG_PORT"       "5432  — host port mapped to Postgres 5432"
 	@echo ""
 
 ##@ Build
@@ -155,6 +168,36 @@ down-k8s: ## Remove JaisCloud K8s deployment and clean up Lambda/Spark resources
 	@kubectl delete pods -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
 	@kubectl delete svc -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
 	@kubectl delete jobs -l app=jaiscloud-spark -n jaiscloud --ignore-not-found 2>/dev/null || true
+
+##@ Local Postgres  (standalone container, independent of docker-compose)
+
+postgres-up: _check-docker-prereq ## Start a local Postgres 16 container on port 5432 — creates the jaiscloud db; data persists across restarts
+	@if docker ps -q -f name=^/$(PG_CONTAINER)$$ | grep -q . 2>/dev/null; then \
+	  echo "$(PG_CONTAINER) is already running on port $(PG_PORT)"; \
+	else \
+	  docker rm -f $(PG_CONTAINER) > /dev/null 2>&1 || true; \
+	  docker volume create $(PG_VOLUME) > /dev/null; \
+	  docker run -d \
+	    --name $(PG_CONTAINER) \
+	    -e POSTGRES_USER=$(PG_USER) \
+	    -e POSTGRES_PASSWORD=$(PG_PASSWORD) \
+	    -e POSTGRES_DB=$(PG_DB) \
+	    -p $(PG_PORT):5432 \
+	    -v $(PG_VOLUME):/var/lib/postgresql/data \
+	    postgres:16-alpine > /dev/null; \
+	  $(MAKE) _wait-postgres; \
+	fi
+
+postgres-reset: _check-docker-prereq ## Wipe all Postgres data and start fresh — WARNING: all data is destroyed
+	@echo "Resetting $(PG_CONTAINER): stopping container and removing volume $(PG_VOLUME)"
+	@docker rm -f $(PG_CONTAINER) > /dev/null 2>&1 || true
+	@docker volume rm $(PG_VOLUME) > /dev/null 2>&1 || true
+	@$(MAKE) postgres-up
+
+postgres-down: ## Stop and remove the local Postgres container  (volume is kept — data survives)
+	@docker rm -f $(PG_CONTAINER) > /dev/null 2>&1 && \
+	  echo "$(PG_CONTAINER) stopped (data preserved in volume $(PG_VOLUME))" || \
+	  echo "$(PG_CONTAINER) was not running"
 
 ##@ Integration tests  (lite mode, no postgres required)
 
@@ -261,6 +304,18 @@ test-all: test test-integration test-e2e ## Unit tests + integration tests + all
 
 _build-for-e2e:
 	go build -o jaiscloud ./cmd/jaiscloud/
+
+_wait-postgres:
+	@echo "Waiting for Postgres on port $(PG_PORT)..."
+	@n=0; until docker exec $(PG_CONTAINER) pg_isready -U $(PG_USER) -q 2>/dev/null; do \
+	  n=$$((n+1)); \
+	  if [ $$n -ge 30 ]; then \
+	    echo "ERROR: Postgres did not become ready within 30s — check: docker logs $(PG_CONTAINER)"; \
+	    exit 1; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	echo "Postgres ready  →  $(JAISCLOUD_DSN)"
 
 _wait-docker:
 	@echo "Waiting for jaiscloud on $(JAISCLOUD_HOST)..."
