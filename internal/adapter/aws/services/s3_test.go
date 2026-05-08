@@ -378,3 +378,30 @@ func TestS3Encode_CRC32_CaseInsensitiveChecksumMode(t *testing.T) {
 	assert.Equal(t, "storedValue==", h.Get("x-amz-checksum-crc32"),
 		"x-amz-checksum-mode matching must be case-insensitive")
 }
+
+func TestS3Encode_CRC32_NotEmittedFromStore_OnRangeRead(t *testing.T) {
+	// Range reads return a partial body whose CRC32 differs from the stored
+	// full-object CRC32. The stored value must be suppressed even when the
+	// client sends x-amz-checksum-mode: ENABLED.
+	c := &S3Codec{}
+	body := []byte("partial")
+	nr := newGetObjectNR("ENABLED")
+	resp := &model.ProviderResponse{
+		HTTPStatus: 206,
+		Data: map[string]any{
+			"_passthrough": true,
+			"_crc32":       "storedFullObjectCRC==",
+			"_raw_body":    body,
+			"_range_start": int64(0),
+			"_range_end":   int64(6),
+			"_range_total": int64(100),
+		},
+	}
+
+	_, h, _ := c.Encode(nr, resp)
+
+	assert.NotEqual(t, "storedFullObjectCRC==", h.Get("x-amz-checksum-crc32"),
+		"stored full-object CRC32 must not be emitted for a range read")
+	assert.Equal(t, s3ChecksumCRC32(body), h.Get("x-amz-checksum-crc32"),
+		"CRC32 must be computed from the partial body for range reads")
+}

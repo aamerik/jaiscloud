@@ -472,10 +472,13 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			total, _ := resp.Data["_range_total"].(int64)
 			h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
 		}
-		// CRC32: Only emits stored checksum if client requested validation
-		// (x-amz-checksum-mode: ENABLED). AWS behaves the same way.
+		// CRC32: Only emits checksum when client requested checksum validation
+		// (x-amz-checksum-mode: ENABLED)AND this is not a range read.
+		// AWS omits checksums on partial content (206) response because
+		// the stored checksum covers the full object, not the byte range.
+		isRangeRead := resp.Data["_range_start"] != nil
 		checksumRequested := strings.EqualFold(nr.Raw.Header.Get("x-amz-checksum-mode"), "ENABLED")
-		if checksumRequested {
+		if checksumRequested && !isRangeRead {
 			if crc32v, ok := resp.Data["_crc32"].(string); ok && crc32v != "" {
 				h.Set("x-amz-checksum-crc32", crc32v)
 			}

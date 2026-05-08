@@ -48,7 +48,7 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
         server-lite server-full server-docker server-k8s server-full-all \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration test-integration-full \
+        test-integration \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -199,48 +199,85 @@ postgres-down: ## Stop and remove the local Postgres container  (volume is kept 
 	  echo "$(PG_CONTAINER) stopped (data preserved in volume $(PG_VOLUME))" || \
 	  echo "$(PG_CONTAINER) was not running"
 
-##@ Integration tests  (lite mode, no postgres required)
+##@ Integration tests
 
-test-integration: _restart-server-lite ## Run tests/integration/ — use TEST_RUN=TestSQS to target one service
-	# Available TEST_RUN values: TestSQS TestSNS TestDynamoDB TestS3 TestLambda
-	#   TestIAM TestKMS TestSecretsManager TestSSM TestCloudFormation
-	#   TestAPIGateway TestEventBridge TestEMR TestEMRContainers
-	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/
-	$(MAKE) stop-server
+# MODE controls the store backend. The value is case-insensitive (full/Full/FULL all work).
+# Note: the variable NAME must be uppercase MODE — Make variable names are case-sensitive.
 
-test-integration-full: _check-docker-prereq ## Full-mode integration: build → reset postgres → start server → run suite → print summary
-	@printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"
-	@printf   "\033[1m│   JaisCloud Integration Suite — Full Mode (Postgres)  │\033[0m\n"
-	@printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"
-	@printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud instance...\n"
-	@pkill -f "jaiscloud start" 2>/dev/null || true
-	@printf "\033[1m[2/4]\033[0m Building jaiscloud... "
-	@go build -o jaiscloud ./cmd/jaiscloud/ \
-	  && printf "\033[32m✓ OK\033[0m\n" \
-	  || (printf "\033[31m✗ build failed\033[0m\n"; exit 1)
-	@printf "\033[1m[3/4]\033[0m Setting up Postgres...\n"
-	@if docker ps -q -f name=^/$(PG_CONTAINER)$$ | grep -q . 2>/dev/null; then \
-	  printf "  Postgres running — resetting data\n"; \
-	  $(MAKE) postgres-reset; \
-	else \
-	  printf "  Postgres not running — starting\n"; \
-	  $(MAKE) postgres-up; \
+test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RUN=TestSQS to target one service
+	@if [ -z "$(MODE)" ]; then \
+	  printf "\n\033[1mUsage:\033[0m\n"; \
+	  printf "  make test-integration \033[36mMODE=lite\033[0m               run against in-memory stores (no postgres)\n"; \
+	  printf "  make test-integration \033[36mMODE=full\033[0m               run against postgres (resets data)\n"; \
+	  printf "  make test-integration \033[36mMODE=full TEST_RUN=TestS3\033[0m  target a single service\n\n"; \
+	  printf "\033[33mMODE is required.\033[0m\n\n"; \
+	  exit 1; \
 	fi
-	@printf "\033[1m[4/4]\033[0m Starting jaiscloud in full mode...\n"
-	@JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud start --mode full --dsn "$(JAISCLOUD_DSN)" \
-	  > /tmp/jaiscloud-full.log 2>&1 &
-	@n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
-	  n=$$((n+1)); \
-	  if [ $$n -ge 30 ]; then \
-	    printf "\033[31m  ✗ jaiscloud did not become healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
-	    pkill -f "jaiscloud start" 2>/dev/null || true; \
-	    exit 1; \
+	@_mode=$$(printf '%s' "$(MODE)" | tr '[:upper:]' '[:lower:]'); \
+	if [ "$$_mode" != "lite" ] && [ "$$_mode" != "full" ]; then \
+	  printf "\033[31mERROR: MODE must be 'lite' or 'full', got '$(MODE)'\033[0m\n"; \
+	  exit 1; \
+	fi; \
+	if [ "$$_mode" = "full" ]; then \
+	  docker info > /dev/null 2>&1 || { printf "\033[31mERROR: Docker is not running\033[0m\n"; exit 1; }; \
+	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
+	  printf   "\033[1m│   JaisCloud Integration Suite — Full Mode (Postgres)  │\033[0m\n"; \
+	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
+	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud instance...\n"; \
+	  pkill -f "jaiscloud start" 2>/dev/null || true; \
+	  printf "\033[1m[2/4]\033[0m Building jaiscloud... "; \
+	  go build -o jaiscloud ./cmd/jaiscloud/ \
+	    && printf "\033[32m✓ OK\033[0m\n" \
+	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
+	  printf "\033[1m[3/4]\033[0m Setting up Postgres...\n"; \
+	  if docker ps -q -f name=^/$(PG_CONTAINER)$$ | grep -q . 2>/dev/null; then \
+	    printf "  Postgres running — resetting data\n"; \
+	    $(MAKE) postgres-reset; \
+	  else \
+	    printf "  Postgres not running — starting\n"; \
+	    $(MAKE) postgres-up; \
 	  fi; \
-	  sleep 1; \
-	done; \
-	printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-full.log)\033[0m\n"
+	  printf "\033[1m[4/4]\033[0m Starting jaiscloud in full mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud start --mode full --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
+	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	    ./jaiscloud start --mode full --dsn "$(JAISCLOUD_DSN)" \
+	    > /tmp/jaiscloud-full.log 2>&1 & \
+	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
+	    n=$$((n+1)); \
+	    if [ $$n -ge 30 ]; then \
+	      printf "\033[31m  ✗ jaiscloud not healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
+	      pkill -f "jaiscloud start" 2>/dev/null || true; \
+	      exit 1; \
+	    fi; \
+	    sleep 1; \
+	  done; \
+	  printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-full.log)\033[0m\n"; \
+	else \
+	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
+	  printf   "\033[1m│  JaisCloud Integration Suite — Lite Mode (in-memory)  │\033[0m\n"; \
+	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
+	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud instance...\n"; \
+	  pkill -f "jaiscloud start" 2>/dev/null || true; \
+	  printf "\033[1m[2/3]\033[0m Building jaiscloud... "; \
+	  go build -o jaiscloud ./cmd/jaiscloud/ \
+	    && printf "\033[32m✓ OK\033[0m\n" \
+	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
+	  printf "\033[1m[3/3]\033[0m Starting jaiscloud in lite mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud start\033[0m\n"; \
+	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	    ./jaiscloud start \
+	    > /tmp/jaiscloud-e2e.log 2>&1 & \
+	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
+	    n=$$((n+1)); \
+	    if [ $$n -ge 30 ]; then \
+	      printf "\033[31m  ✗ jaiscloud not healthy — check /tmp/jaiscloud-e2e.log\033[0m\n"; \
+	      pkill -f "jaiscloud start" 2>/dev/null || true; \
+	      exit 1; \
+	    fi; \
+	    sleep 1; \
+	  done; \
+	  printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-e2e.log)\033[0m\n"; \
+	fi
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
 	@JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ \
