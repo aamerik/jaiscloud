@@ -48,7 +48,7 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
         server-lite server-full server-docker server-k8s server-full-all \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration \
+        test-integration test-integration-full \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -208,6 +208,68 @@ test-integration: _restart-server-lite ## Run tests/integration/ — use TEST_RU
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/
 	$(MAKE) stop-server
+
+test-integration-full: _check-docker-prereq ## Full-mode integration: build → reset postgres → start server → run suite → print summary
+	@printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"
+	@printf   "\033[1m│   JaisCloud Integration Suite — Full Mode (Postgres)  │\033[0m\n"
+	@printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"
+	@printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud instance...\n"
+	@pkill -f "jaiscloud start" 2>/dev/null || true
+	@printf "\033[1m[2/4]\033[0m Building jaiscloud... "
+	@go build -o jaiscloud ./cmd/jaiscloud/ \
+	  && printf "\033[32m✓ OK\033[0m\n" \
+	  || (printf "\033[31m✗ build failed\033[0m\n"; exit 1)
+	@printf "\033[1m[3/4]\033[0m Setting up Postgres...\n"
+	@if docker ps -q -f name=^/$(PG_CONTAINER)$$ | grep -q . 2>/dev/null; then \
+	  printf "  Postgres running — resetting data\n"; \
+	  $(MAKE) postgres-reset; \
+	else \
+	  printf "  Postgres not running — starting\n"; \
+	  $(MAKE) postgres-up; \
+	fi
+	@printf "\033[1m[4/4]\033[0m Starting jaiscloud in full mode...\n"
+	@JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud start --mode full --dsn "$(JAISCLOUD_DSN)" \
+	  > /tmp/jaiscloud-full.log 2>&1 &
+	@n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
+	  n=$$((n+1)); \
+	  if [ $$n -ge 30 ]; then \
+	    printf "\033[31m  ✗ jaiscloud did not become healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
+	    pkill -f "jaiscloud start" 2>/dev/null || true; \
+	    exit 1; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-full.log)\033[0m\n"
+	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
+	@JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ \
+	  > /tmp/integration-results.txt 2>&1; \
+	echo $$? > /tmp/integration-exit.txt; \
+	awk '\
+	  /^=== /       { next } \
+	  /^--- PASS:/  { printf "  \033[32m✓ %s\033[0m\n", $$0; n_pass++; next } \
+	  /^--- FAIL:/  { printf "  \033[31m✗ %s\033[0m\n", $$0; fails[++n_fail]=$$0; in_fail=1; next } \
+	  /^--- /       { in_fail=0; next } \
+	  /^    /       { if (in_fail) printf "  \033[33m%s\033[0m\n", $$0; next } \
+	  /^(FAIL|ok )/ { next } \
+	  { print } \
+	  END { \
+	    print ""; \
+	    print "\033[1m══════════════════════════════════════════════════════\033[0m"; \
+	    printf "\033[1mResults:\033[0m  \033[32m%d passed\033[0m", n_pass+0; \
+	    if (n_fail+0 > 0) { \
+	      printf "  \033[31;1m%d failed\033[0m\n\n", n_fail; \
+	      printf "\033[1;31mFailed tests:\033[0m\n"; \
+	      for (i=1; i<=n_fail; i++) printf "  \033[31m✗  %s\033[0m\n", fails[i]; \
+	    } else { \
+	      printf "  \033[32m0 failed  ✓  All tests passed!\033[0m\n"; \
+	    } \
+	    print "\033[1m══════════════════════════════════════════════════════\033[0m"; \
+	  } \
+	' /tmp/integration-results.txt; \
+	pkill -f "jaiscloud start" 2>/dev/null || true; \
+	exit $$(cat /tmp/integration-exit.txt)
 
 ##@ Full-mode e2e tests  (start server, run suite, stop server)
 

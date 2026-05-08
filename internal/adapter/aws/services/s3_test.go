@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/model"
 )
 
 // ─── extractVirtualHostedBucket ──────────────────────────────────────────────
@@ -315,4 +317,64 @@ func TestPresigned_ExpiredSigV2_403(t *testing.T) {
 	c := &S3Codec{}
 	_, err := c.Decode(req, nil)
 	require.Error(t, err, "expired SigV2 presigned URL must return an error")
+}
+
+// ─── Encode: x-amz-checksum-crc32 conditional on x-amz-checksum-mode ────────
+
+// newGetObjectNR builds a passthrough NormalizedRequest for Encode tests.
+func newGetObjectNR(checksumMode string) *model.NormalizedRequest {
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost:4566/bucket/key", nil)
+	if checksumMode != "" {
+		req.Header.Set("x-amz-checksum-mode", checksumMode)
+	}
+	return &model.NormalizedRequest{Raw: req, Action: "GetObject"}
+}
+
+// newPassthroughResp builds a _passthrough ProviderResponse with a stored CRC32.
+func newPassthroughResp(storedCRC32 string, body []byte) *model.ProviderResponse {
+	return &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"_passthrough": true,
+			"_crc32":       storedCRC32,
+			"_raw_body":    body,
+		},
+	}
+}
+
+func TestS3Encode_CRC32_EmitsStoredValue_WhenChecksumModeEnabled(t *testing.T) {
+	c := &S3Codec{}
+	nr := newGetObjectNR("ENABLED")
+	resp := newPassthroughResp("abc123storedCRC==", []byte("hello"))
+
+	_, h, _ := c.Encode(nr, resp)
+
+	assert.Equal(t, "abc123storedCRC==", h.Get("x-amz-checksum-crc32"),
+		"stored _crc32 must be emitted verbatim when x-amz-checksum-mode is ENABLED")
+}
+
+func TestS3Encode_CRC32_UsesComputedValue_WhenChecksumModeAbsent(t *testing.T) {
+	c := &S3Codec{}
+	body := []byte("hello")
+	nr := newGetObjectNR("") // no checksum-mode header
+	resp := newPassthroughResp("should-not-appear", body)
+
+	_, h, _ := c.Encode(nr, resp)
+
+	got := h.Get("x-amz-checksum-crc32")
+	assert.NotEqual(t, "should-not-appear", got,
+		"stored _crc32 must not be emitted when x-amz-checksum-mode is absent")
+	assert.Equal(t, s3ChecksumCRC32(body), got,
+		"CRC32 computed from body must be used when checksum mode is not requested")
+}
+
+func TestS3Encode_CRC32_CaseInsensitiveChecksumMode(t *testing.T) {
+	c := &S3Codec{}
+	nr := newGetObjectNR("enabled") // lowercase
+	resp := newPassthroughResp("storedValue==", []byte("data"))
+
+	_, h, _ := c.Encode(nr, resp)
+
+	assert.Equal(t, "storedValue==", h.Get("x-amz-checksum-crc32"),
+		"x-amz-checksum-mode matching must be case-insensitive")
 }
