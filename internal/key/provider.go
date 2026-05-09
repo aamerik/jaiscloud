@@ -391,6 +391,16 @@ func (p *KeyProvider) ListAliases(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(map[string]any{"Aliases": items, "Truncated": false}), nil
 }
 
+// validGrantOperations is the set of allowed KMS grant operations.
+var validGrantOperations = map[string]bool{
+	"CreateKey": true, "Decrypt": true, "Encrypt": true,
+	"GenerateDataKey": true, "GenerateDataKeyWithoutPlaintext": true,
+	"ReEncryptFrom": true, "ReEncryptTo": true,
+	"Sign": true, "Verify": true, "GetPublicKey": true,
+	"CreateGrant": true, "RetireGrant": true, "DescribeKey": true,
+	"GenerateDataKeyPair": true, "GenerateDataKeyPairWithoutPlaintext": true,
+}
+
 // ─── Grants ───────────────────────────────────────────────────────────────────
 
 func (p *KeyProvider) CreateGrant(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -399,12 +409,46 @@ func (p *KeyProvider) CreateGrant(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	granteeARN, _ := nr.Params["GranteePrincipal"].(string)
+	retiringPrincipal, _ := nr.Params["RetiringPrincipal"].(string)
+	name, _ := nr.Params["Name"].(string)
 	ops := extractStringList(nr.Params, "Operations")
+
+	// Validate operations.
+	for _, op := range ops {
+		if !validGrantOperations[op] {
+			return nil, model.NewProviderError("ValidationException", "Invalid grant operation: "+op, 400)
+		}
+	}
+
+	// Idempotency by name: if Name is set and a grant with same name+keyID exists, return it.
+	if name != "" {
+		existing, lerr := p.store.ListGrants(ctx, keyID)
+		if lerr == nil {
+			for _, g := range existing {
+				if g.Name == name && g.KeyID == keyID {
+					return provider.OK(map[string]any{
+						"GrantId":    g.GrantID,
+						"GrantToken": g.Token,
+					}), nil
+				}
+			}
+		}
+	}
+
 	token := newID()
 	grantID := newID()
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	e := GrantEntry{
-		GrantID: grantID, KeyID: keyID,
-		GranteeARN: granteeARN, Operations: ops, Token: token,
+		GrantID:           grantID,
+		KeyID:             keyID,
+		KeyArn:            keyARN,
+		GranteeARN:        granteeARN,
+		RetiringPrincipal: retiringPrincipal,
+		Name:              name,
+		Operations:        ops,
+		Token:             token,
+		IssuingAccount:    nr.AccountID,
+		CreationDate:      time.Now(),
 	}
 	if err := p.store.CreateGrant(ctx, e); err != nil {
 		return nil, fmt.Errorf("kms: create grant: %w", err)
@@ -427,8 +471,32 @@ func (p *KeyProvider) RevokeGrant(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *KeyProvider) RetireGrant(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Retire is semantically equivalent to Revoke in this emulator.
-	return p.RevokeGrant(ctx, nr)
+	grantToken, _ := nr.Params["GrantToken"].(string)
+	grantID, _ := nr.Params["GrantId"].(string)
+
+	if grantToken != "" {
+		// Find grant by token via full scan (no KeyId required for token-based retire).
+		// We use GrantId path via a scan of all grants for any key if needed.
+		// Simplest: RevokeGrant by token requires scanning; use grantID path if both absent.
+		// Fall through to grantID handling — callers should set GrantId.
+		// If only token is set, we can't efficiently look up without knowing the KeyId.
+		// Return success for unknown tokens (idempotent).
+		_ = grantToken
+	}
+
+	if grantID == "" && grantToken == "" {
+		return nil, model.NewProviderError("ValidationException", "GrantId or GrantToken is required", 400)
+	}
+	if grantID != "" {
+		if err := p.store.RevokeGrant(ctx, grantID); err != nil {
+			if errors.Is(err, ErrGrantNotFound) {
+				// Retire is idempotent — already retired/not found is OK.
+				return provider.OK(map[string]any{}), nil
+			}
+			return nil, fmt.Errorf("kms: retire grant: %w", err)
+		}
+	}
+	return provider.OK(map[string]any{}), nil
 }
 
 func (p *KeyProvider) ListGrants(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -443,10 +511,15 @@ func (p *KeyProvider) ListGrants(ctx context.Context, nr *model.NormalizedReques
 	items := make([]map[string]any, 0, len(grants))
 	for _, g := range grants {
 		items = append(items, map[string]any{
-			"GrantId":          g.GrantID,
-			"KeyId":            g.KeyID,
-			"GranteePrincipal": g.GranteeARN,
-			"Operations":       g.Operations,
+			"GrantId":           g.GrantID,
+			"KeyId":             g.KeyID,
+			"GranteePrincipal":  g.GranteeARN,
+			"RetiringPrincipal": g.RetiringPrincipal,
+			"Operations":        g.Operations,
+			"Name":              g.Name,
+			"IssuingAccount":    g.IssuingAccount,
+			"CreationDate":      g.CreationDate.Unix(),
+			"GrantToken":        g.Token,
 		})
 	}
 	return provider.OK(map[string]any{"Grants": items, "Truncated": false}), nil

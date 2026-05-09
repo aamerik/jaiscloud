@@ -53,11 +53,16 @@ type AliasEntry struct {
 
 // GrantEntry records a KMS grant.
 type GrantEntry struct {
-	GrantID    string
-	KeyID      string
-	GranteeARN string
-	Operations []string
-	Token      string
+	GrantID          string
+	KeyID            string
+	KeyArn           string
+	GranteeARN       string
+	RetiringPrincipal string
+	Name             string
+	Operations       []string
+	Token            string
+	IssuingAccount   string
+	CreationDate     time.Time
 }
 
 // KeyStore is the persistence interface for KMS key metadata.
