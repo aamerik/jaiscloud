@@ -139,6 +139,61 @@ func TestSecretProvider_SoftDeleteRestore(t *testing.T) {
 	assert.Equal(t, "soft-del", desc["Name"])
 }
 
+// ─── P1.7: DeleteSecret/RestoreSecret lifecycle fixes ────────────────────────
+
+func TestSecretProvider_DeleteSecret_InvalidWindow(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "inv-win"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":             "inv-win",
+		"RecoveryWindowInDays": float64(6),
+	}))
+	require.Error(t, err)
+
+	_, err = routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":             "inv-win",
+		"RecoveryWindowInDays": float64(31),
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_MutualExclusivity(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "mutex"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":                  "mutex",
+		"ForceDeleteWithoutRecovery": true,
+		"RecoveryWindowInDays":      float64(7),
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_AlreadyDeleted(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "dup-del"})
+
+	callSecret(t, routes, "DeleteSecret", map[string]any{"SecretId": "dup-del"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId": "dup-del",
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_DefaultWindow(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "def-win"})
+
+	out := callSecret(t, routes, "DeleteSecret", map[string]any{"SecretId": "def-win"})
+	assert.NotZero(t, out["DeletionDate"])
+}
+
 // ─── UpdateSecret ─────────────────────────────────────────────────────────────
 
 func TestSecretProvider_UpdateSecret(t *testing.T) {

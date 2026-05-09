@@ -135,17 +135,23 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		return nil, err
 	}
 
-	forceDelete := false
-	if v, ok := nr.Params["ForceDeleteWithoutRecovery"].(bool); ok {
-		forceDelete = v
+	forceDelete, _ := nr.Params["ForceDeleteWithoutRecovery"].(bool)
+	_, hasRecoveryDays := nr.Params["RecoveryWindowInDays"]
+	if forceDelete && hasRecoveryDays {
+		return nil, model.NewProviderError("InvalidParameterException",
+			"ForceDeleteWithoutRecovery and RecoveryWindowInDays are mutually exclusive", 400)
 	}
+
 	recoveryDays := int64(30)
 	if v, ok := nr.Params["RecoveryWindowInDays"].(float64); ok {
 		recoveryDays = int64(v)
+		if recoveryDays < 7 || recoveryDays > 30 {
+			return nil, model.NewProviderError("InvalidParameterException",
+				"RecoveryWindowInDays must be between 7 and 30", 400)
+		}
 	}
 
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
-	deletionDate := time.Now().Add(time.Duration(recoveryDays) * 24 * time.Hour)
 
 	if forceDelete {
 		if err := p.store.DeleteSecret(ctx, e.SecretID); err != nil {
@@ -154,13 +160,17 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		return provider.OK(map[string]any{
 			"ARN":          secretARN,
 			"Name":         e.Name,
-			"DeletionDate": deletionDate.Unix(),
+			"DeletionDate": time.Now().Unix(),
 		}), nil
 	}
 
-	// Soft delete — mark DeletedAt, keep data.
-	now := time.Now()
-	e.DeletedAt = &now
+	if e.DeletedAt != nil {
+		return nil, model.NewProviderError("InvalidRequestException",
+			"secret is already scheduled for deletion", 400)
+	}
+
+	deletionDate := time.Now().Add(time.Duration(recoveryDays) * 24 * time.Hour)
+	e.DeletedAt = &deletionDate
 	if err := p.store.UpdateSecret(ctx, e); err != nil {
 		return nil, fmt.Errorf("sm: soft delete: %w", err)
 	}
