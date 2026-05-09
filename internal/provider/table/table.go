@@ -434,10 +434,45 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 	}
 	p.appendStreamRecord(name, "MODIFY", pkHash, key, updated, oldItem)
 	result := map[string]any{}
-	if spec.ReturnValues == "ALL_NEW" {
+	switch spec.ReturnValues {
+	case "ALL_NEW":
 		result["Attributes"] = updated
+	case "ALL_OLD":
+		if oldItem != nil {
+			result["Attributes"] = oldItem
+		}
+	case "UPDATED_NEW":
+		attrs := computeUpdatedAttrs(updated, oldItem)
+		if len(attrs) > 0 {
+			result["Attributes"] = attrs
+		}
+	case "UPDATED_OLD":
+		attrs := computeUpdatedAttrs(oldItem, updated)
+		if len(attrs) > 0 {
+			result["Attributes"] = attrs
+		}
 	}
 	return provider.OK(result), nil
+}
+
+// computeUpdatedAttrs returns the attributes from source that differ from reference.
+func computeUpdatedAttrs(source, reference map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	out := map[string]any{}
+	for k, v := range source {
+		if rv, ok := reference[k]; !ok || !deepEqualDynamo(v, rv) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func deepEqualDynamo(a, b any) bool {
+	aj, _ := json.Marshal(a)
+	bj, _ := json.Marshal(b)
+	return string(aj) == string(bj)
 }
 
 func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -562,37 +597,129 @@ func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRe
 
 func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	transactItems, _ := nr.Params["TransactItems"].([]any)
+	if len(transactItems) == 0 {
+		return nil, model.NewProviderError("ValidationException", "Request must contain at least one TransactItem", 400)
+	}
+	if len(transactItems) > 100 {
+		return nil, model.NewProviderError("ValidationException", "Too many items in TransactItems. Maximum allowed is 100", 400)
+	}
+
+	// Build typed ops; validate tables exist and check for duplicate item keys.
+	type itemKey struct{ table, pkHash string }
+	seen := map[itemKey]bool{}
+	var ops []dynamostore.TransactWriteOp
 	for _, ti := range transactItems {
 		m, _ := ti.(map[string]any)
-		if put, ok := m["Put"].(map[string]any); ok {
+		var op dynamostore.TransactWriteOp
+
+		switch {
+		case m["Put"] != nil:
+			put, _ := m["Put"].(map[string]any)
 			table := strParam(put, "TableName")
 			item := itemParam(put, "Item")
-			ts, _ := p.loadTable(ctx, table)
-			if _, err := p.items.PutItem(ctx, table, computePKHash(item, ts), item, dynamostore.ConditionSpec{}); err != nil {
-				return nil, err
+			ts, err := p.loadTable(ctx, table)
+			if err != nil {
+				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
-		}
-		if del, ok := m["Delete"].(map[string]any); ok {
+			pkHash := computePKHash(item, ts)
+			op = dynamostore.TransactWriteOp{
+				Type: "Put", Table: table, PKHash: pkHash, Item: item,
+				Cond: dynamostore.ConditionSpec{
+					ConditionExpression:       strParam(put, "ConditionExpression"),
+					ExpressionAttributeNames:  exprNamesFrom(put),
+					ExpressionAttributeValues: exprValuesFrom(put),
+					Schema:                    buildItemSchema(ts),
+				},
+			}
+		case m["Delete"] != nil:
+			del, _ := m["Delete"].(map[string]any)
 			table := strParam(del, "TableName")
 			key := itemParam(del, "Key")
 			ts, err := p.loadTable(ctx, table)
-			if err == nil {
-				_, _ = p.items.DeleteItem(ctx, table, computePKHash(key, ts), dynamostore.ConditionSpec{})
+			if err != nil {
+				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
-		}
-		if upd, ok := m["Update"].(map[string]any); ok {
+			pkHash := computePKHash(key, ts)
+			op = dynamostore.TransactWriteOp{
+				Type: "Delete", Table: table, PKHash: pkHash, Key: key,
+				Cond: dynamostore.ConditionSpec{
+					ConditionExpression:       strParam(del, "ConditionExpression"),
+					ExpressionAttributeNames:  exprNamesFrom(del),
+					ExpressionAttributeValues: exprValuesFrom(del),
+					Schema:                    buildItemSchema(ts),
+				},
+			}
+		case m["Update"] != nil:
+			upd, _ := m["Update"].(map[string]any)
 			table := strParam(upd, "TableName")
 			key := itemParam(upd, "Key")
-			spec := dynamostore.UpdateSpec{
-				UpdateExpression:          strParam(upd, "UpdateExpression"),
-				ExpressionAttributeNames:  exprNamesFrom(upd),
-				ExpressionAttributeValues: exprValuesFrom(upd),
-			}
 			ts, err := p.loadTable(ctx, table)
-			if err == nil {
-				_, _ = p.items.UpdateItem(ctx, table, computePKHash(key, ts), key, spec)
+			if err != nil {
+				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
+			pkHash := computePKHash(key, ts)
+			op = dynamostore.TransactWriteOp{
+				Type: "Update", Table: table, PKHash: pkHash, Key: key,
+				Cond: dynamostore.ConditionSpec{
+					ConditionExpression:       strParam(upd, "ConditionExpression"),
+					ExpressionAttributeNames:  exprNamesFrom(upd),
+					ExpressionAttributeValues: exprValuesFrom(upd),
+					Schema:                    buildItemSchema(ts),
+				},
+				Update: dynamostore.UpdateSpec{
+					UpdateExpression:          strParam(upd, "UpdateExpression"),
+					ExpressionAttributeNames:  exprNamesFrom(upd),
+					ExpressionAttributeValues: exprValuesFrom(upd),
+					Schema:                    buildItemSchema(ts),
+				},
+			}
+		case m["ConditionCheck"] != nil:
+			cc, _ := m["ConditionCheck"].(map[string]any)
+			table := strParam(cc, "TableName")
+			key := itemParam(cc, "Key")
+			ts, err := p.loadTable(ctx, table)
+			if err != nil {
+				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
+			}
+			pkHash := computePKHash(key, ts)
+			op = dynamostore.TransactWriteOp{
+				Type: "ConditionCheck", Table: table, PKHash: pkHash, Key: key,
+				Cond: dynamostore.ConditionSpec{
+					ConditionExpression:       strParam(cc, "ConditionExpression"),
+					ExpressionAttributeNames:  exprNamesFrom(cc),
+					ExpressionAttributeValues: exprValuesFrom(cc),
+				},
+			}
+		default:
+			continue
 		}
+
+		ik := itemKey{op.Table, op.PKHash}
+		if seen[ik] {
+			return nil, model.NewProviderError("ValidationException",
+				"Transaction request cannot include multiple operations on one item", 400)
+		}
+		seen[ik] = true
+		ops = append(ops, op)
+	}
+
+	reasons, err := p.items.TransactWriteItems(ctx, ops)
+	if err != nil {
+		return nil, err
+	}
+	if reasons != nil {
+		cancelReasons := make([]map[string]any, len(reasons))
+		for i, r := range reasons {
+			cancelReasons[i] = map[string]any{"Code": r.Code, "Message": r.Message}
+		}
+		codes := make([]string, len(reasons))
+		for i, r := range reasons {
+			codes[i] = r.Code
+		}
+		return nil, model.NewProviderError("TransactionCanceledException",
+			"Transaction cancelled, please refer cancellation reasons for specific reasons ["+
+				strings.Join(codes, ", ")+"]", 400).
+			WithData(map[string]any{"CancellationReasons": cancelReasons})
 	}
 	return provider.OK(map[string]any{}), nil
 }

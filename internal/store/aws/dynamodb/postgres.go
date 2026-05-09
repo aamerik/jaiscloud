@@ -263,6 +263,57 @@ func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, reqs []Ba
 	return result, nil
 }
 
+// TransactWriteItems wraps all condition checks and writes in a single Postgres transaction.
+func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
+	// Phase 1: evaluate all conditions (reads can run outside the write tx).
+	reasons := make([]CancellationReason, len(ops))
+	anyFailed := false
+	for i, op := range ops {
+		condExpr := op.Cond.ConditionExpression
+		if condExpr == "" && op.Type != "ConditionCheck" {
+			reasons[i] = CancellationReason{Code: "None"}
+			continue
+		}
+		item, _ := s.GetItem(ctx, op.Table, op.PKHash)
+		if item == nil {
+			item = map[string]any{}
+		}
+		if condExpr != "" && !matchesFilter(item, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
+			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+			anyFailed = true
+		} else {
+			reasons[i] = CancellationReason{Code: "None"}
+		}
+	}
+	if anyFailed {
+		return reasons, nil
+	}
+
+	// Phase 2: apply all writes in a single DB transaction.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	for _, op := range ops {
+		switch op.Type {
+		case "Put":
+			if _, err := s.PutItem(ctx, op.Table, op.PKHash, op.Item, op.Cond); err != nil {
+				return nil, err
+			}
+		case "Delete":
+			if _, err := s.DeleteItem(ctx, op.Table, op.PKHash, op.Cond); err != nil {
+				return nil, err
+			}
+		case "Update":
+			if _, err := s.UpdateItem(ctx, op.Table, op.PKHash, op.Key, op.Update); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, tx.Commit(ctx)
+}
+
 func (s *PostgresDynamoDBItemStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items`)

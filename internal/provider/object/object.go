@@ -674,11 +674,40 @@ func parseByteRange(hdr string, size int64) (int64, int64, bool) {
 func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
+	requestedVersionID := strParam(nr.Params, "versionId")
 
-	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
-	if err != nil {
-		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+
+	var m objectstore.ObjectMeta
+	if vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended {
+		if requestedVersionID != "" {
+			vm, err := p.meta.GetObjectVersion(ctx, bucket, key, requestedVersionID)
+			if err != nil {
+				return nil, model.NewProviderError("NoSuchVersion", "The specified version does not exist", 404)
+			}
+			if vm.IsDeleteMarker {
+				return nil, model.NewProviderError("MethodNotAllowed", "The specified method is not allowed against this resource", 405).
+					WithData(map[string]any{"_delete_marker": true, "_version_id": requestedVersionID})
+			}
+			m = vm
+		} else {
+			versions, _, _ := p.meta.ListObjectVersions(ctx, bucket, key, "", "", 1)
+			if len(versions) == 0 {
+				return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+			}
+			if versions[0].IsDeleteMarker {
+				return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+			}
+			m = versions[0]
+		}
+	} else {
+		var err error
+		m, err = p.meta.GetObjectMeta(ctx, bucket, key)
+		if err != nil {
+			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+		}
 	}
+
 	if resp304, pe := checkConditions(nr, objectCondMeta{ETag: m.ETag, LastModified: m.LastModified, ContentType: m.ContentType}); pe != nil {
 		return nil, pe
 	} else if resp304 != nil {
@@ -693,17 +722,13 @@ func (p *ObjectProvider) HeadObject(ctx context.Context, nr *model.NormalizedReq
 	if len(m.Metadata) > 0 {
 		data["_metadata"] = m.Metadata
 	}
-	// P2-7: tagging count
 	if len(m.Tags) > 0 {
 		data["_tagging_count"] = len(m.Tags)
 	}
-	// P2-1: SSE headers
 	sseResponseData(data, m.Encryption, m.KMSKeyID, m.SSECKeyMD5)
-	// P2-2: version-id
 	if m.VersionID != "" {
 		data["_version_id"] = m.VersionID
 	}
-	// P2-5: lifecycle expiration
 	if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
 		if exp := computeLifecycleExpiration(bucketMeta, key, m.LastModified); exp != "" {
 			data["_expiration"] = exp
@@ -979,26 +1004,90 @@ func (p *ObjectProvider) DeleteObjects(ctx context.Context, nr *model.Normalized
 		return provider.OK(map[string]any{"Deleted": []any{}}), nil
 	}
 	keys, _ := objects["Object"].([]any)
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+
 	var deleted []map[string]any
+	var errored []map[string]any
+
 	for _, k := range keys {
 		km, _ := k.(map[string]any)
 		key, _ := km["Key"].(string)
-		// On Metadarta failure skip the blob delete - a visible object with a
-		// missing blob is worse than leaving both intact.
-		if err := p.meta.DeleteObjectMeta(ctx, bucket, key); err != nil {
-			slog.Warn("object: meta delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
-			continue
-		}
+		versionID, _ := km["VersionId"].(string)
 
-		if err := p.blobs.Delete(ctx, bucket, key); err != nil {
-			slog.Warn("object: blob delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
+		if vStatus == objectstore.VersioningEnabled {
+			if versionID != "" {
+				// Delete a specific version.
+				m, err := p.meta.GetObjectVersion(ctx, bucket, key, versionID)
+				if err != nil {
+					errored = append(errored, map[string]any{
+						"Key": key, "VersionId": versionID,
+						"Code": "NoSuchVersion", "Message": "The specified version does not exist",
+					})
+					continue
+				}
+				if lockErr := checkObjectLock(nr, m); lockErr != nil {
+					errored = append(errored, map[string]any{
+						"Key": key, "VersionId": versionID,
+						"Code": "AccessDenied", "Message": lockErr.Error(),
+					})
+					continue
+				}
+				wasMarker := m.IsDeleteMarker
+				if err := p.meta.DeleteObjectVersion(ctx, bucket, key, versionID); err != nil {
+					errored = append(errored, map[string]any{
+						"Key": key, "VersionId": versionID,
+						"Code": "InternalError", "Message": err.Error(),
+					})
+					continue
+				}
+				if !wasMarker {
+					_ = p.blobs.Delete(ctx, bucket, key)
+				}
+				entry := map[string]any{"Key": key, "VersionId": versionID}
+				if wasMarker {
+					entry["DeleteMarker"] = true
+					entry["DeleteMarkerVersionId"] = versionID
+				}
+				deleted = append(deleted, entry)
+			} else {
+				// No versionId: create a delete marker.
+				marker := objectstore.ObjectMeta{
+					Key:            key,
+					IsDeleteMarker: true,
+				}
+				markerID, err := p.meta.PutObjectVersion(ctx, bucket, key, marker)
+				if err != nil {
+					errored = append(errored, map[string]any{
+						"Key": key, "Code": "InternalError", "Message": err.Error(),
+					})
+					continue
+				}
+				deleted = append(deleted, map[string]any{
+					"Key":                  key,
+					"DeleteMarker":         true,
+					"DeleteMarkerVersionId": markerID,
+				})
+			}
+		} else {
+			// Non-versioned path.
+			if err := p.meta.DeleteObjectMeta(ctx, bucket, key); err != nil {
+				slog.Warn("object: meta delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
+				continue
+			}
+			if err := p.blobs.Delete(ctx, bucket, key); err != nil {
+				slog.Warn("object: blob delete failed in DeleteObjects", "bucket", bucket, "key", key, "err", err)
+			}
+			deleted = append(deleted, map[string]any{"Key": key})
 		}
-		deleted = append(deleted, map[string]any{"Key": key})
 	}
 	if deleted == nil {
 		deleted = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Deleted": deleted}), nil
+	result := map[string]any{"Deleted": deleted}
+	if len(errored) > 0 {
+		result["Errors"] = errored
+	}
+	return provider.OK(result), nil
 }
 
 // ─── Multipart ────────────────────────────────────────────────────────────────
@@ -1028,6 +1117,10 @@ func (p *ObjectProvider) UploadPart(ctx context.Context, nr *model.NormalizedReq
 	bucket := strParam(nr.Params, "_bucket")
 	uploadID := strParam(nr.Params, "uploadId")
 	partNumber := intParam(nr.Params, "partNumber", 0)
+	if partNumber < 1 || partNumber > 10000 {
+		return nil, model.NewProviderError("InvalidArgument",
+			"Part number must be an integer between 1 and 10000, inclusive", 400)
+	}
 	partKey := fmt.Sprintf("%s/part%d", uploadID, partNumber)
 
 	var etagVal string
@@ -1064,9 +1157,32 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	uploadID := strParam(nr.Params, "uploadId")
 
 	_, _, uploadMeta, _ := p.meta.GetMultipartMeta(ctx, uploadID)
+
+	// Validate part order from caller's XML body (parsed by codec into _parts).
+	if callerParts, ok := nr.Params["_parts"].([]map[string]any); ok && len(callerParts) > 0 {
+		for i := 1; i < len(callerParts); i++ {
+			prev := intParam(callerParts[i-1], "PartNumber", 0)
+			cur := intParam(callerParts[i], "PartNumber", 0)
+			if cur <= prev {
+				return nil, model.NewProviderError("InvalidPartOrder",
+					"The list of parts was not in ascending order.", 400)
+			}
+		}
+	}
+
 	parts, err := p.meta.CompleteMultipart(ctx, bucket, key, uploadID)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchUpload", "The specified upload does not exist", 404)
+	}
+
+	// Validate minimum part size: all parts except the last must be >= 5 MB.
+	const minPartSize = 5 * 1024 * 1024
+	for i, part := range parts {
+		if i < len(parts)-1 && part.Size < minPartSize {
+			return nil, model.NewProviderError("EntityTooSmall",
+				fmt.Sprintf("Your proposed upload is smaller than the minimum allowed size. Minimum size: %d, Proposed size: %d",
+					minPartSize, part.Size), 400)
+		}
 	}
 
 	// Stream parts sequentially into the final object, computing ETag+CRC32

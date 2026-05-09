@@ -400,6 +400,81 @@ func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchG
 	return result, nil
 }
 
+// TransactWriteItems evaluates all conditions atomically (under a single lock),
+// then applies all writes. Returns non-nil reasons if any condition failed.
+func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Phase 1: check all conditions.
+	reasons := make([]CancellationReason, len(ops))
+	anyFailed := false
+	for i, op := range ops {
+		if op.Cond.ConditionExpression == "" && op.Type != "ConditionCheck" {
+			reasons[i] = CancellationReason{Code: "None"}
+			continue
+		}
+		existing := s.tableMap(op.Table)[op.PKHash]
+		if existing == nil {
+			existing = map[string]any{}
+		}
+		condExpr := op.Cond.ConditionExpression
+		if op.Type == "ConditionCheck" && condExpr == "" {
+			reasons[i] = CancellationReason{Code: "None"}
+			continue
+		}
+		if !matchesFilter(existing, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
+			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+			anyFailed = true
+		} else {
+			reasons[i] = CancellationReason{Code: "None"}
+		}
+	}
+	if anyFailed {
+		return reasons, nil
+	}
+
+	// Phase 2: apply all writes (conditions already satisfied).
+	for _, op := range ops {
+		t := s.tableMap(op.Table)
+		switch op.Type {
+		case "Put":
+			oldItem := t[op.PKHash]
+			if oldItem != nil && op.Cond.Schema != nil {
+				s.removeGSIEntries(op.Table, op.PKHash, oldItem, op.Cond.Schema)
+			}
+			t[op.PKHash] = copyItem(op.Item)
+			if op.Cond.Schema != nil {
+				s.addGSIEntries(op.Table, op.PKHash, op.Item, op.Cond.Schema)
+			}
+		case "Delete":
+			oldItem := t[op.PKHash]
+			if oldItem != nil && op.Cond.Schema != nil {
+				s.removeGSIEntries(op.Table, op.PKHash, oldItem, op.Cond.Schema)
+			}
+			delete(t, op.PKHash)
+		case "Update":
+			existing := t[op.PKHash]
+			base := op.Key
+			if existing != nil {
+				base = copyItem(existing)
+			}
+			updated := copyItem(base)
+			applyUpdateExpression(updated, op.Update.UpdateExpression,
+				op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues)
+			if op.Update.Schema != nil {
+				if existing != nil {
+					s.removeGSIEntries(op.Table, op.PKHash, existing, op.Update.Schema)
+				}
+				s.addGSIEntries(op.Table, op.PKHash, updated, op.Update.Schema)
+			}
+			t[op.PKHash] = updated
+		}
+		// ConditionCheck: condition already evaluated — no write needed.
+	}
+	return nil, nil
+}
+
 func (s *MemoryDynamoDBItemStore) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

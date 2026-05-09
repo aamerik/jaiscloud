@@ -96,10 +96,22 @@ func (s *MemorySecretStore) PutVersion(_ context.Context, v VersionEntry) error 
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now()
 	}
-	// If this version becomes AWSCURRENT, demote the old one to AWSPREVIOUS.
-	for i, vv := range s.versions[v.SecretID] {
-		if containsStage(vv.Stages, "AWSCURRENT") && vv.VersionID != v.VersionID {
-			s.versions[v.SecretID][i].Stages = replaceStage(vv.Stages, "AWSCURRENT", "AWSPREVIOUS")
+	// Only demote the old AWSCURRENT→AWSPREVIOUS when this version claims AWSCURRENT.
+	if containsStage(v.Stages, "AWSCURRENT") {
+		for i, vv := range s.versions[v.SecretID] {
+			if containsStage(vv.Stages, "AWSCURRENT") && vv.VersionID != v.VersionID {
+				newStages := removeStage(vv.Stages, "AWSCURRENT")
+				if !containsStage(newStages, "AWSPREVIOUS") {
+					newStages = append(newStages, "AWSPREVIOUS")
+				}
+				// Remove AWSPREVIOUS from any other version before assigning it here.
+				for j, other := range s.versions[v.SecretID] {
+					if other.VersionID != vv.VersionID && containsStage(other.Stages, "AWSPREVIOUS") {
+						s.versions[v.SecretID][j].Stages = removeStage(other.Stages, "AWSPREVIOUS")
+					}
+				}
+				s.versions[v.SecretID][i].Stages = newStages
+			}
 		}
 	}
 	// Replace or append.
@@ -171,6 +183,16 @@ func containsStage(stages []string, stage string) bool {
 		}
 	}
 	return false
+}
+
+func removeStage(stages []string, stage string) []string {
+	out := make([]string, 0, len(stages))
+	for _, s := range stages {
+		if s != stage {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func replaceStage(stages []string, old, newStage string) []string {
