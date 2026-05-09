@@ -909,3 +909,112 @@ func TestDynamoDB_ScanPagination(t *testing.T) {
 	assert.Len(t, seen, 5)
 }
 
+// ─── P1.3: TTL ────────────────────────────────────────────────────────────────
+
+func TestDynamoDB_DescribeTimeToLive_Default(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "ttl-tbl")
+
+	out, err := client.DescribeTimeToLive(ctx, &awsdynamo.DescribeTimeToLiveInput{
+		TableName: aws.String("ttl-tbl"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.TimeToLiveStatusDisabled, out.TimeToLiveDescription.TimeToLiveStatus)
+}
+
+func TestDynamoDB_UpdateTimeToLive_EnableDisable(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "ttl-tbl2")
+
+	_, err := client.UpdateTimeToLive(ctx, &awsdynamo.UpdateTimeToLiveInput{
+		TableName: aws.String("ttl-tbl2"),
+		TimeToLiveSpecification: &types.TimeToLiveSpecification{
+			AttributeName: aws.String("expiresAt"),
+			Enabled:       aws.Bool(true),
+		},
+	})
+	require.NoError(t, err)
+
+	desc, err := client.DescribeTimeToLive(ctx, &awsdynamo.DescribeTimeToLiveInput{
+		TableName: aws.String("ttl-tbl2"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.TimeToLiveStatusEnabled, desc.TimeToLiveDescription.TimeToLiveStatus)
+	assert.Equal(t, "expiresAt", aws.ToString(desc.TimeToLiveDescription.AttributeName))
+
+	// Disable
+	_, err = client.UpdateTimeToLive(ctx, &awsdynamo.UpdateTimeToLiveInput{
+		TableName: aws.String("ttl-tbl2"),
+		TimeToLiveSpecification: &types.TimeToLiveSpecification{
+			AttributeName: aws.String("expiresAt"),
+			Enabled:       aws.Bool(false),
+		},
+	})
+	require.NoError(t, err)
+
+	desc2, err := client.DescribeTimeToLive(ctx, &awsdynamo.DescribeTimeToLiveInput{
+		TableName: aws.String("ttl-tbl2"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.TimeToLiveStatusDisabled, desc2.TimeToLiveDescription.TimeToLiveStatus)
+}
+
+// ─── P1.4: PITR ───────────────────────────────────────────────────────────────
+
+func TestDynamoDB_DescribeContinuousBackups_Default(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "pitr-tbl")
+
+	out, err := client.DescribeContinuousBackups(ctx, &awsdynamo.DescribeContinuousBackupsInput{
+		TableName: aws.String("pitr-tbl"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "AVAILABLE", string(out.ContinuousBackupsDescription.ContinuousBackupsStatus))
+	assert.Equal(t, types.PointInTimeRecoveryStatusDisabled,
+		out.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)
+}
+
+func TestDynamoDB_UpdateContinuousBackups_EnableDisable(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "pitr-tbl2")
+
+	_, err := client.UpdateContinuousBackups(ctx, &awsdynamo.UpdateContinuousBackupsInput{
+		TableName: aws.String("pitr-tbl2"),
+		PointInTimeRecoverySpecification: &types.PointInTimeRecoverySpecification{
+			PointInTimeRecoveryEnabled: aws.Bool(true),
+		},
+	})
+	require.NoError(t, err)
+
+	desc, err := client.DescribeContinuousBackups(ctx, &awsdynamo.DescribeContinuousBackupsInput{
+		TableName: aws.String("pitr-tbl2"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.PointInTimeRecoveryStatusEnabled,
+		desc.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)
+
+	// Disable
+	_, err = client.UpdateContinuousBackups(ctx, &awsdynamo.UpdateContinuousBackupsInput{
+		TableName: aws.String("pitr-tbl2"),
+		PointInTimeRecoverySpecification: &types.PointInTimeRecoverySpecification{
+			PointInTimeRecoveryEnabled: aws.Bool(false),
+		},
+	})
+	require.NoError(t, err)
+
+	desc2, err := client.DescribeContinuousBackups(ctx, &awsdynamo.DescribeContinuousBackupsInput{
+		TableName: aws.String("pitr-tbl2"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.PointInTimeRecoveryStatusDisabled,
+		desc2.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)
+}
+
