@@ -144,6 +144,9 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"cloudformation-stack": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:stack/%s", r, a, n)
 	},
+	// CloudWatch Logs
+	"logs-group":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s:*", r, a, n) },
+	"logs-stream": func(r, a, n string) string { return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s", r, a, n) },
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.
