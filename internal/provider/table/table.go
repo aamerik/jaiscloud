@@ -86,6 +86,20 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		// PITR
 		"Table.DescribeContinuousBackups": p.DescribeContinuousBackups,
 		"Table.UpdateContinuousBackups":   p.UpdateContinuousBackups,
+		// PartiQL stubs (not supported)
+		"Table.ExecuteStatement":      p.ExecuteStatement,
+		"Table.ExecuteTransaction":    p.ExecuteTransaction,
+		"Table.BatchExecuteStatement": p.BatchExecuteStatement,
+		// Global Tables (metadata-only)
+		"Table.CreateGlobalTable":   p.CreateGlobalTable,
+		"Table.DescribeGlobalTable": p.DescribeGlobalTable,
+		"Table.ListGlobalTables":    p.ListGlobalTables,
+		"Table.UpdateGlobalTable":   p.UpdateGlobalTable,
+		// Kinesis Streaming Destinations (metadata-only)
+		"Table.EnableKinesisStreamingDestination":  p.EnableKinesisStreamingDestination,
+		"Table.DisableKinesisStreamingDestination": p.DisableKinesisStreamingDestination,
+		"Table.DescribeKinesisStreamingDestination": p.DescribeKinesisStreamingDestination,
+		"Table.UpdateKinesisStreamingDestination":  p.UpdateKinesisStreamingDestination,
 	}
 }
 
@@ -1308,6 +1322,286 @@ func arnToTableName(arn string) string {
 		return parts[len(parts)-1]
 	}
 	return arn
+}
+
+// ─── Kinesis Streaming Destinations (metadata-only) ──────────────────────────
+
+type kinesisDestInfo struct {
+	StreamArn         string
+	DestinationStatus string
+	TimePrecision     string
+}
+
+func (p *TableProvider) kinesisDestKey(tableName string) string {
+	return "dynamodb_kinesis_dest_" + tableName
+}
+
+func (p *TableProvider) loadKinesisDests(ctx context.Context, tableName string) ([]kinesisDestInfo, error) {
+	entry, err := p.resources.Get(ctx, p.kinesisDestKey(tableName), tableName)
+	if err != nil {
+		return nil, nil // not found = empty list
+	}
+	var dests []kinesisDestInfo
+	json.Unmarshal(entry.Data, &dests)
+	return dests, nil
+}
+
+func (p *TableProvider) saveKinesisDests(ctx context.Context, tableName string, dests []kinesisDestInfo) error {
+	data, _ := json.Marshal(dests)
+	key := p.kinesisDestKey(tableName)
+	entry, err := p.resources.Get(ctx, key, tableName)
+	if err != nil {
+		return p.resources.Create(ctx, store.ResourceEntry{Type: key, ID: tableName, Data: json.RawMessage(data)})
+	}
+	entry.Data = json.RawMessage(data)
+	return p.resources.Update(ctx, entry)
+}
+
+func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	if tableName == "" || streamArn == "" {
+		return nil, model.NewProviderError("ValidationException", "TableName and StreamArn are required", 400)
+	}
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	for _, d := range dests {
+		if d.StreamArn == streamArn && d.DestinationStatus == "ACTIVE" {
+			return nil, model.NewProviderError("ValidationException",
+				"Kinesis streaming destination already active for stream: "+streamArn, 400)
+		}
+	}
+	dests = append(dests, kinesisDestInfo{
+		StreamArn:         streamArn,
+		DestinationStatus: "ACTIVE",
+		TimePrecision:     "MILLISECOND",
+	})
+	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"TableName":         tableName,
+		"StreamArn":         streamArn,
+		"DestinationStatus": "ACTIVE",
+	}), nil
+}
+
+func (p *TableProvider) DisableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	found := false
+	for i, d := range dests {
+		if d.StreamArn == streamArn {
+			if d.DestinationStatus == "DISABLED" {
+				return nil, model.NewProviderError("ValidationException", "Kinesis destination not active", 400)
+			}
+			dests[i].DestinationStatus = "DISABLED"
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, model.NewProviderError("ValidationException", "Kinesis destination not active", 400)
+	}
+	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"TableName":         tableName,
+		"StreamArn":         streamArn,
+		"DestinationStatus": "DISABLED",
+	}), nil
+}
+
+func (p *TableProvider) DescribeKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	items := make([]map[string]any, 0, len(dests))
+	for _, d := range dests {
+		items = append(items, map[string]any{
+			"StreamArn":         d.StreamArn,
+			"DestinationStatus": d.DestinationStatus,
+			"ApproximateCreationDateTimePrecision": d.TimePrecision,
+		})
+	}
+	return provider.OK(map[string]any{
+		"TableName":                    tableName,
+		"KinesisDataStreamDestinations": items,
+	}), nil
+}
+
+func (p *TableProvider) UpdateKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	var precision string
+	if cfg, ok := nr.Params["UpdateKinesisStreamingConfiguration"].(map[string]any); ok {
+		precision, _ = cfg["ApproximateCreationDateTimePrecision"].(string)
+	}
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	for i, d := range dests {
+		if d.StreamArn == streamArn {
+			if precision != "" {
+				dests[i].TimePrecision = precision
+			}
+			if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+				return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+			}
+			return provider.OK(map[string]any{
+				"TableName":         tableName,
+				"StreamArn":         streamArn,
+				"DestinationStatus": dests[i].DestinationStatus,
+			}), nil
+		}
+	}
+	return nil, model.NewProviderError("ValidationException", "Kinesis destination not found: "+streamArn, 400)
+}
+
+// ─── Global Tables (metadata-only) ───────────────────────────────────────────
+
+func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("ValidationException", "GlobalTableName is required", 400)
+	}
+	if _, err := p.resources.Get(ctx, "dynamodb_global_tables", name); err == nil {
+		return nil, model.NewProviderError("GlobalTableAlreadyExistsException", "Global table already exists: "+name, 400)
+	}
+
+	var replicas []map[string]any
+	if rg, ok := nr.Params["ReplicationGroup"].([]any); ok {
+		for _, r := range rg {
+			if rm, ok := r.(map[string]any); ok {
+				region, _ := rm["RegionName"].(string)
+				replicas = append(replicas, map[string]any{
+					"RegionName":    region,
+					"ReplicaStatus": "ACTIVE",
+				})
+			}
+		}
+	}
+
+	desc := map[string]any{
+		"GlobalTableName":   name,
+		"GlobalTableStatus": "ACTIVE",
+		"CreationDateTime":  time.Now().Unix(),
+		"ReplicationGroup":  replicas,
+	}
+	data, _ := json.Marshal(desc)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: "dynamodb_global_tables", ID: name, Data: json.RawMessage(data)}); err != nil {
+		return nil, fmt.Errorf("dynamodb: create global table: %w", err)
+	}
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
+}
+
+func (p *TableProvider) DescribeGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	if err != nil {
+		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
+	}
+	var desc map[string]any
+	json.Unmarshal(entry.Data, &desc)
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
+}
+
+func (p *TableProvider) ListGlobalTables(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, "dynamodb_global_tables", "")
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: list global tables: %w", err)
+	}
+	tables := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var desc map[string]any
+		if err := json.Unmarshal(e.Data, &desc); err != nil {
+			continue
+		}
+		rg, _ := desc["ReplicationGroup"]
+		tables = append(tables, map[string]any{
+			"GlobalTableName":  desc["GlobalTableName"],
+			"ReplicationGroup": rg,
+		})
+	}
+	return provider.OK(map[string]any{"GlobalTables": tables}), nil
+}
+
+func (p *TableProvider) UpdateGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	if err != nil {
+		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
+	}
+	var desc map[string]any
+	json.Unmarshal(entry.Data, &desc)
+
+	// Build current replica map keyed by region.
+	replicaMap := map[string]map[string]any{}
+	if rg, ok := desc["ReplicationGroup"].([]any); ok {
+		for _, r := range rg {
+			if rm, ok := r.(map[string]any); ok {
+				region, _ := rm["RegionName"].(string)
+				replicaMap[region] = rm
+			}
+		}
+	}
+
+	if updates, ok := nr.Params["ReplicaUpdates"].([]any); ok {
+		for _, u := range updates {
+			um, ok := u.(map[string]any)
+			if !ok {
+				continue
+			}
+			if create, ok := um["Create"].(map[string]any); ok {
+				region, _ := create["RegionName"].(string)
+				replicaMap[region] = map[string]any{"RegionName": region, "ReplicaStatus": "ACTIVE"}
+			}
+			if del, ok := um["Delete"].(map[string]any); ok {
+				region, _ := del["RegionName"].(string)
+				delete(replicaMap, region)
+			}
+		}
+	}
+
+	replicas := make([]map[string]any, 0, len(replicaMap))
+	for _, r := range replicaMap {
+		replicas = append(replicas, r)
+	}
+	desc["ReplicationGroup"] = replicas
+
+	data, _ := json.Marshal(desc)
+	entry.Data = json.RawMessage(data)
+	if err := p.resources.Update(ctx, entry); err != nil {
+		return nil, fmt.Errorf("dynamodb: update global table: %w", err)
+	}
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
+}
+
+// ─── PartiQL stubs ────────────────────────────────────────────────────────────
+
+func (p *TableProvider) ExecuteStatement(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
+}
+
+func (p *TableProvider) ExecuteTransaction(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
+}
+
+func (p *TableProvider) BatchExecuteStatement(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
 }
 
 // exclusiveStartKey returns a JSON-encoded ExclusiveStartKey from request params,

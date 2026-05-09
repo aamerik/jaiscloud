@@ -303,6 +303,100 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 		}
 	}
 
+	// PutBucketNotificationConfiguration: parse XML into _notification_config param.
+	if action == "PutBucketNotificationConfiguration" && len(body) > 0 {
+		var notifReq struct {
+			QueueConfigurations []struct {
+				Id       string   `xml:"Id"`
+				Queue    string   `xml:"Queue"`
+				Events   []string `xml:"Event"`
+				Filter   struct {
+					S3Key struct {
+						FilterRules []struct {
+							Name  string `xml:"Name"`
+							Value string `xml:"Value"`
+						} `xml:"FilterRule"`
+					} `xml:"S3Key"`
+				} `xml:"Filter"`
+			} `xml:"QueueConfiguration"`
+			TopicConfigurations []struct {
+				Id     string   `xml:"Id"`
+				Topic  string   `xml:"Topic"`
+				Events []string `xml:"Event"`
+				Filter struct {
+					S3Key struct {
+						FilterRules []struct {
+							Name  string `xml:"Name"`
+							Value string `xml:"Value"`
+						} `xml:"FilterRule"`
+					} `xml:"S3Key"`
+				} `xml:"Filter"`
+			} `xml:"TopicConfiguration"`
+			LambdaConfigurations []struct {
+				Id                string   `xml:"Id"`
+				CloudFunction     string   `xml:"CloudFunction"`
+				Events            []string `xml:"Event"`
+				Filter            struct {
+					S3Key struct {
+						FilterRules []struct {
+							Name  string `xml:"Name"`
+							Value string `xml:"Value"`
+						} `xml:"FilterRule"`
+					} `xml:"S3Key"`
+				} `xml:"Filter"`
+			} `xml:"CloudFunctionConfiguration"`
+		}
+		if xml.Unmarshal(body, &notifReq) == nil {
+			cfg := map[string]any{}
+			// Queue configs
+			qcs := make([]any, 0, len(notifReq.QueueConfigurations))
+			for _, q := range notifReq.QueueConfigurations {
+				rules := make([]any, 0, len(q.Filter.S3Key.FilterRules))
+				for _, r := range q.Filter.S3Key.FilterRules {
+					rules = append(rules, map[string]any{"Name": r.Name, "Value": r.Value})
+				}
+				qcs = append(qcs, map[string]any{
+					"Id":       q.Id,
+					"QueueArn": q.Queue,
+					"Events":   q.Events,
+					"Filter":   map[string]any{"S3Key": map[string]any{"FilterRules": rules}},
+				})
+			}
+			cfg["QueueConfigurations"] = qcs
+			// Topic configs
+			tcs := make([]any, 0, len(notifReq.TopicConfigurations))
+			for _, t := range notifReq.TopicConfigurations {
+				rules := make([]any, 0, len(t.Filter.S3Key.FilterRules))
+				for _, r := range t.Filter.S3Key.FilterRules {
+					rules = append(rules, map[string]any{"Name": r.Name, "Value": r.Value})
+				}
+				tcs = append(tcs, map[string]any{
+					"Id":       t.Id,
+					"TopicArn": t.Topic,
+					"Events":   t.Events,
+					"Filter":   map[string]any{"S3Key": map[string]any{"FilterRules": rules}},
+				})
+			}
+			cfg["TopicConfigurations"] = tcs
+			// Lambda configs
+			lcs := make([]any, 0, len(notifReq.LambdaConfigurations))
+			for _, l := range notifReq.LambdaConfigurations {
+				rules := make([]any, 0, len(l.Filter.S3Key.FilterRules))
+				for _, r := range l.Filter.S3Key.FilterRules {
+					rules = append(rules, map[string]any{"Name": r.Name, "Value": r.Value})
+				}
+				lcs = append(lcs, map[string]any{
+					"Id":                l.Id,
+					"LambdaFunctionArn": l.CloudFunction,
+					"Events":            l.Events,
+					"Filter":            map[string]any{"S3Key": map[string]any{"FilterRules": rules}},
+				})
+			}
+			cfg["LambdaConfigurations"] = lcs
+			params["_notification_config"] = cfg
+		}
+	}
+
 	if action == "CreateBucket" && !isValidBucketName(bucket) {
 		return nil, model.NewProviderError("InvalidBucketName", "The specified bucket is not valid", 400)
 	}
@@ -386,6 +480,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "PutBucketCors"
 			case query.Has("ownershipControls"):
 				return "PutBucketOwnershipControls"
+			case query.Has("notification"):
+				return "PutBucketNotificationConfiguration"
 			default:
 				return "CreateBucket"
 			}
@@ -415,6 +511,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "GetBucketCors"
 			case query.Has("ownershipControls"):
 				return "GetBucketOwnershipControls"
+			case query.Has("notification"):
+				return "GetBucketNotificationConfiguration"
 			default:
 				return "ListObjectsV1"
 			}

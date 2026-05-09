@@ -497,14 +497,10 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 			"Maximum number of entries per request are 10.", 400)
 	}
 
-	// Validate entry IDs: must be unique and match ^[\w-]{1,80}$
+	// Validate entry IDs: must be unique; duplicate IDs fail the whole batch.
 	seenIDs := map[string]bool{}
 	for _, e := range entries {
 		id, _ := e["Id"].(string)
-		if !validBatchEntryID(id) {
-			return nil, model.NewProviderError("AWS.SimpleQueueService.InvalidBatchEntryId",
-				"A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", 400)
-		}
 		if seenIDs[id] {
 			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
 				"Two or more batch entries in the request have the same Id.", 400)
@@ -543,6 +539,14 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 
 	for _, e := range entries {
 		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			failed = append(failed, map[string]any{
+				"Id": id, "Code": "InvalidParameterValue",
+				"Message":     "A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.",
+				"SenderFault": true,
+			})
+			continue
+		}
 		body, _ := e["MessageBody"].(string)
 		msgID := newMessageID()
 		now := p.clock.Now()
@@ -645,10 +649,6 @@ func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.Normal
 	seenIDs := map[string]bool{}
 	for _, e := range entries {
 		id, _ := e["Id"].(string)
-		if !validBatchEntryID(id) {
-			return nil, model.NewProviderError("AWS.SimpleQueueService.InvalidBatchEntryId",
-				"A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", 400)
-		}
 		if seenIDs[id] {
 			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
 				"Two or more batch entries in the request have the same Id.", 400)
@@ -661,6 +661,14 @@ func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.Normal
 
 	for _, e := range entries {
 		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			failed = append(failed, map[string]any{
+				"Id": id, "Code": "InvalidParameterValue",
+				"Message":     "A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.",
+				"SenderFault": true,
+			})
+			continue
+		}
 		rh, _ := e["ReceiptHandle"].(string)
 		if err := p.messages.Delete(ctx, queueURL, rh); err != nil {
 			failed = append(failed, map[string]any{
@@ -679,12 +687,34 @@ func (p *QueueProvider) ChangeMessageVisibilityBatch(ctx context.Context, nr *mo
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entries := batchEntries(nr.Params, "Entries")
 
+	if len(entries) > 10 {
+		return nil, model.NewProviderError("AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
+			"Maximum number of entries per request are 10.", 400)
+	}
+	seenIDs := map[string]bool{}
+	for _, e := range entries {
+		id, _ := e["Id"].(string)
+		if seenIDs[id] {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
+				"Two or more batch entries in the request have the same Id.", 400)
+		}
+		seenIDs[id] = true
+	}
+
 	now := p.clock.Now()
 	var successful []map[string]any
 	var failed []map[string]any
 
 	for _, e := range entries {
 		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			failed = append(failed, map[string]any{
+				"Id": id, "Code": "InvalidParameterValue",
+				"Message":     "A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.",
+				"SenderFault": true,
+			})
+			continue
+		}
 		rh, _ := e["ReceiptHandle"].(string)
 		timeout := toInt(e["VisibilityTimeout"])
 		if err := p.messages.ChangeVisibility(ctx, queueURL, rh, timeout, now); err != nil {
