@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/model"
@@ -45,6 +46,8 @@ func (p *SecretProvider) Routes() map[string]provider.HandlerFunc {
 		"Secret.PutResourcePolicy":          p.PutResourcePolicy,
 		"Secret.DeleteResourcePolicy":       p.DeleteResourcePolicy,
 		"Secret.UpdateSecretVersionStage":   p.UpdateSecretVersionStage,
+		"Secret.GetRandomPassword":          p.GetRandomPassword,
+		"Secret.BatchGetSecretValue":        p.BatchGetSecretValue,
 	}
 }
 
@@ -685,6 +688,172 @@ func extractTags(params map[string]any) map[string]string {
 		for k, val := range v {
 			out[k] = fmt.Sprint(val)
 		}
+	}
+	return out
+}
+
+// ─── P4.8: GetRandomPassword ──────────────────────────────────────────────────
+
+func (p *SecretProvider) GetRandomPassword(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	passwordLength := 32
+	if v, ok := nr.Params["PasswordLength"].(float64); ok {
+		passwordLength = int(v)
+	}
+	if passwordLength < 1 || passwordLength > 4096 {
+		return nil, model.NewProviderError("ValidationException",
+			"PasswordLength must be between 1 and 4096", 400)
+	}
+
+	excludeChars, _ := nr.Params["ExcludeCharacters"].(string)
+	excludeNumbers, _ := nr.Params["ExcludeNumbers"].(bool)
+	excludePunctuation, _ := nr.Params["ExcludePunctuation"].(bool)
+	excludeLowercase, _ := nr.Params["ExcludeLowercase"].(bool)
+	excludeUppercase, _ := nr.Params["ExcludeUppercase"].(bool)
+	includeSpace, _ := nr.Params["IncludeSpace"].(bool)
+	requireEach, _ := nr.Params["RequireEachIncludedType"].(bool)
+
+	const (
+		lowercase   = "abcdefghijklmnopqrstuvwxyz"
+		uppercase   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		digits      = "0123456789"
+		punctuation = `!"#$%&'()*+,-./:;<=>?@[\]^_{|}~` + "`"
+	)
+
+	var pool string
+	var categories []string
+	if !excludeLowercase {
+		pool += lowercase
+		categories = append(categories, lowercase)
+	}
+	if !excludeUppercase {
+		pool += uppercase
+		categories = append(categories, uppercase)
+	}
+	if !excludeNumbers {
+		pool += digits
+		categories = append(categories, digits)
+	}
+	if !excludePunctuation {
+		pool += punctuation
+		categories = append(categories, punctuation)
+	}
+	if includeSpace {
+		pool += " "
+		categories = append(categories, " ")
+	}
+
+	if excludeChars != "" {
+		var filtered string
+		for _, c := range pool {
+			if !strings.ContainsRune(excludeChars, c) {
+				filtered += string(c)
+			}
+		}
+		pool = filtered
+	}
+
+	if pool == "" {
+		return nil, model.NewProviderError("ValidationException",
+			"No characters available to generate password", 400)
+	}
+
+	password := make([]byte, passwordLength)
+	for i := range password {
+		b := make([]byte, 1)
+		rand.Read(b)
+		password[i] = pool[int(b[0])%len(pool)]
+	}
+
+	if requireEach && len(categories) > 0 && passwordLength >= len(categories) {
+		for i, cat := range categories {
+			if i >= passwordLength {
+				break
+			}
+			var filteredCat string
+			for _, c := range cat {
+				if excludeChars == "" || !strings.ContainsRune(excludeChars, c) {
+					filteredCat += string(c)
+				}
+			}
+			if filteredCat != "" {
+				b := make([]byte, 1)
+				rand.Read(b)
+				password[i] = filteredCat[int(b[0])%len(filteredCat)]
+			}
+		}
+		for i := len(password) - 1; i > 0; i-- {
+			b := make([]byte, 1)
+			rand.Read(b)
+			j := int(b[0]) % (i + 1)
+			password[i], password[j] = password[j], password[i]
+		}
+	}
+
+	return provider.OK(map[string]any{
+		"RandomPassword": string(password),
+	}), nil
+}
+
+// ─── P4.9: BatchGetSecretValue ────────────────────────────────────────────────
+
+func (p *SecretProvider) BatchGetSecretValue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	secretIDList := extractStringList(nr.Params, "SecretIdList")
+
+	var secretValues []map[string]any
+	var errs []map[string]any
+
+	for _, secretID := range secretIDList {
+		fakeNR := &model.NormalizedRequest{
+			Params:     map[string]any{"SecretId": secretID},
+			ResourceID: nr.ResourceID,
+			Region:     nr.Region,
+			AccountID:  nr.AccountID,
+		}
+		resp, err := p.GetSecretValue(ctx, fakeNR)
+		if err != nil {
+			var pe *model.ProviderError
+			if errors.As(err, &pe) {
+				errs = append(errs, map[string]any{
+					"SecretId":  secretID,
+					"ErrorCode": pe.Code,
+					"Message":   pe.Message,
+				})
+			} else {
+				errs = append(errs, map[string]any{
+					"SecretId":  secretID,
+					"ErrorCode": "InternalServiceError",
+					"Message":   err.Error(),
+				})
+			}
+			continue
+		}
+		secretValues = append(secretValues, resp.Data)
+	}
+
+	if secretValues == nil {
+		secretValues = []map[string]any{}
+	}
+	if errs == nil {
+		errs = []map[string]any{}
+	}
+	return provider.OK(map[string]any{
+		"SecretValues": secretValues,
+		"Errors":       errs,
+	}), nil
+}
+
+func extractStringList(params map[string]any, key string) []string {
+	raw, ok := params[key]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		out = append(out, fmt.Sprint(v))
 	}
 	return out
 }

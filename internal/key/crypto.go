@@ -8,6 +8,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	ghmac "crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"math/big"
 	"strings"
@@ -343,4 +345,53 @@ func decryptData(key, ct, additionalData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decrypt: gcm open: %w", err)
 	}
 	return pt, nil
+}
+
+// ─── HMAC helpers ─────────────────────────────────────────────────────────────
+
+// validateMacAlgorithm checks that macAlgo is a valid HMAC algorithm and
+// that the numeric suffix matches the keySpec (e.g. HMAC_SHA_256 requires HMAC_256).
+func validateMacAlgorithm(keySpec, macAlgo string) error {
+	validAlgos := map[string]bool{
+		"HMAC_SHA_224": true,
+		"HMAC_SHA_256": true,
+		"HMAC_SHA_384": true,
+		"HMAC_SHA_512": true,
+	}
+	if !validAlgos[macAlgo] {
+		return errors.New("unsupported Mac algorithm: " + macAlgo)
+	}
+	// macAlgo looks like "HMAC_SHA_256"; keySpec like "HMAC_256".
+	// Extract numeric suffix from each and compare.
+	algoSuffix := macAlgo[strings.LastIndex(macAlgo, "_")+1:]
+	specSuffix := keySpec[strings.LastIndex(keySpec, "_")+1:]
+	if algoSuffix != specSuffix {
+		return fmt.Errorf("mac algorithm %s is not compatible with key spec %s", macAlgo, keySpec)
+	}
+	return nil
+}
+
+// computeHMAC computes an HMAC over msg with key using the hash implied by macAlgo.
+func computeHMAC(key, msg []byte, macAlgo string) ([]byte, error) {
+	var newHash func() hash.Hash
+	switch macAlgo {
+	case "HMAC_SHA_224":
+		newHash = sha256.New224
+	case "HMAC_SHA_256":
+		newHash = sha256.New
+	case "HMAC_SHA_384":
+		newHash = sha512.New384
+	case "HMAC_SHA_512":
+		newHash = sha512.New
+	default:
+		return nil, errors.New("unsupported Mac algorithm: " + macAlgo)
+	}
+	mac := ghmac.New(newHash, key)
+	mac.Write(msg)
+	return mac.Sum(nil), nil
+}
+
+// hmacEqual compares two MACs in constant time.
+func hmacEqual(a, b []byte) bool {
+	return ghmac.Equal(a, b)
 }

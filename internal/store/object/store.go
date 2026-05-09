@@ -12,7 +12,12 @@ type ObjectMeta struct {
 	Key          string            `json:"key"`
 	ETag         string            `json:"etag"`
 	// CRC32 is the base64-encoded IEEE CRC32 checksum of the object body.
-	CRC32           string            `json:"crc32"`
+	CRC32              string            `json:"crc32"`
+	// ChecksumAlgorithm is the algorithm specified by the client at upload time
+	// (e.g. "CRC32", "CRC32C", "SHA1", "SHA256"). Empty means CRC32 (legacy).
+	ChecksumAlgorithm  string            `json:"checksum_algorithm,omitempty"`
+	// ChecksumValue is the base64-encoded checksum matching ChecksumAlgorithm.
+	ChecksumValue      string            `json:"checksum_value,omitempty"`
 	Size            int64             `json:"size"`
 	ContentType     string            `json:"content_type"`
 	LastModified    time.Time         `json:"last_modified"`

@@ -71,6 +71,11 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.Verify":               p.Verify,
 		"Key.GetPublicKey":         p.GetPublicKey,
 		"Key.RotateKeyOnDemand":    p.RotateKeyOnDemand,
+		"Key.GenerateDataKeyPair":                p.GenerateDataKeyPair,
+		"Key.GenerateDataKeyPairWithoutPlaintext": p.GenerateDataKeyPairWithoutPlaintext,
+		"Key.GenerateMac":   p.GenerateMac,
+		"Key.VerifyMac":     p.VerifyMac,
+		"Key.GenerateRandom": p.GenerateRandom,
 	}
 }
 
@@ -864,6 +869,204 @@ func (p *KeyProvider) GetPublicKey(ctx context.Context, nr *model.NormalizedRequ
 		resp["EncryptionAlgorithms"] = encryptionAlgorithmsForSpec(e.KeySpec)
 	}
 	return provider.OK(resp), nil
+}
+
+// ─── P4.5: GenerateDataKeyPair ────────────────────────────────────────────────
+
+func (p *KeyProvider) GenerateDataKeyPair(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.KeyUsage != "ENCRYPT_DECRYPT" {
+		return nil, model.NewProviderError("InvalidKeyUsageException",
+			"GenerateDataKeyPair requires a key with KeyUsage ENCRYPT_DECRYPT", 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+
+	keyPairSpec, _ := nr.Params["KeyPairSpec"].(string)
+	if keyPairSpec == "" {
+		return nil, model.NewProviderError("ValidationException", "KeyPairSpec is required", 400)
+	}
+
+	privDER, pubDER, genErr := generateAsymmetricKey(keyPairSpec)
+	if genErr != nil {
+		return nil, model.NewProviderError("ValidationException", genErr.Error(), 400)
+	}
+
+	encCtx := extractEncCtx(nr.Params)
+	aad := marshalEncCtx(encCtx)
+
+	keyMat, matErr := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))
+	if matErr != nil {
+		return nil, fmt.Errorf("kms: load key material: %w", matErr)
+	}
+	encPriv, encErr := encryptData(keyMat, privDER, aad)
+	if encErr != nil {
+		return nil, fmt.Errorf("kms: encrypt private key: %w", encErr)
+	}
+	blob := buildCiphertextBlob(keyID, encPriv)
+
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{
+		"KeyId":                    keyARN,
+		"KeyPairSpec":              keyPairSpec,
+		"PublicKey":                base64.StdEncoding.EncodeToString(pubDER),
+		"PrivateKeyPlaintext":      base64.StdEncoding.EncodeToString(privDER),
+		"PrivateKeyCiphertextBlob": base64.StdEncoding.EncodeToString(blob),
+	}), nil
+}
+
+func (p *KeyProvider) GenerateDataKeyPairWithoutPlaintext(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	resp, err := p.GenerateDataKeyPair(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	delete(resp.Data, "PrivateKeyPlaintext")
+	return resp, nil
+}
+
+// ─── P4.6: GenerateMac / VerifyMac ───────────────────────────────────────────
+
+func (p *KeyProvider) GenerateMac(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.KeyUsage != "GENERATE_VERIFY_MAC" {
+		return nil, model.NewProviderError("InvalidKeyUsageException",
+			fmt.Sprintf("key usage is %s which is not valid for GenerateMac", e.KeyUsage), 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+
+	msgB64, _ := nr.Params["Message"].(string)
+	msg, decErr := base64.StdEncoding.DecodeString(msgB64)
+	if decErr != nil {
+		return nil, model.NewProviderError("ValidationException", "Message must be base64-encoded", 400)
+	}
+	if len(msg) > 4096 {
+		return nil, model.NewProviderError("ValidationException",
+			"1 validation error detected: Value at 'message' failed to satisfy constraint: Member must have length less than or equal to 4096", 400)
+	}
+
+	macAlgo, _ := nr.Params["MacAlgorithm"].(string)
+	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
+		return nil, valErr
+	}
+
+	keyMat, matErr := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))
+	if matErr != nil {
+		return nil, fmt.Errorf("kms: load key material: %w", matErr)
+	}
+
+	mac, macErr := computeHMAC(keyMat, msg, macAlgo)
+	if macErr != nil {
+		return nil, fmt.Errorf("kms: compute mac: %w", macErr)
+	}
+
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{
+		"Mac":          base64.StdEncoding.EncodeToString(mac),
+		"MacAlgorithm": macAlgo,
+		"KeyId":        keyARN,
+	}), nil
+}
+
+func (p *KeyProvider) VerifyMac(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.KeyUsage != "GENERATE_VERIFY_MAC" {
+		return nil, model.NewProviderError("InvalidKeyUsageException",
+			fmt.Sprintf("key usage is %s which is not valid for VerifyMac", e.KeyUsage), 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+
+	msgB64, _ := nr.Params["Message"].(string)
+	msg, _ := base64.StdEncoding.DecodeString(msgB64)
+	if len(msg) > 4096 {
+		return nil, model.NewProviderError("ValidationException", "message too long", 400)
+	}
+	macAlgo, _ := nr.Params["MacAlgorithm"].(string)
+	providedMacB64, _ := nr.Params["Mac"].(string)
+	providedMac, _ := base64.StdEncoding.DecodeString(providedMacB64)
+
+	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
+		return nil, valErr
+	}
+
+	keyMat, matErr := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))
+	if matErr != nil {
+		return nil, fmt.Errorf("kms: load key material: %w", matErr)
+	}
+
+	computed, _ := computeHMAC(keyMat, msg, macAlgo)
+	if !hmacEqual(computed, providedMac) {
+		return nil, model.NewProviderError("KMSInvalidMacException", "MAC verification failed", 400)
+	}
+
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{
+		"KeyId":        keyARN,
+		"MacValid":     true,
+		"MacAlgorithm": macAlgo,
+	}), nil
+}
+
+// ─── P4.7: GenerateRandom ─────────────────────────────────────────────────────
+
+func (p *KeyProvider) GenerateRandom(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	numBytes := 0
+	if v, ok := nr.Params["NumberOfBytes"]; ok {
+		switch n := v.(type) {
+		case float64:
+			numBytes = int(n)
+		case json.Number:
+			i, _ := n.Int64()
+			numBytes = int(i)
+		}
+	} else {
+		return nil, model.NewProviderError("ValidationException", "NumberOfBytes is required.", 400)
+	}
+	if numBytes < 1 {
+		return nil, model.NewProviderError("ValidationException",
+			fmt.Sprintf("1 validation error detected: Value '%d' at 'numberOfBytes' failed to satisfy constraint: Member must have value greater than or equal to 1", numBytes), 400)
+	}
+	if numBytes > 1024 {
+		return nil, model.NewProviderError("ValidationException",
+			fmt.Sprintf("1 validation error detected: Value '%d' at 'numberOfBytes' failed to satisfy constraint: Member must have value less than or equal to 1024", numBytes), 400)
+	}
+
+	rb := make([]byte, numBytes)
+	io.ReadFull(rand.Reader, rb)
+	return provider.OK(map[string]any{
+		"Plaintext": base64.StdEncoding.EncodeToString(rb),
+	}), nil
 }
 
 // ─── KeyEncryptor interface (injected into SecretProvider etc.) ───────────────

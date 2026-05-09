@@ -241,6 +241,20 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 			params["_meta_"+strings.TrimPrefix(lower, "x-amz-meta-")] = vs[0]
 		}
 	}
+	// P4.12: GetObjectAttributes header
+	if v := r.Header.Get("x-amz-object-attributes"); v != "" {
+		params["_object_attributes"] = v
+	}
+	// P4.1: Object lock headers on PutObject
+	if v := r.Header.Get("x-amz-object-lock-mode"); v != "" {
+		params["_lock_mode"] = v
+	}
+	if v := r.Header.Get("x-amz-object-lock-retain-until-date"); v != "" {
+		params["_lock_retain_until_date"] = v
+	}
+	if v := r.Header.Get("x-amz-object-lock-legal-hold"); v != "" {
+		params["_lock_legal_hold"] = v
+	}
 	// Capture inbound flexible checksum to echo back in response.
 	for _, algo := range []string{"crc32", "crc32c", "sha256", "sha1"} {
 		if v := r.Header.Get("x-amz-checksum-" + algo); v != "" {
@@ -349,6 +363,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "DeleteBucketLifecycle"
 			case query.Has("cors"):
 				return "DeleteBucketCors"
+			case query.Has("ownershipControls"):
+				return "DeleteBucketOwnershipControls"
 			default:
 				return "DeleteBucket"
 			}
@@ -368,6 +384,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "PutBucketLifecycleConfiguration"
 			case query.Has("cors"):
 				return "PutBucketCors"
+			case query.Has("ownershipControls"):
+				return "PutBucketOwnershipControls"
 			default:
 				return "CreateBucket"
 			}
@@ -395,6 +413,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "GetBucketLifecycleConfiguration"
 			case query.Has("cors"):
 				return "GetBucketCors"
+			case query.Has("ownershipControls"):
+				return "GetBucketOwnershipControls"
 			default:
 				return "ListObjectsV1"
 			}
@@ -420,6 +440,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 			return "GetObjectRetention"
 		case query.Has("legal-hold"):
 			return "GetObjectLegalHold"
+		case query.Has("attributes"):
+			return "GetObjectAttributes"
 		default:
 			return "GetObject"
 		}
@@ -502,14 +524,19 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			total, _ := resp.Data["_range_total"].(int64)
 			h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
 		}
-		// CRC32: Only emits checksum when client requested checksum validation
-		// (x-amz-checksum-mode: ENABLED)AND this is not a range read.
-		// AWS omits checksums on partial content (206) response because
-		// the stored checksum covers the full object, not the byte range.
+		// Checksum: only emit when client requests ChecksumMode=ENABLED and not a range read.
+		// AWS omits checksums on partial content (206) because the stored checksum covers
+		// the full object, not the byte range.
 		isRangeRead := resp.Data["_range_start"] != nil
 		checksumRequested := strings.EqualFold(nr.Raw.Header.Get("x-amz-checksum-mode"), "ENABLED")
 		if checksumRequested && !isRangeRead {
-			if crc32v, ok := resp.Data["_crc32"].(string); ok && crc32v != "" {
+			if algo, ok := resp.Data["_checksum_algo"].(string); ok && algo != "" {
+				// P4.4: emit the algorithm the object was stored with
+				hdrName := "x-amz-checksum-" + strings.ToLower(algo)
+				if val, ok := resp.Data["_checksum_value"].(string); ok && val != "" {
+					h.Set(hdrName, val)
+				}
+			} else if crc32v, ok := resp.Data["_crc32"].(string); ok && crc32v != "" {
 				h.Set("x-amz-checksum-crc32", crc32v)
 			}
 		}
@@ -1036,6 +1063,34 @@ func s3BuildXML(action string, data map[string]any) []byte {
 			sb.WriteString(xmlTag("LastModified", str(result["LastModified"])))
 			sb.WriteString("</CopyPartResult>")
 		}
+
+	case "GetObjectAttributes":
+		sb.WriteString(`<GetObjectAttributesResponse xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString(xmlTag("LastModified", str(data["LastModified"])))
+		if etag, ok := data["ETag"].(string); ok && etag != "" {
+			sb.WriteString(xmlTag("ETag", etag))
+		}
+		if size, ok := data["ObjectSize"]; ok {
+			sb.WriteString(xmlTag("ObjectSize", fmt.Sprintf("%v", size)))
+		}
+		if sc, ok := data["StorageClass"].(string); ok && sc != "" {
+			sb.WriteString(xmlTag("StorageClass", sc))
+		}
+		if cksum, ok := data["Checksum"].(map[string]any); ok {
+			sb.WriteString("<Checksum>")
+			for k, v := range cksum {
+				sb.WriteString(xmlTag(k, str(v)))
+			}
+			sb.WriteString("</Checksum>")
+		}
+		sb.WriteString("</GetObjectAttributesResponse>")
+
+	case "GetBucketOwnershipControls":
+		sb.WriteString(`<OwnershipControls xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		sb.WriteString("<Rule>")
+		sb.WriteString(xmlTag("ObjectOwnership", str(data["ObjectOwnership"])))
+		sb.WriteString("</Rule>")
+		sb.WriteString("</OwnershipControls>")
 	}
 
 	return []byte(sb.String())
