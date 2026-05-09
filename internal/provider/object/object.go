@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -90,6 +92,12 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.PutBucketAcl":  p.PutBucketAcl,
 		"Object.GetObjectAcl":  p.GetObjectAcl,
 		"Object.PutObjectAcl":  p.PutObjectAcl,
+		// Ownership Controls (P4.3)
+		"Object.PutBucketOwnershipControls":    p.PutBucketOwnershipControls,
+		"Object.GetBucketOwnershipControls":    p.GetBucketOwnershipControls,
+		"Object.DeleteBucketOwnershipControls": p.DeleteBucketOwnershipControls,
+		// GetObjectAttributes (P4.12)
+		"Object.GetObjectAttributes": p.GetObjectAttributes,
 		// Lifecycle (P2-5)
 		"Object.PutBucketLifecycleConfiguration": p.PutBucketLifecycleConfiguration,
 		"Object.GetBucketLifecycleConfiguration": p.GetBucketLifecycleConfiguration,
@@ -168,19 +176,70 @@ func newCRC32() *crc32State                       { return &crc32State{h: crc32.
 func (c *crc32State) Write(p []byte) (int, error) { return c.h.Write(p) }
 func (c *crc32State) Sum32() uint32               { return c.h.Sum32() }
 
+// computeChecksumValue computes and base64-encodes a checksum for data using algo.
+// algo is one of: "CRC32", "CRC32C", "SHA1", "SHA256".
+func computeChecksumValue(data []byte, algo string) string {
+	switch algo {
+	case "CRC32":
+		sum := crc32.ChecksumIEEE(data)
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, sum)
+		return base64.StdEncoding.EncodeToString(b)
+	case "CRC32C":
+		sum := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, sum)
+		return base64.StdEncoding.EncodeToString(b)
+	case "SHA1":
+		h := sha1.Sum(data)
+		return base64.StdEncoding.EncodeToString(h[:])
+	case "SHA256":
+		h := sha256.Sum256(data)
+		return base64.StdEncoding.EncodeToString(h[:])
+	}
+	return ""
+}
+
 // writeChecksums writes from r to the BlobStore and returns the MD5 ETag,
 // CRC32 checksum (base64), and byte count — all computed in a single pass.
-func (p *ObjectProvider) writeChecksums(ctx context.Context, bucket, key string, r io.Reader) (etagVal, crc32Val string, n int64, err error) {
+// If extraAlgo is non-empty, also computes and returns that checksum.
+func (p *ObjectProvider) writeChecksums(ctx context.Context, bucket, key string, r io.Reader, extraAlgo string) (etagVal, crc32Val, extraChecksum string, n int64, err error) {
 	md5h := md5.New()
 	crc32h := newCRC32()
-	tee := io.TeeReader(r, io.MultiWriter(md5h, crc32h))
+	writers := []io.Writer{md5h, crc32h}
+
+	var extraH hash.Hash
+	var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+	switch extraAlgo {
+	case "CRC32C":
+		extraH = crc32.New(crc32cTable)
+	case "SHA1":
+		extraH = sha1.New()
+	case "SHA256":
+		extraH = sha256.New()
+	}
+	if extraH != nil {
+		writers = append(writers, extraH)
+	}
+
+	tee := io.TeeReader(r, io.MultiWriter(writers...))
 	n, err = p.blobs.PutStream(ctx, bucket, key, tee)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 	etagVal = fmt.Sprintf(`"%x"`, md5h.Sum(nil))
 	crc32Val = crc32Base64FromHash(crc32h)
-	return etagVal, crc32Val, n, nil
+	if extraH != nil {
+		switch extraAlgo {
+		case "CRC32C":
+			b := make([]byte, 4)
+			binary.BigEndian.PutUint32(b, extraH.(hash.Hash32).Sum32())
+			extraChecksum = base64.StdEncoding.EncodeToString(b)
+		default:
+			extraChecksum = base64.StdEncoding.EncodeToString(extraH.Sum(nil))
+		}
+	}
+	return etagVal, crc32Val, extraChecksum, n, nil
 }
 
 // bodyReader returns an io.Reader for the request body, decoding aws-chunked
@@ -386,10 +445,19 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 	var etagVal, crc32Val string
 	var size int64
 
+	// Determine client-supplied checksum algo (if any) for P4.4 validation.
+	checksumAlgo := ""
+	if checksumHdr := strParam(nr.Params, "_checksum_header"); checksumHdr != "" {
+		checksumAlgo = strings.ToUpper(strings.TrimPrefix(checksumHdr, "x-amz-checksum-"))
+		checksumAlgo = strings.ReplaceAll(checksumAlgo, "-", "")
+	}
+	expectedChecksum := strParam(nr.Params, "_checksum_value")
+
+	var computedChecksum string
 	if _, streaming := nr.Params["_streaming"]; streaming {
 		// Streaming path: body arrives via nr.Raw.Body (gateway skipped io.ReadAll).
 		var err error
-		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket, blobKey, bodyReader(nr))
+		etagVal, crc32Val, computedChecksum, size, err = p.writeChecksums(ctx, bucket, blobKey, bodyReader(nr), checksumAlgo)
 		if err != nil {
 			return nil, err
 		}
@@ -401,6 +469,20 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		etagVal = etag(body)
 		crc32Val = crc32Base64(body)
 		size = int64(len(body))
+		if checksumAlgo != "" {
+			if checksumAlgo == "CRC32" {
+				computedChecksum = crc32Val
+			} else {
+				computedChecksum = computeChecksumValue(body, checksumAlgo)
+			}
+		}
+	}
+
+	// P4.4: Validate client-supplied checksum; BadDigest on mismatch.
+	if checksumAlgo != "" && expectedChecksum != "" && computedChecksum != expectedChecksum {
+		_ = p.blobs.Delete(ctx, bucket, blobKey)
+		return nil, model.NewProviderError("BadDigest",
+			"The Content-MD5 or checksum you specified did not match what we received.", 400)
 	}
 
 	meta := objectstore.ObjectMeta{
@@ -412,6 +494,14 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		LastModified: time.Now().UTC(),
 		StorageClass: "STANDARD",
 		Metadata:     extractUserMetadata(nr.Params),
+	}
+	if checksumAlgo != "" {
+		meta.ChecksumAlgorithm = checksumAlgo
+		if computedChecksum != "" {
+			meta.ChecksumValue = computedChecksum
+		} else {
+			meta.ChecksumValue = expectedChecksum
+		}
 	}
 	// P2-7: Tagging
 	if tagging := strParam(nr.Params, "_tagging"); tagging != "" {
@@ -432,6 +522,48 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 	meta.SSECKeyMD5 = ssecMD5
 	// P2-4: ACL
 	meta.ACL = resolveACL(strParam(nr.Params, "_acl"), nr.AccountID)
+
+	// P4.1: Object lock headers
+	lockMode := strParam(nr.Params, "_lock_mode")
+	lockUntilStr := strParam(nr.Params, "_lock_retain_until_date")
+	legalHold := strParam(nr.Params, "_lock_legal_hold")
+	if lockMode != "" && lockUntilStr == "" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"x-amz-object-lock-retain-until-date and x-amz-object-lock-mode must both be supplied", 400)
+	}
+	if lockMode == "" && lockUntilStr != "" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"x-amz-object-lock-retain-until-date and x-amz-object-lock-mode must both be supplied", 400)
+	}
+	if lockMode != "" && lockMode != "GOVERNANCE" && lockMode != "COMPLIANCE" {
+		return nil, model.NewProviderError("InvalidArgument", "Unknown wormMode directive.", 400)
+	}
+	var lockRetainUntil *time.Time
+	if lockUntilStr != "" {
+		t, _ := time.Parse(time.RFC3339, lockUntilStr)
+		lockRetainUntil = &t
+	}
+	if lockMode == "" {
+		if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
+			if lockCfg, ok := bucketMeta["object_lock_config"].(map[string]any); ok {
+				if defaultMode, _ := lockCfg["DefaultMode"].(string); defaultMode != "" {
+					lockMode = defaultMode
+					days := 0
+					switch d := lockCfg["DefaultDays"].(type) {
+					case float64:
+						days = int(d)
+					case int:
+						days = d
+					}
+					t := time.Now().Add(time.Duration(days) * 24 * time.Hour)
+					lockRetainUntil = &t
+				}
+			}
+		}
+	}
+	meta.LockMode = lockMode
+	meta.LockRetainUntil = lockRetainUntil
+	meta.LegalHoldStatus = legalHold
 
 	// P2-2: Versioning — use pre-generated versionID so metadata and blob agree.
 	var versionID string
@@ -532,6 +664,19 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 		}
 	}
+	// P4.2: SSE-C re-validation — the caller must supply the matching key
+	if m.SSECKeyMD5 != "" {
+		requestedKeyMD5 := strParam(nr.Params, "_server_side_encryption_customer_key_md5")
+		if requestedKeyMD5 == "" {
+			return nil, model.NewProviderError("InvalidRequest",
+				"The object was stored using a form of Server Side Encryption. The correct parameters must be provided to retrieve the object.", 400)
+		}
+		if requestedKeyMD5 != m.SSECKeyMD5 {
+			return nil, model.NewProviderError("AccessDenied",
+				"Requests specifying Server Side Encryption with Customer provided keys must provide the correct secret key.", 403)
+		}
+	}
+
 	if resp304, pe := checkConditions(nr, objectCondMeta{ETag: m.ETag, LastModified: m.LastModified, ContentType: m.ContentType}); pe != nil {
 		return nil, pe
 	} else if resp304 != nil {
@@ -579,6 +724,11 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 		"_crc32":        m.CRC32,
 		"ContentLength": contentLength,
 		"LastModified":  m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
+	}
+	// P4.4: expose stored checksum algo+value for codec to emit correct header
+	if m.ChecksumAlgorithm != "" {
+		data["_checksum_algo"] = m.ChecksumAlgorithm
+		data["_checksum_value"] = m.ChecksumValue
 	}
 	if status == 206 {
 		data["_status"] = status
@@ -1135,7 +1285,7 @@ func (p *ObjectProvider) UploadPart(ctx context.Context, nr *model.NormalizedReq
 	if _, streaming := nr.Params["_streaming"]; streaming {
 		var err error
 		var crc32Val string
-		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket+"/__parts__", partKey, bodyReader(nr))
+		etagVal, crc32Val, _, size, err = p.writeChecksums(ctx, bucket+"/__parts__", partKey, bodyReader(nr), "")
 		_ = crc32Val
 		if err != nil {
 			return nil, err
@@ -1207,7 +1357,7 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		partETags[i] = p.ETag
 	}
 	multipartETag := computeMultipartETag(partETags)
-	_, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
+	_, crc32Val, _, totalSize, err := p.writeChecksums(ctx, bucket, key, seq, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1286,7 +1436,7 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
 	}
 	partKey := fmt.Sprintf("%s/part%d", uploadID, partNumber)
-	etagVal, _, size, err := p.writeChecksums(ctx, bucket+"/__parts__", partKey, rc)
+	etagVal, _, _, size, err := p.writeChecksums(ctx, bucket+"/__parts__", partKey, rc, "")
 	rc.Close()
 	if err != nil {
 		return nil, err
@@ -1836,6 +1986,11 @@ func (p *ObjectProvider) PutObjectLockConfiguration(ctx context.Context, nr *mod
 	if err := xml.Unmarshal(body, &req); err != nil {
 		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
 	}
+	// P4.1: ObjectLockEnabled must be "Enabled"
+	if req.Enabled != "Enabled" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"x-amz-bucket-object-lock-enabled must be set to 'Enabled' when using PutObjectLockConfiguration", 400)
+	}
 	lockConfig := map[string]any{
 		"ObjectLockEnabled": req.Enabled,
 		"DefaultMode":       req.Rule.DefaultRetention.Mode,
@@ -1878,13 +2033,40 @@ func (p *ObjectProvider) PutObjectRetention(ctx context.Context, nr *model.Norma
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
-	m.LockMode = req.Mode
-	if req.RetainUntilDate != "" {
-		t, err := time.Parse(time.RFC3339, req.RetainUntilDate)
-		if err == nil {
-			m.LockRetainUntil = &t
+
+	// P4.1: Parse new retention
+	var newMode string
+	var newUntil *time.Time
+	if req.Mode != "" {
+		newMode = req.Mode
+		if req.RetainUntilDate != "" {
+			t, _ := time.Parse(time.RFC3339, req.RetainUntilDate)
+			newUntil = &t
+		}
+		if newUntil != nil && time.Now().After(*newUntil) {
+			return nil, model.NewProviderError("InvalidArgument",
+				"The retain until date must be in the future!", 400)
 		}
 	}
+
+	// P4.1: Validate lock reduction (cannot shorten COMPLIANCE; GOVERNANCE requires bypass header)
+	bypassGovernance := strParam(nr.Params, "_bypass_governance_retention") == "true"
+	isReducing := newMode == "" ||
+		(m.LockRetainUntil != nil && newUntil != nil && m.LockRetainUntil.After(*newUntil)) ||
+		(newMode == "GOVERNANCE" && m.LockMode == "COMPLIANCE")
+	if isReducing {
+		if m.LockMode == "COMPLIANCE" {
+			return nil, model.NewProviderError("AccessDenied",
+				"Access Denied because object protected by object lock.", 403)
+		}
+		if m.LockMode == "GOVERNANCE" && !bypassGovernance {
+			return nil, model.NewProviderError("AccessDenied",
+				"Access Denied because object protected by object lock.", 403)
+		}
+	}
+
+	m.LockMode = newMode
+	m.LockRetainUntil = newUntil
 	if err := p.meta.PutObjectMeta(ctx, bucket, key, m); err != nil {
 		return nil, err
 	}
@@ -1993,6 +2175,26 @@ func resolveACL(cannedACL, ownerID string) string {
 			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
 			{Permission: "READ", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"}},
 		}
+	case "bucket-owner-read":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "READ", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+		}
+	case "bucket-owner-full-control":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+		}
+	case "aws-exec-read":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "READ", Grantee: s3Grantee{Type: "CanonicalUser", ID: "ec2"}},
+		}
+	case "log-delivery-write":
+		acl.Grants = []s3Grant{
+			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
+			{Permission: "WRITE", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/s3/LogDelivery"}},
+			{Permission: "READ_ACP", Grantee: s3Grantee{Type: "Group", URI: "http://acs.amazonaws.com/groups/s3/LogDelivery"}},
+		}
 	default: // "private" or ""
 		acl.Grants = []s3Grant{
 			{Permission: "FULL_CONTROL", Grantee: s3Grantee{Type: "CanonicalUser", ID: ownerID}},
@@ -2043,7 +2245,62 @@ func (p *ObjectProvider) GetBucketAcl(ctx context.Context, nr *model.NormalizedR
 func (p *ObjectProvider) PutBucketAcl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	cannedACL := strParam(nr.Params, "_acl")
-	aclJSON := resolveACL(cannedACL, nr.AccountID)
+
+	// P4.3: Check BucketOwnerEnforced — disallow ACL modifications
+	if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
+		if ownership, _ := bucketMeta["ownership_controls"].(string); ownership == "BucketOwnerEnforced" {
+			if cannedACL != "" && cannedACL != "bucket-owner-full-control" {
+				return nil, model.NewProviderError("AccessControlListNotSupported",
+					"The bucket does not allow ACLs", 400)
+			}
+		}
+	}
+
+	var aclJSON string
+	if cannedACL != "" {
+		aclJSON = resolveACL(cannedACL, nr.AccountID)
+	} else {
+		body, _ := nr.Params["_body"].([]byte)
+		if len(body) > 0 {
+			var req struct {
+				XMLName xml.Name `xml:"AccessControlPolicy"`
+				Owner   struct {
+					ID          string `xml:"ID"`
+					DisplayName string `xml:"DisplayName"`
+				} `xml:"Owner"`
+				AccessControlList struct {
+					Grants []struct {
+						Grantee struct {
+							Type string `xml:"type,attr"`
+							ID   string `xml:"ID"`
+							URI  string `xml:"URI"`
+						} `xml:"Grantee"`
+						Permission string `xml:"Permission"`
+					} `xml:"Grant"`
+				} `xml:"AccessControlList"`
+			}
+			if err := xml.Unmarshal(body, &req); err != nil {
+				return nil, model.NewProviderError("MalformedACLError",
+					"The XML you provided was not well-formed or did not validate against our published schema", 400)
+			}
+			acl := s3ACL{Owner: s3ACLOwner{ID: req.Owner.ID, DisplayName: req.Owner.DisplayName}}
+			for _, g := range req.AccessControlList.Grants {
+				acl.Grants = append(acl.Grants, s3Grant{
+					Permission: g.Permission,
+					Grantee: s3Grantee{
+						Type: g.Grantee.Type,
+						ID:   g.Grantee.ID,
+						URI:  g.Grantee.URI,
+					},
+				})
+			}
+			raw, _ := json.Marshal(acl)
+			aclJSON = string(raw)
+		} else {
+			aclJSON = resolveACL("private", nr.AccountID)
+		}
+	}
+
 	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
 		meta["acl"] = aclJSON
 	}); err != nil {
@@ -2066,6 +2323,18 @@ func (p *ObjectProvider) PutObjectAcl(ctx context.Context, nr *model.NormalizedR
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 	cannedACL := strParam(nr.Params, "_acl")
+
+	// P4.3: Check BucketOwnerEnforced — disallow all object ACL modifications
+	if bucketMeta, err := p.meta.GetBucket(ctx, bucket); err == nil {
+		if ownership, _ := bucketMeta["ownership_controls"].(string); ownership == "BucketOwnerEnforced" {
+			body, _ := nr.Params["_body"].([]byte)
+			if cannedACL != "" || len(body) > 0 {
+				return nil, model.NewProviderError("AccessControlListNotSupported",
+					"The bucket does not allow ACLs", 400)
+			}
+		}
+	}
+
 	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
@@ -2075,6 +2344,56 @@ func (p *ObjectProvider) PutObjectAcl(ctx context.Context, nr *model.NormalizedR
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// ─── P4.3: Ownership Controls ─────────────────────────────────────────────────
+
+func (p *ObjectProvider) PutBucketOwnershipControls(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	var req struct {
+		XMLName xml.Name `xml:"OwnershipControls"`
+		Rules   []struct {
+			ObjectOwnership string `xml:"ObjectOwnership"`
+		} `xml:"Rule"`
+	}
+	if err := xml.Unmarshal(body, &req); err != nil || len(req.Rules) == 0 {
+		return nil, model.NewProviderError("MalformedXML", "Invalid XML", 400)
+	}
+	ownership := req.Rules[0].ObjectOwnership
+	if ownership != "BucketOwnerEnforced" && ownership != "BucketOwnerPreferred" && ownership != "ObjectWriter" {
+		return nil, model.NewProviderError("InvalidArgument", "Invalid ObjectOwnership value", 400)
+	}
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["ownership_controls"] = ownership
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketOwnershipControls(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	ownership, _ := meta["ownership_controls"].(string)
+	if ownership == "" {
+		return nil, model.NewProviderError("OwnershipControlsNotFoundError",
+			"The bucket does not have OwnershipControls", 404)
+	}
+	return provider.OK(map[string]any{"ObjectOwnership": ownership}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketOwnershipControls(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "ownership_controls")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 // ─── P2-5: Lifecycle ──────────────────────────────────────────────────────────
@@ -2263,4 +2582,72 @@ func (p *ObjectProvider) GetBucketCORSRules(bucket string) []map[string]any {
 		return rules
 	}
 	return nil
+}
+
+// ─── P4.12: GetObjectAttributes ───────────────────────────────────────────────
+
+func (p *ObjectProvider) GetObjectAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+	attrs := strParam(nr.Params, "_object_attributes")
+
+	requestedVersionID := strParam(nr.Params, "versionId")
+	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)
+
+	var m objectstore.ObjectMeta
+	if (vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended) && requestedVersionID != "" {
+		var err error
+		m, err = p.meta.GetObjectVersion(ctx, bucket, key, requestedVersionID)
+		if err != nil {
+			return nil, model.NewProviderError("NoSuchVersion", "The specified version does not exist", 404)
+		}
+	} else {
+		var err error
+		m, err = p.meta.GetObjectMeta(ctx, bucket, key)
+		if err != nil {
+			return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+		}
+	}
+
+	attrSet := map[string]bool{}
+	for _, a := range strings.Split(attrs, ",") {
+		attrSet[strings.TrimSpace(a)] = true
+	}
+
+	data := map[string]any{
+		"LastModified": m.LastModified.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"),
+	}
+	if attrSet["ETag"] {
+		data["ETag"] = m.ETag
+	}
+	if attrSet["ObjectSize"] {
+		data["ObjectSize"] = m.Size
+	}
+	if attrSet["StorageClass"] {
+		data["StorageClass"] = m.StorageClass
+	}
+	if attrSet["Checksum"] {
+		cksum := map[string]any{}
+		if m.ChecksumAlgorithm != "" && m.ChecksumValue != "" {
+			switch m.ChecksumAlgorithm {
+			case "CRC32":
+				cksum["ChecksumCRC32"] = m.ChecksumValue
+			case "CRC32C":
+				cksum["ChecksumCRC32C"] = m.ChecksumValue
+			case "SHA1":
+				cksum["ChecksumSHA1"] = m.ChecksumValue
+			case "SHA256":
+				cksum["ChecksumSHA256"] = m.ChecksumValue
+			}
+		} else if m.CRC32 != "" {
+			cksum["ChecksumCRC32"] = m.CRC32
+		}
+		if len(cksum) > 0 {
+			data["Checksum"] = cksum
+		}
+	}
+	if m.VersionID != "" {
+		data["_version_id"] = m.VersionID
+	}
+	return provider.OK(data), nil
 }
