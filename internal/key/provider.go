@@ -973,6 +973,9 @@ func (p *KeyProvider) GenerateMac(ctx context.Context, nr *model.NormalizedReque
 
 	macAlgo, _ := nr.Params["MacAlgorithm"].(string)
 	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
+		if strings.Contains(valErr.Error(), "not compatible") {
+			return nil, model.NewProviderError("InvalidKeyUsageException", valErr.Error(), 400)
+		}
 		return nil, model.NewProviderError("ValidationException", valErr.Error(), 400)
 	}
 
@@ -1021,6 +1024,9 @@ func (p *KeyProvider) VerifyMac(ctx context.Context, nr *model.NormalizedRequest
 	providedMac, _ := base64.StdEncoding.DecodeString(providedMacB64)
 
 	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
+		if strings.Contains(valErr.Error(), "not compatible") {
+			return nil, model.NewProviderError("InvalidKeyUsageException", valErr.Error(), 400)
+		}
 		return nil, model.NewProviderError("ValidationException", valErr.Error(), 400)
 	}
 
