@@ -886,6 +886,10 @@ func (p *KeyProvider) GenerateDataKeyPair(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("InvalidKeyUsageException",
 			"GenerateDataKeyPair requires a key with KeyUsage ENCRYPT_DECRYPT", 400)
 	}
+	if e.KeySpec != "SYMMETRIC_DEFAULT" {
+		return nil, model.NewProviderError("InvalidKeyUsageException",
+			"GenerateDataKeyPair is not supported for asymmetric CMKs", 400)
+	}
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
