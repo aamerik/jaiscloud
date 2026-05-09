@@ -34,6 +34,7 @@ import (
 	emrprovider "jaiscloud/internal/provider/aws/emr"
 	emrcontainersprovider "jaiscloud/internal/provider/aws/emroneks"
 	iamprovider "jaiscloud/internal/provider/aws/iam"
+	lambdaesm "jaiscloud/internal/provider/aws/lambda/esm"
 	rdsprovider "jaiscloud/internal/provider/aws/rds"
 	sparkaws "jaiscloud/internal/provider/aws/sparkaws"
 	stackprovider "jaiscloud/internal/provider/aws/stack"
@@ -492,11 +493,18 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	stackP := stackprovider.New(s.resources)
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv)
 
+	// ESM provider: wires Lambda event source mappings (SQS + DynamoDB Streams pollers).
+	esmProvider := lambdaesm.New(ctx, s.resources, funcP, queueP, streams, slog.Default())
+	esmProvider.RehydratePollers(ctx)
+	prevCleanup2 := cleanup
+	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
+
 	registry := provider.NewRegistry()
 	registry.RegisterAll(keyProv.Routes())
 	registry.RegisterAll(secretProv.Routes())
 	registry.RegisterAll(paramProv.Routes())
 	registry.RegisterAll(funcP.Routes())
+	registry.RegisterAll(esmProvider.Routes())
 	registry.RegisterAll(queueP.Routes())
 	registry.RegisterAll(iamP.Routes())
 	registry.RegisterAll(notifP.Routes())

@@ -324,6 +324,38 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 	return provider.OK(cfgToWire(cfg)), nil
 }
 
+// InvokeInternal invokes a Lambda function directly (bypassing the wire layer).
+// Used by ESM pollers to deliver events to functions.
+func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName string, payload []byte) ([]byte, error) {
+	cfg, err := p.loadConfig(ctx, functionName)
+	if err != nil {
+		return nil, fmt.Errorf("function %q not found: %w", functionName, err)
+	}
+	req := lambdaexec.InvokeRequest{
+		FunctionName: cfg.FunctionName,
+		Runtime:      cfg.Runtime,
+		Handler:      cfg.Handler,
+		MemoryMB:     cfg.MemorySize,
+		TimeoutSecs:  cfg.Timeout,
+		EnvVars:      cfg.Environment,
+		Payload:      payload,
+	}
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	invCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return p.executor.Invoke(invCtx, req)
+}
+
+// Shutdown closes the Lambda executor if it supports it.
+func (p *FunctionProvider) Shutdown(_ context.Context) {
+	if p.executor != nil {
+		_ = p.executor.Close()
+	}
+}
+
 // ─── Invoke ───────────────────────────────────────────────────────────────────
 
 // InvokeFunction invokes the function via the configured executor.
