@@ -235,6 +235,11 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 			return nil, model.NewProviderError("InvalidParameterValue",
 				"The request must contain the parameter MessageGroupId", 400)
 		}
+		// FIFO queues do not support per-message DelaySeconds.
+		if d, hasDelay := nr.Params["DelaySeconds"]; hasDelay && toInt(d) > 0 {
+			return nil, model.NewProviderError("InvalidParameterValue",
+				"Value 0 for parameter DelaySeconds is invalid. Reason: The request include parameter that is not valid for this queue type.", 400)
+		}
 		// ContentBasedDeduplication removes the requirement for MessageDeduplicationId.
 		// The attribute is stored as a string in state["Attributes"].
 		queueAttrs := attrsFromState(state)

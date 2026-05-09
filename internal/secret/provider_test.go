@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/secret"
@@ -25,6 +26,7 @@ func snr(params map[string]any) *model.NormalizedRequest {
 		Service:    "secretsmanager",
 		Region:     "us-east-1",
 		AccountID:  "000000000000",
+		Clock:      clock.RealClock{},
 		Params:     params,
 		ResourceID: func(_, name string) string { return "arn:aws:secretsmanager:us-east-1:000000000000:secret:" + name },
 	}

@@ -704,14 +704,10 @@ func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.Normaliz
 	if err := p.saveTable(ctx, ts); err != nil {
 		return nil, err
 	}
-	status := "DISABLING"
-	if enabled {
-		status = "ENABLING"
-	}
 	return provider.OK(map[string]any{
 		"TimeToLiveSpecification": map[string]any{
-			"TimeToLiveStatus": status,
-			"AttributeName":    attrName,
+			"Enabled":       enabled,
+			"AttributeName": attrName,
 		},
 	}), nil
 }

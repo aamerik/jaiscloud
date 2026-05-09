@@ -181,7 +181,7 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("KMSInvalidStateException", "key is already pending deletion: "+keyID, 400)
 	}
 
-	deletionDate := time.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
+	deletionDate := nr.Clock.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
 	e.Enabled = false
 	e.PendingDeletion = true
 	e.DeletionDate = deletionDate

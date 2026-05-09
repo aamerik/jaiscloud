@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/key"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -29,6 +30,7 @@ func nr(params map[string]any) *model.NormalizedRequest {
 		Service:    "kms",
 		Region:     "us-east-1",
 		AccountID:  "000000000000",
+		Clock:      clock.RealClock{},
 		Params:     params,
 		ResourceID: func(rtype, name string) string { return "arn:aws:kms:us-east-1:000000000000:key/" + name },
 	}

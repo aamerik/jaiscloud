@@ -160,7 +160,7 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		return provider.OK(map[string]any{
 			"ARN":          secretARN,
 			"Name":         e.Name,
-			"DeletionDate": time.Now().Unix(),
+			"DeletionDate": nr.Clock.Now().Unix(),
 		}), nil
 	}
 
@@ -169,7 +169,7 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 			"secret is already scheduled for deletion", 400)
 	}
 
-	deletionDate := time.Now().Add(time.Duration(recoveryDays) * 24 * time.Hour)
+	deletionDate := nr.Clock.Now().Add(time.Duration(recoveryDays) * 24 * time.Hour)
 	e.DeletedAt = &deletionDate
 	if err := p.store.UpdateSecret(ctx, e); err != nil {
 		return nil, fmt.Errorf("sm: soft delete: %w", err)
