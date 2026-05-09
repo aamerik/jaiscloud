@@ -16,13 +16,34 @@ func (c *LambdaCodec) ServiceName() string { return "lambda" }
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
+// isESMAction returns true for actions that operate on event-source-mappings.
+func isESMAction(action string) bool {
+	switch action {
+	case "CreateEventSourceMapping", "GetEventSourceMapping",
+		"ListEventSourceMappings", "UpdateEventSourceMapping",
+		"DeleteEventSourceMapping":
+		return true
+	}
+	return false
+}
+
 func (c *LambdaCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
-	action, functionName := lambdaDetectAction(r.Method, r.URL.Path)
+	action, resourceID := lambdaDetectAction(r.Method, r.URL.Path)
 
 	params := map[string]any{
-		"_function_name": functionName,
-		"_body":          body,
+		"_body": body,
 	}
+
+	// For ESM actions, store the resource ID as _esm_uuid rather than _function_name
+	// to avoid confusion between function names and ESM UUIDs.
+	if isESMAction(action) {
+		if resourceID != "" {
+			params["_esm_uuid"] = resourceID
+		}
+	} else {
+		params["_function_name"] = resourceID
+	}
+
 	// Parse JSON body into params (for CreateFunction, UpdateFunctionConfiguration, etc.)
 	if len(body) > 0 {
 		var decoded map[string]any
@@ -49,9 +70,38 @@ func (c *LambdaCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReq
 	}, nil
 }
 
-func lambdaDetectAction(method, path string) (action, functionName string) {
-	// Strip version prefix: /2015-03-31/functions[/...]
+func lambdaDetectAction(method, path string) (action, resourceID string) {
+	// Strip version prefix: /2015-03-31/...
 	path = strings.TrimPrefix(path, "/2015-03-31/")
+
+	// Handle event-source-mappings FIRST (before functions check)
+	// /event-source-mappings                  GET=List, POST=Create
+	// /event-source-mappings/{uuid}           GET=Get, PUT=Update, DELETE=Delete
+	if strings.HasPrefix(path, "event-source-mappings") {
+		rest := strings.TrimPrefix(path, "event-source-mappings")
+		rest = strings.TrimPrefix(rest, "/")
+		if rest == "" {
+			switch method {
+			case http.MethodGet:
+				return "ListEventSourceMappings", ""
+			case http.MethodPost:
+				return "CreateEventSourceMapping", ""
+			}
+			return "Unknown", ""
+		}
+		// rest is the UUID
+		uuid := strings.SplitN(rest, "/", 2)[0]
+		switch method {
+		case http.MethodGet:
+			return "GetEventSourceMapping", uuid
+		case http.MethodPut:
+			return "UpdateEventSourceMapping", uuid
+		case http.MethodDelete:
+			return "DeleteEventSourceMapping", uuid
+		}
+		return "Unknown", uuid
+	}
+
 	segments := strings.SplitN(path, "/", 3)
 
 	if len(segments) == 0 || segments[0] != "functions" {
