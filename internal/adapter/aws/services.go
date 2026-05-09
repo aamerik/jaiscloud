@@ -129,6 +129,12 @@ var awsServices = []ServiceDescriptor{
 		ProviderPrefix: "Gateway",
 	},
 	{
+		SigV4Name:      "logs",
+		TargetPrefix:   "Logs_20140328.",
+		ProviderPrefix: "CloudWatchLogs",
+		Codec:          func() adapter.Codec { return &services.LogsCodec{} },
+	},
+	{
 		SigV4Name:      "monitoring",
 		ProviderPrefix: "CloudWatch",
 		Codec:          func() adapter.Codec { return &services.CloudWatchCodec{} },
