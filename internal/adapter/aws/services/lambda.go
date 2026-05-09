@@ -53,6 +53,13 @@ func (c *LambdaCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReq
 			}
 		}
 	}
+
+	// Parse URL query params (for ListEventSourceMappings FunctionName filter, etc.)
+	for k, vs := range r.URL.Query() {
+		if len(vs) > 0 {
+			params[k] = vs[0]
+		}
+	}
 	// InvokeFunction: also store raw body as payload
 	if action == "InvokeFunction" {
 		params["_payload"] = body

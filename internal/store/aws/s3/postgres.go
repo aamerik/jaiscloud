@@ -114,15 +114,17 @@ func (s *PostgresS3ObjectMetaStore) PutObjectMeta(ctx context.Context, bucket, k
 		meta.LastModified = time.Now().UTC()
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, checksum_algorithm, checksum_value)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		ON CONFLICT (bucket, key) DO UPDATE
 			SET etag=$3, crc32=$4, size=$5, content_type=$6, last_modified=$7, metadata=$8, storage_class=$9, version_id=$10,
-			    tags=$11, encryption=$12, kms_key_id=$13, ssec_key_md5=$14, lock_mode=$15, lock_retain_until=$16, legal_hold_status=$17, acl=$18
+			    tags=$11, encryption=$12, kms_key_id=$13, ssec_key_md5=$14, lock_mode=$15, lock_retain_until=$16, legal_hold_status=$17, acl=$18,
+			    checksum_algorithm=$19, checksum_value=$20
 	`, bucket, key, meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified,
 		json.RawMessage(metaRaw), meta.StorageClass, meta.VersionID,
 		json.RawMessage(tagsRaw), meta.Encryption, meta.KMSKeyID, meta.SSECKeyMD5,
-		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL)
+		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL,
+		meta.ChecksumAlgorithm, meta.ChecksumValue)
 	return err
 }
 
@@ -131,11 +133,13 @@ func (s *PostgresS3ObjectMetaStore) GetObjectMeta(ctx context.Context, bucket, k
 	var metaRaw, tagsRaw []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id,
-		       tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl
+		       tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl,
+		       checksum_algorithm, checksum_value
 		FROM jc_s3_objects WHERE bucket=$1 AND key=$2
 	`, bucket, key).Scan(
 		&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID,
-		&tagsRaw, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL)
+		&tagsRaw, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL,
+		&m.ChecksumAlgorithm, &m.ChecksumValue)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ObjectMeta{}, fmt.Errorf("NoSuchKey")
 	}
@@ -388,14 +392,16 @@ func (s *PostgresS3ObjectMetaStore) PutObjectVersion(ctx context.Context, bucket
 	s.pool.Exec(ctx, `UPDATE jc_s3_object_versions SET is_latest=FALSE WHERE bucket=$1 AND key=$2`, bucket, key)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_s3_object_versions
-		  (bucket, key, version_id, is_delete_marker, is_latest, etag, crc32, size, content_type, last_modified, metadata, storage_class, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, tags)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		  (bucket, key, version_id, is_delete_marker, is_latest, etag, crc32, size, content_type, last_modified, metadata, storage_class, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, tags, checksum_algorithm, checksum_value)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 		ON CONFLICT (bucket, key, version_id) DO UPDATE
-		  SET is_latest=$5, etag=$6, crc32=$7, size=$8, content_type=$9, last_modified=$10, metadata=$11
+		  SET is_latest=$5, etag=$6, crc32=$7, size=$8, content_type=$9, last_modified=$10, metadata=$11,
+		      checksum_algorithm=$21, checksum_value=$22
 	`, bucket, key, meta.VersionID, meta.IsDeleteMarker, true,
 		meta.ETag, meta.CRC32, meta.Size, meta.ContentType, meta.LastModified,
 		json.RawMessage(metaRaw), meta.StorageClass, meta.Encryption, meta.KMSKeyID, meta.SSECKeyMD5,
-		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL, json.RawMessage(tagsRaw))
+		meta.LockMode, meta.LockRetainUntil, meta.LegalHoldStatus, meta.ACL, json.RawMessage(tagsRaw),
+		meta.ChecksumAlgorithm, meta.ChecksumValue)
 	if err != nil {
 		return "", err
 	}
@@ -422,11 +428,13 @@ func (s *PostgresS3ObjectMetaStore) GetObjectVersion(ctx context.Context, bucket
 	var metaRaw, tagsRaw []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id,
-		       is_delete_marker, is_latest, lock_mode, lock_retain_until, legal_hold_status, acl, encryption, kms_key_id, ssec_key_md5, tags
+		       is_delete_marker, is_latest, lock_mode, lock_retain_until, legal_hold_status, acl, encryption, kms_key_id, ssec_key_md5, tags,
+		       checksum_algorithm, checksum_value
 		FROM jc_s3_object_versions WHERE bucket=$1 AND key=$2 AND version_id=$3
 	`, bucket, key, versionID).Scan(
 		&m.Key, &m.ETag, &m.CRC32, &m.Size, &m.ContentType, &m.LastModified, &metaRaw, &m.StorageClass, &m.VersionID,
-		&m.IsDeleteMarker, &m.IsLatest, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &tagsRaw)
+		&m.IsDeleteMarker, &m.IsLatest, &m.LockMode, &m.LockRetainUntil, &m.LegalHoldStatus, &m.ACL, &m.Encryption, &m.KMSKeyID, &m.SSECKeyMD5, &tagsRaw,
+		&m.ChecksumAlgorithm, &m.ChecksumValue)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ObjectMeta{}, fmt.Errorf("NoSuchVersion")
 	}

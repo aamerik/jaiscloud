@@ -169,11 +169,7 @@ func (s *PostgresKeyStore) ListAliases(ctx context.Context, keyID string) ([]Ali
 // ─── Grant operations ─────────────────────────────────────────────────────────
 
 func (s *PostgresKeyStore) CreateGrant(ctx context.Context, e GrantEntry) error {
-	data, _ := json.Marshal(map[string]any{
-		"grantee_arn": e.GranteeARN,
-		"operations":  e.Operations,
-		"token":       e.Token,
-	})
+	data, _ := json.Marshal(e)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_kms_grants (grant_id, key_id, grant_data) VALUES ($1, $2, $3)`,
 		e.GrantID, e.KeyID, data,

@@ -473,6 +473,11 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		if err != nil {
 			return nil, err
 		}
+		// writeChecksums returns extraChecksum only for CRC32C/SHA1/SHA256.
+		// CRC32 is always computed as crc32Val; use it here to match the non-streaming path.
+		if checksumAlgo == "CRC32" {
+			computedChecksum = crc32Val
+		}
 	} else {
 		body, _ := nr.Params["_body"].([]byte)
 		if err := p.blobs.Put(ctx, bucket, blobKey, body); err != nil {
@@ -1345,13 +1350,13 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		return nil, model.NewProviderError("NoSuchUpload", "The specified upload does not exist", 404)
 	}
 
-	// Validate minimum part size: all parts except the last must be >= 5 MB.
+	// AWS requires all parts except the last to be at least 5 MB.
 	const minPartSize = 5 * 1024 * 1024
 	for i, part := range parts {
 		if i < len(parts)-1 && part.Size < minPartSize {
 			return nil, model.NewProviderError("EntityTooSmall",
-				fmt.Sprintf("Your proposed upload is smaller than the minimum allowed size. Minimum size: %d, Proposed size: %d",
-					minPartSize, part.Size), 400)
+				fmt.Sprintf("Your proposed upload is smaller than the minimum allowed size. "+
+					"Part number %d is smaller than the minimum allowed size.", part.PartNumber), 400)
 		}
 	}
 
@@ -1946,29 +1951,23 @@ func (p *ObjectProvider) ListObjectVersions(ctx context.Context, nr *model.Norma
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
-	var versionItems []map[string]any
-	var deleteMarkers []map[string]any
+	// The codec iterates data["Versions"] and uses IsDeleteMarker to emit
+	// <DeleteMarker> vs <Version> elements — merge everything into one slice.
+	allVersions := make([]map[string]any, 0, len(versions))
 	for _, v := range versions {
 		entry := map[string]any{
-			"Key":          v.Key,
-			"VersionId":    v.VersionID,
-			"IsLatest":     fmt.Sprintf("%v", v.IsLatest),
-			"LastModified": v.LastModified.UTC().Format(time.RFC3339),
+			"Key":            v.Key,
+			"VersionId":      v.VersionID,
+			"IsLatest":       fmt.Sprintf("%v", v.IsLatest),
+			"LastModified":   v.LastModified.UTC().Format(time.RFC3339),
+			"IsDeleteMarker": v.IsDeleteMarker,
 		}
-		if v.IsDeleteMarker {
-			deleteMarkers = append(deleteMarkers, entry)
-		} else {
+		if !v.IsDeleteMarker {
 			entry["ETag"] = v.ETag
 			entry["Size"] = fmt.Sprintf("%d", v.Size)
 			entry["StorageClass"] = v.StorageClass
-			versionItems = append(versionItems, entry)
 		}
-	}
-	if versionItems == nil {
-		versionItems = []map[string]any{}
-	}
-	if deleteMarkers == nil {
-		deleteMarkers = []map[string]any{}
+		allVersions = append(allVersions, entry)
 	}
 	return provider.OK(map[string]any{
 		"Name":            bucket,
@@ -1977,8 +1976,7 @@ func (p *ObjectProvider) ListObjectVersions(ctx context.Context, nr *model.Norma
 		"VersionIdMarker": versionIDMarker,
 		"MaxKeys":         fmt.Sprintf("%d", maxKeys),
 		"IsTruncated":     fmt.Sprintf("%v", truncated),
-		"Versions":        versionItems,
-		"DeleteMarkers":   deleteMarkers,
+		"Versions":        allVersions,
 	}), nil
 }
 

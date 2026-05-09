@@ -241,9 +241,9 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 			params["_meta_"+strings.TrimPrefix(lower, "x-amz-meta-")] = vs[0]
 		}
 	}
-	// P4.12: GetObjectAttributes header
-	if v := r.Header.Get("x-amz-object-attributes"); v != "" {
-		params["_object_attributes"] = v
+	// P4.12: GetObjectAttributes — SDK sends each attribute as a separate header value.
+	if vals := r.Header.Values("x-amz-object-attributes"); len(vals) > 0 {
+		params["_object_attributes"] = strings.Join(vals, ",")
 	}
 	// P4.1: Object lock headers on PutObject
 	if v := r.Header.Get("x-amz-object-lock-mode"); v != "" {

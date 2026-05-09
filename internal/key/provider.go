@@ -962,11 +962,8 @@ func (p *KeyProvider) Verify(ctx context.Context, nr *model.NormalizedRequest) (
 	}
 	verifyErr := verifySignature(e.PublicKey, msg, sig, sigAlgo, msgType)
 	if verifyErr != nil {
-		return provider.OK(map[string]any{
-			"KeyId":            nr.ResourceID(model.RTKMSKey, keyID),
-			"SignatureValid":   false,
-			"SigningAlgorithm": sigAlgo,
-		}), nil
+		return nil, model.NewProviderError("KMSInvalidSignatureException",
+			"The request was rejected because the specified signature could not be verified.", 400)
 	}
 	return provider.OK(map[string]any{
 		"KeyId":            nr.ResourceID(model.RTKMSKey, keyID),

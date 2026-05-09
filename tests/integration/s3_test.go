@@ -252,8 +252,9 @@ func TestS3_MultipartUpload(t *testing.T) {
 	uploadID := aws.ToString(createOut.UploadId)
 	require.NotEmpty(t, uploadID)
 
-	// Upload two parts (min 5 MB each for real S3, but our emulator has no size limit)
-	part1Data := bytes.Repeat([]byte("A"), 1024)
+	// Part 1 must be at least 5 MB (AWS minimum for non-final parts); part 2 can be any size.
+	const minPart = 5 * 1024 * 1024
+	part1Data := bytes.Repeat([]byte("A"), minPart)
 	part2Data := bytes.Repeat([]byte("B"), 1024)
 
 	p1, err := c.UploadPart(ctx, &awss3.UploadPartInput{
@@ -610,12 +611,13 @@ func TestS3_Streaming_Multipart(t *testing.T) {
 	require.NoError(t, err)
 	uploadID := aws.ToString(createOut.UploadId)
 
-	// Three parts of 256 KB each.
-	const partSize = 256 * 1024
+	// Parts 1 and 2 must be >= 5 MB (AWS minimum for non-final parts); part 3 can be smaller.
+	const minPart = 5 * 1024 * 1024
+	partSizes := [3]int{minPart, minPart, 256 * 1024}
 	var partData [3][]byte
 	var completedParts []types.CompletedPart
 	for i := 0; i < 3; i++ {
-		partData[i] = make([]byte, partSize)
+		partData[i] = make([]byte, partSizes[i])
 		for j := range partData[i] {
 			partData[i][j] = byte(i + 1)
 		}
@@ -659,7 +661,7 @@ func TestS3_Streaming_Multipart(t *testing.T) {
 		want = append(want, d...)
 	}
 	assert.Equal(t, want, got)
-	assert.Equal(t, int64(3*partSize), aws.ToInt64(out.ContentLength))
+	assert.Equal(t, int64(partSizes[0]+partSizes[1]+partSizes[2]), aws.ToInt64(out.ContentLength))
 }
 
 // TestS3_Streaming_HeadAfterStreamPut verifies metadata (size, ETag) is
