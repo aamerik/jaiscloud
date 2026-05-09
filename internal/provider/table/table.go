@@ -90,6 +90,11 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.ExecuteStatement":      p.ExecuteStatement,
 		"Table.ExecuteTransaction":    p.ExecuteTransaction,
 		"Table.BatchExecuteStatement": p.BatchExecuteStatement,
+		// Global Tables (metadata-only)
+		"Table.CreateGlobalTable":   p.CreateGlobalTable,
+		"Table.DescribeGlobalTable": p.DescribeGlobalTable,
+		"Table.ListGlobalTables":    p.ListGlobalTables,
+		"Table.UpdateGlobalTable":   p.UpdateGlobalTable,
 	}
 }
 
@@ -1312,6 +1317,125 @@ func arnToTableName(arn string) string {
 		return parts[len(parts)-1]
 	}
 	return arn
+}
+
+// ─── Global Tables (metadata-only) ───────────────────────────────────────────
+
+func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("ValidationException", "GlobalTableName is required", 400)
+	}
+	if _, err := p.resources.Get(ctx, "dynamodb_global_tables", name); err == nil {
+		return nil, model.NewProviderError("GlobalTableAlreadyExistsException", "Global table already exists: "+name, 400)
+	}
+
+	var replicas []map[string]any
+	if rg, ok := nr.Params["ReplicationGroup"].([]any); ok {
+		for _, r := range rg {
+			if rm, ok := r.(map[string]any); ok {
+				region, _ := rm["RegionName"].(string)
+				replicas = append(replicas, map[string]any{
+					"RegionName":    region,
+					"ReplicaStatus": "ACTIVE",
+				})
+			}
+		}
+	}
+
+	desc := map[string]any{
+		"GlobalTableName":   name,
+		"GlobalTableStatus": "ACTIVE",
+		"CreationDateTime":  time.Now().Unix(),
+		"ReplicationGroup":  replicas,
+	}
+	data, _ := json.Marshal(desc)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: "dynamodb_global_tables", ID: name, Data: json.RawMessage(data)}); err != nil {
+		return nil, fmt.Errorf("dynamodb: create global table: %w", err)
+	}
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
+}
+
+func (p *TableProvider) DescribeGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	if err != nil {
+		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
+	}
+	var desc map[string]any
+	json.Unmarshal(entry.Data, &desc)
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
+}
+
+func (p *TableProvider) ListGlobalTables(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, "dynamodb_global_tables", "")
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: list global tables: %w", err)
+	}
+	tables := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var desc map[string]any
+		if err := json.Unmarshal(e.Data, &desc); err != nil {
+			continue
+		}
+		rg, _ := desc["ReplicationGroup"]
+		tables = append(tables, map[string]any{
+			"GlobalTableName":  desc["GlobalTableName"],
+			"ReplicationGroup": rg,
+		})
+	}
+	return provider.OK(map[string]any{"GlobalTables": tables}), nil
+}
+
+func (p *TableProvider) UpdateGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["GlobalTableName"].(string)
+	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	if err != nil {
+		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
+	}
+	var desc map[string]any
+	json.Unmarshal(entry.Data, &desc)
+
+	// Build current replica map keyed by region.
+	replicaMap := map[string]map[string]any{}
+	if rg, ok := desc["ReplicationGroup"].([]any); ok {
+		for _, r := range rg {
+			if rm, ok := r.(map[string]any); ok {
+				region, _ := rm["RegionName"].(string)
+				replicaMap[region] = rm
+			}
+		}
+	}
+
+	if updates, ok := nr.Params["ReplicaUpdates"].([]any); ok {
+		for _, u := range updates {
+			um, ok := u.(map[string]any)
+			if !ok {
+				continue
+			}
+			if create, ok := um["Create"].(map[string]any); ok {
+				region, _ := create["RegionName"].(string)
+				replicaMap[region] = map[string]any{"RegionName": region, "ReplicaStatus": "ACTIVE"}
+			}
+			if del, ok := um["Delete"].(map[string]any); ok {
+				region, _ := del["RegionName"].(string)
+				delete(replicaMap, region)
+			}
+		}
+	}
+
+	replicas := make([]map[string]any, 0, len(replicaMap))
+	for _, r := range replicaMap {
+		replicas = append(replicas, r)
+	}
+	desc["ReplicationGroup"] = replicas
+
+	data, _ := json.Marshal(desc)
+	entry.Data = json.RawMessage(data)
+	if err := p.resources.Update(ctx, entry); err != nil {
+		return nil, fmt.Errorf("dynamodb: update global table: %w", err)
+	}
+	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
 }
 
 // ─── PartiQL stubs ────────────────────────────────────────────────────────────
