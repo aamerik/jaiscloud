@@ -22,6 +22,7 @@ import (
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsapigw "github.com/aws/aws-sdk-go-v2/service/apigateway"
+	awscwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awssm "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -310,6 +311,20 @@ func newAPIGWClient(t *testing.T) *awsapigw.Client {
 		t.Fatalf("load config: %v", err)
 	}
 	return awsapigw.NewFromConfig(cfg, func(o *awsapigw.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newCWLClient(t *testing.T) *awscwl.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awscwl.NewFromConfig(cfg, func(o *awscwl.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
 }
