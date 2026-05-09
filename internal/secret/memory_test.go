@@ -3,6 +3,7 @@ package secret_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/secret"
 
@@ -92,6 +93,59 @@ func TestMemorySecretStore_ListVersions(t *testing.T) {
 	versions, err := s.ListVersions(ctx, "s1")
 	require.NoError(t, err)
 	assert.Len(t, versions, 2)
+}
+
+// ─── P1.2: New SecretEntry fields ────────────────────────────────────────────
+
+func TestSecretEntry_NewFieldsDefault(t *testing.T) {
+	e := secret.SecretEntry{SecretID: "s1", Name: "n1"}
+	assert.False(t, e.RotationEnabled)
+	assert.Empty(t, e.RotationLambdaARN)
+	assert.Nil(t, e.RotationRules)
+	assert.Nil(t, e.NextRotationDate)
+	assert.Empty(t, e.ResourcePolicy)
+}
+
+func TestSecretEntry_SerializeDeserialize(t *testing.T) {
+	ctx := context.Background()
+	s := newSecretStore()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	e := secret.SecretEntry{
+		SecretID:          "s-rt",
+		Name:              "rt/secret",
+		RotationEnabled:   true,
+		RotationLambdaARN: "arn:aws:lambda:us-east-1:000000000000:function:rotate",
+		RotationRules:     map[string]any{"AutomaticallyAfterDays": float64(30)},
+		NextRotationDate:  &now,
+		ResourcePolicy:    `{"Version":"2012-10-17"}`,
+	}
+	require.NoError(t, s.CreateSecret(ctx, e))
+
+	got, err := s.GetSecret(ctx, "s-rt")
+	require.NoError(t, err)
+	assert.True(t, got.RotationEnabled)
+	assert.Equal(t, e.RotationLambdaARN, got.RotationLambdaARN)
+	assert.Equal(t, e.RotationRules, got.RotationRules)
+	require.NotNil(t, got.NextRotationDate)
+	assert.Equal(t, now, got.NextRotationDate.UTC().Truncate(time.Second))
+	assert.Equal(t, e.ResourcePolicy, got.ResourcePolicy)
+}
+
+func TestSecretEntry_BackwardsCompatible(t *testing.T) {
+	ctx := context.Background()
+	s := newSecretStore()
+
+	e := secret.SecretEntry{SecretID: "s-old", Name: "old/secret", Description: "legacy"}
+	require.NoError(t, s.CreateSecret(ctx, e))
+
+	got, err := s.GetSecret(ctx, "s-old")
+	require.NoError(t, err)
+	assert.False(t, got.RotationEnabled)
+	assert.Empty(t, got.RotationLambdaARN)
+	assert.Nil(t, got.RotationRules)
+	assert.Nil(t, got.NextRotationDate)
+	assert.Empty(t, got.ResourcePolicy)
 }
 
 func TestMemorySecretStore_Reset(t *testing.T) {
