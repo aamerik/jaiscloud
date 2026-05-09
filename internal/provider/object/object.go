@@ -1014,7 +1014,7 @@ func (p *ObjectProvider) DeleteObjects(ctx context.Context, nr *model.Normalized
 		key, _ := km["Key"].(string)
 		versionID, _ := km["VersionId"].(string)
 
-		if vStatus == objectstore.VersioningEnabled {
+		if vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended {
 			if versionID != "" {
 				// Delete a specific version.
 				m, err := p.meta.GetObjectVersion(ctx, bucket, key, versionID)

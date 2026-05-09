@@ -602,6 +602,23 @@ func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.Normal
 	if len(entries) == 0 {
 		return nil, model.NewProviderError("AWS.SimpleQueueService.EmptyBatchRequest", "There is nothing to delete.", 400)
 	}
+	if len(entries) > 10 {
+		return nil, model.NewProviderError("AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
+			"Maximum number of entries per request are 10.", 400)
+	}
+	seenIDs := map[string]bool{}
+	for _, e := range entries {
+		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.InvalidBatchEntryId",
+				"A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", 400)
+		}
+		if seenIDs[id] {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
+				"Two or more batch entries in the request have the same Id.", 400)
+		}
+		seenIDs[id] = true
+	}
 
 	var successful []map[string]any
 	var failed []map[string]any

@@ -314,8 +314,12 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 				return nil, err
 			}
 		case "Update":
-			existing, err := s.GetItem(ctx, op.Table, op.PKHash)
-			if err != nil {
+			var existingRaw []byte
+			err := tx.QueryRow(ctx, `SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2`, op.Table, op.PKHash).Scan(&existingRaw)
+			var existing map[string]any
+			if err == nil {
+				json.Unmarshal(existingRaw, &existing)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return nil, err
 			}
 			if existing == nil {

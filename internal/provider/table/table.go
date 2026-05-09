@@ -857,7 +857,7 @@ func (p *TableProvider) DescribeContinuousBackups(ctx context.Context, nr *model
 	}
 	return provider.OK(map[string]any{
 		"ContinuousBackupsDescription": map[string]any{
-			"ContinuousBackupsStatus": "AVAILABLE",
+			"ContinuousBackupsStatus": "ENABLED",
 			"PointInTimeRecoveryDescription": map[string]any{
 				"PointInTimeRecoveryStatus": pitrStatus,
 			},
@@ -883,7 +883,7 @@ func (p *TableProvider) UpdateContinuousBackups(ctx context.Context, nr *model.N
 	}
 	return provider.OK(map[string]any{
 		"ContinuousBackupsDescription": map[string]any{
-			"ContinuousBackupsStatus": "AVAILABLE",
+			"ContinuousBackupsStatus": "ENABLED",
 			"PointInTimeRecoveryDescription": map[string]any{
 				"PointInTimeRecoveryStatus": pitrStatus,
 			},
