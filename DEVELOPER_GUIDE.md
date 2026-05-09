@@ -1,8 +1,8 @@
 # Developer Guide
 
-JaisCloud is a local AWS emulator written in Go. Point any AWS SDK at `http://localhost:4566` and it speaks the same wire protocol as real AWS — SQS, S3, DynamoDB, Lambda, EMR, and more — without touching the internet.
+JaisCloud ships one self-contained binary per cloud provider. Each binary speaks the exact wire protocol for that cloud — no shared adapter, no runtime flag to switch clouds. The AWS binary (`jaiscloud-aws`) is the reference implementation; Azure and GCP stubs follow the same structure.
 
-This guide walks you from a fresh clone to a running server, then through progressively more realistic setups: in-memory for unit tests, PostgreSQL-backed for persistence, and real Spark jobs submitted to a Kubernetes cluster.
+This guide covers the AWS binary. It walks you from a fresh clone to a running server, then through progressively more realistic setups: in-memory for unit tests, PostgreSQL-backed for persistence, and real Spark jobs submitted to a Kubernetes cluster.
 
 ---
 
@@ -12,7 +12,7 @@ Read this table first. Pick the row that matches your goal, then jump to that se
 
 You can run JaisCloud two ways:
 
-- **From source** — build the Go binary yourself (`go build ./cmd/jaiscloud/`). Good for development and debugging.
+- **From source** — build the Go binary yourself (`go build -o jaiscloud-aws ./cmd/jaiscloud-aws/`). Good for development and debugging.
 - **Via Docker / Kubernetes** — use the pre-built image. No Go required at all.
 
 | Goal | Mode | Run from source | Run via Docker / K8s |
@@ -26,12 +26,12 @@ You can run JaisCloud two ways:
 If you are new to JaisCloud and want the fastest start, pull the public image and run it:
 
 ```bash
-docker pull ghcr.io/jaisrajms/jaiscloud:latest
-docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud:latest
+docker pull ghcr.io/jaisrajms/jaiscloud-aws:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud-aws:latest
 curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
 ```
 
-If you are developing JaisCloud itself or need to iterate quickly on code changes, build from source with `go build -o jaiscloud ./cmd/jaiscloud/`.
+If you are developing JaisCloud itself or need to iterate quickly on code changes, build from source with `go build -o jaiscloud-aws ./cmd/jaiscloud-aws/`.
 
 ---
 
@@ -97,7 +97,7 @@ If Go is not installed or out of date: https://go.dev/dl/
 
 ### Required for Full mode and Spark
 
-**Docker** — needed to run PostgreSQL (full mode) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud:latest`.
+**Docker** — needed to run PostgreSQL (full mode) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud-aws:latest`.
 
 ```bash
 docker version
@@ -137,15 +137,15 @@ aws --version
 From the repo root:
 
 ```bash
-go build -o jaiscloud ./cmd/jaiscloud/
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 ```
 
-This produces a `jaiscloud` binary in the current directory. You must rebuild after any code change — never run a stale binary.
+This produces a `jaiscloud-aws` binary in the current directory. You must rebuild after any code change — never run a stale binary.
 
 ### Step 2 — Start the server
 
 ```bash
-./jaiscloud start
+./jaiscloud-aws start
 ```
 
 Expected output:
@@ -154,12 +154,12 @@ INFO  executor  lambda=mock  spark=mock
 INFO  jaiscloud started  port=4566  mode=lite
 ```
 
-The server is now listening on port 4566. Leave this terminal open, or run it in the background with `./jaiscloud start &`.
+The server is now listening on port 4566. Leave this terminal open, or run it in the background with `./jaiscloud-aws start &`.
 
 ### Step 3 — Verify it is running
 
 ```bash
-./jaiscloud doctor
+./jaiscloud-aws doctor
 ```
 
 Expected:
@@ -240,9 +240,9 @@ The repo includes a Docker Compose file that starts both PostgreSQL and JaisClou
 make up-docker
 ```
 
-This pulls `ghcr.io/jaisrajms/jaiscloud:latest`, starts PostgreSQL on port 5433, and starts JaisCloud on port 4566. Skip to the verify step.
+This pulls `ghcr.io/jaisrajms/jaiscloud-aws:latest`, starts PostgreSQL on port 5433, and starts JaisCloud on port 4566. Skip to the verify step.
 
-> **Using a locally built image?** Run `make docker` first, then pass the image override: `JAISCLOUD_IMAGE=jaiscloud:latest make up-docker`.
+> **Using a locally built image?** Run `make docker-aws` first, then pass the image override: `JAISCLOUD_IMAGE=jaiscloud-aws:latest make up-docker`.
 
 To stop:
 ```bash
@@ -280,8 +280,8 @@ docker exec jaiscloud-pg pg_isready -U jaiscloud
 ### Step 2 — Start JaisCloud in full mode
 
 ```bash
-go build -o jaiscloud ./cmd/jaiscloud/
-./jaiscloud start \
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
+./jaiscloud-aws start \
   --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
@@ -308,7 +308,7 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
     sqs create-queue --queue-name persist-test
 
 # Stop and restart the server (Ctrl+C then restart, or kill & restart if running in background)
-./jaiscloud start --mode full --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
+./jaiscloud-aws start --mode full --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 
 # Queue should still be there
 aws --endpoint-url http://localhost:4566 --region us-east-1 \
@@ -323,7 +323,7 @@ You can use environment variables instead of flags:
 ```bash
 export JAISCLOUD_MODE=full
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
-./jaiscloud start
+./jaiscloud-aws start
 ```
 
 ### Connection string format
@@ -382,7 +382,7 @@ make up-k8s
 ```
 
 This runs in order:
-1. Pulls `ghcr.io/jaisrajms/jaiscloud:latest` from the GitHub Container Registry
+1. Pulls `ghcr.io/jaisrajms/jaiscloud-aws:latest` from the GitHub Container Registry
 2. Applies `deploy/k8s/namespace.yaml` — creates the `jaiscloud` namespace
 3. Applies `deploy/k8s/rbac.yaml` — grants JaisCloud permission to create Spark Jobs and Lambda Pods
 4. Applies `deploy/k8s/postgres.yaml` — starts a PostgreSQL pod
@@ -416,7 +416,7 @@ kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
 ### Step 4 — Verify
 
 ```bash
-./jaiscloud doctor
+./jaiscloud-aws doctor
 # OK: jaiscloud is running at http://localhost:4566
 
 curl http://localhost:4566/_jaiscloud/health
@@ -452,12 +452,12 @@ kubectl logs -n jaiscloud deployment/postgres -f
 This is the default. You do not need to set anything:
 
 ```bash
-./jaiscloud start   # mock executor is on by default
+./jaiscloud-aws start   # mock executor is on by default
 ```
 
 To be explicit:
 ```bash
-JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start
+JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud-aws start
 ```
 
 ### Try it — EMR on EC2 (classic)
@@ -618,7 +618,7 @@ export JAISCLOUD_K8S_NAMESPACE=jaiscloud
 export JAISCLOUD_K8S_SA=spark-driver              # SA for the spark-submit pod
 export JAISCLOUD_K8S_SPARK_SA=spark-driver         # SA for executor pods
 
-./jaiscloud start --mode full \
+./jaiscloud-aws start --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
@@ -744,10 +744,10 @@ This section explains each Spark-related env var in detail — why it exists, wh
 
 ```bash
 # Explicit mock (same as leaving unset)
-JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud start
+JAISCLOUD_EXECUTOR_MODE=mock ./jaiscloud-aws start
 
 # Real K8s execution
-JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud start
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start
 ```
 
 ---
@@ -798,7 +798,7 @@ rules:
 Set this when you want Spark and Lambda workloads isolated in a different namespace than the JaisCloud server itself, or when your cluster policy requires workloads in a specific namespace:
 
 ```bash
-JAISCLOUD_K8S_NAMESPACE=spark-jobs ./jaiscloud start
+JAISCLOUD_K8S_NAMESPACE=spark-jobs ./jaiscloud-aws start
 ```
 
 The namespace must already exist and have the RBAC from `deploy/k8s/rbac.yaml` applied. If the namespace does not exist, Job creation silently fails and steps stay in `RUNNING` forever until the reconcile timeout fires.
@@ -879,10 +879,10 @@ This exists because Kubernetes does not guarantee immediate consistency — a 40
 
 ```bash
 # Shorter timeout for CI — fail fast when jobs are externally cleaned up
-JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=2m ./jaiscloud start
+JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=2m ./jaiscloud-aws start
 
 # Longer timeout for flaky clusters with intermittent API server unavailability
-JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=30m ./jaiscloud start
+JAISCLOUD_SPARK_K8S_RECONCILE_TIMEOUT=30m ./jaiscloud-aws start
 ```
 
 If steps are flipping to `FAILED` unexpectedly in a healthy cluster, increase this value. If steps stay `RUNNING` too long after being externally deleted, decrease it.
@@ -901,10 +901,10 @@ If steps are flipping to `FAILED` unexpectedly in a healthy cluster, increase th
 
 ```bash
 # CI — give each CI job a stable, reproducible instance ID so cleanup is deterministic
-JAISCLOUD_INSTANCE_ID=ci-run-${CI_JOB_ID} ./jaiscloud start
+JAISCLOUD_INSTANCE_ID=ci-run-${CI_JOB_ID} ./jaiscloud-aws start
 
 # Staging — fix the ID so that rolling restarts re-adopt the same set of jobs
-JAISCLOUD_INSTANCE_ID=staging-primary ./jaiscloud start
+JAISCLOUD_INSTANCE_ID=staging-primary ./jaiscloud-aws start
 ```
 
 **Do not** set this to the same value for two concurrently running instances — they will fight over each other's K8s resources.
@@ -918,7 +918,7 @@ When Spark jobs run in K8s mode, the driver pod needs to reach JaisCloud's S3 en
 ```bash
 export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://jaiscloud.jaiscloud.svc:4566
 export JAISCLOUD_EXECUTOR_MODE=k8s
-./jaiscloud start --mode full --dsn "postgres://..."
+./jaiscloud-aws start --mode full --dsn "postgres://..."
 ```
 
 JaisCloud then injects the following into every spark-submit pod:
@@ -942,9 +942,9 @@ The IMDS emulator exposes `GET /latest/meta-data/` endpoints so Spark jobs that 
 Enable it:
 
 ```bash
-./jaiscloud start --imds-enabled
+./jaiscloud-aws start --imds-enabled
 # or
-JAISCLOUD_IMDS_ENABLED=true ./jaiscloud start
+JAISCLOUD_IMDS_ENABLED=true ./jaiscloud-aws start
 ```
 
 When `--aws-emulator-endpoint` is also set, JaisCloud injects `AWS_EC2_METADATA_SERVICE_ENDPOINT=<endpoint>` into Spark driver pods so they hit the local IMDS emulator instead of `169.254.169.254`.
@@ -1016,13 +1016,13 @@ The port is **not** part of the base. JaisCloud strips `:port` from the Host hea
 
 ```bash
 # CLI flag
-./jaiscloud start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local"
+./jaiscloud-aws start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local"
 
 # Multiple bases (comma-separated)
-./jaiscloud start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local,s3.devbox.local"
+./jaiscloud-aws start --s3-virtual-host-bases "jaiscloud.jaiscloud.svc.cluster.local,s3.devbox.local"
 
 # Environment variable (same syntax)
-JAISCLOUD_S3_VIRTUAL_HOST_BASES=jaiscloud.jaiscloud.svc.cluster.local ./jaiscloud start
+JAISCLOUD_S3_VIRTUAL_HOST_BASES=jaiscloud.jaiscloud.svc.cluster.local ./jaiscloud-aws start
 ```
 
 ---
@@ -1134,7 +1134,7 @@ go test -race ./internal/...
 Start the server first, then run:
 
 ```bash
-./jaiscloud start &
+./jaiscloud-aws start &
 go test -race -count=1 ./tests/integration/
 
 # Run a specific service
@@ -1178,8 +1178,8 @@ docker exec jaiscloud-pg pg_isready -U jaiscloud
 #### 2. Build and start JaisCloud in full mode
 
 ```bash
-go build -o jaiscloud ./cmd/jaiscloud/
-./jaiscloud start \
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
+./jaiscloud-aws start \
   --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 ```
@@ -1206,7 +1206,7 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
 
 # Kill and restart the server
 kill %1
-./jaiscloud start --mode full \
+./jaiscloud-aws start --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 
 # Queue should still be there
@@ -1553,7 +1553,7 @@ Iceberg tests run a real Spark SQL job via Docker, write Iceberg tables to JaisC
 JaisCloud must be running in full mode (lite mode works too — Glue, S3, and DynamoDB are all in-memory):
 
 ```bash
-./jaiscloud start --mode full \
+./jaiscloud-aws start --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
@@ -1793,7 +1793,7 @@ export JAISCLOUD_PLATFORM_ENV_FILE=/etc/jaiscloud/extra-env.json
 
 ## Multi-Cloud Spark Transforms
 
-The `CloudSparkTransform` registry (`internal/executor/spark/cloud_transform.go`) decouples cloud-specific Spark contributions from the executor. Each cloud registers itself via `init()` and is selected at manifest build time from `SparkConfig.Cloud` (derived from `--cloud` / `JAISCLOUD_CLOUD`).
+The `CloudSparkTransform` registry (`internal/executor/spark/cloud_transform.go`) decouples cloud-specific Spark contributions from the executor. Each cloud registers itself via `init()` and is selected at manifest build time from `SparkConfig.Cloud`, which is set to the cloud's name by the binary's `main.go` (e.g. `"aws"` for `jaiscloud-aws`, `"azure"` for `jaiscloud-azure`).
 
 | Cloud | Transform | URI validation | Auth mechanism |
 |---|---|---|---|
@@ -1809,12 +1809,11 @@ Each transform contributes:
 
 ### Azure Spark transform
 
-Set `JAISCLOUD_CLOUD=azure` and configure one of two authentication modes:
+Use the `jaiscloud-azure` binary. Configure one of two authentication modes:
 
 **Shared key** (simpler, for dev):
 
 ```bash
-export JAISCLOUD_CLOUD=azure
 export JAISCLOUD_AZURE_STORAGE_ACCOUNT=mystorageacct
 export JAISCLOUD_AZURE_STORAGE_KEY=base64encodedkey==
 ```
@@ -1824,7 +1823,6 @@ This injects `fs.azure.account.auth.type.*.dfs.core.windows.net=SharedKey` and t
 **OAuth / Workload Identity** (for production K8s):
 
 ```bash
-export JAISCLOUD_CLOUD=azure
 export JAISCLOUD_AZURE_STORAGE_ACCOUNT=mystorageacct
 export JAISCLOUD_AZURE_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 export JAISCLOUD_AZURE_CLIENT_SECRET=my-client-secret
@@ -1841,12 +1839,11 @@ export JAISCLOUD_AZURE_STORAGE_ENDPOINT=https://mystorageacct.dfs.core.windows.n
 
 ### GCP Spark transform
 
-Set `JAISCLOUD_CLOUD=gcp` and configure one of two service-account modes:
+Use the `jaiscloud-gcp` binary. Configure one of two service-account modes:
 
 **Key file path** (the key is already present on the container filesystem):
 
 ```bash
-export JAISCLOUD_CLOUD=gcp
 export JAISCLOUD_GCP_PROJECT_ID=my-gcp-project
 export JAISCLOUD_GCP_SA_KEY_PATH=/etc/gcp/key.json
 ```
@@ -1854,7 +1851,6 @@ export JAISCLOUD_GCP_SA_KEY_PATH=/etc/gcp/key.json
 **K8s Secret** (the key is stored in a Kubernetes Secret and mounted by the executor):
 
 ```bash
-export JAISCLOUD_CLOUD=gcp
 export JAISCLOUD_GCP_PROJECT_ID=my-gcp-project
 export JAISCLOUD_GCP_SA_SECRET=my-gcp-sa-key-secret   # K8s Secret name in the executor namespace
 ```
@@ -1879,10 +1875,10 @@ No extra configuration needed. This is the default when `JAISCLOUD_EXECUTOR_MODE
 
 ```bash
 # Minimal — everything defaults to in-memory mock
-./jaiscloud start
+./jaiscloud-aws start
 
 # Explicit mock with full persistence
-./jaiscloud start \
+./jaiscloud-aws start \
   --mode full \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" \
   --executor-mode mock
@@ -1931,7 +1927,7 @@ export JAISCLOUD_PLATFORM_ENV='{"HTTP_PROXY":"http://proxy.corp:3128","NO_PROXY"
 export JAISCLOUD_PLATFORM_HOSTPATH_ALLOWLIST=/etc/ssl/certs,/run/secrets
 export JAISCLOUD_PLATFORM_VOLUMES='[{"name":"corp-certs","mountPath":"/etc/corp/certs","hostPath":"/etc/ssl/certs","readOnly":true}]'
 
-./jaiscloud start
+./jaiscloud-aws start
 ```
 
 **Verify Docker executor is active:**
@@ -1998,7 +1994,7 @@ export JAISCLOUD_PLATFORM_VOLUMES='[
   {"name":"corp-tls","secret":"corp-tls-secret","mountPath":"/etc/corp/tls","readOnly":true}
 ]'
 
-./jaiscloud start
+./jaiscloud-aws start
 ```
 
 **Verify K8s executor is active:**
@@ -2019,13 +2015,12 @@ kubectl get jobs -n jaiscloud -l app=jaiscloud-spark
 
 ---
 
-### Multi-cloud (Azure / GCP) with K8s executor
+### Azure / GCP with K8s executor
 
-Set `--cloud` to select the cloud adapter, then add the cloud-specific Spark transform env vars. The Platform layer applies identically across all clouds.
+Each cloud has its own binary. The Platform layer and K8s executor configuration apply identically regardless of which binary you run.
 
 **Azure (K8s executor, OAuth auth):**
 ```bash
-export JAISCLOUD_CLOUD=azure
 export JAISCLOUD_EXECUTOR_MODE=k8s
 export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
 export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
@@ -2041,12 +2036,11 @@ export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
   {"name":"azure-ca","source":{"kind":"configMap","name":"azure-ca-bundle","key":"ca.crt"}}
 ]'
 
-./jaiscloud start --mode full --dsn "postgres://..."
+./jaiscloud-azure start --mode full --dsn "postgres://..."
 ```
 
 **GCP (K8s executor, Secret-based SA key):**
 ```bash
-export JAISCLOUD_CLOUD=gcp
 export JAISCLOUD_EXECUTOR_MODE=k8s
 export JAISCLOUD_K8S_APISERVER=https://127.0.0.1:6443
 export JAISCLOUD_K8S_TOKEN=$(kubectl create token jaiscloud-sa -n jaiscloud --duration=24h)
@@ -2057,7 +2051,7 @@ export JAISCLOUD_GCP_SA_SECRET=my-gcp-sa-key-secret   # K8s Secret in the execut
 
 export JAISCLOUD_PLATFORM_TLS_ENABLED=false   # GCP root CAs already trusted by default JVM
 
-./jaiscloud start --mode full --dsn "postgres://..."
+./jaiscloud-gcp start --mode full --dsn "postgres://..."
 ```
 
 ---
@@ -2092,8 +2086,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
 
 Build and run:
 ```powershell
-go build -o jaiscloud.exe ./cmd/jaiscloud/
-.\jaiscloud.exe start
+go build -o jaiscloud-aws.exe ./cmd/jaiscloud-aws/
+.\jaiscloud-aws.exe start
 ```
 
 ### AWS CLI shorthand
@@ -2115,12 +2109,12 @@ awslocal emr list-clusters
 
 ### Adding a new AWS service
 
-All AWS service wiring flows from a single source of truth: the `awsServices` slice in [internal/adapter/aws/services.go](internal/adapter/aws/services.go). Adding one `ServiceDescriptor` entry here automatically updates service detection, SigV4 allow-list, Action routing, and gateway provider mapping.
+All AWS service wiring flows from a single source of truth: the `awsServices` slice in [internal/aws/adapter/services.go](internal/aws/adapter/services.go). Adding one `ServiceDescriptor` entry here automatically updates service detection, SigV4 allow-list, Action routing, and gateway provider mapping.
 
 **Step 1 — Register the service descriptor:**
 
 ```go
-// internal/adapter/aws/services.go
+// internal/aws/adapter/services.go
 {
     SigV4Name:      "my-service",       // matches Authorization scope
     TargetPrefix:   "MyService",        // for JSON/Target; "" for Query or REST
@@ -2131,20 +2125,20 @@ All AWS service wiring flows from a single source of truth: the `awsServices` sl
 
 **Step 2 — Implement the codec:**
 
-Create `internal/adapter/aws/services/myservice.go`. Choose the protocol that matches the real AWS SDK:
+Create `internal/aws/adapter/services/myservice.go`. Choose the protocol that matches the real AWS SDK:
 
 - JSON/Target (DynamoDB-style): embed `BaseCodec`, implement `Decode` to read `X-Amz-Target`, `Encode` to write `application/x-amz-json-1.1`.
 - Query/XML (SQS-style): parse form body, `Action=` param.
 - REST/JSON (Lambda-style): extract action from path + HTTP method.
 
-Register in `buildAWSAdapter()` in `cmd/jaiscloud/main.go`:
+Register in `buildAWSAdapter()` in `cmd/jaiscloud-aws/main.go`:
 ```go
 "my-service": &services.MyServiceCodec{},
 ```
 
 **Step 3 — Implement the provider:**
 
-Create `internal/provider/aws/myservice/myservice.go`. Follow the struct pattern used by every other provider:
+Create `internal/aws/provider/myservice/myservice.go`. Follow the struct pattern used by every other provider:
 
 ```go
 type MyServiceProvider struct {
@@ -2194,9 +2188,9 @@ Providers must never call `fmt.Sprintf("arn:aws:...")` directly — always use `
 
 ### Provider layout conventions
 
-**Cloud-specific vs. cloud-agnostic:**
-- Providers that implement AWS-specific semantics (EMR, EC2, CloudFormation) live under `internal/provider/aws/`.
-- Providers that could apply to any cloud (SQS, DynamoDB, S3, Lambda, EventBridge) live directly under `internal/provider/`.
+**Per-cloud layout:**
+- All AWS provider packages live under `internal/aws/provider/`. The binary at `cmd/jaiscloud-aws/` imports only `internal/aws/` packages.
+- Shared infrastructure (store interfaces, event bus, clock, config) lives under `internal/` and may be imported by any cloud binary, but must never import cloud-specific code.
 
 **Struct fields:** Keep the struct small. Standard fields: `resources store.ResourceStore`, `bus *events.EventBus`. For providers with background goroutines: `ctx context.Context`, `cancel context.CancelFunc`, `wg sync.WaitGroup`.
 

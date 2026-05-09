@@ -3,8 +3,10 @@
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
-             grep -oP 'const version = "\K[^"]+' cmd/jaiscloud/main.go 2>/dev/null || \
+             grep -oP 'const version = "\K[^"]+' cmd/jaiscloud-aws/main.go 2>/dev/null || \
              echo "dev")
+
+CLOUDS := aws azure gcp
 
 REGISTRY ?=
 
@@ -39,10 +41,10 @@ PG_DB        ?= jaiscloud
 # Narrow any test target to a single test: make test-e2e-emrcontainers-k8s TEST_RUN=TestSparkJob_K8s_CancelJobRun
 TEST_RUN ?= .
 
-IMAGE             := jaiscloud
+IMAGE             := jaiscloud-aws
 # Public image used by up-docker and up-k8s. Override with a locally built image
-# (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud:latest to make.
-JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud:latest
+# (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
+JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
 
 .PHONY: help build test docker clean \
         server-lite server-full server-docker server-k8s server-full-all \
@@ -91,23 +93,31 @@ help: ## Show this help  (tip: bare 'make' also works)
 
 ##@ Build
 
-build: ## Compile the jaiscloud binary (CGO_ENABLED=0, static)
-	go build -trimpath -ldflags="-s -w" -o jaiscloud ./cmd/jaiscloud/
+build: build-aws  ## Compile jaiscloud-aws (default)
 
-docker: ## Build jaiscloud Docker image tagged jaiscloud:VERSION
+build-all: $(addprefix build-,$(CLOUDS))  ## Compile all cloud binaries (aws, azure, gcp)
+
+build-%:  ## Compile jaiscloud-<cloud>
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o jaiscloud-$* ./cmd/jaiscloud-$*/
+
+docker: docker-aws  ## Build jaiscloud-aws Docker image (default)
+
+docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
+
+docker-%:  ## Build jaiscloud-<cloud> Docker image
 	docker build \
 		--build-arg VERSION=$(VERSION) \
-		--tag $(IMAGE):$(VERSION) \
-		--tag $(IMAGE):latest \
-		--file Dockerfile \
-		.
+		--build-arg CLOUD=$* \
+		--tag jaiscloud-$*:$(VERSION) \
+		--tag jaiscloud-$*:latest \
+		--file Dockerfile .
 ifdef REGISTRY
-	docker tag $(IMAGE):$(VERSION) $(REGISTRY)/$(IMAGE):$(VERSION)
-	docker tag $(IMAGE):latest     $(REGISTRY)/$(IMAGE):latest
+	docker tag jaiscloud-$*:$(VERSION) $(REGISTRY)/jaiscloud-$*:$(VERSION)
+	docker tag jaiscloud-$*:latest     $(REGISTRY)/jaiscloud-$*:latest
 endif
 
-clean: ## Remove the compiled binary
-	rm -f jaiscloud
+clean: ## Remove compiled binaries
+	rm -f jaiscloud-aws jaiscloud-azure jaiscloud-gcp
 
 ##@ Unit tests
 
@@ -118,11 +128,11 @@ test: ## Run all unit tests with the race detector  (no server needed)
 
 server-lite: build ## In-memory stores, mock executors — no postgres required
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud start
+	  ./jaiscloud-aws start
 
 server-full: build ## Postgres stores, mock executors — requires JAISCLOUD_DSN
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud start --mode full --dsn "$(JAISCLOUD_DSN)"
+	  ./jaiscloud-aws start --mode full --dsn "$(JAISCLOUD_DSN)"
 
 server-docker: _check-docker-prereq docker ## Full mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
@@ -135,8 +145,8 @@ server-k8s: _check-k8s-prereq up-k8s ## Full mode + Spark and Lambda via K8s  (r
 
 server-full-all: server-k8s ## Alias for server-k8s (full mode, all executors via K8s)
 
-stop-server: ## Stop background jaiscloud process and clean up Lambda/Spark resources
-	@pkill -f "jaiscloud start" 2>/dev/null && echo "jaiscloud stopped" || echo "jaiscloud was not running"
+stop-server: ## Stop background jaiscloud-aws process and clean up Lambda/Spark resources
+	@pkill -f "jaiscloud-aws start" 2>/dev/null && echo "jaiscloud-aws stopped" || echo "jaiscloud-aws was not running"
 	@kubectl delete pods -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
 	@kubectl delete svc -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
 	@kubectl delete jobs -l app=jaiscloud-spark -n jaiscloud --ignore-not-found 2>/dev/null || true
@@ -223,10 +233,10 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
 	  printf   "\033[1m│   JaisCloud Integration Suite — Full Mode (Postgres)  │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
-	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud instance...\n"; \
-	  pkill -f "jaiscloud start" 2>/dev/null || true; \
-	  printf "\033[1m[2/4]\033[0m Building jaiscloud... "; \
-	  go build -o jaiscloud ./cmd/jaiscloud/ \
+	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud-aws instance...\n"; \
+	  pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	  printf "\033[1m[2/4]\033[0m Building jaiscloud-aws... "; \
+	  go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ \
 	    && printf "\033[32m✓ OK\033[0m\n" \
 	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
 	  printf "\033[1m[3/4]\033[0m Setting up Postgres...\n"; \
@@ -237,16 +247,16 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	    printf "  Postgres not running — starting\n"; \
 	    $(MAKE) postgres-up; \
 	  fi; \
-	  printf "\033[1m[4/4]\033[0m Starting jaiscloud in full mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud start --mode full --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
+	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws in full mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start --mode full --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
 	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	    ./jaiscloud start --mode full --dsn "$(JAISCLOUD_DSN)" \
+	    ./jaiscloud-aws start --mode full --dsn "$(JAISCLOUD_DSN)" \
 	    > /tmp/jaiscloud-full.log 2>&1 & \
 	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud not healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
-	      pkill -f "jaiscloud start" 2>/dev/null || true; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
+	      pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
@@ -256,22 +266,22 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
 	  printf   "\033[1m│  JaisCloud Integration Suite — Lite Mode (in-memory)  │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
-	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud instance...\n"; \
-	  pkill -f "jaiscloud start" 2>/dev/null || true; \
-	  printf "\033[1m[2/3]\033[0m Building jaiscloud... "; \
-	  go build -o jaiscloud ./cmd/jaiscloud/ \
+	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud-aws instance...\n"; \
+	  pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	  printf "\033[1m[2/3]\033[0m Building jaiscloud-aws... "; \
+	  go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ \
 	    && printf "\033[32m✓ OK\033[0m\n" \
 	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
-	  printf "\033[1m[3/3]\033[0m Starting jaiscloud in lite mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud start\033[0m\n"; \
+	  printf "\033[1m[3/3]\033[0m Starting jaiscloud-aws in lite mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start\033[0m\n"; \
 	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	    ./jaiscloud start \
+	    ./jaiscloud-aws start \
 	    > /tmp/jaiscloud-e2e.log 2>&1 & \
 	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud not healthy — check /tmp/jaiscloud-e2e.log\033[0m\n"; \
-	      pkill -f "jaiscloud start" 2>/dev/null || true; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-e2e.log\033[0m\n"; \
+	      pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
@@ -305,7 +315,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	    print "\033[1m══════════════════════════════════════════════════════\033[0m"; \
 	  } \
 	' /tmp/integration-results.txt; \
-	pkill -f "jaiscloud start" 2>/dev/null || true; \
+	pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
 	exit $$(cat /tmp/integration-exit.txt)
 
 ##@ Full-mode e2e tests  (start server, run suite, stop server)
@@ -402,7 +412,7 @@ test-all: test test-integration test-e2e ## Unit tests + integration tests + all
 # ─── Internal helpers (not shown in help) ────────────────────────────────────
 
 _build-for-e2e:
-	go build -o jaiscloud ./cmd/jaiscloud/
+	go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
 _wait-postgres:
 	@echo "Waiting for Postgres on port $(PG_PORT)..."
@@ -433,21 +443,21 @@ _start-k8s: _check-k8s-prereq up-k8s
 _stop-k8s: down-k8s
 
 _restart-server-lite: _build-for-e2e
-	@pkill -f "jaiscloud start" 2>/dev/null || true
+	@pkill -f "jaiscloud-aws start" 2>/dev/null || true
 	@sleep 1
 	@JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud start \
+	  ./jaiscloud-aws start \
 	  > /tmp/jaiscloud-e2e.log 2>&1 &
-	@echo "Waiting for jaiscloud on $(JAISCLOUD_HOST)..."
+	@echo "Waiting for jaiscloud-aws on $(JAISCLOUD_HOST)..."
 	@n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	  n=$$((n+1)); \
 	  if [ $$n -ge 30 ]; then \
-	    echo "ERROR: jaiscloud did not become healthy — check /tmp/jaiscloud-e2e.log"; \
+	    echo "ERROR: jaiscloud-aws did not become healthy — check /tmp/jaiscloud-e2e.log"; \
 	    exit 1; \
 	  fi; \
 	  sleep 1; \
 	done; \
-	echo "jaiscloud ready (log: /tmp/jaiscloud-e2e.log)"
+	echo "jaiscloud-aws ready (log: /tmp/jaiscloud-e2e.log)"
 
 _check-docker-prereq:
 	@docker info > /dev/null 2>&1 || \

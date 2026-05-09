@@ -9,20 +9,32 @@
 
 **⚡ JaisCloud — Fast, Local, Realistic Cloud for AI-Driven Development that runs anywhere — laptop, CI, or Kubernetes**
 
-JaisCloud is a free and open-source, lightweight multi-cloud emulator designed to enable AI agents and developers to rapidly deploy and validate code changes for enterprise applications that depend on cloud resources—without interacting with real cloud environments. It goes beyond basic emulation by providing high-fidelity, scaled-down implementations of cloud services (across AWS, Azure, and GCP), including real execution backends for systems like EMR (Spark), Lambda, and container-based workloads. This allows workloads to behave much closer to actual cloud environments while still running locally or in isolated infrastructure.
+JaisCloud is a free and open-source, lightweight multi-cloud emulator designed to enable AI agents and developers to rapidly deploy and validate code changes for enterprise applications that depend on cloud resources—without interacting with real cloud environments. It goes beyond basic emulation by providing high-fidelity, scaled-down implementations of cloud services, including real execution backends for systems like EMR (Spark), Lambda, and container-based workloads. This allows workloads to behave much closer to actual cloud environments while still running locally or in isolated infrastructure.
 
 By combining protocol-level compatibility with real execution semantics, JaisCloud enables end-to-end validation of cloud-dependent workflows in complete isolation, eliminating the latency, cost, and risk associated with real deployments. **This dramatically shortens the feedback loop: AI agents can provision resources, execute workflows, and verify behavior in seconds rather than minutes. At the same time, it significantly reduces cloud costs by removing the need to provision real cloud infrastructure for development and testing workflows.**
 
 As an open-source project, JaisCloud offers transparency, extensibility, and community-driven innovation—allowing teams to customize, audit, and evolve the platform to fit their specific needs. It plays a critical role in accelerating AI-driven Software Development Lifecycle (AI-SDLC) by enabling fast, reliable, and repeatable validation of code changes. By empowering AI agents with tight feedback cycles and realistic execution environments, JaisCloud becomes a foundational tool for building, testing, and evolving cloud-native systems with high velocity.
 
-JaisCloud speaks the exact same wire protocols as AWS — no SDK shims, no proxy rewrites. Point any `aws-sdk-go-v2`, `boto3`, or `aws-sdk-js` client at `http://localhost:4566` and it works, unmodified.
+**One binary per cloud.** JaisCloud ships separate, self-contained binaries for each cloud provider. Each binary speaks the exact wire protocol for that cloud — no runtime flag to switch clouds.
+
+| Cloud | Binary | Status |
+|---|---|---|
+| [AWS](#aws) | `jaiscloud-aws` | Full implementation |
+| [Azure](#azure) | `jaiscloud-azure` | Stub (501 — in progress) |
+| [GCP](#gcp) | `jaiscloud-gcp` | Stub (501 — in progress) |
+
+---
+
+## AWS
+
+`jaiscloud-aws` speaks the exact same wire protocols as AWS — no SDK shims, no proxy rewrites. Point any `aws-sdk-go-v2`, `boto3`, or `aws-sdk-js` client at `http://localhost:4566` and it works, unmodified.
 
 ```bash
 # Start in seconds
-go run ./cmd/jaiscloud/ start
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ && ./jaiscloud-aws start
 
 # Or with Docker
-docker run -p 4566:4566 ghcr.io/jaisraj/jaiscloud:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud-aws:latest
 ```
 
 ```python
@@ -90,15 +102,15 @@ For per-operation coverage, executor modes, fidelity notes, and full-mode persis
 ### Binary
 
 ```bash
-go build -o jaiscloud ./cmd/jaiscloud/
-./jaiscloud start
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
+./jaiscloud-aws start
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/jaisrajms/jaiscloud:latest
-docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud:latest
+docker pull ghcr.io/jaisrajms/jaiscloud-aws:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud-aws:latest
 ```
 
 ### Docker Compose (full mode with Postgres)
@@ -214,7 +226,7 @@ spec:
     spec:
       containers:
         - name: jaiscloud
-          image: ghcr.io/jaisrajms/jaiscloud:latest
+          image: ghcr.io/jaisrajms/jaiscloud-aws:latest
           args: ["start", "--mode", "full", "--blob-dir", "/blobs", "--metrics"]
           ports:
             - containerPort: 4566
@@ -274,7 +286,6 @@ All flags have an equivalent `JAISCLOUD_*` environment variable.
 |---|---|---|---|
 | `--port` | `JAISCLOUD_PORT` | `4566` | Listen port |
 | `--mode` | `JAISCLOUD_MODE` | `lite` | `lite` (memory) or `full` (postgres) |
-| `--cloud` | `JAISCLOUD_CLOUD` | `aws` | Cloud to emulate: `aws`, `azure`, `gcp` |
 | `--region` | `JAISCLOUD_REGION` | `us-east-1` | AWS region reported in responses |
 | `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -324,13 +335,13 @@ The Platform Runtime Layer injects TLS trust, extra volumes, and environment var
 ## CLI Commands
 
 ```bash
-jaiscloud start          # start the emulator
-jaiscloud version        # print version
-jaiscloud env            # print effective config as env vars
-jaiscloud doctor         # verify the emulator is reachable
-jaiscloud reset          # wipe all state
-jaiscloud export -o snapshot.json   # save state to file
-jaiscloud import -i snapshot.json   # restore state from file
+jaiscloud-aws start          # start the emulator
+jaiscloud-aws version        # print version
+jaiscloud-aws env            # print effective config as env vars
+jaiscloud-aws doctor         # verify the emulator is reachable
+jaiscloud-aws reset          # wipe all state
+jaiscloud-aws export -o snapshot.json   # save state to file
+jaiscloud-aws import -i snapshot.json   # restore state from file
 ```
 
 ---
@@ -403,7 +414,7 @@ aws --endpoint-url http://localhost:4566 emr list-clusters
 go test -race ./internal/...
 
 # Integration tests (server must be running on :4566)
-./jaiscloud start &
+./jaiscloud-aws start &
 go test -race -count=1 ./tests/integration/
 
 # Target a specific service
@@ -438,7 +449,7 @@ See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for the full test matrix and how to
 ```
 HTTP request
   → gateway (Chi router + middleware)
-      → CloudAdapter.DetectAndDecode     (selected once at startup from --cloud)
+      → CloudAdapter.DetectAndDecode     (hardcoded to the binary's cloud at compile time)
           (X-Amz-Target → SQS/DynamoDB/Glue/EMR JSON)
           (Authorization SigV4 scope → all services)
           (Action param → SQS/IAM/STS/SNS Query protocol)
@@ -454,7 +465,37 @@ HTTP request
   → HTTP response
 ```
 
-Each JaisCloud instance emulates exactly one cloud (`--cloud`). There is no per-request cloud detection — the adapter is selected once at startup.
+Each JaisCloud binary emulates exactly one cloud. There is no per-request cloud detection and no `--cloud` flag — the adapter and all providers are compiled into the binary at build time.
+
+---
+
+---
+
+## Azure
+
+`jaiscloud-azure` is the Azure binary. It accepts Azure wire-protocol requests and routes them through the same provider registry as the AWS binary, but using Azure-native resource IDs and authentication.
+
+**Current status:** stub implementation — all Azure endpoints return HTTP 501 Not Implemented. Full implementation is in progress.
+
+```bash
+go build -o jaiscloud-azure ./cmd/jaiscloud-azure/
+./jaiscloud-azure start
+```
+
+When the implementation is complete, you will point any Azure SDK at `http://localhost:4566` with no code changes, the same way you would point an AWS SDK at the AWS binary.
+
+---
+
+## GCP
+
+`jaiscloud-gcp` is the GCP binary. It accepts GCP wire-protocol requests and routes them through the same provider registry, using GCP-native resource names and service account authentication.
+
+**Current status:** stub implementation — all GCP endpoints return HTTP 501 Not Implemented. Full implementation is in progress.
+
+```bash
+go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+./jaiscloud-gcp start
+```
 
 ---
 

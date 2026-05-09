@@ -5,6 +5,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 # Build args injected by Docker Buildx for multi-platform builds
 ARG TARGETOS
 ARG TARGETARCH
+ARG CLOUD=aws
 
 # ca-certificates needed for TLS to external registries during `go mod download`
 RUN apk add --no-cache ca-certificates git
@@ -18,10 +19,10 @@ RUN go mod download
 # Copy source and build a fully static binary
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /jaiscloud ./cmd/jaiscloud/
+    go build -trimpath -ldflags="-s -w" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM scratch
+FROM gcr.io/distroless/static:nonroot
 
 # TLS roots so HTTPS calls (e.g. Prometheus scrape) work
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

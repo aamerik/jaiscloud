@@ -4,7 +4,9 @@
 plan_docs/
 
 # Ignore built binary not folder
-jaiscloud
+jaiscloud-aws
+jaiscloud-azure
+jaiscloud-gcp
 jaiscloud-linux
 !jaiscloud/
 

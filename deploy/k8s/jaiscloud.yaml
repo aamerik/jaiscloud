@@ -58,7 +58,7 @@ spec:
       terminationGracePeriodSeconds: 45
       containers:
         - name: jaiscloud
-          image: ghcr.io/jaisrajms/jaiscloud:latest
+          image: ghcr.io/jaisrajms/jaiscloud-aws:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 4566

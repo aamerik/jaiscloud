@@ -214,7 +214,6 @@ func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
 	viper.SetDefault("mode", "lite")
-	viper.SetDefault("cloud", "aws")
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
@@ -248,10 +247,9 @@ func Load() (*Config, error) {
 	viper.AutomaticEnv()
 
 	cfg := &Config{
-		Port:          viper.GetInt("port"),
-		Mode:          Mode(viper.GetString("mode")),
-		Cloud:         viper.GetString("cloud"),
-		LogLevel:      viper.GetString("log_level"),
+		Port:     viper.GetInt("port"),
+		Mode:     Mode(viper.GetString("mode")),
+		LogLevel: viper.GetString("log_level"),
 		Region:        viper.GetString("region"),
 		AccountID:     viper.GetString("account_id"),
 		DSN:           viper.GetString("dsn"),
@@ -280,12 +278,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid mode %q: must be lite or full", cfg.Mode)
 	}
 
-	switch cfg.Cloud {
-	case "aws", "azure", "gcp":
-		// valid
-	default:
-		return nil, fmt.Errorf("invalid cloud %q: must be aws, azure, or gcp", cfg.Cloud)
-	}
+
 
 	// Parse base time for deterministic mode
 	if ts := viper.GetString("time"); ts != "" {

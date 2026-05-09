@@ -2,9 +2,12 @@
 
 ## Project
 
-JaisCloud is a local multi-cloud emulator written in Go. It speaks native AWS wire protocols (Query/XML, JSON/Target, REST) so any AWS SDK can point at it without modification.
+JaisCloud is a local cloud emulator written in Go. Each cloud ships as its own self-contained binary (`jaiscloud-aws`, `jaiscloud-azure`, `jaiscloud-gcp`). The binary IS the cloud — there is no runtime `--cloud` flag and no shared provider logic between clouds. AWS wire protocols (Query/XML, JSON/Target, REST) are implemented so any AWS SDK can point at `jaiscloud-aws` without modification.
 
-**Implemented services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
+**Design decision: per-cloud binaries, not a cloud-agnostic core.**
+Every cloud has its own adapter, its own provider implementations, and its own entry point. Only infrastructure utilities are shared (`gateway`, `store`, `model`, `admin`, `blobfs`, `clock`, `events`, `executor`, `config`). When Azure or GCP services are implemented, they will live entirely in `internal/azure/` or `internal/gcp/` — no provider code will be shared with AWS.
+
+**Implemented AWS services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
 
 ---
 
@@ -20,69 +23,84 @@ go 1.26.2
 ## Directory layout
 
 ```
-cmd/jaiscloud/          # main.go — wires everything together, Cobra CLI
-docs/                   # Architecture, LLD, design documents
+cmd/
+  jaiscloud-aws/main.go    # AWS binary — full provider wiring, Cobra CLI
+  jaiscloud-azure/main.go  # Azure binary stub (501 for all ops)
+  jaiscloud-gcp/main.go    # GCP binary stub (501 for all ops)
+docs/                      # Architecture, LLD, design documents
 internal/
-  adapter/              # Cloud wire-protocol layer (no business logic)
-    adapter.go          # CloudAdapter interface; Codec interface
+  # ── SHARED INFRASTRUCTURE (cloud-neutral utilities) ──────────────────────
+  adapter/
+    adapter.go             # CloudAdapter + Codec interfaces only — no implementations
+  provider/
+    provider.go            # HandlerFunc type, OK() helper
+    registry.go            # Registry — Dispatch (exact match → error)
+  model/                   # NormalizedRequest, ProviderResponse, ProviderError, Cloud enum
+  gateway/                 # HTTP server (Chi), middleware, request dispatch
+    server.go              # Server — holds single CloudAdapter; handleCloudRequest
+    middleware/            # Recovery, RequestID, Logging, Metrics
+  admin/                   # /_jaiscloud/* endpoints; Resetter, Snapshotter interfaces
+  blobfs/                  # BlobStore (Memory/LocalFS); BlobFetcher (S3BlobFetcher)
+  clock/                   # Clock interface: RealClock, FixedClock, OffsetClock
+  config/                  # Config struct; Viper loading; env prefix JAISCLOUD_
+  events/                  # In-process EventBus (subscribe/publish)
+  executor/                # Container executor abstraction
+    lambda/                # Lambda executor (mock / docker / k8s)
+  k8shelpers/              # Generic K8s helpers (BuildPodSpec, IdentityMutator, OwnershipPatcher)
+  k8stypes/                # K8s type defs
+  sparkhelpers/            # Spark-specific K8s helpers
+  platform/                # PlatformConfig — TLS init containers, env fragments, volume mounts
+  reqctx/                  # Request context helpers
+  resourcemgr/             # Deletion guards: CheckParent, AcquireDelete, DeleteGuardRule
+  certstore/               # TLS cert storage
+  store/                   # ResourceStore interface + memory/postgres implementations
+    migrations/            # SQL migration files (001–013)
     aws/
-      aws.go            # AWSAdapter
-      router.go         # DetectService — data-driven via services.go
-      services.go       # ServiceDescriptor + awsServices registry (single source of truth)
-                        #   Add one entry here to register a new service.
-                        #   Derived maps at init(): targetPrefixToService, knownSigV4Services,
-                        #   actionToService, serviceProviderMap
-      services/         # Per-service Codec implementations (Decode/Encode)
-    azure/azure.go      # AzureAdapter stub (501)
-    gcp/gcp.go          # GCPAdapter stub (501)
-  admin/                # /_jaiscloud/* endpoints; Resetter, Snapshotter interfaces
-  blobfs/               # BlobStore (Memory/LocalFS); BlobFetcher (S3BlobFetcher)
-  clock/                # Clock interface: RealClock, FixedClock, OffsetClock
-  config/               # Config struct; Viper loading; env prefix JAISCLOUD_
-  events/               # In-process EventBus (subscribe/publish)
-  gateway/              # HTTP server (Chi), middleware, request dispatch
-    server.go           # Server — holds single CloudAdapter; handleCloudRequest
-    middleware/         # Recovery, RequestID, Logging, Metrics
-  k8shelpers/           # Generic K8s helpers (BuildPodSpec, IdentityMutator, OwnershipPatcher)
-  model/                # Shared types: NormalizedRequest, ProviderResponse, ProviderError
-  platform/             # PlatformConfig — TLS init containers, env fragments, volume mounts
-  provider/             # Business logic layer
-    provider.go         # HandlerFunc type, OK() helper
-    registry.go         # Registry — Dispatch (exact match → error)
-    aws/
-      apigw/            # APIGatewayProvider
-      cache/            # ElastiCache (metadata only)
-      cloudwatch/       # CloudWatchProvider — metrics ring, alarms
-      compute/          # EC2 (metadata only)
-      container/        # ECS (metadata only)
-      dns/              # Route53 (metadata only)
-      eks/              # EKS (metadata only)
-      emr/              # EMRProvider — RunJobFlow, steps, bootstrap, Spark K8s/Docker
-      emroneks/         # EMRContainersProvider — virtual clusters, job runs
-      iam/              # IAMProvider + STS
-      rds/              # RDS (metadata only)
-      sparkaws/         # AWS emulator wiring injected into Spark driver pods
-      stack/            # CloudFormation — CreateStack, intrinsics, topsort, dispatch
-    catalog/            # Glue Data Catalog provider
-    events/             # EventBridgeProvider
-    function/           # FunctionProvider — Lambda
-    notification/       # SNSProvider
-    object/             # ObjectProvider — S3
-    queue/              # QueueProvider — SQS (all 17 operations)
-    table/              # TableProvider — DynamoDB
-    key/                # KeyProvider — KMS
-    secret/             # SecretProvider — SecretsManager
-    param/              # ParameterProvider — SSM
-  resourcemgr/          # Deletion guards: CheckParent, AcquireDelete, DeleteGuardRule
-  sparkhelpers/         # Spark-specific K8s helpers: SubmitClientMode, ClientModeJob,
-                        # BuildExecutorTemplate, OwnershipPatcher, ClassifyTerminal
-  store/                # ResourceStore interface + memory/postgres implementations
-    migrations/         # SQL migration files (001–013)
-    aws/
-      dynamodb/         # DynamoDBItemStore (memory + postgres)
-      s3/               # S3ObjectMetaStore (memory + postgres)
-      sqs/              # SQSMessageStore (memory + postgres)
-      stream/           # MemoryStreamStore (DynamoDB Streams)
+      dynamodb/            # DynamoDBItemStore (memory + postgres)
+      s3/                  # S3ObjectMetaStore (memory + postgres)
+      sqs/                 # SQSMessageStore (memory + postgres)
+    object/                # Generic ObjectStore
+    stream/                # MemoryStreamStore (DynamoDB Streams)
+
+  # ── AWS-SPECIFIC (internal/aws/) ─────────────────────────────────────────
+  aws/
+    adapter/               # AWSAdapter, router.go, services.go
+      services/            # Per-service Codec implementations (27 files)
+    provider/              # All AWS business logic
+      apigw/               # APIGatewayProvider
+      cache/               # ElastiCache (metadata only)
+      catalog/             # Glue Data Catalog provider
+      cloudwatch/          # CloudWatchProvider — metrics ring, alarms
+        logs/              # CloudWatch Logs
+      compute/             # EC2 (metadata only)
+      container/           # ECS (metadata only)
+      dns/                 # Route53 (metadata only)
+      eks/                 # EKS (metadata only)
+      emr/                 # EMRProvider — RunJobFlow, steps, bootstrap, Spark K8s/Docker
+      emroneks/            # EMRContainersProvider — virtual clusters, job runs
+      events/              # EventBridgeProvider
+      function/            # FunctionProvider — Lambda
+      iam/                 # IAMProvider + STS
+      lambda/esm/          # Lambda event source mappings
+      notification/        # SNSProvider
+      object/              # ObjectProvider — S3
+      queue/               # QueueProvider — SQS (all 17 operations)
+      rds/                 # RDS (metadata only)
+      sparkaws/            # AWS emulator wiring injected into Spark driver pods
+      stack/               # CloudFormation — CreateStack, intrinsics, topsort, dispatch
+      table/               # TableProvider — DynamoDB
+    key/                   # KeyProvider — KMS
+    secret/                # SecretProvider — SecretsManager
+    parameter/             # ParameterProvider — SSM
+
+  # ── AZURE-SPECIFIC (stub, returns 501) ───────────────────────────────────
+  azure/
+    adapter/               # AzureAdapter stub
+
+  # ── GCP-SPECIFIC (stub, returns 501) ─────────────────────────────────────
+  gcp/
+    adapter/               # GCPAdapter stub
+
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2 (SQS, IAM, SNS, DynamoDB, S3, Lambda)
   full_mode/aws/        # Full-mode e2e tests (build-tagged): lambda, cfn, kms, emr, emrcontainers,
@@ -93,12 +111,26 @@ tests/
 
 ## Architecture
 
+### Per-cloud binary model
+
+Each binary is self-contained:
+
+```
+jaiscloud-aws    = internal/aws/adapter + internal/aws/provider/* + shared infra
+jaiscloud-azure  = internal/azure/adapter (stub) + shared infra
+jaiscloud-gcp    = internal/gcp/adapter (stub) + shared infra
+```
+
+`internal/aws/` may import `internal/*` (shared). `internal/*` (shared) must **never** import `internal/aws/` — this is enforced by `go build`.
+
+When a new cloud is implemented (e.g. Azure), ALL of its logic — adapter, codecs, providers, resource ID formatters — goes into `internal/azure/`. No provider code is promoted to shared.
+
 ### Request flow
 
 ```
 HTTP request
   → gateway.Server.handleCloudRequest
-      → cloudAdapter.DetectAndDecode     (single adapter selected at startup from cfg.Cloud)
+      → cloudAdapter.DetectAndDecode     (adapter hardcoded at binary startup)
           → <ServiceCodec>.Decode
       → inject: nr.Clock, nr.Region, nr.AccountID, nr.Cloud, nr.ResourceID
       → middleware.WithRequestLabels(ctx, cloud, service, action)
@@ -109,9 +141,9 @@ HTTP request
 
 Key design rules:
 - **No layer imports its caller.** `model` package breaks the cycle between `gateway` and `adapter`.
-- **Single cloud per instance.** `cfg.Cloud` set once at startup; no per-request cloud detection.
+- **Single cloud per binary.** `cfg.Cloud` is set unconditionally in `main.go`; no `--cloud` flag, no per-request cloud detection.
+- **No shared providers.** Each cloud owns its adapters and providers entirely. Storage backends (`store/aws/*`) are shared as data storage only — they don't implement wire protocols.
 - **Executors are wired at startup.** `JAISCLOUD_EXECUTOR_MODE` controls the container orchestrator for Spark and Lambda.
-- **AWS providers live under `internal/provider/aws/`.** Cloud-agnostic providers live directly under `internal/provider/`.
 
 ### CloudAdapter interface
 
@@ -125,9 +157,9 @@ type CloudAdapter interface {
 
 `ServiceToProvider` maps wire service name (e.g. `"sqs"`) to provider registry prefix (e.g. `"Queue"`). AWS delegates to `serviceProviderMap` from `services.go`; Azure/GCP stubs return the service name unchanged.
 
-### Service → Provider mapping
+### Service → Provider mapping (AWS)
 
-Defined once in `internal/adapter/aws/services.go` — no switch statement anywhere.
+Defined once in `internal/aws/adapter/services.go` — no switch statement anywhere.
 
 | Wire service | Provider prefix | Codec |
 |---|---|---|
@@ -156,7 +188,7 @@ Defined once in `internal/adapter/aws/services.go` — no switch statement anywh
 | `ssm` | `SSM` | SSMCodec (JSON/Target) |
 | `apigateway` | `APIGateway` | APIGatewayCodec (REST/JSON) |
 
-**Adding a new service:** add one `ServiceDescriptor` entry to `awsServices` in `services.go`. Detection, SigV4 allow-list, Action routing, and provider mapping all update automatically.
+**Adding a new AWS service:** add one `ServiceDescriptor` entry to `awsServices` in `internal/aws/adapter/services.go`. Detection, SigV4 allow-list, Action routing, and provider mapping all update automatically.
 
 ### Service detection order (router.go)
 
@@ -191,26 +223,29 @@ Defined once in `internal/adapter/aws/services.go` — no switch statement anywh
 
 ```bash
 # Always rebuild after code changes
-go build -o jaiscloud ./cmd/jaiscloud/
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
+
+# Build all cloud binaries
+make build-all   # → jaiscloud-aws, jaiscloud-azure, jaiscloud-gcp
 
 # Lite mode (default, port 4566)
-./jaiscloud start
+./jaiscloud-aws start
 
 # Full mode (PostgreSQL persistence)
-./jaiscloud start --mode full --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+./jaiscloud-aws start --mode full --dsn "postgres://user:pass@localhost:5433/jaiscloud"
 
-# Docker-compose (postgres on 5433, jaiscloud on 4566)
+# Docker-compose (postgres on 5433, jaiscloud-aws on 4566)
 make up-docker
 make down-docker
 
 # K8s executors (Spark + Lambda)
-JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud start --mode full --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start --mode full --dsn "postgres://..."
 
 # Docker executors
-JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud start --mode full --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode full --dsn "postgres://..."
 
 # Prometheus metrics (at /metrics)
-./jaiscloud start --metrics
+./jaiscloud-aws start --metrics
 ```
 
 ### Key environment variables
@@ -218,7 +253,6 @@ JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud start --mode full --dsn "postgres://.
 ```bash
 JAISCLOUD_PORT=4566
 JAISCLOUD_MODE=lite                  # or "full"
-JAISCLOUD_CLOUD=aws                  # or "azure", "gcp"
 JAISCLOUD_DSN=                       # required when MODE=full
 JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
@@ -233,6 +267,8 @@ JAISCLOUD_AWS_EMULATOR_ENDPOINT=     # JaisCloud endpoint reachable from Spark p
 JAISCLOUD_SPARK_K8S_CLUSTER_MODE=auto   # auto | always | never
 JAISCLOUD_INSTANCE_ID=               # override auto-generated instance UUID
 ```
+
+Note: `JAISCLOUD_CLOUD` is **not** an env var. The binary determines the cloud.
 
 > **Config loading:** all `viper.BindPFlag(...)` calls in `startCmd` must use the global `viper` package (not `viper.New()`) or flags are silently ignored.
 
@@ -259,7 +295,7 @@ JAISCLOUD_INSTANCE_ID=               # override auto-generated instance UUID
 go test -race ./internal/...
 
 # Integration tests — lite mode
-./jaiscloud start &
+./jaiscloud-aws start &
 go test -race ./tests/integration/
 
 # Full-mode e2e (docker-compose handles server + postgres)
@@ -281,13 +317,13 @@ Integration tests call `POST /_jaiscloud/reset` between each test via `resetStat
 
 ## Key conventions
 
-### Multi-cloud: never hardcode ARN formats
+### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
 Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws:...")`.
 
 - `model.NormalizedRequest.ResourceID` — injected by gateway, always non-nil
-- `config.awsARNFormatters` — add one entry per new resource type
-- Azure/GCP adapters inject their own formatters at startup
+- `config.awsARNFormatters` — add one entry per new AWS resource type
+- Future Azure/GCP binaries will inject their own formatters; this is the only cross-cutting concern
 
 ### DynamoDB x-amz-crc32
 
