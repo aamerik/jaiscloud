@@ -22,6 +22,7 @@ type TableProvider struct {
 	resources store.ResourceStore
 	items     dynamostore.DynamoDBItemStore
 	streams   *streamstore.MemoryStreamStore
+	ttlWorker *TTLWorker
 }
 
 func New(resources store.ResourceStore, items dynamostore.DynamoDBItemStore) *TableProvider {
@@ -30,6 +31,28 @@ func New(resources store.ResourceStore, items dynamostore.DynamoDBItemStore) *Ta
 
 func NewWithStreams(resources store.ResourceStore, items dynamostore.DynamoDBItemStore, streams *streamstore.MemoryStreamStore) *TableProvider {
 	return &TableProvider{resources: resources, items: items, streams: streams}
+}
+
+// NewWithTTL constructs a TableProvider with an active TTL reaper.
+// cloud/region/accountID are injected so background goroutines never hold a NormalizedRequest.
+func NewWithTTL(
+	resources store.ResourceStore,
+	items dynamostore.DynamoDBItemStore,
+	streams *streamstore.MemoryStreamStore,
+	cloud, region, accountID string,
+	ttlInterval time.Duration,
+) *TableProvider {
+	p := &TableProvider{resources: resources, items: items, streams: streams}
+	p.ttlWorker = NewTTLWorker(resources, items, streams, cloud, region, accountID, ttlInterval)
+	p.ttlWorker.Start(context.Background())
+	return p
+}
+
+// Shutdown stops the TTL reaper goroutine (if running).
+func (p *TableProvider) Shutdown() {
+	if p.ttlWorker != nil {
+		p.ttlWorker.Shutdown()
+	}
 }
 
 func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
@@ -371,7 +394,8 @@ func (p *TableProvider) GetItem(ctx context.Context, nr *model.NormalizedRequest
 	}
 	result := map[string]any{}
 	if item != nil {
-		result["Item"] = item
+		projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
+		result["Item"] = dynamostore.ApplyProjection(item, projAttrs)
 	}
 	return provider.OK(result), nil
 }
@@ -456,6 +480,17 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 }
 
 // computeUpdatedAttrs returns the attributes from source that differ from reference.
+func applyProjectionSlice(items []map[string]any, attrs []string) []map[string]any {
+	if len(attrs) == 0 {
+		return items
+	}
+	out := make([]map[string]any, len(items))
+	for i, item := range items {
+		out[i] = dynamostore.ApplyProjection(item, attrs)
+	}
+	return out
+}
+
 func computeUpdatedAttrs(source, reference map[string]any) map[string]any {
 	if source == nil {
 		return nil
@@ -498,9 +533,11 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
+	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
+	projected := applyProjectionSlice(items, projAttrs)
 	result := map[string]any{
-		"Items":        items,
-		"Count":        len(items),
+		"Items":        projected,
+		"Count":        len(projected),
 		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {
@@ -526,9 +563,11 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
+	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
+	projected := applyProjectionSlice(items, projAttrs)
 	result := map[string]any{
-		"Items":        items,
-		"Count":        len(items),
+		"Items":        projected,
+		"Count":        len(projected),
 		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {

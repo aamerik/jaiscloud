@@ -117,14 +117,14 @@ func startCmd() *cobra.Command {
 			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
 			defer cleanup()
 
 			cloudAdapter, err := buildAdapter(cfg)
 			if err != nil {
 				return err
 			}
-			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter)
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      string(cfg.Cloud),
@@ -321,7 +321,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -517,7 +517,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(apigwprovider.New(s.resources).Routes())
 	registry.RegisterAll(cloudwatchprovider.New(s.resources, bus).Routes())
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP
 }
 
 // buildK8sClient constructs a kubernetes.Interface using in-cluster config if

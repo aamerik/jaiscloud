@@ -822,11 +822,17 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 	}
 	srcBucket, srcKey := parts[0], parts[1]
 
-	data, err := p.blobs.Get(ctx, srcBucket, srcKey)
+	srcMeta, err := p.meta.GetObjectMeta(ctx, srcBucket, srcKey)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
 	}
-	srcMeta, err := p.meta.GetObjectMeta(ctx, srcBucket, srcKey)
+
+	// Copy-source conditional checks (params set by S3Codec).
+	if _, pe := checkCopySourceConditions(nr, srcMeta); pe != nil {
+		return nil, pe
+	}
+
+	data, err := p.blobs.Get(ctx, srcBucket, srcKey)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
 	}
@@ -1383,6 +1389,33 @@ func checkConditions(nr *model.NormalizedRequest, m objectCondMeta) (*model.Prov
 	return nil, nil
 }
 
+// checkCopySourceConditions evaluates x-amz-copy-source-if-* params (set by S3Codec).
+// Returns (nil, PreconditionFailed 412) when a condition fails, (nil, nil) when all pass.
+func checkCopySourceConditions(nr *model.NormalizedRequest, m objectstore.ObjectMeta) (*model.ProviderResponse, error) {
+	etagRaw := strings.Trim(m.ETag, `"`)
+	if v := strParam(nr.Params, "_copy_source_if_match"); v != "" {
+		if v != "*" && strings.Trim(v, `"`) != etagRaw {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the copy-source pre-conditions did not hold", 412)
+		}
+	}
+	if v := strParam(nr.Params, "_copy_source_if_unmodified_since"); v != "" {
+		if t, err := parseHTTPDate(v); err == nil && m.LastModified.After(t) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the copy-source pre-conditions did not hold", 412)
+		}
+	}
+	if v := strParam(nr.Params, "_copy_source_if_none_match"); v != "" {
+		if v == "*" || strings.Trim(v, `"`) == etagRaw {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the copy-source pre-conditions did not hold", 412)
+		}
+	}
+	if v := strParam(nr.Params, "_copy_source_if_modified_since"); v != "" {
+		if t, err := parseHTTPDate(v); err == nil && !m.LastModified.After(t) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the copy-source pre-conditions did not hold", 412)
+		}
+	}
+	return nil, nil
+}
+
 func parseHTTPDate(s string) (time.Time, error) {
 	for _, layout := range []string{time.RFC1123, "Mon, 02-Jan-2006 15:04:05 MST", time.ANSIC} {
 		if t, err := time.Parse(layout, s); err == nil {
@@ -1740,25 +1773,38 @@ func (p *ObjectProvider) ListObjectVersions(ctx context.Context, nr *model.Norma
 	versionIDMarker := strParam(nr.Params, "version-id-marker")
 	maxKeys := intParam(nr.Params, "max-keys", 1000)
 
+	if versionIDMarker != "" && keyMarker == "" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"A version-id marker cannot be specified without a key marker.", 400)
+	}
+
 	versions, truncated, err := p.meta.ListObjectVersions(ctx, bucket, prefix, keyMarker, versionIDMarker, maxKeys)
 	if err != nil {
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
-	var items []map[string]any
+	var versionItems []map[string]any
+	var deleteMarkers []map[string]any
 	for _, v := range versions {
-		items = append(items, map[string]any{
+		entry := map[string]any{
 			"Key":          v.Key,
 			"VersionId":    v.VersionID,
 			"IsLatest":     fmt.Sprintf("%v", v.IsLatest),
 			"LastModified": v.LastModified.UTC().Format(time.RFC3339),
-			"ETag":         v.ETag,
-			"Size":         fmt.Sprintf("%d", v.Size),
-			"StorageClass": v.StorageClass,
-			"IsDeleteMarker": v.IsDeleteMarker,
-		})
+		}
+		if v.IsDeleteMarker {
+			deleteMarkers = append(deleteMarkers, entry)
+		} else {
+			entry["ETag"] = v.ETag
+			entry["Size"] = fmt.Sprintf("%d", v.Size)
+			entry["StorageClass"] = v.StorageClass
+			versionItems = append(versionItems, entry)
+		}
 	}
-	if items == nil {
-		items = []map[string]any{}
+	if versionItems == nil {
+		versionItems = []map[string]any{}
+	}
+	if deleteMarkers == nil {
+		deleteMarkers = []map[string]any{}
 	}
 	return provider.OK(map[string]any{
 		"Name":            bucket,
@@ -1767,7 +1813,8 @@ func (p *ObjectProvider) ListObjectVersions(ctx context.Context, nr *model.Norma
 		"VersionIdMarker": versionIDMarker,
 		"MaxKeys":         fmt.Sprintf("%d", maxKeys),
 		"IsTruncated":     fmt.Sprintf("%v", truncated),
-		"Versions":        items,
+		"Versions":        versionItems,
+		"DeleteMarkers":   deleteMarkers,
 	}), nil
 }
 
