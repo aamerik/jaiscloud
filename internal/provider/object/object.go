@@ -21,9 +21,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	objectstore "jaiscloud/internal/store/object"
@@ -31,12 +33,19 @@ import (
 
 // ObjectProvider handles all S3 operations.
 type ObjectProvider struct {
-	meta  objectstore.ObjectMetaStore
-	blobs blobfs.BlobStore
+	meta       objectstore.ObjectMetaStore
+	blobs      blobfs.BlobStore
+	notifStore sync.Map
+	bus        *events.EventBus
 }
 
 func New(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvider {
 	return &ObjectProvider{meta: meta, blobs: blobs}
+}
+
+// NewWithBus constructs an ObjectProvider with an event bus for S3 notification dispatch.
+func NewWithBus(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore, bus *events.EventBus) *ObjectProvider {
+	return &ObjectProvider{meta: meta, blobs: blobs, bus: bus}
 }
 
 func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
@@ -106,6 +115,9 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.PutBucketCors":    p.PutBucketCors,
 		"Object.GetBucketCors":    p.GetBucketCors,
 		"Object.DeleteBucketCors": p.DeleteBucketCors,
+		// Notifications (P5.1)
+		"Object.PutBucketNotificationConfiguration": p.PutBucketNotificationConfiguration,
+		"Object.GetBucketNotificationConfiguration": p.GetBucketNotificationConfiguration,
 	}
 }
 
@@ -599,6 +611,7 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		respData["_version_id"] = versionID
 	}
 	sseResponseData(respData, enc, kmsKey, ssecMD5)
+	p.dispatchNotification(ctx, bucket, key, "s3:ObjectCreated:Put")
 	return &model.ProviderResponse{HTTPStatus: 200, Data: respData}, nil
 }
 
@@ -943,6 +956,7 @@ func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedR
 	if err := p.blobs.Delete(ctx, bucket, key); err != nil {
 		slog.Warn("object: blob delete failed after metadata delete", "bucket", bucket, "key", key, "err", err)
 	}
+	p.dispatchNotification(ctx, bucket, key, "s3:ObjectRemoved:Delete")
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
