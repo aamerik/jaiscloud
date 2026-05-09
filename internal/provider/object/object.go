@@ -1158,8 +1158,8 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 
 	_, _, uploadMeta, _ := p.meta.GetMultipartMeta(ctx, uploadID)
 
-	// Validate part order from caller's XML body (parsed by codec into _parts).
-	if callerParts, ok := nr.Params["_parts"].([]map[string]any); ok && len(callerParts) > 0 {
+	// Validate part order from caller's XML body (parsed by codec into _requested_parts).
+	if callerParts, ok := nr.Params["_requested_parts"].([]map[string]any); ok && len(callerParts) > 0 {
 		for i := 1; i < len(callerParts); i++ {
 			prev := intParam(callerParts[i-1], "PartNumber", 0)
 			cur := intParam(callerParts[i], "PartNumber", 0)

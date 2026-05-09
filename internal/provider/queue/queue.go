@@ -497,6 +497,9 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		if body, ok := e["MessageBody"].(string); ok {
 			totalSize += len(body)
 		}
+		if ma, ok := e["MessageAttributes"]; ok {
+			totalSize += messageAttributesWireSize(parseMessageAttributes(ma))
+		}
 	}
 	if totalSize > maxMsgSize {
 		return nil, model.NewProviderError("AWS.SimpleQueueService.BatchRequestTooLong",
@@ -597,7 +600,7 @@ func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.Normal
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entries := batchEntries(nr.Params, "Entries")
 	if len(entries) == 0 {
-		return nil, model.NewProviderError("EmptyBatch", "batch must contain at least one entry", 400)
+		return nil, model.NewProviderError("AWS.SimpleQueueService.EmptyBatchRequest", "There is nothing to delete.", 400)
 	}
 
 	var successful []map[string]any
@@ -923,6 +926,20 @@ func parseMessageAttributes(v any) map[string]sqsstore.MessageAttribute {
 		return m
 	}
 	return result
+}
+
+// messageAttributesWireSize returns the total wire size (name + dataType + value bytes) for batch size checks.
+func messageAttributesWireSize(attrs map[string]sqsstore.MessageAttribute) int {
+	n := 0
+	for name, attr := range attrs {
+		n += len(name) + len(attr.DataType)
+		if strings.HasPrefix(attr.DataType, "Binary") {
+			n += len(attr.BinaryValue)
+		} else {
+			n += len(attr.StringValue)
+		}
+	}
+	return n
 }
 
 // md5MessageAttributes computes the AWS-compatible MD5 over message attributes.

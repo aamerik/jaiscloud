@@ -298,15 +298,43 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 	for _, op := range ops {
 		switch op.Type {
 		case "Put":
-			if _, err := s.PutItem(ctx, op.Table, op.PKHash, op.Item, op.Cond); err != nil {
+			raw, _ := json.Marshal(op.Item)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (table_name, pk_hash) DO UPDATE
+					SET item=$3, updated_at=now()
+			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
 				return nil, err
 			}
 		case "Delete":
-			if _, err := s.DeleteItem(ctx, op.Table, op.PKHash, op.Cond); err != nil {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
+			`, op.Table, op.PKHash); err != nil {
 				return nil, err
 			}
 		case "Update":
-			if _, err := s.UpdateItem(ctx, op.Table, op.PKHash, op.Key, op.Update); err != nil {
+			existing, err := s.GetItem(ctx, op.Table, op.PKHash)
+			if err != nil {
+				return nil, err
+			}
+			if existing == nil {
+				existing = copyItem(op.Key)
+			}
+			if op.Update.UpdateExpression != "" {
+				applyUpdateExpression(existing, op.Update.UpdateExpression, op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues)
+			} else {
+				for k, v := range op.Item {
+					existing[k] = v
+				}
+			}
+			raw, _ := json.Marshal(existing)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (table_name, pk_hash) DO UPDATE
+					SET item=$3, updated_at=now()
+			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
 				return nil, err
 			}
 		}

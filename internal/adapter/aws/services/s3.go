@@ -256,7 +256,7 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 			for i, p := range completeReq.Parts {
 				parts[i] = map[string]any{"PartNumber": p.PartNumber, "ETag": p.ETag}
 			}
-			params["_parts"] = parts
+			params["_requested_parts"] = parts
 		}
 	}
 
