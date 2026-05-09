@@ -113,10 +113,11 @@ func (w *TTLWorker) expireTable(ctx context.Context, ts tableSchema, nowUnix int
 		_, _ = w.items.DeleteItem(ctx, ts.TableName, pkHash, dynamostore.ConditionSpec{})
 		if w.streams != nil && w.streams.IsEnabled(ts.TableName) {
 			w.streams.Append(ts.TableName, streamstore.Record{
-				EventName: "REMOVE",
-				Keys:      item,
-				OldImage:  item,
+				EventName:                   "REMOVE",
+				Keys:                        item,
+				OldImage:                    item,
 				ApproximateCreationDateTime: time.Now(),
+				UserIdentity:                &streamstore.UserIdentity{Type: "Service", PrincipalId: "dynamodb.amazonaws.com"},
 			})
 		}
 	}

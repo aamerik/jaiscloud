@@ -7,15 +7,23 @@ import (
 	"time"
 )
 
+// UserIdentity identifies who caused a stream event.
+// For TTL-expired items: Type="Service", PrincipalId="dynamodb.amazonaws.com".
+type UserIdentity struct {
+	Type        string
+	PrincipalId string
+}
+
 // Record represents a single DynamoDB Streams record.
 type Record struct {
-	SequenceNumber    int
-	EventID           string
-	EventName         string // INSERT, MODIFY, REMOVE
+	SequenceNumber              int
+	EventID                     string
+	EventName                   string // INSERT, MODIFY, REMOVE
 	ApproximateCreationDateTime time.Time
-	Keys              map[string]any
-	NewImage          map[string]any
-	OldImage          map[string]any
+	Keys                        map[string]any
+	NewImage                    map[string]any
+	OldImage                    map[string]any
+	UserIdentity                *UserIdentity // non-nil for service-initiated events (e.g. TTL expiry)
 }
 
 // StreamInfo holds metadata about a single stream.

@@ -37,6 +37,11 @@ func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, clk c
 	return &QueueProvider{resources: resources, messages: messages, clock: clk, bus: bus, waiters: NewWaiters()}
 }
 
+// Reset clears in-memory waiter state; satisfies admin.Resetter.
+func (p *QueueProvider) Reset() {
+	p.waiters.Reset()
+}
+
 // Routes returns the provider's route map for registration in the Registry.
 func (p *QueueProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
