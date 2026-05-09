@@ -263,21 +263,34 @@ func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, reqs []Ba
 	return result, nil
 }
 
-// TransactWriteItems wraps all condition checks and writes in a single Postgres transaction.
+// TransactWriteItems runs all condition checks and writes in a single Serializable transaction.
+// SELECT ... FOR UPDATE locks each row during condition evaluation to prevent TOCTOU races.
 func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
-	// Phase 1: evaluate all conditions (reads can run outside the write tx).
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Phase 1: evaluate all conditions under SELECT … FOR UPDATE.
 	reasons := make([]CancellationReason, len(ops))
 	anyFailed := false
 	for i, op := range ops {
-		condExpr := op.Cond.ConditionExpression
-		if condExpr == "" && op.Type != "ConditionCheck" {
-			reasons[i] = CancellationReason{Code: "None"}
-			continue
+		var raw []byte
+		err := tx.QueryRow(ctx,
+			`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2 FOR UPDATE`,
+			op.Table, op.PKHash,
+		).Scan(&raw)
+		var item map[string]any
+		if err == nil {
+			json.Unmarshal(raw, &item)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
 		}
-		item, _ := s.GetItem(ctx, op.Table, op.PKHash)
 		if item == nil {
 			item = map[string]any{}
 		}
+		condExpr := op.Cond.ConditionExpression
 		if condExpr != "" && !matchesFilter(item, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
 			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
 			anyFailed = true
@@ -289,12 +302,7 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 		return reasons, nil
 	}
 
-	// Phase 2: apply all writes in a single DB transaction.
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
+	// Phase 2: apply all writes within the same transaction.
 	for _, op := range ops {
 		switch op.Type {
 		case "Put":
@@ -315,7 +323,10 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 			}
 		case "Update":
 			var existingRaw []byte
-			err := tx.QueryRow(ctx, `SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2`, op.Table, op.PKHash).Scan(&existingRaw)
+			err := tx.QueryRow(ctx,
+				`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2`,
+				op.Table, op.PKHash,
+			).Scan(&existingRaw)
 			var existing map[string]any
 			if err == nil {
 				json.Unmarshal(existingRaw, &existing)
