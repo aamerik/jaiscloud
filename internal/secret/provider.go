@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,6 +49,7 @@ func (p *SecretProvider) Routes() map[string]provider.HandlerFunc {
 		"Secret.UpdateSecretVersionStage":   p.UpdateSecretVersionStage,
 		"Secret.GetRandomPassword":          p.GetRandomPassword,
 		"Secret.BatchGetSecretValue":        p.BatchGetSecretValue,
+		"Secret.ValidateResourcePolicy":     p.ValidateResourcePolicy,
 	}
 }
 
@@ -843,6 +845,61 @@ func (p *SecretProvider) BatchGetSecretValue(ctx context.Context, nr *model.Norm
 	return provider.OK(map[string]any{
 		"SecretValues": secretValues,
 		"Errors":       errs,
+	}), nil
+}
+
+func (p *SecretProvider) ValidateResourcePolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	policy, _ := nr.Params["ResourcePolicy"].(string)
+	if policy == "" {
+		return nil, model.NewProviderError("ValidationException", "ResourcePolicy is required", 400)
+	}
+
+	var errs []map[string]string
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		errs = append(errs, map[string]string{"CheckName": "JSONSyntax", "ErrorMessage": "Invalid JSON: " + err.Error()})
+		return provider.OK(map[string]any{
+			"PolicyValidationPassed": false,
+			"ValidationErrors":       errs,
+		}), nil
+	}
+
+	// Validate Version
+	if v, ok := doc["Version"].(string); ok {
+		if v != "2012-10-17" && v != "2008-10-17" {
+			errs = append(errs, map[string]string{
+				"CheckName":    "PolicyVersion",
+				"ErrorMessage": "Unrecognized policy version: " + v,
+			})
+		}
+	}
+
+	// Validate Statement
+	stmts, ok := doc["Statement"]
+	if !ok {
+		errs = append(errs, map[string]string{"CheckName": "StatementPresent", "ErrorMessage": "Policy must contain Statement"})
+	} else {
+		stmtList, ok := stmts.([]any)
+		if !ok {
+			errs = append(errs, map[string]string{"CheckName": "StatementType", "ErrorMessage": "Statement must be an array"})
+		} else {
+			for i, s := range stmtList {
+				sm, ok := s.(map[string]any)
+				if !ok {
+					errs = append(errs, map[string]string{"CheckName": "StatementFormat", "ErrorMessage": fmt.Sprintf("Statement[%d] must be an object", i)})
+					continue
+				}
+				if _, hasEffect := sm["Effect"]; !hasEffect {
+					errs = append(errs, map[string]string{"CheckName": "StatementEffect", "ErrorMessage": fmt.Sprintf("Statement[%d] must have Effect field", i)})
+				}
+			}
+		}
+	}
+
+	return provider.OK(map[string]any{
+		"PolicyValidationPassed": len(errs) == 0,
+		"ValidationErrors":       errs,
 	}), nil
 }
 
