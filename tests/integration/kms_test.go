@@ -306,6 +306,49 @@ func TestKMS_CreateKey_ReturnsKeySpec(t *testing.T) {
 	assert.Equal(t, types.KeyUsageTypeEncryptDecrypt, out.KeyMetadata.KeyUsage)
 }
 
+// ─── P1.5: ScheduleKeyDeletion validation ─────────────────────────────────────
+
+func TestKMS_ScheduleKeyDeletion_InvalidWindow(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	_, err = c.ScheduleKeyDeletion(ctx, &awskms.ScheduleKeyDeletionInput{
+		KeyId:               aws.String(keyID),
+		PendingWindowInDays: aws.Int32(6),
+	})
+	require.Error(t, err)
+}
+
+// ─── P1.6: CancelKeyDeletion ──────────────────────────────────────────────────
+
+func TestKMS_CancelKeyDeletion(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	_, err = c.ScheduleKeyDeletion(ctx, &awskms.ScheduleKeyDeletionInput{
+		KeyId:               aws.String(keyID),
+		PendingWindowInDays: aws.Int32(7),
+	})
+	require.NoError(t, err)
+
+	_, err = c.CancelKeyDeletion(ctx, &awskms.CancelKeyDeletionInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+
+	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+	assert.Equal(t, types.KeyStateEnabled, desc.KeyMetadata.KeyState)
+}
+
 func TestKMS_DescribeKey_IncludesNewFields(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()

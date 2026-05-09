@@ -224,3 +224,82 @@ func TestKeyProvider_ScheduleKeyDeletion(t *testing.T) {
 	meta := descData.Data["KeyMetadata"].(map[string]any)
 	assert.Equal(t, "PendingDeletion", meta["KeyState"])
 }
+
+// ─── P1.5: ScheduleKeyDeletion validation ────────────────────────────────────
+
+func TestKeyProvider_ScheduleKeyDeletion_InvalidWindow(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	_, err := routes["Key.ScheduleKeyDeletion"](context.Background(), nr(map[string]any{
+		"KeyId":               keyID,
+		"PendingWindowInDays": float64(6), // too small
+	}))
+	require.Error(t, err)
+
+	_, err = routes["Key.ScheduleKeyDeletion"](context.Background(), nr(map[string]any{
+		"KeyId":               keyID,
+		"PendingWindowInDays": float64(31), // too large
+	}))
+	require.Error(t, err)
+}
+
+// ─── P1.6: CancelKeyDeletion ─────────────────────────────────────────────────
+
+func TestKeyProvider_CancelKeyDeletion(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	callKey(t, routes, "ScheduleKeyDeletion", map[string]any{
+		"KeyId":               keyID,
+		"PendingWindowInDays": float64(7),
+	})
+
+	// Verify it's pending.
+	desc := callKey(t, routes, "DescribeKey", map[string]any{"KeyId": keyID})
+	assert.Equal(t, "PendingDeletion", desc["KeyMetadata"].(map[string]any)["KeyState"])
+
+	// Cancel.
+	callKey(t, routes, "CancelKeyDeletion", map[string]any{"KeyId": keyID})
+
+	// Now enabled again.
+	desc2 := callKey(t, routes, "DescribeKey", map[string]any{"KeyId": keyID})
+	assert.Equal(t, "Enabled", desc2["KeyMetadata"].(map[string]any)["KeyState"])
+}
+
+func TestKeyProvider_CancelKeyDeletion_NotPending(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	_, err := routes["Key.CancelKeyDeletion"](context.Background(), nr(map[string]any{"KeyId": keyID}))
+	require.Error(t, err)
+}
+
+func TestKeyProvider_ScheduleKeyDeletion_AlreadyPending(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	callKey(t, routes, "ScheduleKeyDeletion", map[string]any{
+		"KeyId":               keyID,
+		"PendingWindowInDays": float64(7),
+	})
+
+	// Second schedule on the same key must fail.
+	_, err := routes["Key.ScheduleKeyDeletion"](context.Background(), nr(map[string]any{
+		"KeyId":               keyID,
+		"PendingWindowInDays": float64(7),
+	}))
+	require.Error(t, err)
+}

@@ -44,6 +44,7 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.EnableKey":         p.EnableKey,
 		"Key.DisableKey":        p.DisableKey,
 		"Key.ScheduleKeyDeletion": p.ScheduleKeyDeletion,
+		"Key.CancelKeyDeletion":   p.CancelKeyDeletion,
 		"Key.ListKeys":          p.ListKeys,
 		"Key.TagResource":       p.TagResource,
 		"Key.UntagResource":     p.UntagResource,
@@ -167,12 +168,19 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 			pendingDays, _ = n.Int64()
 		}
 	}
-	deletionDate := time.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
+	if pendingDays < 7 || pendingDays > 30 {
+		return nil, model.NewProviderError("InvalidParameterException", "PendingWindowInDays must be between 7 and 30", 400)
+	}
 
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is already pending deletion: "+keyID, 400)
+	}
+
+	deletionDate := time.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
 	e.Enabled = false
 	e.PendingDeletion = true
 	e.DeletionDate = deletionDate
@@ -185,6 +193,28 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 		"DeletionDate":        deletionDate.Unix(),
 		"PendingWindowInDays": pendingDays,
 	}), nil
+}
+
+func (p *KeyProvider) CancelKeyDeletion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if !e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is not pending deletion: "+keyID, 400)
+	}
+	e.PendingDeletion = false
+	e.DeletionDate = time.Time{}
+	e.Enabled = true
+	if err := p.store.UpdateKey(ctx, e); err != nil {
+		return nil, fmt.Errorf("kms: cancel key deletion: %w", err)
+	}
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{"KeyId": keyARN}), nil
 }
 
 func (p *KeyProvider) ListKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
