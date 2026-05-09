@@ -860,7 +860,7 @@ func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
 		"KeyState":     keyState(e),
 		"AWSAccountId": accountID,
 		"CreationDate": time.Now().Unix(),
-		"MultiRegion":  false,
+		"MultiRegion":  e.MultiRegion,
 	}
 	if e.PendingDeletion && !e.DeletionDate.IsZero() {
 		m["DeletionDate"] = e.DeletionDate.Unix()

@@ -289,6 +289,42 @@ func TestKMS_ReEncrypt(t *testing.T) {
 	assert.Equal(t, plaintext, decOut.Plaintext)
 }
 
+// ─── P1.1: KeyEntry new fields ────────────────────────────────────────────────
+
+func TestKMS_CreateKey_ReturnsKeySpec(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
+		KeySpec:  types.KeySpecSymmetricDefault,
+		KeyUsage: types.KeyUsageTypeEncryptDecrypt,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.KeyMetadata)
+	assert.Equal(t, types.KeySpecSymmetricDefault, out.KeyMetadata.KeySpec)
+	assert.Equal(t, types.KeyUsageTypeEncryptDecrypt, out.KeyMetadata.KeyUsage)
+}
+
+func TestKMS_DescribeKey_IncludesNewFields(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
+		Description: aws.String("fields test"),
+		KeySpec:     types.KeySpecSymmetricDefault,
+	})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+	assert.Equal(t, types.KeySpecSymmetricDefault, desc.KeyMetadata.KeySpec)
+	assert.Equal(t, "fields test", aws.ToString(desc.KeyMetadata.Description))
+	assert.False(t, aws.ToBool(desc.KeyMetadata.MultiRegion))
+}
+
 func TestKMS_ScheduleKeyDeletion_BlocksCryptoOps(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()

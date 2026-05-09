@@ -16,19 +16,33 @@ var (
 
 // KeyEntry holds the persisted state of a KMS key.
 type KeyEntry struct {
-	KeyID          string
-	Enabled        bool
+	KeyID           string
+	Enabled         bool
 	PendingDeletion bool      // true after ScheduleKeyDeletion until deletion date
-	DeletionDate   time.Time // zero unless PendingDeletion is true
-	Description    string
-	KeyUsage       string // "ENCRYPT_DECRYPT" | "SIGN_VERIFY"
-	KeySpec        string // "SYMMETRIC_DEFAULT" | "RSA_2048" | ...
-	Origin         string // "AWS_KMS" | "EXTERNAL"
-	Tags           map[string]string
-	// KeyMaterial is the AES-GCM–encrypted 32-byte data key used for
-	// Encrypt/Decrypt operations on this logical KMS key.
-	// Nil for metadata-only (pending import) keys.
+	DeletionDate    time.Time // zero unless PendingDeletion is true
+	Description     string
+	KeyUsage        string // "ENCRYPT_DECRYPT" | "SIGN_VERIFY" | "GENERATE_VERIFY_MAC"
+	KeySpec         string // "SYMMETRIC_DEFAULT" | "RSA_2048" | "ECC_NIST_P256" | "HMAC_256" | ...
+	Origin          string // "AWS_KMS" | "EXTERNAL"
+	Tags            map[string]string
+	// KeyMaterial is the AES-GCM–encrypted symmetric key (32 bytes for SYMMETRIC_DEFAULT,
+	// variable for HMAC). Nil for asymmetric keys that use PrivateKey instead.
 	KeyMaterial []byte
+	// PrivateKey holds the AES-GCM–encrypted DER-encoded PKCS8 private key for RSA/ECC keys.
+	PrivateKey []byte
+	// PublicKey holds the DER-encoded SubjectPublicKeyInfo public key for RSA/ECC keys (unencrypted).
+	PublicKey []byte
+	// MultiRegion indicates this is a multi-region key.
+	MultiRegion bool
+	// RotationEnabled tracks whether automatic key rotation is enabled.
+	RotationEnabled bool
+	// RotationPeriodInDays is the rotation period (0 = use default 365).
+	RotationPeriodInDays int
+	// PreviousKeyMaterials holds encrypted previous symmetric key materials for key rotation.
+	// Decrypt tries each in order after the current material fails.
+	PreviousKeyMaterials [][]byte
+	// Policy holds the key policy JSON.
+	Policy string
 }
 
 // AliasEntry maps an alias name to a key ID.
