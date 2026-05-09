@@ -86,6 +86,10 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		// PITR
 		"Table.DescribeContinuousBackups": p.DescribeContinuousBackups,
 		"Table.UpdateContinuousBackups":   p.UpdateContinuousBackups,
+		// PartiQL stubs (not supported)
+		"Table.ExecuteStatement":      p.ExecuteStatement,
+		"Table.ExecuteTransaction":    p.ExecuteTransaction,
+		"Table.BatchExecuteStatement": p.BatchExecuteStatement,
 	}
 }
 
@@ -1308,6 +1312,23 @@ func arnToTableName(arn string) string {
 		return parts[len(parts)-1]
 	}
 	return arn
+}
+
+// ─── PartiQL stubs ────────────────────────────────────────────────────────────
+
+func (p *TableProvider) ExecuteStatement(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
+}
+
+func (p *TableProvider) ExecuteTransaction(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
+}
+
+func (p *TableProvider) BatchExecuteStatement(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("ValidationException",
+		"PartiQL is not supported in this emulator. Use standard DynamoDB API operations.", 400)
 }
 
 // exclusiveStartKey returns a JSON-encoded ExclusiveStartKey from request params,
