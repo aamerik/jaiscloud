@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -225,6 +226,30 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
 
+	isFIFO, _ := state["IsFifo"].(bool)
+	groupID, hasGroupID := stringParam(nr.Params, "MessageGroupId")
+	dedupID, hasDedupID := stringParam(nr.Params, "MessageDeduplicationId")
+
+	if isFIFO {
+		if !hasGroupID || groupID == "" {
+			return nil, model.NewProviderError("MissingParameter",
+				"The request must contain the parameter MessageGroupId", 400)
+		}
+		// FIFO queues do not support per-message DelaySeconds.
+		if d, hasDelay := nr.Params["DelaySeconds"]; hasDelay && toInt(d) > 0 {
+			return nil, model.NewProviderError("InvalidParameterValue",
+				"Value 0 for parameter DelaySeconds is invalid. Reason: The request include parameter that is not valid for this queue type.", 400)
+		}
+		// ContentBasedDeduplication removes the requirement for MessageDeduplicationId.
+		// The attribute is stored as a string in state["Attributes"].
+		queueAttrs := attrsFromState(state)
+		contentBasedDedup := queueAttrs["ContentBasedDeduplication"] == "true"
+		if !contentBasedDedup && !hasDedupID {
+			return nil, model.NewProviderError("InvalidParameterValue",
+				"The queue requires MessageDeduplicationId when ContentBasedDeduplication is disabled", 400)
+		}
+	}
+
 	now := p.clock.Now()
 	msgID := newMessageID()
 	delaySec := intFromState(state, "DelaySeconds", 0)
@@ -242,11 +267,15 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	if delaySec > 0 {
 		msg.DelayUntil = now.Add(time.Duration(delaySec) * time.Second)
 	}
-	if g, ok := stringParam(nr.Params, "MessageGroupId"); ok {
-		msg.GroupID = g
+	if hasGroupID {
+		msg.GroupID = groupID
 	}
-	if d, ok := stringParam(nr.Params, "MessageDeduplicationId"); ok {
-		msg.DeduplicationID = d
+	if hasDedupID {
+		msg.DeduplicationID = dedupID
+	} else if isFIFO {
+		// ContentBasedDeduplication: auto-assign SHA-256 of body as dedup ID.
+		h := sha256.Sum256([]byte(body))
+		msg.DeduplicationID = fmt.Sprintf("%x", h)
 	}
 	if ma, ok := nr.Params["MessageAttributes"]; ok {
 		msg.MessageAttributes = parseMessageAttributes(ma)
@@ -776,6 +805,15 @@ func buildSysAttributes(m sqsstore.SQSMessage) map[string]string {
 	}
 	if m.FirstReceivedAt != nil {
 		a["ApproximateFirstReceiveTimestamp"] = strconv.FormatInt(m.FirstReceivedAt.UnixMilli(), 10)
+	}
+	if m.GroupID != "" {
+		a["MessageGroupId"] = m.GroupID
+	}
+	if m.DeduplicationID != "" {
+		a["MessageDeduplicationId"] = m.DeduplicationID
+	}
+	if m.SequenceNumber != "" {
+		a["SequenceNumber"] = m.SequenceNumber
 	}
 	return a
 }

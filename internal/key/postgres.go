@@ -28,15 +28,7 @@ func NewPostgresKeyStore(pool *pgxpool.Pool, dek []byte) *PostgresKeyStore {
 // ─── Key CRUD ─────────────────────────────────────────────────────────────────
 
 func (s *PostgresKeyStore) CreateKey(ctx context.Context, e KeyEntry) error {
-	data, err := json.Marshal(map[string]any{
-		"description":      e.Description,
-		"key_usage":        e.KeyUsage,
-		"key_spec":         e.KeySpec,
-		"origin":           e.Origin,
-		"tags":             e.Tags,
-		"pending_deletion": e.PendingDeletion,
-		"deletion_date":    e.DeletionDate,
-	})
+	data, err := json.Marshal(keyDataMap(e))
 	if err != nil {
 		return fmt.Errorf("kms postgres: marshal key data: %w", err)
 	}
@@ -62,15 +54,7 @@ func (s *PostgresKeyStore) GetKey(ctx context.Context, keyID string) (KeyEntry, 
 }
 
 func (s *PostgresKeyStore) UpdateKey(ctx context.Context, e KeyEntry) error {
-	data, err := json.Marshal(map[string]any{
-		"description":      e.Description,
-		"key_usage":        e.KeyUsage,
-		"key_spec":         e.KeySpec,
-		"origin":           e.Origin,
-		"tags":             e.Tags,
-		"pending_deletion": e.PendingDeletion,
-		"deletion_date":    e.DeletionDate,
-	})
+	data, err := json.Marshal(keyDataMap(e))
 	if err != nil {
 		return fmt.Errorf("kms postgres: marshal key data: %w", err)
 	}
@@ -288,6 +272,25 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
+func keyDataMap(e KeyEntry) map[string]any {
+	return map[string]any{
+		"description":            e.Description,
+		"key_usage":              e.KeyUsage,
+		"key_spec":               e.KeySpec,
+		"origin":                 e.Origin,
+		"tags":                   e.Tags,
+		"pending_deletion":       e.PendingDeletion,
+		"deletion_date":          e.DeletionDate,
+		"private_key":            e.PrivateKey,
+		"public_key":             e.PublicKey,
+		"multi_region":           e.MultiRegion,
+		"rotation_enabled":       e.RotationEnabled,
+		"rotation_period_days":   e.RotationPeriodInDays,
+		"previous_key_materials": e.PreviousKeyMaterials,
+		"policy":                 e.Policy,
+	}
+}
+
 func scanKey(row scannable) (KeyEntry, error) {
 	var e KeyEntry
 	var data []byte
@@ -298,13 +301,20 @@ func scanKey(row scannable) (KeyEntry, error) {
 		return KeyEntry{}, fmt.Errorf("kms postgres: scan key: %w", err)
 	}
 	var meta struct {
-		Description     string            `json:"description"`
-		KeyUsage        string            `json:"key_usage"`
-		KeySpec         string            `json:"key_spec"`
-		Origin          string            `json:"origin"`
-		Tags            map[string]string `json:"tags"`
-		PendingDeletion bool              `json:"pending_deletion"`
-		DeletionDate    time.Time         `json:"deletion_date"`
+		Description          string            `json:"description"`
+		KeyUsage             string            `json:"key_usage"`
+		KeySpec              string            `json:"key_spec"`
+		Origin               string            `json:"origin"`
+		Tags                 map[string]string `json:"tags"`
+		PendingDeletion      bool              `json:"pending_deletion"`
+		DeletionDate         time.Time         `json:"deletion_date"`
+		PrivateKey           []byte            `json:"private_key"`
+		PublicKey            []byte            `json:"public_key"`
+		MultiRegion          bool              `json:"multi_region"`
+		RotationEnabled      bool              `json:"rotation_enabled"`
+		RotationPeriodDays   int               `json:"rotation_period_days"`
+		PreviousKeyMaterials [][]byte          `json:"previous_key_materials"`
+		Policy               string            `json:"policy"`
 	}
 	_ = json.Unmarshal(data, &meta)
 	e.Description = meta.Description
@@ -314,6 +324,13 @@ func scanKey(row scannable) (KeyEntry, error) {
 	e.Tags = meta.Tags
 	e.PendingDeletion = meta.PendingDeletion
 	e.DeletionDate = meta.DeletionDate
+	e.PrivateKey = meta.PrivateKey
+	e.PublicKey = meta.PublicKey
+	e.MultiRegion = meta.MultiRegion
+	e.RotationEnabled = meta.RotationEnabled
+	e.RotationPeriodInDays = meta.RotationPeriodDays
+	e.PreviousKeyMaterials = meta.PreviousKeyMaterials
+	e.Policy = meta.Policy
 	return e, nil
 }
 

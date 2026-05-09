@@ -289,6 +289,86 @@ func TestKMS_ReEncrypt(t *testing.T) {
 	assert.Equal(t, plaintext, decOut.Plaintext)
 }
 
+// ─── P1.1: KeyEntry new fields ────────────────────────────────────────────────
+
+func TestKMS_CreateKey_ReturnsKeySpec(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
+		KeySpec:  types.KeySpecSymmetricDefault,
+		KeyUsage: types.KeyUsageTypeEncryptDecrypt,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.KeyMetadata)
+	assert.Equal(t, types.KeySpecSymmetricDefault, out.KeyMetadata.KeySpec)
+	assert.Equal(t, types.KeyUsageTypeEncryptDecrypt, out.KeyMetadata.KeyUsage)
+}
+
+// ─── P1.5: ScheduleKeyDeletion validation ─────────────────────────────────────
+
+func TestKMS_ScheduleKeyDeletion_InvalidWindow(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	_, err = c.ScheduleKeyDeletion(ctx, &awskms.ScheduleKeyDeletionInput{
+		KeyId:               aws.String(keyID),
+		PendingWindowInDays: aws.Int32(6),
+	})
+	require.Error(t, err)
+}
+
+// ─── P1.6: CancelKeyDeletion ──────────────────────────────────────────────────
+
+func TestKMS_CancelKeyDeletion(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	_, err = c.ScheduleKeyDeletion(ctx, &awskms.ScheduleKeyDeletionInput{
+		KeyId:               aws.String(keyID),
+		PendingWindowInDays: aws.Int32(7),
+	})
+	require.NoError(t, err)
+
+	_, err = c.CancelKeyDeletion(ctx, &awskms.CancelKeyDeletionInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+
+	// CancelKeyDeletion → Disabled state; must EnableKey to go Enabled.
+	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+	assert.Equal(t, types.KeyStateDisabled, desc.KeyMetadata.KeyState)
+}
+
+func TestKMS_DescribeKey_IncludesNewFields(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	out, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
+		Description: aws.String("fields test"),
+		KeySpec:     types.KeySpecSymmetricDefault,
+	})
+	require.NoError(t, err)
+	keyID := aws.ToString(out.KeyMetadata.KeyId)
+
+	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
+	require.NoError(t, err)
+	assert.Equal(t, types.KeySpecSymmetricDefault, desc.KeyMetadata.KeySpec)
+	assert.Equal(t, "fields test", aws.ToString(desc.KeyMetadata.Description))
+	assert.False(t, aws.ToBool(desc.KeyMetadata.MultiRegion))
+}
+
 func TestKMS_ScheduleKeyDeletion_BlocksCryptoOps(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()

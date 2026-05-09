@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/secret"
@@ -25,6 +26,7 @@ func snr(params map[string]any) *model.NormalizedRequest {
 		Service:    "secretsmanager",
 		Region:     "us-east-1",
 		AccountID:  "000000000000",
+		Clock:      clock.RealClock{},
 		Params:     params,
 		ResourceID: func(_, name string) string { return "arn:aws:secretsmanager:us-east-1:000000000000:secret:" + name },
 	}
@@ -137,6 +139,61 @@ func TestSecretProvider_SoftDeleteRestore(t *testing.T) {
 
 	desc := callSecret(t, routes, "DescribeSecret", map[string]any{"SecretId": "soft-del"})
 	assert.Equal(t, "soft-del", desc["Name"])
+}
+
+// ─── P1.7: DeleteSecret/RestoreSecret lifecycle fixes ────────────────────────
+
+func TestSecretProvider_DeleteSecret_InvalidWindow(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "inv-win"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":             "inv-win",
+		"RecoveryWindowInDays": float64(6),
+	}))
+	require.Error(t, err)
+
+	_, err = routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":             "inv-win",
+		"RecoveryWindowInDays": float64(31),
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_MutualExclusivity(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "mutex"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId":                  "mutex",
+		"ForceDeleteWithoutRecovery": true,
+		"RecoveryWindowInDays":      float64(7),
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_AlreadyDeleted(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "dup-del"})
+
+	callSecret(t, routes, "DeleteSecret", map[string]any{"SecretId": "dup-del"})
+
+	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
+		"SecretId": "dup-del",
+	}))
+	require.Error(t, err)
+}
+
+func TestSecretProvider_DeleteSecret_DefaultWindow(t *testing.T) {
+	p := newSecretProvider(t)
+	routes := p.Routes()
+	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "def-win"})
+
+	out := callSecret(t, routes, "DeleteSecret", map[string]any{"SecretId": "def-win"})
+	assert.NotZero(t, out["DeletionDate"])
 }
 
 // ─── UpdateSecret ─────────────────────────────────────────────────────────────

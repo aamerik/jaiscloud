@@ -120,6 +120,72 @@ func TestMemoryKeyStore_Reset(t *testing.T) {
 	assert.ErrorIs(t, err, key.ErrKeyNotFound)
 }
 
+// ─── P1.1: New KeyEntry fields ───────────────────────────────────────────────
+
+func TestKeyEntry_NewFieldsDefault(t *testing.T) {
+	e := key.KeyEntry{KeyID: "k1", Enabled: true}
+	assert.Nil(t, e.PrivateKey)
+	assert.Nil(t, e.PublicKey)
+	assert.False(t, e.MultiRegion)
+	assert.False(t, e.RotationEnabled)
+	assert.Zero(t, e.RotationPeriodInDays)
+	assert.Nil(t, e.PreviousKeyMaterials)
+	assert.Empty(t, e.Policy)
+}
+
+func TestKeyEntry_SerializeDeserialize(t *testing.T) {
+	ctx := context.Background()
+	s := newStore()
+
+	e := key.KeyEntry{
+		KeyID:                "k-rt",
+		Enabled:              true,
+		PrivateKey:           []byte{1, 2, 3},
+		PublicKey:            []byte{4, 5, 6},
+		MultiRegion:          true,
+		RotationEnabled:      true,
+		RotationPeriodInDays: 90,
+		PreviousKeyMaterials: [][]byte{{10, 11}, {12, 13}},
+		Policy:               `{"Version":"2012-10-17"}`,
+	}
+	require.NoError(t, s.CreateKey(ctx, e))
+
+	got, err := s.GetKey(ctx, "k-rt")
+	require.NoError(t, err)
+	assert.Equal(t, e.PrivateKey, got.PrivateKey)
+	assert.Equal(t, e.PublicKey, got.PublicKey)
+	assert.True(t, got.MultiRegion)
+	assert.True(t, got.RotationEnabled)
+	assert.Equal(t, 90, got.RotationPeriodInDays)
+	assert.Equal(t, e.PreviousKeyMaterials, got.PreviousKeyMaterials)
+	assert.Equal(t, e.Policy, got.Policy)
+}
+
+func TestKeyEntry_BackwardsCompatible(t *testing.T) {
+	ctx := context.Background()
+	s := newStore()
+
+	// Entry using only pre-P1.1 fields; new fields must remain at zero values.
+	e := key.KeyEntry{
+		KeyID:       "k-old",
+		Enabled:     true,
+		Description: "legacy key",
+		KeyUsage:    "ENCRYPT_DECRYPT",
+		KeySpec:     "SYMMETRIC_DEFAULT",
+	}
+	require.NoError(t, s.CreateKey(ctx, e))
+
+	got, err := s.GetKey(ctx, "k-old")
+	require.NoError(t, err)
+	assert.Nil(t, got.PrivateKey)
+	assert.Nil(t, got.PublicKey)
+	assert.False(t, got.MultiRegion)
+	assert.False(t, got.RotationEnabled)
+	assert.Zero(t, got.RotationPeriodInDays)
+	assert.Nil(t, got.PreviousKeyMaterials)
+	assert.Empty(t, got.Policy)
+}
+
 func TestMemoryKeyStore_DeleteKey_CascadesAliasesGrants(t *testing.T) {
 	ctx := context.Background()
 	s := newStore()

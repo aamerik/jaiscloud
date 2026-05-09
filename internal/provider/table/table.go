@@ -57,10 +57,22 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.TagResource":       p.TagResource,
 		"Table.UntagResource":     p.UntagResource,
 		"Table.ListTagsOfResource": p.ListTagsOfResource,
+		// TTL
+		"Table.DescribeTimeToLive": p.DescribeTimeToLive,
+		"Table.UpdateTimeToLive":   p.UpdateTimeToLive,
+		// PITR
+		"Table.DescribeContinuousBackups": p.DescribeContinuousBackups,
+		"Table.UpdateContinuousBackups":   p.UpdateContinuousBackups,
 	}
 }
 
 // ─── Table metadata ───────────────────────────────────────────────────────────
+
+// TTLSpecification mirrors DynamoDB's TimeToLiveSpecification.
+type TTLSpecification struct {
+	AttributeName string `json:"AttributeName"`
+	Enabled       bool   `json:"Enabled"`
+}
 
 type tableSchema struct {
 	TableName              string              `json:"TableName"`
@@ -78,6 +90,8 @@ type tableSchema struct {
 	StreamEnabled          bool                `json:"StreamEnabled"`
 	StreamViewType         string              `json:"StreamViewType"`
 	LatestStreamArn        string              `json:"LatestStreamArn"`
+	TTLSpec                *TTLSpecification   `json:"TTLSpec,omitempty"`
+	PITREnabled            bool                `json:"PITREnabled"`
 }
 
 func tableArn(nr *model.NormalizedRequest, name string) string {
@@ -445,13 +459,14 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
-	items, lastKey, err := p.items.Query(ctx, name, q)
+	items, scannedCount, lastKey, err := p.items.Query(ctx, name, q)
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]any{
-		"Items": items,
-		"Count": len(items),
+		"Items":        items,
+		"Count":        len(items),
+		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {
 		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
@@ -472,13 +487,14 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
-	items, lastKey, err := p.items.Scan(ctx, name, sc)
+	items, scannedCount, lastKey, err := p.items.Scan(ctx, name, sc)
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]any{
-		"Items": items,
-		"Count": len(items),
+		"Items":        items,
+		"Count":        len(items),
+		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {
 		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
@@ -653,6 +669,99 @@ func (p *TableProvider) ListTagsOfResource(ctx context.Context, nr *model.Normal
 		tags = []map[string]any{}
 	}
 	return provider.OK(map[string]any{"Tags": tags}), nil
+}
+
+// ─── TTL ──────────────────────────────────────────────────────────────────────
+
+func (p *TableProvider) DescribeTimeToLive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "TableName")
+	ts, err := p.loadTable(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
+	}
+	ttlDesc := map[string]any{"TimeToLiveStatus": "DISABLED"}
+	if ts.TTLSpec != nil && ts.TTLSpec.Enabled {
+		ttlDesc = map[string]any{
+			"TimeToLiveStatus": "ENABLED",
+			"AttributeName":    ts.TTLSpec.AttributeName,
+		}
+	} else if ts.TTLSpec != nil && ts.TTLSpec.AttributeName != "" {
+		ttlDesc["AttributeName"] = ts.TTLSpec.AttributeName
+	}
+	return provider.OK(map[string]any{"TimeToLiveDescription": ttlDesc}), nil
+}
+
+func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "TableName")
+	ts, err := p.loadTable(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
+	}
+	spec, _ := nr.Params["TimeToLiveSpecification"].(map[string]any)
+	attrName, _ := spec["AttributeName"].(string)
+	if attrName == "" {
+		return nil, model.NewProviderError("ValidationException",
+			"TimeToLiveSpecification.AttributeName is required", 400)
+	}
+	enabled, _ := spec["Enabled"].(bool)
+	ts.TTLSpec = &TTLSpecification{AttributeName: attrName, Enabled: enabled}
+	if err := p.saveTable(ctx, ts); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"TimeToLiveSpecification": map[string]any{
+			"Enabled":       enabled,
+			"AttributeName": attrName,
+		},
+	}), nil
+}
+
+// ─── PITR ─────────────────────────────────────────────────────────────────────
+
+func (p *TableProvider) DescribeContinuousBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "TableName")
+	ts, err := p.loadTable(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "TableNotFoundException", "Table not found")
+	}
+	pitrStatus := "DISABLED"
+	if ts.PITREnabled {
+		pitrStatus = "ENABLED"
+	}
+	return provider.OK(map[string]any{
+		"ContinuousBackupsDescription": map[string]any{
+			"ContinuousBackupsStatus": "AVAILABLE",
+			"PointInTimeRecoveryDescription": map[string]any{
+				"PointInTimeRecoveryStatus": pitrStatus,
+			},
+		},
+	}), nil
+}
+
+func (p *TableProvider) UpdateContinuousBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "TableName")
+	ts, err := p.loadTable(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "TableNotFoundException", "Table not found")
+	}
+	spec, _ := nr.Params["PointInTimeRecoverySpecification"].(map[string]any)
+	enabled, _ := spec["PointInTimeRecoveryEnabled"].(bool)
+	ts.PITREnabled = enabled
+	if err := p.saveTable(ctx, ts); err != nil {
+		return nil, err
+	}
+	pitrStatus := "DISABLED"
+	if enabled {
+		pitrStatus = "ENABLED"
+	}
+	return provider.OK(map[string]any{
+		"ContinuousBackupsDescription": map[string]any{
+			"ContinuousBackupsStatus": "AVAILABLE",
+			"PointInTimeRecoveryDescription": map[string]any{
+				"PointInTimeRecoveryStatus": pitrStatus,
+			},
+		},
+	}), nil
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

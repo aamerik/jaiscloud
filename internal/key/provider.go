@@ -44,6 +44,7 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.EnableKey":         p.EnableKey,
 		"Key.DisableKey":        p.DisableKey,
 		"Key.ScheduleKeyDeletion": p.ScheduleKeyDeletion,
+		"Key.CancelKeyDeletion":   p.CancelKeyDeletion,
 		"Key.ListKeys":          p.ListKeys,
 		"Key.TagResource":       p.TagResource,
 		"Key.UntagResource":     p.UntagResource,
@@ -167,12 +168,20 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 			pendingDays, _ = n.Int64()
 		}
 	}
-	deletionDate := time.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
+	if pendingDays < 7 || pendingDays > 30 {
+		return nil, model.NewProviderError("ValidationException",
+			fmt.Sprintf("PendingWindowInDays should be between 7 and 30, but it is %d", pendingDays), 400)
+	}
 
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is already pending deletion: "+keyID, 400)
+	}
+
+	deletionDate := nr.Clock.Now().Add(time.Duration(pendingDays) * 24 * time.Hour)
 	e.Enabled = false
 	e.PendingDeletion = true
 	e.DeletionDate = deletionDate
@@ -182,9 +191,32 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	return provider.OK(map[string]any{
 		"KeyId":               keyARN,
+		"KeyState":            "PendingDeletion",
 		"DeletionDate":        deletionDate.Unix(),
 		"PendingWindowInDays": pendingDays,
 	}), nil
+}
+
+func (p *KeyProvider) CancelKeyDeletion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if !e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is not pending deletion: "+keyID, 400)
+	}
+	e.PendingDeletion = false
+	e.DeletionDate = time.Time{}
+	e.Enabled = false // AWS: CancelKeyDeletion transitions to Disabled, not Enabled
+	if err := p.store.UpdateKey(ctx, e); err != nil {
+		return nil, fmt.Errorf("kms: cancel key deletion: %w", err)
+	}
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{"KeyId": keyARN}), nil
 }
 
 func (p *KeyProvider) ListKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -860,7 +892,7 @@ func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
 		"KeyState":     keyState(e),
 		"AWSAccountId": accountID,
 		"CreationDate": time.Now().Unix(),
-		"MultiRegion":  false,
+		"MultiRegion":  e.MultiRegion,
 	}
 	if e.PendingDeletion && !e.DeletionDate.IsZero() {
 		m["DeletionDate"] = e.DeletionDate.Unix()

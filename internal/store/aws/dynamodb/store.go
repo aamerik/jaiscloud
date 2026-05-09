@@ -87,8 +87,13 @@ type DynamoDBItemStore interface {
 	GetItem(ctx context.Context, table, pkHash string) (map[string]any, error)
 	DeleteItem(ctx context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error)
 	UpdateItem(ctx context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error)
-	Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, string, error)
-	Scan(ctx context.Context, table string, s ScanSpec) ([]map[string]any, string, error)
+	// Query returns (items, scannedCount, lastKey, error).
+	// scannedCount is the number of items that matched the key condition before
+	// FilterExpression was applied. Equals len(items) when there is no FilterExpression.
+	Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error)
+	// Scan returns (items, scannedCount, lastKey, error).
+	// scannedCount is the number of items examined before FilterExpression filtering.
+	Scan(ctx context.Context, table string, s ScanSpec) ([]map[string]any, int, string, error)
 	BatchWriteItems(ctx context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error)
 	BatchGetItems(ctx context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error)
 	Reset()

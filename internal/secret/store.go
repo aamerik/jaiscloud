@@ -24,6 +24,15 @@ type SecretEntry struct {
 	DeletedAt   *time.Time // non-nil when scheduled for deletion
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// Rotation fields.
+	RotationEnabled      bool
+	RotationLambdaARN    string
+	AutoRotateAfterDays  int
+	LastRotatedDate      *time.Time
+	NextRotationDate     *time.Time
+	LastAccessedDate     *time.Time
+	// ResourcePolicy holds the resource-based policy JSON.
+	ResourcePolicy string
 }
 
 // VersionEntry holds an encrypted version of a secret value.

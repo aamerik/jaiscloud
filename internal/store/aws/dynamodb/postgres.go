@@ -153,7 +153,7 @@ func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHas
 	return existing, nil
 }
 
-func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, string, error) {
+func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	if q.IndexSchema != nil {
 		return s.queryIndex(ctx, table, q)
 	}
@@ -161,13 +161,13 @@ func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, table string, q Q
 		SELECT item FROM jc_dynamodb_items WHERE table_name=$1 ORDER BY pk_hash
 	`, table)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	defer rows.Close()
 	return s.filterRows(rows, q.KeyConditionExpression, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, q.ExclusiveStartKey, q.Limit)
 }
 
-func (s *PostgresDynamoDBItemStore) Scan(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, string, error) {
+func (s *PostgresDynamoDBItemStore) Scan(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	if sc.IndexSchema != nil {
 		return s.scanIndex(ctx, table, sc)
 	}
@@ -175,18 +175,19 @@ func (s *PostgresDynamoDBItemStore) Scan(ctx context.Context, table string, sc S
 		SELECT item FROM jc_dynamodb_items WHERE table_name=$1 ORDER BY pk_hash
 	`, table)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	defer rows.Close()
 	return s.filterRows(rows, "", sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, sc.ExclusiveStartKey, sc.Limit)
 }
 
-func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExpr string, names map[string]string, values map[string]any, exclusiveStartKey string, limit int) ([]map[string]any, string, error) {
-	var all []map[string]any
+func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExpr string, names map[string]string, values map[string]any, exclusiveStartKey string, limit int) ([]map[string]any, int, string, error) {
+	// Collect items matching key condition.
+	var keyMatched []map[string]any
 	for rows.Next() {
 		var raw []byte
 		if err := rows.Scan(&raw); err != nil {
-			return nil, "", err
+			return nil, 0, "", err
 		}
 		var item map[string]any
 		if err := json.Unmarshal(raw, &item); err != nil {
@@ -195,24 +196,33 @@ func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExp
 		if !matchesKeyCondition(item, keyExpr, names, values, nil) {
 			continue
 		}
-		if filterExpr != "" && !matchesFilter(item, filterExpr, names, values, nil) {
-			continue
-		}
-		all = append(all, item)
+		keyMatched = append(keyMatched, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
-	all = paginateItems(all, exclusiveStartKey, limit)
+
+	// Paginate on key-condition-matched items; scannedCount = items in page.
+	page := paginateItems(keyMatched, exclusiveStartKey, limit)
+	scannedCount := len(page)
+
 	var lastKey string
-	if limit > 0 && len(all) == limit {
-		b, _ := json.Marshal(all[len(all)-1])
+	if limit > 0 && len(page) == limit {
+		b, _ := json.Marshal(page[len(page)-1])
 		lastKey = string(b)
 	}
-	if all == nil {
-		all = []map[string]any{}
+
+	// Apply FilterExpression on the page.
+	var result []map[string]any
+	for _, item := range page {
+		if filterExpr == "" || matchesFilter(item, filterExpr, names, values, nil) {
+			result = append(result, item)
+		}
 	}
-	return all, lastKey, nil
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, scannedCount, lastKey, nil
 }
 
 func (s *PostgresDynamoDBItemStore) BatchWriteItems(ctx context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
@@ -493,7 +503,7 @@ func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, table, 
 // ─── Index query helpers ──────────────────────────────────────────────────────
 
 // queryIndex routes a Query to the appropriate GSI or LSI index table.
-func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string, q QuerySpec) ([]map[string]any, string, error) {
+func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	idx := q.IndexSchema
 	suffix := pgSuffix(table)
 	main := "jc_dt_" + suffix
@@ -528,12 +538,12 @@ func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string
 		}
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 
 	items, err := s.fetchByPKHashes(ctx, table, pkHashes)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	items = sortByIndexSK(items, idx, q.ScanIndexForward)
 	return s.filterAndPaginate(items, q.KeyConditionExpression, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, q.ExclusiveStartKey, q.Limit)
@@ -583,7 +593,7 @@ func sortByIndexSK(items []map[string]any, idx *IndexKeyRef, scanFwd bool) []map
 }
 
 // scanIndex routes a Scan to the appropriate GSI index table.
-func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, string, error) {
+func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	idx := sc.IndexSchema
 	suffix := pgSuffix(table)
 	main := "jc_dt_" + suffix
@@ -600,12 +610,12 @@ func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string,
 			idx.IndexName)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 
 	items, err := s.fetchByPKHashes(ctx, table, pkHashes)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 	return s.filterAndPaginate(items, "", sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, sc.ExclusiveStartKey, sc.Limit)
 }
@@ -659,25 +669,33 @@ func (s *PostgresDynamoDBItemStore) fetchByPKHashes(ctx context.Context, table s
 	return items, rows.Err()
 }
 
-func (s *PostgresDynamoDBItemStore) filterAndPaginate(items []map[string]any, keyExpr, filterExpr string, names map[string]string, values map[string]any, exclusiveStartKey string, limit int) ([]map[string]any, string, error) {
-	var filtered []map[string]any
+func (s *PostgresDynamoDBItemStore) filterAndPaginate(items []map[string]any, keyExpr, filterExpr string, names map[string]string, values map[string]any, exclusiveStartKey string, limit int) ([]map[string]any, int, string, error) {
+	// Apply key condition first to get key-matched items for scannedCount.
+	var keyMatched []map[string]any
 	for _, item := range items {
 		if keyExpr != "" && !matchesKeyCondition(item, keyExpr, names, values, nil) {
 			continue
 		}
-		if filterExpr != "" && !matchesFilter(item, filterExpr, names, values, nil) {
-			continue
-		}
-		filtered = append(filtered, item)
+		keyMatched = append(keyMatched, item)
 	}
-	filtered = paginateItems(filtered, exclusiveStartKey, limit)
+
+	page := paginateItems(keyMatched, exclusiveStartKey, limit)
+	scannedCount := len(page)
+
 	var lastKey string
-	if limit > 0 && len(filtered) == limit {
-		b, _ := json.Marshal(filtered[len(filtered)-1])
+	if limit > 0 && len(page) == limit {
+		b, _ := json.Marshal(page[len(page)-1])
 		lastKey = string(b)
 	}
-	if filtered == nil {
-		filtered = []map[string]any{}
+
+	var result []map[string]any
+	for _, item := range page {
+		if filterExpr == "" || matchesFilter(item, filterExpr, names, values, nil) {
+			result = append(result, item)
+		}
 	}
-	return filtered, lastKey, nil
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, scannedCount, lastKey, nil
 }

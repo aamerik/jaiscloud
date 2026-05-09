@@ -975,6 +975,107 @@ func TestSQS_SendMessageBatchWithAttributes(t *testing.T) {
 
 // ─── Test 33: event_source_mapping_to_lambda — deferred to Phase 1 ───────────
 
+// ─── P1.8: FIFO system attributes in ReceiveMessage ──────────────────────────
+
+func TestSQS_FIFO_SystemAttributesIncludeGroupAndSeq(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("sys-attrs-fifo.fifo"),
+		Attributes: map[string]string{
+			"FifoQueue":                 "true",
+			"ContentBasedDeduplication": "true",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:       out.QueueUrl,
+		MessageBody:    aws.String("hello"),
+		MessageGroupId: aws.String("grp-1"),
+	})
+	require.NoError(t, err)
+
+	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:              out.QueueUrl,
+		AttributeNames:        []types.QueueAttributeName{"All"},
+		MaxNumberOfMessages:   1,
+	})
+	require.NoError(t, err)
+	require.Len(t, recv.Messages, 1)
+	assert.Equal(t, "grp-1", recv.Messages[0].Attributes["MessageGroupId"])
+}
+
+// ─── P1.9: FIFO GroupId validation ───────────────────────────────────────────
+
+func TestSQS_FIFO_RequiresMessageGroupId(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("groupid-required.fifo"),
+		Attributes: map[string]string{
+			"FifoQueue":                 "true",
+			"ContentBasedDeduplication": "true",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    out.QueueUrl,
+		MessageBody: aws.String("no group"),
+		// MessageGroupId intentionally omitted
+	})
+	require.Error(t, err)
+}
+
+func TestSQS_FIFO_RequiresDedupIdWhenNoContentBasedDedup(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("dedup-required.fifo"),
+		Attributes: map[string]string{
+			"FifoQueue": "true",
+			// ContentBasedDeduplication deliberately not set
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:       out.QueueUrl,
+		MessageBody:    aws.String("needs dedup"),
+		MessageGroupId: aws.String("grp-1"),
+		// MessageDeduplicationId intentionally omitted
+	})
+	require.Error(t, err)
+}
+
+func TestSQS_FIFO_AcceptsDedupId(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("with-dedup.fifo"),
+		Attributes: map[string]string{"FifoQueue": "true"},
+	})
+	require.NoError(t, err)
+
+	sendOut, err := client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:               out.QueueUrl,
+		MessageBody:            aws.String("dedup msg"),
+		MessageGroupId:         aws.String("grp-1"),
+		MessageDeduplicationId: aws.String("dedup-123"),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, aws.ToString(sendOut.MessageId))
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func containsSubstr(slice []string, sub string) bool {
