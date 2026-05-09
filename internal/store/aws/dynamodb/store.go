@@ -80,6 +80,24 @@ type ConditionSpec struct {
 	Schema *TableSchema
 }
 
+// TransactWriteOp is a single operation within a TransactWriteItems call.
+type TransactWriteOp struct {
+	Type      string         // "Put", "Delete", "Update", "ConditionCheck"
+	Table     string
+	PKHash    string
+	Item      map[string]any // Put only
+	Key       map[string]any // Delete, Update, ConditionCheck
+	Cond      ConditionSpec
+	Update    UpdateSpec
+}
+
+// CancellationReason is the per-item failure detail for TransactionCanceledException.
+type CancellationReason struct {
+	Code    string         // "None" or "ConditionalCheckFailed"
+	Message string
+	Item    map[string]any // ReturnValuesOnConditionCheckFailure
+}
+
 // DynamoDBItemStore manages the DynamoDB item data plane.
 type DynamoDBItemStore interface {
 	// ── Data-plane methods ───────────────────────────────────────────────────
@@ -96,6 +114,9 @@ type DynamoDBItemStore interface {
 	Scan(ctx context.Context, table string, s ScanSpec) ([]map[string]any, int, string, error)
 	BatchWriteItems(ctx context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error)
 	BatchGetItems(ctx context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error)
+	// TransactWriteItems evaluates all conditions then applies all writes atomically.
+	// Returns (nil, nil) on success; (reasons, nil) if any condition failed (caller wraps in TransactionCanceledException).
+	TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error)
 	Reset()
 
 	// ── Table-lifecycle methods ──────────────────────────────────────────────

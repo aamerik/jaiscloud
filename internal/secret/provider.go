@@ -41,9 +41,10 @@ func (p *SecretProvider) Routes() map[string]provider.HandlerFunc {
 		"Secret.UntagResource":         p.UntagResource,
 		"Secret.RotateSecret":          p.RotateSecret,
 		"Secret.CancelRotateSecret":    p.CancelRotateSecret,
-		"Secret.GetResourcePolicy":     p.GetResourcePolicy,
-		"Secret.PutResourcePolicy":     p.PutResourcePolicy,
-		"Secret.DeleteResourcePolicy":  p.DeleteResourcePolicy,
+		"Secret.GetResourcePolicy":          p.GetResourcePolicy,
+		"Secret.PutResourcePolicy":          p.PutResourcePolicy,
+		"Secret.DeleteResourcePolicy":       p.DeleteResourcePolicy,
+		"Secret.UpdateSecretVersionStage":   p.UpdateSecretVersionStage,
 	}
 }
 
@@ -245,16 +246,26 @@ func (p *SecretProvider) PutSecretValue(ctx context.Context, nr *model.Normalize
 		versionID = newID()
 	}
 
-	if err := p.putValueWithID(ctx, e.SecretID, e.KMSKeyID, raw, e.Name, versionID, isBinary); err != nil {
+	stages := []string{"AWSCURRENT"}
+	if vs, ok := nr.Params["VersionStages"].([]any); ok && len(vs) > 0 {
+		stages = make([]string, 0, len(vs))
+		for _, s := range vs {
+			if str, ok := s.(string); ok {
+				stages = append(stages, str)
+			}
+		}
+	}
+
+	if err := p.putValueWithStages(ctx, e.SecretID, e.KMSKeyID, raw, e.Name, versionID, isBinary, stages); err != nil {
 		return nil, err
 	}
 
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
 	return provider.OK(map[string]any{
-		"ARN":       secretARN,
-		"Name":      e.Name,
-		"VersionId": versionID,
-		"VersionStages": []string{"AWSCURRENT"},
+		"ARN":           secretARN,
+		"Name":          e.Name,
+		"VersionId":     versionID,
+		"VersionStages": stages,
 	}), nil
 }
 
@@ -415,6 +426,10 @@ func (p *SecretProvider) putValue(ctx context.Context, secretID, kmsKeyID string
 }
 
 func (p *SecretProvider) putValueWithID(ctx context.Context, secretID, kmsKeyID string, raw []byte, name, versionID string, isBinary bool) error {
+	return p.putValueWithStages(ctx, secretID, kmsKeyID, raw, name, versionID, isBinary, []string{"AWSCURRENT"})
+}
+
+func (p *SecretProvider) putValueWithStages(ctx context.Context, secretID, kmsKeyID string, raw []byte, name, versionID string, isBinary bool, stages []string) error {
 	ct, err := p.encrypt(ctx, kmsKeyID, raw, name)
 	if err != nil {
 		return fmt.Errorf("sm: encrypt: %w", err)
@@ -424,8 +439,80 @@ func (p *SecretProvider) putValueWithID(ctx context.Context, secretID, kmsKeyID 
 		VersionID:    versionID,
 		SecretBinary: ct,
 		IsBinary:     isBinary,
-		Stages:       []string{"AWSCURRENT"},
+		Stages:       stages,
 	})
+}
+
+func (p *SecretProvider) UpdateSecretVersionStage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	versionStage, _ := nr.Params["VersionStage"].(string)
+	if versionStage == "" {
+		return nil, model.NewProviderError("ValidationException", "VersionStage is required", 400)
+	}
+	removeFromID, _ := nr.Params["RemoveFromVersionId"].(string)
+	moveToID, _ := nr.Params["MoveToVersionId"].(string)
+
+	if removeFromID != "" {
+		removeFrom, err := p.store.GetVersion(ctx, e.SecretID, removeFromID)
+		if err != nil {
+			return nil, model.NewProviderError("ResourceNotFoundException", "version not found: "+removeFromID, 400)
+		}
+		newStages := removeStageSlice(removeFrom.Stages, versionStage)
+		if versionStage == "AWSCURRENT" {
+			if !containsStageSlice(newStages, "AWSPREVIOUS") {
+				newStages = append(newStages, "AWSPREVIOUS")
+			}
+		}
+		if err := p.store.UpdateVersionStages(ctx, e.SecretID, removeFromID, newStages); err != nil {
+			return nil, fmt.Errorf("sm: remove stage: %w", err)
+		}
+	}
+
+	if moveToID != "" {
+		moveTo, err := p.store.GetVersion(ctx, e.SecretID, moveToID)
+		if err != nil {
+			return nil, model.NewProviderError("ResourceNotFoundException", "version not found: "+moveToID, 400)
+		}
+		if !containsStageSlice(moveTo.Stages, versionStage) {
+			if versionStage == "AWSCURRENT" {
+				// Remove AWSPREVIOUS from all other versions.
+				all, _ := p.store.ListVersions(ctx, e.SecretID)
+				for _, v := range all {
+					if v.VersionID != moveToID && v.VersionID != removeFromID && containsStageSlice(v.Stages, "AWSPREVIOUS") {
+						p.store.UpdateVersionStages(ctx, e.SecretID, v.VersionID, removeStageSlice(v.Stages, "AWSPREVIOUS"))
+					}
+				}
+			}
+			if err := p.store.UpdateVersionStages(ctx, e.SecretID, moveToID, append(moveTo.Stages, versionStage)); err != nil {
+				return nil, fmt.Errorf("sm: add stage: %w", err)
+			}
+		}
+	}
+
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	return provider.OK(map[string]any{"ARN": secretARN, "Name": e.Name}), nil
+}
+
+func removeStageSlice(stages []string, stage string) []string {
+	out := make([]string, 0, len(stages))
+	for _, s := range stages {
+		if s != stage {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func containsStageSlice(stages []string, stage string) bool {
+	for _, s := range stages {
+		if s == stage {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *SecretProvider) encrypt(ctx context.Context, kmsKeyID string, pt []byte, name string) ([]byte, error) {

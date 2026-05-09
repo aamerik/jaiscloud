@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -277,6 +278,12 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 		h := sha256.Sum256([]byte(body))
 		msg.DeduplicationID = fmt.Sprintf("%x", h)
 	}
+	if isFIFO {
+		queueAttrs := attrsFromState(state)
+		if queueAttrs["MessageDeduplicationScope"] == "messageGroup" {
+			msg.DedupScope = "messageGroup"
+		}
+	}
 	if ma, ok := nr.Params["MessageAttributes"]; ok {
 		msg.MessageAttributes = parseMessageAttributes(ma)
 	}
@@ -340,14 +347,18 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 		return nil, err
 	}
 
-	// Apply the caller-specified visibility timeout
+	// Evaluate DLQ redrive BEFORE building the response — messages that exceed
+	// maxReceiveCount must not be delivered to the caller.
+	var deliverable []sqsstore.SQSMessage
 	for i := range msgs {
+		if p.checkDLQ(ctx, state, queueURL, &msgs[i]) {
+			continue // moved to DLQ; exclude from this response
+		}
 		p.messages.ChangeVisibility(ctx, queueURL, msgs[i].ReceiptHandle, visTimeout, now)
 		msgs[i].VisibleAt = now.Add(time.Duration(visTimeout) * time.Second)
-
-		// Check DLQ redrive
-		p.checkDLQ(ctx, state, queueURL, &msgs[i])
+		deliverable = append(deliverable, msgs[i])
 	}
+	msgs = deliverable
 
 	// Build wire-format messages
 	var wireMessages []map[string]any
@@ -446,14 +457,53 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 
 	entries := batchEntries(nr.Params, "Entries")
 	if len(entries) == 0 {
-		return nil, model.NewProviderError("EmptyBatch", "batch must contain at least one message", 400)
+		return nil, model.NewProviderError("AWS.SimpleQueueService.EmptyBatchRequest",
+			"There is nothing to send. At least one SQS message must be sent with each batch.", 400)
 	}
 	if len(entries) > 10 {
-		return nil, model.NewProviderError("BatchTooLarge", "maximum 10 messages per batch", 400)
+		return nil, model.NewProviderError("AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
+			"Maximum number of entries per request are 10.", 400)
 	}
 
-	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
+	// Validate entry IDs: must be unique and match ^[\w-]{1,80}$
+	seenIDs := map[string]bool{}
+	for _, e := range entries {
+		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.InvalidBatchEntryId",
+				"A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", 400)
+		}
+		if seenIDs[id] {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
+				"Two or more batch entries in the request have the same Id.", 400)
+		}
+		seenIDs[id] = true
+	}
+
+	storeEntry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
+	}
+	var state map[string]any
+	json.Unmarshal(storeEntry.Data, &state)
+	isFIFO, _ := state["IsFifo"].(bool)
+	queueAttrs := attrsFromState(state)
+	contentBasedDedup := queueAttrs["ContentBasedDeduplication"] == "true"
+
+	// Check total batch size against queue's MaximumMessageSize (default 256 KB).
+	maxMsgSize := intFromState(state, "MaximumMessageSize", 262144)
+	totalSize := 0
+	for _, e := range entries {
+		if body, ok := e["MessageBody"].(string); ok {
+			totalSize += len(body)
+		}
+		if ma, ok := e["MessageAttributes"]; ok {
+			totalSize += messageAttributesWireSize(parseMessageAttributes(ma))
+		}
+	}
+	if totalSize > maxMsgSize {
+		return nil, model.NewProviderError("AWS.SimpleQueueService.BatchRequestTooLong",
+			"The combined size of all messages in the batch exceeds the maximum you can send with a batch.", 400)
 	}
 
 	var successful []map[string]any
@@ -464,6 +514,28 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		body, _ := e["MessageBody"].(string)
 		msgID := newMessageID()
 		now := p.clock.Now()
+
+		// Per-entry FIFO validation
+		if isFIFO {
+			groupID, hasGroup := e["MessageGroupId"].(string)
+			if !hasGroup || groupID == "" {
+				failed = append(failed, map[string]any{
+					"Id": id, "Code": "MissingParameter",
+					"Message":     "The request must contain the parameter MessageGroupId",
+					"SenderFault": true,
+				})
+				continue
+			}
+			_, hasDedupID := e["MessageDeduplicationId"].(string)
+			if !contentBasedDedup && !hasDedupID {
+				failed = append(failed, map[string]any{
+					"Id": id, "Code": "InvalidParameterValue",
+					"Message":     "The queue requires MessageDeduplicationId when ContentBasedDeduplication is disabled",
+					"SenderFault": true,
+				})
+				continue
+			}
+		}
 
 		msg := sqsstore.SQSMessage{
 			MessageID: msgID,
@@ -476,6 +548,12 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		}
 		if d, ok := e["MessageDeduplicationId"].(string); ok {
 			msg.DeduplicationID = d
+		} else if isFIFO {
+			h := sha256.Sum256([]byte(body))
+			msg.DeduplicationID = fmt.Sprintf("%x", h)
+		}
+		if isFIFO && queueAttrs["MessageDeduplicationScope"] == "messageGroup" {
+			msg.DedupScope = "messageGroup"
 		}
 		if ds, ok := e["DelaySeconds"]; ok {
 			if sec := toInt(ds); sec > 0 {
@@ -512,11 +590,34 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 	}), nil
 }
 
+var batchEntryIDRegexp = regexp.MustCompile(`^[\w-]{1,80}$`)
+
+func validBatchEntryID(id string) bool {
+	return id != "" && batchEntryIDRegexp.MatchString(id)
+}
+
 func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	entries := batchEntries(nr.Params, "Entries")
 	if len(entries) == 0 {
-		return nil, model.NewProviderError("EmptyBatch", "batch must contain at least one entry", 400)
+		return nil, model.NewProviderError("AWS.SimpleQueueService.EmptyBatchRequest", "There is nothing to delete.", 400)
+	}
+	if len(entries) > 10 {
+		return nil, model.NewProviderError("AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
+			"Maximum number of entries per request are 10.", 400)
+	}
+	seenIDs := map[string]bool{}
+	for _, e := range entries {
+		id, _ := e["Id"].(string)
+		if !validBatchEntryID(id) {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.InvalidBatchEntryId",
+				"A batch entry id can only contain alphanumeric characters, hyphens and underscores. It can be at most 80 letters long.", 400)
+		}
+		if seenIDs[id] {
+			return nil, model.NewProviderError("AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
+				"Two or more batch entries in the request have the same Id.", 400)
+		}
+		seenIDs[id] = true
 	}
 
 	var successful []map[string]any
@@ -614,22 +715,26 @@ func (p *QueueProvider) ListQueueTags(ctx context.Context, nr *model.NormalizedR
 
 // ─── DLQ ──────────────────────────────────────────────────────────────────────
 
-func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queueURL string, msg *sqsstore.SQSMessage) {
+// checkDLQ evaluates whether msg has exceeded its maxReceiveCount and, if so,
+// moves it to the dead-letter queue. Returns true if the message was moved (and
+// must therefore NOT be delivered to the caller).
+func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queueURL string, msg *sqsstore.SQSMessage) bool {
 	rp, ok := state["RedrivePolicy"].(string)
 	if !ok || rp == "" {
-		return
+		return false
 	}
 	var policy map[string]any
 	if err := json.Unmarshal([]byte(rp), &policy); err != nil {
-		return
+		return false
 	}
 	maxCount := toInt(policy["maxReceiveCount"])
 	if maxCount <= 0 {
 		maxCount = 1
 	}
 	dlqArn, _ := policy["deadLetterTargetArn"].(string)
-	if dlqArn == "" || msg.ReceiveCount < maxCount {
-		return
+	// AWS triggers DLQ when ReceiveCount > maxReceiveCount (strictly greater).
+	if dlqArn == "" || msg.ReceiveCount <= maxCount {
+		return false
 	}
 
 	// Move message to DLQ — reset delivery metadata so it is immediately visible.
@@ -637,8 +742,8 @@ func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queu
 	dlqMsg := *msg
 	dlqMsg.QueueURL = dlqURL
 	dlqMsg.ReceiptHandle = ""
-	dlqMsg.VisibleAt = time.Time{}   // clear in-flight timeout
-	dlqMsg.DelayUntil = time.Time{}  // no delay in DLQ
+	dlqMsg.VisibleAt = time.Time{}  // clear in-flight timeout
+	dlqMsg.DelayUntil = time.Time{} // no delay in DLQ
 	dlqMsg.ReceiveCount = 0
 	p.messages.Send(ctx, dlqMsg)
 	p.messages.Delete(ctx, queueURL, msg.ReceiptHandle)
@@ -651,6 +756,7 @@ func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queu
 			MessageID:      msg.MessageID,
 		},
 	})
+	return true
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -837,6 +943,20 @@ func parseMessageAttributes(v any) map[string]sqsstore.MessageAttribute {
 		return m
 	}
 	return result
+}
+
+// messageAttributesWireSize returns the total wire size (name + dataType + value bytes) for batch size checks.
+func messageAttributesWireSize(attrs map[string]sqsstore.MessageAttribute) int {
+	n := 0
+	for name, attr := range attrs {
+		n += len(name) + len(attr.DataType)
+		if strings.HasPrefix(attr.DataType, "Binary") {
+			n += len(attr.BinaryValue)
+		} else {
+			n += len(attr.StringValue)
+		}
+	}
+	return n
 }
 
 // md5MessageAttributes computes the AWS-compatible MD5 over message attributes.

@@ -16,6 +16,7 @@ type SQSMessage struct {
 	MessageAttributes map[string]MessageAttribute // user-defined attributes
 	GroupID           string                      // FIFO: MessageGroupId
 	DeduplicationID   string                      // FIFO: MessageDeduplicationId
+	DedupScope        string                      // FIFO: "" (queue) or "messageGroup"
 	VisibleAt         time.Time                   // when the message becomes visible again
 	SentAt            time.Time
 	DelayUntil        time.Time  // for delayed messages

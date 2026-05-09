@@ -243,6 +243,23 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 		}
 	}
 
+	// CompleteMultipartUpload: parse XML part list so provider can validate order/sizes.
+	if action == "CompleteMultipartUpload" && len(body) > 0 {
+		var completeReq struct {
+			Parts []struct {
+				PartNumber int    `xml:"PartNumber"`
+				ETag       string `xml:"ETag"`
+			} `xml:"Part"`
+		}
+		if xml.Unmarshal(body, &completeReq) == nil {
+			parts := make([]map[string]any, len(completeReq.Parts))
+			for i, p := range completeReq.Parts {
+				parts[i] = map[string]any{"PartNumber": p.PartNumber, "ETag": p.ETag}
+			}
+			params["_requested_parts"] = parts
+		}
+	}
+
 	// DeleteObjects: parse XML body into params["Delete"]
 	if action == "DeleteObjects" && len(body) > 0 {
 		var deleteReq struct {

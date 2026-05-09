@@ -40,9 +40,15 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// FIFO deduplication: reject duplicates within 5-minute window
+	// FIFO deduplication: reject duplicates within 5-minute window.
+	// Scope: "messageGroup" → key includes GroupID; default → queue-wide.
 	if msg.DeduplicationID != "" {
-		dedupKey := msg.QueueURL + ":" + msg.DeduplicationID
+		var dedupKey string
+		if msg.DedupScope == "messageGroup" {
+			dedupKey = msg.QueueURL + ":" + msg.GroupID + ":" + msg.DeduplicationID
+		} else {
+			dedupKey = msg.QueueURL + ":" + msg.DeduplicationID
+		}
 		if entry, ok := s.dedup[dedupKey]; ok && time.Now().Before(entry.expiry) {
 			return entry.messageID, nil // return original MessageID to caller
 		}

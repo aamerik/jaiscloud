@@ -1031,7 +1031,7 @@ func TestDynamoDB_DescribeContinuousBackups_Default(t *testing.T) {
 		TableName: aws.String("pitr-tbl"),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "AVAILABLE", string(out.ContinuousBackupsDescription.ContinuousBackupsStatus))
+	assert.Equal(t, "ENABLED", string(out.ContinuousBackupsDescription.ContinuousBackupsStatus))
 	assert.Equal(t, types.PointInTimeRecoveryStatusDisabled,
 		out.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)
 }

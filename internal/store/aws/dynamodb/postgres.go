@@ -263,6 +263,100 @@ func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, reqs []Ba
 	return result, nil
 }
 
+// TransactWriteItems runs all condition checks and writes in a single Serializable transaction.
+// SELECT ... FOR UPDATE locks each row during condition evaluation to prevent TOCTOU races.
+func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Phase 1: evaluate all conditions under SELECT … FOR UPDATE.
+	reasons := make([]CancellationReason, len(ops))
+	anyFailed := false
+	for i, op := range ops {
+		var raw []byte
+		err := tx.QueryRow(ctx,
+			`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2 FOR UPDATE`,
+			op.Table, op.PKHash,
+		).Scan(&raw)
+		var item map[string]any
+		if err == nil {
+			json.Unmarshal(raw, &item)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		if item == nil {
+			item = map[string]any{}
+		}
+		condExpr := op.Cond.ConditionExpression
+		if condExpr != "" && !matchesFilter(item, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
+			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+			anyFailed = true
+		} else {
+			reasons[i] = CancellationReason{Code: "None"}
+		}
+	}
+	if anyFailed {
+		return reasons, nil
+	}
+
+	// Phase 2: apply all writes within the same transaction.
+	for _, op := range ops {
+		switch op.Type {
+		case "Put":
+			raw, _ := json.Marshal(op.Item)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (table_name, pk_hash) DO UPDATE
+					SET item=$3, updated_at=now()
+			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				return nil, err
+			}
+		case "Delete":
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
+			`, op.Table, op.PKHash); err != nil {
+				return nil, err
+			}
+		case "Update":
+			var existingRaw []byte
+			err := tx.QueryRow(ctx,
+				`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2`,
+				op.Table, op.PKHash,
+			).Scan(&existingRaw)
+			var existing map[string]any
+			if err == nil {
+				json.Unmarshal(existingRaw, &existing)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return nil, err
+			}
+			if existing == nil {
+				existing = copyItem(op.Key)
+			}
+			if op.Update.UpdateExpression != "" {
+				applyUpdateExpression(existing, op.Update.UpdateExpression, op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues)
+			} else {
+				for k, v := range op.Item {
+					existing[k] = v
+				}
+			}
+			raw, _ := json.Marshal(existing)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (table_name, pk_hash) DO UPDATE
+					SET item=$3, updated_at=now()
+			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, tx.Commit(ctx)
+}
+
 func (s *PostgresDynamoDBItemStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items`)
