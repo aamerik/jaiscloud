@@ -57,7 +57,7 @@ func (p *Provider) CreateLogStream(_ context.Context, nr *model.NormalizedReques
 	// Initialise seq token counter
 	seqTokens := p.store.seqToken[groupName]
 	if seqTokens == nil {
-		seqTokens = make(map[string]int)
+		seqTokens = make(map[string]int64)
 		p.store.seqToken[groupName] = seqTokens
 	}
 	seqTokens[streamName] = 0

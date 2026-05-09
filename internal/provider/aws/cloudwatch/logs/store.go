@@ -88,7 +88,7 @@ type memStore struct {
 	// tags maps groupArn → map[string]string
 	tags map[string]map[string]string
 	// seqToken maps groupName → streamName → counter
-	seqToken map[string]map[string]int
+	seqToken map[string]map[string]int64
 }
 
 func newMemStore() *memStore {
@@ -102,7 +102,7 @@ func (s *memStore) reset() {
 	s.streams = make(map[string]map[string]*LogStream)
 	s.events = make(map[string]map[string]*eventRing)
 	s.tags = make(map[string]map[string]string)
-	s.seqToken = make(map[string]map[string]int)
+	s.seqToken = make(map[string]map[string]int64)
 }
 
 // Reset wipes all state (called on POST /_jaiscloud/reset).

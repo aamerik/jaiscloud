@@ -242,9 +242,11 @@ func (p *Provider) UntagLogGroup(_ context.Context, nr *model.NormalizedRequest)
 	if keysRaw, ok := nr.Params["tags"]; ok {
 		if keys, ok := keysRaw.([]any); ok {
 			existing := p.store.tags[g.Arn]
-			for _, k := range keys {
-				if ks, ok := k.(string); ok {
-					delete(existing, ks)
+			if existing != nil {
+				for _, k := range keys {
+					if ks, ok := k.(string); ok {
+						delete(existing, ks)
+					}
 				}
 			}
 		}

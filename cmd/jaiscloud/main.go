@@ -821,6 +821,7 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"apigateway":      &services.APIGatewayCodec{},
 		"execute-api":     &services.ExecuteAPICodec{},
 		"monitoring":      &services.CloudWatchCodec{},
+		"logs":            &services.LogsCodec{},
 	})
 }
 
