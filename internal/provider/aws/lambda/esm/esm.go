@@ -126,6 +126,12 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("InvalidParameterValueException", err.Error(), 400)
 	}
 
+	// Validate function exists
+	if _, err := p.resources.Get(ctx, "lambda_functions", functionName); err != nil {
+		return nil, model.NewProviderError("ResourceNotFoundException",
+			"Function not found: "+functionName, 404)
+	}
+
 	// Check for duplicate: same function + same event source
 	if p.esmDuplicateExists(ctx, functionName, eventSourceArn) {
 		return nil, model.NewProviderError("ResourceConflictException",
