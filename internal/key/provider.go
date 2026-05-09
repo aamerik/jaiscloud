@@ -169,7 +169,8 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 		}
 	}
 	if pendingDays < 7 || pendingDays > 30 {
-		return nil, model.NewProviderError("InvalidParameterException", "PendingWindowInDays must be between 7 and 30", 400)
+		return nil, model.NewProviderError("ValidationException",
+			fmt.Sprintf("PendingWindowInDays should be between 7 and 30, but it is %d", pendingDays), 400)
 	}
 
 	e, err := p.store.GetKey(ctx, keyID)
@@ -209,7 +210,7 @@ func (p *KeyProvider) CancelKeyDeletion(ctx context.Context, nr *model.Normalize
 	}
 	e.PendingDeletion = false
 	e.DeletionDate = time.Time{}
-	e.Enabled = true
+	e.Enabled = false // AWS: CancelKeyDeletion transitions to Disabled, not Enabled
 	if err := p.store.UpdateKey(ctx, e); err != nil {
 		return nil, fmt.Errorf("kms: cancel key deletion: %w", err)
 	}

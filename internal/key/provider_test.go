@@ -268,9 +268,9 @@ func TestKeyProvider_CancelKeyDeletion(t *testing.T) {
 	// Cancel.
 	callKey(t, routes, "CancelKeyDeletion", map[string]any{"KeyId": keyID})
 
-	// Now enabled again.
+	// CancelKeyDeletion transitions to Disabled (must call EnableKey explicitly to re-enable).
 	desc2 := callKey(t, routes, "DescribeKey", map[string]any{"KeyId": keyID})
-	assert.Equal(t, "Enabled", desc2["KeyMetadata"].(map[string]any)["KeyState"])
+	assert.Equal(t, "Disabled", desc2["KeyMetadata"].(map[string]any)["KeyState"])
 }
 
 func TestKeyProvider_CancelKeyDeletion_NotPending(t *testing.T) {

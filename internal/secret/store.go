@@ -25,10 +25,11 @@ type SecretEntry struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	// Rotation fields.
-	RotationEnabled   bool
-	RotationLambdaARN string
-	RotationRules     map[string]any // e.g. {"AutomaticallyAfterDays": 30}
-	NextRotationDate  *time.Time
+	RotationEnabled      bool
+	RotationLambdaARN    string
+	AutoRotateAfterDays  int
+	LastRotatedDate      *time.Time
+	NextRotationDate     *time.Time
 	// ResourcePolicy holds the resource-based policy JSON.
 	ResourcePolicy string
 }

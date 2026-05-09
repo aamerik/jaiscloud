@@ -101,7 +101,8 @@ func TestSecretEntry_NewFieldsDefault(t *testing.T) {
 	e := secret.SecretEntry{SecretID: "s1", Name: "n1"}
 	assert.False(t, e.RotationEnabled)
 	assert.Empty(t, e.RotationLambdaARN)
-	assert.Nil(t, e.RotationRules)
+	assert.Zero(t, e.AutoRotateAfterDays)
+	assert.Nil(t, e.LastRotatedDate)
 	assert.Nil(t, e.NextRotationDate)
 	assert.Empty(t, e.ResourcePolicy)
 }
@@ -112,13 +113,13 @@ func TestSecretEntry_SerializeDeserialize(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	e := secret.SecretEntry{
-		SecretID:          "s-rt",
-		Name:              "rt/secret",
-		RotationEnabled:   true,
-		RotationLambdaARN: "arn:aws:lambda:us-east-1:000000000000:function:rotate",
-		RotationRules:     map[string]any{"AutomaticallyAfterDays": float64(30)},
-		NextRotationDate:  &now,
-		ResourcePolicy:    `{"Version":"2012-10-17"}`,
+		SecretID:            "s-rt",
+		Name:                "rt/secret",
+		RotationEnabled:     true,
+		RotationLambdaARN:   "arn:aws:lambda:us-east-1:000000000000:function:rotate",
+		AutoRotateAfterDays: 30,
+		NextRotationDate:    &now,
+		ResourcePolicy:      `{"Version":"2012-10-17"}`,
 	}
 	require.NoError(t, s.CreateSecret(ctx, e))
 
@@ -126,7 +127,7 @@ func TestSecretEntry_SerializeDeserialize(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.RotationEnabled)
 	assert.Equal(t, e.RotationLambdaARN, got.RotationLambdaARN)
-	assert.Equal(t, e.RotationRules, got.RotationRules)
+	assert.Equal(t, 30, got.AutoRotateAfterDays)
 	require.NotNil(t, got.NextRotationDate)
 	assert.Equal(t, now, got.NextRotationDate.UTC().Truncate(time.Second))
 	assert.Equal(t, e.ResourcePolicy, got.ResourcePolicy)
@@ -143,7 +144,7 @@ func TestSecretEntry_BackwardsCompatible(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got.RotationEnabled)
 	assert.Empty(t, got.RotationLambdaARN)
-	assert.Nil(t, got.RotationRules)
+	assert.Zero(t, got.AutoRotateAfterDays)
 	assert.Nil(t, got.NextRotationDate)
 	assert.Empty(t, got.ResourcePolicy)
 }

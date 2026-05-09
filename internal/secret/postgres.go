@@ -237,14 +237,15 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 	}
 	e.DeletedAt = deletedAt
 	var meta struct {
-		Description       string            `json:"description"`
-		KMSKeyID          string            `json:"kms_key_id"`
-		Tags              map[string]string `json:"tags"`
-		RotationEnabled   bool              `json:"rotation_enabled"`
-		RotationLambdaARN string            `json:"rotation_lambda_arn"`
-		RotationRules     map[string]any    `json:"rotation_rules"`
-		NextRotationDate  *time.Time        `json:"next_rotation_date"`
-		ResourcePolicy    string            `json:"resource_policy"`
+		Description         string            `json:"description"`
+		KMSKeyID            string            `json:"kms_key_id"`
+		Tags                map[string]string `json:"tags"`
+		RotationEnabled     bool              `json:"rotation_enabled"`
+		RotationLambdaARN   string            `json:"rotation_lambda_arn"`
+		AutoRotateAfterDays int               `json:"auto_rotate_after_days"`
+		LastRotatedDate     *time.Time        `json:"last_rotated_date"`
+		NextRotationDate    *time.Time        `json:"next_rotation_date"`
+		ResourcePolicy      string            `json:"resource_policy"`
 	}
 	_ = json.Unmarshal(data, &meta)
 	e.Description = meta.Description
@@ -252,7 +253,8 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 	e.Tags = meta.Tags
 	e.RotationEnabled = meta.RotationEnabled
 	e.RotationLambdaARN = meta.RotationLambdaARN
-	e.RotationRules = meta.RotationRules
+	e.AutoRotateAfterDays = meta.AutoRotateAfterDays
+	e.LastRotatedDate = meta.LastRotatedDate
 	e.NextRotationDate = meta.NextRotationDate
 	e.ResourcePolicy = meta.ResourcePolicy
 	return e, nil
@@ -260,14 +262,15 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 
 func secretMeta(e SecretEntry) map[string]any {
 	return map[string]any{
-		"description":         e.Description,
-		"kms_key_id":          e.KMSKeyID,
-		"tags":                e.Tags,
-		"rotation_enabled":    e.RotationEnabled,
-		"rotation_lambda_arn": e.RotationLambdaARN,
-		"rotation_rules":      e.RotationRules,
-		"next_rotation_date":  e.NextRotationDate,
-		"resource_policy":     e.ResourcePolicy,
+		"description":            e.Description,
+		"kms_key_id":             e.KMSKeyID,
+		"tags":                   e.Tags,
+		"rotation_enabled":       e.RotationEnabled,
+		"rotation_lambda_arn":    e.RotationLambdaARN,
+		"auto_rotate_after_days": e.AutoRotateAfterDays,
+		"last_rotated_date":      e.LastRotatedDate,
+		"next_rotation_date":     e.NextRotationDate,
+		"resource_policy":        e.ResourcePolicy,
 	}
 }
 

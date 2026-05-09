@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -266,6 +267,10 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	}
 	if hasDedupID {
 		msg.DeduplicationID = dedupID
+	} else if isFIFO {
+		// ContentBasedDeduplication: auto-assign SHA-256 of body as dedup ID.
+		h := sha256.Sum256([]byte(body))
+		msg.DeduplicationID = fmt.Sprintf("%x", h)
 	}
 	if ma, ok := nr.Params["MessageAttributes"]; ok {
 		msg.MessageAttributes = parseMessageAttributes(ma)

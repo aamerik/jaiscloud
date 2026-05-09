@@ -344,9 +344,10 @@ func TestKMS_CancelKeyDeletion(t *testing.T) {
 	_, err = c.CancelKeyDeletion(ctx, &awskms.CancelKeyDeletionInput{KeyId: aws.String(keyID)})
 	require.NoError(t, err)
 
+	// CancelKeyDeletion → Disabled state; must EnableKey to go Enabled.
 	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: aws.String(keyID)})
 	require.NoError(t, err)
-	assert.Equal(t, types.KeyStateEnabled, desc.KeyMetadata.KeyState)
+	assert.Equal(t, types.KeyStateDisabled, desc.KeyMetadata.KeyState)
 }
 
 func TestKMS_DescribeKey_IncludesNewFields(t *testing.T) {

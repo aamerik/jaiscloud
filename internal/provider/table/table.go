@@ -685,6 +685,8 @@ func (p *TableProvider) DescribeTimeToLive(ctx context.Context, nr *model.Normal
 			"TimeToLiveStatus": "ENABLED",
 			"AttributeName":    ts.TTLSpec.AttributeName,
 		}
+	} else if ts.TTLSpec != nil && ts.TTLSpec.AttributeName != "" {
+		ttlDesc["AttributeName"] = ts.TTLSpec.AttributeName
 	}
 	return provider.OK(map[string]any{"TimeToLiveDescription": ttlDesc}), nil
 }
@@ -728,7 +730,7 @@ func (p *TableProvider) DescribeContinuousBackups(ctx context.Context, nr *model
 	}
 	return provider.OK(map[string]any{
 		"ContinuousBackupsDescription": map[string]any{
-			"ContinuousBackupsStatus": "AVAILABLE",
+			"ContinuousBackupsStatus": "ENABLED",
 			"PointInTimeRecoveryDescription": map[string]any{
 				"PointInTimeRecoveryStatus": pitrStatus,
 			},
@@ -754,7 +756,7 @@ func (p *TableProvider) UpdateContinuousBackups(ctx context.Context, nr *model.N
 	}
 	return provider.OK(map[string]any{
 		"ContinuousBackupsDescription": map[string]any{
-			"ContinuousBackupsStatus": "AVAILABLE",
+			"ContinuousBackupsStatus": "ENABLED",
 			"PointInTimeRecoveryDescription": map[string]any{
 				"PointInTimeRecoveryStatus": pitrStatus,
 			},
