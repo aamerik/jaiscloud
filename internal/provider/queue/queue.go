@@ -605,6 +605,10 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		successful = append(successful, entry)
 	}
 
+	if len(successful) > 0 {
+		p.waiters.Notify(queueURL)
+	}
+
 	return provider.OK(map[string]any{
 		"Successful": successful,
 		"Failed":     failed,
