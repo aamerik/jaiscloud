@@ -76,6 +76,10 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.GenerateMac":   p.GenerateMac,
 		"Key.VerifyMac":     p.VerifyMac,
 		"Key.GenerateRandom": p.GenerateRandom,
+		// Key import (stub)
+		"Key.GetParametersForImport":    p.GetParametersForImport,
+		"Key.ImportKeyMaterial":         p.ImportKeyMaterial,
+		"Key.DeleteImportedKeyMaterial": p.DeleteImportedKeyMaterial,
 	}
 }
 
@@ -94,14 +98,30 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 	desc, _ := nr.Params["Description"].(string)
 	tags := extractTags(nr.Params)
 
+	origin, _ := nr.Params["Origin"].(string)
+	if origin == "" {
+		origin = "AWS_KMS"
+	}
+
 	e := KeyEntry{
 		KeyID:       keyID,
 		Enabled:     true,
 		Description: desc,
 		KeyUsage:    keyUsage,
 		KeySpec:     keySpec,
-		Origin:      "AWS_KMS",
+		Origin:      origin,
 		Tags:        tags,
+	}
+
+	// EXTERNAL origin: create key entry without any key material.
+	if origin == "EXTERNAL" {
+		if err := p.store.CreateKey(ctx, e); err != nil {
+			return nil, fmt.Errorf("kms: create key: %w", err)
+		}
+		keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+		return provider.OK(map[string]any{
+			"KeyMetadata": keyMetadata(e, keyARN, nr.Region, nr.AccountID),
+		}), nil
 	}
 
 	if isAsymmetricSpec(keySpec) {
@@ -389,6 +409,46 @@ func (p *KeyProvider) ListAliases(ctx context.Context, nr *model.NormalizedReque
 		})
 	}
 	return provider.OK(map[string]any{"Aliases": items, "Truncated": false}), nil
+}
+
+// ─── Key import stubs ─────────────────────────────────────────────────────────
+
+func (p *KeyProvider) GetParametersForImport(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.Origin != "EXTERNAL" {
+		return nil, model.NewProviderError("UnsupportedOperationException",
+			"GetParametersForImport is only supported for keys with Origin=EXTERNAL", 400)
+	}
+	// Return dummy wrapping key and import token (base64-encoded random bytes).
+	dummyKey := make([]byte, 256)
+	io.ReadFull(rand.Reader, dummyKey)
+	token := make([]byte, 32)
+	io.ReadFull(rand.Reader, token)
+	return provider.OK(map[string]any{
+		"KeyId":              keyID,
+		"PublicKey":          base64.StdEncoding.EncodeToString(dummyKey),
+		"ImportToken":        base64.StdEncoding.EncodeToString(token),
+		"ParametersValidTo":  time.Now().Add(24 * time.Hour).Unix(),
+		"KeySpec":            "RSA_2048",
+		"WrappingAlgorithm":  "RSAES_OAEP_SHA_256",
+	}), nil
+}
+
+func (p *KeyProvider) ImportKeyMaterial(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("UnsupportedOperationException",
+		"Key material import is not supported in this emulator", 400)
+}
+
+func (p *KeyProvider) DeleteImportedKeyMaterial(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, model.NewProviderError("UnsupportedOperationException",
+		"Key material import is not supported in this emulator", 400)
 }
 
 // validGrantOperations is the set of allowed KMS grant operations.
