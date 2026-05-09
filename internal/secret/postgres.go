@@ -245,6 +245,7 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 		AutoRotateAfterDays int               `json:"auto_rotate_after_days"`
 		LastRotatedDate     *time.Time        `json:"last_rotated_date"`
 		NextRotationDate    *time.Time        `json:"next_rotation_date"`
+		LastAccessedDate    *time.Time        `json:"last_accessed_date"`
 		ResourcePolicy      string            `json:"resource_policy"`
 	}
 	_ = json.Unmarshal(data, &meta)
@@ -256,6 +257,7 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 	e.AutoRotateAfterDays = meta.AutoRotateAfterDays
 	e.LastRotatedDate = meta.LastRotatedDate
 	e.NextRotationDate = meta.NextRotationDate
+	e.LastAccessedDate = meta.LastAccessedDate
 	e.ResourcePolicy = meta.ResourcePolicy
 	return e, nil
 }
@@ -270,6 +272,7 @@ func secretMeta(e SecretEntry) map[string]any {
 		"auto_rotate_after_days": e.AutoRotateAfterDays,
 		"last_rotated_date":      e.LastRotatedDate,
 		"next_rotation_date":     e.NextRotationDate,
+		"last_accessed_date":     e.LastAccessedDate,
 		"resource_policy":        e.ResourcePolicy,
 	}
 }

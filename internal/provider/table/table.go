@@ -699,6 +699,10 @@ func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.Normaliz
 	}
 	spec, _ := nr.Params["TimeToLiveSpecification"].(map[string]any)
 	attrName, _ := spec["AttributeName"].(string)
+	if attrName == "" {
+		return nil, model.NewProviderError("ValidationException",
+			"TimeToLiveSpecification.AttributeName is required", 400)
+	}
 	enabled, _ := spec["Enabled"].(bool)
 	ts.TTLSpec = &TTLSpecification{AttributeName: attrName, Enabled: enabled}
 	if err := p.saveTable(ctx, ts); err != nil {

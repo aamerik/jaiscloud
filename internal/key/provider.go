@@ -191,6 +191,7 @@ func (p *KeyProvider) ScheduleKeyDeletion(ctx context.Context, nr *model.Normali
 	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	return provider.OK(map[string]any{
 		"KeyId":               keyARN,
+		"KeyState":            "PendingDeletion",
 		"DeletionDate":        deletionDate.Unix(),
 		"PendingWindowInDays": pendingDays,
 	}), nil

@@ -232,7 +232,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 
 	if isFIFO {
 		if !hasGroupID || groupID == "" {
-			return nil, model.NewProviderError("InvalidParameterValue",
+			return nil, model.NewProviderError("MissingParameter",
 				"The request must contain the parameter MessageGroupId", 400)
 		}
 		// FIFO queues do not support per-message DelaySeconds.

@@ -30,6 +30,7 @@ type SecretEntry struct {
 	AutoRotateAfterDays  int
 	LastRotatedDate      *time.Time
 	NextRotationDate     *time.Time
+	LastAccessedDate     *time.Time
 	// ResourcePolicy holds the resource-based policy JSON.
 	ResourcePolicy string
 }

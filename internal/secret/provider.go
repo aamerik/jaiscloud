@@ -135,11 +135,16 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		return nil, err
 	}
 
+	if e.DeletedAt != nil {
+		return nil, model.NewProviderError("InvalidRequestException",
+			"You tried to perform the operation on a secret that's currently marked deleted.", 400)
+	}
+
 	forceDelete, _ := nr.Params["ForceDeleteWithoutRecovery"].(bool)
 	_, hasRecoveryDays := nr.Params["RecoveryWindowInDays"]
 	if forceDelete && hasRecoveryDays {
 		return nil, model.NewProviderError("InvalidParameterException",
-			"ForceDeleteWithoutRecovery and RecoveryWindowInDays are mutually exclusive", 400)
+			"You can't use ForceDeleteWithoutRecovery in conjunction with RecoveryWindowInDays.", 400)
 	}
 
 	recoveryDays := int64(30)
@@ -147,7 +152,7 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		recoveryDays = int64(v)
 		if recoveryDays < 7 || recoveryDays > 30 {
 			return nil, model.NewProviderError("InvalidParameterException",
-				"RecoveryWindowInDays must be between 7 and 30", 400)
+				"RecoveryWindowInDays value must be between 7 and 30 days (inclusive).", 400)
 		}
 	}
 
@@ -162,11 +167,6 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 			"Name":         e.Name,
 			"DeletionDate": nr.Clock.Now().Unix(),
 		}), nil
-	}
-
-	if e.DeletedAt != nil {
-		return nil, model.NewProviderError("InvalidRequestException",
-			"secret is already scheduled for deletion", 400)
 	}
 
 	deletionDate := nr.Clock.Now().Add(time.Duration(recoveryDays) * 24 * time.Hour)
