@@ -459,13 +459,14 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
-	items, lastKey, err := p.items.Query(ctx, name, q)
+	items, scannedCount, lastKey, err := p.items.Query(ctx, name, q)
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]any{
-		"Items": items,
-		"Count": len(items),
+		"Items":        items,
+		"Count":        len(items),
+		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {
 		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
@@ -486,13 +487,14 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
-	items, lastKey, err := p.items.Scan(ctx, name, sc)
+	items, scannedCount, lastKey, err := p.items.Scan(ctx, name, sc)
 	if err != nil {
 		return nil, err
 	}
 	result := map[string]any{
-		"Items": items,
-		"Count": len(items),
+		"Items":        items,
+		"Count":        len(items),
+		"ScannedCount": scannedCount,
 	}
 	if lastKey != "" {
 		result["LastEvaluatedKey"] = unmarshalKey(lastKey)

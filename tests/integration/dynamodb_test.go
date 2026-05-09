@@ -909,6 +909,62 @@ func TestDynamoDB_ScanPagination(t *testing.T) {
 	assert.Len(t, seen, 5)
 }
 
+// ─── P1.10: ScannedCount ─────────────────────────────────────────────────────
+
+func TestDynamoDB_ScannedCount_EqualToCountWithNoFilter(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "sc-tbl")
+
+	for i := 0; i < 3; i++ {
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("sc-tbl"),
+			Item: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("pk%d", i)},
+				"SK": &types.AttributeValueMemberS{Value: "sk"},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := client.Scan(ctx, &awsdynamo.ScanInput{TableName: aws.String("sc-tbl")})
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), out.Count)
+	assert.Equal(t, int32(3), out.ScannedCount)
+}
+
+func TestDynamoDB_ScannedCount_GreaterThanCountWithFilter(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "sc-filter-tbl")
+
+	for i := 0; i < 5; i++ {
+		active := i%2 == 0 // 3 active (0,2,4), 2 inactive
+		_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String("sc-filter-tbl"),
+			Item: map[string]types.AttributeValue{
+				"PK":     &types.AttributeValueMemberS{Value: fmt.Sprintf("pk%d", i)},
+				"SK":     &types.AttributeValueMemberS{Value: "sk"},
+				"active": &types.AttributeValueMemberBOOL{Value: active},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := client.Scan(ctx, &awsdynamo.ScanInput{
+		TableName:        aws.String("sc-filter-tbl"),
+		FilterExpression: aws.String("active = :t"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":t": &types.AttributeValueMemberBOOL{Value: true},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), out.Count)        // 3 pass the filter
+	assert.Equal(t, int32(5), out.ScannedCount) // all 5 were examined
+}
+
 // ─── P1.3: TTL ────────────────────────────────────────────────────────────────
 
 func TestDynamoDB_DescribeTimeToLive_Default(t *testing.T) {

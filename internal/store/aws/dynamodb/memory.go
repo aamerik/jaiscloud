@@ -154,12 +154,12 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 	return copyItem(existing), nil
 }
 
-func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q QuerySpec) ([]map[string]any, string, error) {
+func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.tables[table]
 	if t == nil {
-		return []map[string]any{}, "", nil
+		return []map[string]any{}, 0, "", nil
 	}
 	schema := s.schemas[table]
 	attrTypes := buildAttrTypes(schema)
@@ -218,16 +218,13 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 		}
 	}
 
-	// Apply key condition and filter expression.
-	var matched []map[string]any
+	// Apply key condition only → keyMatched (used for ScannedCount and pagination).
+	var keyMatched []map[string]any
 	for _, item := range candidates {
 		if !matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
 			continue
 		}
-		if q.FilterExpression != "" && !matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
-			continue
-		}
-		matched = append(matched, item)
+		keyMatched = append(keyMatched, item)
 	}
 
 	// Sort by sort key if available, otherwise by pkHash for stable order.
@@ -235,49 +232,55 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 		skAttr := sortAttr
 		numeric := sortIsNumeric
 		fwd := sortForward
-		sort.Slice(matched, func(i, j int) bool {
+		sort.Slice(keyMatched, func(i, j int) bool {
 			if numeric {
-				ni, _ := ParseNumeric(matched[i][skAttr])
-				nj, _ := ParseNumeric(matched[j][skAttr])
+				ni, _ := ParseNumeric(keyMatched[i][skAttr])
+				nj, _ := ParseNumeric(keyMatched[j][skAttr])
 				if fwd {
 					return ni < nj
 				}
 				return ni > nj
 			}
-			vi, _ := AttrVal(matched[i][skAttr])
-			vj, _ := AttrVal(matched[j][skAttr])
+			vi, _ := AttrVal(keyMatched[i][skAttr])
+			vj, _ := AttrVal(keyMatched[j][skAttr])
 			if fwd {
 				return vi < vj
 			}
 			return vi > vj
 		})
 	} else {
-		sort.Slice(matched, func(i, j int) bool { return itemPKHash(matched[i]) < itemPKHash(matched[j]) })
+		sort.Slice(keyMatched, func(i, j int) bool { return itemPKHash(keyMatched[i]) < itemPKHash(keyMatched[j]) })
 	}
 
-	all := paginateItems(matched, q.ExclusiveStartKey, q.Limit)
+	// Paginate on key-condition-matched items; scannedCount = items in page.
+	page := paginateItems(keyMatched, q.ExclusiveStartKey, q.Limit)
+	scannedCount := len(page)
+
 	var lastKey string
-	if q.Limit > 0 && len(all) == q.Limit {
-		b, _ := json.Marshal(all[len(all)-1])
+	if q.Limit > 0 && len(page) == q.Limit {
+		b, _ := json.Marshal(page[len(page)-1])
 		lastKey = string(b)
 	}
 
-	result := make([]map[string]any, len(all))
-	for i, item := range all {
-		result[i] = copyItem(item)
+	// Apply FilterExpression on the page.
+	var result []map[string]any
+	for _, item := range page {
+		if q.FilterExpression == "" || matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
+			result = append(result, copyItem(item))
+		}
 	}
 	if len(result) == 0 {
 		result = []map[string]any{}
 	}
-	return result, lastKey, nil
+	return result, scannedCount, lastKey, nil
 }
 
-func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanSpec) ([]map[string]any, string, error) {
+func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.tables[table]
 	if t == nil {
-		return []map[string]any{}, "", nil
+		return []map[string]any{}, 0, "", nil
 	}
 	schema := s.schemas[table]
 	attrTypes := buildAttrTypes(schema)
@@ -304,27 +307,30 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 		}
 	}
 
-	var all []map[string]any
-	for _, item := range candidates {
-		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, attrTypes) {
-			all = append(all, item)
-		}
-	}
-	sort.Slice(all, func(i, j int) bool { return itemPKHash(all[i]) < itemPKHash(all[j]) })
-	all = paginateItems(all, sc.ExclusiveStartKey, sc.Limit)
+	// Sort all candidates stably before pagination.
+	sort.Slice(candidates, func(i, j int) bool { return itemPKHash(candidates[i]) < itemPKHash(candidates[j]) })
+
+	// Paginate candidates; scannedCount = items in page (before filter).
+	page := paginateItems(candidates, sc.ExclusiveStartKey, sc.Limit)
+	scannedCount := len(page)
+
 	var lastKey string
-	if sc.Limit > 0 && len(all) == sc.Limit {
-		b, _ := json.Marshal(all[len(all)-1])
+	if sc.Limit > 0 && len(page) == sc.Limit {
+		b, _ := json.Marshal(page[len(page)-1])
 		lastKey = string(b)
 	}
-	if all == nil {
-		all = []map[string]any{}
+
+	// Apply FilterExpression on the page.
+	var result []map[string]any
+	for _, item := range page {
+		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, attrTypes) {
+			result = append(result, copyItem(item))
+		}
 	}
-	result := make([]map[string]any, len(all))
-	for i, item := range all {
-		result[i] = copyItem(item)
+	if result == nil {
+		result = []map[string]any{}
 	}
-	return result, lastKey, nil
+	return result, scannedCount, lastKey, nil
 }
 
 // paginateItems skips items up to and including the ExclusiveStartKey item.
