@@ -95,6 +95,11 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.DescribeGlobalTable": p.DescribeGlobalTable,
 		"Table.ListGlobalTables":    p.ListGlobalTables,
 		"Table.UpdateGlobalTable":   p.UpdateGlobalTable,
+		// Kinesis Streaming Destinations (metadata-only)
+		"Table.EnableKinesisStreamingDestination":  p.EnableKinesisStreamingDestination,
+		"Table.DisableKinesisStreamingDestination": p.DisableKinesisStreamingDestination,
+		"Table.DescribeKinesisStreamingDestination": p.DescribeKinesisStreamingDestination,
+		"Table.UpdateKinesisStreamingDestination":  p.UpdateKinesisStreamingDestination,
 	}
 }
 
@@ -1317,6 +1322,150 @@ func arnToTableName(arn string) string {
 		return parts[len(parts)-1]
 	}
 	return arn
+}
+
+// ─── Kinesis Streaming Destinations (metadata-only) ──────────────────────────
+
+type kinesisDestInfo struct {
+	StreamArn         string
+	DestinationStatus string
+	TimePrecision     string
+}
+
+func (p *TableProvider) kinesisDestKey(tableName string) string {
+	return "dynamodb_kinesis_dest_" + tableName
+}
+
+func (p *TableProvider) loadKinesisDests(ctx context.Context, tableName string) ([]kinesisDestInfo, error) {
+	entry, err := p.resources.Get(ctx, p.kinesisDestKey(tableName), tableName)
+	if err != nil {
+		return nil, nil // not found = empty list
+	}
+	var dests []kinesisDestInfo
+	json.Unmarshal(entry.Data, &dests)
+	return dests, nil
+}
+
+func (p *TableProvider) saveKinesisDests(ctx context.Context, tableName string, dests []kinesisDestInfo) error {
+	data, _ := json.Marshal(dests)
+	key := p.kinesisDestKey(tableName)
+	entry, err := p.resources.Get(ctx, key, tableName)
+	if err != nil {
+		return p.resources.Create(ctx, store.ResourceEntry{Type: key, ID: tableName, Data: json.RawMessage(data)})
+	}
+	entry.Data = json.RawMessage(data)
+	return p.resources.Update(ctx, entry)
+}
+
+func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	if tableName == "" || streamArn == "" {
+		return nil, model.NewProviderError("ValidationException", "TableName and StreamArn are required", 400)
+	}
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	for _, d := range dests {
+		if d.StreamArn == streamArn && d.DestinationStatus == "ACTIVE" {
+			return nil, model.NewProviderError("ValidationException",
+				"Kinesis streaming destination already active for stream: "+streamArn, 400)
+		}
+	}
+	dests = append(dests, kinesisDestInfo{
+		StreamArn:         streamArn,
+		DestinationStatus: "ACTIVE",
+		TimePrecision:     "MILLISECOND",
+	})
+	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"TableName":         tableName,
+		"StreamArn":         streamArn,
+		"DestinationStatus": "ACTIVE",
+	}), nil
+}
+
+func (p *TableProvider) DisableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	found := false
+	for i, d := range dests {
+		if d.StreamArn == streamArn {
+			if d.DestinationStatus == "DISABLED" {
+				return nil, model.NewProviderError("ValidationException", "Kinesis destination not active", 400)
+			}
+			dests[i].DestinationStatus = "DISABLED"
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, model.NewProviderError("ValidationException", "Kinesis destination not active", 400)
+	}
+	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"TableName":         tableName,
+		"StreamArn":         streamArn,
+		"DestinationStatus": "DISABLED",
+	}), nil
+}
+
+func (p *TableProvider) DescribeKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	items := make([]map[string]any, 0, len(dests))
+	for _, d := range dests {
+		items = append(items, map[string]any{
+			"StreamArn":         d.StreamArn,
+			"DestinationStatus": d.DestinationStatus,
+			"ApproximateCreationDateTimePrecision": d.TimePrecision,
+		})
+	}
+	return provider.OK(map[string]any{
+		"TableName":                    tableName,
+		"KinesisDataStreamDestinations": items,
+	}), nil
+}
+
+func (p *TableProvider) UpdateKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tableName, _ := nr.Params["TableName"].(string)
+	streamArn, _ := nr.Params["StreamArn"].(string)
+	var precision string
+	if cfg, ok := nr.Params["UpdateKinesisStreamingConfiguration"].(map[string]any); ok {
+		precision, _ = cfg["ApproximateCreationDateTimePrecision"].(string)
+	}
+	dests, err := p.loadKinesisDests(ctx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
+	}
+	for i, d := range dests {
+		if d.StreamArn == streamArn {
+			if precision != "" {
+				dests[i].TimePrecision = precision
+			}
+			if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+				return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
+			}
+			return provider.OK(map[string]any{
+				"TableName":         tableName,
+				"StreamArn":         streamArn,
+				"DestinationStatus": dests[i].DestinationStatus,
+			}), nil
+		}
+	}
+	return nil, model.NewProviderError("ValidationException", "Kinesis destination not found: "+streamArn, 400)
 }
 
 // ─── Global Tables (metadata-only) ───────────────────────────────────────────
