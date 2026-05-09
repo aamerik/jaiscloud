@@ -969,7 +969,7 @@ func (p *KeyProvider) GenerateMac(ctx context.Context, nr *model.NormalizedReque
 
 	macAlgo, _ := nr.Params["MacAlgorithm"].(string)
 	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
-		return nil, valErr
+		return nil, model.NewProviderError("ValidationException", valErr.Error(), 400)
 	}
 
 	keyMat, matErr := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))
@@ -1017,7 +1017,7 @@ func (p *KeyProvider) VerifyMac(ctx context.Context, nr *model.NormalizedRequest
 	providedMac, _ := base64.StdEncoding.DecodeString(providedMacB64)
 
 	if valErr := validateMacAlgorithm(e.KeySpec, macAlgo); valErr != nil {
-		return nil, valErr
+		return nil, model.NewProviderError("ValidationException", valErr.Error(), 400)
 	}
 
 	keyMat, matErr := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))

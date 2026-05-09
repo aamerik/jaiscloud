@@ -798,6 +798,10 @@ func (p *SecretProvider) GetRandomPassword(_ context.Context, nr *model.Normaliz
 
 func (p *SecretProvider) BatchGetSecretValue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	secretIDList := extractStringList(nr.Params, "SecretIdList")
+	if len(secretIDList) > 20 {
+		return nil, model.NewProviderError("ValidationException",
+			"1 validation error detected: Value at 'secretIdList' failed to satisfy constraint: Member must have length less than or equal to 20", 400)
+	}
 
 	var secretValues []map[string]any
 	var errs []map[string]any

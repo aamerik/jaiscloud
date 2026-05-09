@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -174,19 +176,70 @@ func newCRC32() *crc32State                       { return &crc32State{h: crc32.
 func (c *crc32State) Write(p []byte) (int, error) { return c.h.Write(p) }
 func (c *crc32State) Sum32() uint32               { return c.h.Sum32() }
 
+// computeChecksumValue computes and base64-encodes a checksum for data using algo.
+// algo is one of: "CRC32", "CRC32C", "SHA1", "SHA256".
+func computeChecksumValue(data []byte, algo string) string {
+	switch algo {
+	case "CRC32":
+		sum := crc32.ChecksumIEEE(data)
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, sum)
+		return base64.StdEncoding.EncodeToString(b)
+	case "CRC32C":
+		sum := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, sum)
+		return base64.StdEncoding.EncodeToString(b)
+	case "SHA1":
+		h := sha1.Sum(data)
+		return base64.StdEncoding.EncodeToString(h[:])
+	case "SHA256":
+		h := sha256.Sum256(data)
+		return base64.StdEncoding.EncodeToString(h[:])
+	}
+	return ""
+}
+
 // writeChecksums writes from r to the BlobStore and returns the MD5 ETag,
 // CRC32 checksum (base64), and byte count — all computed in a single pass.
-func (p *ObjectProvider) writeChecksums(ctx context.Context, bucket, key string, r io.Reader) (etagVal, crc32Val string, n int64, err error) {
+// If extraAlgo is non-empty, also computes and returns that checksum.
+func (p *ObjectProvider) writeChecksums(ctx context.Context, bucket, key string, r io.Reader, extraAlgo string) (etagVal, crc32Val, extraChecksum string, n int64, err error) {
 	md5h := md5.New()
 	crc32h := newCRC32()
-	tee := io.TeeReader(r, io.MultiWriter(md5h, crc32h))
+	writers := []io.Writer{md5h, crc32h}
+
+	var extraH hash.Hash
+	var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+	switch extraAlgo {
+	case "CRC32C":
+		extraH = crc32.New(crc32cTable)
+	case "SHA1":
+		extraH = sha1.New()
+	case "SHA256":
+		extraH = sha256.New()
+	}
+	if extraH != nil {
+		writers = append(writers, extraH)
+	}
+
+	tee := io.TeeReader(r, io.MultiWriter(writers...))
 	n, err = p.blobs.PutStream(ctx, bucket, key, tee)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 	etagVal = fmt.Sprintf(`"%x"`, md5h.Sum(nil))
 	crc32Val = crc32Base64FromHash(crc32h)
-	return etagVal, crc32Val, n, nil
+	if extraH != nil {
+		switch extraAlgo {
+		case "CRC32C":
+			b := make([]byte, 4)
+			binary.BigEndian.PutUint32(b, extraH.(hash.Hash32).Sum32())
+			extraChecksum = base64.StdEncoding.EncodeToString(b)
+		default:
+			extraChecksum = base64.StdEncoding.EncodeToString(extraH.Sum(nil))
+		}
+	}
+	return etagVal, crc32Val, extraChecksum, n, nil
 }
 
 // bodyReader returns an io.Reader for the request body, decoding aws-chunked
@@ -392,10 +445,19 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 	var etagVal, crc32Val string
 	var size int64
 
+	// Determine client-supplied checksum algo (if any) for P4.4 validation.
+	checksumAlgo := ""
+	if checksumHdr := strParam(nr.Params, "_checksum_header"); checksumHdr != "" {
+		checksumAlgo = strings.ToUpper(strings.TrimPrefix(checksumHdr, "x-amz-checksum-"))
+		checksumAlgo = strings.ReplaceAll(checksumAlgo, "-", "")
+	}
+	expectedChecksum := strParam(nr.Params, "_checksum_value")
+
+	var computedChecksum string
 	if _, streaming := nr.Params["_streaming"]; streaming {
 		// Streaming path: body arrives via nr.Raw.Body (gateway skipped io.ReadAll).
 		var err error
-		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket, blobKey, bodyReader(nr))
+		etagVal, crc32Val, computedChecksum, size, err = p.writeChecksums(ctx, bucket, blobKey, bodyReader(nr), checksumAlgo)
 		if err != nil {
 			return nil, err
 		}
@@ -407,6 +469,20 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		etagVal = etag(body)
 		crc32Val = crc32Base64(body)
 		size = int64(len(body))
+		if checksumAlgo != "" {
+			if checksumAlgo == "CRC32" {
+				computedChecksum = crc32Val
+			} else {
+				computedChecksum = computeChecksumValue(body, checksumAlgo)
+			}
+		}
+	}
+
+	// P4.4: Validate client-supplied checksum; BadDigest on mismatch.
+	if checksumAlgo != "" && expectedChecksum != "" && computedChecksum != expectedChecksum {
+		_ = p.blobs.Delete(ctx, bucket, blobKey)
+		return nil, model.NewProviderError("BadDigest",
+			"The Content-MD5 or checksum you specified did not match what we received.", 400)
 	}
 
 	meta := objectstore.ObjectMeta{
@@ -419,13 +495,13 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		StorageClass: "STANDARD",
 		Metadata:     extractUserMetadata(nr.Params),
 	}
-	// P4.4: Store client-supplied checksum algorithm+value
-	if checksumHdr := strParam(nr.Params, "_checksum_header"); checksumHdr != "" {
-		// Header looks like "x-amz-checksum-crc32" → algo is "CRC32"
-		algo := strings.ToUpper(strings.TrimPrefix(checksumHdr, "x-amz-checksum-"))
-		algo = strings.ReplaceAll(algo, "-", "")
-		meta.ChecksumAlgorithm = algo
-		meta.ChecksumValue = strParam(nr.Params, "_checksum_value")
+	if checksumAlgo != "" {
+		meta.ChecksumAlgorithm = checksumAlgo
+		if computedChecksum != "" {
+			meta.ChecksumValue = computedChecksum
+		} else {
+			meta.ChecksumValue = expectedChecksum
+		}
 	}
 	// P2-7: Tagging
 	if tagging := strParam(nr.Params, "_tagging"); tagging != "" {
@@ -1209,7 +1285,7 @@ func (p *ObjectProvider) UploadPart(ctx context.Context, nr *model.NormalizedReq
 	if _, streaming := nr.Params["_streaming"]; streaming {
 		var err error
 		var crc32Val string
-		etagVal, crc32Val, size, err = p.writeChecksums(ctx, bucket+"/__parts__", partKey, bodyReader(nr))
+		etagVal, crc32Val, _, size, err = p.writeChecksums(ctx, bucket+"/__parts__", partKey, bodyReader(nr), "")
 		_ = crc32Val
 		if err != nil {
 			return nil, err
@@ -1281,7 +1357,7 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 		partETags[i] = p.ETag
 	}
 	multipartETag := computeMultipartETag(partETags)
-	_, crc32Val, totalSize, err := p.writeChecksums(ctx, bucket, key, seq)
+	_, crc32Val, _, totalSize, err := p.writeChecksums(ctx, bucket, key, seq, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1360,7 +1436,7 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 		return nil, model.NewProviderError("NoSuchKey", "Source key does not exist", 404)
 	}
 	partKey := fmt.Sprintf("%s/part%d", uploadID, partNumber)
-	etagVal, _, size, err := p.writeChecksums(ctx, bucket+"/__parts__", partKey, rc)
+	etagVal, _, _, size, err := p.writeChecksums(ctx, bucket+"/__parts__", partKey, rc, "")
 	rc.Close()
 	if err != nil {
 		return nil, err
@@ -2550,8 +2626,25 @@ func (p *ObjectProvider) GetObjectAttributes(ctx context.Context, nr *model.Norm
 	if attrSet["StorageClass"] {
 		data["StorageClass"] = m.StorageClass
 	}
-	if attrSet["Checksum"] && m.CRC32 != "" {
-		data["Checksum"] = map[string]any{"ChecksumCRC32": m.CRC32}
+	if attrSet["Checksum"] {
+		cksum := map[string]any{}
+		if m.ChecksumAlgorithm != "" && m.ChecksumValue != "" {
+			switch m.ChecksumAlgorithm {
+			case "CRC32":
+				cksum["ChecksumCRC32"] = m.ChecksumValue
+			case "CRC32C":
+				cksum["ChecksumCRC32C"] = m.ChecksumValue
+			case "SHA1":
+				cksum["ChecksumSHA1"] = m.ChecksumValue
+			case "SHA256":
+				cksum["ChecksumSHA256"] = m.ChecksumValue
+			}
+		} else if m.CRC32 != "" {
+			cksum["ChecksumCRC32"] = m.CRC32
+		}
+		if len(cksum) > 0 {
+			data["Checksum"] = cksum
+		}
 	}
 	if m.VersionID != "" {
 		data["_version_id"] = m.VersionID
