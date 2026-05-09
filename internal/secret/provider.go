@@ -376,14 +376,114 @@ func (p *SecretProvider) UntagResource(ctx context.Context, nr *model.Normalized
 	return provider.OK(map[string]any{}), nil
 }
 
-// ─── Rotation stubs ───────────────────────────────────────────────────────────
+// ─── Rotation ─────────────────────────────────────────────────────────────────
 
-func (p *SecretProvider) RotateSecret(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, model.NewProviderError("NotImplementedException", "RotateSecret is not supported in JaisCloud", 501)
+func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Persist RotationLambdaARN and RotationRules if provided.
+	if lambdaARN, ok := nr.Params["RotationLambdaARN"].(string); ok && lambdaARN != "" {
+		e.RotationLambdaARN = lambdaARN
+	}
+	if rules, ok := nr.Params["RotationRules"].(map[string]any); ok {
+		if d, ok := rules["AutomaticallyAfterDays"].(float64); ok {
+			days := int(d)
+			if days < 1 || days > 1000 {
+				return nil, model.NewProviderError("InvalidParameterException",
+					"AutomaticallyAfterDays must be between 1 and 1000", 400)
+			}
+			e.AutoRotateAfterDays = days
+		}
+	}
+
+	// Check for an in-progress rotation (AWSPENDING not also AWSCURRENT).
+	versions, _ := p.store.ListVersions(ctx, e.SecretID)
+	for _, v := range versions {
+		hasPending := containsStageSlice(v.Stages, "AWSPENDING")
+		hasCurrent := containsStageSlice(v.Stages, "AWSCURRENT")
+		if hasPending && !hasCurrent {
+			return nil, model.NewProviderError("InvalidRequestException",
+				"A previous rotation request is still in progress", 400)
+		}
+	}
+
+	// Get current secret value to copy into the new pending version.
+	currentV, err := p.store.GetVersionByStage(ctx, e.SecretID, "AWSCURRENT")
+	if err != nil {
+		return nil, model.NewProviderError("InvalidRequestException", "no current version to rotate", 400)
+	}
+
+	pendingVersionID := newID()
+	if err := p.store.PutVersion(ctx, VersionEntry{
+		SecretID:      e.SecretID,
+		VersionID:     pendingVersionID,
+		SecretBinary: currentV.SecretBinary,
+		IsBinary:      currentV.IsBinary,
+		Stages:        []string{"AWSPENDING"},
+	}); err != nil {
+		return nil, fmt.Errorf("sm: put pending version: %w", err)
+	}
+
+	// rotateImmediately defaults to true.
+	rotateNow := true
+	if v, ok := nr.Params["RotateImmediately"].(bool); ok {
+		rotateNow = v
+	}
+	if rotateNow {
+		// Promote AWSPENDING → AWSCURRENT (PutVersion demotes old AWSCURRENT to AWSPREVIOUS).
+		if err := p.store.PutVersion(ctx, VersionEntry{
+			SecretID:      e.SecretID,
+			VersionID:     pendingVersionID,
+			SecretBinary: currentV.SecretBinary,
+			IsBinary:      currentV.IsBinary,
+			Stages:        []string{"AWSCURRENT"},
+		}); err != nil {
+			return nil, fmt.Errorf("sm: promote pending version: %w", err)
+		}
+		now := time.Now()
+		e.LastRotatedDate = &now
+	}
+
+	if err := p.store.UpdateSecret(ctx, e); err != nil {
+		return nil, fmt.Errorf("sm: update secret rotation fields: %w", err)
+	}
+
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	return provider.OK(map[string]any{
+		"ARN":       secretARN,
+		"Name":      e.Name,
+		"VersionId": pendingVersionID,
+	}), nil
 }
 
-func (p *SecretProvider) CancelRotateSecret(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *SecretProvider) CancelRotateSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Remove AWSPENDING stage from any version that has it but not AWSCURRENT.
+	versions, _ := p.store.ListVersions(ctx, e.SecretID)
+	for _, v := range versions {
+		if containsStageSlice(v.Stages, "AWSPENDING") && !containsStageSlice(v.Stages, "AWSCURRENT") {
+			newStages := removeStageSlice(v.Stages, "AWSPENDING")
+			_ = p.store.UpdateVersionStages(ctx, e.SecretID, v.VersionID, newStages)
+		}
+	}
+
+	e.RotationLambdaARN = ""
+	if err := p.store.UpdateSecret(ctx, e); err != nil {
+		return nil, fmt.Errorf("sm: cancel rotation: %w", err)
+	}
+
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	return provider.OK(map[string]any{
+		"ARN":  secretARN,
+		"Name": e.Name,
+	}), nil
 }
 
 // ─── Resource policy stubs ────────────────────────────────────────────────────

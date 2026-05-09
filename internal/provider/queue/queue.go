@@ -30,10 +30,11 @@ type QueueProvider struct {
 	messages  sqsstore.SQSMessageStore
 	clock     clock.Clock
 	bus       *events.EventBus
+	waiters   *Waiters
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, clk clock.Clock, bus *events.EventBus) *QueueProvider {
-	return &QueueProvider{resources: resources, messages: messages, clock: clk, bus: bus}
+	return &QueueProvider{resources: resources, messages: messages, clock: clk, bus: bus, waiters: NewWaiters()}
 }
 
 // Routes returns the provider's route map for registration in the Registry.
@@ -295,6 +296,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	if origID != "" {
 		msgID = origID // FIFO dedup: return the original message's ID
 	}
+	p.waiters.Notify(queueURL)
 
 	md5Body := fmt.Sprintf("%x", md5.Sum([]byte(body)))
 	resp := map[string]any{
@@ -341,8 +343,27 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 	attrNames := stringSliceParam(nr.Params, "MessageAttributeNames")
 	sysAttrNames := stringSliceParam(nr.Params, "AttributeNames")
 
+	// Long polling: WaitTimeSeconds > 0 blocks until a message arrives or deadline.
+	waitSec := 0
+	if w, ok := nr.Params["WaitTimeSeconds"]; ok {
+		waitSec = toInt(w)
+	} else {
+		waitSec = intFromState(state, "ReceiveMessageWaitTimeSeconds", 0)
+	}
+	if waitSec < 0 {
+		waitSec = 0
+	}
+	if waitSec > 20 {
+		return nil, model.NewProviderError("InvalidParameterValue", "Value for parameter WaitTimeSeconds is invalid. Reason: Must be >= 0 and <= 20", 400)
+	}
+
 	now := p.clock.Now()
-	msgs, err := p.messages.Receive(ctx, queueURL, maxMessages, now)
+	var msgs []sqsstore.SQSMessage
+	if waitSec > 0 {
+		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, queueURL, maxMessages, time.Duration(waitSec)*time.Second, p.clock)
+	} else {
+		msgs, err = p.messages.Receive(ctx, queueURL, maxMessages, now)
+	}
 	if err != nil {
 		return nil, err
 	}

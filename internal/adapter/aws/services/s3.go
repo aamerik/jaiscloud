@@ -192,6 +192,19 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if v := r.Header.Get("If-Unmodified-Since"); v != "" {
 		params["_cond_if_unmodified_since"] = v
 	}
+	// CopyObject source conditionals — header names stay in codec only.
+	if v := r.Header.Get("x-amz-copy-source-if-match"); v != "" {
+		params["_copy_source_if_match"] = v
+	}
+	if v := r.Header.Get("x-amz-copy-source-if-none-match"); v != "" {
+		params["_copy_source_if_none_match"] = v
+	}
+	if v := r.Header.Get("x-amz-copy-source-if-modified-since"); v != "" {
+		params["_copy_source_if_modified_since"] = v
+	}
+	if v := r.Header.Get("x-amz-copy-source-if-unmodified-since"); v != "" {
+		params["_copy_source_if_unmodified_since"] = v
+	}
 	// P2-7: Tagging
 	if v := r.Header.Get("x-amz-tagging"); v != "" {
 		params["_tagging"] = v

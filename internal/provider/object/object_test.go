@@ -809,12 +809,12 @@ func TestVersioning_ListObjectVersions(t *testing.T) {
 		t.Fatalf("list versions: %v", err)
 	}
 	versions, _ := resp.Data["Versions"].([]map[string]any)
-	if len(versions) != 3 {
-		t.Fatalf("want 3 versions (2 puts + 1 delete marker), got %d", len(versions))
+	deleteMarkers, _ := resp.Data["DeleteMarkers"].([]map[string]any)
+	if len(versions) != 2 {
+		t.Fatalf("want 2 object versions, got %d", len(versions))
 	}
-	// First entry (newest) must be the delete marker.
-	if versions[0]["IsDeleteMarker"] != true {
-		t.Fatalf("latest entry must be delete marker, got %v", versions[0])
+	if len(deleteMarkers) != 1 {
+		t.Fatalf("want 1 delete marker, got %d", len(deleteMarkers))
 	}
 }
 

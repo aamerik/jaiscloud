@@ -67,6 +67,10 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.GetKeyRotationStatus": p.GetKeyRotationStatus,
 		"Key.EnableKeyRotation":    p.EnableKeyRotation,
 		"Key.DisableKeyRotation":   p.DisableKeyRotation,
+		"Key.Sign":                 p.Sign,
+		"Key.Verify":               p.Verify,
+		"Key.GetPublicKey":         p.GetPublicKey,
+		"Key.RotateKeyOnDemand":    p.RotateKeyOnDemand,
 	}
 }
 
@@ -85,16 +89,6 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 	desc, _ := nr.Params["Description"].(string)
 	tags := extractTags(nr.Params)
 
-	// Generate per-key material (32 bytes) and encrypt with server DEK.
-	keyMaterial, err := Generate32()
-	if err != nil {
-		return nil, fmt.Errorf("kms: generate key material: %w", err)
-	}
-	encMaterial, err := encryptData(p.serverDEK, keyMaterial, []byte(keyID))
-	if err != nil {
-		return nil, fmt.Errorf("kms: encrypt key material: %w", err)
-	}
-
 	e := KeyEntry{
 		KeyID:       keyID,
 		Enabled:     true,
@@ -103,7 +97,30 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 		KeySpec:     keySpec,
 		Origin:      "AWS_KMS",
 		Tags:        tags,
-		KeyMaterial: encMaterial,
+	}
+
+	if isAsymmetricSpec(keySpec) {
+		privDER, pubDER, err := generateAsymmetricKey(keySpec)
+		if err != nil {
+			return nil, model.NewProviderError("ValidationException", err.Error(), 400)
+		}
+		encPriv, err := encryptData(p.serverDEK, privDER, []byte(keyID))
+		if err != nil {
+			return nil, fmt.Errorf("kms: encrypt private key: %w", err)
+		}
+		e.PrivateKey = encPriv
+		e.PublicKey = pubDER
+	} else {
+		// Symmetric or HMAC key: generate random material.
+		keyMaterial, err := Generate32()
+		if err != nil {
+			return nil, fmt.Errorf("kms: generate key material: %w", err)
+		}
+		encMaterial, err := encryptData(p.serverDEK, keyMaterial, []byte(keyID))
+		if err != nil {
+			return nil, fmt.Errorf("kms: encrypt key material: %w", err)
+		}
+		e.KeyMaterial = encMaterial
 	}
 	if err := p.store.CreateKey(ctx, e); err != nil {
 		return nil, fmt.Errorf("kms: create key: %w", err)
@@ -496,12 +513,20 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	encCtx := extractEncCtx(nr.Params)
 	aad := marshalEncCtx(encCtx)
 
-	keyMat, err := decryptData(p.serverDEK, e.KeyMaterial, []byte(keyID))
-	if err != nil {
-		return nil, fmt.Errorf("kms: load key material: %w", err)
+	// Try current key material first, then previous materials (for rotated keys).
+	allMaterials := append([][]byte{e.KeyMaterial}, e.PreviousKeyMaterials...)
+	var pt []byte
+	for _, mat := range allMaterials {
+		keyMat, matErr := decryptData(p.serverDEK, mat, []byte(keyID))
+		if matErr != nil {
+			continue
+		}
+		if decrypted, decErr := decryptData(keyMat, ct, aad); decErr == nil {
+			pt = decrypted
+			break
+		}
 	}
-	pt, err := decryptData(keyMat, ct, aad)
-	if err != nil {
+	if pt == nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "decryption failed", 400)
 	}
 	return provider.OK(map[string]any{
@@ -632,18 +657,213 @@ func (p *KeyProvider) PutKeyPolicy(_ context.Context, nr *model.NormalizedReques
 	return provider.OK(map[string]any{}), nil
 }
 
-// ─── Key rotation (stub) ──────────────────────────────────────────────────────
+// ─── Key rotation ─────────────────────────────────────────────────────────────
 
-func (p *KeyProvider) GetKeyRotationStatus(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"KeyRotationEnabled": false}), nil
+func (p *KeyProvider) GetKeyRotationStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	return provider.OK(map[string]any{
+		"KeyRotationEnabled":   e.RotationEnabled,
+		"RotationPeriodInDays": e.RotationPeriodInDays,
+	}), nil
 }
 
-func (p *KeyProvider) EnableKeyRotation(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *KeyProvider) EnableKeyRotation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	e.RotationEnabled = true
+	if days, ok := nr.Params["RotationPeriodInDays"]; ok {
+		if d, ok := days.(float64); ok && d > 0 {
+			e.RotationPeriodInDays = int(d)
+		}
+	}
+	if e.RotationPeriodInDays == 0 {
+		e.RotationPeriodInDays = 365
+	}
+	return provider.OK(map[string]any{}), p.store.UpdateKey(ctx, e)
 }
 
-func (p *KeyProvider) DisableKeyRotation(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *KeyProvider) DisableKeyRotation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	e.RotationEnabled = false
+	return provider.OK(map[string]any{}), p.store.UpdateKey(ctx, e)
+}
+
+// RotateKeyOnDemand rotates a SYMMETRIC_DEFAULT key by generating new material,
+// saving the old material in PreviousKeyMaterials for decryption of old ciphertexts.
+func (p *KeyProvider) RotateKeyOnDemand(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+	if isAsymmetricSpec(e.KeySpec) {
+		return nil, model.NewProviderError("UnsupportedOperationException", "on-demand rotation is only supported for SYMMETRIC_DEFAULT keys", 400)
+	}
+	const onDemandRotationLimit = 10
+	if len(e.PreviousKeyMaterials) >= onDemandRotationLimit {
+		return nil, model.NewProviderError("LimitExceededException",
+			"You have exceeded the maximum number of on-demand rotations (10)", 400)
+	}
+	newMat, err := Generate32()
+	if err != nil {
+		return nil, fmt.Errorf("kms: generate rotation material: %w", err)
+	}
+	encNew, err := encryptData(p.serverDEK, newMat, []byte(keyID))
+	if err != nil {
+		return nil, fmt.Errorf("kms: encrypt new material: %w", err)
+	}
+	e.PreviousKeyMaterials = append(e.PreviousKeyMaterials, e.KeyMaterial)
+	e.KeyMaterial = encNew
+	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
+	return provider.OK(map[string]any{"KeyId": keyARN}), p.store.UpdateKey(ctx, e)
+}
+
+// ─── Asymmetric operations ────────────────────────────────────────────────────
+
+func (p *KeyProvider) Sign(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if !isAsymmetricSpec(e.KeySpec) {
+		return nil, model.NewProviderError("UnsupportedOperationException", "Sign is only supported for asymmetric keys", 400)
+	}
+	msgB64, _ := nr.Params["Message"].(string)
+	msg, err := base64.StdEncoding.DecodeString(msgB64)
+	if err != nil {
+		return nil, model.NewProviderError("ValidationException", "Message must be base64-encoded", 400)
+	}
+	sigAlgo, _ := nr.Params["SigningAlgorithm"].(string)
+	msgType, _ := nr.Params["MessageType"].(string)
+	if msgType == "" {
+		msgType = "RAW"
+	}
+	privDER, err := decryptData(p.serverDEK, e.PrivateKey, []byte(keyID))
+	if err != nil {
+		return nil, fmt.Errorf("kms: load private key: %w", err)
+	}
+	sig, err := signData(privDER, msg, sigAlgo, msgType)
+	if err != nil {
+		return nil, model.NewProviderError("ValidationException", err.Error(), 400)
+	}
+	return provider.OK(map[string]any{
+		"KeyId":            nr.ResourceID(model.RTKMSKey, keyID),
+		"Signature":        base64.StdEncoding.EncodeToString(sig),
+		"SigningAlgorithm": sigAlgo,
+	}), nil
+}
+
+func (p *KeyProvider) Verify(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if !isAsymmetricSpec(e.KeySpec) {
+		return nil, model.NewProviderError("UnsupportedOperationException", "Verify is only supported for asymmetric keys", 400)
+	}
+	msgB64, _ := nr.Params["Message"].(string)
+	msg, err := base64.StdEncoding.DecodeString(msgB64)
+	if err != nil {
+		return nil, model.NewProviderError("ValidationException", "Message must be base64-encoded", 400)
+	}
+	sigB64, _ := nr.Params["Signature"].(string)
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return nil, model.NewProviderError("ValidationException", "Signature must be base64-encoded", 400)
+	}
+	sigAlgo, _ := nr.Params["SigningAlgorithm"].(string)
+	msgType, _ := nr.Params["MessageType"].(string)
+	if msgType == "" {
+		msgType = "RAW"
+	}
+	verifyErr := verifySignature(e.PublicKey, msg, sig, sigAlgo, msgType)
+	if verifyErr != nil {
+		return provider.OK(map[string]any{
+			"KeyId":            nr.ResourceID(model.RTKMSKey, keyID),
+			"SignatureValid":   false,
+			"SigningAlgorithm": sigAlgo,
+		}), nil
+	}
+	return provider.OK(map[string]any{
+		"KeyId":            nr.ResourceID(model.RTKMSKey, keyID),
+		"SignatureValid":   true,
+		"SigningAlgorithm": sigAlgo,
+	}), nil
+}
+
+func (p *KeyProvider) GetPublicKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+	if !isAsymmetricSpec(e.KeySpec) {
+		return nil, model.NewProviderError("UnsupportedOperationException", "GetPublicKey is only supported for asymmetric keys", 400)
+	}
+	resp := map[string]any{
+		"KeyId":     nr.ResourceID(model.RTKMSKey, keyID),
+		"KeySpec":   e.KeySpec,
+		"KeyUsage":  e.KeyUsage,
+		"PublicKey": base64.StdEncoding.EncodeToString(e.PublicKey),
+	}
+	if e.KeyUsage == "SIGN_VERIFY" {
+		resp["SigningAlgorithms"] = signingAlgorithmsForSpec(e.KeySpec)
+	} else {
+		resp["EncryptionAlgorithms"] = encryptionAlgorithmsForSpec(e.KeySpec)
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── KeyEncryptor interface (injected into SecretProvider etc.) ───────────────
