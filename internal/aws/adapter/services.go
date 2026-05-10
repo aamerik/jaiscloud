@@ -167,9 +167,9 @@ var (
 	// Used by DetectService (Priority 1).
 	targetPrefixToService map[string]string
 
-	// knownSigV4Services is the allow-list of service names extracted from the
-	// SigV4 Authorization header. Used by DetectService (Priority 2).
-	knownSigV4Services map[string]bool
+	// knownServices is the allow-list of valid AWS service names. Used by
+	// DetectService for SigV4 Authorization, presigned SigV4, and SigV2 checks.
+	knownServices map[string]bool
 
 	// actionToService maps Action= query-param values → SigV4 service name.
 	// Used by DetectService (Priority 3).
@@ -182,12 +182,12 @@ var (
 
 func init() {
 	targetPrefixToService = make(map[string]string, len(awsServices))
-	knownSigV4Services = make(map[string]bool, len(awsServices))
+	knownServices = make(map[string]bool, len(awsServices))
 	actionToService = make(map[string]string)
 	serviceProviderMap = make(map[string]string, len(awsServices))
 
 	for _, svc := range awsServices {
-		knownSigV4Services[svc.SigV4Name] = true
+		knownServices[svc.SigV4Name] = true
 		serviceProviderMap[svc.SigV4Name] = svc.ProviderPrefix
 		if svc.TargetPrefix != "" {
 			targetPrefixToService[svc.TargetPrefix] = svc.SigV4Name

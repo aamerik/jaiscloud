@@ -13,6 +13,7 @@ const (
 	SourceUnknown    DetectionSource = iota
 	SourceXAmzTarget                 // X-Amz-Target: <Prefix>.<Action>
 	SourceSigV4                      // Authorization: Credential=.../<service>/aws4_request
+	SourceSigV2                      // AWSAccessKeyId=... in query string (always S3)
 	SourceAction                     // Action=<value> query/form param
 )
 
@@ -29,8 +30,16 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 
 	// Priority 2: SigV4 Authorization scope — covers all signed services.
 	if auth := r.Header.Get("Authorization"); auth != "" {
-		if svc := extractSigV4Service(auth); svc != "" && knownSigV4Services[svc] {
+		if svc := extractSigV4Service(auth); svc != "" && knownServices[svc] {
 			return svc, SourceSigV4
+		}
+	}
+
+	// Priority 2.5: Presigned URL - X-Amz-Credential query param with SigV4 scope.
+	if cred := r.URL.Query().Get("X-Amz-Credential"); cred != "" {
+		parts := strings.Split(cred, "/")
+		if len(parts) >= 4 && knownServices[parts[3]] {
+			return parts[3], SourceSigV4
 		}
 	}
 
@@ -53,6 +62,11 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 		if svc := actionToService[graniteAction]; svc != "" {
 			return svc, SourceAction
 		}
+	}
+
+	// Priorit 5: SigV2 presigned URL (AWSAccessKeyId query param) - always S3.
+	if r.URL.Query().Get("AWSAccessKeyId") != "" && knownServices["s3"] {
+		return "s3", SourceSigV2
 	}
 
 	return "", SourceUnknown
