@@ -51,16 +51,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push jaiscloud
+      - name: Build and push jaiscloud-aws
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7
-          build-args: VERSION=${{ needs.setup.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.setup.outputs.version }}
+            CLOUD=aws
           tags: |
-            ghcr.io/${{ github.repository_owner }}/jaiscloud:${{ needs.setup.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/jaiscloud:latest
-          cache-from: type=gha,scope=jaiscloud
-          cache-to: type=gha,mode=max,scope=jaiscloud
+            ghcr.io/${{ github.repository_owner }}/jaiscloud-aws:${{ needs.setup.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/jaiscloud-aws:latest
+          cache-from: type=gha,scope=jaiscloud-aws
+          cache-to: type=gha,mode=max,scope=jaiscloud-aws
