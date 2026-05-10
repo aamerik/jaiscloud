@@ -20,7 +20,7 @@ func TestSQS_SendMessageBatch_TooManyEntries(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("batch-too-many")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/batch-too-many"
+	qURL := host() + "/000000000000/batch-too-many"
 
 	entries := make([]sqstypes.SendMessageBatchRequestEntry, 11)
 	for i := range entries {
@@ -45,7 +45,7 @@ func TestSQS_SendMessageBatch_DuplicateIdsFails(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("batch-dup-ids")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/batch-dup-ids"
+	qURL := host() + "/000000000000/batch-dup-ids"
 
 	_, err = c.SendMessageBatch(ctx, &sqs.SendMessageBatchInput{
 		QueueUrl: aws.String(qURL),
@@ -64,7 +64,7 @@ func TestSQS_DeleteMessageBatch_InvalidIdReturnsPerEntryFailure(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("batch-del-id")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/batch-del-id"
+	qURL := host() + "/000000000000/batch-del-id"
 
 	out, err := c.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{
 		QueueUrl: aws.String(qURL),
@@ -95,7 +95,7 @@ func TestSQS_ChangeMessageVisibilityBatch_TooManyEntries(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("batch-vis-many")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/batch-vis-many"
+	qURL := host() + "/000000000000/batch-vis-many"
 
 	entries := make([]sqstypes.ChangeMessageVisibilityBatchRequestEntry, 11)
 	for i := range entries {

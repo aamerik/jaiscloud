@@ -22,7 +22,7 @@ func TestSQS_LongPoll_ReceivesMessageSentAfterPollStarts(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("lp-queue")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/lp-queue"
+	qURL := host() + "/000000000000/lp-queue"
 
 	var recvOut *sqs.ReceiveMessageOutput
 	var recvErr error
@@ -58,7 +58,7 @@ func TestSQS_LongPoll_BatchSendWakesReceiver(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("lp-batch-queue")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/lp-batch-queue"
+	qURL := host() + "/000000000000/lp-batch-queue"
 
 	var recvOut *sqs.ReceiveMessageOutput
 	var wg sync.WaitGroup
@@ -93,7 +93,7 @@ func TestSQS_LongPoll_InvalidWaitTimeReturnsError(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("lp-err-queue")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/lp-err-queue"
+	qURL := host() + "/000000000000/lp-err-queue"
 
 	_, err = c.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl:        aws.String(qURL),
@@ -109,7 +109,7 @@ func TestSQS_LongPoll_ZeroWaitTimeReturnsImmediately(t *testing.T) {
 
 	_, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("lp-zero-queue")})
 	require.NoError(t, err)
-	qURL := "http://" + host() + ":4566/000000000000/lp-zero-queue"
+	qURL := host() + "/000000000000/lp-zero-queue"
 
 	start := time.Now()
 	out, err := c.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{

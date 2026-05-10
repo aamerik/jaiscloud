@@ -24,8 +24,8 @@ func TestSQS_StartMessageMoveTask_MovesMessages(t *testing.T) {
 	_, err = c.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("mmt-dst")})
 	require.NoError(t, err)
 
-	srcURL := "http://" + host() + ":4566/000000000000/mmt-src"
-	dstURL := "http://" + host() + ":4566/000000000000/mmt-dst"
+	srcURL := host() + "/000000000000/mmt-src"
+	dstURL := host() + "/000000000000/mmt-dst"
 
 	// Send messages to source
 	_, err = c.SendMessage(ctx, &sqs.SendMessageInput{
