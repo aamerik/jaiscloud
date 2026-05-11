@@ -25,6 +25,7 @@ import (
 	functionprovider "jaiscloud/internal/aws/provider/function"
 	iamprovider "jaiscloud/internal/aws/provider/iam"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
+	stsprovider "jaiscloud/internal/aws/sts"
 	"jaiscloud/internal/aws/provider/notification"
 	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/provider/queue"
@@ -238,13 +239,14 @@ func bindFlags(cmd *cobra.Command) {
 
 // appStores holds all store instances that the server depends on.
 type appStores struct {
-	resources  store.ResourceStore
-	messages   sqsstore.SQSMessageStore
-	dynamo     dynamostore.DynamoDBItemStore
-	s3Meta     objectstore.ObjectMetaStore
-	blobs      blobfs.BlobStore
-	secrets    secretprovider.SecretStore
-	parameters paramprovider.ParameterStore
+	resources   store.ResourceStore
+	messages    sqsstore.SQSMessageStore
+	dynamo      dynamostore.DynamoDBItemStore
+	s3Meta      objectstore.ObjectMetaStore
+	blobs       blobfs.BlobStore
+	secrets     secretprovider.SecretStore
+	parameters  paramprovider.ParameterStore
+	stsSession  *stsprovider.MemorySessionStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -266,25 +268,27 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		}
 		slog.Info("blob storage", "dir", cfg.BlobDir)
 		return appStores{
-			resources:  pgStore,
-			messages:   sqsstore.NewPostgresSQSMessageStore(pool),
-			dynamo:     dynamostore.NewPostgresDynamoDBItemStore(pool),
-			s3Meta:     s3store.NewPostgresS3ObjectMetaStore(pool),
-			blobs:      blobs,
-			secrets:    secretprovider.NewPostgresSecretStore(pool),
-			parameters: paramprovider.NewPostgresParameterStore(pool),
+			resources:   pgStore,
+			messages:    sqsstore.NewPostgresSQSMessageStore(pool),
+			dynamo:      dynamostore.NewPostgresDynamoDBItemStore(pool),
+			s3Meta:      s3store.NewPostgresS3ObjectMetaStore(pool),
+			blobs:       blobs,
+			secrets:     secretprovider.NewPostgresSecretStore(pool),
+			parameters:  paramprovider.NewPostgresParameterStore(pool),
+			stsSession:  stsprovider.NewMemorySessionStore(),
 		}, nil
 	}
 
 	slog.Info("starting in lite mode")
 	return appStores{
-		resources:  store.NewMemoryResourceStore(),
-		messages:   sqsstore.NewMemoryMessageStore(),
-		dynamo:     dynamostore.NewMemoryDynamoDBItemStore(),
-		s3Meta:     s3store.NewMemoryS3ObjectMetaStore(),
-		blobs:      blobfs.NewMemoryBlobStore(),
-		secrets:    secretprovider.NewMemorySecretStore(),
-		parameters: paramprovider.NewMemoryParameterStore(),
+		resources:   store.NewMemoryResourceStore(),
+		messages:    sqsstore.NewMemoryMessageStore(),
+		dynamo:      dynamostore.NewMemoryDynamoDBItemStore(),
+		s3Meta:      s3store.NewMemoryS3ObjectMetaStore(),
+		blobs:       blobfs.NewMemoryBlobStore(),
+		secrets:     secretprovider.NewMemorySecretStore(),
+		parameters:  paramprovider.NewMemoryParameterStore(),
+		stsSession:  stsprovider.NewMemorySessionStore(),
 	}, nil
 }
 
@@ -465,6 +469,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
+	stsP := stsprovider.New(s.stsSession)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus)
@@ -484,6 +489,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(esmProvider.Routes())
 	registry.RegisterAll(queueP.Routes())
 	registry.RegisterAll(iamP.Routes())
+	registry.RegisterAll(stsP.Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -785,6 +791,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(keyStore)
 	h.RegisterResetter(secretStore)
 	h.RegisterResetter(paramStore)
+	h.RegisterResetter(s.stsSession)
 	for _, r := range extra {
 		if r != nil {
 			h.RegisterResetter(r)
@@ -802,6 +809,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	if snap, ok := paramStore.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("parameters", snap)
 	}
+	h.RegisterSnapshotter("sts-sessions", s.stsSession)
 	return h
 }
 

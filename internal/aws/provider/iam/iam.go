@@ -93,11 +93,6 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		// Policy simulation (always-allow stub)
 		"IAM.SimulatePrincipalPolicy":   p.SimulatePrincipalPolicy,
 		"IAM.SimulateCustomPolicy":      p.SimulateCustomPolicy,
-		// STS
-		"STS.AssumeRole":                p.AssumeRole,
-		"STS.GetCallerIdentity":         p.GetCallerIdentity,
-		"STS.GetSessionToken":           p.GetSessionToken,
-		"STS.GetFederationToken":        p.GetFederationToken,
 	}
 }
 
@@ -650,91 +645,6 @@ func (p *IAMProvider) ListRoleTags(ctx context.Context, nr *model.NormalizedRequ
 }
 
 // ─── STS ─────────────────────────────────────────────────────────────────────
-
-func (p *IAMProvider) AssumeRole(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	roleArn := strParam(nr.Params, "RoleArn")
-	sessionName := strParam(nr.Params, "RoleSessionName")
-	if sessionName == "" {
-		sessionName = "session"
-	}
-	expiry := time.Now().UTC().Add(time.Hour)
-	policySize := 1
-	if policy := strParam(nr.Params, "Policy"); policy != "" {
-		policySize = (len(policy) * 100) / 2048
-		if policySize < 1 {
-			policySize = 1
-		}
-		if policySize > 100 {
-			policySize = 100
-		}
-	}
-	return provider.OK(map[string]any{
-		"Credentials": map[string]any{
-			"AccessKeyId":     "ASIA" + randID(16),
-			"SecretAccessKey": randID(20),
-			"SessionToken":    randID(32),
-			"Expiration":      expiry.Format(time.RFC3339),
-		},
-		"AssumedRoleUser": map[string]any{
-			"AssumedRoleId": roleArn + ":" + sessionName,
-			"Arn":           roleArn + "/" + sessionName,
-		},
-		"PackedPolicySize": policySize,
-	}), nil
-}
-
-func (p *IAMProvider) GetCallerIdentity(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{
-		"Account": nr.AccountID,
-		"Arn":     fmt.Sprintf("arn:aws:iam::%s:root", nr.AccountID),
-		"UserId":  nr.AccountID,
-	}), nil
-}
-
-func (p *IAMProvider) GetSessionToken(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	expiry := time.Now().UTC().Add(12 * time.Hour)
-	return provider.OK(map[string]any{
-		"Credentials": map[string]any{
-			"AccessKeyId":     "ASIA" + randID(16),
-			"SecretAccessKey": randID(20),
-			"SessionToken":    randID(32),
-			"Expiration":      expiry.Format(time.RFC3339),
-		},
-	}), nil
-}
-
-func (p *IAMProvider) GetFederationToken(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "Name")
-	if name == "" {
-		name = "federation-user"
-	}
-	expiry := time.Now().UTC().Add(12 * time.Hour)
-	return provider.OK(map[string]any{
-		"Credentials": map[string]any{
-			"AccessKeyId":     "ASIA" + randID(16),
-			"SecretAccessKey": randID(20),
-			"SessionToken":    randID(32),
-			"Expiration":      expiry.Format(time.RFC3339),
-		},
-		"FederatedUser": map[string]any{
-			"FederatedUserId": fmt.Sprintf("%s:%s", nr.AccountID, name),
-			"Arn":             fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", nr.AccountID, name),
-		},
-		"PackedPolicySize": func() int {
-			policySize := 1
-			if policy := strParam(nr.Params, "Policy"); policy != "" {
-				policySize = (len(policy) * 100) / 2048
-				if policySize < 1 {
-					policySize = 1
-				}
-				if policySize > 100 {
-					policySize = 100
-				}
-			}
-			return policySize
-		}(),
-	}), nil
-}
 
 // ─── UpdateUser ───────────────────────────────────────────────────────────────
 
