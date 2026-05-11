@@ -1,0 +1,150 @@
+package eks
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"jaiscloud/internal/model"
+	"jaiscloud/internal/provider"
+	"jaiscloud/internal/store"
+)
+
+type eksAddon struct {
+	ClusterName            string    `json:"clusterName"`
+	AddonName              string    `json:"addonName"`
+	AddonVersion           string    `json:"addonVersion"`
+	Arn                    string    `json:"addonArn"`
+	Status                 string    `json:"status"`
+	ServiceAccountRoleArn  string    `json:"serviceAccountRoleArn"`
+	ConfigurationValues    string    `json:"configurationValues"`
+	CreatedAt              time.Time `json:"createdAt"`
+	ModifiedAt             time.Time `json:"modifiedAt"`
+}
+
+func addonKey(clusterName, addonName string) string {
+	return clusterName + "/" + addonName
+}
+
+func addonToWire(a eksAddon) map[string]any {
+	return map[string]any{
+		"clusterName":           a.ClusterName,
+		"addonName":             a.AddonName,
+		"addonVersion":          a.AddonVersion,
+		"addonArn":              a.Arn,
+		"status":                a.Status,
+		"serviceAccountRoleArn": a.ServiceAccountRoleArn,
+		"configurationValues":   a.ConfigurationValues,
+		"createdAt":             a.CreatedAt.Format(time.RFC3339),
+		"modifiedAt":            a.ModifiedAt.Format(time.RFC3339),
+	}
+}
+
+func (p *EKSProvider) CreateAddon(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterName, _ := nr.Params["clusterName"].(string)
+	addonName, _ := nr.Params["addonName"].(string)
+	if clusterName == "" || addonName == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "clusterName and addonName are required", HTTPStatus: http.StatusBadRequest}
+	}
+	if _, err := p.resources.Get(ctx, rtCluster, clusterName); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + clusterName + " not found", HTTPStatus: http.StatusNotFound}
+	}
+
+	now := time.Now().UTC()
+	a := eksAddon{
+		ClusterName:           clusterName,
+		AddonName:             addonName,
+		AddonVersion:          strParam(nr.Params, "addonVersion"),
+		Arn:                   nr.ResourceID("eks-addon", clusterName+"/"+addonName),
+		Status:                "ACTIVE",
+		ServiceAccountRoleArn: strParam(nr.Params, "serviceAccountRoleArn"),
+		ConfigurationValues:   strParam(nr.Params, "configurationValues"),
+		CreatedAt:             now,
+		ModifiedAt:            now,
+	}
+	data, _ := json.Marshal(a)
+	key := addonKey(clusterName, addonName)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtAddon, ID: key, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "ResourceInUseException", Message: "addon " + addonName + " already exists in cluster " + clusterName, HTTPStatus: http.StatusConflict}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"addon": addonToWire(a)}), nil
+}
+
+func (p *EKSProvider) DescribeAddon(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterName, _ := nr.Params["clusterName"].(string)
+	addonName, _ := nr.Params["addonName"].(string)
+	key := addonKey(clusterName, addonName)
+	e, err := p.resources.Get(ctx, rtAddon, key)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
+	}
+	var a eksAddon
+	_ = json.Unmarshal(e.Data, &a)
+	return provider.OK(map[string]any{"addon": addonToWire(a)}), nil
+}
+
+func (p *EKSProvider) ListAddons(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterName, _ := nr.Params["clusterName"].(string)
+	entries, _ := p.resources.List(ctx, rtAddon, "")
+	prefix := clusterName + "/"
+	names := make([]string, 0)
+	for _, e := range entries {
+		var a eksAddon
+		if json.Unmarshal(e.Data, &a) == nil && strings.HasPrefix(e.ID, prefix) {
+			names = append(names, a.AddonName)
+		}
+	}
+	return provider.OK(map[string]any{"addons": names}), nil
+}
+
+func (p *EKSProvider) DeleteAddon(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterName, _ := nr.Params["clusterName"].(string)
+	addonName, _ := nr.Params["addonName"].(string)
+	key := addonKey(clusterName, addonName)
+	e, err := p.resources.Get(ctx, rtAddon, key)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
+	}
+	var a eksAddon
+	_ = json.Unmarshal(e.Data, &a)
+	_ = p.resources.Delete(ctx, rtAddon, key)
+	return provider.OK(map[string]any{"addon": addonToWire(a)}), nil
+}
+
+func (p *EKSProvider) UpdateAddon(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterName, _ := nr.Params["clusterName"].(string)
+	addonName, _ := nr.Params["addonName"].(string)
+	key := addonKey(clusterName, addonName)
+	e, err := p.resources.Get(ctx, rtAddon, key)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found", HTTPStatus: http.StatusNotFound}
+	}
+	var a eksAddon
+	_ = json.Unmarshal(e.Data, &a)
+
+	if v := strParam(nr.Params, "addonVersion"); v != "" {
+		a.AddonVersion = v
+	}
+	if v := strParam(nr.Params, "serviceAccountRoleArn"); v != "" {
+		a.ServiceAccountRoleArn = v
+	}
+	if v := strParam(nr.Params, "configurationValues"); v != "" {
+		a.ConfigurationValues = v
+	}
+	a.ModifiedAt = time.Now().UTC()
+
+	data, _ := json.Marshal(a)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtAddon, ID: key, Data: data})
+	return provider.OK(map[string]any{"update": map[string]any{
+		"clusterName": clusterName,
+		"addonName":   addonName,
+		"updateId":    "update-" + addonName,
+		"status":      "Successful",
+		"type":        "AddonUpdate",
+	}}), nil
+}

@@ -56,6 +56,14 @@ func (p *StackProvider) Routes() map[string]provider.HandlerFunc {
 		"CloudFormation.DescribeStackResources": p.DescribeStackResources,
 		"CloudFormation.ValidateTemplate":       p.ValidateTemplate,
 		"CloudFormation.GetTemplate":            p.GetTemplate,
+		// ChangeSets (14.8)
+		"CloudFormation.CreateChangeSet":   p.CreateChangeSet,
+		"CloudFormation.DescribeChangeSet": p.DescribeChangeSet,
+		"CloudFormation.ListChangeSets":    p.ListChangeSets,
+		"CloudFormation.ExecuteChangeSet":  p.ExecuteChangeSet,
+		"CloudFormation.DeleteChangeSet":   p.DeleteChangeSet,
+		// Stack events (14.8)
+		"CloudFormation.DescribeStackEvents": p.DescribeStackEvents,
 	}
 }
 

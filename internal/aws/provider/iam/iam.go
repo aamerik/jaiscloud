@@ -93,6 +93,23 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		// Policy simulation (always-allow stub)
 		"IAM.SimulatePrincipalPolicy":   p.SimulatePrincipalPolicy,
 		"IAM.SimulateCustomPolicy":      p.SimulateCustomPolicy,
+		// Policy versioning (14.9)
+		"IAM.CreatePolicyVersion":     p.CreatePolicyVersion,
+		"IAM.GetPolicyVersion":        p.GetPolicyVersion,
+		"IAM.DeletePolicyVersion":     p.DeletePolicyVersion,
+		"IAM.ListPolicyVersions":      p.ListPolicyVersions,
+		"IAM.SetDefaultPolicyVersion": p.SetDefaultPolicyVersion,
+		// OIDC providers (14.10)
+		"IAM.CreateOpenIDConnectProvider":                   p.CreateOpenIDConnectProvider,
+		"IAM.GetOpenIDConnectProvider":                      p.GetOpenIDConnectProvider,
+		"IAM.ListOpenIDConnectProviders":                    p.ListOpenIDConnectProviders,
+		"IAM.DeleteOpenIDConnectProvider":                   p.DeleteOpenIDConnectProvider,
+		"IAM.UpdateOpenIDConnectProviderThumbprint":         p.UpdateOpenIDConnectProviderThumbprint,
+		"IAM.AddClientIDToOpenIDConnectProvider":            p.AddClientIDToOpenIDConnectProvider,
+		"IAM.RemoveClientIDFromOpenIDConnectProvider":       p.RemoveClientIDFromOpenIDConnectProvider,
+		"IAM.TagOpenIDConnectProvider":                      p.TagOpenIDConnectProvider,
+		"IAM.UntagOpenIDConnectProvider":                    p.UntagOpenIDConnectProvider,
+		"IAM.ListOpenIDConnectProviderTags":                 p.ListOpenIDConnectProviderTags,
 	}
 }
 

@@ -41,6 +41,12 @@ func (p *ContainerProvider) Routes() map[string]provider.HandlerFunc {
 		"ECS.DescribeTasks":             p.DescribeTasks,
 		"ECS.StopTask":                  p.StopTask,
 		"ECS.ListTasks":                 p.ListTasks,
+		// Tagging (14.1)
+		"ECS.TagResource":               p.TagResource,
+		"ECS.UntagResource":             p.UntagResource,
+		"ECS.ListTagsForResource":       p.ListTagsForResource,
+		// ExecuteCommand stub (14.1)
+		"ECS.ExecuteCommand":            p.ExecuteCommand,
 	}
 }
 
@@ -49,6 +55,7 @@ const (
 	rtTaskDefinition = "ecs_task_definition"
 	rtService        = "ecs_service"
 	rtTask           = "ecs_task"
+	rtECSTags        = "ecs_tags"
 )
 
 func newID() string {
@@ -589,4 +596,104 @@ func resolveTaskDefID(s string) string {
 	// Could be "family:revision" or ARN "arn:...:task-definition/family:revision"
 	s = splitARN(s)
 	return s
+}
+
+// ─── Tagging (14.1) ───────────────────────────────────────────────────────────
+
+func (p *ContainerProvider) loadECSTags(ctx context.Context, arn string) map[string]string {
+	tags := map[string]string{}
+	if e, err := p.resources.Get(ctx, rtECSTags, arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	return tags
+}
+
+func (p *ContainerProvider) saveECSTags(ctx context.Context, arn string, tags map[string]string) {
+	data, _ := json.Marshal(tags)
+	entry := store.ResourceEntry{Type: rtECSTags, ID: arn, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+}
+
+func (p *ContainerProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadECSTags(ctx, arn)
+	if rawTags, ok := nr.Params["tags"].([]any); ok {
+		for _, t := range rawTags {
+			if m, ok := t.(map[string]any); ok {
+				k, _ := m["key"].(string)
+				v, _ := m["value"].(string)
+				if k != "" {
+					tags[k] = v
+				}
+			}
+		}
+	}
+	p.saveECSTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *ContainerProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadECSTags(ctx, arn)
+	if keys, ok := nr.Params["tagKeys"].([]any); ok {
+		for _, k := range keys {
+			if s, ok := k.(string); ok {
+				delete(tags, s)
+			}
+		}
+	}
+	p.saveECSTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *ContainerProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadECSTags(ctx, arn)
+	tagList := make([]map[string]any, 0, len(tags))
+	for k, v := range tags {
+		tagList = append(tagList, map[string]any{"key": k, "value": v})
+	}
+	return provider.OK(map[string]any{"tags": tagList}), nil
+}
+
+// ─── ExecuteCommand stub (14.1) ───────────────────────────────────────────────
+
+func (p *ContainerProvider) ExecuteCommand(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	cluster, _ := nr.Params["cluster"].(string)
+	task, _ := nr.Params["task"].(string)
+	container, _ := nr.Params["container"].(string)
+	interactive, _ := nr.Params["interactive"].(bool)
+
+	sessionID := fmt.Sprintf("ecs-exec-%x", randBytes(8))
+	return provider.OK(map[string]any{
+		"clusterArn":    nr.ResourceID("ecs-cluster", cluster),
+		"containerArn":  nr.ResourceID("ecs-container-instance", container),
+		"containerName": container,
+		"interactive":   interactive,
+		"session": map[string]any{
+			"sessionId":  sessionID,
+			"streamUrl":  "wss://localhost:4566/ecs-exec-stub",
+			"tokenValue": "synthetic-token-" + sessionID,
+		},
+		"taskArn": nr.ResourceID("ecs-task", task),
+	}), nil
+}
+
+func randBytes(n int) []byte {
+	b := make([]byte, n)
+	rand.Read(b)
+	return b
 }

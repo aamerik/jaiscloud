@@ -33,9 +33,18 @@ func (p *RelationalProvider) Routes() map[string]provider.HandlerFunc {
 		"RDS.DescribeDBClusters":    p.DescribeDBClusters,
 		"RDS.ModifyDBCluster":       p.ModifyDBCluster,
 		"RDS.DeleteDBCluster":       p.DeleteDBCluster,
-		"RDS.CreateDBSubnetGroup":   p.CreateDBSubnetGroup,
+		"RDS.CreateDBSubnetGroup":    p.CreateDBSubnetGroup,
 		"RDS.DescribeDBSubnetGroups": p.DescribeDBSubnetGroups,
-		"RDS.DeleteDBSubnetGroup":   p.DeleteDBSubnetGroup,
+		"RDS.DeleteDBSubnetGroup":    p.DeleteDBSubnetGroup,
+		// Snapshots (14.7)
+		"RDS.CreateDBSnapshot":   p.CreateDBSnapshot,
+		"RDS.DescribeDBSnapshots": p.DescribeDBSnapshots,
+		"RDS.DeleteDBSnapshot":   p.DeleteDBSnapshot,
+		"RDS.CopyDBSnapshot":     p.CopyDBSnapshot,
+		// Tagging (14.7)
+		"RDS.AddTagsToResource":      p.AddTagsToResource,
+		"RDS.RemoveTagsFromResource": p.RemoveTagsFromResource,
+		"RDS.ListTagsForResource":    p.ListTagsForResource,
 	}
 }
 

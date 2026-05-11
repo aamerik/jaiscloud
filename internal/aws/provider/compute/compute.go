@@ -73,6 +73,10 @@ func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 		"Compute.CreateNatGateway":    p.CreateNatGateway,
 		"Compute.DescribeNatGateways": p.DescribeNatGateways,
 		"Compute.DeleteNatGateway":    p.DeleteNatGateway,
+		// Tags (14.5)
+		"Compute.CreateTags":   p.CreateTags,
+		"Compute.DeleteTags":   p.DeleteTags,
+		"Compute.DescribeTags": p.DescribeTags,
 	}
 }
 

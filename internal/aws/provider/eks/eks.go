@@ -12,7 +12,11 @@ import (
 	"jaiscloud/internal/store"
 )
 
-const rtCluster = "eks_cluster"
+const (
+	rtCluster   = "eks_cluster"
+	rtNodegroup = "eks_nodegroup"
+	rtAddon     = "eks_addon"
+)
 
 // EKSProvider handles EKS cluster CRUD operations.
 type EKSProvider struct {
@@ -29,6 +33,19 @@ func (p *EKSProvider) Routes() map[string]provider.HandlerFunc {
 		"EKS.DescribeCluster": p.DescribeCluster,
 		"EKS.DeleteCluster":   p.DeleteCluster,
 		"EKS.ListClusters":    p.ListClusters,
+		// Nodegroups (14.2)
+		"EKS.CreateNodegroup":        p.CreateNodegroup,
+		"EKS.DescribeNodegroup":      p.DescribeNodegroup,
+		"EKS.ListNodegroups":         p.ListNodegroups,
+		"EKS.DeleteNodegroup":        p.DeleteNodegroup,
+		"EKS.UpdateNodegroupConfig":  p.UpdateNodegroupConfig,
+		"EKS.UpdateNodegroupVersion": p.UpdateNodegroupVersion,
+		// Addons (14.3)
+		"EKS.CreateAddon":   p.CreateAddon,
+		"EKS.DescribeAddon": p.DescribeAddon,
+		"EKS.ListAddons":    p.ListAddons,
+		"EKS.DeleteAddon":   p.DeleteAddon,
+		"EKS.UpdateAddon":   p.UpdateAddon,
 	}
 }
 

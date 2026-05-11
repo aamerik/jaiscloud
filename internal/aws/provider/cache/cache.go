@@ -32,6 +32,15 @@ func (p *CacheProvider) Routes() map[string]provider.HandlerFunc {
 		"ElastiCache.DescribeReplicationGroups": p.DescribeReplicationGroups,
 		"ElastiCache.ModifyReplicationGroup":   p.ModifyReplicationGroup,
 		"ElastiCache.DeleteReplicationGroup":   p.DeleteReplicationGroup,
+		// Subnet groups (14.6)
+		"ElastiCache.CreateCacheSubnetGroup":   p.CreateCacheSubnetGroup,
+		"ElastiCache.DescribeCacheSubnetGroups": p.DescribeCacheSubnetGroups,
+		"ElastiCache.ModifyCacheSubnetGroup":   p.ModifyCacheSubnetGroup,
+		"ElastiCache.DeleteCacheSubnetGroup":   p.DeleteCacheSubnetGroup,
+		// Tagging (14.6)
+		"ElastiCache.AddTagsToResource":      p.AddTagsToResource,
+		"ElastiCache.RemoveTagsFromResource": p.RemoveTagsFromResource,
+		"ElastiCache.ListTagsForResource":    p.ListTagsForResource,
 	}
 }
 
