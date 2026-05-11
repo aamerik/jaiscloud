@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"time"
 
+	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
@@ -85,8 +86,11 @@ func (p *Provider) CreateStateMachine(ctx context.Context, nr *model.NormalizedR
 	}
 
 	definition, _ := nr.Params["definition"].(string)
-	if !isValidJSON(definition) {
-		return nil, sfnErr("InvalidDefinition", "Definition is not valid JSON", 400)
+	if _, err := asl.Parse(definition); err != nil {
+		return nil, sfnErr("InvalidDefinition", fmt.Sprintf("Invalid definition: %s", err.Error()), 400)
+	}
+	if diags := asl.Validate(mustParseSM(definition)); hasErrors(diags) {
+		return nil, sfnErr("InvalidDefinition", diags[0].Message, 400)
 	}
 
 	roleARN, _ := nr.Params["roleArn"].(string)
@@ -227,22 +231,26 @@ func (p *Provider) ListStateMachines(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) ValidateStateMachineDefinition(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	def, _ := nr.Params["definition"].(string)
-	if !isValidJSON(def) {
+	sm, err := asl.Parse(def)
+	if err != nil {
 		return provider.OK(map[string]any{
 			"result": "FAIL",
-			"diagnostics": []any{
-				map[string]any{
-					"severity": "ERROR",
-					"code":     "SCHEMA_VALIDATION_FAILED",
-					"message":  "Definition is not valid JSON",
-					"location": "/",
-				},
-			},
+			"diagnostics": []asl.ValidationDiagnostic{{
+				Severity: "ERROR",
+				Code:     "INVALID_JSON",
+				Message:  err.Error(),
+				Location: "",
+			}},
 		}), nil
 	}
+	diags := asl.Validate(sm)
+	result := "OK"
+	if hasErrors(diags) {
+		result = "FAIL"
+	}
 	return provider.OK(map[string]any{
-		"result":      "OK",
-		"diagnostics": []any{},
+		"result":      result,
+		"diagnostics": diags,
 	}), nil
 }
 
@@ -935,4 +943,20 @@ func splitARN(arn string) []string {
 		parts = append(parts, segment)
 	}
 	return parts
+}
+
+// mustParseSM parses a definition that was already validated as valid JSON.
+// Panics are impossible here since we only call it after asl.Parse succeeded.
+func mustParseSM(definition string) *asl.StateMachineDefinition {
+	sm, _ := asl.Parse(definition)
+	return sm
+}
+
+func hasErrors(diags []asl.ValidationDiagnostic) bool {
+	for _, d := range diags {
+		if d.Severity == "ERROR" {
+			return true
+		}
+	}
+	return false
 }
