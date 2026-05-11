@@ -355,6 +355,47 @@ func (s *PostgresS3ObjectMetaStore) GetMultipartMeta(ctx context.Context, upload
 	return bucket, key, meta, nil
 }
 
+func (s *PostgresS3ObjectMetaStore) ListParts(ctx context.Context, uploadID string) ([]PartMeta, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT part_number, etag, size FROM jc_s3_multipart_parts
+		WHERE upload_id=$1 ORDER BY part_number
+	`, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var parts []PartMeta
+	for rows.Next() {
+		var p PartMeta
+		if err := rows.Scan(&p.PartNumber, &p.ETag, &p.Size); err != nil {
+			return nil, err
+		}
+		parts = append(parts, p)
+	}
+	return parts, rows.Err()
+}
+
+func (s *PostgresS3ObjectMetaStore) ListActiveUploads(ctx context.Context, bucket string) ([]ActiveUpload, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT upload_id, key, created_at FROM jc_s3_multipart_uploads
+		WHERE bucket=$1 ORDER BY key, upload_id
+	`, bucket)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ActiveUpload
+	for rows.Next() {
+		var u ActiveUpload
+		u.Bucket = bucket
+		if err := rows.Scan(&u.UploadID, &u.Key, &u.Initiated); err != nil {
+			return nil, err
+		}
+		result = append(result, u)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresS3ObjectMetaStore) GetBucketVersioning(ctx context.Context, bucket string) (string, error) {
 	meta, err := s.GetBucket(ctx, bucket)
 	if err != nil {

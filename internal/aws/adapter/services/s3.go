@@ -459,6 +459,12 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "DeleteBucketCors"
 			case query.Has("ownershipControls"):
 				return "DeleteBucketOwnershipControls"
+			case query.Has("policy"):
+				return "DeleteBucketPolicy"
+			case query.Has("website"):
+				return "DeleteBucketWebsite"
+			case query.Has("replication"):
+				return "DeleteBucketReplication"
 			default:
 				return "DeleteBucket"
 			}
@@ -482,6 +488,14 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "PutBucketOwnershipControls"
 			case query.Has("notification"):
 				return "PutBucketNotificationConfiguration"
+			case query.Has("policy"):
+				return "PutBucketPolicy"
+			case query.Has("website"):
+				return "PutBucketWebsite"
+			case query.Has("logging"):
+				return "PutBucketLogging"
+			case query.Has("replication"):
+				return "PutBucketReplication"
 			default:
 				return "CreateBucket"
 			}
@@ -513,6 +527,14 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 				return "GetBucketOwnershipControls"
 			case query.Has("notification"):
 				return "GetBucketNotificationConfiguration"
+			case query.Has("policy"):
+				return "GetBucketPolicy"
+			case query.Has("website"):
+				return "GetBucketWebsite"
+			case query.Has("logging"):
+				return "GetBucketLogging"
+			case query.Has("replication"):
+				return "GetBucketReplication"
 			default:
 				return "ListObjectsV1"
 			}
@@ -712,6 +734,20 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			h.Set("Location", loc)
 		}
 		return resp.HTTPStatus, h, nil
+	}
+
+	// Raw JSON passthrough (GetBucketPolicy)
+	if raw, ok := resp.Data["_raw_json"].(string); ok {
+		h := http.Header{}
+		h.Set("Content-Type", "application/json")
+		return resp.HTTPStatus, h, []byte(raw)
+	}
+
+	// Raw XML passthrough (GetBucketWebsite, GetBucketLogging, GetBucketReplication)
+	if raw, ok := resp.Data["_raw_xml"].(string); ok {
+		h := http.Header{}
+		h.Set("Content-Type", "application/xml")
+		return resp.HTTPStatus, h, []byte(raw)
 	}
 
 	// XML body for all other operations
@@ -1129,10 +1165,28 @@ func s3BuildXML(action string, data map[string]any) []byte {
 	case "ListMultipartUploads":
 		sb.WriteString(`<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
 		sb.WriteString(xmlTag("Bucket", str(data["Bucket"])))
+		if uploads, ok := data["Uploads"].([]map[string]any); ok {
+			for _, u := range uploads {
+				sb.WriteString("<Upload>")
+				sb.WriteString(xmlTag("Key", str(u["Key"])))
+				sb.WriteString(xmlTag("UploadId", str(u["UploadId"])))
+				sb.WriteString(xmlTag("Initiated", str(u["Initiated"])))
+				sb.WriteString("</Upload>")
+			}
+		}
 		sb.WriteString("</ListMultipartUploadsResult>")
 
 	case "ListParts":
 		sb.WriteString(`<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+		if parts, ok := data["Parts"].([]map[string]any); ok {
+			for _, pt := range parts {
+				sb.WriteString("<Part>")
+				sb.WriteString(xmlTag("PartNumber", fmt.Sprintf("%v", pt["PartNumber"])))
+				sb.WriteString(xmlTag("ETag", str(pt["ETag"])))
+				sb.WriteString(xmlTag("Size", fmt.Sprintf("%v", pt["Size"])))
+				sb.WriteString("</Part>")
+			}
+		}
 		sb.WriteString("</ListPartsResult>")
 
 	case "DeleteObjects":

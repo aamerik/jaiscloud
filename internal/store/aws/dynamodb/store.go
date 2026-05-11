@@ -50,6 +50,8 @@ type ScanSpec struct {
 	Limit                     int
 	ExclusiveStartKey         string
 	Select                    string
+	Segment                   int // 0-based segment number (parallel scan)
+	TotalSegments             int // total number of segments; 0 means no parallel scan
 }
 
 // BatchWriteRequest is a single put or delete within a BatchWriteItem call.

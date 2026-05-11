@@ -75,17 +75,55 @@ func (p *QueueProvider) Routes() map[string]provider.HandlerFunc {
 		"Queue.StartMessageMoveTask":  p.StartMessageMoveTask,
 		"Queue.CancelMessageMoveTask": p.CancelMessageMoveTask,
 		"Queue.ListMessageMoveTasks":  p.ListMessageMoveTasks,
+		// DLQ
+		"Queue.ListDeadLetterSourceQueues": p.ListDeadLetterSourceQueues,
 	}
 }
 
 // ─── Control Plane ────────────────────────────────────────────────────────────
+
+var validQueueNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func validateQueueAttrs(attrs map[string]string) error {
+	type rangeCheck struct{ key string; min, max int }
+	checks := []rangeCheck{
+		{"VisibilityTimeout", 0, 43200},
+		{"DelaySeconds", 0, 900},
+		{"MessageRetentionPeriod", 60, 1209600},
+		{"MaximumMessageSize", 1024, 262144},
+		{"ReceiveMessageWaitTimeSeconds", 0, 20},
+	}
+	for _, c := range checks {
+		if v, ok := attrs[c.key]; ok && v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < c.min || n > c.max {
+				return model.NewProviderError("InvalidAttributeValue",
+					fmt.Sprintf("Value %s for parameter %s is invalid. Reason: Must be between %d and %d, inclusive.", v, c.key, c.min, c.max), 400)
+			}
+		}
+	}
+	return nil
+}
 
 func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, ok := stringParam(nr.Params, "QueueName")
 	if !ok || name == "" {
 		return nil, model.NewProviderError("InvalidParameter", "QueueName is required", 400)
 	}
+
+	// Queue name validation (Task 1.12).
+	baseName := strings.TrimSuffix(name, ".fifo")
+	if len(name) > 80 || !validQueueNameRe.MatchString(baseName) {
+		return nil, model.NewProviderError("InvalidParameterValue",
+			"The specified queue name is not valid.", 400)
+	}
+
 	attrs := attrsParam(nr.Params, "Attributes")
+
+	// Attribute range validation (Task 1.12).
+	if err := validateQueueAttrs(attrs); err != nil {
+		return nil, err
+	}
 
 	isFIFO := strings.HasSuffix(name, ".fifo")
 	if isFIFO {
@@ -96,8 +134,21 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 
 	queueURL := fmt.Sprintf("http://localhost:%d/000000000000/%s", nr.Port, name)
 
-	// Idempotency: if queue exists with same name return its URL
-	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err == nil {
+	// Idempotency: if queue exists, check for attribute mismatch (Task 1.10).
+	if existing, err := p.resources.Get(ctx, "sqs_queues", queueURL); err == nil {
+		if len(attrs) > 0 {
+			var existingState map[string]any
+			json.Unmarshal(existing.Data, &existingState)
+			existingAttrs := attrsFromState(existingState)
+			mismatch := []string{"VisibilityTimeout", "MaximumMessageSize", "MessageRetentionPeriod", "DelaySeconds", "ReceiveMessageWaitTimeSeconds"}
+			for _, k := range mismatch {
+				req := attrs[k]
+				if req != "" && existingAttrs[k] != "" && existingAttrs[k] != req {
+					return nil, model.NewProviderError("QueueAlreadyExists",
+						"A queue already exists with the same name and a different value for attribute "+k, 400)
+				}
+			}
+		}
 		return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
 	}
 
@@ -118,11 +169,11 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		"ReceiveMessageWaitTimeSeconds": attrOrDefault(attrs, "ReceiveMessageWaitTimeSeconds", "0"),
 	}
 
-	if rp, ok := attrs["RedrivePolicy"]; ok {
-		state["RedrivePolicy"] = rp
-	}
-	if mc, ok := attrs["MaxReceiveCount"]; ok {
-		state["MaxReceiveCount"] = mc
+	// Persist new attributes (Task 1.11).
+	for _, k := range []string{"RedrivePolicy", "MaxReceiveCount", "SqsManagedSseEnabled", "KmsMasterKeyId", "FifoThroughputLimit", "RedriveAllowPolicy"} {
+		if v, ok := attrs[k]; ok {
+			state[k] = v
+		}
 	}
 
 	data, _ := json.Marshal(state)
@@ -160,11 +211,45 @@ func (p *QueueProvider) ListQueues(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	urls := make([]string, 0, len(entries))
+
+	// Collect all matching URLs.
+	allURLs := make([]string, 0, len(entries))
 	for _, e := range entries {
-		urls = append(urls, e.ID)
+		allURLs = append(allURLs, e.ID)
 	}
-	return provider.OK(map[string]any{"QueueUrls": urls}), nil
+
+	// Apply NextToken cursor (Task 1.13).
+	nextToken, _ := stringParam(nr.Params, "NextToken")
+	start := 0
+	if nextToken != "" {
+		for i, u := range allURLs {
+			if u == nextToken {
+				start = i + 1
+				break
+			}
+		}
+	}
+	allURLs = allURLs[start:]
+
+	// Apply MaxResults limit.
+	maxResults := 1000
+	if v, ok := nr.Params["MaxResults"]; ok {
+		if n := toInt(v); n > 0 && n <= 1000 {
+			maxResults = n
+		}
+	}
+
+	var outNextToken string
+	if len(allURLs) > maxResults {
+		outNextToken = allURLs[maxResults-1]
+		allURLs = allURLs[:maxResults]
+	}
+
+	resp := map[string]any{"QueueUrls": allURLs}
+	if outNextToken != "" {
+		resp["NextToken"] = outNextToken
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *QueueProvider) GetQueueUrl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -252,6 +337,14 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	}
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
+
+	// Per-message size validation (Task 1.9).
+	maxMsgSize := intFromState(state, "MaximumMessageSize", 262144)
+	msgAttrs := parseMessageAttributes(nr.Params["MessageAttributes"])
+	if len(body)+messageAttributesWireSize(msgAttrs) > maxMsgSize {
+		return nil, model.NewProviderError("InvalidParameterValue",
+			fmt.Sprintf("One or more parameters are invalid. Reason: Message must be shorter than %d bytes.", maxMsgSize), 400)
+	}
 
 	isFIFO, _ := state["IsFifo"].(bool)
 	groupID, hasGroupID := stringParam(nr.Params, "MessageGroupId")
@@ -979,6 +1072,12 @@ func buildAttributes(state map[string]any, visible, notVisible, delayed int) map
 	if isFIFO, _ := state["IsFifo"].(bool); isFIFO {
 		a["FifoQueue"] = "true"
 	}
+	// New attributes (Task 1.11).
+	for _, k := range []string{"SqsManagedSseEnabled", "KmsMasterKeyId", "FifoThroughputLimit", "RedriveAllowPolicy"} {
+		if v, ok := state[k]; ok {
+			a[k] = str(v)
+		}
+	}
 	return a
 }
 
@@ -1111,4 +1210,44 @@ func str(v any) string {
 
 func newMessageID() string {
 	return fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), rand.Int31())
+}
+
+// ─── ListDeadLetterSourceQueues (Task 1.8) ────────────────────────────────────
+
+func (p *QueueProvider) ListDeadLetterSourceQueues(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	queueURL, ok := stringParam(nr.Params, "QueueUrl")
+	if !ok {
+		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
+	}
+	dlqEntry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
+	}
+	var dlqState map[string]any
+	json.Unmarshal(dlqEntry.Data, &dlqState)
+	dlqARN := str(dlqState["QueueArn"])
+
+	entries, err := p.resources.List(ctx, "sqs_queues", "")
+	if err != nil {
+		return nil, err
+	}
+	var urls []string
+	for _, e := range entries {
+		var state map[string]any
+		json.Unmarshal(e.Data, &state)
+		rp := str(state["RedrivePolicy"])
+		if rp == "" {
+			continue
+		}
+		var policy map[string]any
+		if json.Unmarshal([]byte(rp), &policy) == nil {
+			if str(policy["deadLetterTargetArn"]) == dlqARN {
+				urls = append(urls, e.ID)
+			}
+		}
+	}
+	if urls == nil {
+		urls = []string{}
+	}
+	return provider.OK(map[string]any{"QueueUrls": urls}), nil
 }

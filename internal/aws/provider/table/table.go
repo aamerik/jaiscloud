@@ -3,6 +3,7 @@ package table
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,6 +102,11 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.DisableKinesisStreamingDestination": p.DisableKinesisStreamingDestination,
 		"Table.DescribeKinesisStreamingDestination": p.DescribeKinesisStreamingDestination,
 		"Table.UpdateKinesisStreamingDestination":  p.UpdateKinesisStreamingDestination,
+		// Misc stubs
+		"Table.DescribeEndpoints":           p.DescribeEndpoints,
+		"Table.DescribeLimits":              p.DescribeLimits,
+		"Table.DescribeContributorInsights": p.DescribeContributorInsights,
+		"Table.ListContributorInsights":     p.ListContributorInsights,
 	}
 }
 
@@ -361,6 +367,10 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	if item == nil {
 		return nil, model.NewProviderError("ValidationException", "Item is required", 400)
 	}
+	if dynItemSize(item) > maxItemSizeBytes {
+		return nil, model.NewProviderError("ValidationException",
+			"Item size has exceeded the maximum allowed size of 400 KB", 400)
+	}
 	ts, _ := p.loadTable(ctx, name)
 	pkHash := computePKHash(item, ts)
 	// Peek at existing item for stream event type — before the conditional write.
@@ -533,6 +543,15 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 	if v, ok := nr.Params["ScanIndexForward"].(bool); ok {
 		scanFwd = v
 	}
+	selectVal := strParam(nr.Params, "Select")
+	projExpr := strParam(nr.Params, "ProjectionExpression")
+
+	// Validate: SELECT=COUNT and ProjectionExpression cannot both be set.
+	if selectVal == "COUNT" && projExpr != "" {
+		return nil, model.NewProviderError("ValidationException",
+			"Can not use both expression and non-expression parameters in the same request: Non-expression parameters: {Select} Expression parameters: {ProjectionExpression}", 400)
+	}
+
 	q := dynamostore.QuerySpec{
 		IndexName:                 indexName,
 		IndexSchema:               resolveIndexSchema(ts, indexName),
@@ -548,15 +567,43 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
-	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
+
+	// Apply GSI projection if applicable.
+	if indexName != "" {
+		for _, g := range ts.GlobalSecondaryIndexes {
+			if fmt.Sprintf("%v", g["IndexName"]) == indexName {
+				items = filterByGSIProjection(items, g, ts.KeySchema)
+				break
+			}
+		}
+	}
+
+	projAttrs := dynamostore.ParseProjection(projExpr, exprNames(nr.Params))
 	projected := applyProjectionSlice(items, projAttrs)
+
+	var lek map[string]any
+	if lastKey != "" {
+		lek = buildLastEvaluatedKey(lastKey, ts, indexName)
+	}
+
+	if selectVal == "COUNT" {
+		result := map[string]any{
+			"Count":        len(projected),
+			"ScannedCount": scannedCount,
+		}
+		if lek != nil {
+			result["LastEvaluatedKey"] = lek
+		}
+		return provider.OK(result), nil
+	}
+
 	result := map[string]any{
 		"Items":        projected,
 		"Count":        len(projected),
 		"ScannedCount": scannedCount,
 	}
-	if lastKey != "" {
-		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
+	if lek != nil {
+		result["LastEvaluatedKey"] = lek
 	}
 	return provider.OK(result), nil
 }
@@ -565,6 +612,15 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 	name := strParam(nr.Params, "TableName")
 	ts, _ := p.loadTable(ctx, name)
 	indexName := strParam(nr.Params, "IndexName")
+	selectVal := strParam(nr.Params, "Select")
+	projExpr := strParam(nr.Params, "ProjectionExpression")
+
+	// Validate: SELECT=COUNT and ProjectionExpression cannot both be set.
+	if selectVal == "COUNT" && projExpr != "" {
+		return nil, model.NewProviderError("ValidationException",
+			"Can not use both expression and non-expression parameters in the same request: Non-expression parameters: {Select} Expression parameters: {ProjectionExpression}", 400)
+	}
+
 	sc := dynamostore.ScanSpec{
 		IndexName:                 indexName,
 		IndexSchema:               resolveIndexSchema(ts, indexName),
@@ -574,19 +630,60 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
 	}
+
+	// Parallel scan validation and wiring.
+	_, segPresent := nr.Params["Segment"]
+	_, totalPresent := nr.Params["TotalSegments"]
+	segParam := intParam(nr.Params, "Segment", 0)
+	totalParam := intParam(nr.Params, "TotalSegments", 0)
+	if segPresent && !totalPresent {
+		return nil, model.NewProviderError("ValidationException",
+			"The TotalSegments parameter is required when you specify the Segment parameter", 400)
+	}
+	if totalPresent && !segPresent {
+		return nil, model.NewProviderError("ValidationException",
+			"The Segment parameter is required when you specify the TotalSegments parameter", 400)
+	}
+	if totalPresent && segPresent && segParam >= totalParam {
+		return nil, model.NewProviderError("ValidationException",
+			"The Segment parameter must be between 0 and the TotalSegments parameter", 400)
+	}
+	if totalPresent && segPresent {
+		sc.Segment = segParam
+		sc.TotalSegments = totalParam
+	}
+
 	items, scannedCount, lastKey, err := p.items.Scan(ctx, name, sc)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
-	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
+
+	projAttrs := dynamostore.ParseProjection(projExpr, exprNames(nr.Params))
 	projected := applyProjectionSlice(items, projAttrs)
+
+	var lek map[string]any
+	if lastKey != "" {
+		lek = buildLastEvaluatedKey(lastKey, ts, indexName)
+	}
+
+	if selectVal == "COUNT" {
+		result := map[string]any{
+			"Count":        len(projected),
+			"ScannedCount": scannedCount,
+		}
+		if lek != nil {
+			result["LastEvaluatedKey"] = lek
+		}
+		return provider.OK(result), nil
+	}
+
 	result := map[string]any{
 		"Items":        projected,
 		"Count":        len(projected),
 		"ScannedCount": scannedCount,
 	}
-	if lastKey != "" {
-		result["LastEvaluatedKey"] = unmarshalKey(lastKey)
+	if lek != nil {
+		result["LastEvaluatedKey"] = lek
 	}
 	return provider.OK(result), nil
 }
@@ -603,6 +700,10 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 			m, _ := wr.(map[string]any)
 			if put, ok := m["PutRequest"].(map[string]any); ok {
 				item := itemParam(put, "Item")
+				if dynItemSize(item) > maxItemSizeBytes {
+					return nil, model.NewProviderError("ValidationException",
+						"Item size has exceeded the maximum allowed size of 400 KB", 400)
+				}
 				reqs = append(reqs, dynamostore.BatchWriteRequest{
 					Table:   tableName,
 					Schema:  buildItemSchema(ts),
@@ -631,6 +732,8 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	requestItems, _ := nr.Params["RequestItems"].(map[string]any)
 	var reqs []dynamostore.BatchGetRequest
+	type tableProjection struct{ attrs []string }
+	projections := map[string]tableProjection{}
 	for table, v := range requestItems {
 		m, _ := v.(map[string]any)
 		rawKeys, _ := m["Keys"].([]any)
@@ -641,10 +744,28 @@ func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRe
 			}
 		}
 		reqs = append(reqs, dynamostore.BatchGetRequest{Table: table, Keys: keys})
+		projExpr, _ := m["ProjectionExpression"].(string)
+		names := map[string]string{}
+		if en, ok := m["ExpressionAttributeNames"].(map[string]any); ok {
+			for k, nv := range en {
+				names[k], _ = nv.(string)
+			}
+		}
+		projections[table] = tableProjection{dynamostore.ParseProjection(projExpr, names)}
 	}
 	result, err := p.items.BatchGetItems(ctx, reqs)
 	if err != nil {
 		return nil, err
+	}
+	// Apply per-table projections.
+	for table, items := range result {
+		if proj := projections[table]; len(proj.attrs) > 0 {
+			projected := make([]map[string]any, len(items))
+			for i, item := range items {
+				projected[i] = dynamostore.ApplyProjection(item, proj.attrs)
+			}
+			result[table] = projected
+		}
 	}
 	return provider.OK(map[string]any{"Responses": result, "UnprocessedKeys": map[string]any{}}), nil
 }
@@ -790,7 +911,15 @@ func (p *TableProvider) TransactGetItems(ctx context.Context, nr *model.Normaliz
 			h := computePKHash(key, ts)
 			item, _ := p.items.GetItem(ctx, table, h)
 			if item != nil {
-				responses = append(responses, map[string]any{"Item": item})
+				projExpr, _ := get["ProjectionExpression"].(string)
+				names := map[string]string{}
+				if en, ok := get["ExpressionAttributeNames"].(map[string]any); ok {
+					for k, nv := range en {
+						names[k], _ = nv.(string)
+					}
+				}
+				projAttrs := dynamostore.ParseProjection(projExpr, names)
+				responses = append(responses, map[string]any{"Item": dynamostore.ApplyProjection(item, projAttrs)})
 			} else {
 				responses = append(responses, map[string]any{})
 			}
@@ -1311,6 +1440,144 @@ func unmarshalKey(s string) map[string]any {
 	return m
 }
 
+// buildLastEvaluatedKey extracts only the key attributes from a full-item JSON string.
+// For index queries it also includes the index key attributes.
+func buildLastEvaluatedKey(lastKeyJSON string, ts tableSchema, indexName string) map[string]any {
+	var item map[string]any
+	if err := json.Unmarshal([]byte(lastKeyJSON), &item); err != nil {
+		return nil
+	}
+	keyAttrs := make(map[string]bool)
+	for _, k := range ts.KeySchema {
+		keyAttrs[k["AttributeName"]] = true
+	}
+	if indexName != "" {
+		for _, g := range ts.GlobalSecondaryIndexes {
+			if fmt.Sprintf("%v", g["IndexName"]) != indexName {
+				continue
+			}
+			for _, k := range parseKeySchema(g["KeySchema"]) {
+				keyAttrs[k["AttributeName"]] = true
+			}
+		}
+		for _, l := range ts.LocalSecondaryIndexes {
+			if fmt.Sprintf("%v", l["IndexName"]) != indexName {
+				continue
+			}
+			for _, k := range parseKeySchema(l["KeySchema"]) {
+				keyAttrs[k["AttributeName"]] = true
+			}
+		}
+	}
+	lek := make(map[string]any, len(keyAttrs))
+	for attr := range keyAttrs {
+		if v, ok := item[attr]; ok {
+			lek[attr] = v
+		}
+	}
+	return lek
+}
+
+// ─── Item size validation ─────────────────────────────────────────────────────
+
+const maxItemSizeBytes = 409600 // 400 KB
+
+func dynAttrSize(name string, v any) int {
+	size := len(name)
+	m, ok := v.(map[string]any)
+	if !ok {
+		return size + 1
+	}
+	for typ, val := range m {
+		switch typ {
+		case "S":
+			s, _ := val.(string)
+			size += len(s) + 3
+		case "N":
+			s, _ := val.(string)
+			size += len(s) + 1
+		case "B":
+			s, _ := val.(string)
+			b, _ := base64.StdEncoding.DecodeString(s)
+			size += len(b) + 1
+		case "BOOL", "NULL":
+			size += 1
+		case "L":
+			size += 3
+			if elems, ok := val.([]any); ok {
+				for _, e := range elems {
+					size += dynAttrSize("", e)
+				}
+			}
+		case "M":
+			size += 3
+			if mm, ok := val.(map[string]any); ok {
+				for k, mv := range mm {
+					size += dynAttrSize(k, mv)
+				}
+			}
+		case "SS", "NS", "BS":
+			elems, _ := val.([]any)
+			for _, e := range elems {
+				es, _ := e.(string)
+				size += len(es)
+			}
+		}
+	}
+	return size
+}
+
+func dynItemSize(item map[string]any) int {
+	total := 0
+	for k, v := range item {
+		total += dynAttrSize(k, v)
+	}
+	return total
+}
+
+// ─── GSI projection enforcement ───────────────────────────────────────────────
+
+func filterByGSIProjection(items []map[string]any, gsi map[string]any, tableKeySchema []map[string]string) []map[string]any {
+	proj, _ := gsi["Projection"].(map[string]any)
+	if proj == nil {
+		return items
+	}
+	projType, _ := proj["ProjectionType"].(string)
+	if projType == "" || projType == "ALL" {
+		return items
+	}
+
+	// Collect allowed attribute names.
+	allowed := make(map[string]bool)
+	for _, k := range tableKeySchema {
+		allowed[k["AttributeName"]] = true
+	}
+	for _, k := range parseKeySchema(gsi["KeySchema"]) {
+		allowed[k["AttributeName"]] = true
+	}
+	if projType == "INCLUDE" {
+		if nonKey, ok := proj["NonKeyAttributes"].([]any); ok {
+			for _, a := range nonKey {
+				if s, ok := a.(string); ok {
+					allowed[s] = true
+				}
+			}
+		}
+	}
+
+	out := make([]map[string]any, len(items))
+	for i, item := range items {
+		filtered := make(map[string]any)
+		for k, v := range item {
+			if allowed[k] {
+				filtered[k] = v
+			}
+		}
+		out[i] = filtered
+	}
+	return out
+}
+
 // isConditionFailed returns true when err is a ConditionalCheckFailedException from the store.
 func isConditionFailed(err error) bool {
 	return err != nil && err.Error() == "ConditionalCheckFailedException"
@@ -1634,4 +1901,39 @@ func exclusiveStartKey(params map[string]any) string {
 		return ""
 	}
 	return string(b)
+}
+
+// ─── Misc stubs (Task 1.4) ────────────────────────────────────────────────────
+
+func (p *TableProvider) DescribeEndpoints(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{
+		"Endpoints": []map[string]any{
+			{
+				"Address":              fmt.Sprintf("dynamodb.%s.amazonaws.com", nr.Region),
+				"CachePeriodInMinutes": 1440,
+			},
+		},
+	}), nil
+}
+
+func (p *TableProvider) DescribeLimits(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{
+		"AccountMaxReadCapacityUnits":  20000,
+		"AccountMaxWriteCapacityUnits": 20000,
+		"TableMaxReadCapacityUnits":    10000,
+		"TableMaxWriteCapacityUnits":   10000,
+	}), nil
+}
+
+func (p *TableProvider) DescribeContributorInsights(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{
+		"TableName":                 strParam(nr.Params, "TableName"),
+		"ContributorInsightsStatus": "DISABLED",
+	}), nil
+}
+
+func (p *TableProvider) ListContributorInsights(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{
+		"ContributorInsightsSummaries": []any{},
+	}), nil
 }

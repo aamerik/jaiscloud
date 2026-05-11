@@ -22,10 +22,11 @@ type MemoryS3ObjectMetaStore struct {
 }
 
 type multipartUpload struct {
-	Bucket string
-	Key    string
-	Meta   map[string]any
-	Parts  map[int]PartMeta
+	Bucket    string
+	Key       string
+	Meta      map[string]any
+	Parts     map[int]PartMeta
+	Initiated time.Time
 }
 
 func NewMemoryS3ObjectMetaStore() *MemoryS3ObjectMetaStore {
@@ -366,7 +367,8 @@ func (s *MemoryS3ObjectMetaStore) InitMultipart(_ context.Context, bucket, key, 
 	defer s.mu.Unlock()
 	s.uploads[uploadID] = multipartUpload{
 		Bucket: bucket, Key: key, Meta: meta,
-		Parts: make(map[int]PartMeta),
+		Parts:     make(map[int]PartMeta),
+		Initiated: time.Now().UTC(),
 	}
 	return nil
 }
@@ -420,6 +422,48 @@ func (s *MemoryS3ObjectMetaStore) GetMultipartMeta(_ context.Context, uploadID s
 		return "", "", nil, fmt.Errorf("NoSuchUpload")
 	}
 	return u.Bucket, u.Key, u.Meta, nil
+}
+
+func (s *MemoryS3ObjectMetaStore) ListParts(_ context.Context, uploadID string) ([]PartMeta, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.uploads[uploadID]
+	if !ok {
+		return nil, fmt.Errorf("NoSuchUpload")
+	}
+	nums := make([]int, 0, len(u.Parts))
+	for n := range u.Parts {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	parts := make([]PartMeta, 0, len(nums))
+	for _, n := range nums {
+		parts = append(parts, u.Parts[n])
+	}
+	return parts, nil
+}
+
+func (s *MemoryS3ObjectMetaStore) ListActiveUploads(_ context.Context, bucket string) ([]ActiveUpload, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []ActiveUpload
+	for id, u := range s.uploads {
+		if u.Bucket == bucket {
+			result = append(result, ActiveUpload{
+				Bucket:    u.Bucket,
+				Key:       u.Key,
+				UploadID:  id,
+				Initiated: u.Initiated,
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Key != result[j].Key {
+			return result[i].Key < result[j].Key
+		}
+		return result[i].UploadID < result[j].UploadID
+	})
+	return result, nil
 }
 
 func (s *MemoryS3ObjectMetaStore) Reset() {

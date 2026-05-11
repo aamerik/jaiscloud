@@ -49,6 +49,14 @@ type PartMeta struct {
 	Size       int64
 }
 
+// ActiveUpload represents an in-progress multipart upload.
+type ActiveUpload struct {
+	Bucket    string
+	Key       string
+	UploadID  string
+	Initiated time.Time
+}
+
 // Versioning status constants used by GetBucketVersioning / SetBucketVersioning.
 // Concrete implementations must return/accept these values regardless of the
 // underlying cloud's native terminology (e.g. GCS generations map to Enabled;
@@ -84,6 +92,10 @@ type ObjectMetaStore interface {
 	CompleteMultipart(ctx context.Context, bucket, key, uploadID string) ([]PartMeta, error)
 	AbortMultipart(ctx context.Context, uploadID string) error
 	GetMultipartMeta(ctx context.Context, uploadID string) (bucket, key string, meta map[string]any, err error)
+	// ListParts returns all uploaded parts for an upload, sorted by PartNumber.
+	ListParts(ctx context.Context, uploadID string) ([]PartMeta, error)
+	// ListActiveUploads returns all in-progress multipart uploads for a bucket.
+	ListActiveUploads(ctx context.Context, bucket string) ([]ActiveUpload, error)
 
 	// Versioning
 	GetBucketVersioning(ctx context.Context, bucket string) (string, error) // "" | "Enabled" | "Suspended"

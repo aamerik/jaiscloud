@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -335,6 +337,27 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 		}
 	}
 
+	// Parallel scan partitioning: hash each item's primary key and keep only items for this segment.
+	if sc.TotalSegments > 0 {
+		h := fnv.New32a()
+		var filtered []map[string]any
+		for _, item := range candidates {
+			h.Reset()
+			pkVal := ""
+			if schema.PKAttr != "" {
+				if v, ok := item[schema.PKAttr]; ok {
+					b, _ := json.Marshal(v)
+					pkVal = string(b)
+				}
+			}
+			h.Write([]byte(pkVal))
+			if int(h.Sum32())%sc.TotalSegments == sc.Segment {
+				filtered = append(filtered, item)
+			}
+		}
+		candidates = filtered
+	}
+
 	// Sort all candidates stably before pagination.
 	sort.Slice(candidates, func(i, j int) bool { return itemPKHash(candidates[i]) < itemPKHash(candidates[j]) })
 
@@ -370,14 +393,21 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 }
 
 // paginateItems skips items up to and including the ExclusiveStartKey item.
+// The start key is matched by subset: all fields in startKey must match the item.
 func paginateItems(items []map[string]any, exclusiveStartKey string, limit int) []map[string]any {
 	start := 0
 	if exclusiveStartKey != "" {
 		var startKey map[string]any
-		if json.Unmarshal([]byte(exclusiveStartKey), &startKey) == nil {
-			startHash := itemPKHash(startKey)
+		if json.Unmarshal([]byte(exclusiveStartKey), &startKey) == nil && len(startKey) > 0 {
 			for i, item := range items {
-				if itemPKHash(item) == startHash {
+				matched := true
+				for k, sv := range startKey {
+					if !reflect.DeepEqual(item[k], sv) {
+						matched = false
+						break
+					}
+				}
+				if matched {
 					start = i + 1
 					break
 				}

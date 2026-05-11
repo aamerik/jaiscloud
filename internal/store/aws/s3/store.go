@@ -7,3 +7,4 @@ import objectstore "jaiscloud/internal/store/object"
 // Type aliases so memory.go and postgres.go use the canonical types without change.
 type ObjectMeta = objectstore.ObjectMeta
 type PartMeta = objectstore.PartMeta
+type ActiveUpload = objectstore.ActiveUpload

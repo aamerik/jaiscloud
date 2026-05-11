@@ -118,6 +118,18 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		// Notifications (P5.1)
 		"Object.PutBucketNotificationConfiguration": p.PutBucketNotificationConfiguration,
 		"Object.GetBucketNotificationConfiguration": p.GetBucketNotificationConfiguration,
+		// Policy / Website / Logging / Replication (P1.16-1.19)
+		"Object.PutBucketPolicy":       p.PutBucketPolicy,
+		"Object.GetBucketPolicy":       p.GetBucketPolicy,
+		"Object.DeleteBucketPolicy":    p.DeleteBucketPolicy,
+		"Object.PutBucketWebsite":      p.PutBucketWebsite,
+		"Object.GetBucketWebsite":      p.GetBucketWebsite,
+		"Object.DeleteBucketWebsite":   p.DeleteBucketWebsite,
+		"Object.PutBucketLogging":      p.PutBucketLogging,
+		"Object.GetBucketLogging":      p.GetBucketLogging,
+		"Object.PutBucketReplication":  p.PutBucketReplication,
+		"Object.GetBucketReplication":  p.GetBucketReplication,
+		"Object.DeleteBucketReplication": p.DeleteBucketReplication,
 	}
 }
 
@@ -1420,11 +1432,40 @@ func (p *ObjectProvider) AbortMultipartUpload(ctx context.Context, nr *model.Nor
 }
 
 func (p *ObjectProvider) ListMultipartUploads(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"Uploads": []any{}}), nil
+	bucket := strParam(nr.Params, "_bucket")
+	uploads, err := p.meta.ListActiveUploads(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(uploads))
+	for _, u := range uploads {
+		items = append(items, map[string]any{
+			"Key":       u.Key,
+			"UploadId":  u.UploadID,
+			"Initiated": u.Initiated.UTC().Format(time.RFC3339),
+		})
+	}
+	return provider.OK(map[string]any{
+		"Bucket":  bucket,
+		"Uploads": items,
+	}), nil
 }
 
 func (p *ObjectProvider) ListParts(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"Parts": []any{}}), nil
+	uploadID := strParam(nr.Params, "uploadId")
+	parts, err := p.meta.ListParts(ctx, uploadID)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchUpload", "The specified upload does not exist", 404)
+	}
+	items := make([]map[string]any, 0, len(parts))
+	for _, pt := range parts {
+		items = append(items, map[string]any{
+			"PartNumber": pt.PartNumber,
+			"ETag":       pt.ETag,
+			"Size":       pt.Size,
+		})
+	}
+	return provider.OK(map[string]any{"Parts": items}), nil
 }
 
 func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -2662,4 +2703,132 @@ func (p *ObjectProvider) GetObjectAttributes(ctx context.Context, nr *model.Norm
 		data["_version_id"] = m.VersionID
 	}
 	return provider.OK(data), nil
+}
+
+// ─── Bucket Policy / Website / Logging / Replication (P1.16-1.19) ────────────
+
+func (p *ObjectProvider) PutBucketPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["policy"] = string(body)
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	policy, _ := meta["policy"].(string)
+	if policy == "" {
+		return nil, model.NewProviderError("NoSuchBucketPolicy", "The bucket policy does not exist", 404)
+	}
+	return provider.OK(map[string]any{"_raw_json": policy}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "policy")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) PutBucketWebsite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["website_config"] = string(body)
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketWebsite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	cfg, _ := meta["website_config"].(string)
+	if cfg == "" {
+		return nil, model.NewProviderError("NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration", 404)
+	}
+	return provider.OK(map[string]any{"_raw_xml": cfg}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketWebsite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "website_config")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) PutBucketLogging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["logging_config"] = string(body)
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketLogging(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	cfg, _ := meta["logging_config"].(string)
+	if cfg == "" {
+		cfg = "<BucketLoggingStatus xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>"
+	}
+	return provider.OK(map[string]any{"_raw_xml": cfg}), nil
+}
+
+func (p *ObjectProvider) PutBucketReplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	body, _ := nr.Params["_body"].([]byte)
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		meta["replication_config"] = string(body)
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+func (p *ObjectProvider) GetBucketReplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	meta, err := p.meta.GetBucket(ctx, bucket)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	cfg, _ := meta["replication_config"].(string)
+	if cfg == "" {
+		return nil, model.NewProviderError("ReplicationConfigurationNotFoundError", "The replication configuration was not found", 404)
+	}
+	return provider.OK(map[string]any{"_raw_xml": cfg}), nil
+}
+
+func (p *ObjectProvider) DeleteBucketReplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	if err := p.updateBucketConfig(ctx, bucket, func(meta map[string]any) {
+		delete(meta, "replication_config")
+	}); err != nil {
+		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
