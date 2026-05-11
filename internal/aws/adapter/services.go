@@ -105,6 +105,12 @@ var awsServices = []ServiceDescriptor{
 	{SigV4Name: "emr-containers", ProviderPrefix: "EMRContainers"},
 	{SigV4Name: "events", TargetPrefix: "AWSEvents.", ProviderPrefix: "EventBridge"},
 	{SigV4Name: "eks", ProviderPrefix: "EKS"},
+	{
+		SigV4Name:      "kinesis",
+		TargetPrefix:   "Kinesis_20131202.",
+		ProviderPrefix: "Kinesis",
+		Codec:          func() adapter.Codec { return &services.KinesisCodec{} },
+	},
 	// P0 expansion services — Codec factories set to nil until Phase 2–6 wire them.
 	{
 		SigV4Name:      "kms",

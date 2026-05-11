@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSTS_GetCallerIdentity(t *testing.T) {
+func TestSTS_GetCallerIdentity_FullFields(t *testing.T) {
 	resetState(t)
 	client := newSTSClient(t)
 	ctx := context.Background()

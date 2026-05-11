@@ -147,6 +147,9 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	// CloudWatch Logs
 	"logs-group":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s:*", r, a, n) },
 	"logs-stream": func(r, a, n string) string { return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s", r, a, n) },
+	// Kinesis
+	"kinesis-stream":   func(r, a, n string) string { return fmt.Sprintf("arn:aws:kinesis:%s:%s:stream/%s", r, a, n) },
+	"kinesis-consumer": func(r, a, n string) string { return fmt.Sprintf("arn:aws:kinesis:%s:%s:stream/%s", r, a, n) }, // n = "streamName/consumer/name:ts"
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.

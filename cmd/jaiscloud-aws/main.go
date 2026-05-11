@@ -24,8 +24,10 @@ import (
 	eventsprovider "jaiscloud/internal/aws/provider/events"
 	functionprovider "jaiscloud/internal/aws/provider/function"
 	iamprovider "jaiscloud/internal/aws/provider/iam"
+	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stsprovider "jaiscloud/internal/aws/sts"
+	kinesisstore "jaiscloud/internal/store/aws/kinesis"
 	"jaiscloud/internal/aws/provider/notification"
 	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/provider/queue"
@@ -247,6 +249,7 @@ type appStores struct {
 	secrets     secretprovider.SecretStore
 	parameters  paramprovider.ParameterStore
 	stsSession  *stsprovider.MemorySessionStore
+	kinesis     *kinesisstore.MemoryKinesisStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -276,6 +279,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			secrets:     secretprovider.NewPostgresSecretStore(pool),
 			parameters:  paramprovider.NewPostgresParameterStore(pool),
 			stsSession:  stsprovider.NewMemorySessionStore(),
+			kinesis:     kinesisstore.NewMemoryKinesisStore(),
 		}, nil
 	}
 
@@ -289,6 +293,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		secrets:     secretprovider.NewMemorySecretStore(),
 		parameters:  paramprovider.NewMemoryParameterStore(),
 		stsSession:  stsprovider.NewMemorySessionStore(),
+		kinesis:     kinesisstore.NewMemoryKinesisStore(),
 	}, nil
 }
 
@@ -470,6 +475,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.New(s.stsSession)
+	kinesisP := kinesisprovider.New(s.kinesis)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus)
@@ -490,6 +496,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(queueP.Routes())
 	registry.RegisterAll(iamP.Routes())
 	registry.RegisterAll(stsP.Routes())
+	registry.RegisterAll(kinesisP.Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -792,6 +799,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(secretStore)
 	h.RegisterResetter(paramStore)
 	h.RegisterResetter(s.stsSession)
+	h.RegisterResetter(s.kinesis)
 	for _, r := range extra {
 		if r != nil {
 			h.RegisterResetter(r)
@@ -810,6 +818,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 		h.RegisterSnapshotter("parameters", snap)
 	}
 	h.RegisterSnapshotter("sts-sessions", s.stsSession)
+	h.RegisterSnapshotter("kinesis", s.kinesis)
 	return h
 }
 
