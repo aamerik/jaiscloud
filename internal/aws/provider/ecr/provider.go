@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -20,11 +21,27 @@ import (
 var repoNameRe = regexp.MustCompile(`^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 
 type Provider struct {
-	store *ecrstore.MemoryECRStore
+	store    *ecrstore.MemoryECRStore
+	proxy    *RegistryProxy
+	fullMode bool
 }
 
 func New(store *ecrstore.MemoryECRStore) *Provider {
 	return &Provider{store: store}
+}
+
+// NewFull creates a Provider backed by a real registry:2 proxy for OCI push/pull.
+func NewFull(store *ecrstore.MemoryECRStore, proxy *RegistryProxy) *Provider {
+	return &Provider{store: store, proxy: proxy, fullMode: true}
+}
+
+// OCIHandler returns the HTTP handler for OCI Distribution v2 requests, or nil
+// in lite mode (no real registry).
+func (p *Provider) OCIHandler() func(http.ResponseWriter, *http.Request) {
+	if !p.fullMode || p.proxy == nil {
+		return nil
+	}
+	return p.proxy.Proxy
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {

@@ -397,6 +397,10 @@ test-e2e-kinesis: ## Kinesis full mode e2e tests — tests/full_mode/aws/kinesis
 	  go test -v -tags kinesis_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kinesis/
 	$(MAKE) down-docker
 
+test-e2e-ecr: ## ECR full mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/ecr/
+
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/full_mode/aws/iceberg/ (tag: iceberg_e2e)

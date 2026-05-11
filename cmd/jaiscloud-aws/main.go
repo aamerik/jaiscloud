@@ -124,7 +124,8 @@ func startCmd() *cobra.Command {
 			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID)
+			ecrP := buildECRProvider(ctx, cfg, s)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
 			defer cleanup()
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
@@ -157,6 +158,14 @@ func startCmd() *cobra.Command {
 				}))
 			}
 			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(objectP.GetBucketCORSRules))
+
+			// ECR full mode: register OCI Distribution v2 routes before the wildcard.
+			if ociHandler := ecrP.OCIHandler(); ociHandler != nil {
+				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
+					r.HandleFunc("/v2/*", ociHandler)
+					r.HandleFunc("/v2/", ociHandler)
+				}))
+			}
 
 			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs, gatewayOpts...)
 			_ = bus
@@ -327,7 +336,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -503,7 +512,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(iamP.Routes())
 	registry.RegisterAll(stsP.Routes())
 	registry.RegisterAll(kinesisP.Routes())
-	registry.RegisterAll(ecrprovider.New(s.ecr).Routes())
+	registry.RegisterAll(ecrP.Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -830,6 +839,30 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterSnapshotter("kinesis", s.kinesis)
 	h.RegisterSnapshotter("ecr", s.ecr)
 	return h
+}
+
+// ─── ecr provider factory ─────────────────────────────────────────────────────
+
+func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecrprovider.Provider {
+	if cfg.Mode == config.ModeFull && cfg.ExecutorMode == "k8s" {
+		k8sNS := cfg.K8sNamespace
+		if k8sNS == "" {
+			k8sNS = "jaiscloud"
+		}
+		k8sClient, err := buildK8sClient()
+		if err != nil {
+			slog.Warn("ecr: cannot reach k8s, falling back to lite mode", "err", err)
+			return ecrprovider.New(s.ecr)
+		}
+		proxy := ecrprovider.NewRegistryProxy(k8sClient, k8sNS, s.ecr)
+		if err := proxy.Start(ctx); err != nil {
+			slog.Warn("ecr: registry:2 failed to start, falling back to lite mode", "err", err)
+			return ecrprovider.New(s.ecr)
+		}
+		slog.Info("ecr full mode: registry:2 proxy ready")
+		return ecrprovider.NewFull(s.ecr, proxy)
+	}
+	return ecrprovider.New(s.ecr)
 }
 
 // ─── kinesis provider factory ─────────────────────────────────────────────────
