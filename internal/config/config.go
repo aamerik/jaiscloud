@@ -152,6 +152,13 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"kinesis-consumer": func(r, a, n string) string { return fmt.Sprintf("arn:aws:kinesis:%s:%s:stream/%s", r, a, n) }, // n = "streamName/consumer/name:ts"
 	// ECR
 	"ecr-repository": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecr:%s:%s:repository/%s", r, a, n) },
+	// Step Functions
+	"sfn-state-machine": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:states:%s:%s:stateMachine:%s", r, a, n)
+	},
+	"sfn-activity": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:states:%s:%s:activity:%s", r, a, n)
+	},
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.

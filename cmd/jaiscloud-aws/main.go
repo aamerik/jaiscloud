@@ -26,10 +26,12 @@ import (
 	iamprovider "jaiscloud/internal/aws/provider/iam"
 	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
 	ecrprovider "jaiscloud/internal/aws/provider/ecr"
+	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stsprovider "jaiscloud/internal/aws/sts"
 	kinesisstore "jaiscloud/internal/store/aws/kinesis"
 	ecrstore "jaiscloud/internal/store/aws/ecr"
+	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
 	"jaiscloud/internal/aws/provider/notification"
 	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/provider/queue"
@@ -263,6 +265,7 @@ type appStores struct {
 	stsSession  *stsprovider.MemorySessionStore
 	kinesis     *kinesisstore.MemoryKinesisStore
 	ecr         *ecrstore.MemoryECRStore
+	sfn         *sfnstore.MemoryStepFunctionsStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -294,6 +297,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			stsSession:  stsprovider.NewMemorySessionStore(),
 			kinesis:     kinesisstore.NewMemoryKinesisStore(),
 			ecr:         ecrstore.NewMemoryECRStore(),
+			sfn:         sfnstore.NewMemoryStepFunctionsStore(),
 		}, nil
 	}
 
@@ -309,6 +313,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		stsSession:  stsprovider.NewMemorySessionStore(),
 		kinesis:     kinesisstore.NewMemoryKinesisStore(),
 		ecr:         ecrstore.NewMemoryECRStore(),
+		sfn:         sfnstore.NewMemoryStepFunctionsStore(),
 	}, nil
 }
 
@@ -513,6 +518,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(stsP.Routes())
 	registry.RegisterAll(kinesisP.Routes())
 	registry.RegisterAll(ecrP.Routes())
+	registry.RegisterAll(sfnprovider.New(s.sfn).Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -800,6 +806,7 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"monitoring":      &services.CloudWatchCodec{},
 		"logs":            &services.LogsCodec{},
 		"ecr":             &services.ECRCodec{},
+		"states":          &services.StepFunctionsCodec{},
 	})
 }
 
@@ -818,6 +825,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(s.stsSession)
 	h.RegisterResetter(s.kinesis)
 	h.RegisterResetter(s.ecr)
+	h.RegisterResetter(s.sfn)
 	for _, r := range extra {
 		if r != nil {
 			h.RegisterResetter(r)
@@ -838,6 +846,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterSnapshotter("sts-sessions", s.stsSession)
 	h.RegisterSnapshotter("kinesis", s.kinesis)
 	h.RegisterSnapshotter("ecr", s.ecr)
+	h.RegisterSnapshotter("stepfunctions", s.sfn)
 	return h
 }
 

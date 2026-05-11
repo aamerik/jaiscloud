@@ -117,6 +117,12 @@ var awsServices = []ServiceDescriptor{
 		ProviderPrefix: "ECR",
 		Codec:          func() adapter.Codec { return &services.ECRCodec{} },
 	},
+	{
+		SigV4Name:      "states",
+		TargetPrefix:   "AWSStepFunctions.",
+		ProviderPrefix: "StepFunctions",
+		Codec:          func() adapter.Codec { return &services.StepFunctionsCodec{} },
+	},
 	// P0 expansion services — Codec factories set to nil until Phase 2–6 wire them.
 	{
 		SigV4Name:      "kms",

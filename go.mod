@@ -50,6 +50,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sfn v1.40.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.68.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.15 // indirect
