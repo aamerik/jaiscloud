@@ -1,5 +1,4 @@
 // Package function implements the Lambda provider (FunctionProvider).
-// All functions are stored in the ResourceStore; Invoke echoes the payload.
 package function
 
 import (
@@ -7,23 +6,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/reqctx"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/reqctx"
 	"jaiscloud/internal/store"
 )
 
-const resourceType = "lambda_functions"
+const (
+	resTypeFunction   = "lambda_functions"
+	resTypeVersions   = "lambda_versions"
+	resTypeAliases    = "lambda_aliases"
+	resTypeLayers     = "lambda_layers"
+	resTypePolicies   = "lambda_policies"
+	resTypeURLs       = "lambda_urls"
+)
 
 // FunctionProvider handles all Lambda operations.
 type FunctionProvider struct {
 	resources          store.ResourceStore
-	executor           lambdaexec.LambdaExecutor // nil → MockExecutor behaviour (echo)
+	executor           lambdaexec.LambdaExecutor
 	concurrencyLimit   int64
 	syncPayloadMax     int64
 	asyncPayloadMax    int64
@@ -31,17 +39,14 @@ type FunctionProvider struct {
 	activeInvocations  atomic.Int64
 }
 
-// New constructs a FunctionProvider with a mock (echo) executor.
 func New(resources store.ResourceStore) *FunctionProvider {
 	return &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}}
 }
 
-// NewWithExecutor constructs a FunctionProvider with the given executor.
 func NewWithExecutor(resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *FunctionProvider {
 	return &FunctionProvider{resources: resources, executor: exec}
 }
 
-// NewWithLimits constructs a FunctionProvider with concurrency and payload-size limits.
 func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig) *FunctionProvider {
 	return &FunctionProvider{
 		resources:          resources,
@@ -55,14 +60,49 @@ func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor
 
 func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Function.CreateFunction":             p.CreateFunction,
-		"Function.GetFunction":                p.GetFunction,
-		"Function.GetFunctionConfiguration":   p.GetFunctionConfiguration,
-		"Function.DeleteFunction":             p.DeleteFunction,
-		"Function.ListFunctions":              p.ListFunctions,
+		// Core CRUD
+		"Function.CreateFunction":              p.CreateFunction,
+		"Function.GetFunction":                 p.GetFunction,
+		"Function.GetFunctionConfiguration":    p.GetFunctionConfiguration,
+		"Function.DeleteFunction":              p.DeleteFunction,
+		"Function.ListFunctions":               p.ListFunctions,
 		"Function.UpdateFunctionConfiguration": p.UpdateFunctionConfiguration,
-		"Function.UpdateFunctionCode":         p.UpdateFunctionCode,
-		"Function.InvokeFunction":             p.InvokeFunction,
+		"Function.UpdateFunctionCode":          p.UpdateFunctionCode,
+		"Function.InvokeFunction":              p.InvokeFunction,
+		// Versions
+		"Function.PublishVersion":              p.PublishVersion,
+		"Function.ListVersionsByFunction":      p.ListVersionsByFunction,
+		// Aliases
+		"Function.CreateAlias":                 p.CreateAlias,
+		"Function.GetAlias":                    p.GetAlias,
+		"Function.UpdateAlias":                 p.UpdateAlias,
+		"Function.DeleteAlias":                 p.DeleteAlias,
+		"Function.ListAliases":                 p.ListAliases,
+		// Layers
+		"Function.ListLayers":                  p.ListLayers,
+		"Function.PublishLayerVersion":         p.PublishLayerVersion,
+		"Function.GetLayerVersion":             p.GetLayerVersion,
+		"Function.ListLayerVersions":           p.ListLayerVersions,
+		"Function.DeleteLayerVersion":          p.DeleteLayerVersion,
+		// Tags
+		"Function.TagResource":                 p.TagResource,
+		"Function.UntagResource":               p.UntagResource,
+		"Function.ListTags":                    p.ListTags,
+		// Permissions
+		"Function.AddPermission":               p.AddPermission,
+		"Function.RemovePermission":            p.RemovePermission,
+		"Function.GetPolicy":                   p.GetPolicy,
+		// Function URLs
+		"Function.CreateFunctionUrlConfig":     p.CreateFunctionUrlConfig,
+		"Function.GetFunctionUrlConfig":        p.GetFunctionUrlConfig,
+		"Function.UpdateFunctionUrlConfig":     p.UpdateFunctionUrlConfig,
+		"Function.DeleteFunctionUrlConfig":     p.DeleteFunctionUrlConfig,
+		// Concurrency
+		"Function.PutFunctionConcurrency":      p.PutFunctionConcurrency,
+		"Function.GetFunctionConcurrency":      p.GetFunctionConcurrency,
+		"Function.DeleteFunctionConcurrency":   p.DeleteFunctionConcurrency,
+		// Account
+		"Function.GetAccountSettings":          p.GetAccountSettings,
 	}
 }
 
@@ -82,7 +122,77 @@ func validateLambdaTimeout(t int) error {
 	return nil
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── data models ──────────────────────────────────────────────────────────────
+
+type functionConfig struct {
+	FunctionName        string            `json:"FunctionName"`
+	FunctionArn         string            `json:"FunctionArn"`
+	Runtime             string            `json:"Runtime"`
+	Role                string            `json:"Role"`
+	Handler             string            `json:"Handler"`
+	Description         string            `json:"Description"`
+	Timeout             int               `json:"Timeout"`
+	MemorySize          int               `json:"MemorySize"`
+	State               string            `json:"State"`
+	LastModified        string            `json:"LastModified"`
+	RevisionId          string            `json:"RevisionId"`
+	CodeSize            int64             `json:"CodeSize"`
+	Environment         map[string]string `json:"Environment,omitempty"`
+	Tags                map[string]string `json:"Tags,omitempty"`
+	ReservedConcurrency *int              `json:"ReservedConcurrency,omitempty"`
+	VersionCounter      int64             `json:"VersionCounter,omitempty"`
+}
+
+type versionEntry struct {
+	functionConfig
+	Version string `json:"Version"`
+}
+
+type aliasEntry struct {
+	FunctionName    string `json:"FunctionName"`
+	Name            string `json:"Name"`
+	FunctionVersion string `json:"FunctionVersion"`
+	AliasArn        string `json:"AliasArn"`
+	Description     string `json:"Description,omitempty"`
+	RevisionId      string `json:"RevisionId"`
+}
+
+type layerEntry struct {
+	LayerName          string   `json:"LayerName"`
+	LayerArn           string   `json:"LayerArn"`
+	VersionNumber      int64    `json:"VersionNumber"`
+	VersionArn         string   `json:"VersionArn"`
+	Description        string   `json:"Description,omitempty"`
+	LicenseInfo        string   `json:"LicenseInfo,omitempty"`
+	CompatibleRuntimes []string `json:"CompatibleRuntimes,omitempty"`
+	CreatedDate        string   `json:"CreatedDate"`
+	CodeSize           int64    `json:"CodeSize"`
+}
+
+type policyDocument struct {
+	Version   string            `json:"Version"`
+	Id        string            `json:"Id"`
+	Statement []policyStatement `json:"Statement"`
+}
+
+type policyStatement struct {
+	Sid       string         `json:"Sid"`
+	Effect    string         `json:"Effect"`
+	Principal map[string]any `json:"Principal"`
+	Action    string         `json:"Action"`
+	Resource  string         `json:"Resource"`
+	Condition map[string]any `json:"Condition,omitempty"`
+}
+
+type urlConfig struct {
+	FunctionArn      string `json:"FunctionArn"`
+	FunctionUrl      string `json:"FunctionUrl"`
+	AuthType         string `json:"AuthType"`
+	CreatedTime      string `json:"CreatedTime"`
+	LastModifiedTime string `json:"LastModifiedTime"`
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 func strParam(params map[string]any, key string) string {
 	if v, ok := params[key]; ok {
@@ -93,24 +203,17 @@ func strParam(params map[string]any, key string) string {
 	return ""
 }
 
-type functionConfig struct {
-	FunctionName string            `json:"FunctionName"`
-	FunctionArn  string            `json:"FunctionArn"`
-	Runtime      string            `json:"Runtime"`
-	Role         string            `json:"Role"`
-	Handler      string            `json:"Handler"`
-	Description  string            `json:"Description"`
-	Timeout      int               `json:"Timeout"`
-	MemorySize   int               `json:"MemorySize"`
-	State        string            `json:"State"`
-	LastModified string            `json:"LastModified"`
-	RevisionId   string            `json:"RevisionId"`
-	CodeSize     int64             `json:"CodeSize"`
-	Environment  map[string]string `json:"Environment,omitempty"`
+// extractFunctionName strips an ARN to a plain function name.
+func extractFunctionName(name string) string {
+	if strings.HasPrefix(name, "arn:") {
+		parts := strings.Split(name, ":")
+		if len(parts) >= 7 {
+			return parts[6]
+		}
+	}
+	return name
 }
 
-// parseEnvVars extracts Environment.Variables from the Lambda request params.
-// AWS SDK sends: {"Environment": {"Variables": {"KEY": "val"}}}
 func parseEnvVars(params map[string]any) map[string]string {
 	env, ok := params["Environment"].(map[string]any)
 	if !ok {
@@ -136,7 +239,7 @@ func (p *FunctionProvider) saveConfig(ctx context.Context, cfg functionConfig) e
 	if err != nil {
 		return err
 	}
-	entry := store.ResourceEntry{Type: resourceType, ID: cfg.FunctionName, Data: data}
+	entry := store.ResourceEntry{Type: resTypeFunction, ID: cfg.FunctionName, Data: data}
 	if err := p.resources.Create(ctx, entry); err != nil {
 		if err == store.ErrAlreadyExists {
 			return p.resources.Update(ctx, entry)
@@ -147,7 +250,7 @@ func (p *FunctionProvider) saveConfig(ctx context.Context, cfg functionConfig) e
 }
 
 func (p *FunctionProvider) loadConfig(ctx context.Context, name string) (functionConfig, error) {
-	entry, err := p.resources.Get(ctx, resourceType, name)
+	entry, err := p.resources.Get(ctx, resTypeFunction, name)
 	if err != nil {
 		return functionConfig{}, err
 	}
@@ -155,7 +258,43 @@ func (p *FunctionProvider) loadConfig(ctx context.Context, name string) (functio
 	return cfg, json.Unmarshal(entry.Data, &cfg)
 }
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
+// resolveConfig returns the functionConfig for (name, qualifier).
+// qualifier="" or "$LATEST" → current config; numeric → version; else → alias.
+func (p *FunctionProvider) resolveConfig(ctx context.Context, name, qualifier string) (functionConfig, string, error) {
+	if qualifier == "" || qualifier == "$LATEST" {
+		cfg, err := p.loadConfig(ctx, name)
+		return cfg, "$LATEST", err
+	}
+	// Numeric version
+	if _, err := strconv.ParseInt(qualifier, 10, 64); err == nil {
+		cfg, err := p.loadVersion(ctx, name, qualifier)
+		return cfg, qualifier, err
+	}
+	// Alias
+	a, err := p.loadAlias(ctx, name, qualifier)
+	if err != nil {
+		return functionConfig{}, "", err
+	}
+	if a.FunctionVersion == "$LATEST" {
+		cfg, err := p.loadConfig(ctx, name)
+		return cfg, "$LATEST", err
+	}
+	cfg, err := p.loadVersion(ctx, name, a.FunctionVersion)
+	return cfg, a.FunctionVersion, err
+}
+
+// cfgToWire converts a functionConfig to the wire map.
+func cfgToWire(cfg functionConfig) map[string]any {
+	var m map[string]any
+	b, _ := json.Marshal(cfg)
+	json.Unmarshal(b, &m)
+	if cfg.Environment != nil {
+		m["Environment"] = map[string]any{"Variables": cfg.Environment}
+	}
+	return m
+}
+
+// ─── Core CRUD ────────────────────────────────────────────────────────────────
 
 func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "FunctionName")
@@ -165,6 +304,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 	if name == "" {
 		return nil, model.NewProviderError("InvalidParameterValueException", "FunctionName is required", 400)
 	}
+	name = extractFunctionName(name)
 
 	runtime := strParam(nr.Params, "Runtime")
 	if runtime == "" {
@@ -214,43 +354,36 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 }
 
 func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
-	cfg, err := p.loadConfig(ctx, name)
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	qualifier := strParam(nr.Params, "Qualifier")
+	cfg, resolvedVersion, err := p.resolveConfig(ctx, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
+	wire := cfgToWire(cfg)
+	wire["Version"] = resolvedVersion
 	return provider.OK(map[string]any{
-		"Configuration": cfgToWire(cfg),
+		"Configuration": wire,
 		"Code":          map[string]any{"Location": ""},
-		"Tags":          map[string]any{},
+		"Tags":          cfg.Tags,
 	}), nil
 }
 
 func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
-	cfg, err := p.loadConfig(ctx, name)
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	qualifier := strParam(nr.Params, "Qualifier")
+	cfg, resolvedVersion, err := p.resolveConfig(ctx, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
-	return provider.OK(cfgToWire(cfg)), nil
-}
-
-// cfgToWire converts a functionConfig to the wire map, shaping Environment as
-// {"Variables": {...}} so the AWS SDK deserialises it correctly.
-func cfgToWire(cfg functionConfig) map[string]any {
-	var m map[string]any
-	b, _ := json.Marshal(cfg)
-	json.Unmarshal(b, &m)
-	// Reshape Environment: stored as flat map, SDK expects {"Variables":{...}}
-	if cfg.Environment != nil {
-		m["Environment"] = map[string]any{"Variables": cfg.Environment}
-	}
-	return m
+	wire := cfgToWire(cfg)
+	wire["Version"] = resolvedVersion
+	return provider.OK(wire), nil
 }
 
 func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
-	if err := p.resources.Delete(ctx, resourceType, name); err != nil {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	if err := p.resources.Delete(ctx, resTypeFunction, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	p.executor.DeleteFunction(ctx, name)
@@ -258,7 +391,7 @@ func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.Normali
 }
 
 func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, resourceType, "")
+	entries, err := p.resources.List(ctx, resTypeFunction, "")
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +406,7 @@ func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.Normaliz
 }
 
 func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
@@ -304,7 +437,6 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 		cfg.Timeout = newTimeout
 	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
-
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
@@ -312,7 +444,7 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 }
 
 func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	cfg, err := p.loadConfig(ctx, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
@@ -324,8 +456,9 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 	return provider.OK(cfgToWire(cfg)), nil
 }
 
-// InvokeInternal invokes a Lambda function directly (bypassing the wire layer).
-// Used by ESM pollers to deliver events to functions.
+// ─── Invoke ───────────────────────────────────────────────────────────────────
+
+// InvokeInternal invokes a Lambda function directly (used by ESM pollers).
 func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName string, payload []byte) ([]byte, error) {
 	cfg, err := p.loadConfig(ctx, functionName)
 	if err != nil {
@@ -349,28 +482,35 @@ func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName stri
 	return p.executor.Invoke(invCtx, req)
 }
 
-// Shutdown closes the Lambda executor if it supports it.
 func (p *FunctionProvider) Shutdown(_ context.Context) {
 	if p.executor != nil {
 		_ = p.executor.Close()
 	}
 }
 
-// ─── Invoke ───────────────────────────────────────────────────────────────────
-
-// InvokeFunction invokes the function via the configured executor.
-// When InvocationType=Event (async), returns 202 without waiting for a result.
 func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr.Params, "_function_name")
-	cfg, err := p.loadConfig(ctx, name)
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	qualifier := strParam(nr.Params, "Qualifier")
+
+	invType := strParam(nr.Params, "_invocation_type")
+	isDryRun := strings.EqualFold(invType, "DryRun")
+	isAsync := strings.EqualFold(invType, "Event")
+
+	// DryRun: validate the function exists then return 204 without invoking.
+	if isDryRun {
+		if _, _, err := p.resolveConfig(ctx, name, qualifier); err != nil {
+			return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+		}
+		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	}
+
+	cfg, _, err := p.resolveConfig(ctx, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 
-	isAsync := strings.EqualFold(strParam(nr.Params, "_invocation_type"), "Event")
 	payload, _ := nr.Params["_payload"].([]byte)
 
-	// Request-side size check — before consuming a concurrency slot.
 	maxReq := p.syncPayloadMax
 	if isAsync {
 		maxReq = p.asyncPayloadMax
@@ -382,24 +522,17 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 			413)
 	}
 
-	// Async: short-circuit after payload check, before consuming a slot.
 	if isAsync {
 		return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 	}
 
-	// Concurrency slot.
 	current := p.activeInvocations.Add(1)
 	defer p.activeInvocations.Add(-1)
 
 	if p.concurrencyLimit > 0 && current > p.concurrencyLimit {
-		return nil, model.NewProviderError(
-			"TooManyRequestsException",
-			"Rate Exceeded.",
-			429,
-		)
+		return nil, model.NewProviderError("TooManyRequestsException", "Rate Exceeded.", 429)
 	}
 
-	// Context deadline from function timeout.
 	timeout := time.Duration(cfg.Timeout) * time.Second
 	if timeout <= 0 {
 		timeout = 3 * time.Second
@@ -418,7 +551,6 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 	}
 	result, err := p.executor.Invoke(invCtx, req)
 	if err != nil {
-		// AWS-shaped timeout envelope.
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(invCtx.Err(), context.DeadlineExceeded) {
 			reqID := reqctx.GetRequestID(ctx)
 			if reqID == "" {
@@ -434,16 +566,12 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 			timeoutBody, _ := json.Marshal(body)
 			return &model.ProviderResponse{
 				HTTPStatus: 200,
-				Data: map[string]any{
-					"_function_error": "Unhandled",
-					"_payload":        timeoutBody,
-				},
+				Data:       map[string]any{"_function_error": "Unhandled", "_payload": timeoutBody},
 			}, nil
 		}
 		return nil, model.NewProviderError("ServiceException", "invocation failed: "+err.Error(), 500)
 	}
 
-	// Response-side size check.
 	if p.responsePayloadMax > 0 && int64(len(result)) > p.responsePayloadMax {
 		body := map[string]any{
 			"errorMessage": fmt.Sprintf("Response payload size (%d bytes) exceeded maximum allowed payload size (%d bytes).",
@@ -453,10 +581,7 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		oversizePayload, _ := json.Marshal(body)
 		return &model.ProviderResponse{
 			HTTPStatus: 200,
-			Data: map[string]any{
-				"_function_error": "Unhandled",
-				"_payload":        oversizePayload,
-			},
+			Data:       map[string]any{"_function_error": "Unhandled", "_payload": oversizePayload},
 		}, nil
 	}
 
@@ -464,4 +589,696 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		HTTPStatus: 200,
 		Data:       map[string]any{"_payload": result},
 	}, nil
+}
+
+// ─── Versions ─────────────────────────────────────────────────────────────────
+
+func versionKey(name, version string) string { return name + "#" + version }
+
+func (p *FunctionProvider) loadVersion(ctx context.Context, name, version string) (functionConfig, error) {
+	entry, err := p.resources.Get(ctx, resTypeVersions, versionKey(name, version))
+	if err != nil {
+		return functionConfig{}, err
+	}
+	var ve versionEntry
+	if err := json.Unmarshal(entry.Data, &ve); err != nil {
+		return functionConfig{}, err
+	}
+	return ve.functionConfig, nil
+}
+
+func (p *FunctionProvider) PublishVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	cfg.VersionCounter++
+	versionStr := strconv.FormatInt(cfg.VersionCounter, 10)
+
+	ve := versionEntry{functionConfig: cfg, Version: versionStr}
+	data, _ := json.Marshal(ve)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data}); err != nil {
+		if err != store.ErrAlreadyExists {
+			return nil, fmt.Errorf("lambda: publish version: %w", err)
+		}
+		p.resources.Update(ctx, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data})
+	}
+
+	if err := p.saveConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+
+	wire := cfgToWire(cfg)
+	wire["Version"] = versionStr
+	return provider.OK(wire), nil
+}
+
+func (p *FunctionProvider) ListVersionsByFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	entries, err := p.resources.List(ctx, resTypeVersions, name+"#")
+	if err != nil {
+		return nil, fmt.Errorf("lambda: list versions: %w", err)
+	}
+	// Also include $LATEST
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+
+	versions := make([]map[string]any, 0, len(entries)+1)
+	for _, e := range entries {
+		var ve versionEntry
+		if json.Unmarshal(e.Data, &ve) == nil {
+			wire := cfgToWire(ve.functionConfig)
+			wire["Version"] = ve.Version
+			versions = append(versions, wire)
+		}
+	}
+	// Sort by version number ascending
+	sort.Slice(versions, func(i, j int) bool {
+		vi, _ := strconv.ParseInt(fmt.Sprint(versions[i]["Version"]), 10, 64)
+		vj, _ := strconv.ParseInt(fmt.Sprint(versions[j]["Version"]), 10, 64)
+		return vi < vj
+	})
+	// Append $LATEST
+	latestWire := cfgToWire(cfg)
+	latestWire["Version"] = "$LATEST"
+	versions = append(versions, latestWire)
+
+	return provider.OK(map[string]any{"Versions": versions}), nil
+}
+
+// ─── Aliases ──────────────────────────────────────────────────────────────────
+
+func aliasKey(functionName, aliasName string) string { return functionName + "/" + aliasName }
+
+func (p *FunctionProvider) loadAlias(ctx context.Context, functionName, aliasName string) (aliasEntry, error) {
+	entry, err := p.resources.Get(ctx, resTypeAliases, aliasKey(functionName, aliasName))
+	if err != nil {
+		return aliasEntry{}, err
+	}
+	var a aliasEntry
+	return a, json.Unmarshal(entry.Data, &a)
+}
+
+func (p *FunctionProvider) saveAlias(ctx context.Context, a aliasEntry) error {
+	data, _ := json.Marshal(a)
+	entry := store.ResourceEntry{Type: resTypeAliases, ID: aliasKey(a.FunctionName, a.Name), Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			return p.resources.Update(ctx, entry)
+		}
+		return err
+	}
+	return nil
+}
+
+func (p *FunctionProvider) CreateAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	aliasName := strParam(nr.Params, "Name")
+	if aliasName == "" {
+		return nil, model.NewProviderError("ValidationException", "Name is required", 400)
+	}
+	funcVersion := strParam(nr.Params, "FunctionVersion")
+	if funcVersion == "" {
+		funcVersion = "$LATEST"
+	}
+
+	if _, err := p.loadConfig(ctx, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+
+	a := aliasEntry{
+		FunctionName:    name,
+		Name:            aliasName,
+		FunctionVersion: funcVersion,
+		AliasArn:        nr.ResourceID(model.RTLambdaFunction, name+":"+aliasName),
+		Description:     strParam(nr.Params, "Description"),
+		RevisionId:      "1",
+	}
+	// Fail if alias already exists
+	if _, err := p.loadAlias(ctx, name, aliasName); err == nil {
+		return nil, model.NewProviderError("ResourceConflictException", "Alias already exists: "+aliasName, 409)
+	}
+	if err := p.saveAlias(ctx, a); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: aliasToWire(a)}, nil
+}
+
+func (p *FunctionProvider) GetAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	aliasName := strParam(nr.Params, "_alias_name")
+	a, err := p.loadAlias(ctx, name, aliasName)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
+	}
+	return provider.OK(aliasToWire(a)), nil
+}
+
+func (p *FunctionProvider) UpdateAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	aliasName := strParam(nr.Params, "_alias_name")
+	a, err := p.loadAlias(ctx, name, aliasName)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
+	}
+	if v := strParam(nr.Params, "FunctionVersion"); v != "" {
+		a.FunctionVersion = v
+	}
+	if d := strParam(nr.Params, "Description"); d != "" {
+		a.Description = d
+	}
+	if err := p.saveAlias(ctx, a); err != nil {
+		return nil, err
+	}
+	return provider.OK(aliasToWire(a)), nil
+}
+
+func (p *FunctionProvider) DeleteAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	aliasName := strParam(nr.Params, "_alias_name")
+	if err := p.resources.Delete(ctx, resTypeAliases, aliasKey(name, aliasName)); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *FunctionProvider) ListAliases(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	entries, err := p.resources.List(ctx, resTypeAliases, name+"/")
+	if err != nil {
+		return nil, fmt.Errorf("lambda: list aliases: %w", err)
+	}
+	aliases := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var a aliasEntry
+		if json.Unmarshal(e.Data, &a) == nil {
+			aliases = append(aliases, aliasToWire(a))
+		}
+	}
+	return provider.OK(map[string]any{"Aliases": aliases}), nil
+}
+
+func aliasToWire(a aliasEntry) map[string]any {
+	return map[string]any{
+		"FunctionName":    a.FunctionName,
+		"Name":            a.Name,
+		"FunctionVersion": a.FunctionVersion,
+		"AliasArn":        a.AliasArn,
+		"Description":     a.Description,
+		"RevisionId":      a.RevisionId,
+	}
+}
+
+// ─── Layers ───────────────────────────────────────────────────────────────────
+
+func layerVersionKey(layerName string, version int64) string {
+	return fmt.Sprintf("%s#%d", layerName, version)
+}
+
+func (p *FunctionProvider) layerARN(nr *model.NormalizedRequest, layerName string) string {
+	return nr.ResourceID(model.RTLambdaFunction, "layer:"+layerName)
+}
+
+func (p *FunctionProvider) nextLayerVersion(ctx context.Context, layerName string) (int64, error) {
+	entries, err := p.resources.List(ctx, resTypeLayers, layerName+"#")
+	if err != nil {
+		return 0, err
+	}
+	var max int64
+	for _, e := range entries {
+		var le layerEntry
+		if json.Unmarshal(e.Data, &le) == nil && le.VersionNumber > max {
+			max = le.VersionNumber
+		}
+	}
+	return max + 1, nil
+}
+
+func (p *FunctionProvider) PublishLayerVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	layerName := strParam(nr.Params, "_layer_name")
+	if layerName == "" {
+		return nil, model.NewProviderError("ValidationException", "LayerName is required", 400)
+	}
+	version, err := p.nextLayerVersion(ctx, layerName)
+	if err != nil {
+		return nil, fmt.Errorf("lambda: layer version: %w", err)
+	}
+
+	var runtimes []string
+	if raw, ok := nr.Params["CompatibleRuntimes"].([]any); ok {
+		for _, r := range raw {
+			if s, ok := r.(string); ok {
+				runtimes = append(runtimes, s)
+			}
+		}
+	}
+
+	layerARN := p.layerARN(nr, layerName)
+	le := layerEntry{
+		LayerName:          layerName,
+		LayerArn:           layerARN,
+		VersionNumber:      version,
+		VersionArn:         fmt.Sprintf("%s:%d", layerARN, version),
+		Description:        strParam(nr.Params, "Description"),
+		LicenseInfo:        strParam(nr.Params, "LicenseInfo"),
+		CompatibleRuntimes: runtimes,
+		CreatedDate:        time.Now().UTC().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(le)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeLayers, ID: layerVersionKey(layerName, version), Data: data}); err != nil {
+		return nil, fmt.Errorf("lambda: publish layer: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: layerToWire(le)}, nil
+}
+
+func (p *FunctionProvider) GetLayerVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	layerName := strParam(nr.Params, "_layer_name")
+	versionStr := strParam(nr.Params, "_layer_version")
+	version, _ := strconv.ParseInt(versionStr, 10, 64)
+
+	entry, err := p.resources.Get(ctx, resTypeLayers, layerVersionKey(layerName, version))
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Layer version not found: "+layerName+":"+versionStr)
+	}
+	var le layerEntry
+	if err := json.Unmarshal(entry.Data, &le); err != nil {
+		return nil, err
+	}
+	return provider.OK(layerToWire(le)), nil
+}
+
+func (p *FunctionProvider) DeleteLayerVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	layerName := strParam(nr.Params, "_layer_name")
+	versionStr := strParam(nr.Params, "_layer_version")
+	version, _ := strconv.ParseInt(versionStr, 10, 64)
+
+	if err := p.resources.Delete(ctx, resTypeLayers, layerVersionKey(layerName, version)); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Layer version not found")
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *FunctionProvider) ListLayerVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	layerName := strParam(nr.Params, "_layer_name")
+	entries, err := p.resources.List(ctx, resTypeLayers, layerName+"#")
+	if err != nil {
+		return nil, fmt.Errorf("lambda: list layer versions: %w", err)
+	}
+	versions := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var le layerEntry
+		if json.Unmarshal(e.Data, &le) == nil {
+			versions = append(versions, layerToWire(le))
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		vi, _ := versions[i]["Version"].(float64)
+		vj, _ := versions[j]["Version"].(float64)
+		return vi > vj // descending (latest first)
+	})
+	return provider.OK(map[string]any{"LayerVersions": versions}), nil
+}
+
+func (p *FunctionProvider) ListLayers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, resTypeLayers, "")
+	if err != nil {
+		return nil, fmt.Errorf("lambda: list layers: %w", err)
+	}
+	// Deduplicate to latest version per layer
+	latest := map[string]layerEntry{}
+	for _, e := range entries {
+		var le layerEntry
+		if json.Unmarshal(e.Data, &le) == nil {
+			if existing, ok := latest[le.LayerName]; !ok || le.VersionNumber > existing.VersionNumber {
+				latest[le.LayerName] = le
+			}
+		}
+	}
+	layers := make([]map[string]any, 0, len(latest))
+	for _, le := range latest {
+		layers = append(layers, map[string]any{
+			"LayerName":          le.LayerName,
+			"LayerArn":           le.LayerArn,
+			"LatestMatchingVersion": layerToWire(le),
+		})
+	}
+	return provider.OK(map[string]any{"Layers": layers}), nil
+}
+
+func layerToWire(le layerEntry) map[string]any {
+	return map[string]any{
+		"LayerName":          le.LayerName,
+		"LayerArn":           le.LayerArn,
+		"Version":            le.VersionNumber,
+		"LayerVersionArn":    le.VersionArn,
+		"Description":        le.Description,
+		"LicenseInfo":        le.LicenseInfo,
+		"CompatibleRuntimes": le.CompatibleRuntimes,
+		"CreatedDate":        le.CreatedDate,
+	}
+}
+
+// ─── Tags ─────────────────────────────────────────────────────────────────────
+
+// functionNameFromARN extracts the function name from an ARN or returns as-is.
+func functionNameFromARN(arn string) string {
+	// arn:aws:lambda:region:account:function:name
+	parts := strings.Split(arn, ":")
+	for i, p := range parts {
+		if p == "function" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return arn
+}
+
+func (p *FunctionProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "_resource_arn")
+	name := functionNameFromARN(arn)
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	if cfg.Tags == nil {
+		cfg.Tags = make(map[string]string)
+	}
+	if tags, ok := nr.Params["Tags"].(map[string]any); ok {
+		for k, v := range tags {
+			cfg.Tags[k] = fmt.Sprint(v)
+		}
+	}
+	if err := p.saveConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *FunctionProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "_resource_arn")
+	name := functionNameFromARN(arn)
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	// Tag keys come as repeated query params: ?tagKeys=k1&tagKeys=k2
+	// Already copied into params by the codec's query param loop (only first value).
+	// The SDK actually sends: DELETE /tags/{arn}?tagKeys=k1&tagKeys=k2
+	// We need to extract all tagKeys values from the raw request.
+	if raw := nr.Raw; raw != nil {
+		for _, k := range raw.URL.Query()["tagKeys"] {
+			delete(cfg.Tags, k)
+		}
+	}
+	if err := p.saveConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *FunctionProvider) ListTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "_resource_arn")
+	name := functionNameFromARN(arn)
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	tags := cfg.Tags
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	return provider.OK(map[string]any{"Tags": tags}), nil
+}
+
+// ─── Permissions ──────────────────────────────────────────────────────────────
+
+func (p *FunctionProvider) loadPolicy(ctx context.Context, name string) (policyDocument, error) {
+	entry, err := p.resources.Get(ctx, resTypePolicies, name)
+	if err != nil {
+		return policyDocument{Version: "2012-10-17", Id: name}, nil // empty policy
+	}
+	var doc policyDocument
+	return doc, json.Unmarshal(entry.Data, &doc)
+}
+
+func (p *FunctionProvider) savePolicy(ctx context.Context, name string, doc policyDocument) error {
+	data, _ := json.Marshal(doc)
+	entry := store.ResourceEntry{Type: resTypePolicies, ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			return p.resources.Update(ctx, entry)
+		}
+		return err
+	}
+	return nil
+}
+
+func (p *FunctionProvider) AddPermission(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	statementID := strParam(nr.Params, "StatementId")
+	if statementID == "" {
+		return nil, model.NewProviderError("ValidationException", "StatementId is required", 400)
+	}
+	if _, err := p.loadConfig(ctx, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+
+	principal := strParam(nr.Params, "Principal")
+	action := strParam(nr.Params, "Action")
+	functionARN := p.functionARN(nr, name)
+
+	stmt := policyStatement{
+		Sid:    statementID,
+		Effect: "Allow",
+		Principal: map[string]any{
+			"Service": principal,
+		},
+		Action:   action,
+		Resource: functionARN,
+	}
+	if src := strParam(nr.Params, "SourceArn"); src != "" {
+		stmt.Condition = map[string]any{
+			"ArnLike": map[string]any{"AWS:SourceArn": src},
+		}
+	}
+
+	doc, err := p.loadPolicy(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	// Remove existing statement with same Sid
+	filtered := doc.Statement[:0]
+	for _, s := range doc.Statement {
+		if s.Sid != statementID {
+			filtered = append(filtered, s)
+		}
+	}
+	doc.Statement = append(filtered, stmt)
+	if err := p.savePolicy(ctx, name, doc); err != nil {
+		return nil, err
+	}
+
+	stmtJSON, _ := json.Marshal(stmt)
+	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
+		"Statement": string(stmtJSON),
+	}}, nil
+}
+
+func (p *FunctionProvider) RemovePermission(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	statementID := strParam(nr.Params, "_statement_id")
+
+	doc, err := p.loadPolicy(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	filtered := doc.Statement[:0]
+	for _, s := range doc.Statement {
+		if s.Sid != statementID {
+			filtered = append(filtered, s)
+		}
+	}
+	doc.Statement = filtered
+	if err := p.savePolicy(ctx, name, doc); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *FunctionProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	if _, err := p.loadConfig(ctx, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	doc, err := p.loadPolicy(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(doc.Statement) == 0 {
+		return nil, model.NewProviderError("ResourceNotFoundException", "No policy found for function: "+name, 404)
+	}
+	policyJSON, _ := json.Marshal(doc)
+	return provider.OK(map[string]any{
+		"Policy":     string(policyJSON),
+		"RevisionId": "1",
+	}), nil
+}
+
+// ─── Function URLs ─────────────────────────────────────────────────────────────
+
+func (p *FunctionProvider) loadURLConfig(ctx context.Context, name string) (urlConfig, error) {
+	entry, err := p.resources.Get(ctx, resTypeURLs, name)
+	if err != nil {
+		return urlConfig{}, err
+	}
+	var uc urlConfig
+	return uc, json.Unmarshal(entry.Data, &uc)
+}
+
+func (p *FunctionProvider) saveURLConfig(ctx context.Context, name string, uc urlConfig) error {
+	data, _ := json.Marshal(uc)
+	entry := store.ResourceEntry{Type: resTypeURLs, ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			return p.resources.Update(ctx, entry)
+		}
+		return err
+	}
+	return nil
+}
+
+func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	if _, err := p.loadConfig(ctx, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	if _, err := p.loadURLConfig(ctx, name); err == nil {
+		return nil, model.NewProviderError("ResourceConflictException", "Function URL config already exists", 409)
+	}
+	authType := strParam(nr.Params, "AuthType")
+	if authType == "" {
+		authType = "NONE"
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	uc := urlConfig{
+		FunctionArn:      p.functionARN(nr, name),
+		FunctionUrl:      fmt.Sprintf("https://%s.lambda-url.us-east-1.on.aws/", name),
+		AuthType:         authType,
+		CreatedTime:      now,
+		LastModifiedTime: now,
+	}
+	if err := p.saveURLConfig(ctx, name, uc); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: urlToWire(uc)}, nil
+}
+
+func (p *FunctionProvider) GetFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	uc, err := p.loadURLConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
+	}
+	return provider.OK(urlToWire(uc)), nil
+}
+
+func (p *FunctionProvider) UpdateFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	uc, err := p.loadURLConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
+	}
+	if a := strParam(nr.Params, "AuthType"); a != "" {
+		uc.AuthType = a
+	}
+	uc.LastModifiedTime = time.Now().UTC().Format(time.RFC3339)
+	if err := p.saveURLConfig(ctx, name, uc); err != nil {
+		return nil, err
+	}
+	return provider.OK(urlToWire(uc)), nil
+}
+
+func (p *FunctionProvider) DeleteFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	if err := p.resources.Delete(ctx, resTypeURLs, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func urlToWire(uc urlConfig) map[string]any {
+	return map[string]any{
+		"FunctionArn":      uc.FunctionArn,
+		"FunctionUrl":      uc.FunctionUrl,
+		"AuthType":         uc.AuthType,
+		"CreatedTime":      uc.CreatedTime,
+		"LastModifiedTime": uc.LastModifiedTime,
+	}
+}
+
+// ─── Concurrency ──────────────────────────────────────────────────────────────
+
+func (p *FunctionProvider) PutFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	var concurrency int
+	switch v := nr.Params["ReservedConcurrentExecutions"].(type) {
+	case float64:
+		concurrency = int(v)
+	case int:
+		concurrency = v
+	}
+	cfg.ReservedConcurrency = &concurrency
+	if err := p.saveConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"ReservedConcurrentExecutions": concurrency}), nil
+}
+
+func (p *FunctionProvider) GetFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	if cfg.ReservedConcurrency == nil {
+		return provider.OK(map[string]any{}), nil
+	}
+	return provider.OK(map[string]any{"ReservedConcurrentExecutions": *cfg.ReservedConcurrency}), nil
+}
+
+func (p *FunctionProvider) DeleteFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	cfg, err := p.loadConfig(ctx, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	cfg.ReservedConcurrency = nil
+	if err := p.saveConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── Account settings ─────────────────────────────────────────────────────────
+
+func (p *FunctionProvider) GetAccountSettings(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{
+		"AccountLimit": map[string]any{
+			"TotalCodeSize":                  80530636800,
+			"CodeSizeUnzipped":               262144000,
+			"CodeSizeZipped":                 52428800,
+			"ConcurrentExecutions":           1000,
+			"UnreservedConcurrentExecutions": 1000,
+		},
+		"AccountUsage": map[string]any{
+			"TotalCodeSize":        0,
+			"FunctionCount":        0,
+		},
+	}), nil
 }
