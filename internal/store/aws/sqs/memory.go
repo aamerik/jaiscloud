@@ -9,31 +9,94 @@ import (
 	"time"
 )
 
+const defaultRetentionSecs = 345600 // 4 days
+
 // dedupEntry stores deduplication metadata for a FIFO message.
 type dedupEntry struct {
 	expiry    time.Time
 	messageID string
 }
 
+// queueData holds per-queue messages and the configured retention period.
+type queueData struct {
+	messages      []*SQSMessage
+	retentionSecs int
+}
+
+func (q *queueData) retention() int {
+	if q.retentionSecs <= 0 {
+		return defaultRetentionSecs
+	}
+	return q.retentionSecs
+}
+
 // MemoryMessageStore is an in-memory SQSMessageStore.
 // Messages are stored in per-queue slices; FIFO ordering is preserved.
+// A background goroutine removes expired messages every 10 seconds.
 type MemoryMessageStore struct {
 	mu     sync.Mutex
-	queues map[string][]*SQSMessage // queueURL → ordered message list
+	queues map[string]*queueData // queueURL → queue state
 
 	// FIFO deduplication: dedup key → entry (expiry + original messageID)
 	dedup map[string]dedupEntry
 
 	// FIFO sequence counter per queue
 	seqCounter map[string]int64
+
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func NewMemoryMessageStore() *MemoryMessageStore {
-	return &MemoryMessageStore{
-		queues:     make(map[string][]*SQSMessage),
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &MemoryMessageStore{
+		queues:     make(map[string]*queueData),
 		dedup:      make(map[string]dedupEntry),
 		seqCounter: make(map[string]int64),
+		cancel:     cancel,
 	}
+	s.wg.Add(1)
+	go s.retentionWorker(ctx)
+	return s
+}
+
+func (s *MemoryMessageStore) retentionWorker(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.removeExpiredMessages()
+		}
+	}
+}
+
+func (s *MemoryMessageStore) removeExpiredMessages() {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, q := range s.queues {
+		threshold := now.Add(-time.Duration(q.retention()) * time.Second)
+		keep := q.messages[:0]
+		for _, m := range q.messages {
+			if !m.SentAt.Before(threshold) {
+				keep = append(keep, m)
+			}
+		}
+		q.messages = keep
+	}
+}
+
+func (s *MemoryMessageStore) getOrCreateQueue(queueURL string) *queueData {
+	q, ok := s.queues[queueURL]
+	if !ok {
+		q = &queueData{}
+		s.queues[queueURL] = q
+	}
+	return q
 }
 
 func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID string, err error) {
@@ -65,7 +128,8 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 	msg.ReceiptHandle = newHandle()
 
 	cp := msg // copy to avoid caller mutation
-	s.queues[msg.QueueURL] = append(s.queues[msg.QueueURL], &cp)
+	q := s.getOrCreateQueue(msg.QueueURL)
+	q.messages = append(q.messages, &cp)
 	return "", nil
 }
 
@@ -73,7 +137,11 @@ func (s *MemoryMessageStore) Receive(ctx context.Context, queueURL string, maxMe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := s.queues[queueURL]
+	q := s.queues[queueURL]
+	if q == nil {
+		return nil, nil
+	}
+	msgs := q.messages
 	var result []SQSMessage
 
 	// FIFO: track in-flight groups to preserve ordering
@@ -124,10 +192,14 @@ func (s *MemoryMessageStore) Delete(ctx context.Context, queueURL, receiptHandle
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := s.queues[queueURL]
+	q := s.queues[queueURL]
+	if q == nil {
+		return fmt.Errorf("receipt handle not found")
+	}
+	msgs := q.messages
 	for i, m := range msgs {
 		if m.ReceiptHandle == receiptHandle {
-			s.queues[queueURL] = append(msgs[:i], msgs[i+1:]...)
+			q.messages = append(msgs[:i], msgs[i+1:]...)
 			return nil
 		}
 	}
@@ -138,7 +210,11 @@ func (s *MemoryMessageStore) ChangeVisibility(ctx context.Context, queueURL, rec
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, m := range s.queues[queueURL] {
+	q := s.queues[queueURL]
+	if q == nil {
+		return fmt.Errorf("receipt handle not found")
+	}
+	for _, m := range q.messages {
 		if m.ReceiptHandle == receiptHandle {
 			if timeoutSec == 0 {
 				m.VisibleAt = time.Time{} // immediately visible
@@ -154,7 +230,9 @@ func (s *MemoryMessageStore) ChangeVisibility(ctx context.Context, queueURL, rec
 func (s *MemoryMessageStore) Purge(ctx context.Context, queueURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queues[queueURL] = nil
+	if q := s.queues[queueURL]; q != nil {
+		q.messages = nil
+	}
 	return nil
 }
 
@@ -162,7 +240,11 @@ func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, queueURL 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, m := range s.queues[queueURL] {
+	q := s.queues[queueURL]
+	if q == nil {
+		return
+	}
+	for _, m := range q.messages {
 		if !m.DelayUntil.IsZero() && now.Before(m.DelayUntil) {
 			delayed++
 		} else if !m.VisibleAt.IsZero() && now.Before(m.VisibleAt) {
@@ -174,12 +256,28 @@ func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, queueURL 
 	return
 }
 
-func (s *MemoryMessageStore) Reset() {
+func (s *MemoryMessageStore) SetQueueRetention(_ context.Context, queueURL string, retentionSecs int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queues = make(map[string][]*SQSMessage)
+	q := s.getOrCreateQueue(queueURL)
+	q.retentionSecs = retentionSecs
+	return nil
+}
+
+func (s *MemoryMessageStore) Reset() {
+	s.cancel()
+	s.wg.Wait()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.queues = make(map[string]*queueData)
 	s.dedup = make(map[string]dedupEntry)
 	s.seqCounter = make(map[string]int64)
+	s.cancel = cancel
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	go s.retentionWorker(ctx)
 }
 
 func newHandle() string {

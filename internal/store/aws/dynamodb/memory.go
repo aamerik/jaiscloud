@@ -43,7 +43,11 @@ func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash strin
 		if existing == nil {
 			existing = map[string]any{}
 		}
-		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
+		ok, err := matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -90,7 +94,11 @@ func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash st
 		if existing == nil {
 			existing = map[string]any{}
 		}
-		if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
+		ok, err := matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -123,7 +131,11 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 		if check == nil {
 			check = map[string]any{}
 		}
-		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues, nil) {
+		ok, err := matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -136,8 +148,10 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 	}
 
 	if spec.UpdateExpression != "" {
-		applyUpdateExpression(existing, spec.UpdateExpression,
-			spec.ExpressionAttributeNames, spec.ExpressionAttributeValues)
+		if err := applyUpdateExpression(existing, spec.UpdateExpression,
+			spec.ExpressionAttributeNames, spec.ExpressionAttributeValues); err != nil {
+			return nil, err
+		}
 	} else {
 		for k, v := range item {
 			existing[k] = v
@@ -163,6 +177,7 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	}
 	schema := s.schemas[table]
 	attrTypes := buildAttrTypes(schema)
+	_ = attrTypes // retained for build-attrTypes call; type info is now embedded in DynamoDB values
 
 	// Collect candidates based on index routing.
 	var candidates []map[string]any
@@ -221,7 +236,11 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	// Apply key condition only → keyMatched (used for ScannedCount and pagination).
 	var keyMatched []map[string]any
 	for _, item := range candidates {
-		if !matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
+		ok, err := matchesKeyCondition(item, q.KeyConditionExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if !ok {
 			continue
 		}
 		keyMatched = append(keyMatched, item)
@@ -265,7 +284,15 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	// Apply FilterExpression on the page.
 	var result []map[string]any
 	for _, item := range page {
-		if q.FilterExpression == "" || matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, attrTypes) {
+		if q.FilterExpression == "" {
+			result = append(result, copyItem(item))
+			continue
+		}
+		ok, err := matchesFilter(item, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if ok {
 			result = append(result, copyItem(item))
 		}
 	}
@@ -284,6 +311,7 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 	}
 	schema := s.schemas[table]
 	attrTypes := buildAttrTypes(schema)
+	_ = attrTypes
 
 	var candidates []map[string]any
 	if sc.IndexSchema != nil && !sc.IndexSchema.IsLSI {
@@ -323,7 +351,15 @@ func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanS
 	// Apply FilterExpression on the page.
 	var result []map[string]any
 	for _, item := range page {
-		if sc.FilterExpression == "" || matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues, attrTypes) {
+		if sc.FilterExpression == "" {
+			result = append(result, copyItem(item))
+			continue
+		}
+		ok, err := matchesFilter(item, sc.FilterExpression, sc.ExpressionAttributeNames, sc.ExpressionAttributeValues)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if ok {
 			result = append(result, copyItem(item))
 		}
 	}
@@ -423,7 +459,11 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []Tr
 			reasons[i] = CancellationReason{Code: "None"}
 			continue
 		}
-		if !matchesFilter(existing, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
+		ok, err := matchesFilter(existing, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
 			anyFailed = true
 		} else {
@@ -460,8 +500,10 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []Tr
 				base = copyItem(existing)
 			}
 			updated := copyItem(base)
-			applyUpdateExpression(updated, op.Update.UpdateExpression,
-				op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues)
+			if err := applyUpdateExpression(updated, op.Update.UpdateExpression,
+				op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues); err != nil {
+				return nil, err
+			}
 			if op.Update.Schema != nil {
 				if existing != nil {
 					s.removeGSIEntries(op.Table, op.PKHash, existing, op.Update.Schema)
@@ -651,79 +693,6 @@ func extractEqValue(expr, attrName string, names map[string]string, values map[s
 	return "", false
 }
 
-// applyUpdateExpression handles SET, REMOVE, and ADD clauses.
-func applyUpdateExpression(item map[string]any, expr string, names map[string]string, values map[string]any) {
-	upper := strings.ToUpper(expr)
-	setIdx := strings.Index(upper, "SET ")
-	removeIdx := strings.Index(upper, " REMOVE ")
-	addIdx := strings.Index(upper, " ADD ")
-
-	if setIdx >= 0 {
-		end := len(expr)
-		if removeIdx > setIdx {
-			end = removeIdx
-		}
-		if addIdx > setIdx && addIdx < end {
-			end = addIdx
-		}
-		setPart := strings.TrimSpace(expr[setIdx+4 : end])
-		for _, assignment := range splitComma(setPart) {
-			parts := strings.SplitN(assignment, "=", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			attrRef := strings.TrimSpace(parts[0])
-			valRef := strings.TrimSpace(parts[1])
-			attr := resolveExprName(attrRef, names)
-			val := resolveExprValue(valRef, values)
-			if attr != "" {
-				item[attr] = val
-			}
-		}
-	}
-
-	if removeIdx >= 0 {
-		end := len(expr)
-		removePart := strings.TrimSpace(expr[removeIdx+8 : end])
-		for _, attrRef := range splitComma(removePart) {
-			attr := resolveExprName(strings.TrimSpace(attrRef), names)
-			if attr != "" {
-				delete(item, attr)
-			}
-		}
-	}
-
-	if addIdx >= 0 {
-		addPart := strings.TrimSpace(expr[addIdx+5:])
-		for _, assignment := range splitComma(addPart) {
-			parts := strings.SplitN(assignment, " ", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			attr := resolveExprName(strings.TrimSpace(parts[0]), names)
-			valRef := strings.TrimSpace(parts[1])
-			val := resolveExprValue(valRef, values)
-			if attr != "" {
-				if existing, ok := item[attr]; ok {
-					if em, ok := existing.(map[string]any); ok {
-						if nv, ok := em["N"]; ok {
-							if newMap, ok := val.(map[string]any); ok {
-								if nv2, ok := newMap["N"]; ok {
-									n1 := toFloat(nv)
-									n2 := toFloat(nv2)
-									item[attr] = map[string]any{"N": fmt.Sprintf("%g", n1+n2)}
-									continue
-								}
-							}
-						}
-					}
-				}
-				item[attr] = val
-			}
-		}
-	}
-}
-
 func splitComma(s string) []string {
 	var parts []string
 	depth := 0
@@ -766,60 +735,32 @@ func resolveExprValue(ref string, values map[string]any) any {
 	return ref
 }
 
-func toFloat(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case string:
-		var f float64
-		fmt.Sscanf(n, "%f", &f)
-		return f
-	}
-	return 0
-}
-
 // matchesKeyCondition evaluates a DynamoDB KeyConditionExpression against an item.
-func matchesKeyCondition(item map[string]any, expr string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
-	if expr == "" {
-		return true
-	}
-	conditions := splitAND(expr)
-	for _, cond := range conditions {
-		if !evalCondition(item, strings.TrimSpace(cond), names, values, attrTypes) {
-			return false
-		}
-	}
-	return true
+func matchesKeyCondition(item map[string]any, expr string, names map[string]string, values map[string]any) (bool, error) {
+	return EvalFilter(item, expr, names, values)
 }
 
-// matchesFilter evaluates a DynamoDB FilterExpression against an item.
-func matchesFilter(item map[string]any, expr string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
-	if expr == "" {
-		return true
-	}
-	return matchesKeyCondition(item, expr, names, values, attrTypes)
+// matchesFilter evaluates a DynamoDB FilterExpression or ConditionExpression against an item.
+func matchesFilter(item map[string]any, expr string, names map[string]string, values map[string]any) (bool, error) {
+	return EvalFilter(item, expr, names, values)
 }
 
 // splitAND splits a condition expression on top-level AND connectives,
 // correctly handling "attr BETWEEN :lo AND :hi" patterns.
-// A " AND " is treated as a BETWEEN's closing token when the clause accumulated
-// so far contains more BETWEEN keywords than AND keywords.
 func splitAND(expr string) []string {
 	upper := strings.ToUpper(expr)
 	var parts []string
-	partStart := 0 // start of the current part
+	partStart := 0
 	i := 0
 	for i+5 <= len(upper) {
 		if upper[i:i+5] != " AND " {
 			i++
 			continue
 		}
-		// Found " AND " at position i.
 		clause := upper[partStart:i]
 		betweenCount := strings.Count(clause, " BETWEEN ")
 		andInClause := strings.Count(clause, " AND ")
 		if betweenCount > andInClause {
-			// This AND is closing an open BETWEEN — keep scanning same part.
 			i += 5
 			continue
 		}
@@ -829,158 +770,6 @@ func splitAND(expr string) []string {
 	}
 	parts = append(parts, expr[partStart:])
 	return parts
-}
-
-func evalCondition(item map[string]any, cond string, names map[string]string, values map[string]any, attrTypes map[string]string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(cond))
-
-	if strings.HasPrefix(upper, "ATTRIBUTE_NOT_EXISTS(") {
-		inner := cond[len("attribute_not_exists("):]
-		inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
-		attr := resolveExprName(strings.TrimSpace(inner), names)
-		_, exists := item[attr]
-		return !exists
-	}
-
-	if strings.HasPrefix(upper, "ATTRIBUTE_EXISTS(") {
-		inner := cond[len("attribute_exists("):]
-		inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
-		attr := resolveExprName(strings.TrimSpace(inner), names)
-		_, exists := item[attr]
-		return exists
-	}
-
-	if strings.HasPrefix(upper, "CONTAINS(") {
-		inner := strings.TrimSpace(cond[len("contains("):])
-		inner = strings.TrimSuffix(inner, ")")
-		parts := strings.SplitN(inner, ",", 2)
-		if len(parts) != 2 {
-			return true
-		}
-		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
-		valRef := strings.TrimSpace(parts[1])
-		val := resolveExprValue(valRef, values)
-		s, _ := AttrVal(item[attr])
-		vs, _ := AttrVal(val)
-		if vs == "" {
-			vs = fmt.Sprintf("%v", extractDynamoString(val))
-		}
-		return strings.Contains(s, vs)
-	}
-
-	if strings.Contains(upper, " BEGINS_WITH ") || strings.HasPrefix(upper, "BEGINS_WITH(") {
-		inner := strings.TrimSpace(cond)
-		inner = strings.TrimPrefix(strings.ToLower(inner), "begins_with(")
-		inner = strings.TrimSuffix(inner, ")")
-		parts := strings.SplitN(inner, ",", 2)
-		if len(parts) != 2 {
-			return true
-		}
-		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
-		valRef := strings.TrimSpace(parts[1])
-		val := resolveExprValue(valRef, values)
-		itemVal := itemAttrString(item, attr)
-		return strings.HasPrefix(itemVal, fmt.Sprintf("%v", extractDynamoString(val)))
-	}
-
-	// BETWEEN: "attr BETWEEN :lo AND :hi"
-	if betweenIdx := strings.Index(upper, " BETWEEN "); betweenIdx >= 0 {
-		attr := resolveExprName(strings.TrimSpace(cond[:betweenIdx]), names)
-		rest := cond[betweenIdx+9:]
-		andIdx := strings.Index(strings.ToUpper(rest), " AND ")
-		if andIdx < 0 {
-			return true
-		}
-		loRef := strings.TrimSpace(rest[:andIdx])
-		hiRef := strings.TrimSpace(rest[andIdx+5:])
-		lo := resolveExprValue(loRef, values)
-		hi := resolveExprValue(hiRef, values)
-		itemVal := item[attr]
-		loN, loIsN := ParseNumeric(lo)
-		hiN, hiIsN := ParseNumeric(hi)
-		itemN, itemIsN := ParseNumeric(itemVal)
-		if loIsN && hiIsN && itemIsN {
-			return itemN >= loN && itemN <= hiN
-		}
-		ls, _ := AttrVal(lo)
-		hs, _ := AttrVal(hi)
-		is, _ := AttrVal(itemVal)
-		if ls == "" {
-			ls = fmt.Sprintf("%v", extractDynamoString(lo))
-		}
-		if hs == "" {
-			hs = fmt.Sprintf("%v", extractDynamoString(hi))
-		}
-		if is == "" {
-			is = fmt.Sprintf("%v", extractDynamoString(itemVal))
-		}
-		return is >= ls && is <= hs
-	}
-
-	// Comparison operators in order from longest to shortest to avoid mis-matches.
-	for _, op := range []string{" <> ", " <= ", " >= ", " < ", " > "} {
-		if strings.Contains(cond, op) {
-			parts := strings.SplitN(cond, op, 2)
-			attr := resolveExprName(strings.TrimSpace(parts[0]), names)
-			val := resolveExprValue(strings.TrimSpace(parts[1]), values)
-			itemVal := item[attr]
-			aN, aIsN := ParseNumeric(itemVal)
-			bN, bIsN := ParseNumeric(val)
-			if aIsN && bIsN {
-				switch strings.TrimSpace(op) {
-				case "<>":
-					return aN != bN
-				case "<":
-					return aN < bN
-				case "<=":
-					return aN <= bN
-				case ">":
-					return aN > bN
-				case ">=":
-					return aN >= bN
-				}
-			}
-			as, _ := AttrVal(itemVal)
-			bs, _ := AttrVal(val)
-			if as == "" {
-				as = fmt.Sprintf("%v", extractDynamoString(itemVal))
-			}
-			if bs == "" {
-				bs = fmt.Sprintf("%v", extractDynamoString(val))
-			}
-			switch strings.TrimSpace(op) {
-			case "<>":
-				return as != bs
-			case "<":
-				return as < bs
-			case "<=":
-				return as <= bs
-			case ">":
-				return as > bs
-			case ">=":
-				return as >= bs
-			}
-		}
-	}
-
-	if strings.Contains(cond, " = ") {
-		parts := strings.SplitN(cond, " = ", 2)
-		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
-		valRef := strings.TrimSpace(parts[1])
-		val := resolveExprValue(valRef, values)
-		itemVal := item[attr]
-		return dynamoValuesEqual(itemVal, val)
-	}
-
-	return true
-}
-
-func itemAttrString(item map[string]any, attr string) string {
-	v, ok := item[attr]
-	if !ok {
-		return ""
-	}
-	return fmt.Sprintf("%v", extractDynamoString(v))
 }
 
 func extractDynamoString(v any) any {
@@ -993,10 +782,4 @@ func extractDynamoString(v any) any {
 		}
 	}
 	return v
-}
-
-func dynamoValuesEqual(a, b any) bool {
-	as := fmt.Sprintf("%v", extractDynamoString(a))
-	bs := fmt.Sprintf("%v", extractDynamoString(b))
-	return as == bs
 }

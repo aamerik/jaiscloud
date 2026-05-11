@@ -45,6 +45,10 @@ type SQSMessageStore interface {
 	Purge(ctx context.Context, queueURL string) error
 	GetApproximateCounts(ctx context.Context, queueURL string, now time.Time) (visible, notVisible, delayed int, err error)
 
+	// SetQueueRetention registers the message retention period for a queue so
+	// the store can expire old messages. retentionSecs=0 resets to the 4-day default.
+	SetQueueRetention(ctx context.Context, queueURL string, retentionSecs int) error
+
 	// Reset wipes all messages across all queues.
 	Reset()
 }

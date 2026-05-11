@@ -41,6 +41,30 @@ func Generate32() ([]byte, error) {
 	return key, nil
 }
 
+// generateHMACMaterial returns random key material of the correct minimum size for the given HMAC key spec.
+// HMAC_224 → 28 bytes, HMAC_256 → 32 bytes, HMAC_384 → 48 bytes, HMAC_512 → 64 bytes.
+// All other specs (SYMMETRIC_DEFAULT) default to 32 bytes.
+func generateHMACMaterial(keySpec string) ([]byte, error) {
+	var size int
+	switch keySpec {
+	case "HMAC_224":
+		size = 28
+	case "HMAC_256":
+		size = 32
+	case "HMAC_384":
+		size = 48
+	case "HMAC_512":
+		size = 64
+	default:
+		size = 32
+	}
+	key := make([]byte, size)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("generate key material: %w", err)
+	}
+	return key, nil
+}
+
 // ParseHexKey decodes a 32-byte hex-encoded KEK from a string.
 // Returns an error if the string is empty, not valid hex, or not 32 bytes.
 func ParseHexKey(s string) ([]byte, error) {

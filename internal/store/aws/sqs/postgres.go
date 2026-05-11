@@ -221,6 +221,12 @@ func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, queu
 	return visible, notVisible, delayed, rows.Err()
 }
 
+// SetQueueRetention is a no-op for the postgres store; TTL is enforced via DB-side
+// expiry or a separate housekeeping job.
+func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _ string, _ int) error {
+	return nil
+}
+
 func (s *PostgresSQSMessageStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages`)

@@ -4,6 +4,7 @@ package table
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -377,7 +378,7 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
-		return nil, err
+		return nil, storeErrToProvider(err)
 	}
 	eventName := "INSERT"
 	if existingForStream != nil {
@@ -434,7 +435,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
-		return nil, err
+		return nil, storeErrToProvider(err)
 	}
 	p.appendStreamRecord(name, "REMOVE", pkHash, key, nil, oldItem)
 	result := map[string]any{}
@@ -468,7 +469,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
-		return nil, err
+		return nil, storeErrToProvider(err)
 	}
 	p.appendStreamRecord(name, "MODIFY", pkHash, key, updated, oldItem)
 	result := map[string]any{}
@@ -545,7 +546,7 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 	}
 	items, scannedCount, lastKey, err := p.items.Query(ctx, name, q)
 	if err != nil {
-		return nil, err
+		return nil, storeErrToProvider(err)
 	}
 	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
 	projected := applyProjectionSlice(items, projAttrs)
@@ -575,7 +576,7 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 	}
 	items, scannedCount, lastKey, err := p.items.Scan(ctx, name, sc)
 	if err != nil {
-		return nil, err
+		return nil, storeErrToProvider(err)
 	}
 	projAttrs := dynamostore.ParseProjection(strParam(nr.Params, "ProjectionExpression"), exprNames(nr.Params))
 	projected := applyProjectionSlice(items, projAttrs)
@@ -1313,6 +1314,19 @@ func unmarshalKey(s string) map[string]any {
 // isConditionFailed returns true when err is a ConditionalCheckFailedException from the store.
 func isConditionFailed(err error) bool {
 	return err != nil && err.Error() == "ConditionalCheckFailedException"
+}
+
+// storeErrToProvider converts known store sentinel errors into ProviderErrors.
+// Unknown errors are returned as-is (become HTTP 500 at the gateway).
+func storeErrToProvider(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exprErr *dynamostore.ExpressionError
+	if errors.As(err, &exprErr) {
+		return model.NewProviderError("ValidationException", exprErr.Message, 400)
+	}
+	return err
 }
 
 func arnToTableName(arn string) string {

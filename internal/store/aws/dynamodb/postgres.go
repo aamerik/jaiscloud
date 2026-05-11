@@ -50,7 +50,11 @@ func (s *PostgresDynamoDBItemStore) PutItem(ctx context.Context, table, pkHash s
 			if existing == nil {
 				existing = map[string]any{}
 			}
-			if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
+			ok, err := matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
 				return nil, &conditionFailedError{}
 			}
 		}
@@ -101,7 +105,11 @@ func (s *PostgresDynamoDBItemStore) DeleteItem(ctx context.Context, table, pkHas
 			if existing == nil {
 				existing = map[string]any{}
 			}
-			if !matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues, nil) {
+			ok, err := matchesFilter(existing, cond.ConditionExpression, cond.ExpressionAttributeNames, cond.ExpressionAttributeValues)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
 				return nil, &conditionFailedError{}
 			}
 		}
@@ -131,7 +139,11 @@ func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHas
 		if check == nil {
 			check = map[string]any{}
 		}
-		if !matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues, nil) {
+		ok, err := matchesFilter(check, spec.ConditionExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, &conditionFailedError{}
 		}
 	}
@@ -139,7 +151,9 @@ func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHas
 		existing = copyItem(item)
 	}
 	if spec.UpdateExpression != "" {
-		applyUpdateExpression(existing, spec.UpdateExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues)
+		if err := applyUpdateExpression(existing, spec.UpdateExpression, spec.ExpressionAttributeNames, spec.ExpressionAttributeValues); err != nil {
+			return nil, err
+		}
 	} else {
 		for k, v := range item {
 			existing[k] = v
@@ -193,7 +207,11 @@ func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExp
 		if err := json.Unmarshal(raw, &item); err != nil {
 			continue
 		}
-		if !matchesKeyCondition(item, keyExpr, names, values, nil) {
+		ok, err := matchesKeyCondition(item, keyExpr, names, values)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if !ok {
 			continue
 		}
 		keyMatched = append(keyMatched, item)
@@ -215,7 +233,15 @@ func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExp
 	// Apply FilterExpression on the page.
 	var result []map[string]any
 	for _, item := range page {
-		if filterExpr == "" || matchesFilter(item, filterExpr, names, values, nil) {
+		if filterExpr == "" {
+			result = append(result, item)
+			continue
+		}
+		ok, err := matchesFilter(item, filterExpr, names, values)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if ok {
 			result = append(result, item)
 		}
 	}
@@ -291,12 +317,18 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 			item = map[string]any{}
 		}
 		condExpr := op.Cond.ConditionExpression
-		if condExpr != "" && !matchesFilter(item, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues, nil) {
-			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
-			anyFailed = true
-		} else {
-			reasons[i] = CancellationReason{Code: "None"}
+		if condExpr != "" {
+			ok, ferr := matchesFilter(item, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues)
+			if ferr != nil {
+				return nil, ferr
+			}
+			if !ok {
+				reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+				anyFailed = true
+				continue
+			}
 		}
+		reasons[i] = CancellationReason{Code: "None"}
 	}
 	if anyFailed {
 		return reasons, nil
@@ -337,7 +369,9 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 				existing = copyItem(op.Key)
 			}
 			if op.Update.UpdateExpression != "" {
-				applyUpdateExpression(existing, op.Update.UpdateExpression, op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues)
+				if err := applyUpdateExpression(existing, op.Update.UpdateExpression, op.Update.ExpressionAttributeNames, op.Update.ExpressionAttributeValues); err != nil {
+					return nil, err
+				}
 			} else {
 				for k, v := range op.Item {
 					existing[k] = v
@@ -361,7 +395,6 @@ func (s *PostgresDynamoDBItemStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items`)
 	// Drop all per-table index tables created by CreateTableSchema.
-	// Use current_schema() so the query works regardless of cloud (aws/azure/gcp).
 	rows, err := s.pool.Query(ctx, `
 		SELECT tablename FROM pg_tables
 		WHERE schemaname=current_schema() AND tablename LIKE 'jc_dt_%'
@@ -385,7 +418,6 @@ func (s *PostgresDynamoDBItemStore) Reset() {
 // ─── Table-lifecycle methods ──────────────────────────────────────────────────
 
 // CreateTableSchema creates GSI and LSI index tables for a DynamoDB table.
-// Main item storage stays in the global jc_dynamodb_items table.
 func (s *PostgresDynamoDBItemStore) CreateTableSchema(ctx context.Context, schema TableSchema) error {
 	suffix := pgSuffix(schema.TableName)
 	main := "jc_dt_" + suffix
@@ -431,7 +463,6 @@ DROP TABLE IF EXISTS %s_gsi;
 }
 
 // AddGSI backfills GSI index rows from existing items in jc_dynamodb_items.
-// Items are processed in batches of 200 to avoid N+1 round-trips.
 func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, tableName string, schema TableSchema, idx IndexDef) error {
 	suffix := pgSuffix(tableName)
 	gsiTable := "jc_dt_" + suffix + "_gsi"
@@ -457,7 +488,6 @@ func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, tableName string
 		if len(batch) == 0 {
 			return nil
 		}
-		// Build multi-row INSERT: VALUES ($1,$2,$3,$4,$5),($6,$7,$8,$9,$10),...
 		placeholders := make([]string, 0, len(batch))
 		args := make([]any, 0, len(batch)*5)
 		for i, r := range batch {
@@ -486,7 +516,7 @@ func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, tableName string
 		}
 		gsiPKVal, ok := AttrVal(item[idx.PKAttr])
 		if !ok {
-			continue // sparse index — item has no GSI PK attribute
+			continue
 		}
 		gsiSKVal := ""
 		var gsiSKNum *float64
@@ -521,7 +551,6 @@ func (s *PostgresDynamoDBItemStore) DeleteGSI(ctx context.Context, tableName str
 
 // ─── Index write helpers ──────────────────────────────────────────────────────
 
-// upsertIndexRows maintains GSI and LSI index rows for the given item.
 func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, pkHash string, item map[string]any, schema *TableSchema) error {
 	if schema == nil {
 		return nil
@@ -529,11 +558,9 @@ func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, 
 	suffix := pgSuffix(table)
 	main := "jc_dt_" + suffix
 
-	// Remove stale index rows for this pkHash first.
 	s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s_gsi WHERE pk_hash=$1`, main), pkHash)
 	s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s_lsi WHERE pk_hash=$1`, main), pkHash)
 
-	// Insert GSI rows.
 	for _, gsi := range schema.GSIs {
 		gsiPKVal, ok := AttrVal(item[gsi.PKAttr])
 		if !ok {
@@ -560,7 +587,6 @@ func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, 
 		}
 	}
 
-	// Insert LSI rows.
 	pkVal, _ := AttrVal(item[schema.PKAttr])
 	for _, lsi := range schema.LSIs {
 		lsiSKVal := ""
@@ -586,7 +612,6 @@ func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, 
 	return nil
 }
 
-// deleteIndexRows removes all GSI/LSI index rows for the given pkHash.
 func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, table, pkHash string) {
 	suffix := pgSuffix(table)
 	main := "jc_dt_" + suffix
@@ -596,7 +621,6 @@ func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, table, 
 
 // ─── Index query helpers ──────────────────────────────────────────────────────
 
-// queryIndex routes a Query to the appropriate GSI or LSI index table.
 func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	idx := q.IndexSchema
 	suffix := pgSuffix(table)
@@ -643,7 +667,6 @@ func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string
 	return s.filterAndPaginate(items, q.KeyConditionExpression, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, q.ExclusiveStartKey, q.Limit)
 }
 
-// lsiSortOrder returns the ORDER BY clause for LSI queries, using numeric column when SK type is N.
 func lsiSortOrder(idx *IndexKeyRef) string {
 	if idx != nil && idx.SKType == "N" {
 		return "lsi_sk_num NULLS LAST, pk_hash"
@@ -651,7 +674,6 @@ func lsiSortOrder(idx *IndexKeyRef) string {
 	return "lsi_sk_val, pk_hash"
 }
 
-// gsiSortOrder returns the ORDER BY clause for GSI queries, using numeric column when SK type is N.
 func gsiSortOrder(idx *IndexKeyRef) string {
 	if idx != nil && idx.SKType == "N" {
 		return "gsi_sk_num NULLS LAST, pk_hash"
@@ -659,8 +681,6 @@ func gsiSortOrder(idx *IndexKeyRef) string {
 	return "gsi_sk_val, pk_hash"
 }
 
-// sortByIndexSK sorts items by the index SK attribute after fetching from jc_dynamodb_items.
-// This restores ordering lost by the IN (...) clause in fetchByPKHashes.
 func sortByIndexSK(items []map[string]any, idx *IndexKeyRef, scanFwd bool) []map[string]any {
 	if idx == nil || idx.SKAttr == "" || len(items) == 0 {
 		return items
@@ -686,7 +706,6 @@ func sortByIndexSK(items []map[string]any, idx *IndexKeyRef, scanFwd bool) []map
 	return items
 }
 
-// scanIndex routes a Scan to the appropriate GSI index table.
 func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	idx := sc.IndexSchema
 	suffix := pgSuffix(table)
@@ -764,11 +783,16 @@ func (s *PostgresDynamoDBItemStore) fetchByPKHashes(ctx context.Context, table s
 }
 
 func (s *PostgresDynamoDBItemStore) filterAndPaginate(items []map[string]any, keyExpr, filterExpr string, names map[string]string, values map[string]any, exclusiveStartKey string, limit int) ([]map[string]any, int, string, error) {
-	// Apply key condition first to get key-matched items for scannedCount.
 	var keyMatched []map[string]any
 	for _, item := range items {
-		if keyExpr != "" && !matchesKeyCondition(item, keyExpr, names, values, nil) {
-			continue
+		if keyExpr != "" {
+			ok, err := matchesKeyCondition(item, keyExpr, names, values)
+			if err != nil {
+				return nil, 0, "", err
+			}
+			if !ok {
+				continue
+			}
 		}
 		keyMatched = append(keyMatched, item)
 	}
@@ -784,7 +808,15 @@ func (s *PostgresDynamoDBItemStore) filterAndPaginate(items []map[string]any, ke
 
 	var result []map[string]any
 	for _, item := range page {
-		if filterExpr == "" || matchesFilter(item, filterExpr, names, values, nil) {
+		if filterExpr == "" {
+			result = append(result, item)
+			continue
+		}
+		ok, err := matchesFilter(item, filterExpr, names, values)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if ok {
 			result = append(result, item)
 		}
 	}

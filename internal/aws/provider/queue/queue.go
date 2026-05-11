@@ -132,6 +132,10 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		return nil, err
 	}
 
+	if retSecs, err := strconv.Atoi(attrOrDefault(attrs, "MessageRetentionPeriod", "345600")); err == nil {
+		p.messages.SetQueueRetention(ctx, queueURL, retSecs)
+	}
+
 	return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
 }
 
@@ -220,7 +224,17 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 
 	data, _ := json.Marshal(state)
 	entry.Data = data
-	return provider.OK(map[string]any{}), p.resources.Update(ctx, entry)
+	if err := p.resources.Update(ctx, entry); err != nil {
+		return nil, err
+	}
+
+	if rp, ok := newAttrs["MessageRetentionPeriod"]; ok {
+		if retSecs, err := strconv.Atoi(rp); err == nil {
+			p.messages.SetQueueRetention(ctx, queueURL, retSecs)
+		}
+	}
+
+	return provider.OK(map[string]any{}), nil
 }
 
 // ─── Data Plane ───────────────────────────────────────────────────────────────

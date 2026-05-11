@@ -136,8 +136,8 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 		e.PrivateKey = encPriv
 		e.PublicKey = pubDER
 	} else {
-		// Symmetric or HMAC key: generate random material.
-		keyMaterial, err := Generate32()
+		// Symmetric or HMAC key: generate random material at the correct size for the spec.
+		keyMaterial, err := generateHMACMaterial(keySpec)
 		if err != nil {
 			return nil, fmt.Errorf("kms: generate key material: %w", err)
 		}
@@ -602,6 +602,9 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "Encrypt", "ENCRYPT_DECRYPT"); err != nil {
+		return nil, err
+	}
 	ptB64, _ := nr.Params["Plaintext"].(string)
 	pt, err := base64.StdEncoding.DecodeString(ptB64)
 	if err != nil {
@@ -648,6 +651,9 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "Decrypt", "ENCRYPT_DECRYPT"); err != nil {
+		return nil, err
+	}
 	encCtx := extractEncCtx(nr.Params)
 	aad := marshalEncCtx(encCtx)
 
@@ -688,6 +694,9 @@ func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedR
 	}
 	if !e.Enabled {
 		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "GenerateDataKey", "ENCRYPT_DECRYPT"); err != nil {
+		return nil, err
 	}
 
 	bits := 256
@@ -744,6 +753,9 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, srcKeyID), srcKey.KeyUsage, "ReEncrypt", "ENCRYPT_DECRYPT"); err != nil {
+		return nil, err
+	}
 	srcEncCtx := extractEncCtxFrom(nr.Params, "SourceEncryptionContext")
 	srcAAD := marshalEncCtx(srcEncCtx)
 	srcMat, err := decryptData(p.serverDEK, srcKey.KeyMaterial, []byte(srcKeyID))
@@ -763,6 +775,9 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	dstKey, err := p.store.GetKey(ctx, dstKeyID)
 	if err != nil {
 		return nil, p.keyErr(err)
+	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, dstKeyID), dstKey.KeyUsage, "ReEncrypt", "ENCRYPT_DECRYPT"); err != nil {
+		return nil, err
 	}
 	dstEncCtx := extractEncCtxFrom(nr.Params, "DestinationEncryptionContext")
 	dstAAD := marshalEncCtx(dstEncCtx)
@@ -902,6 +917,9 @@ func (p *KeyProvider) Sign(ctx context.Context, nr *model.NormalizedRequest) (*m
 	if !isAsymmetricSpec(e.KeySpec) {
 		return nil, model.NewProviderError("UnsupportedOperationException", "Sign is only supported for asymmetric keys", 400)
 	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "Sign", "SIGN_VERIFY"); err != nil {
+		return nil, err
+	}
 	msgB64, _ := nr.Params["Message"].(string)
 	msg, err := base64.StdEncoding.DecodeString(msgB64)
 	if err != nil {
@@ -944,6 +962,9 @@ func (p *KeyProvider) Verify(ctx context.Context, nr *model.NormalizedRequest) (
 	}
 	if !isAsymmetricSpec(e.KeySpec) {
 		return nil, model.NewProviderError("UnsupportedOperationException", "Verify is only supported for asymmetric keys", 400)
+	}
+	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "Verify", "SIGN_VERIFY"); err != nil {
+		return nil, err
 	}
 	msgB64, _ := nr.Params["Message"].(string)
 	msg, err := base64.StdEncoding.DecodeString(msgB64)
@@ -1334,6 +1355,16 @@ func (p *KeyProvider) keyErr(err error) error {
 		return model.NewProviderError("DisabledException", "key is disabled", 400)
 	}
 	return err
+}
+
+// checkKeyUsage returns InvalidKeyUsageException if keyUsage != required.
+// Error format matches AWS: "<keyARN> key usage is <keyUsage> which is not valid for <operation>."
+func checkKeyUsage(keyARN, keyUsage, operation, required string) error {
+	if keyUsage != required {
+		return model.NewProviderError("InvalidKeyUsageException",
+			fmt.Sprintf("%s key usage is %s which is not valid for %s.", keyARN, keyUsage, operation), 400)
+	}
+	return nil
 }
 
 func newID() string {
