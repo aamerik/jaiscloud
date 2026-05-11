@@ -189,14 +189,159 @@ func (p *EMRProvider) Routes() map[string]provider.HandlerFunc {
 		"EMR.PutManagedScalingPolicy":           p.PutManagedScalingPolicy,
 		"EMR.GetManagedScalingPolicy":           p.GetManagedScalingPolicy,
 		"EMR.RemoveManagedScalingPolicy":        p.RemoveManagedScalingPolicy,
+		// Security configurations (13.1)
+		"EMR.CreateSecurityConfiguration":  p.CreateSecurityConfiguration,
+		"EMR.DescribeSecurityConfiguration": p.DescribeSecurityConfiguration,
+		"EMR.DeleteSecurityConfiguration":  p.DeleteSecurityConfiguration,
+		"EMR.ListSecurityConfigurations":   p.ListSecurityConfigurations,
+		// Auto-scaling policies (13.2)
+		"EMR.PutAutoScalingPolicy":    p.PutAutoScalingPolicy,
+		"EMR.RemoveAutoScalingPolicy": p.RemoveAutoScalingPolicy,
 	}
 }
 
 const (
 	rtCluster            = "emr_cluster"
 	rtBlockPublicAccess  = "emr_block_public_access"
+	rtSecurityConfig     = "emr_security_config"
 	bpaID                = "singleton"
 )
+
+// ─── Security configurations (13.1) ──────────────────────────────────────────
+
+type securityConfiguration struct {
+	Name                  string    `json:"Name"`
+	SecurityConfiguration string    `json:"SecurityConfiguration"`
+	CreationDateTime      time.Time `json:"CreationDateTime"`
+}
+
+func (p *EMRProvider) CreateSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" || len(name) > 10280 {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "Name must be 1–10280 characters", HTTPStatus: http.StatusBadRequest}
+	}
+	cfgJSON := strParam(nr.Params, "SecurityConfiguration")
+	if cfgJSON == "" {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "SecurityConfiguration is required", HTTPStatus: http.StatusBadRequest}
+	}
+	if !json.Valid([]byte(cfgJSON)) {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "SecurityConfiguration must be valid JSON", HTTPStatus: http.StatusBadRequest}
+	}
+	sc := securityConfiguration{Name: name, SecurityConfiguration: cfgJSON, CreationDateTime: time.Now().UTC()}
+	data, _ := json.Marshal(sc)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSecurityConfig, ID: name, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' already exists.", name), HTTPStatus: http.StatusBadRequest}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"Name": name, "CreationDateTime": sc.CreationDateTime.Unix()}), nil
+}
+
+func (p *EMRProvider) DescribeSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, rtSecurityConfig, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' does not exist.", name), HTTPStatus: http.StatusBadRequest}
+	}
+	var sc securityConfiguration
+	json.Unmarshal(e.Data, &sc)
+	return provider.OK(map[string]any{
+		"Name":                  sc.Name,
+		"SecurityConfiguration": sc.SecurityConfiguration,
+		"CreationDateTime":      sc.CreationDateTime.Unix(),
+	}), nil
+}
+
+func (p *EMRProvider) DeleteSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if _, err := p.resources.Get(ctx, rtSecurityConfig, name); err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' does not exist.", name), HTTPStatus: http.StatusBadRequest}
+	}
+	// Check if any active cluster references this security configuration.
+	clusters, _ := p.resources.List(ctx, rtCluster, "")
+	for _, e := range clusters {
+		var c emrCluster
+		json.Unmarshal(e.Data, &c)
+		if c.Status.State != "TERMINATED" && c.Status.State != "TERMINATED_WITH_ERRORS" {
+			if secCfg, ok := c.Ec2InstanceAttributes["SecurityConfiguration"].(string); ok && secCfg == name {
+				return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' is in use by cluster %s.", name, c.Id), HTTPStatus: http.StatusBadRequest}
+			}
+		}
+	}
+	_ = p.resources.Delete(ctx, rtSecurityConfig, name)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EMRProvider) ListSecurityConfigurations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, rtSecurityConfig, "")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var sc securityConfiguration
+		json.Unmarshal(e.Data, &sc)
+		items = append(items, map[string]any{
+			"Name":             sc.Name,
+			"CreationDateTime": sc.CreationDateTime.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"SecurityConfigurations": items}), nil
+}
+
+// ─── Auto-scaling policies (13.2) ─────────────────────────────────────────────
+
+func (p *EMRProvider) PutAutoScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterID := strParam(nr.Params, "ClusterId")
+	instanceGroupID := strParam(nr.Params, "InstanceGroupId")
+	policy, _ := nr.Params["AutoScalingPolicy"].(map[string]any)
+	if policy == nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "AutoScalingPolicy is required", HTTPStatus: http.StatusBadRequest}
+	}
+	c, err := p.loadCluster(ctx, clusterID)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
+	}
+	found := false
+	for i := range c.InstanceGroups {
+		if c.InstanceGroups[i]["Id"] == instanceGroupID {
+			c.InstanceGroups[i]["AutoScalingPolicy"] = policy
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Instance group id '%s' is not valid.", instanceGroupID), HTTPStatus: http.StatusBadRequest}
+	}
+	p.saveCluster(ctx, c)
+	return provider.OK(map[string]any{
+		"ClusterId":       clusterID,
+		"InstanceGroupId": instanceGroupID,
+		"AutoScalingPolicy": map[string]any{
+			"Status":      map[string]any{"State": "ATTACHED"},
+			"Constraints": policy["Constraints"],
+			"Rules":       policy["Rules"],
+		},
+	}), nil
+}
+
+func (p *EMRProvider) RemoveAutoScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	clusterID := strParam(nr.Params, "ClusterId")
+	instanceGroupID := strParam(nr.Params, "InstanceGroupId")
+	c, err := p.loadCluster(ctx, clusterID)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
+	}
+	for i := range c.InstanceGroups {
+		if c.InstanceGroups[i]["Id"] == instanceGroupID {
+			delete(c.InstanceGroups[i], "AutoScalingPolicy")
+			break
+		}
+	}
+	p.saveCluster(ctx, c)
+	return provider.OK(map[string]any{}), nil
+}
 
 // ─── Resource shapes ──────────────────────────────────────────────────────────
 

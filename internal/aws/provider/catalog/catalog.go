@@ -46,6 +46,10 @@ func (p *GlueProvider) Routes() map[string]provider.HandlerFunc {
 		"Glue.BatchCreatePartition": p.BatchCreatePartition,
 		"Glue.BatchDeletePartition": p.BatchDeletePartition,
 		"Glue.UpdatePartition":      p.UpdatePartition,
+		// Tagging (13.12)
+		"Glue.TagResource":   p.TagResource,
+		"Glue.UntagResource": p.UntagResource,
+		"Glue.GetTags":       p.GetTags,
 	}
 }
 
@@ -55,7 +59,71 @@ const (
 	rtDatabase  = "glue_database"
 	rtTable     = "glue_table"
 	rtPartition = "glue_partition"
+	rtGlueTags  = "glue_tags"
 )
+
+// ─── Tagging (13.12) ──────────────────────────────────────────────────────────
+
+func (p *GlueProvider) loadGlueTags(ctx context.Context, arn string) map[string]string {
+	tags := map[string]string{}
+	if e, err := p.resources.Get(ctx, rtGlueTags, arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	return tags
+}
+
+func (p *GlueProvider) saveGlueTags(ctx context.Context, arn string, tags map[string]string) {
+	data, _ := json.Marshal(tags)
+	entry := store.ResourceEntry{Type: rtGlueTags, ID: arn, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+}
+
+func (p *GlueProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceArn")
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadGlueTags(ctx, arn)
+	if rawTags, ok := nr.Params["TagsToAdd"].(map[string]any); ok {
+		for k, v := range rawTags {
+			if s, ok := v.(string); ok {
+				tags[k] = s
+			}
+		}
+	}
+	p.saveGlueTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *GlueProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceArn")
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadGlueTags(ctx, arn)
+	if keys, ok := nr.Params["TagsToRemove"].([]any); ok {
+		for _, k := range keys {
+			if s, ok := k.(string); ok {
+				delete(tags, s)
+			}
+		}
+	}
+	p.saveGlueTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *GlueProvider) GetTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceArn")
+	if arn == "" {
+		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
+	}
+	tags := p.loadGlueTags(ctx, arn)
+	return provider.OK(map[string]any{"Tags": tags}), nil
+}
 
 func dbID(name string) string        { return strings.ToLower(name) }
 func tableID(db, table string) string { return strings.ToLower(db) + "/" + strings.ToLower(table) }

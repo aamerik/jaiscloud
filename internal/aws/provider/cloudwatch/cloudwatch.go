@@ -73,6 +73,20 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudWatch.TagResource":             p.TagResource,
 		"CloudWatch.UntagResource":           p.UntagResource,
 		"CloudWatch.ListTagsForResource":     p.ListTagsForResource,
+		// Composite alarms (13.8)
+		"CloudWatch.PutCompositeAlarm":           p.PutCompositeAlarm,
+		"CloudWatch.DescribeAlarmHistory":        p.DescribeAlarmHistory,
+		// Anomaly detectors (13.8)
+		"CloudWatch.PutAnomalyDetector":          p.PutAnomalyDetector,
+		"CloudWatch.DescribeAnomalyDetectors":    p.DescribeAnomalyDetectors,
+		"CloudWatch.DeleteAnomalyDetector":       p.DeleteAnomalyDetector,
+		// Metric streams (13.9)
+		"CloudWatch.PutMetricStream":    p.PutMetricStream,
+		"CloudWatch.GetMetricStream":    p.GetMetricStream,
+		"CloudWatch.DeleteMetricStream": p.DeleteMetricStream,
+		"CloudWatch.ListMetricStreams":  p.ListMetricStreams,
+		"CloudWatch.StartMetricStreams": p.StartMetricStreams,
+		"CloudWatch.StopMetricStreams":  p.StopMetricStreams,
 	}
 }
 
@@ -550,4 +564,303 @@ func toFloat(v any) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// ─── Composite Alarms (13.8) ──────────────────────────────────────────────────
+
+type compositeAlarm struct {
+	AlarmName               string    `json:"AlarmName"`
+	AlarmRule               string    `json:"AlarmRule"`
+	AlarmActions            []string  `json:"AlarmActions"`
+	OKActions               []string  `json:"OKActions"`
+	InsufficientDataActions []string  `json:"InsufficientDataActions"`
+	ActionsEnabled          bool      `json:"ActionsEnabled"`
+	State                   string    `json:"State"`
+	Description             string    `json:"Description"`
+	ARN                     string    `json:"ARN"`
+	CreationDate            time.Time `json:"CreationDate"`
+}
+
+func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["AlarmName"].(string)
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationError", Message: "AlarmName is required", HTTPStatus: 400}
+	}
+	rule, _ := nr.Params["AlarmRule"].(string)
+	alarm := compositeAlarm{
+		AlarmName:      name,
+		AlarmRule:      rule,
+		ActionsEnabled: true,
+		State:          "OK",
+		ARN:            nr.ResourceID("cloudwatch-alarm", name),
+		CreationDate:   time.Now().UTC(),
+	}
+	if v, ok := nr.Params["ActionsEnabled"].(bool); ok {
+		alarm.ActionsEnabled = v
+	}
+	if v, ok := nr.Params["AlarmDescription"].(string); ok {
+		alarm.Description = v
+	}
+	alarm.AlarmActions = strSlice(nr.Params, "AlarmActions")
+	alarm.OKActions = strSlice(nr.Params, "OKActions")
+	alarm.InsufficientDataActions = strSlice(nr.Params, "InsufficientDataActions")
+	data, _ := json.Marshal(alarm)
+	entry := store.ResourceEntry{Type: "cloudwatch_composite_alarm", ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) DescribeAlarmHistory(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{"AlarmHistoryItems": []any{}}), nil
+}
+
+// ─── Anomaly Detectors (13.8) ─────────────────────────────────────────────────
+
+type anomalyDetector struct {
+	Namespace     string            `json:"Namespace"`
+	MetricName    string            `json:"MetricName"`
+	Dimensions    map[string]string `json:"Dimensions"`
+	Stat          string            `json:"Stat"`
+	Configuration map[string]any    `json:"Configuration"`
+	StateValue    string            `json:"StateValue"`
+}
+
+func anomalyKey(ns, metric string, dims map[string]string) string {
+	return ringKey(ns, metric, dims)
+}
+
+func (p *Provider) PutAnomalyDetector(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ns, _ := nr.Params["Namespace"].(string)
+	metric, _ := nr.Params["MetricName"].(string)
+	stat, _ := nr.Params["Stat"].(string)
+	dims := extractDimensions(nr.Params, "")
+	cfg, _ := nr.Params["Configuration"].(map[string]any)
+	det := anomalyDetector{
+		Namespace:     ns,
+		MetricName:    metric,
+		Dimensions:    dims,
+		Stat:          stat,
+		Configuration: cfg,
+		StateValue:    "TRAINED_INSUFFICIENT_DATA",
+	}
+	data, _ := json.Marshal(det)
+	id := anomalyKey(ns, metric, dims)
+	entry := store.ResourceEntry{Type: "cloudwatch_anomaly_detector", ID: id, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) DescribeAnomalyDetectors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, "cloudwatch_anomaly_detector", "")
+	nsFilter, _ := nr.Params["Namespace"].(string)
+	metricFilter, _ := nr.Params["MetricName"].(string)
+	out := []map[string]any{}
+	for _, e := range entries {
+		var det anomalyDetector
+		json.Unmarshal(e.Data, &det)
+		if nsFilter != "" && det.Namespace != nsFilter {
+			continue
+		}
+		if metricFilter != "" && det.MetricName != metricFilter {
+			continue
+		}
+		dims := make([]map[string]any, 0, len(det.Dimensions))
+		for k, v := range det.Dimensions {
+			dims = append(dims, map[string]any{"Name": k, "Value": v})
+		}
+		out = append(out, map[string]any{
+			"Namespace":     det.Namespace,
+			"MetricName":    det.MetricName,
+			"Dimensions":    dims,
+			"Stat":          det.Stat,
+			"Configuration": det.Configuration,
+			"StateValue":    det.StateValue,
+		})
+	}
+	return provider.OK(map[string]any{"AnomalyDetectors": out}), nil
+}
+
+func (p *Provider) DeleteAnomalyDetector(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ns, _ := nr.Params["Namespace"].(string)
+	metric, _ := nr.Params["MetricName"].(string)
+	dims := extractDimensions(nr.Params, "")
+	id := anomalyKey(ns, metric, dims)
+	if _, err := p.resources.Get(ctx, "cloudwatch_anomaly_detector", id); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Anomaly detector not found", HTTPStatus: 400}
+	}
+	_ = p.resources.Delete(ctx, "cloudwatch_anomaly_detector", id)
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── Metric Streams (13.9) ────────────────────────────────────────────────────
+
+type metricStream struct {
+	Name             string         `json:"Name"`
+	ARN              string         `json:"ARN"`
+	State            string         `json:"State"`
+	FirehoseARN      string         `json:"FirehoseArn"`
+	RoleARN          string         `json:"RoleArn"`
+	OutputFormat     string         `json:"OutputFormat"`
+	IncludeFilters   []map[string]any `json:"IncludeFilters"`
+	ExcludeFilters   []map[string]any `json:"ExcludeFilters"`
+	CreationDate     time.Time      `json:"CreationDate"`
+	LastUpdateDate   time.Time      `json:"LastUpdateDate"`
+}
+
+func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["Name"].(string)
+	if name == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "Name is required", HTTPStatus: 400}
+	}
+	now := time.Now().UTC()
+	ms := metricStream{
+		Name:           name,
+		ARN:            nr.ResourceID("cloudwatch-metric-stream", name),
+		State:          "running",
+		FirehoseARN:    strParam2(nr.Params, "FirehoseArn"),
+		RoleARN:        strParam2(nr.Params, "RoleArn"),
+		OutputFormat:   strParam2(nr.Params, "OutputFormat"),
+		CreationDate:   now,
+		LastUpdateDate: now,
+	}
+	if v, ok := nr.Params["IncludeFilters"].([]any); ok {
+		for _, f := range v {
+			if m, ok := f.(map[string]any); ok {
+				ms.IncludeFilters = append(ms.IncludeFilters, m)
+			}
+		}
+	}
+	if v, ok := nr.Params["ExcludeFilters"].([]any); ok {
+		for _, f := range v {
+			if m, ok := f.(map[string]any); ok {
+				ms.ExcludeFilters = append(ms.ExcludeFilters, m)
+			}
+		}
+	}
+	data, _ := json.Marshal(ms)
+	entry := store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			ms.CreationDate = now // preserve original on upsert via reload
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+	return provider.OK(map[string]any{"Arn": ms.ARN}), nil
+}
+
+func (p *Provider) GetMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["Name"].(string)
+	e, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
+	}
+	var ms metricStream
+	json.Unmarshal(e.Data, &ms)
+	return provider.OK(map[string]any{
+		"Name":           ms.Name,
+		"Arn":            ms.ARN,
+		"State":          ms.State,
+		"FirehoseArn":    ms.FirehoseARN,
+		"RoleArn":        ms.RoleARN,
+		"OutputFormat":   ms.OutputFormat,
+		"IncludeFilters": ms.IncludeFilters,
+		"ExcludeFilters": ms.ExcludeFilters,
+		"CreationDate":   ms.CreationDate.Unix(),
+		"LastUpdateDate": ms.LastUpdateDate.Unix(),
+	}), nil
+}
+
+func (p *Provider) DeleteMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["Name"].(string)
+	if _, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
+	}
+	_ = p.resources.Delete(ctx, "cloudwatch_metric_stream", name)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) ListMetricStreams(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, "cloudwatch_metric_stream", "")
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var ms metricStream
+		json.Unmarshal(e.Data, &ms)
+		out = append(out, map[string]any{
+			"Name":           ms.Name,
+			"Arn":            ms.ARN,
+			"State":          ms.State,
+			"FirehoseArn":    ms.FirehoseARN,
+			"OutputFormat":   ms.OutputFormat,
+			"CreationDate":   ms.CreationDate.Unix(),
+			"LastUpdateDate": ms.LastUpdateDate.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"Entries": out}), nil
+}
+
+func (p *Provider) setMetricStreamState(ctx context.Context, names []string, state string) error {
+	for _, name := range names {
+		e, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name)
+		if err != nil {
+			return &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
+		}
+		var ms metricStream
+		json.Unmarshal(e.Data, &ms)
+		ms.State = state
+		ms.LastUpdateDate = time.Now().UTC()
+		data, _ := json.Marshal(ms)
+		_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data})
+	}
+	return nil
+}
+
+func (p *Provider) StartMetricStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	names := strSlice(nr.Params, "Names")
+	if err := p.setMetricStreamState(ctx, names, "running"); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) StopMetricStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	names := strSlice(nr.Params, "Names")
+	if err := p.setMetricStreamState(ctx, names, "stopped"); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// strSlice extracts a []string from params[key] (handles []any and []string).
+func strSlice(params map[string]any, key string) []string {
+	v, ok := params[key]
+	if !ok {
+		return nil
+	}
+	switch val := v.(type) {
+	case []any:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return val
+	}
+	return nil
+}
+
+// strParam2 is a string extractor for cloudwatch (avoids redeclaration conflicts with other files).
+func strParam2(params map[string]any, key string) string {
+	s, _ := params[key].(string)
+	return s
 }

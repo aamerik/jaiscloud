@@ -1,6 +1,46 @@
 package logs
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// LogQuery represents a CloudWatch Logs Insights query execution.
+type LogQuery struct {
+	QueryID       string
+	QueryString   string
+	LogGroupNames []string
+	StartTime     int64
+	EndTime       int64
+	Status        string // "Scheduled","Running","Complete","Failed","Cancelled","Timeout","Unknown"
+	CreatedAt     time.Time
+	Results       [][]map[string]string
+	Statistics    map[string]float64
+}
+
+// QueryDefinition is a saved query definition for reuse.
+type QueryDefinition struct {
+	QueryDefinitionID string
+	Name              string
+	QueryString       string
+	LogGroupNames     []string
+	LastModified      time.Time
+}
+
+// ExportTask represents a CWL export to S3 (stub — no actual export).
+type ExportTask struct {
+	TaskID            string
+	TaskName          string
+	LogGroupName      string
+	From              int64
+	To                int64
+	Destination       string
+	DestinationPrefix string
+	StatusCode        string // "CANCELLED","COMPLETED","FAILED","PENDING","PENDING_CANCEL","RUNNING"
+	StatusMessage     string
+	CreationTime      int64
+	CompletionTime    int64
+}
 
 // LogGroup holds metadata for a CloudWatch Logs log group.
 type LogGroup struct {
@@ -101,6 +141,12 @@ type memStore struct {
 	seqToken map[string]map[string]int64
 	// subscriptionFilters maps groupName → filterName → *SubscriptionFilter
 	subscriptionFilters map[string]map[string]*SubscriptionFilter
+	// queries maps queryID → *LogQuery
+	queries map[string]*LogQuery
+	// queryDefinitions maps queryDefinitionID → *QueryDefinition
+	queryDefinitions map[string]*QueryDefinition
+	// exportTasks maps taskID → *ExportTask
+	exportTasks map[string]*ExportTask
 }
 
 func newMemStore() *memStore {
@@ -116,6 +162,9 @@ func (s *memStore) reset() {
 	s.tags = make(map[string]map[string]string)
 	s.seqToken = make(map[string]map[string]int64)
 	s.subscriptionFilters = make(map[string]map[string]*SubscriptionFilter)
+	s.queries = make(map[string]*LogQuery)
+	s.queryDefinitions = make(map[string]*QueryDefinition)
+	s.exportTasks = make(map[string]*ExportTask)
 }
 
 // Reset wipes all state (called on POST /_jaiscloud/reset).

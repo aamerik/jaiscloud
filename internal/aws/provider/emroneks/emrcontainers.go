@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,10 +141,17 @@ func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
 		"EMRContainers.DeleteManagedEndpoint":   p.DeleteManagedEndpoint,
 		"EMRContainers.DescribeManagedEndpoint": p.DescribeManagedEndpoint,
 		"EMRContainers.ListManagedEndpoints":    p.ListManagedEndpoints,
-		// Tagging
+		// Tagging (real CRUD, 13.5)
 		"EMRContainers.TagResource":         p.TagResource,
 		"EMRContainers.UntagResource":       p.UntagResource,
 		"EMRContainers.ListTagsForResource": p.ListTagsForResource,
+		// Security configurations (13.3)
+		"EMRContainers.CreateSecurityConfiguration":  p.CreateSecurityConfiguration,
+		"EMRContainers.DescribeSecurityConfiguration": p.DescribeSecurityConfiguration,
+		"EMRContainers.DeleteSecurityConfiguration":  p.DeleteSecurityConfiguration,
+		"EMRContainers.ListSecurityConfigurations":   p.ListSecurityConfigurations,
+		// Session credentials (13.4)
+		"EMRContainers.GetManagedEndpointSessionCredentials": p.GetManagedEndpointSessionCredentials,
 	}
 }
 
@@ -151,6 +159,7 @@ const (
 	rtVirtualCluster  = "emrc_virtual_cluster"
 	rtJobRun          = "emrc_job_run"
 	rtManagedEndpoint = "emrc_managed_endpoint"
+	rtEKSSecConfig    = "emrc_security_config"
 )
 
 // ─── Virtual Cluster types ────────────────────────────────────────────────────
@@ -588,20 +597,249 @@ func (p *EMRContainersProvider) ListManagedEndpoints(ctx context.Context, nr *mo
 
 // ─── Tagging operations ───────────────────────────────────────────────────────
 
-// tagResource is a generic helper that applies tags to any stored resource by ARN lookup.
-// EMR on EKS uses REST path params; the resource ARN is in the URL path.
+// ─── Real Tag CRUD (13.5) ─────────────────────────────────────────────────────
+
+// resolveTaggedResource parses the resource ARN from nr.Params["resourceArn"] and
+// returns (resourceType, id1, id2, error). id2 is only set for job runs and endpoints.
+func resolveTaggedResource(arn string) (rt, id1, id2 string, err error) {
+	// strip arn:aws:emr-containers:region:account: prefix
+	// remaining path: /virtualclusters/<id>
+	//                 /virtualclusters/<vcId>/jobruns/<jobId>
+	//                 /virtualclusters/<vcId>/endpoints/<epId>
+	const pathSep = ":/"
+	idx := -1
+	for i := 0; i < len(arn); i++ {
+		if arn[i] == ':' && i+1 < len(arn) && arn[i+1] == '/' {
+			idx = i + 1
+			// Take the LAST such occurrence (after account segment)
+		}
+	}
+	if idx < 0 {
+		err = fmt.Errorf("invalid ARN: %s", arn)
+		return
+	}
+	path := arn[idx:] // e.g. "/virtualclusters/vc123/jobruns/jr456"
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	switch {
+	case len(parts) == 2 && parts[0] == "virtualclusters":
+		return rtVirtualCluster, parts[1], "", nil
+	case len(parts) == 4 && parts[0] == "virtualclusters" && parts[2] == "jobruns":
+		return rtJobRun, parts[1] + "/" + parts[3], "", nil
+	case len(parts) == 4 && parts[0] == "virtualclusters" && parts[2] == "endpoints":
+		return rtManagedEndpoint, parts[1] + "/" + parts[3], "", nil
+	case len(parts) == 2 && parts[0] == "securityconfigurations":
+		return rtEKSSecConfig, parts[1], "", nil
+	default:
+		err = fmt.Errorf("unrecognised EMR-containers ARN path: %s", path)
+	}
+	return
+}
+
 func (p *EMRContainersProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// tags come in as {"tags": {"key":"value",...}}
-	_ = nr // no-op: tags stored on creation for now
+	arn := strParam(nr.Params, "resourceArn")
+	newTags, _ := nr.Params["tags"].(map[string]any)
+	rt, id, _, err := resolveTaggedResource(arn)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
+	}
+	e, err := p.resources.Get(ctx, rt, id)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
+	}
+	var obj map[string]any
+	json.Unmarshal(e.Data, &obj)
+	existing := tagsFromObj(obj)
+	for k, v := range newTags {
+		if s, ok := v.(string); ok {
+			existing[k] = s
+		}
+	}
+	obj["tags"] = existing
+	data, _ := json.Marshal(obj)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rt, ID: id, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRContainersProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "resourceArn")
+	rt, id, _, err := resolveTaggedResource(arn)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
+	}
+	e, ferr := p.resources.Get(ctx, rt, id)
+	if ferr != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
+	}
+	var obj map[string]any
+	json.Unmarshal(e.Data, &obj)
+	existing := tagsFromObj(obj)
+	keys, _ := nr.Params["tagKeys"].([]any)
+	for _, k := range keys {
+		if ks, ok := k.(string); ok {
+			delete(existing, ks)
+		}
+	}
+	obj["tags"] = existing
+	data, _ := json.Marshal(obj)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rt, ID: id, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRContainersProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"tags": map[string]string{}}), nil
+	arn := strParam(nr.Params, "resourceArn")
+	rt, id, _, err := resolveTaggedResource(arn)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
+	}
+	e, ferr := p.resources.Get(ctx, rt, id)
+	if ferr != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
+	}
+	var obj map[string]any
+	json.Unmarshal(e.Data, &obj)
+	return provider.OK(map[string]any{"tags": tagsFromObj(obj)}), nil
+}
+
+func tagsFromObj(obj map[string]any) map[string]string {
+	out := map[string]string{}
+	if t, ok := obj["tags"].(map[string]any); ok {
+		for k, v := range t {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
+		}
+	} else if t, ok := obj["tags"].(map[string]string); ok {
+		for k, v := range t {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// ─── Security Configurations (13.3) ──────────────────────────────────────────
+
+type eksSecurityConfiguration struct {
+	ID                        string            `json:"id"`
+	Name                      string            `json:"name"`
+	ARN                       string            `json:"arn"`
+	SecurityConfigurationData map[string]any    `json:"securityConfigurationData"`
+	CreatedAt                 time.Time         `json:"createdAt"`
+	CreatedBy                 string            `json:"createdBy"`
+	Tags                      map[string]string `json:"tags"`
+}
+
+func (p *EMRContainersProvider) CreateSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "name")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "name is required", HTTPStatus: 400}
+	}
+	secData, _ := nr.Params["securityConfigurationData"].(map[string]any)
+	tags := map[string]string{}
+	if rawTags, ok := nr.Params["tags"].(map[string]any); ok {
+		for k, v := range rawTags {
+			if s, ok := v.(string); ok {
+				tags[k] = s
+			}
+		}
+	}
+	id := shortID()
+	arn := nr.ResourceID("emr-containers-security-config", id)
+	sc := eksSecurityConfiguration{
+		ID:                        id,
+		Name:                      name,
+		ARN:                       arn,
+		SecurityConfigurationData: secData,
+		CreatedAt:                 time.Now().UTC(),
+		Tags:                      tags,
+	}
+	data, _ := json.Marshal(sc)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtEKSSecConfig, ID: id, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"id": id, "name": name, "arn": arn}), nil
+}
+
+func (p *EMRContainersProvider) DescribeSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "id")
+	e, err := p.resources.Get(ctx, rtEKSSecConfig, id)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Security configuration '%s' not found.", id), HTTPStatus: 400}
+	}
+	var sc eksSecurityConfiguration
+	json.Unmarshal(e.Data, &sc)
+	return provider.OK(map[string]any{
+		"securityConfiguration": map[string]any{
+			"id":                        sc.ID,
+			"name":                      sc.Name,
+			"arn":                       sc.ARN,
+			"securityConfigurationData": sc.SecurityConfigurationData,
+			"createdAt":                 sc.CreatedAt.Format(time.RFC3339),
+			"createdBy":                 sc.CreatedBy,
+			"tags":                      sc.Tags,
+		},
+	}), nil
+}
+
+func (p *EMRContainersProvider) DeleteSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "id")
+	if _, err := p.resources.Get(ctx, rtEKSSecConfig, id); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Security configuration '%s' not found.", id), HTTPStatus: 400}
+	}
+	_ = p.resources.Delete(ctx, rtEKSSecConfig, id)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EMRContainersProvider) ListSecurityConfigurations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, rtEKSSecConfig, "")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		var sc eksSecurityConfiguration
+		json.Unmarshal(e.Data, &sc)
+		items = append(items, map[string]any{
+			"id":        sc.ID,
+			"name":      sc.Name,
+			"arn":       sc.ARN,
+			"createdAt": sc.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return provider.OK(map[string]any{"securityConfigurations": items}), nil
+}
+
+// ─── Session Credentials (13.4) ───────────────────────────────────────────────
+
+func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	endpointID := strParam(nr.Params, "endpointIdentifier")
+	vcID := strParam(nr.Params, "virtualClusterIdentifier")
+	credType := strParam(nr.Params, "credentialType")
+	if credType != "TOKEN" && credType != "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "credentialType must be TOKEN", HTTPStatus: 400}
+	}
+	duration := 900
+	if d, ok := nr.Params["durationInSeconds"].(float64); ok {
+		duration = int(d)
+		if duration < 15 || duration > 14400 {
+			return nil, &model.ProviderError{Code: "ValidationException", Message: "durationInSeconds must be between 15 and 14400", HTTPStatus: 400}
+		}
+	}
+	// Validate virtual cluster exists
+	if _, err := p.resources.Get(ctx, rtVirtualCluster, vcID); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Virtual cluster '%s' not found.", vcID), HTTPStatus: 400}
+	}
+	_ = endpointID // not validated further in lite mode
+	sessionID := shortID()
+	expiresAt := time.Now().Add(time.Duration(duration) * time.Second)
+	token := fmt.Sprintf("synthetic-emr-token-%s-%d", sessionID, expiresAt.Unix())
+	return provider.OK(map[string]any{
+		"id": sessionID,
+		"credentials": map[string]any{
+			"token":          token,
+			"expirationTime": expiresAt.Unix(),
+		},
+		"expiresAt": expiresAt.Unix(),
+	}), nil
 }
 
 // ─── Provider lifecycle ───────────────────────────────────────────────────────

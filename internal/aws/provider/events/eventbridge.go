@@ -24,6 +24,10 @@ const (
 	resTypeTarget            = "eb_target"
 	resTypeBus               = "eb_bus"
 	resTypeEBTags            = "eb_tags"
+	resTypeArchive           = "eb_archive"
+	resTypeReplay            = "eb_replay"
+	resTypeConnection        = "eb_connection"
+	resTypeApiDestination    = "eb_api_destination"
 	jaiscloudHostPlaceholder = "jaiscloud-host"
 )
 
@@ -68,6 +72,28 @@ func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
 		"EventBridge.TagResource":              p.TagResource,
 		"EventBridge.UntagResource":            p.UntagResource,
 		"EventBridge.ListTagsForResource":      p.ListTagsForResource,
+		// Archive + Replay (13.6)
+		"EventBridge.CreateArchive":     p.CreateArchive,
+		"EventBridge.DescribeArchive":   p.DescribeArchive,
+		"EventBridge.ListArchives":      p.ListArchives,
+		"EventBridge.UpdateArchive":     p.UpdateArchive,
+		"EventBridge.DeleteArchive":     p.DeleteArchive,
+		"EventBridge.StartReplay":       p.StartReplay,
+		"EventBridge.DescribeReplay":    p.DescribeReplay,
+		"EventBridge.ListReplays":       p.ListReplays,
+		"EventBridge.CancelReplay":      p.CancelReplay,
+		// Connection + ApiDestination (13.7)
+		"EventBridge.CreateConnection":          p.CreateConnection,
+		"EventBridge.DescribeConnection":        p.DescribeConnection,
+		"EventBridge.UpdateConnection":          p.UpdateConnection,
+		"EventBridge.DeleteConnection":          p.DeleteConnection,
+		"EventBridge.ListConnections":           p.ListConnections,
+		"EventBridge.DeauthorizeConnection":     p.DeauthorizeConnection,
+		"EventBridge.CreateApiDestination":      p.CreateApiDestination,
+		"EventBridge.DescribeApiDestination":    p.DescribeApiDestination,
+		"EventBridge.UpdateApiDestination":      p.UpdateApiDestination,
+		"EventBridge.DeleteApiDestination":      p.DeleteApiDestination,
+		"EventBridge.ListApiDestinations":       p.ListApiDestinations,
 	}
 }
 
@@ -771,4 +797,544 @@ func (p *EventBridgeProvider) saveTags(ctx context.Context, arn string, tags map
 			_ = p.resources.Update(ctx, entry)
 		}
 	}
+}
+
+// ─── Archive + Replay (13.6) ──────────────────────────────────────────────────
+
+type ebArchive struct {
+	Name           string    `json:"Name"`
+	ARN            string    `json:"ARN"`
+	EventSourceARN string    `json:"EventSourceArn"`
+	Description    string    `json:"Description"`
+	EventPattern   string    `json:"EventPattern"`
+	RetentionDays  int       `json:"RetentionDays"`
+	State          string    `json:"State"`
+	StateReason    string    `json:"StateReason"`
+	CreationTime   time.Time `json:"CreationTime"`
+	SizeBytes      int64     `json:"SizeBytes"`
+	EventCount     int64     `json:"EventCount"`
+}
+
+type ebReplay struct {
+	Name               string     `json:"Name"`
+	ARN                string     `json:"ARN"`
+	EventSourceARN     string     `json:"EventSourceArn"`
+	DestinationARN     string     `json:"DestinationArn"`
+	FilterARNs         []string   `json:"FilterArns"`
+	EventStartTime     time.Time  `json:"EventStartTime"`
+	EventEndTime       time.Time  `json:"EventEndTime"`
+	State              string     `json:"State"`
+	StateReason        string     `json:"StateReason"`
+	Description        string     `json:"Description"`
+	ReplayStartTime    time.Time  `json:"ReplayStartTime"`
+	ReplayEndTime      *time.Time `json:"ReplayEndTime,omitempty"`
+}
+
+func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ArchiveName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "ArchiveName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	if _, err := p.resources.Get(ctx, resTypeArchive, name); err == nil {
+		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Archive already exists: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	arch := ebArchive{
+		Name:           name,
+		ARN:            nr.ResourceID("events-archive", name),
+		EventSourceARN: strParam(nr.Params, "EventSourceArn"),
+		Description:    strParam(nr.Params, "Description"),
+		EventPattern:   strParam(nr.Params, "EventPattern"),
+		State:          "ENABLED",
+		CreationTime:   time.Now().UTC(),
+	}
+	if d, ok := nr.Params["RetentionDays"].(float64); ok {
+		arch.RetentionDays = int(d)
+	}
+	data, _ := json.Marshal(arch)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"ArchiveArn": arch.ARN, "CreationTime": arch.CreationTime.Unix(), "State": arch.State}), nil
+}
+
+func (p *EventBridgeProvider) DescribeArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ArchiveName")
+	e, err := p.resources.Get(ctx, resTypeArchive, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var arch ebArchive
+	json.Unmarshal(e.Data, &arch)
+	return provider.OK(map[string]any{
+		"ArchiveName":    arch.Name,
+		"ArchiveArn":     arch.ARN,
+		"EventSourceArn": arch.EventSourceARN,
+		"Description":    arch.Description,
+		"EventPattern":   arch.EventPattern,
+		"RetentionDays":  arch.RetentionDays,
+		"State":          arch.State,
+		"StateReason":    arch.StateReason,
+		"CreationTime":   arch.CreationTime.Unix(),
+		"SizeBytes":      arch.SizeBytes,
+		"EventCount":     arch.EventCount,
+	}), nil
+}
+
+func (p *EventBridgeProvider) ListArchives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, resTypeArchive, "")
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	srcFilter := strParam(nr.Params, "EventSourceArn")
+	stateFilter := strParam(nr.Params, "State")
+	out := []map[string]any{}
+	for _, e := range entries {
+		var arch ebArchive
+		json.Unmarshal(e.Data, &arch)
+		if namePrefix != "" && !strings.HasPrefix(arch.Name, namePrefix) {
+			continue
+		}
+		if srcFilter != "" && arch.EventSourceARN != srcFilter {
+			continue
+		}
+		if stateFilter != "" && arch.State != stateFilter {
+			continue
+		}
+		out = append(out, map[string]any{
+			"ArchiveName":    arch.Name,
+			"ArchiveArn":     arch.ARN,
+			"EventSourceArn": arch.EventSourceARN,
+			"State":          arch.State,
+			"RetentionDays":  arch.RetentionDays,
+			"SizeBytes":      arch.SizeBytes,
+			"EventCount":     arch.EventCount,
+			"CreationTime":   arch.CreationTime.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"Archives": out}), nil
+}
+
+func (p *EventBridgeProvider) UpdateArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ArchiveName")
+	e, err := p.resources.Get(ctx, resTypeArchive, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var arch ebArchive
+	json.Unmarshal(e.Data, &arch)
+	if v := strParam(nr.Params, "Description"); v != "" {
+		arch.Description = v
+	}
+	if v := strParam(nr.Params, "EventPattern"); v != "" {
+		arch.EventPattern = v
+	}
+	if d, ok := nr.Params["RetentionDays"].(float64); ok {
+		arch.RetentionDays = int(d)
+	}
+	data, _ := json.Marshal(arch)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data})
+	return provider.OK(map[string]any{"ArchiveArn": arch.ARN, "CreationTime": arch.CreationTime.Unix(), "State": arch.State}), nil
+}
+
+func (p *EventBridgeProvider) DeleteArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ArchiveName")
+	if _, err := p.resources.Get(ctx, resTypeArchive, name); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	_ = p.resources.Delete(ctx, resTypeArchive, name)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ReplayName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "ReplayName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	dest, _ := nr.Params["Destination"].(map[string]any)
+	destARN := ""
+	var filterARNs []string
+	if dest != nil {
+		destARN, _ = dest["Arn"].(string)
+		if fa, ok := dest["FilterArns"].([]any); ok {
+			for _, f := range fa {
+				if s, ok := f.(string); ok {
+					filterARNs = append(filterARNs, s)
+				}
+			}
+		}
+	}
+	replay := ebReplay{
+		Name:            name,
+		ARN:             nr.ResourceID("events-replay", name),
+		EventSourceARN:  strParam(nr.Params, "EventSourceArn"),
+		DestinationARN:  destARN,
+		FilterARNs:      filterARNs,
+		Description:     strParam(nr.Params, "Description"),
+		State:           "COMPLETED",
+		ReplayStartTime: time.Now().UTC(),
+	}
+	now := time.Now().UTC()
+	replay.ReplayEndTime = &now
+	data, _ := json.Marshal(replay)
+	entry := store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			_ = p.resources.Update(ctx, entry)
+		} else {
+			return nil, err
+		}
+	}
+	return provider.OK(map[string]any{"ReplayArn": replay.ARN, "State": replay.State, "ReplayStartTime": replay.ReplayStartTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) DescribeReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ReplayName")
+	e, err := p.resources.Get(ctx, resTypeReplay, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Replay not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var r ebReplay
+	json.Unmarshal(e.Data, &r)
+	out := map[string]any{
+		"ReplayName":     r.Name,
+		"ReplayArn":      r.ARN,
+		"EventSourceArn": r.EventSourceARN,
+		"Description":    r.Description,
+		"State":          r.State,
+		"StateReason":    r.StateReason,
+		"ReplayStartTime": r.ReplayStartTime.Unix(),
+	}
+	if r.ReplayEndTime != nil {
+		out["ReplayEndTime"] = r.ReplayEndTime.Unix()
+	}
+	return provider.OK(out), nil
+}
+
+func (p *EventBridgeProvider) ListReplays(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, resTypeReplay, "")
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	stateFilter := strParam(nr.Params, "State")
+	out := []map[string]any{}
+	for _, e := range entries {
+		var r ebReplay
+		json.Unmarshal(e.Data, &r)
+		if namePrefix != "" && !strings.HasPrefix(r.Name, namePrefix) {
+			continue
+		}
+		if stateFilter != "" && r.State != stateFilter {
+			continue
+		}
+		out = append(out, map[string]any{
+			"ReplayName":     r.Name,
+			"ReplayArn":      r.ARN,
+			"EventSourceArn": r.EventSourceARN,
+			"State":          r.State,
+			"ReplayStartTime": r.ReplayStartTime.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"Replays": out}), nil
+}
+
+func (p *EventBridgeProvider) CancelReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ReplayName")
+	e, err := p.resources.Get(ctx, resTypeReplay, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Replay not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var r ebReplay
+	json.Unmarshal(e.Data, &r)
+	if r.State != "RUNNING" && r.State != "STARTING" {
+		return nil, &model.ProviderError{Code: "IllegalStatusException", Message: fmt.Sprintf("Replay %s is not in a cancellable state: %s", name, r.State), HTTPStatus: http.StatusBadRequest}
+	}
+	r.State = "CANCELLED"
+	data, _ := json.Marshal(r)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data})
+	return provider.OK(map[string]any{"ReplayArn": r.ARN, "State": r.State}), nil
+}
+
+// ─── Connection + ApiDestination (13.7) ───────────────────────────────────────
+
+type ebConnection struct {
+	Name               string         `json:"Name"`
+	ARN                string         `json:"ARN"`
+	ID                 string         `json:"ID"`
+	AuthorizationType  string         `json:"AuthorizationType"`
+	AuthParameters     map[string]any `json:"AuthParameters,omitempty"`
+	State              string         `json:"State"`
+	Description        string         `json:"Description"`
+	CreationTime       time.Time      `json:"CreationTime"`
+	LastModifiedTime   time.Time      `json:"LastModifiedTime"`
+	LastAuthorizedTime time.Time      `json:"LastAuthorizedTime"`
+}
+
+type ebApiDestination struct {
+	Name                         string    `json:"Name"`
+	ARN                          string    `json:"ARN"`
+	ID                           string    `json:"ID"`
+	ConnectionARN                string    `json:"ConnectionArn"`
+	InvocationEndpoint           string    `json:"InvocationEndpoint"`
+	HTTPMethod                   string    `json:"HttpMethod"`
+	State                        string    `json:"State"`
+	InvocationRateLimitPerSecond int       `json:"InvocationRateLimitPerSecond"`
+	Description                  string    `json:"Description"`
+	CreationTime                 time.Time `json:"CreationTime"`
+	LastModifiedTime             time.Time `json:"LastModifiedTime"`
+}
+
+func ebConnID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 8)
+	for i := range b {
+		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+		time.Sleep(0)
+	}
+	return string(b)
+}
+
+func (p *EventBridgeProvider) CreateConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
+	}
+	if _, err := p.resources.Get(ctx, resTypeConnection, name); err == nil {
+		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Connection already exists: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	now := time.Now().UTC()
+	conn := ebConnection{
+		Name:               name,
+		ARN:                nr.ResourceID("events-connection", name),
+		ID:                 ebConnID(),
+		AuthorizationType:  strParam(nr.Params, "AuthorizationType"),
+		State:              "AUTHORIZED",
+		Description:        strParam(nr.Params, "Description"),
+		CreationTime:       now,
+		LastModifiedTime:   now,
+		LastAuthorizedTime: now,
+	}
+	if ap, ok := nr.Params["AuthParameters"].(map[string]any); ok {
+		conn.AuthParameters = ap
+	}
+	data, _ := json.Marshal(conn)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix(), "LastModifiedTime": conn.LastModifiedTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) DescribeConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var conn ebConnection
+	json.Unmarshal(e.Data, &conn)
+	return provider.OK(map[string]any{
+		"Name":               conn.Name,
+		"ConnectionArn":      conn.ARN,
+		"AuthorizationType":  conn.AuthorizationType,
+		"ConnectionState":    conn.State,
+		"Description":        conn.Description,
+		"CreationTime":       conn.CreationTime.Unix(),
+		"LastModifiedTime":   conn.LastModifiedTime.Unix(),
+		"LastAuthorizedTime": conn.LastAuthorizedTime.Unix(),
+	}), nil
+}
+
+func (p *EventBridgeProvider) UpdateConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var conn ebConnection
+	json.Unmarshal(e.Data, &conn)
+	if v := strParam(nr.Params, "Description"); v != "" {
+		conn.Description = v
+	}
+	if v := strParam(nr.Params, "AuthorizationType"); v != "" {
+		conn.AuthorizationType = v
+	}
+	if ap, ok := nr.Params["AuthParameters"].(map[string]any); ok {
+		conn.AuthParameters = ap
+	}
+	conn.LastModifiedTime = time.Now().UTC()
+	data, _ := json.Marshal(conn)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
+	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix(), "LastModifiedTime": conn.LastModifiedTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) DeleteConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var conn ebConnection
+	json.Unmarshal(e.Data, &conn)
+	_ = p.resources.Delete(ctx, resTypeConnection, name)
+	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": "DELETING", "CreationTime": conn.CreationTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) ListConnections(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, resTypeConnection, "")
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	stateFilter := strParam(nr.Params, "ConnectionState")
+	out := []map[string]any{}
+	for _, e := range entries {
+		var conn ebConnection
+		json.Unmarshal(e.Data, &conn)
+		if namePrefix != "" && !strings.HasPrefix(conn.Name, namePrefix) {
+			continue
+		}
+		if stateFilter != "" && conn.State != stateFilter {
+			continue
+		}
+		out = append(out, map[string]any{
+			"Name":              conn.Name,
+			"ConnectionArn":     conn.ARN,
+			"AuthorizationType": conn.AuthorizationType,
+			"ConnectionState":   conn.State,
+			"CreationTime":      conn.CreationTime.Unix(),
+			"LastModifiedTime":  conn.LastModifiedTime.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"Connections": out}), nil
+}
+
+func (p *EventBridgeProvider) DeauthorizeConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var conn ebConnection
+	json.Unmarshal(e.Data, &conn)
+	conn.State = "DEAUTHORIZED"
+	conn.LastModifiedTime = time.Now().UTC()
+	data, _ := json.Marshal(conn)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
+	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) CreateApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
+	}
+	connARN := strParam(nr.Params, "ConnectionArn")
+	endpoint := strParam(nr.Params, "InvocationEndpoint")
+	if _, err := p.resources.Get(ctx, resTypeApiDestination, name); err == nil {
+		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "ApiDestination already exists: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	rateLimit := 300
+	if v, ok := nr.Params["InvocationRateLimitPerSecond"].(float64); ok && v > 0 {
+		rateLimit = int(v)
+	}
+	now := time.Now().UTC()
+	dest := ebApiDestination{
+		Name:                         name,
+		ARN:                          nr.ResourceID("events-api-destination", name),
+		ID:                           ebConnID(),
+		ConnectionARN:                connARN,
+		InvocationEndpoint:           endpoint,
+		HTTPMethod:                   strParam(nr.Params, "HttpMethod"),
+		State:                        "ACTIVE",
+		InvocationRateLimitPerSecond: rateLimit,
+		Description:                  strParam(nr.Params, "Description"),
+		CreationTime:                 now,
+		LastModifiedTime:             now,
+	}
+	data, _ := json.Marshal(dest)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"ApiDestinationArn": dest.ARN, "ApiDestinationState": dest.State, "CreationTime": dest.CreationTime.Unix(), "LastModifiedTime": dest.LastModifiedTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) DescribeApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeApiDestination, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var dest ebApiDestination
+	json.Unmarshal(e.Data, &dest)
+	return provider.OK(map[string]any{
+		"Name":                         dest.Name,
+		"ApiDestinationArn":            dest.ARN,
+		"ConnectionArn":                dest.ConnectionARN,
+		"InvocationEndpoint":           dest.InvocationEndpoint,
+		"HttpMethod":                   dest.HTTPMethod,
+		"ApiDestinationState":          dest.State,
+		"InvocationRateLimitPerSecond": dest.InvocationRateLimitPerSecond,
+		"Description":                  dest.Description,
+		"CreationTime":                 dest.CreationTime.Unix(),
+		"LastModifiedTime":             dest.LastModifiedTime.Unix(),
+	}), nil
+}
+
+func (p *EventBridgeProvider) UpdateApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	e, err := p.resources.Get(ctx, resTypeApiDestination, name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	var dest ebApiDestination
+	json.Unmarshal(e.Data, &dest)
+	if v := strParam(nr.Params, "Description"); v != "" {
+		dest.Description = v
+	}
+	if v := strParam(nr.Params, "ConnectionArn"); v != "" {
+		dest.ConnectionARN = v
+	}
+	if v := strParam(nr.Params, "InvocationEndpoint"); v != "" {
+		dest.InvocationEndpoint = v
+	}
+	if v := strParam(nr.Params, "HttpMethod"); v != "" {
+		dest.HTTPMethod = v
+	}
+	if v, ok := nr.Params["InvocationRateLimitPerSecond"].(float64); ok && v > 0 {
+		dest.InvocationRateLimitPerSecond = int(v)
+	}
+	dest.LastModifiedTime = time.Now().UTC()
+	data, _ := json.Marshal(dest)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data})
+	return provider.OK(map[string]any{"ApiDestinationArn": dest.ARN, "ApiDestinationState": dest.State, "CreationTime": dest.CreationTime.Unix(), "LastModifiedTime": dest.LastModifiedTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) DeleteApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if _, err := p.resources.Get(ctx, resTypeApiDestination, name); err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
+	}
+	_ = p.resources.Delete(ctx, resTypeApiDestination, name)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EventBridgeProvider) ListApiDestinations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, resTypeApiDestination, "")
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	connFilter := strParam(nr.Params, "ConnectionArn")
+	out := []map[string]any{}
+	for _, e := range entries {
+		var dest ebApiDestination
+		json.Unmarshal(e.Data, &dest)
+		if namePrefix != "" && !strings.HasPrefix(dest.Name, namePrefix) {
+			continue
+		}
+		if connFilter != "" && dest.ConnectionARN != connFilter {
+			continue
+		}
+		out = append(out, map[string]any{
+			"Name":                         dest.Name,
+			"ApiDestinationArn":            dest.ARN,
+			"ConnectionArn":                dest.ConnectionARN,
+			"InvocationEndpoint":           dest.InvocationEndpoint,
+			"HttpMethod":                   dest.HTTPMethod,
+			"ApiDestinationState":          dest.State,
+			"InvocationRateLimitPerSecond": dest.InvocationRateLimitPerSecond,
+			"CreationTime":                 dest.CreationTime.Unix(),
+			"LastModifiedTime":             dest.LastModifiedTime.Unix(),
+		})
+	}
+	return provider.OK(map[string]any{"ApiDestinations": out}), nil
 }

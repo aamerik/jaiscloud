@@ -37,15 +37,20 @@ func (p *DNSProvider) Routes() map[string]provider.HandlerFunc {
 		"DNS.ListHealthChecks":          p.ListHealthChecks,
 		"DNS.DeleteHealthCheck":         p.DeleteHealthCheck,
 		"DNS.GetChange":                 p.GetChange,
+		// Tagging (13.13)
+		"DNS.ChangeTagsForResource":    p.ChangeTagsForResource,
+		"DNS.ListTagsForResource":      p.ListTagsForResource,
+		"DNS.ListTagsForResources":     p.ListTagsForResources,
 	}
 }
 
 // ─── Resource types ───────────────────────────────────────────────────────────
 
 const (
-	rtHostedZone   = "route53_hosted_zone"
-	rtRRSet        = "route53_rrset"
-	rtHealthCheck  = "route53_health_check"
+	rtHostedZone  = "route53_hosted_zone"
+	rtRRSet       = "route53_rrset"
+	rtHealthCheck = "route53_health_check"
+	rtR53Tags     = "route53_tags"
 )
 
 func newShortID() string {
@@ -321,3 +326,122 @@ func cleanZoneID(id string) string {
 	id = strings.TrimPrefix(id, "/healthcheck/")
 	return id
 }
+
+// ─── Tagging (13.13) ──────────────────────────────────────────────────────────
+
+// r53TagKey returns the store key for a resource's tags.
+// resourceType is "hostedzone" or "healthcheck", resourceID is the bare ID.
+func r53TagKey(resourceType, resourceID string) string {
+	return resourceType + "/" + resourceID
+}
+
+func (p *DNSProvider) loadR53Tags(ctx context.Context, resourceType, resourceID string) map[string]string {
+	tags := map[string]string{}
+	if e, err := p.resources.Get(ctx, rtR53Tags, r53TagKey(resourceType, resourceID)); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	return tags
+}
+
+func (p *DNSProvider) saveR53Tags(ctx context.Context, resourceType, resourceID string, tags map[string]string) {
+	data, _ := json.Marshal(tags)
+	key := r53TagKey(resourceType, resourceID)
+	entry := store.ResourceEntry{Type: rtR53Tags, ID: key, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+}
+
+func (p *DNSProvider) ChangeTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	resourceType := strParam(nr.Params, "ResourceType")
+	resourceID := cleanZoneID(strParam(nr.Params, "ResourceId"))
+	if resourceType == "" || resourceID == "" {
+		return nil, &model.ProviderError{Code: "InvalidInput", Message: "ResourceType and ResourceId are required", HTTPStatus: http.StatusBadRequest}
+	}
+	// Validate resource exists
+	switch resourceType {
+	case "hostedzone":
+		if _, err := p.resources.Get(ctx, rtHostedZone, resourceID); err != nil {
+			return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: fmt.Sprintf("No hosted zone found with ID: %s", resourceID), HTTPStatus: http.StatusNotFound}
+		}
+	case "healthcheck":
+		if _, err := p.resources.Get(ctx, rtHealthCheck, resourceID); err != nil {
+			return nil, &model.ProviderError{Code: "NoSuchHealthCheck", Message: "Health check not found", HTTPStatus: http.StatusNotFound}
+		}
+	}
+	tags := p.loadR53Tags(ctx, resourceType, resourceID)
+	// AddTags
+	if rawAdd, ok := nr.Params["AddTags"].([]any); ok {
+		for _, t := range rawAdd {
+			if m, ok := t.(map[string]any); ok {
+				k, _ := m["Key"].(string)
+				v, _ := m["Value"].(string)
+				if k != "" {
+					tags[k] = v
+				}
+			}
+		}
+	}
+	// RemoveTagKeys
+	if rawRemove, ok := nr.Params["RemoveTagKeys"].([]any); ok {
+		for _, k := range rawRemove {
+			if s, ok := k.(string); ok {
+				delete(tags, s)
+			}
+		}
+	}
+	p.saveR53Tags(ctx, resourceType, resourceID, tags)
+	return provider.OK(map[string]any{"ChangeTagsForResourceResponse": true}), nil
+}
+
+func (p *DNSProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	resourceType := strParam(nr.Params, "ResourceType")
+	resourceID := cleanZoneID(strParam(nr.Params, "ResourceId"))
+	tags := p.loadR53Tags(ctx, resourceType, resourceID)
+	tagList := make([]map[string]any, 0, len(tags))
+	for k, v := range tags {
+		tagList = append(tagList, map[string]any{"Key": k, "Value": v})
+	}
+	return provider.OK(map[string]any{
+		"ListTagsForResourceResponse": true,
+		"ResourceTagSet": map[string]any{
+			"ResourceType": resourceType,
+			"ResourceId":   resourceID,
+			"Tags":         tagList,
+		},
+	}), nil
+}
+
+func (p *DNSProvider) ListTagsForResources(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	resourceType := strParam(nr.Params, "ResourceType")
+	var resourceIDs []string
+	if raw, ok := nr.Params["ResourceIds"].([]any); ok {
+		for _, id := range raw {
+			if s, ok := id.(string); ok {
+				resourceIDs = append(resourceIDs, cleanZoneID(s))
+			}
+		}
+	}
+	sets := make([]map[string]any, 0, len(resourceIDs))
+	for _, resourceID := range resourceIDs {
+		tags := p.loadR53Tags(ctx, resourceType, resourceID)
+		tagList := make([]map[string]any, 0, len(tags))
+		for k, v := range tags {
+			tagList = append(tagList, map[string]any{"Key": k, "Value": v})
+		}
+		sets = append(sets, map[string]any{
+			"ResourceType": resourceType,
+			"ResourceId":   resourceID,
+			"Tags":         tagList,
+		})
+	}
+	return provider.OK(map[string]any{
+		"ListTagsForResourcesResponse": true,
+		"ResourceTagSets":              sets,
+	}), nil
+}
+
+// Ensure time import is used (Route53 hostedZone uses time.Time).
+var _ = time.Now

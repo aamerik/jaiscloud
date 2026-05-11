@@ -42,6 +42,17 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudWatchLogs.PutSubscriptionFilter":       p.PutSubscriptionFilter,
 		"CloudWatchLogs.DescribeSubscriptionFilters": p.DescribeSubscriptionFilters,
 		"CloudWatchLogs.DeleteSubscriptionFilter":    p.DeleteSubscriptionFilter,
+		// Query CRUD (13.10)
+		"CloudWatchLogs.StartQuery":                  p.StartQuery,
+		"CloudWatchLogs.GetQueryResults":             p.GetQueryResults,
+		"CloudWatchLogs.StopQuery":                   p.StopQuery,
+		"CloudWatchLogs.PutQueryDefinition":          p.PutQueryDefinition,
+		"CloudWatchLogs.DescribeQueryDefinitions":    p.DescribeQueryDefinitions,
+		"CloudWatchLogs.DeleteQueryDefinition":       p.DeleteQueryDefinition,
+		// Export tasks (13.11)
+		"CloudWatchLogs.CreateExportTask":    p.CreateExportTask,
+		"CloudWatchLogs.DescribeExportTasks": p.DescribeExportTasks,
+		"CloudWatchLogs.CancelExportTask":    p.CancelExportTask,
 	}
 }
 
