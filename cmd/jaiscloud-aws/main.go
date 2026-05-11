@@ -25,9 +25,11 @@ import (
 	functionprovider "jaiscloud/internal/aws/provider/function"
 	iamprovider "jaiscloud/internal/aws/provider/iam"
 	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
+	ecrprovider "jaiscloud/internal/aws/provider/ecr"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stsprovider "jaiscloud/internal/aws/sts"
 	kinesisstore "jaiscloud/internal/store/aws/kinesis"
+	ecrstore "jaiscloud/internal/store/aws/ecr"
 	"jaiscloud/internal/aws/provider/notification"
 	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/provider/queue"
@@ -251,6 +253,7 @@ type appStores struct {
 	parameters  paramprovider.ParameterStore
 	stsSession  *stsprovider.MemorySessionStore
 	kinesis     *kinesisstore.MemoryKinesisStore
+	ecr         *ecrstore.MemoryECRStore
 }
 
 // initStores constructs the store layer for the chosen mode (lite or full).
@@ -281,6 +284,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 			parameters:  paramprovider.NewPostgresParameterStore(pool),
 			stsSession:  stsprovider.NewMemorySessionStore(),
 			kinesis:     kinesisstore.NewMemoryKinesisStore(),
+			ecr:         ecrstore.NewMemoryECRStore(),
 		}, nil
 	}
 
@@ -295,6 +299,7 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 		parameters:  paramprovider.NewMemoryParameterStore(),
 		stsSession:  stsprovider.NewMemorySessionStore(),
 		kinesis:     kinesisstore.NewMemoryKinesisStore(),
+		ecr:         ecrstore.NewMemoryECRStore(),
 	}, nil
 }
 
@@ -498,6 +503,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(iamP.Routes())
 	registry.RegisterAll(stsP.Routes())
 	registry.RegisterAll(kinesisP.Routes())
+	registry.RegisterAll(ecrprovider.New(s.ecr).Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -784,6 +790,7 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"execute-api":     &services.ExecuteAPICodec{},
 		"monitoring":      &services.CloudWatchCodec{},
 		"logs":            &services.LogsCodec{},
+		"ecr":             &services.ECRCodec{},
 	})
 }
 
@@ -801,6 +808,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(paramStore)
 	h.RegisterResetter(s.stsSession)
 	h.RegisterResetter(s.kinesis)
+	h.RegisterResetter(s.ecr)
 	for _, r := range extra {
 		if r != nil {
 			h.RegisterResetter(r)
@@ -820,6 +828,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	}
 	h.RegisterSnapshotter("sts-sessions", s.stsSession)
 	h.RegisterSnapshotter("kinesis", s.kinesis)
+	h.RegisterSnapshotter("ecr", s.ecr)
 	return h
 }
 

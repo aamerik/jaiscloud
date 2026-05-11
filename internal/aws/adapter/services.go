@@ -111,6 +111,12 @@ var awsServices = []ServiceDescriptor{
 		ProviderPrefix: "Kinesis",
 		Codec:          func() adapter.Codec { return &services.KinesisCodec{} },
 	},
+	{
+		SigV4Name:      "ecr",
+		TargetPrefix:   "AmazonEC2ContainerRegistry_V20150921.",
+		ProviderPrefix: "ECR",
+		Codec:          func() adapter.Codec { return &services.ECRCodec{} },
+	},
 	// P0 expansion services — Codec factories set to nil until Phase 2–6 wire them.
 	{
 		SigV4Name:      "kms",
