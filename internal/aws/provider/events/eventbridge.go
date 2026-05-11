@@ -22,6 +22,8 @@ import (
 const (
 	resTypeRule              = "eb_rule"
 	resTypeTarget            = "eb_target"
+	resTypeBus               = "eb_bus"
+	resTypeEBTags            = "eb_tags"
 	jaiscloudHostPlaceholder = "jaiscloud-host"
 )
 
@@ -57,6 +59,15 @@ func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
 		"EventBridge.RemoveTargets":     p.RemoveTargets,
 		"EventBridge.ListTargetsByRule": p.ListTargetsByRule,
 		"EventBridge.PutEvents":         p.PutEvents,
+		// Event Bus CRUD
+		"EventBridge.CreateEventBus":   p.CreateEventBus,
+		"EventBridge.DeleteEventBus":   p.DeleteEventBus,
+		"EventBridge.DescribeEventBus": p.DescribeEventBus,
+		"EventBridge.ListEventBuses":   p.ListEventBuses,
+		// Tags
+		"EventBridge.TagResource":              p.TagResource,
+		"EventBridge.UntagResource":            p.UntagResource,
+		"EventBridge.ListTagsForResource":      p.ListTagsForResource,
 	}
 }
 
@@ -630,4 +641,134 @@ func strParam(params map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// ─── Event Bus CRUD ───────────────────────────────────────────────────────────
+
+type eventBusData struct {
+	Name string `json:"Name"`
+	Arn  string `json:"Arn"`
+}
+
+func (p *EventBridgeProvider) CreateEventBus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
+	}
+	arn := nr.ResourceID("events-bus", name)
+	bd := eventBusData{Name: name, Arn: arn}
+	raw, _ := json.Marshal(bd)
+	entry := store.ResourceEntry{Type: resTypeBus, ID: name, Data: raw}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Event bus already exists: " + name, HTTPStatus: 400}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"EventBusArn": arn}), nil
+}
+
+func (p *EventBridgeProvider) DeleteEventBus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "default" {
+		return nil, &model.ProviderError{Code: "ValidationException", Message: "Cannot delete default event bus", HTTPStatus: 400}
+	}
+	if err := p.resources.Delete(ctx, resTypeBus, name); err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event bus not found: "+name)
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EventBridgeProvider) DescribeEventBus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "Name")
+	if name == "" {
+		name = "default"
+	}
+	if name == "default" {
+		arn := nr.ResourceID("events-bus", "default")
+		return provider.OK(map[string]any{"Name": "default", "Arn": arn}), nil
+	}
+	e, err := p.resources.Get(ctx, resTypeBus, name)
+	if err != nil {
+		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event bus not found: "+name)
+	}
+	var bd eventBusData
+	if err := json.Unmarshal(e.Data, &bd); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"Name": bd.Name, "Arn": bd.Arn}), nil
+}
+
+func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, resTypeBus, "")
+	buses := make([]map[string]any, 0, len(entries)+1)
+	// Always include default bus first.
+	buses = append(buses, map[string]any{"Name": "default", "Arn": nr.ResourceID("events-bus", "default")})
+	for _, e := range entries {
+		var bd eventBusData
+		if json.Unmarshal(e.Data, &bd) == nil {
+			buses = append(buses, map[string]any{"Name": bd.Name, "Arn": bd.Arn})
+		}
+	}
+	return provider.OK(map[string]any{"EventBuses": buses}), nil
+}
+
+// ─── Tags ─────────────────────────────────────────────────────────────────────
+
+func (p *EventBridgeProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceARN")
+	tags := p.loadTags(ctx, arn)
+	if rawTags, ok := nr.Params["Tags"].([]any); ok {
+		for _, t := range rawTags {
+			if m, ok := t.(map[string]any); ok {
+				k, _ := m["Key"].(string)
+				v, _ := m["Value"].(string)
+				if k != "" {
+					tags[k] = v
+				}
+			}
+		}
+	}
+	p.saveTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EventBridgeProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceARN")
+	tags := p.loadTags(ctx, arn)
+	if keys, ok := nr.Params["TagKeys"].([]any); ok {
+		for _, k := range keys {
+			delete(tags, fmt.Sprintf("%v", k))
+		}
+	}
+	p.saveTags(ctx, arn, tags)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *EventBridgeProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := strParam(nr.Params, "ResourceARN")
+	tags := p.loadTags(ctx, arn)
+	out := make([]map[string]any, 0, len(tags))
+	for k, v := range tags {
+		out = append(out, map[string]any{"Key": k, "Value": v})
+	}
+	return provider.OK(map[string]any{"Tags": out}), nil
+}
+
+func (p *EventBridgeProvider) loadTags(ctx context.Context, arn string) map[string]string {
+	tags := make(map[string]string)
+	if e, err := p.resources.Get(ctx, resTypeEBTags, arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	return tags
+}
+
+func (p *EventBridgeProvider) saveTags(ctx context.Context, arn string, tags map[string]string) {
+	data, _ := json.Marshal(tags)
+	entry := store.ResourceEntry{Type: resTypeEBTags, ID: arn, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if err == store.ErrAlreadyExists {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
 }

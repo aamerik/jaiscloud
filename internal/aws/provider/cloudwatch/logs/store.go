@@ -75,6 +75,16 @@ func (r *eventRing) Slice() []LogEvent {
 	return out
 }
 
+// SubscriptionFilter holds a CloudWatch Logs subscription filter.
+type SubscriptionFilter struct {
+	LogGroupName   string `json:"logGroupName"`
+	FilterName     string `json:"filterName"`
+	FilterPattern  string `json:"filterPattern"`
+	DestinationArn string `json:"destinationArn"`
+	Distribution   string `json:"distribution"`
+	CreationTime   int64  `json:"creationTime"`
+}
+
 // memStore is the in-memory backing store for CloudWatch Logs.
 type memStore struct {
 	mu sync.RWMutex
@@ -89,6 +99,8 @@ type memStore struct {
 	tags map[string]map[string]string
 	// seqToken maps groupName → streamName → counter
 	seqToken map[string]map[string]int64
+	// subscriptionFilters maps groupName → filterName → *SubscriptionFilter
+	subscriptionFilters map[string]map[string]*SubscriptionFilter
 }
 
 func newMemStore() *memStore {
@@ -103,6 +115,7 @@ func (s *memStore) reset() {
 	s.events = make(map[string]map[string]*eventRing)
 	s.tags = make(map[string]map[string]string)
 	s.seqToken = make(map[string]map[string]int64)
+	s.subscriptionFilters = make(map[string]map[string]*SubscriptionFilter)
 }
 
 // Reset wipes all state (called on POST /_jaiscloud/reset).

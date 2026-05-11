@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -277,5 +278,72 @@ func (p *Provider) ListTagsLogGroup(_ context.Context, nr *model.NormalizedReque
 		outTags[k] = v
 	}
 	return provider.OK(map[string]any{"tags": outTags}), nil
+}
+
+// ─── ARN-based tagging (4.11) ─────────────────────────────────────────────────
+
+// groupByARN scans for a log group whose ARN matches. Must be called with at least a read lock.
+func (s *memStore) groupByARN(arn string) *LogGroup {
+	for _, g := range s.groups {
+		if g.Arn == arn {
+			return g
+		}
+	}
+	return nil
+}
+
+// TagResource adds tags to a log group identified by its ARN.
+func (p *Provider) TagResource(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := paramStr(nr.Params, "resourceArn")
+
+	p.store.mu.Lock()
+	defer p.store.mu.Unlock()
+
+	g := p.store.groupByARN(arn)
+	if g == nil {
+		return nil, logsErr("ResourceNotFoundException", "The specified resource does not exist: "+arn, 400)
+	}
+	if p.store.tags[arn] == nil {
+		p.store.tags[arn] = make(map[string]string)
+	}
+	if tagMap, ok := nr.Params["tags"].(map[string]any); ok {
+		for k, v := range tagMap {
+			p.store.tags[arn][k] = fmt.Sprint(v)
+		}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// UntagResource removes tags from a log group identified by its ARN.
+func (p *Provider) UntagResource(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := paramStr(nr.Params, "resourceArn")
+
+	p.store.mu.Lock()
+	defer p.store.mu.Unlock()
+
+	existing := p.store.tags[arn]
+	if existing != nil {
+		if keys, ok := nr.Params["tagKeys"].([]any); ok {
+			for _, k := range keys {
+				delete(existing, fmt.Sprint(k))
+			}
+		}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ListTagsForResource returns the tags for a log group identified by its ARN.
+func (p *Provider) ListTagsForResource(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn := paramStr(nr.Params, "resourceArn")
+
+	p.store.mu.RLock()
+	defer p.store.mu.RUnlock()
+
+	tags := p.store.tags[arn]
+	out := make([]map[string]any, 0, len(tags))
+	for k, v := range tags {
+		out = append(out, map[string]any{"Key": k, "Value": v})
+	}
+	return provider.OK(map[string]any{"tags": out}), nil
 }
 

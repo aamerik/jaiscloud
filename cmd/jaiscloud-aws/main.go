@@ -466,6 +466,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
 	notifP := notification.New(s.resources, s.messages, bus)
+	notifP.SetLambdaInvoker(funcP)
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus)
 	stackP := stackprovider.New(s.resources)
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv)

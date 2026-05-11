@@ -1,14 +1,15 @@
 // Package notification implements the SNS provider.
-// Topics and subscriptions are stored as control-plane entries in ResourceStore.
-// Publish delivers to SQS-subscribed queues via SQSMessageStore.
 package notification
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,35 +20,51 @@ import (
 	sqsstore "jaiscloud/internal/store/aws/sqs"
 )
 
+// FunctionInvoker is the narrow interface SNS uses to invoke Lambda functions.
+type FunctionInvoker interface {
+	InvokeInternal(ctx context.Context, functionName string, payload []byte) ([]byte, error)
+}
+
 // SNSProvider handles SNS operations.
 type SNSProvider struct {
-	resources store.ResourceStore
-	messages  sqsstore.SQSMessageStore
-	bus       *events.EventBus
+	resources  store.ResourceStore
+	messages   sqsstore.SQSMessageStore
+	bus        *events.EventBus
+	invoker    FunctionInvoker
+	httpClient *http.Client
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *SNSProvider {
-	return &SNSProvider{resources: resources, messages: messages, bus: bus}
+	return &SNSProvider{
+		resources:  resources,
+		messages:   messages,
+		bus:        bus,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
 }
+
+// SetLambdaInvoker wires the Lambda invoker for SNS→Lambda protocol delivery.
+func (p *SNSProvider) SetLambdaInvoker(inv FunctionInvoker) { p.invoker = inv }
 
 func (p *SNSProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Notification.CreateTopic":              p.CreateTopic,
-		"Notification.DeleteTopic":              p.DeleteTopic,
-		"Notification.GetTopicAttributes":       p.GetTopicAttributes,
-		"Notification.SetTopicAttributes":       p.SetTopicAttributes,
-		"Notification.ListTopics":               p.ListTopics,
-		"Notification.Subscribe":                p.Subscribe,
-		"Notification.Unsubscribe":              p.Unsubscribe,
-		"Notification.ListSubscriptions":        p.ListSubscriptions,
-		"Notification.ListSubscriptionsByTopic": p.ListSubscriptionsByTopic,
+		"Notification.CreateTopic":               p.CreateTopic,
+		"Notification.DeleteTopic":               p.DeleteTopic,
+		"Notification.GetTopicAttributes":        p.GetTopicAttributes,
+		"Notification.SetTopicAttributes":        p.SetTopicAttributes,
+		"Notification.ListTopics":                p.ListTopics,
+		"Notification.Subscribe":                 p.Subscribe,
+		"Notification.Unsubscribe":               p.Unsubscribe,
+		"Notification.ConfirmSubscription":       p.ConfirmSubscription,
+		"Notification.ListSubscriptions":         p.ListSubscriptions,
+		"Notification.ListSubscriptionsByTopic":  p.ListSubscriptionsByTopic,
 		"Notification.GetSubscriptionAttributes": p.GetSubscriptionAttributes,
 		"Notification.SetSubscriptionAttributes": p.SetSubscriptionAttributes,
-		"Notification.Publish":                  p.Publish,
-		"Notification.PublishBatch":             p.PublishBatch,
-		"Notification.TagResource":              p.TagResource,
-		"Notification.UntagResource":            p.UntagResource,
-		"Notification.ListTagsForResource":      p.ListTagsForResource,
+		"Notification.Publish":                   p.Publish,
+		"Notification.PublishBatch":              p.PublishBatch,
+		"Notification.TagResource":               p.TagResource,
+		"Notification.UntagResource":             p.UntagResource,
+		"Notification.ListTagsForResource":       p.ListTagsForResource,
 	}
 }
 
@@ -98,6 +115,8 @@ type topicData struct {
 	Attributes map[string]string `json:"Attributes"`
 	Tags       map[string]string `json:"Tags"`
 	CreatedAt  time.Time         `json:"CreatedAt"`
+	// DedupCache maps deduplication ID → unix expiry (FIFO topics only).
+	DedupCache map[string]int64 `json:"DedupCache,omitempty"`
 }
 
 func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -107,20 +126,33 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 	}
 	arn := topicArn(nr.Region, nr.AccountID, name)
 
+	isFIFO := strings.HasSuffix(name, ".fifo")
+	attrs := map[string]string{
+		"TopicArn":                 arn,
+		"DisplayName":              name,
+		"SubscriptionsConfirmed":   "0",
+		"SubscriptionsPending":     "0",
+		"SubscriptionsDeleted":     "0",
+		"EffectiveDeliveryPolicy":  `{"defaultHealthyRetryPolicy":{"numRetries":3}}`,
+	}
+	if isFIFO {
+		attrs["FifoTopic"] = "true"
+		attrs["ContentBasedDeduplication"] = "false"
+		// Allow caller to override ContentBasedDeduplication via Attributes
+	}
+	// Apply caller-provided attributes (e.g., ContentBasedDeduplication)
+	if attrsMap, ok := nr.Params["Attributes"].(map[string]any); ok {
+		for k, v := range attrsMap {
+			attrs[k] = fmt.Sprint(v)
+		}
+	}
+
 	td := topicData{
-		TopicArn: arn,
-		Attributes: map[string]string{
-			"TopicArn":                 arn,
-			"DisplayName":              name,
-			"SubscriptionsConfirmed":   "0",
-			"SubscriptionsPending":     "0",
-			"SubscriptionsDeleted":     "0",
-			"EffectiveDeliveryPolicy":  `{"defaultHealthyRetryPolicy":{"numRetries":3}}`,
-		},
+		TopicArn:  arn,
+		Attributes: attrs,
 		Tags:      map[string]string{},
 		CreatedAt: time.Now().UTC(),
 	}
-	// CreateTopic is idempotent — return existing ARN if name matches.
 	if err := saveEntry(ctx, p.resources, "sns_topics", arn, td); err != nil {
 		return nil, err
 	}
@@ -191,29 +223,40 @@ type subscriptionData struct {
 	Endpoint        string            `json:"Endpoint"`
 	Owner           string            `json:"Owner"`
 	Attributes      map[string]string `json:"Attributes"`
+	Token           string            `json:"Token,omitempty"` // confirmation token for http/https
+	Confirmed       bool              `json:"Confirmed"`
 }
 
 func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	topicArn := strParam(nr.Params, "TopicArn")
+	tArn := strParam(nr.Params, "TopicArn")
 	protocol := strParam(nr.Params, "Protocol")
 	endpoint := strParam(nr.Params, "Endpoint")
 
-	if topicArn == "" || protocol == "" {
+	if tArn == "" || protocol == "" {
 		return nil, model.NewProviderError("InvalidParameter", "TopicArn and Protocol are required", 400)
 	}
 
-	// Derive topic name from ARN for subArn generation.
-	parts := strings.Split(topicArn, ":")
+	parts := strings.Split(tArn, ":")
 	topicName := parts[len(parts)-1]
 	sArn := subArn(nr.Region, nr.AccountID, topicName)
 
+	// Generate confirmation token for http/https; auto-confirm everything else.
+	token := ""
+	confirmed := true
+	if protocol == "http" || protocol == "https" {
+		token = fmt.Sprintf("%x", md5.Sum([]byte(sArn+time.Now().String())))
+		confirmed = true // auto-confirm for local dev
+	}
+
 	sd := subscriptionData{
 		SubscriptionArn: sArn,
-		TopicArn:        topicArn,
+		TopicArn:        tArn,
 		Protocol:        protocol,
 		Endpoint:        endpoint,
 		Owner:           nr.AccountID,
 		Attributes:      map[string]string{"SubscriptionArn": sArn},
+		Token:           token,
+		Confirmed:       confirmed,
 	}
 	if err := saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd); err != nil {
 		return nil, err
@@ -227,18 +270,38 @@ func (p *SNSProvider) Unsubscribe(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(nil), nil
 }
 
+// ConfirmSubscription validates the token generated at Subscribe time.
+func (p *SNSProvider) ConfirmSubscription(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	tArn := strParam(nr.Params, "TopicArn")
+	token := strParam(nr.Params, "Token")
+
+	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	for _, e := range entries {
+		var sd subscriptionData
+		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != tArn {
+			continue
+		}
+		if sd.Token == token || token == "" {
+			sd.Confirmed = true
+			_ = saveEntry(ctx, p.resources, "sns_subscriptions", sd.SubscriptionArn, sd)
+			return provider.OK(map[string]any{"SubscriptionArn": sd.SubscriptionArn}), nil
+		}
+	}
+	return nil, model.NewProviderError("AuthorizationError", "invalid confirmation token", 403)
+}
+
 func (p *SNSProvider) ListSubscriptions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
 	return provider.OK(map[string]any{"Subscriptions": subscriptionList(entries)}), nil
 }
 
 func (p *SNSProvider) ListSubscriptionsByTopic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	topicArn := strParam(nr.Params, "TopicArn")
+	tArn := strParam(nr.Params, "TopicArn")
 	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
 	var filtered []store.ResourceEntry
 	for _, e := range entries {
 		var sd subscriptionData
-		if json.Unmarshal(e.Data, &sd) == nil && sd.TopicArn == topicArn {
+		if json.Unmarshal(e.Data, &sd) == nil && sd.TopicArn == tArn {
 			filtered = append(filtered, e)
 		}
 	}
@@ -299,12 +362,12 @@ func subscriptionList(entries []store.ResourceEntry) []map[string]any {
 // ─── Publish ──────────────────────────────────────────────────────────────────
 
 func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	topicArn := strParam(nr.Params, "TopicArn")
+	tArn := strParam(nr.Params, "TopicArn")
 	message := strParam(nr.Params, "Message")
 	subject := strParam(nr.Params, "Subject")
 	messageID := fmt.Sprintf("%x", md5.Sum([]byte(message+time.Now().String())))
 
-	if topicArn == "" {
+	if tArn == "" {
 		return nil, model.NewProviderError("InvalidParameter", "TopicArn is required", 400)
 	}
 
@@ -313,39 +376,74 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 		msgAttrs = ma
 	}
 
-	// Load subscriptions and deliver.
+	// ── FIFO dedup ────────────────────────────────────────────────────────────
+	var td topicData
+	if loadErr := loadEntry(ctx, p.resources, "sns_topics", tArn, &td); loadErr == nil {
+		if td.Attributes["FifoTopic"] == "true" {
+			dedupID := strParam(nr.Params, "MessageDeduplicationId")
+			if dedupID == "" && td.Attributes["ContentBasedDeduplication"] == "true" {
+				dedupID = fmt.Sprintf("%x", md5.Sum([]byte(message)))
+			}
+			if dedupID != "" {
+				now := time.Now().Unix()
+				if td.DedupCache == nil {
+					td.DedupCache = make(map[string]int64)
+				}
+				// Prune expired entries.
+				for k, exp := range td.DedupCache {
+					if exp < now {
+						delete(td.DedupCache, k)
+					}
+				}
+				if _, seen := td.DedupCache[dedupID]; seen {
+					return provider.OK(map[string]any{"MessageId": messageID}), nil
+				}
+				td.DedupCache[dedupID] = now + 300 // 5-min window
+				_ = saveEntry(ctx, p.resources, "sns_topics", tArn, td)
+			}
+		}
+	}
+
+	// ── Deliver to each matching subscription ─────────────────────────────────
 	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
 	for _, e := range entries {
 		var sd subscriptionData
-		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != topicArn {
+		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != tArn {
 			continue
 		}
+		// Evaluate filter policy.
+		if fp := sd.Attributes["FilterPolicy"]; fp != "" {
+			if !matchesFilterPolicy(fp, msgAttrs) {
+				continue
+			}
+		}
+		rawDelivery := sd.Attributes["RawMessageDelivery"] == "true"
 		switch sd.Protocol {
 		case "sqs":
-			rawDelivery := sd.Attributes["RawMessageDelivery"] == "true"
-			p.deliverToSQS(ctx, sd.Endpoint, topicArn, messageID, message, subject, nr.Region, nr.AccountID, msgAttrs, rawDelivery)
-		// http/https: log and no-op for Phase 1
+			p.deliverToSQS(ctx, sd.Endpoint, tArn, messageID, message, subject,
+				nr.Region, nr.AccountID, msgAttrs, rawDelivery)
+		case "lambda":
+			go p.deliverToLambda(ctx, sd.SubscriptionArn, tArn, messageID, message, subject, sd.Endpoint, msgAttrs)
+		case "http", "https":
+			go p.deliverToHTTP(tArn, messageID, message, subject, sd.Endpoint, msgAttrs)
 		}
 	}
 
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
-func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any, rawDelivery bool) {
+func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any, rawDelivery bool) {
 	if p.messages == nil {
 		return
 	}
-
 	var bodyStr string
 	if rawDelivery {
-		// RawMessageDelivery: deliver the message body directly, no JSON envelope.
 		bodyStr = message
 	} else {
-		// SNS wraps the message in a JSON envelope when delivering to SQS.
 		envelope := map[string]any{
 			"Type":      "Notification",
 			"MessageId": messageID,
-			"TopicArn":  topicArn,
+			"TopicArn":  tArn,
 			"Subject":   subject,
 			"Message":   message,
 			"Timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -356,9 +454,6 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, mess
 		b, _ := json.Marshal(envelope)
 		bodyStr = string(b)
 	}
-	// Each SQS delivery gets its own unique MessageID — the SNS notification
-	// messageID is preserved in the envelope body but must not be reused as the
-	// SQS row key, otherwise fan-out to N queues would conflict on the PK.
 	sqsMsgID := fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), rand.Int31())
 	msg := sqsstore.SQSMessage{
 		MessageID: sqsMsgID,
@@ -369,8 +464,69 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, topicArn, mess
 	_, _ = p.messages.Send(ctx, msg)
 }
 
+func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, messageID, message, subject, functionName string, msgAttrs map[string]any) {
+	if p.invoker == nil {
+		return
+	}
+	// Extract bare function name from ARN or use as-is.
+	fnName := functionName
+	if parts := strings.Split(functionName, ":"); len(parts) >= 7 {
+		fnName = parts[6]
+	}
+	record := map[string]any{
+		"EventSource":          "aws:sns",
+		"EventVersion":         "1.0",
+		"EventSubscriptionArn": subArn,
+		"Sns": map[string]any{
+			"Type":              "Notification",
+			"MessageId":         messageID,
+			"TopicArn":          tArn,
+			"Subject":           subject,
+			"Message":           message,
+			"Timestamp":         time.Now().UTC().Format(time.RFC3339),
+			"SignatureVersion":  "1",
+			"Signature":         "EXAMPLE",
+			"SigningCertUrl":    "EXAMPLE",
+			"UnsubscribeUrl":   "EXAMPLE",
+			"MessageAttributes": msgAttrs,
+		},
+	}
+	payload, _ := json.Marshal(map[string]any{"Records": []any{record}})
+	_, _ = p.invoker.InvokeInternal(ctx, fnName, payload)
+}
+
+func (p *SNSProvider) deliverToHTTP(tArn, messageID, message, subject, endpoint string, msgAttrs map[string]any) {
+	envelope := map[string]any{
+		"Type":             "Notification",
+		"MessageId":        messageID,
+		"TopicArn":         tArn,
+		"Subject":          subject,
+		"Message":          message,
+		"Timestamp":        time.Now().UTC().Format(time.RFC3339),
+		"SignatureVersion": "1",
+		"Signature":        "EXAMPLE",
+		"SigningCertURL":   "EXAMPLE",
+	}
+	if len(msgAttrs) > 0 {
+		envelope["MessageAttributes"] = msgAttrs
+	}
+	body, _ := json.Marshal(envelope)
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("x-amz-sns-message-type", "Notification")
+	req.Header.Set("x-amz-sns-topic-arn", tArn)
+	req.Header.Set("x-amz-sns-message-id", messageID)
+	resp, err := p.httpClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 func (p *SNSProvider) PublishBatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	topicArn := strParam(nr.Params, "TopicArn")
+	tArn := strParam(nr.Params, "TopicArn")
 	entries, _ := nr.Params["PublishBatchRequestEntries"].([]any)
 	var successful []map[string]any
 	for _, e := range entries {
@@ -378,9 +534,8 @@ func (p *SNSProvider) PublishBatch(ctx context.Context, nr *model.NormalizedRequ
 		id, _ := m["Id"].(string)
 		message, _ := m["Message"].(string)
 		msgID := fmt.Sprintf("%x", md5.Sum([]byte(message)))
-		// Re-use Publish logic via recursive single publish.
 		fakeNR := &model.NormalizedRequest{
-			Params:    map[string]any{"TopicArn": topicArn, "Message": message},
+			Params:    map[string]any{"TopicArn": tArn, "Message": message},
 			Region:    nr.Region,
 			AccountID: nr.AccountID,
 		}
@@ -389,6 +544,125 @@ func (p *SNSProvider) PublishBatch(ctx context.Context, nr *model.NormalizedRequ
 		}
 	}
 	return provider.OK(map[string]any{"Successful": successful, "Failed": []map[string]any{}}), nil
+}
+
+// ─── Filter policy ────────────────────────────────────────────────────────────
+
+// matchesFilterPolicy returns true if the message attributes satisfy the filter policy.
+func matchesFilterPolicy(filterPolicyJSON string, msgAttrs map[string]any) bool {
+	if filterPolicyJSON == "" {
+		return true
+	}
+	var policy map[string][]any
+	if err := json.Unmarshal([]byte(filterPolicyJSON), &policy); err != nil {
+		return true // malformed policy → pass-through
+	}
+	for key, rules := range policy {
+		attr, hasAttr := msgAttrs[key]
+		if !hasAttr {
+			// "exists: false" rule passes when attribute is absent.
+			for _, r := range rules {
+				if m, ok := r.(map[string]any); ok {
+					if ex, ok := m["exists"].(bool); ok && !ex {
+						goto nextKey
+					}
+				}
+			}
+			return false // attribute absent and no matching rule
+		nextKey:
+			continue
+		}
+		attrMap, _ := attr.(map[string]any)
+		strVal, _ := attrMap["StringValue"].(string)
+		dataType, _ := attrMap["DataType"].(string)
+		isNum := strings.HasPrefix(dataType, "Number")
+		var numVal float64
+		if isNum {
+			numVal, _ = strconv.ParseFloat(strVal, 64)
+		}
+		if !filterRulesMatch(rules, strVal, numVal, isNum) {
+			return false
+		}
+	}
+	return true
+}
+
+func filterRulesMatch(rules []any, strVal string, numVal float64, isNum bool) bool {
+	for _, rule := range rules {
+		switch r := rule.(type) {
+		case string:
+			if r == strVal {
+				return true
+			}
+		case map[string]any:
+			if filterSingleRuleMatch(r, strVal, numVal, isNum) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func filterSingleRuleMatch(r map[string]any, strVal string, numVal float64, isNum bool) bool {
+	if prefix, ok := r["prefix"].(string); ok {
+		return strings.HasPrefix(strVal, prefix)
+	}
+	if ab, ok := r["anything-but"]; ok {
+		switch v := ab.(type) {
+		case []any:
+			for _, item := range v {
+				if fmt.Sprint(item) == strVal {
+					return false
+				}
+			}
+			return true
+		case string:
+			return v != strVal
+		}
+	}
+	if numCond, ok := r["numeric"].([]any); ok && isNum {
+		return evaluateNumericCondition(numCond, numVal)
+	}
+	if ex, ok := r["exists"].(bool); ok {
+		return ex // attribute exists, so "exists: true" matches
+	}
+	return false
+}
+
+func evaluateNumericCondition(cond []any, val float64) bool {
+	for i := 0; i+1 < len(cond); i += 2 {
+		op, _ := cond[i].(string)
+		var thresh float64
+		switch t := cond[i+1].(type) {
+		case float64:
+			thresh = t
+		case string:
+			thresh, _ = strconv.ParseFloat(t, 64)
+		}
+		switch op {
+		case ">":
+			if !(val > thresh) {
+				return false
+			}
+		case ">=":
+			if !(val >= thresh) {
+				return false
+			}
+		case "<":
+			if !(val < thresh) {
+				return false
+			}
+		case "<=":
+			if !(val <= thresh) {
+				return false
+			}
+		case "=":
+			if val != thresh {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────

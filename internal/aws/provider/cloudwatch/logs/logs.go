@@ -20,20 +20,28 @@ func New() *Provider {
 // Routes returns all CloudWatch Logs handler registrations.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"CloudWatchLogs.CreateLogGroup":        p.CreateLogGroup,
-		"CloudWatchLogs.DeleteLogGroup":        p.DeleteLogGroup,
-		"CloudWatchLogs.DescribeLogGroups":     p.DescribeLogGroups,
-		"CloudWatchLogs.CreateLogStream":       p.CreateLogStream,
-		"CloudWatchLogs.DeleteLogStream":       p.DeleteLogStream,
-		"CloudWatchLogs.DescribeLogStreams":    p.DescribeLogStreams,
-		"CloudWatchLogs.PutLogEvents":          p.PutLogEvents,
-		"CloudWatchLogs.GetLogEvents":          p.GetLogEvents,
-		"CloudWatchLogs.FilterLogEvents":       p.FilterLogEvents,
-		"CloudWatchLogs.TagLogGroup":           p.TagLogGroup,
-		"CloudWatchLogs.UntagLogGroup":         p.UntagLogGroup,
-		"CloudWatchLogs.ListTagsLogGroup":      p.ListTagsLogGroup,
-		"CloudWatchLogs.PutRetentionPolicy":    p.PutRetentionPolicy,
-		"CloudWatchLogs.DeleteRetentionPolicy": p.DeleteRetentionPolicy,
+		"CloudWatchLogs.CreateLogGroup":              p.CreateLogGroup,
+		"CloudWatchLogs.DeleteLogGroup":              p.DeleteLogGroup,
+		"CloudWatchLogs.DescribeLogGroups":           p.DescribeLogGroups,
+		"CloudWatchLogs.CreateLogStream":             p.CreateLogStream,
+		"CloudWatchLogs.DeleteLogStream":             p.DeleteLogStream,
+		"CloudWatchLogs.DescribeLogStreams":          p.DescribeLogStreams,
+		"CloudWatchLogs.PutLogEvents":                p.PutLogEvents,
+		"CloudWatchLogs.GetLogEvents":                p.GetLogEvents,
+		"CloudWatchLogs.FilterLogEvents":             p.FilterLogEvents,
+		"CloudWatchLogs.TagLogGroup":                 p.TagLogGroup,
+		"CloudWatchLogs.UntagLogGroup":               p.UntagLogGroup,
+		"CloudWatchLogs.ListTagsLogGroup":            p.ListTagsLogGroup,
+		"CloudWatchLogs.PutRetentionPolicy":          p.PutRetentionPolicy,
+		"CloudWatchLogs.DeleteRetentionPolicy":       p.DeleteRetentionPolicy,
+		// ARN-based tagging (4.11)
+		"CloudWatchLogs.TagResource":                 p.TagResource,
+		"CloudWatchLogs.UntagResource":               p.UntagResource,
+		"CloudWatchLogs.ListTagsForResource":         p.ListTagsForResource,
+		// Subscription filters (4.12)
+		"CloudWatchLogs.PutSubscriptionFilter":       p.PutSubscriptionFilter,
+		"CloudWatchLogs.DescribeSubscriptionFilters": p.DescribeSubscriptionFilters,
+		"CloudWatchLogs.DeleteSubscriptionFilter":    p.DeleteSubscriptionFilter,
 	}
 }
 

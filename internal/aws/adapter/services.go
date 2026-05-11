@@ -83,7 +83,8 @@ var awsServices = []ServiceDescriptor{
 		ProviderPrefix: "Notification",
 		QueryActions: []string{
 			"CreateTopic", "DeleteTopic", "GetTopicAttributes", "SetTopicAttributes", "ListTopics",
-			"Subscribe", "Unsubscribe", "ListSubscriptions", "ListSubscriptionsByTopic",
+			"Subscribe", "Unsubscribe", "ConfirmSubscription",
+			"ListSubscriptions", "ListSubscriptionsByTopic",
 			"GetSubscriptionAttributes", "SetSubscriptionAttributes",
 			"Publish", "PublishBatch",
 			"TagResource", "UntagResource", "ListTagsForResource",
@@ -148,6 +149,8 @@ var awsServices = []ServiceDescriptor{
 			"DescribeAlarmsForMetric",
 			"DeleteAlarms",
 			"SetAlarmState",
+			"EnableAlarmActions",
+			"DisableAlarmActions",
 			"GetDashboard",
 			"ListDashboards",
 			"PutDashboard",

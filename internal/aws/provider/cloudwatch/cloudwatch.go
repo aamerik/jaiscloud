@@ -68,6 +68,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudWatch.ListDashboards":          p.ListDashboards,
 		"CloudWatch.PutDashboard":            p.PutDashboard,
 		"CloudWatch.DeleteDashboards":        p.DeleteDashboards,
+		"CloudWatch.EnableAlarmActions":      p.EnableAlarmActions,
+		"CloudWatch.DisableAlarmActions":     p.DisableAlarmActions,
 		"CloudWatch.TagResource":             p.TagResource,
 		"CloudWatch.UntagResource":           p.UntagResource,
 		"CloudWatch.ListTagsForResource":     p.ListTagsForResource,
@@ -107,19 +109,130 @@ func (p *Provider) PutMetricData(_ context.Context, nr *model.NormalizedRequest)
 	return provider.OK(map[string]any{"__action__": "PutMetricData"}), nil
 }
 
-// GetMetricStatistics returns an empty Datapoints array.
-// Real devbox callers (health-check pollers) treat empty as "no recent data".
 func (p *Provider) GetMetricStatistics(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	label, _ := nr.Params["MetricName"].(string)
-	return provider.OK(map[string]any{
-		"__action__": "GetMetricStatistics",
-		"Label":      label,
-		"Datapoints": []any{},
-	}), nil
+	ns, _ := nr.Params["Namespace"].(string)
+	metricName, _ := nr.Params["MetricName"].(string)
+	dims := extractDimensions(nr.Params, "")
+	startTime := parseTimestamp(nr.Params["StartTime"])
+	endTime := parseTimestamp(nr.Params["EndTime"])
+	period := 60
+	if pv, ok := nr.Params["Period"].(float64); ok {
+		period = int(pv)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	key := ringKey(ns, metricName, dims)
+	ring, ok := p.metrics[key]
+	if !ok {
+		return provider.OK(map[string]any{"Label": metricName, "Datapoints": []any{}}), nil
+	}
+
+	type bucket struct{ sum, min, max, count float64 }
+	buckets := make(map[int64]*bucket)
+	for _, dp := range ring.points {
+		if dp.Timestamp.IsZero() {
+			continue
+		}
+		if dp.Timestamp.Before(startTime) || dp.Timestamp.After(endTime) {
+			continue
+		}
+		t := (dp.Timestamp.Unix() / int64(period)) * int64(period)
+		b := buckets[t]
+		if b == nil {
+			b = &bucket{min: dp.Value, max: dp.Value}
+			buckets[t] = b
+		}
+		b.sum += dp.Value
+		b.count++
+		if dp.Value < b.min {
+			b.min = dp.Value
+		}
+		if dp.Value > b.max {
+			b.max = dp.Value
+		}
+	}
+
+	var stats []string
+	for i := 1; ; i++ {
+		s, ok := nr.Params["Statistics.member."+strconv.Itoa(i)].(string)
+		if !ok || s == "" {
+			break
+		}
+		stats = append(stats, s)
+	}
+
+	datapoints := make([]any, 0, len(buckets))
+	for t, b := range buckets {
+		dp := map[string]any{"Timestamp": time.Unix(t, 0).UTC().Format(time.RFC3339)}
+		for _, s := range stats {
+			switch s {
+			case "Sum":
+				dp["Sum"] = b.sum
+			case "Average":
+				dp["Average"] = b.sum / b.count
+			case "Minimum":
+				dp["Minimum"] = b.min
+			case "Maximum":
+				dp["Maximum"] = b.max
+			case "SampleCount":
+				dp["SampleCount"] = b.count
+			}
+		}
+		datapoints = append(datapoints, dp)
+	}
+	sort.Slice(datapoints, func(i, j int) bool {
+		ti, _ := datapoints[i].(map[string]any)["Timestamp"].(string)
+		tj, _ := datapoints[j].(map[string]any)["Timestamp"].(string)
+		return ti < tj
+	})
+	return provider.OK(map[string]any{"Label": metricName, "Datapoints": datapoints}), nil
 }
 
-func (p *Provider) GetMetricData(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "GetMetricData", "MetricDataResults": []any{}}), nil
+func (p *Provider) GetMetricData(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	results := make([]any, 0)
+	for i := 1; ; i++ {
+		prefix := "MetricDataQueries.member." + strconv.Itoa(i) + "."
+		id, ok := nr.Params[prefix+"Id"].(string)
+		if !ok || id == "" {
+			break
+		}
+		ns, _ := nr.Params[prefix+"MetricStat.Metric.Namespace"].(string)
+		metricName, _ := nr.Params[prefix+"MetricStat.Metric.MetricName"].(string)
+
+		var values []float64
+		var timestamps []string
+		if ns != "" && metricName != "" {
+			dims := extractDimensions(nr.Params, prefix+"MetricStat.Metric.")
+			key := ringKey(ns, metricName, dims)
+			if ring, ok := p.metrics[key]; ok {
+				for _, dp := range ring.points {
+					if !dp.Timestamp.IsZero() {
+						values = append(values, dp.Value)
+						timestamps = append(timestamps, dp.Timestamp.UTC().Format(time.RFC3339))
+					}
+				}
+			}
+		}
+		if values == nil {
+			values = []float64{}
+		}
+		if timestamps == nil {
+			timestamps = []string{}
+		}
+		results = append(results, map[string]any{
+			"Id":         id,
+			"Label":      metricName,
+			"Values":     values,
+			"Timestamps": timestamps,
+			"StatusCode": "Complete",
+		})
+	}
+	return provider.OK(map[string]any{"MetricDataResults": results, "Messages": []any{}}), nil
 }
 
 func (p *Provider) ListMetrics(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -220,32 +333,164 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	return provider.OK(map[string]any{"__action__": "SetAlarmState"}), nil
 }
 
-func (p *Provider) GetDashboard(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "GetDashboard", "DashboardBody": "{}"}), nil
+// ─── Alarm actions ────────────────────────────────────────────────────────────
+
+func (p *Provider) EnableAlarmActions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setAlarmActionsEnabled(ctx, nr, true)
 }
 
-func (p *Provider) ListDashboards(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "ListDashboards", "DashboardEntries": []any{}}), nil
+func (p *Provider) DisableAlarmActions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setAlarmActionsEnabled(ctx, nr, false)
 }
 
-func (p *Provider) PutDashboard(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "PutDashboard"}), nil
+func (p *Provider) setAlarmActionsEnabled(ctx context.Context, nr *model.NormalizedRequest, enabled bool) (*model.ProviderResponse, error) {
+	for i := 1; ; i++ {
+		name, ok := nr.Params["AlarmNames.member."+strconv.Itoa(i)].(string)
+		if !ok || name == "" {
+			break
+		}
+		e, err := p.resources.Get(ctx, "cloudwatch_alarm", name)
+		if err != nil {
+			continue
+		}
+		var params map[string]any
+		if json.Unmarshal(e.Data, &params) != nil {
+			continue
+		}
+		params["ActionsEnabled"] = enabled
+		data, _ := json.Marshal(params)
+		_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data})
+	}
+	return provider.OK(map[string]any{}), nil
 }
 
-func (p *Provider) DeleteDashboards(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "DeleteDashboards"}), nil
+// ─── Dashboards ───────────────────────────────────────────────────────────────
+
+type dashboardEntry struct {
+	DashboardName string `json:"DashboardName"`
+	DashboardBody string `json:"DashboardBody"`
+	DashboardArn  string `json:"DashboardArn"`
+	LastModified  string `json:"LastModified"`
 }
 
-func (p *Provider) TagResource(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "TagResource"}), nil
+func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["DashboardName"].(string)
+	body, _ := nr.Params["DashboardBody"].(string)
+	d := dashboardEntry{
+		DashboardName: name,
+		DashboardBody: body,
+		DashboardArn:  "arn:aws:cloudwatch::" + name,
+		LastModified:  time.Now().UTC().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(d)
+	entry := store.ResourceEntry{Type: "cloudwatch_dashboard", ID: name, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+	return provider.OK(map[string]any{"DashboardValidationMessages": []any{}}), nil
 }
 
-func (p *Provider) UntagResource(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "UntagResource"}), nil
+func (p *Provider) GetDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["DashboardName"].(string)
+	e, err := p.resources.Get(ctx, "cloudwatch_dashboard", name)
+	if err != nil {
+		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Dashboard not found: " + name, HTTPStatus: 404}
+	}
+	var d dashboardEntry
+	if err := json.Unmarshal(e.Data, &d); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"DashboardName": d.DashboardName,
+		"DashboardBody": d.DashboardBody,
+		"DashboardArn":  d.DashboardArn,
+	}), nil
 }
 
-func (p *Provider) ListTagsForResource(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "ListTagsForResource", "Tags": []any{}}), nil
+func (p *Provider) ListDashboards(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, "cloudwatch_dashboard", "")
+	out := make([]any, 0, len(entries))
+	for _, e := range entries {
+		var d dashboardEntry
+		if json.Unmarshal(e.Data, &d) == nil {
+			out = append(out, map[string]any{
+				"DashboardName": d.DashboardName,
+				"DashboardArn":  d.DashboardArn,
+				"LastModified":  d.LastModified,
+			})
+		}
+	}
+	return provider.OK(map[string]any{"DashboardEntries": out}), nil
+}
+
+func (p *Provider) DeleteDashboards(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	for i := 1; ; i++ {
+		name, ok := nr.Params["DashboardNames.member."+strconv.Itoa(i)].(string)
+		if !ok || name == "" {
+			break
+		}
+		_ = p.resources.Delete(ctx, "cloudwatch_dashboard", name)
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── Tags ─────────────────────────────────────────────────────────────────────
+
+func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["ResourceARN"].(string)
+	tags := make(map[string]string)
+	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	for i := 1; ; i++ {
+		k, kok := nr.Params["Tags.member."+strconv.Itoa(i)+".Key"].(string)
+		v, _ := nr.Params["Tags.member."+strconv.Itoa(i)+".Value"].(string)
+		if !kok || k == "" {
+			break
+		}
+		tags[k] = v
+	}
+	data, _ := json.Marshal(tags)
+	entry := store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data}
+	if err := p.resources.Create(ctx, entry); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			_ = p.resources.Update(ctx, entry)
+		}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["ResourceARN"].(string)
+	tags := make(map[string]string)
+	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	for i := 1; ; i++ {
+		k, ok := nr.Params["TagKeys.member."+strconv.Itoa(i)].(string)
+		if !ok || k == "" {
+			break
+		}
+		delete(tags, k)
+	}
+	data, _ := json.Marshal(tags)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data})
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["ResourceARN"].(string)
+	tags := make(map[string]string)
+	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+		_ = json.Unmarshal(e.Data, &tags)
+	}
+	out := make([]any, 0, len(tags))
+	for k, v := range tags {
+		out = append(out, map[string]any{"Key": k, "Value": v})
+	}
+	return provider.OK(map[string]any{"Tags": out}), nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
