@@ -27,6 +27,8 @@ import (
 	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
 	ecrprovider "jaiscloud/internal/aws/provider/ecr"
 	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
+	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
+	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stsprovider "jaiscloud/internal/aws/sts"
 	kinesisstore "jaiscloud/internal/store/aws/kinesis"
@@ -63,6 +65,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
@@ -127,8 +130,20 @@ func startCmd() *cobra.Command {
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
 			defer cleanup()
+
+			// Wire Step Functions execution engine — provides real ASL execution.
+			sfnDisp := sfndispatcher.New(registry, cfg)
+			sfnEng := sfnengine.New(s.sfn, sfnDisp, cfg.Clock)
+			sfnP.SetEngine(sfnEng)
+			prevCleanup := cleanup
+			cleanup = func() {
+				shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = sfnEng.Shutdown(shutCtx)
+				prevCleanup()
+			}
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter)
@@ -341,7 +356,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -518,7 +533,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(stsP.Routes())
 	registry.RegisterAll(kinesisP.Routes())
 	registry.RegisterAll(ecrP.Routes())
-	registry.RegisterAll(sfnprovider.New(s.sfn).Routes())
+	sfnP := sfnprovider.New(s.sfn)
+	registry.RegisterAll(sfnP.Routes())
 	registry.RegisterAll(notifP.Routes())
 	registry.RegisterAll(tableProvider.Routes())
 	registry.RegisterAll(tableProvider.StreamRoutes())
@@ -540,7 +556,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	logsProvider := cwlogs.New()
 	registry.RegisterAll(logsProvider.Routes())
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP
 }
 
 // buildK8sClient constructs a kubernetes.Interface using in-cluster config if

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
+	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
@@ -19,11 +20,30 @@ import (
 var nameRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
 
 type Provider struct {
-	store *sfnstore.MemoryStepFunctionsStore
+	store  *sfnstore.MemoryStepFunctionsStore
+	engine *engine.ExecutionEngine // nil in lite mode
 }
 
-func New(store *sfnstore.MemoryStepFunctionsStore) *Provider {
-	return &Provider{store: store}
+// Option is a functional option for the Provider.
+type Option func(*Provider)
+
+// WithEngine attaches an ExecutionEngine for real ASL execution.
+func WithEngine(eng *engine.ExecutionEngine) Option {
+	return func(p *Provider) { p.engine = eng }
+}
+
+func New(store *sfnstore.MemoryStepFunctionsStore, opts ...Option) *Provider {
+	p := &Provider{store: store}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
+}
+
+// SetEngine attaches the execution engine after construction (used in main.go
+// to break the registry→engine→registry circular dependency).
+func (p *Provider) SetEngine(eng *engine.ExecutionEngine) {
+	p.engine = eng
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -284,42 +304,58 @@ func (p *Provider) StartExecution(ctx context.Context, nr *model.NormalizedReque
 	execARN := fmt.Sprintf("arn:aws:states:%s:%s:execution:%s:%s", nr.Region, nr.AccountID, smName, execName)
 
 	t := time.Now().UTC()
-	stopTime := t
-	exec := &sfnstore.Execution{
-		Name:            execName,
-		ARN:             execARN,
-		StateMachineARN: smARN,
-		Status:          sfnstore.ExecutionStatusSucceeded, // instant success in lite mode
-		StartDate:       t,
-		StopDate:        &stopTime,
-		Input:           input,
-		InputDetails:    map[string]any{"included": true},
-		Output:          input, // passthrough
-		OutputDetails:   map[string]any{"included": true},
-		TraceHeader:     traceHeader,
-		History:         []sfnstore.HistoryEvent{},
-	}
 
-	if err := p.store.StartExecution(exec); err != nil {
-		return nil, storeErr(err)
-	}
+	if p.engine != nil {
+		// Engine mode: start RUNNING, engine will finalize
+		exec := &sfnstore.Execution{
+			Name:            execName,
+			ARN:             execARN,
+			StateMachineARN: smARN,
+			Status:          sfnstore.ExecutionStatusRunning,
+			StartDate:       t,
+			Input:           input,
+			InputDetails:    map[string]any{"included": true},
+			TraceHeader:     traceHeader,
+			History:         []sfnstore.HistoryEvent{},
+		}
+		if err := p.store.StartExecution(exec); err != nil {
+			return nil, storeErr(err)
+		}
 
-	// Append history events
-	_ = p.store.AppendHistory(execARN, sfnstore.HistoryEvent{
-		Timestamp: t,
-		Type:      "ExecutionStarted",
-		ExecutionStartedEventDetails: &sfnstore.ExecutionStartedEventDetails{
-			Input:   input,
-			RoleArn: sm.RoleARN,
-		},
-	})
-	_ = p.store.AppendHistory(execARN, sfnstore.HistoryEvent{
-		Timestamp: t,
-		Type:      "ExecutionSucceeded",
-		ExecutionSucceededEventDetails: &sfnstore.ExecutionSucceededEventDetails{
-			Output: input,
-		},
-	})
+		def, parseErr := asl.Parse(sm.Definition)
+		if parseErr != nil {
+			return nil, sfnErr("InvalidDefinition", parseErr.Error(), 400)
+		}
+		p.engine.Start(execARN, def, input)
+	} else {
+		// Lite mode: instant SUCCEEDED
+		stopTime := t
+		exec := &sfnstore.Execution{
+			Name:            execName,
+			ARN:             execARN,
+			StateMachineARN: smARN,
+			Status:          sfnstore.ExecutionStatusSucceeded,
+			StartDate:       t,
+			StopDate:        &stopTime,
+			Input:           input,
+			InputDetails:    map[string]any{"included": true},
+			Output:          input,
+			OutputDetails:   map[string]any{"included": true},
+			TraceHeader:     traceHeader,
+			History:         []sfnstore.HistoryEvent{},
+		}
+		if err := p.store.StartExecution(exec); err != nil {
+			return nil, storeErr(err)
+		}
+		_ = p.store.AppendHistory(execARN, sfnstore.HistoryEvent{
+			Timestamp: t, Type: "ExecutionStarted",
+			ExecutionStartedEventDetails: &sfnstore.ExecutionStartedEventDetails{Input: input, RoleArn: sm.RoleARN},
+		})
+		_ = p.store.AppendHistory(execARN, sfnstore.HistoryEvent{
+			Timestamp: t, Type: "ExecutionSucceeded",
+			ExecutionSucceededEventDetails: &sfnstore.ExecutionSucceededEventDetails{Output: input},
+		})
+	}
 
 	return provider.OK(map[string]any{
 		"executionArn": execARN,
@@ -370,8 +406,12 @@ func (p *Provider) StopExecution(ctx context.Context, nr *model.NormalizedReques
 	errMsg, _ := nr.Params["error"].(string)
 	cause, _ := nr.Params["cause"].(string)
 
-	if err := p.store.StopExecution(execARN, errMsg, cause); err != nil {
-		return nil, storeErr(err)
+	if p.engine != nil {
+		p.engine.Stop(execARN, errMsg, cause)
+	} else {
+		if err := p.store.StopExecution(execARN, errMsg, cause); err != nil {
+			return nil, storeErr(err)
+		}
 	}
 
 	return provider.OK(map[string]any{
@@ -667,10 +707,25 @@ func (p *Provider) GetActivityTask(ctx context.Context, nr *model.NormalizedRequ
 }
 
 func (p *Provider) SendTaskSuccess(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	token, _ := nr.Params["taskToken"].(string)
+	output, _ := nr.Params["output"].(string)
+	if p.engine != nil {
+		if err := p.engine.SendTaskSuccess(token, output); err != nil {
+			return nil, sfnErr("TaskDoesNotExist", err.Error(), 400)
+		}
+	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) SendTaskFailure(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	token, _ := nr.Params["taskToken"].(string)
+	errCode, _ := nr.Params["error"].(string)
+	cause, _ := nr.Params["cause"].(string)
+	if p.engine != nil {
+		if err := p.engine.SendTaskFailure(token, errCode, cause); err != nil {
+			return nil, sfnErr("TaskDoesNotExist", err.Error(), 400)
+		}
+	}
 	return provider.OK(map[string]any{}), nil
 }
 

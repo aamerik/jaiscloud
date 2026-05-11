@@ -401,6 +401,10 @@ test-e2e-ecr: ## ECR full mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/ecr/
 
+test-e2e-sfn: ## Step Functions full mode e2e tests — tests/full_mode/aws/stepfunctions/ (tag: sfn_e2e)
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/full_mode/aws/stepfunctions/
+
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/full_mode/aws/iceberg/ (tag: iceberg_e2e)

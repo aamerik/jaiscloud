@@ -412,6 +412,23 @@ func (s *MemoryStepFunctionsStore) AppendHistory(execARN string, event HistoryEv
 	return nil
 }
 
+// FinalizeExecution marks an execution as SUCCEEDED or FAILED with output/error.
+func (s *MemoryStepFunctionsStore) FinalizeExecution(arn string, status ExecutionStatus, output, errCode, cause string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.executions[arn]
+	if !ok {
+		return &SFNError{Code: "ExecutionDoesNotExist", Message: "Execution does not exist", Status: 400}
+	}
+	t := now()
+	e.Status = status
+	e.StopDate = &t
+	e.Output = output
+	e.Error = errCode
+	e.Cause = cause
+	return nil
+}
+
 // ─── Activities ───────────────────────────────────────────────────────────────
 
 func (s *MemoryStepFunctionsStore) CreateActivity(act *Activity) error {

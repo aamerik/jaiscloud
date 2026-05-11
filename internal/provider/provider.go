@@ -10,6 +10,15 @@ import (
 // HandlerFunc is the signature every provider operation must implement.
 type HandlerFunc func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
+// ServiceDispatcher allows one provider to invoke another provider's handler.
+// Used by the Step Functions execution engine to call Lambda, DynamoDB, SQS, etc.
+type ServiceDispatcher interface {
+	// Dispatch invokes a registered provider action and returns its response data.
+	// providerPrefix is the registry prefix (e.g. "Function", "Table", "Queue").
+	// action is the operation name (e.g. "Invoke", "PutItem", "SendMessage").
+	Dispatch(ctx context.Context, providerPrefix, action string, params map[string]any) (map[string]any, error)
+}
+
 // OK is a convenience constructor for a successful 200 response.
 func OK(data map[string]any) *model.ProviderResponse {
 	return &model.ProviderResponse{HTTPStatus: 200, Data: data}
