@@ -56,6 +56,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -475,7 +476,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.New(s.stsSession)
-	kinesisP := kinesisprovider.New(s.kinesis)
+	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus)
@@ -820,6 +821,26 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterSnapshotter("sts-sessions", s.stsSession)
 	h.RegisterSnapshotter("kinesis", s.kinesis)
 	return h
+}
+
+// ─── kinesis provider factory ─────────────────────────────────────────────────
+
+func buildKinesisProvider(ctx context.Context, cfg *config.Config, s appStores) *kinesisprovider.Provider {
+	if cfg.Mode == config.ModeFull {
+		dataDir := filepath.Join(cfg.BlobDir, "kinesis")
+		mock, err := kinesisprovider.NewMockServer(cfg.AccountID, dataDir)
+		if err != nil {
+			slog.Warn("kinesis-mock unavailable, falling back to lite mode", "err", err)
+			return kinesisprovider.New(s.kinesis)
+		}
+		if err := mock.Start(ctx); err != nil {
+			slog.Warn("kinesis-mock failed to start, falling back to lite mode", "err", err)
+			return kinesisprovider.New(s.kinesis)
+		}
+		slog.Info("kinesis full mode: using kinesis-mock subprocess", "port", mock.Port())
+		return kinesisprovider.NewFull(s.kinesis, mock)
+	}
+	return kinesisprovider.New(s.kinesis)
 }
 
 // ─── version ──────────────────────────────────────────────────────────────────

@@ -2,9 +2,13 @@
 package kinesis
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -16,17 +20,86 @@ import (
 var streamNameRE = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
 
 // Provider handles Kinesis API operations.
+// In lite mode it uses the in-memory store; in full mode it proxies to kinesis-mock.
 type Provider struct {
-	store *kinesisstore.MemoryKinesisStore
+	store      *kinesisstore.MemoryKinesisStore
+	mockServer *MockServer
+	httpClient *http.Client
+	fullMode   bool
 }
 
-// New constructs a Provider.
+// New constructs a Provider in lite mode.
 func New(store *kinesisstore.MemoryKinesisStore) *Provider {
-	return &Provider{store: store}
+	return &Provider{store: store, httpClient: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// NewFull constructs a Provider in full mode backed by a kinesis-mock subprocess.
+func NewFull(store *kinesisstore.MemoryKinesisStore, mock *MockServer) *Provider {
+	return &Provider{
+		store:      store,
+		mockServer: mock,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		fullMode:   true,
+	}
+}
+
+// proxyToMock forwards the current action + params to kinesis-mock subprocess.
+func (p *Provider) proxyToMock(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body, _ := json.Marshal(nr.Params)
+	url := fmt.Sprintf("http://localhost:%d/", p.mockServer.Port())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, model.NewProviderError("InternalFailure", err.Error(), 500)
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "Kinesis_20131202."+nr.Action)
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20000101/us-east-1/kinesis/aws4_request, SignedHeaders=host, Signature=test")
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, model.NewProviderError("InternalFailure", "kinesis-mock unreachable: "+err.Error(), 500)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 400 {
+		var errBody struct {
+			Type    string `json:"__type"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(respBody, &errBody)
+		if errBody.Type == "" {
+			errBody.Type = "InternalFailure"
+		}
+		return nil, model.NewProviderError(errBody.Type, errBody.Message, resp.StatusCode)
+	}
+	var data map[string]any
+	_ = json.Unmarshal(respBody, &data)
+	if data == nil {
+		data = map[string]any{}
+	}
+	return provider.OK(data), nil
 }
 
 // Routes returns all Kinesis handler registrations.
+// In full mode every route is wrapped to proxy to kinesis-mock.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
+	routes := p.liteRoutes()
+	if p.fullMode {
+		wrapped := make(map[string]provider.HandlerFunc, len(routes))
+		for k := range routes {
+			k := k // capture
+			wrapped[k] = func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+				return p.proxyToMock(ctx, nr)
+			}
+		}
+		return wrapped
+	}
+	return routes
+}
+
+// liteRoutes returns the in-memory handler map used in lite mode.
+func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Stream lifecycle
 		"Kinesis.CreateStream":          p.CreateStream,
@@ -68,8 +141,26 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	}
 }
 
-// Reset wipes all state.
-func (p *Provider) Reset() { p.store.Reset() }
+// Reset wipes all state. In full mode, restarts kinesis-mock subprocess.
+func (p *Provider) Reset() {
+	if p.fullMode && p.mockServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := p.mockServer.Restart(ctx); err != nil {
+			// best-effort; log but don't panic
+			_ = err
+		}
+		return
+	}
+	p.store.Reset()
+}
+
+// Shutdown stops the kinesis-mock subprocess if running.
+func (p *Provider) Shutdown() {
+	if p.fullMode && p.mockServer != nil {
+		_ = p.mockServer.Stop()
+	}
+}
 
 // ─── Stream CRUD ──────────────────────────────────────────────────────────────
 
