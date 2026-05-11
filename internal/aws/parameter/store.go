@@ -44,5 +44,10 @@ type ParameterStore interface {
 	ListParameters(ctx context.Context, path string, recursive bool) ([]ParameterEntry, error)
 	GetParameterHistory(ctx context.Context, name string) ([]HistoryEntry, error)
 
+	// Label operations
+	LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error)
+	UnlabelParameterVersion(ctx context.Context, name string, version int64, labels []string) error
+	GetLabelsByVersion(ctx context.Context, name string, version int64) ([]string, error)
+
 	Reset()
 }

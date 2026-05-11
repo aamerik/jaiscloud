@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -174,6 +175,40 @@ func (s *MemorySecretStore) Reset() {
 	s.secrets = make(map[string]SecretEntry)
 	s.byName = make(map[string]string)
 	s.versions = make(map[string][]VersionEntry)
+}
+
+func (s *MemorySecretStore) Snapshot() (json.RawMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap := struct {
+		Secrets  map[string]SecretEntry    `json:"secrets"`
+		ByName   map[string]string         `json:"by_name"`
+		Versions map[string][]VersionEntry `json:"versions"`
+	}{s.secrets, s.byName, s.versions}
+	return json.Marshal(snap)
+}
+
+func (s *MemorySecretStore) Restore(raw json.RawMessage) error {
+	var snap struct {
+		Secrets  map[string]SecretEntry    `json:"secrets"`
+		ByName   map[string]string         `json:"by_name"`
+		Versions map[string][]VersionEntry `json:"versions"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snap.Secrets != nil {
+		s.secrets = snap.Secrets
+	}
+	if snap.ByName != nil {
+		s.byName = snap.ByName
+	}
+	if snap.Versions != nil {
+		s.versions = snap.Versions
+	}
+	return nil
 }
 
 func containsStage(stages []string, stage string) bool {

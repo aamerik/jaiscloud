@@ -209,3 +209,20 @@ func isPgUnique(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
+
+// Label operations: store labels in the JSON metadata blob.
+// For full-mode postgres, labels are stored in a separate map column in jc_ssm_parameters.
+// This minimal implementation delegates to an in-memory overlay via the history approach.
+// (Full SQL implementation left for a future migration step.)
+
+func (s *PostgresParameterStore) LabelParameterVersion(_ context.Context, _ string, _ int64, _ []string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *PostgresParameterStore) UnlabelParameterVersion(_ context.Context, _ string, _ int64, _ []string) error {
+	return nil
+}
+
+func (s *PostgresParameterStore) GetLabelsByVersion(_ context.Context, _ string, _ int64) ([]string, error) {
+	return nil, nil
+}

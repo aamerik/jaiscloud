@@ -32,9 +32,11 @@ func (p *ParameterProvider) Routes() map[string]provider.HandlerFunc {
 		"Parameter.DeleteParameters":       p.DeleteParameters,
 		"Parameter.DescribeParameters":     p.DescribeParameters,
 		"Parameter.GetParameterHistory":    p.GetParameterHistory,
-		"Parameter.AddTagsToResource":      p.AddTagsToResource,
-		"Parameter.RemoveTagsFromResource": p.RemoveTagsFromResource,
-		"Parameter.ListTagsForResource":    p.ListTagsForResource,
+		"Parameter.AddTagsToResource":       p.AddTagsToResource,
+		"Parameter.RemoveTagsFromResource":  p.RemoveTagsFromResource,
+		"Parameter.ListTagsForResource":     p.ListTagsForResource,
+		"Parameter.LabelParameterVersion":   p.LabelParameterVersion,
+		"Parameter.UnlabelParameterVersion": p.UnlabelParameterVersion,
 	}
 }
 
@@ -276,6 +278,56 @@ func (p *ParameterProvider) ListTagsForResource(ctx context.Context, nr *model.N
 		tags = append(tags, map[string]string{"Key": k, "Value": v})
 	}
 	return provider.OK(map[string]any{"TagList": tags}), nil
+}
+
+// ─── Label operations ─────────────────────────────────────────────────────────
+
+func (p *ParameterProvider) LabelParameterVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["Name"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("ValidationException", "Name is required", 400)
+	}
+	version := int64(0)
+	switch v := nr.Params["ParameterVersion"].(type) {
+	case float64:
+		version = int64(v)
+	case int64:
+		version = v
+	}
+	labels := extractStringList(nr.Params, "Labels")
+	invalid, err := p.store.LabelParameterVersion(ctx, name, version, labels)
+	if errors.Is(err, ErrParameterNotFound) {
+		return nil, model.NewProviderError("ParameterNotFound", "parameter not found: "+name, 400)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ssm: label parameter version: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"InvalidLabels":    invalid,
+		"ParameterVersion": version,
+	}), nil
+}
+
+func (p *ParameterProvider) UnlabelParameterVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["Name"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("ValidationException", "Name is required", 400)
+	}
+	version := int64(0)
+	switch v := nr.Params["ParameterVersion"].(type) {
+	case float64:
+		version = int64(v)
+	case int64:
+		version = v
+	}
+	labels := extractStringList(nr.Params, "Labels")
+	if err := p.store.UnlabelParameterVersion(ctx, name, version, labels); err != nil {
+		return nil, fmt.Errorf("ssm: unlabel parameter version: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"RemovedLabels":    labels,
+		"ParameterVersion": version,
+	}), nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

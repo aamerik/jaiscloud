@@ -43,6 +43,8 @@ type KeyEntry struct {
 	PreviousKeyMaterials [][]byte
 	// Policy holds the key policy JSON.
 	Policy string
+	// CreatedAt is the UTC creation timestamp.
+	CreatedAt time.Time
 }
 
 // AliasEntry maps an alias name to a key ID.

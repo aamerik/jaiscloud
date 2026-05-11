@@ -53,10 +53,13 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.DeleteAlias":       p.DeleteAlias,
 		"Key.ListAliases":       p.ListAliases,
 		"Key.UpdateAlias":       p.UpdateAlias,
-		"Key.CreateGrant":       p.CreateGrant,
-		"Key.RevokeGrant":       p.RevokeGrant,
-		"Key.RetireGrant":       p.RetireGrant,
-		"Key.ListGrants":        p.ListGrants,
+		"Key.CreateGrant":            p.CreateGrant,
+		"Key.RevokeGrant":            p.RevokeGrant,
+		"Key.RetireGrant":            p.RetireGrant,
+		"Key.ListGrants":             p.ListGrants,
+		"Key.ListRetirableGrants":    p.ListRetirableGrants,
+		"Key.ListKeyPolicies":        p.ListKeyPolicies,
+		"Key.DeriveSharedSecret":     p.DeriveSharedSecret,
 		"Key.Encrypt":           p.Encrypt,
 		"Key.Decrypt":           p.Decrypt,
 		"Key.GenerateDataKey":   p.GenerateDataKey,
@@ -111,6 +114,7 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 		KeySpec:     keySpec,
 		Origin:      origin,
 		Tags:        tags,
+		CreatedAt:   time.Now().UTC(),
 	}
 
 	// EXTERNAL origin: create key entry without any key material.
@@ -266,14 +270,27 @@ func (p *KeyProvider) ListKeys(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, fmt.Errorf("kms: list keys: %w", err)
 	}
-	items := make([]map[string]any, 0, len(keys))
-	for _, e := range keys {
+	sort.Slice(keys, func(i, j int) bool { return keys[i].KeyID < keys[j].KeyID })
+	marker, _ := nr.Params["Marker"].(string)
+	limit := kmsLimit(nr.Params)
+	start := kmsMarkerIndex(keys, marker, func(i int) string { return keys[i].KeyID })
+	page := keys[start:]
+	truncated := false
+	if len(page) > limit {
+		page, truncated = page[:limit], true
+	}
+	items := make([]map[string]any, 0, len(page))
+	for _, e := range page {
 		items = append(items, map[string]any{
 			"KeyId":  e.KeyID,
 			"KeyArn": nr.ResourceID(model.RTKMSKey, e.KeyID),
 		})
 	}
-	return provider.OK(map[string]any{"Keys": items, "Truncated": false}), nil
+	resp := map[string]any{"Keys": items, "Truncated": truncated}
+	if truncated {
+		resp["NextMarker"] = page[len(page)-1].KeyID
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────
@@ -329,11 +346,29 @@ func (p *KeyProvider) ListResourceTags(ctx context.Context, nr *model.Normalized
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
-	tags := make([]map[string]string, 0, len(e.Tags))
+	type kv struct{ k, v string }
+	pairs := make([]kv, 0, len(e.Tags))
 	for k, v := range e.Tags {
-		tags = append(tags, map[string]string{"TagKey": k, "TagValue": v})
+		pairs = append(pairs, kv{k, v})
 	}
-	return provider.OK(map[string]any{"Tags": tags, "Truncated": false}), nil
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].k < pairs[j].k })
+	marker, _ := nr.Params["Marker"].(string)
+	limit := kmsLimit(nr.Params)
+	start := kmsMarkerIndex(pairs, marker, func(i int) string { return pairs[i].k })
+	page := pairs[start:]
+	truncated := false
+	if len(page) > limit {
+		page, truncated = page[:limit], true
+	}
+	tags := make([]map[string]string, 0, len(page))
+	for _, p := range page {
+		tags = append(tags, map[string]string{"TagKey": p.k, "TagValue": p.v})
+	}
+	resp := map[string]any{"Tags": tags, "Truncated": truncated}
+	if truncated {
+		resp["NextMarker"] = page[len(page)-1].k
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Aliases ──────────────────────────────────────────────────────────────────
@@ -400,15 +435,28 @@ func (p *KeyProvider) ListAliases(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, fmt.Errorf("kms: list aliases: %w", err)
 	}
-	items := make([]map[string]any, 0, len(aliases))
-	for _, a := range aliases {
+	sort.Slice(aliases, func(i, j int) bool { return aliases[i].AliasName < aliases[j].AliasName })
+	marker, _ := nr.Params["Marker"].(string)
+	limit := kmsLimit(nr.Params)
+	start := kmsMarkerIndex(aliases, marker, func(i int) string { return aliases[i].AliasName })
+	page := aliases[start:]
+	truncated := false
+	if len(page) > limit {
+		page, truncated = page[:limit], true
+	}
+	items := make([]map[string]any, 0, len(page))
+	for _, a := range page {
 		items = append(items, map[string]any{
 			"AliasName":   a.AliasName,
 			"TargetKeyId": a.TargetKeyID,
 			"AliasArn":    nr.ResourceID(model.RTKMSAlias, strings.TrimPrefix(a.AliasName, "alias/")),
 		})
 	}
-	return provider.OK(map[string]any{"Aliases": items, "Truncated": false}), nil
+	resp := map[string]any{"Aliases": items, "Truncated": truncated}
+	if truncated {
+		resp["NextMarker"] = page[len(page)-1].AliasName
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Key import stubs ─────────────────────────────────────────────────────────
@@ -568,21 +616,21 @@ func (p *KeyProvider) ListGrants(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, fmt.Errorf("kms: list grants: %w", err)
 	}
-	items := make([]map[string]any, 0, len(grants))
-	for _, g := range grants {
-		items = append(items, map[string]any{
-			"GrantId":           g.GrantID,
-			"KeyId":             g.KeyID,
-			"GranteePrincipal":  g.GranteeARN,
-			"RetiringPrincipal": g.RetiringPrincipal,
-			"Operations":        g.Operations,
-			"Name":              g.Name,
-			"IssuingAccount":    g.IssuingAccount,
-			"CreationDate":      g.CreationDate.Unix(),
-			"GrantToken":        g.Token,
-		})
+	sort.Slice(grants, func(i, j int) bool { return grants[i].GrantID < grants[j].GrantID })
+	marker, _ := nr.Params["Marker"].(string)
+	limit := kmsLimit(nr.Params)
+	start := kmsMarkerIndex(grants, marker, func(i int) string { return grants[i].GrantID })
+	page := grants[start:]
+	truncated := false
+	if len(page) > limit {
+		page, truncated = page[:limit], true
 	}
-	return provider.OK(map[string]any{"Grants": items, "Truncated": false}), nil
+	items := grantItems(page)
+	resp := map[string]any{"Grants": items, "Truncated": truncated}
+	if truncated {
+		resp["NextMarker"] = page[len(page)-1].GrantID
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Crypto operations ────────────────────────────────────────────────────────
@@ -610,6 +658,25 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, model.NewProviderError("ValidationException", "Plaintext must be base64-encoded", 400)
 	}
+
+	// Asymmetric RSA ENCRYPT_DECRYPT key: use RSAES_OAEP.
+	if len(e.PrivateKey) > 0 && len(e.KeyMaterial) == 0 {
+		algo, _ := nr.Params["EncryptionAlgorithm"].(string)
+		if algo == "" {
+			algo = "RSAES_OAEP_SHA_256"
+		}
+		ct, err := rsaEncryptOAEP(e.PublicKey, pt, algo)
+		if err != nil {
+			return nil, fmt.Errorf("kms: rsa encrypt: %w", err)
+		}
+		blob := buildCiphertextBlob(keyID, ct)
+		return provider.OK(map[string]any{
+			"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
+			"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
+			"EncryptionAlgorithm": algo,
+		}), nil
+	}
+
 	encCtx := extractEncCtx(nr.Params)
 	aad := marshalEncCtx(encCtx)
 
@@ -625,8 +692,8 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	// Prepend key ID so Decrypt can identify the key without caller providing it.
 	blob := buildCiphertextBlob(keyID, ct)
 	return provider.OK(map[string]any{
-		"KeyId":          nr.ResourceID(model.RTKMSKey, keyID),
-		"CiphertextBlob": base64.StdEncoding.EncodeToString(blob),
+		"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
+		"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
 		"EncryptionAlgorithm": "SYMMETRIC_DEFAULT",
 	}), nil
 }
@@ -654,6 +721,24 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err := checkKeyUsage(nr.ResourceID(model.RTKMSKey, keyID), e.KeyUsage, "Decrypt", "ENCRYPT_DECRYPT"); err != nil {
 		return nil, err
 	}
+
+	// Asymmetric RSA ENCRYPT_DECRYPT key.
+	if len(e.PrivateKey) > 0 && len(e.KeyMaterial) == 0 {
+		algo, _ := nr.Params["EncryptionAlgorithm"].(string)
+		if algo == "" {
+			algo = "RSAES_OAEP_SHA_256"
+		}
+		pt, err := rsaDecryptOAEP(p.serverDEK, e.PrivateKey, keyID, ct, algo)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidCiphertextException", "decryption failed", 400)
+		}
+		return provider.OK(map[string]any{
+			"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
+			"Plaintext":           base64.StdEncoding.EncodeToString(pt),
+			"EncryptionAlgorithm": algo,
+		}), nil
+	}
+
 	encCtx := extractEncCtx(nr.Params)
 	aad := marshalEncCtx(encCtx)
 
@@ -798,15 +883,40 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	}), nil
 }
 
-// ─── Key policy (stub) ────────────────────────────────────────────────────────
+// ─── Key policy ───────────────────────────────────────────────────────────────
 
-func (p *KeyProvider) GetKeyPolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{
-		"Policy": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*","Resource":"*"}]}`,
-	}), nil
+const defaultKeyPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*","Resource":"*"}]}`
+
+func (p *KeyProvider) GetKeyPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	policy := e.Policy
+	if policy == "" {
+		policy = defaultKeyPolicy
+	}
+	return provider.OK(map[string]any{"Policy": policy}), nil
 }
 
-func (p *KeyProvider) PutKeyPolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *KeyProvider) PutKeyPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	policy, _ := nr.Params["Policy"].(string)
+	e.Policy = policy
+	if err := p.store.UpdateKey(ctx, e); err != nil {
+		return nil, fmt.Errorf("kms: put key policy: %w", err)
+	}
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1475,6 +1585,10 @@ func extractStringList(params map[string]any, key string) []string {
 }
 
 func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
+	createdAt := e.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
 	m := map[string]any{
 		"KeyId":        e.KeyID,
 		"Arn":          arn,
@@ -1485,8 +1599,15 @@ func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
 		"Origin":       e.Origin,
 		"KeyState":     keyState(e),
 		"AWSAccountId": accountID,
-		"CreationDate": time.Now().Unix(),
+		"CreationDate": createdAt.Unix(),
 		"MultiRegion":  e.MultiRegion,
+		"KeyManager":   "CUSTOMER",
+	}
+	if algos := encryptionAlgorithmsForSpec(e.KeySpec); len(algos) > 0 {
+		m["EncryptionAlgorithms"] = algos
+	}
+	if algos := signingAlgorithmsForSpec(e.KeySpec); len(algos) > 0 {
+		m["SigningAlgorithms"] = algos
 	}
 	if e.PendingDeletion && !e.DeletionDate.IsZero() {
 		m["DeletionDate"] = e.DeletionDate.Unix()
@@ -1506,3 +1627,129 @@ func keyState(e KeyEntry) string {
 
 // ensure hex import is used
 var _ = hex.EncodeToString
+
+// ─── New operations (2.1-2.5) ────────────────────────────────────────────────
+
+func (p *KeyProvider) ListRetirableGrants(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	principal, _ := nr.Params["RetiringPrincipal"].(string)
+	if principal == "" {
+		return nil, model.NewProviderError("ValidationException", "RetiringPrincipal is required", 400)
+	}
+	all, err := p.store.ListGrants(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("kms: list retirable grants: %w", err)
+	}
+	var filtered []GrantEntry
+	for _, g := range all {
+		if g.RetiringPrincipal == principal {
+			filtered = append(filtered, g)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].GrantID < filtered[j].GrantID })
+	marker, _ := nr.Params["Marker"].(string)
+	limit := kmsLimit(nr.Params)
+	start := kmsMarkerIndex(filtered, marker, func(i int) string { return filtered[i].GrantID })
+	page := filtered[start:]
+	truncated := false
+	if len(page) > limit {
+		page, truncated = page[:limit], true
+	}
+	resp := map[string]any{"Grants": grantItems(page), "Truncated": truncated}
+	if truncated {
+		resp["NextMarker"] = page[len(page)-1].GrantID
+	}
+	return provider.OK(resp), nil
+}
+
+func (p *KeyProvider) ListKeyPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := p.resolveKeyID(ctx, nr); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"PolicyNames": []string{"default"}, "Truncated": false}), nil
+}
+
+func (p *KeyProvider) DeriveSharedSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	if e.PendingDeletion {
+		return nil, model.NewProviderError("KMSInvalidStateException", "key is pending deletion", 400)
+	}
+	if !e.Enabled {
+		return nil, model.NewProviderError("DisabledException", "key is disabled", 400)
+	}
+	if !strings.HasPrefix(e.KeySpec, "ECC_") {
+		return nil, model.NewProviderError("InvalidKeyUsageException", "DeriveSharedSecret requires an ECC key", 400)
+	}
+	peerB64, _ := nr.Params["PublicKey"].(string)
+	peerPubDER, err := base64.StdEncoding.DecodeString(peerB64)
+	if err != nil {
+		return nil, model.NewProviderError("ValidationException", "PublicKey must be base64-encoded DER", 400)
+	}
+	shared, err := ecdhSharedSecret(p.serverDEK, e.PrivateKey, keyID, peerPubDER)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidKeyUsageException", "ECDH key agreement failed: "+err.Error(), 400)
+	}
+	return provider.OK(map[string]any{
+		"KeyId":                nr.ResourceID(model.RTKMSKey, keyID),
+		"SharedSecret":         base64.StdEncoding.EncodeToString(shared),
+		"KeyAgreementAlgorithm": "ECDH",
+	}), nil
+}
+
+// ─── pagination helpers ───────────────────────────────────────────────────────
+
+func kmsLimit(params map[string]any) int {
+	limit := 100
+	switch v := params["Limit"].(type) {
+	case float64:
+		if int(v) > 0 {
+			limit = int(v)
+		}
+	case json.Number:
+		if n, err := v.Int64(); err == nil && n > 0 {
+			limit = int(n)
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	return limit
+}
+
+// kmsMarkerIndex returns the slice index to start from given a marker string.
+// keyFn extracts the sort key from element i. Returns 0 when marker is empty or not found.
+func kmsMarkerIndex[T any](items []T, marker string, keyFn func(int) string) int {
+	if marker == "" || len(items) == 0 {
+		return 0
+	}
+	for i := range items {
+		if keyFn(i) > marker {
+			return i
+		}
+	}
+	return len(items) // beyond last element → empty page
+}
+
+func grantItems(grants []GrantEntry) []map[string]any {
+	items := make([]map[string]any, 0, len(grants))
+	for _, g := range grants {
+		items = append(items, map[string]any{
+			"GrantId":           g.GrantID,
+			"KeyId":             g.KeyID,
+			"GranteePrincipal":  g.GranteeARN,
+			"RetiringPrincipal": g.RetiringPrincipal,
+			"Operations":        g.Operations,
+			"Name":              g.Name,
+			"IssuingAccount":    g.IssuingAccount,
+			"CreationDate":      g.CreationDate.Unix(),
+			"GrantToken":        g.Token,
+		})
+	}
+	return items
+}

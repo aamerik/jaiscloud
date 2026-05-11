@@ -284,6 +284,7 @@ func keyDataMap(e KeyEntry) map[string]any {
 		"rotation_period_days":   e.RotationPeriodInDays,
 		"previous_key_materials": e.PreviousKeyMaterials,
 		"policy":                 e.Policy,
+		"created_at":             e.CreatedAt,
 	}
 }
 
@@ -311,6 +312,7 @@ func scanKey(row scannable) (KeyEntry, error) {
 		RotationPeriodDays   int               `json:"rotation_period_days"`
 		PreviousKeyMaterials [][]byte          `json:"previous_key_materials"`
 		Policy               string            `json:"policy"`
+		CreatedAt            time.Time         `json:"created_at"`
 	}
 	_ = json.Unmarshal(data, &meta)
 	e.Description = meta.Description
@@ -327,6 +329,7 @@ func scanKey(row scannable) (KeyEntry, error) {
 	e.RotationPeriodInDays = meta.RotationPeriodDays
 	e.PreviousKeyMaterials = meta.PreviousKeyMaterials
 	e.Policy = meta.Policy
+	e.CreatedAt = meta.CreatedAt
 	return e, nil
 }
 

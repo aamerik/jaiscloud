@@ -491,18 +491,52 @@ func (p *SecretProvider) CancelRotateSecret(ctx context.Context, nr *model.Norma
 	}), nil
 }
 
-// ─── Resource policy stubs ────────────────────────────────────────────────────
+// ─── Resource policy ──────────────────────────────────────────────────────────
 
-func (p *SecretProvider) GetResourcePolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *SecretProvider) GetResourcePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	if e.ResourcePolicy == "" {
+		return nil, model.NewProviderError("ResourceNotFoundException", "resource policy not found for secret: "+e.Name, 400)
+	}
+	return provider.OK(map[string]any{
+		"ARN":            nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"Name":           e.Name,
+		"ResourcePolicy": e.ResourcePolicy,
+	}), nil
 }
 
-func (p *SecretProvider) PutResourcePolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *SecretProvider) PutResourcePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	policy, _ := nr.Params["ResourcePolicy"].(string)
+	e.ResourcePolicy = policy
+	if err := p.store.UpdateSecret(ctx, e); err != nil {
+		return nil, fmt.Errorf("secretsmanager: put resource policy: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"Name": e.Name,
+	}), nil
 }
 
-func (p *SecretProvider) DeleteResourcePolicy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{}), nil
+func (p *SecretProvider) DeleteResourcePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.resolveSecret(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e.ResourcePolicy = ""
+	if err := p.store.UpdateSecret(ctx, e); err != nil {
+		return nil, fmt.Errorf("secretsmanager: delete resource policy: %w", err)
+	}
+	return provider.OK(map[string]any{
+		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"Name": e.Name,
+	}), nil
 }
 
 // ─── internal helpers ─────────────────────────────────────────────────────────

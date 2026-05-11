@@ -2,6 +2,7 @@ package key
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 )
 
@@ -194,4 +195,41 @@ func (s *MemoryKeyStore) Reset() {
 	s.aliases = make(map[string]AliasEntry)
 	s.grants = make(map[string]GrantEntry)
 	s.dek = nil
+}
+
+func (s *MemoryKeyStore) Snapshot() (json.RawMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap := struct {
+		Keys    map[string]KeyEntry   `json:"keys"`
+		Aliases map[string]AliasEntry `json:"aliases"`
+		Grants  map[string]GrantEntry `json:"grants"`
+		DEK     []byte                `json:"dek"`
+	}{s.keys, s.aliases, s.grants, s.dek}
+	return json.Marshal(snap)
+}
+
+func (s *MemoryKeyStore) Restore(raw json.RawMessage) error {
+	var snap struct {
+		Keys    map[string]KeyEntry   `json:"keys"`
+		Aliases map[string]AliasEntry `json:"aliases"`
+		Grants  map[string]GrantEntry `json:"grants"`
+		DEK     []byte                `json:"dek"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snap.Keys != nil {
+		s.keys = snap.Keys
+	}
+	if snap.Aliases != nil {
+		s.aliases = snap.Aliases
+	}
+	if snap.Grants != nil {
+		s.grants = snap.Grants
+	}
+	s.dek = snap.DEK
+	return nil
 }

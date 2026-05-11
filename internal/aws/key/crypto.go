@@ -6,11 +6,13 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	ghmac "crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -347,9 +349,100 @@ func encryptionAlgorithmsForSpec(keySpec string) []string {
 	return nil
 }
 
-// Silence unused-import warnings for sha256/sha512 (used via crypto.Hash.Size()).
+// Silence unused-import warnings for sha256/sha512/sha1 (used via crypto.Hash.Size()).
 var _ = sha256.Size
 var _ = sha512.Size384
+var _ = sha1.Size
+
+// ─── RSA OAEP encrypt / decrypt ──────────────────────────────────────────────
+
+// rsaEncryptOAEP encrypts pt with the DER-encoded SubjectPublicKeyInfo public key.
+// algo must be "RSAES_OAEP_SHA_1" or "RSAES_OAEP_SHA_256".
+func rsaEncryptOAEP(pubDER, pt []byte, algo string) ([]byte, error) {
+	pub, err := x509.ParsePKIXPublicKey(pubDER)
+	if err != nil {
+		return nil, fmt.Errorf("rsa oaep encrypt: parse public key: %w", err)
+	}
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("rsa oaep encrypt: key is not RSA")
+	}
+	h := oaepHash(algo)
+	return rsa.EncryptOAEP(h, rand.Reader, rsaPub, pt, nil)
+}
+
+// rsaDecryptOAEP decrypts ct using the AES-GCM–encrypted PKCS8 DER private key.
+// serverDEK is used to unwrap the private key; keyID is the AES-GCM AAD.
+func rsaDecryptOAEP(serverDEK, encPrivDER []byte, keyID string, ct []byte, algo string) ([]byte, error) {
+	privDER, err := decryptData(serverDEK, encPrivDER, []byte(keyID))
+	if err != nil {
+		return nil, fmt.Errorf("rsa oaep decrypt: unwrap private key: %w", err)
+	}
+	key, err := x509.ParsePKCS8PrivateKey(privDER)
+	if err != nil {
+		return nil, fmt.Errorf("rsa oaep decrypt: parse private key: %w", err)
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("rsa oaep decrypt: key is not RSA")
+	}
+	h := oaepHash(algo)
+	return rsa.DecryptOAEP(h, rand.Reader, rsaKey, ct, nil)
+}
+
+func oaepHash(algo string) hash.Hash {
+	if strings.Contains(algo, "SHA_1") {
+		return sha1.New()
+	}
+	return sha256.New()
+}
+
+// ─── ECDH shared secret ───────────────────────────────────────────────────────
+
+// ecdhSharedSecret computes an ECDH shared secret.
+// serverDEK + keyID are used to unwrap the stored PKCS8 private key.
+// peerPubDER is a DER SubjectPublicKeyInfo of the peer's ECDH public key.
+func ecdhSharedSecret(serverDEK, encPrivDER []byte, keyID string, peerPubDER []byte) ([]byte, error) {
+	privDER, err := decryptData(serverDEK, encPrivDER, []byte(keyID))
+	if err != nil {
+		return nil, fmt.Errorf("ecdh: unwrap private key: %w", err)
+	}
+	key, err := x509.ParsePKCS8PrivateKey(privDER)
+	if err != nil {
+		return nil, fmt.Errorf("ecdh: parse private key: %w", err)
+	}
+	ecKey, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("ecdh: key is not ECDSA/ECC")
+	}
+	// Convert ecdsa.PrivateKey → ecdh.PrivateKey using the ECDH() method (Go 1.20+).
+	ecdhPriv, err := ecKey.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("ecdh: convert private key: %w", err)
+	}
+	// Parse peer public key: try ecdh.PublicKey first, then ecdsa.PublicKey.
+	peerPub, err := x509.ParsePKIXPublicKey(peerPubDER)
+	if err != nil {
+		return nil, fmt.Errorf("ecdh: parse peer public key: %w", err)
+	}
+	var ecdhPeer *ecdh.PublicKey
+	switch pk := peerPub.(type) {
+	case *ecdh.PublicKey:
+		ecdhPeer = pk
+	case *ecdsa.PublicKey:
+		ecdhPeer, err = pk.ECDH()
+		if err != nil {
+			return nil, fmt.Errorf("ecdh: convert peer public key: %w", err)
+		}
+	default:
+		return nil, errors.New("ecdh: peer public key is not ECC")
+	}
+	shared, err := ecdhPriv.ECDH(ecdhPeer)
+	if err != nil {
+		return nil, fmt.Errorf("ecdh: key agreement: %w", err)
+	}
+	return shared, nil
+}
 
 // decryptData decrypts ciphertext produced by encryptData.
 func decryptData(key, ct, additionalData []byte) ([]byte, error) {
