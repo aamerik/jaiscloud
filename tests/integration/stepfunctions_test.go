@@ -166,14 +166,14 @@ func TestSFN_ListStateMachines_Pagination(t *testing.T) {
 	}
 
 	page1, err := client.ListStateMachines(ctx, &awssfn.ListStateMachinesInput{
-		MaxResults: aws.Int32(3),
+		MaxResults: 3,
 	})
 	require.NoError(t, err)
 	require.Len(t, page1.StateMachines, 3)
 	require.NotNil(t, page1.NextToken)
 
 	page2, err := client.ListStateMachines(ctx, &awssfn.ListStateMachinesInput{
-		MaxResults: aws.Int32(3),
+		MaxResults: 3,
 		NextToken:  page1.NextToken,
 	})
 	require.NoError(t, err)
