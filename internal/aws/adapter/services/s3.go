@@ -255,6 +255,10 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if v := r.Header.Get("x-amz-object-lock-legal-hold"); v != "" {
 		params["_lock_legal_hold"] = v
 	}
+	// S3 Control: capture account ID header.
+	if v := r.Header.Get("x-amz-account-id"); v != "" {
+		params["_account_id"] = v
+	}
 	// Capture inbound flexible checksum to echo back in response.
 	for _, algo := range []string{"crc32", "crc32c", "sha256", "sha1"} {
 		if v := r.Header.Get("x-amz-checksum-" + algo); v != "" {
@@ -442,6 +446,38 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 		return "ListBuckets"
 	}
 
+	// S3 Control API: /v20180820/accesspoint/...
+	if bucket == "v20180820" {
+		parts := strings.SplitN(key, "/", 3)
+		if len(parts) >= 1 && parts[0] == "accesspoint" {
+			switch {
+			case len(parts) == 1 && method == http.MethodGet:
+				return "ListAccessPoints"
+			case len(parts) == 2:
+				switch method {
+				case http.MethodPut:
+					return "CreateAccessPoint"
+				case http.MethodGet:
+					return "GetAccessPoint"
+				case http.MethodDelete:
+					return "DeleteAccessPoint"
+				}
+			case len(parts) == 3 && parts[2] == "policy":
+				switch method {
+				case http.MethodPut:
+					return "PutAccessPointPolicy"
+				case http.MethodGet:
+					return "GetAccessPointPolicy"
+				case http.MethodDelete:
+					return "DeleteAccessPointPolicy"
+				}
+			case len(parts) == 3 && parts[2] == "policyStatus":
+				return "GetAccessPointPolicyStatus"
+			}
+		}
+		return "ListBuckets"
+	}
+
 	if key == "" {
 		// Bucket-level operations
 		switch method {
@@ -601,6 +637,8 @@ func s3DetectAction(method, bucket, key string, query url.Values, headers http.H
 			return "CreateMultipartUpload"
 		case query.Has("uploadId"):
 			return "CompleteMultipartUpload"
+		case query.Has("select") && query.Get("select-type") == "2":
+			return "SelectObjectContent"
 		}
 	}
 	return "GetObject"
@@ -674,6 +712,15 @@ func (c *S3Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespon
 			h.Set("x-amz-checksum-crc32", s3ChecksumCRC32(body))
 		}
 		return status, h, body
+	}
+
+	// SelectObjectContent — AWS event-stream binary encoding.
+	if nr.Action == "SelectObjectContent" {
+		payload, _ := resp.Data["_select_payload"].([]byte)
+		h := http.Header{}
+		h.Set("Content-Type", "application/vnd.amazon.eventstream")
+		body := s3BuildSelectEventStream(payload)
+		return 200, h, body
 	}
 
 	// 304 Not Modified — ETag/Last-Modified headers, no body.
@@ -1295,4 +1342,60 @@ func checkPresignedExpiration(query url.Values) error {
 		}
 	}
 	return nil
+}
+
+// ─── S3 Select event-stream ───────────────────────────────────────────────────
+
+// s3BuildSelectEventStream encodes payload as AWS event-stream binary frames:
+// a Records event containing the raw bytes followed by an End event.
+// Frame layout: [4B total][4B headers-len][4B prelude-crc32][headers][payload][4B msg-crc32]
+// Header layout: [1B name-len][name][1B type=7 (string)][2B value-len][value]
+func s3BuildSelectEventStream(payload []byte) []byte {
+	var out []byte
+	out = append(out, s3SelectFrame(
+		[][2]string{
+			{":event-type", "Records"},
+			{":content-type", "application/octet-stream"},
+			{":message-type", "event"},
+		},
+		payload,
+	)...)
+	out = append(out, s3SelectFrame(
+		[][2]string{
+			{":event-type", "End"},
+			{":message-type", "event"},
+		},
+		nil,
+	)...)
+	return out
+}
+
+func s3SelectFrame(hdrs [][2]string, payload []byte) []byte {
+	// Encode headers.
+	var hdrBuf []byte
+	for _, kv := range hdrs {
+		name, val := kv[0], kv[1]
+		hdrBuf = append(hdrBuf, byte(len(name)))
+		hdrBuf = append(hdrBuf, []byte(name)...)
+		hdrBuf = append(hdrBuf, 7) // type: string
+		hdrBuf = binary.BigEndian.AppendUint16(hdrBuf, uint16(len(val)))
+		hdrBuf = append(hdrBuf, []byte(val)...)
+	}
+
+	totalLen := uint32(4 + 4 + 4 + len(hdrBuf) + len(payload) + 4)
+	hdrLen := uint32(len(hdrBuf))
+
+	prelude := make([]byte, 8)
+	binary.BigEndian.PutUint32(prelude[0:], totalLen)
+	binary.BigEndian.PutUint32(prelude[4:], hdrLen)
+	preludeCRC := crc32.ChecksumIEEE(prelude)
+
+	msg := make([]byte, 0, totalLen)
+	msg = append(msg, prelude...)
+	msg = binary.BigEndian.AppendUint32(msg, preludeCRC)
+	msg = append(msg, hdrBuf...)
+	msg = append(msg, payload...)
+	msgCRC := crc32.ChecksumIEEE(msg)
+	msg = binary.BigEndian.AppendUint32(msg, msgCRC)
+	return msg
 }

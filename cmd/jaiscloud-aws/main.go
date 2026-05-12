@@ -39,6 +39,15 @@ import (
 	"jaiscloud/internal/aws/provider/queue"
 	rdsprovider "jaiscloud/internal/aws/provider/rds"
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
+	// Phase 15 providers
+	cognitoprovider "jaiscloud/internal/aws/provider/cognito"
+	cognitoidentityprovider "jaiscloud/internal/aws/provider/cognitoidentity"
+	acmprovider "jaiscloud/internal/aws/provider/acm"
+	sesprovider "jaiscloud/internal/aws/provider/ses"
+	firehoseprovider "jaiscloud/internal/aws/provider/firehose"
+	cloudfrontprovider "jaiscloud/internal/aws/provider/cloudfront"
+	athenaprovider "jaiscloud/internal/aws/provider/athena"
+	redshiftprovider "jaiscloud/internal/aws/provider/redshift"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/aws/provider/table"
 	secretprovider "jaiscloud/internal/aws/secret"
@@ -513,7 +522,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
-	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus)
+	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus).WithResourceStore(s.resources)
 	stackP := stackprovider.New(s.resources)
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv)
 
@@ -555,6 +564,17 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	logsProvider := cwlogs.New()
 	registry.RegisterAll(logsProvider.Routes())
+
+	// Phase 15 providers
+	registry.RegisterAll(cognitoprovider.New(s.resources).Routes())
+	registry.RegisterAll(cognitoidentityprovider.New(s.resources).Routes())
+	registry.RegisterAll(acmprovider.New(s.resources).Routes())
+	sesP := sesprovider.New(s.resources)
+	registry.RegisterAll(sesP.Routes())
+	registry.RegisterAll(firehoseprovider.New(s.resources).Routes())
+	registry.RegisterAll(cloudfrontprovider.New(s.resources).Routes())
+	registry.RegisterAll(athenaprovider.New(s.resources).Routes())
+	registry.RegisterAll(redshiftprovider.New(s.resources).Routes())
 
 	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP
 }

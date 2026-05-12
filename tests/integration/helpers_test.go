@@ -9,26 +9,35 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
-	awsglue "github.com/aws/aws-sdk-go-v2/service/glue"
-	awsemr "github.com/aws/aws-sdk-go-v2/service/emr"
-	awsemrc "github.com/aws/aws-sdk-go-v2/service/emrcontainers"
+	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
+	awsathena "github.com/aws/aws-sdk-go-v2/service/athena"
+	awscloudfront "github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	awscf "github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	awscwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	awscognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	awscognitoidentity "github.com/aws/aws-sdk-go-v2/service/cognitoidentity"
+	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	awsdynamostreams "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
+	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsecs "github.com/aws/aws-sdk-go-v2/service/ecs"
 	awselasticache "github.com/aws/aws-sdk-go-v2/service/elasticache"
+	awsemr "github.com/aws/aws-sdk-go-v2/service/emr"
+	awsemrc "github.com/aws/aws-sdk-go-v2/service/emrcontainers"
+	awsfirehose "github.com/aws/aws-sdk-go-v2/service/firehose"
+	awsglue "github.com/aws/aws-sdk-go-v2/service/glue"
+	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
+	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
+	awsredshift "github.com/aws/aws-sdk-go-v2/service/redshift"
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
-	awsapigw "github.com/aws/aws-sdk-go-v2/service/apigateway"
-	awscwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
-	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	awss3control "github.com/aws/aws-sdk-go-v2/service/s3control"
 	awssm "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	awsses "github.com/aws/aws-sdk-go-v2/service/ses"
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
 	awsssm "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	awsapigw "github.com/aws/aws-sdk-go-v2/service/apigateway"
 	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -344,4 +353,130 @@ func host() string {
 		return h
 	}
 	return "localhost"
+}
+
+func newCognitoIDPClient(t *testing.T) *awscognitoidp.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awscognitoidp.NewFromConfig(cfg, func(o *awscognitoidp.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newCognitoIdentityClient(t *testing.T) *awscognitoidentity.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awscognitoidentity.NewFromConfig(cfg, func(o *awscognitoidentity.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newACMClient(t *testing.T) *awsacm.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsacm.NewFromConfig(cfg, func(o *awsacm.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newSESClient(t *testing.T) *awsses.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsses.NewFromConfig(cfg, func(o *awsses.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newFirehoseClient(t *testing.T) *awsfirehose.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsfirehose.NewFromConfig(cfg, func(o *awsfirehose.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newCloudfrontClient(t *testing.T) *awscloudfront.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awscloudfront.NewFromConfig(cfg, func(o *awscloudfront.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newAthenaClient(t *testing.T) *awsathena.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsathena.NewFromConfig(cfg, func(o *awsathena.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newRedshiftClient(t *testing.T) *awsredshift.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsredshift.NewFromConfig(cfg, func(o *awsredshift.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newS3ControlClient(t *testing.T) *awss3control.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awss3control.NewFromConfig(cfg, func(o *awss3control.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
 }

@@ -178,6 +178,63 @@ var awsServices = []ServiceDescriptor{
 			"ListTagsForResource",
 		},
 	},
+	// ── Phase 15 services ────────────────────────────────────────────────────
+	{
+		SigV4Name:      "cognito-idp",
+		TargetPrefix:   "AWSCognitoIdentityProviderService.",
+		ProviderPrefix: "Cognito",
+		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "cognito-idp", TargetPrefix: "AWSCognitoIdentityProviderService."} },
+	},
+	{
+		SigV4Name:      "cognito-identity",
+		TargetPrefix:   "AWSCognitoIdentityService.",
+		ProviderPrefix: "CognitoIdentity",
+		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "cognito-identity", TargetPrefix: "AWSCognitoIdentityService."} },
+	},
+	{
+		SigV4Name:      "acm",
+		TargetPrefix:   "CertificateManager.",
+		ProviderPrefix: "ACM",
+		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "acm", TargetPrefix: "CertificateManager."} },
+	},
+	{
+		SigV4Name:      "email",
+		ProviderPrefix: "SES",
+		QueryActions: []string{
+			"SendEmail", "SendRawEmail", "SendBulkTemplatedEmail",
+			"VerifyEmailIdentity", "VerifyDomainIdentity",
+			"ListIdentities", "DeleteIdentity",
+			"GetIdentityVerificationAttributes",
+			"GetSendQuota", "GetSendStatistics",
+		},
+	},
+	{
+		SigV4Name:      "firehose",
+		TargetPrefix:   "Firehose_20150804.",
+		ProviderPrefix: "Firehose",
+		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "firehose", TargetPrefix: "Firehose_20150804."} },
+	},
+	{
+		SigV4Name:      "cloudfront",
+		ProviderPrefix: "CloudFront",
+		Codec:          func() adapter.Codec { return &services.CloudFrontCodec{} },
+	},
+	{
+		SigV4Name:      "athena",
+		TargetPrefix:   "AmazonAthena.",
+		ProviderPrefix: "Athena",
+		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "athena", TargetPrefix: "AmazonAthena."} },
+	},
+	{
+		SigV4Name:      "redshift",
+		ProviderPrefix: "Redshift",
+		QueryActions: []string{
+			"CreateCluster", "DescribeClusters", "DeleteCluster", "ModifyCluster", "RebootCluster",
+			"ResumeCluster", "PauseCluster",
+			"CreateClusterSubnetGroup", "DescribeClusterSubnetGroups", "DeleteClusterSubnetGroup", "ModifyClusterSubnetGroup",
+			"CreateTags", "DeleteTags", "DescribeTags",
+		},
+	},
 }
 
 // ─── Derived lookup tables ────────────────────────────────────────────────────

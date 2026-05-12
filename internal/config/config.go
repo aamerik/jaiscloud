@@ -159,6 +159,25 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"sfn-activity": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:states:%s:%s:activity:%s", r, a, n)
 	},
+	// Phase 14 additions
+	"eks-nodegroup": func(r, a, n string) string { return fmt.Sprintf("arn:aws:eks:%s:%s:nodegroup/%s", r, a, n) },
+	"eks-addon":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:eks:%s:%s:addon/%s", r, a, n) },
+	"rds-snapshot":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:snapshot:%s", r, a, n) },
+	"cfn-changeset": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:changeSet/%s", r, a, n)
+	},
+	"elasticache-subnetgroup": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticache:%s:%s:subnetgroup:%s", r, a, n)
+	},
+	// Phase 15 additions
+	"cognito-userpool":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", r, a, n) },
+	"cognito-identitypool":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-identity:%s:%s:identitypool/%s", r, a, n) },
+	"acm-certificate":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:acm:%s:%s:certificate/%s", r, a, n) },
+	"firehose-stream":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", r, a, n) },
+	"cloudfront-distribution":  func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudfront::%s:distribution/%s", a, n) },
+	"athena-workgroup":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
+	"redshift-cluster":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
+	"s3-accesspoint":           func(r, a, n string) string { return fmt.Sprintf("arn:aws:s3:%s:%s:accesspoint/%s", r, a, n) },
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.

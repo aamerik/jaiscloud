@@ -28,6 +28,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/store"
 	objectstore "jaiscloud/internal/store/object"
 )
 
@@ -35,6 +36,7 @@ import (
 type ObjectProvider struct {
 	meta       objectstore.ObjectMetaStore
 	blobs      blobfs.BlobStore
+	resources  store.ResourceStore
 	notifStore sync.Map
 	bus        *events.EventBus
 }
@@ -46,6 +48,12 @@ func New(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvid
 // NewWithBus constructs an ObjectProvider with an event bus for S3 notification dispatch.
 func NewWithBus(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore, bus *events.EventBus) *ObjectProvider {
 	return &ObjectProvider{meta: meta, blobs: blobs, bus: bus}
+}
+
+// WithResourceStore attaches a generic ResourceStore for access points and other metadata.
+func (p *ObjectProvider) WithResourceStore(res store.ResourceStore) *ObjectProvider {
+	p.resources = res
+	return p
 }
 
 func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
@@ -118,6 +126,17 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		// Notifications (P5.1)
 		"Object.PutBucketNotificationConfiguration": p.PutBucketNotificationConfiguration,
 		"Object.GetBucketNotificationConfiguration": p.GetBucketNotificationConfiguration,
+		// S3 Select (P15.9)
+		"Object.SelectObjectContent": p.SelectObjectContent,
+		// S3 Access Points (P15.10)
+		"Object.CreateAccessPoint":          p.CreateAccessPoint,
+		"Object.GetAccessPoint":             p.GetAccessPoint,
+		"Object.ListAccessPoints":           p.ListAccessPoints,
+		"Object.DeleteAccessPoint":          p.DeleteAccessPoint,
+		"Object.PutAccessPointPolicy":       p.PutAccessPointPolicy,
+		"Object.GetAccessPointPolicy":       p.GetAccessPointPolicy,
+		"Object.DeleteAccessPointPolicy":    p.DeleteAccessPointPolicy,
+		"Object.GetAccessPointPolicyStatus": p.GetAccessPointPolicyStatus,
 		// Policy / Website / Logging / Replication (P1.16-1.19)
 		"Object.PutBucketPolicy":       p.PutBucketPolicy,
 		"Object.GetBucketPolicy":       p.GetBucketPolicy,
@@ -2831,4 +2850,29 @@ func (p *ObjectProvider) DeleteBucketReplication(ctx context.Context, nr *model.
 		return nil, model.NewProviderError("NoSuchBucket", "The specified bucket does not exist", 404)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── P15.9: SelectObjectContent ──────────────────────────────────────────────
+
+func (p *ObjectProvider) SelectObjectContent(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket := strParam(nr.Params, "_bucket")
+	key := strParam(nr.Params, "_key")
+
+	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+
+	rc, err := p.blobs.GetStream(ctx, bucket, key, 0, -1)
+	if err != nil {
+		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
+	}
+	defer rc.Close()
+
+	payload, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, model.NewProviderError("InternalError", "Failed to read object", 500)
+	}
+	_ = m
+	return provider.OK(map[string]any{"_select_payload": payload}), nil
 }
