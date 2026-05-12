@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssfn "github.com/aws/aws-sdk-go-v2/service/sfn"
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
+	middleware "github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +24,20 @@ func sfnClient(t *testing.T) *awssfn.Client {
 	cfg := newAWSConfig(t)
 	return awssfn.NewFromConfig(cfg, func(o *awssfn.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint())
+		// The SDK's StartSyncExecution middleware prepends "sync-" to the host at
+		// the Serialize step. ClearStackValues is called before the middleware chain
+		// runs, so DisableEndpointHostPrefix set on a context before the call is
+		// wiped. We inject an Initialize-step middleware (which runs after
+		// ClearStackValues) to re-disable the prefix for every request.
+		o.APIOptions = append(o.APIOptions, func(s *middleware.Stack) error {
+			return s.Initialize.Add(middleware.InitializeMiddlewareFunc(
+				"DisableHostPrefix",
+				func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+					ctx = smithyhttp.DisableEndpointHostPrefix(ctx, true)
+					return next.HandleInitialize(ctx, in)
+				},
+			), middleware.Before)
+		})
 	})
 }
 

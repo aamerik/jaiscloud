@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	smithy "github.com/aws/smithy-go"
-	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,8 +46,9 @@ func assertAWSError(t *testing.T, err error, expectedCode string) {
 	assert.Equal(t, expectedCode, apiErr.ErrorCode())
 }
 
-// sfnSyncCtx disables the SDK's automatic "sync-" hostname prefix for StartSyncExecution.
-// Without this the SDK rewrites localhost:4566 → sync-localhost:4566, causing DNS failures.
+// sfnSyncCtx is a no-op: the sfnClient already installs an Initialize-step middleware
+// that disables the "sync-" host prefix (DisableEndpointHostPrefix via context is
+// cleared by ClearStackValues before the middleware chain runs, making it ineffective).
 func sfnSyncCtx(ctx context.Context) context.Context {
-	return smithyhttp.DisableEndpointHostPrefix(ctx, true)
+	return ctx
 }

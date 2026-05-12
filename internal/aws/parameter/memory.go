@@ -31,7 +31,7 @@ func NewMemoryParameterStore() *MemoryParameterStore {
 	}
 }
 
-func (s *MemoryParameterStore) PutParameter(_ context.Context, e ParameterEntry, overwrite bool) error {
+func (s *MemoryParameterStore) PutParameter(_ context.Context, e *ParameterEntry, overwrite bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -55,7 +55,7 @@ func (s *MemoryParameterStore) PutParameter(_ context.Context, e ParameterEntry,
 		e.CreatedAt = now
 	}
 	e.UpdatedAt = now
-	s.params[e.Name] = e
+	s.params[e.Name] = *e
 	return nil
 }
 
@@ -143,7 +143,7 @@ func (s *MemoryParameterStore) LabelParameterVersion(_ context.Context, name str
 	}
 	var invalid []string
 	for _, lbl := range newLabels {
-		if lbl == "" {
+		if lbl == "" || strings.HasPrefix(lbl, "aws") || strings.HasPrefix(lbl, "ssm") {
 			invalid = append(invalid, lbl)
 			continue
 		}

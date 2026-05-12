@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,6 +144,11 @@ func (p *DNSProvider) ListHostedZones(ctx context.Context, nr *model.NormalizedR
 		var hz hostedZone
 		json.Unmarshal(e.Data, &hz)
 		zones = append(zones, zoneToWire(hz))
+	}
+	if maxStr, _ := nr.Params["MaxItems"].(string); maxStr != "" {
+		if max, err := strconv.Atoi(maxStr); err == nil && max > 0 && max < len(zones) {
+			zones = zones[:max]
+		}
 	}
 	return provider.OK(map[string]any{"HostedZones": zones}), nil
 }

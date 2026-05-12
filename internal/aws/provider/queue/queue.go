@@ -126,6 +126,10 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	isFIFO := strings.HasSuffix(name, ".fifo")
+	if attrs["FifoQueue"] == "true" && !isFIFO {
+		return nil, model.NewProviderError("InvalidParameterValue",
+			"The name of a FIFO queue can only include alphanumeric characters, hyphens, or underscores, must end with .fifo suffix and be 1 to 80 in length.", 400)
+	}
 	if isFIFO {
 		if attrs["FifoQueue"] != "true" {
 			attrs["FifoQueue"] = "true"
@@ -375,6 +379,10 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	delaySec := intFromState(state, "DelaySeconds", 0)
 	if d, ok := nr.Params["DelaySeconds"]; ok {
 		delaySec = toInt(d)
+		if delaySec > 900 {
+			return nil, model.NewProviderError("InvalidParameterValue",
+				"Value "+fmt.Sprint(delaySec)+" for parameter DelaySeconds is invalid. Reason: Must be between 0 and 900, inclusive.", 400)
+		}
 	}
 
 	msg := sqsstore.SQSMessage{

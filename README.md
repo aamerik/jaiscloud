@@ -64,36 +64,62 @@ s3.create_bucket(Bucket="my-bucket")
 | **Multi Cloud** | &#x231B; | Partial | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
-> **Fidelity over features.** JaisCloud implements fewer services than LocalStack, but the ones it does implement pass the full AWS SDK integration test suite with no patching.
-
 ---
 
 ## Supported Services
 
-| Service | Status | Coverage |
-|---|---|---|
-| Amazon S3 | ✅ Full | Buckets, objects, multipart, batch delete, chunked encoding, Iceberg/S3A compatible |
-| Amazon SQS | ✅ Full | All 17 operations, FIFO, DLQ, JSON + Query/XML protocols |
-| Amazon DynamoDB | ✅ Full | CRUD, expressions, batch ops, streams, composite keys, cursor pagination |
-| Amazon SNS | ✅ Full | Topics, subscriptions, SQS fan-out with MessageAttributes |
-| Amazon EventBridge | ✅ Full | Rules, targets, event pattern matching, SQS delivery |
-| AWS IAM + STS | ✅ Full | Roles, policies, users, access keys, AssumeRole, GetCallerIdentity |
-| AWS Lambda | ✅ Full | Echo / Docker warm pool / K8s warm pod (Pod + ClusterIP Service per function) |
-| AWS Glue Data Catalog | ✅ Full | Databases, tables, partitions, Iceberg metadata CAS |
-| Amazon EMR (on EC2) | ✅ Full | Clusters, steps, instance fleets/groups; bootstrap actions as K8s init containers; mock or real K8s Spark |
-| Amazon EMR on EKS | ✅ Full | Virtual clusters, job runs, managed endpoints; mock or real K8s |
-| AWS KMS | ✅ Full | Keys, aliases, grants, envelope crypto (AES-256-GCM), rotation |
-| AWS Secrets Manager | ✅ Full | Secrets, versions, rotation, KMS-encrypted at rest |
-| AWS SSM Parameter Store | ✅ Full | String / StringList / SecureString, history, path queries |
-| AWS API Gateway (REST) | ✅ Full | Management plane + MOCK / AWS_PROXY / HTTP_PROXY invoke |
-| AWS CloudFormation | ✅ Full | Intrinsics, topo sort, real resource dispatch (9 types) |
-| Amazon EC2 | ⚙️ Stub | Wire protocol only |
-| Amazon Route 53 | ⚙️ Stub | Wire protocol only |
-| Amazon RDS | ⚙️ Stub | Wire protocol only |
-| Amazon ElastiCache | ⚙️ Stub | Wire protocol only |
-| Amazon ECS | ⚙️ Stub | Wire protocol only |
+**Legend:**
+- ✅ **Full** — real business logic; passes the AWS SDK integration test suite
+- ⚙️ **Metadata-only** — wire protocol + resource CRUD; no execution engine (e.g. EC2 instances don't run)
+- 🔌 **Stub** — endpoint exists, returns plausible responses; limited operation coverage
 
-For per-operation coverage, executor modes, fidelity notes, and full-mode persistence details see **[docs/SERVICES.md](docs/SERVICES.md)**.
+### Full implementations
+
+| Service | Operations / Notes |
+|---|---|
+| Amazon S3 | Buckets, objects, multipart upload, batch delete, chunked encoding, versioning, policies, website, lifecycle, notifications; Iceberg / S3A compatible |
+| Amazon SQS | All 17 operations; FIFO + deduplication; DLQ; message-move task; long-poll; JSON + Query/XML protocols |
+| Amazon DynamoDB | CRUD, condition/update/filter expressions, batch ops, parallel scan, composite keys, cursor pagination, TTL |
+| Amazon DynamoDB Streams | Stream creation, shard iterators, record delivery to Lambda via ESM |
+| Amazon SNS | Topics, subscriptions, publish, SQS fan-out with MessageAttributes and filter policies |
+| Amazon EventBridge | Rules, targets, event pattern matching, SQS / Lambda delivery |
+| AWS IAM | Roles, policies, users, groups, access keys, instance profiles, policy attachments |
+| AWS STS | AssumeRole, GetCallerIdentity, GetSessionToken, federation tokens |
+| AWS Lambda | Echo (mock) / Docker warm pool / K8s warm pod per function; event source mappings (SQS, DynamoDB Streams, Kinesis); aliases, versions, layers, concurrency, function URLs |
+| AWS Glue Data Catalog | Databases, tables, partitions, table versions, Iceberg metadata CAS, crawlers |
+| Amazon Kinesis | Streams, shards, records (PutRecord / PutRecords / GetRecords), shard iterators, shard split/merge, consumers, retention, tags |
+| Amazon EMR (on EC2) | Clusters, steps, instance fleets/groups; bootstrap actions as K8s init containers; mock or real Docker/K8s Spark |
+| Amazon EMR on EKS | Virtual clusters, job runs, managed endpoints; mock or real Docker/K8s Spark |
+| AWS KMS | Keys, aliases, grants, Encrypt/Decrypt/GenerateDataKey, envelope crypto (AES-256-GCM), key rotation |
+| AWS Secrets Manager | Secrets, versions, binary secrets, rotation, KMS-encrypted at rest |
+| AWS SSM Parameter Store | String / StringList / SecureString, versioning, labels, history, path queries, tags |
+| AWS API Gateway (REST) | Resources, methods, integrations, deployments, stages; MOCK / AWS_PROXY / HTTP_PROXY invocation |
+| AWS CloudFormation | Intrinsics (Ref, Fn::Sub, Fn::Join, Fn::Select, Fn::If, Fn::GetAtt, Fn::ImportValue), topological sort, real resource dispatch for 9 resource types |
+| Amazon CloudWatch | PutMetricData, GetMetricData, GetMetricStatistics, PutMetricAlarm, DescribeAlarms; in-memory metric ring |
+| Amazon CloudWatch Logs | Log groups, log streams, PutLogEvents, GetLogEvents, filter patterns |
+
+### Metadata-only implementations
+
+These services implement the full wire protocol and resource CRUD (create, describe, delete, tag) but do not have an underlying execution engine — instances don't run, clusters don't provision real VMs, etc.
+
+| Service | Supported operations |
+|---|---|
+| Amazon EC2 | Instances, AMIs, security groups, key pairs, VPCs, subnets, route tables, internet gateways, snapshots, volumes, placement groups |
+| Amazon Route 53 | Hosted zones, record sets, health checks, tags |
+| Amazon RDS | DB instances, DB clusters, parameter groups, subnet groups, snapshots |
+| Amazon ElastiCache | Clusters, replication groups, subnet groups, parameter groups |
+| Amazon ECS | Clusters, task definitions, services, tasks |
+| Amazon EKS | Clusters, node groups, Fargate profiles, add-ons |
+
+### Stub implementations
+
+These services accept requests and return plausible responses but have very limited operation coverage.
+
+| Service | Notes |
+|---|---|
+| AWS Step Functions | CreateStateMachine, StartExecution, DescribeExecution; no actual state machine evaluation |
+
+For per-operation coverage, executor modes, fidelity notes, and full-mode persistence details see the [Service Reference](#service-reference) section below.
 
 ---
 
@@ -441,6 +467,49 @@ make test-e2e-lambda-docker TEST_RUN=TestLambda_DeleteAndReCreate
 ```
 
 See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for the full test matrix and how to set up the Spark and Lambda environments.
+
+---
+
+## Service Reference
+
+### Persistence (lite vs full mode)
+
+| Service | Lite mode | Full mode (`--mode full`) |
+|---|---|---|
+| SQS | In-memory | PostgreSQL |
+| SNS | In-memory | PostgreSQL |
+| DynamoDB + Streams | In-memory | PostgreSQL |
+| S3 (metadata) | In-memory | PostgreSQL |
+| S3 (object bytes) | In-memory | LocalFS (`--blob-dir`) |
+| Lambda | In-memory config | PostgreSQL config |
+| IAM / STS | In-memory | PostgreSQL |
+| KMS | In-memory | PostgreSQL |
+| Secrets Manager | In-memory | PostgreSQL |
+| SSM Parameter Store | In-memory | PostgreSQL |
+| API Gateway | In-memory | PostgreSQL |
+| CloudFormation | In-memory | PostgreSQL |
+| EventBridge | In-memory | PostgreSQL |
+| Glue Data Catalog | In-memory | PostgreSQL |
+| Kinesis | In-memory | In-memory (no postgres backend yet) |
+| CloudWatch metrics | In-memory ring | In-memory ring + PostgreSQL alarms |
+| CloudWatch Logs | In-memory | In-memory |
+| EC2 / Route53 / RDS / ElastiCache / ECS / EKS | In-memory | In-memory |
+
+### Lambda execution modes
+
+| Mode (`JAISCLOUD_EXECUTOR_MODE`) | Behavior |
+|---|---|
+| _(empty)_ / `mock` | Echo function — returns the invocation payload unchanged |
+| `docker` | Warm Docker container pool per function; reuses containers across invocations |
+| `k8s` | Warm K8s Pod + ClusterIP Service per function; survives JaisCloud restarts |
+
+### EMR / Spark execution modes
+
+| Mode | EMR on EC2 | EMR on EKS |
+|---|---|---|
+| _(empty)_ / `mock` | Steps complete instantly as `COMPLETED` | Job runs complete instantly as `COMPLETED` |
+| `docker` | Each step runs as a Docker container | Each job run runs as a Docker container |
+| `k8s` | Each step runs as a K8s `batch/v1 Job` | Each job run runs as a K8s `batch/v1 Job`; cluster-mode available |
 
 ---
 

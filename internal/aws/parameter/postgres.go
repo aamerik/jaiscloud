@@ -22,8 +22,8 @@ func NewPostgresParameterStore(pool *pgxpool.Pool) *PostgresParameterStore {
 	return &PostgresParameterStore{pool: pool}
 }
 
-func (s *PostgresParameterStore) PutParameter(ctx context.Context, e ParameterEntry, overwrite bool) error {
-	data, _ := json.Marshal(paramMeta(e))
+func (s *PostgresParameterStore) PutParameter(ctx context.Context, e *ParameterEntry, overwrite bool) error {
+	data, _ := json.Marshal(paramMeta(*e))
 	now := time.Now()
 
 	tx, err := s.pool.Begin(ctx)
@@ -215,8 +215,14 @@ func isPgUnique(err error) bool {
 // This minimal implementation delegates to an in-memory overlay via the history approach.
 // (Full SQL implementation left for a future migration step.)
 
-func (s *PostgresParameterStore) LabelParameterVersion(_ context.Context, _ string, _ int64, _ []string) ([]string, error) {
-	return nil, nil
+func (s *PostgresParameterStore) LabelParameterVersion(_ context.Context, _ string, _ int64, labels []string) ([]string, error) {
+	var invalid []string
+	for _, lbl := range labels {
+		if lbl == "" || strings.HasPrefix(lbl, "aws") || strings.HasPrefix(lbl, "ssm") {
+			invalid = append(invalid, lbl)
+		}
+	}
+	return invalid, nil
 }
 
 func (s *PostgresParameterStore) UnlabelParameterVersion(_ context.Context, _ string, _ int64, _ []string) error {

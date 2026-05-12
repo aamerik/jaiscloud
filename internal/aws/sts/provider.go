@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +21,9 @@ import (
 
 var (
 	// from LocalStack provider.py lines 39–41
-	roleARNRegex    = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
-	sessionNameRegex = regexp.MustCompile(`^[\w+=,.@-]*$`)
+	roleARNRegex           = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
+	sessionNameRegex       = regexp.MustCompile(`^[\w+=,.@-]*$`)
+	federationNameRegex    = regexp.MustCompile(`^[\w+=,.@-]+$`)
 )
 
 // STSProvider handles STS API operations.
@@ -68,6 +70,10 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 	sessionName := strParam(nr.Params, "RoleSessionName")
 	durationSecs := intParam(nr.Params, "DurationSeconds", 3600)
 
+	if durationSecs < 900 || durationSecs > 43200 {
+		return nil, stsErr("ValidationError",
+			"1 validation error detected: Value at 'durationSeconds' failed to satisfy constraint: Member must have value greater than or equal to 900", 400)
+	}
 	if !roleARNRegex.MatchString(roleArn) {
 		return nil, stsErr("ValidationError", fmt.Sprintf("%s is invalid", roleArn), 400)
 	}
@@ -240,8 +246,9 @@ func (p *STSProvider) GetSessionToken(_ context.Context, nr *model.NormalizedReq
 
 func (p *STSProvider) GetFederationToken(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if name == "" {
-		return nil, stsErr("ValidationError", "Name is required", 400)
+	if name == "" || !federationNameRegex.MatchString(name) {
+		return nil, stsErr("ValidationError",
+			fmt.Sprintf("1 validation error detected: Value '%s' at 'name' failed to satisfy constraint: Member must satisfy regular expression pattern: [\\w+=,.@-]+", name), 400)
 	}
 	durationSecs := intParam(nr.Params, "DurationSeconds", 43200)
 	creds := generateCredentials(durationSecs)
@@ -342,6 +349,10 @@ func intParam(params map[string]any, key string, def int) int {
 		return v
 	case int64:
 		return int(v)
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }

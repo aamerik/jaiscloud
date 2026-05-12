@@ -69,7 +69,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ECR.GetLifecyclePolicyPreview":   p.GetLifecyclePolicyPreview,
 
 		// Repository policy
-		"ECR.PutRepositoryPolicy":    p.PutRepositoryPolicy,
+		"ECR.SetRepositoryPolicy":    p.PutRepositoryPolicy,
 		"ECR.GetRepositoryPolicy":    p.GetRepositoryPolicy,
 		"ECR.DeleteRepositoryPolicy": p.DeleteRepositoryPolicy,
 

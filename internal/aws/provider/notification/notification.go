@@ -331,6 +331,12 @@ func (p *SNSProvider) SetSubscriptionAttributes(ctx context.Context, nr *model.N
 	sArn := strParam(nr.Params, "SubscriptionArn")
 	attr := strParam(nr.Params, "AttributeName")
 	val := strParam(nr.Params, "AttributeValue")
+	if attr == "FilterPolicy" && val != "" {
+		var check map[string]any
+		if err := json.Unmarshal([]byte(val), &check); err != nil {
+			return nil, model.NewProviderError("InvalidParameter", "Invalid JSON in FilterPolicy: "+err.Error(), http.StatusBadRequest)
+		}
+	}
 	var sd subscriptionData
 	if err := loadEntry(ctx, p.resources, "sns_subscriptions", sArn, &sd); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")

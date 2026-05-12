@@ -38,7 +38,7 @@ type HistoryEntry struct {
 
 // ParameterStore is the persistence interface for SSM Parameter Store.
 type ParameterStore interface {
-	PutParameter(ctx context.Context, e ParameterEntry, overwrite bool) error
+	PutParameter(ctx context.Context, e *ParameterEntry, overwrite bool) error
 	GetParameter(ctx context.Context, name string) (ParameterEntry, error)
 	DeleteParameter(ctx context.Context, name string) error
 	ListParameters(ctx context.Context, path string, recursive bool) ([]ParameterEntry, error)

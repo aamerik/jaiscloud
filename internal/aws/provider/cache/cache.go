@@ -41,6 +41,10 @@ func (p *CacheProvider) Routes() map[string]provider.HandlerFunc {
 		"ElastiCache.AddTagsToResource":      p.AddTagsToResource,
 		"ElastiCache.RemoveTagsFromResource": p.RemoveTagsFromResource,
 		"ElastiCache.ListTagsForResource":    p.ListTagsForResource,
+		// Parameter Groups
+		"ElastiCache.CreateCacheParameterGroup":   p.CreateCacheParameterGroup,
+		"ElastiCache.DescribeCacheParameterGroups": p.DescribeCacheParameterGroups,
+		"ElastiCache.DeleteCacheParameterGroup":   p.DeleteCacheParameterGroup,
 	}
 }
 

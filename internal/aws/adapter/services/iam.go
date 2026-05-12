@@ -90,7 +90,7 @@ func isSTSAction(action string) bool {
 	switch action {
 	case "AssumeRole", "AssumeRoleWithSAML", "AssumeRoleWithWebIdentity",
 		"GetCallerIdentity", "GetSessionToken", "GetFederationToken",
-		"DecodeAuthorizationMessage":
+		"DecodeAuthorizationMessage", "GetAccessKeyInfo":
 		return true
 	}
 	return false
@@ -329,6 +329,38 @@ func buildIAMResult(action string, data map[string]any) string {
 			sb.WriteString("</FederatedUser>")
 		}
 		sb.WriteString(xmlTag("PackedPolicySize", str(data["PackedPolicySize"])))
+	case "AssumeRoleWithWebIdentity":
+		if creds, ok := data["Credentials"].(map[string]any); ok {
+			sb.WriteString(encodeSTS(creds))
+		}
+		if aru, ok := data["AssumedRoleUser"].(map[string]any); ok {
+			sb.WriteString("<AssumedRoleUser>")
+			sb.WriteString(xmlTag("AssumedRoleId", str(aru["AssumedRoleId"])))
+			sb.WriteString(xmlTag("Arn", str(aru["Arn"])))
+			sb.WriteString("</AssumedRoleUser>")
+		}
+		sb.WriteString(xmlTag("SubjectFromWebIdentityToken", str(data["SubjectFromWebIdentityToken"])))
+		sb.WriteString(xmlTag("PackedPolicySize", str(data["PackedPolicySize"])))
+	case "AssumeRoleWithSAML":
+		if creds, ok := data["Credentials"].(map[string]any); ok {
+			sb.WriteString(encodeSTS(creds))
+		}
+		if aru, ok := data["AssumedRoleUser"].(map[string]any); ok {
+			sb.WriteString("<AssumedRoleUser>")
+			sb.WriteString(xmlTag("AssumedRoleId", str(aru["AssumedRoleId"])))
+			sb.WriteString(xmlTag("Arn", str(aru["Arn"])))
+			sb.WriteString("</AssumedRoleUser>")
+		}
+		sb.WriteString(xmlTag("Subject", str(data["Subject"])))
+		sb.WriteString(xmlTag("SubjectType", str(data["SubjectType"])))
+		sb.WriteString(xmlTag("Issuer", str(data["Issuer"])))
+		sb.WriteString(xmlTag("Audience", str(data["Audience"])))
+		sb.WriteString(xmlTag("NameQualifier", str(data["NameQualifier"])))
+		sb.WriteString(xmlTag("PackedPolicySize", str(data["PackedPolicySize"])))
+	case "DecodeAuthorizationMessage":
+		sb.WriteString(xmlTag("DecodedMessage", str(data["DecodedMessage"])))
+	case "GetAccessKeyInfo":
+		sb.WriteString(xmlTag("Account", str(data["Account"])))
 
 	// Groups
 	case "CreateGroup":

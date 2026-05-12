@@ -30,10 +30,14 @@ func (c *ElastiCacheCodec) Decode(r *http.Request, body []byte) (*model.Normaliz
 	}, nil
 }
 
-func (c *ElastiCacheCodec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *ElastiCacheCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
-	body := buildElastiCacheXML(resp.Data)
+	action := ""
+	if nr != nil {
+		action = nr.Action
+	}
+	body := buildElastiCacheXML(action, resp.Data)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -53,7 +57,7 @@ func (c *ElastiCacheCodec) EncodeError(_ *model.NormalizedRequest, perr *model.P
 
 const ecNS = `xmlns="http://elasticache.amazonaws.com/doc/2015-02-02/"`
 
-func buildElastiCacheXML(data map[string]any) string {
+func buildElastiCacheXML(action string, data map[string]any) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 	}
@@ -106,7 +110,116 @@ func buildElastiCacheXML(data map[string]any) string {
 		sb.WriteString(`</ReplicationGroups>`)
 		return wrap("DescribeReplicationGroups", sb.String())
 	}
+	if v, ok := data["CacheSubnetGroup"]; ok {
+		a := action
+		if a == "" {
+			a = "CreateCacheSubnetGroup"
+		}
+		return wrap(a, encodeCacheSubnetGroup(v))
+	}
+	if list, ok := data["CacheSubnetGroups"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<CacheSubnetGroups>`)
+		if items, ok := list.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeCacheSubnetGroup(item))
+			}
+		}
+		sb.WriteString(`</CacheSubnetGroups>`)
+		return wrap("DescribeCacheSubnetGroups", sb.String())
+	}
+	if v, ok := data["CacheParameterGroup"]; ok {
+		a := action
+		if a == "" {
+			a = "CreateCacheParameterGroup"
+		}
+		return wrap(a, encodeCacheParameterGroup(v))
+	}
+	if list, ok := data["CacheParameterGroups"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<CacheParameterGroups>`)
+		if items, ok := list.([]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeCacheParameterGroup(item))
+			}
+		}
+		sb.WriteString(`</CacheParameterGroups>`)
+		return wrap("DescribeCacheParameterGroups", sb.String())
+	}
+	if _, ok := data["TagList"]; ok {
+		a := action
+		if a == "" {
+			a = "AddTagsToResource"
+		}
+		return wrap(a, encodeECTagList(data["TagList"]))
+	}
+	// Empty response — use the action name to produce a valid wrapper
+	if action != "" && len(data) == 0 {
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<` + action + `Response ` + ecNS + `>` +
+			`<ResponseMetadata><RequestId>jaiscloud-ec</RequestId></ResponseMetadata>` +
+			`</` + action + `Response>`
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+}
+
+func encodeCacheSubnetGroup(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<CacheSubnetGroup>`)
+	sb.WriteString(xmlTag("CacheSubnetGroupName", str(m["CacheSubnetGroupName"])))
+	sb.WriteString(xmlTag("CacheSubnetGroupDescription", str(m["CacheSubnetGroupDescription"])))
+	sb.WriteString(xmlTag("VpcId", str(m["VpcId"])))
+	if subnets, ok := m["Subnets"].([]map[string]any); ok {
+		sb.WriteString(`<Subnets>`)
+		for _, s := range subnets {
+			sb.WriteString(`<Subnet>`)
+			sb.WriteString(xmlTag("SubnetIdentifier", str(s["SubnetIdentifier"])))
+			if az, ok := s["SubnetAvailabilityZone"].(map[string]any); ok {
+				sb.WriteString(`<SubnetAvailabilityZone>`)
+				sb.WriteString(xmlTag("Name", str(az["Name"])))
+				sb.WriteString(`</SubnetAvailabilityZone>`)
+			}
+			sb.WriteString(`</Subnet>`)
+		}
+		sb.WriteString(`</Subnets>`)
+	}
+	sb.WriteString(xmlTag("ARN", str(m["ARN"])))
+	sb.WriteString(`</CacheSubnetGroup>`)
+	return sb.String()
+}
+
+func encodeCacheParameterGroup(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<CacheParameterGroup>`)
+	sb.WriteString(xmlTag("CacheParameterGroupName", str(m["CacheParameterGroupName"])))
+	sb.WriteString(xmlTag("CacheParameterGroupFamily", str(m["CacheParameterGroupFamily"])))
+	sb.WriteString(xmlTag("Description", str(m["Description"])))
+	sb.WriteString(xmlTag("ARN", str(m["ARN"])))
+	sb.WriteString(`</CacheParameterGroup>`)
+	return sb.String()
+}
+
+func encodeECTagList(v any) string {
+	var sb strings.Builder
+	sb.WriteString(`<TagList>`)
+	if tags, ok := v.([]map[string]any); ok {
+		for _, t := range tags {
+			sb.WriteString(`<Tag>`)
+			sb.WriteString(xmlTag("Key", str(t["Key"])))
+			sb.WriteString(xmlTag("Value", str(t["Value"])))
+			sb.WriteString(`</Tag>`)
+		}
+	}
+	sb.WriteString(`</TagList>`)
+	return sb.String()
 }
 
 func encodeCacheCluster(v any) string {

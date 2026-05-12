@@ -32,10 +32,14 @@ func (c *RDSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 	}, nil
 }
 
-func (c *RDSCodec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *RDSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
-	body := buildRDSXML(resp.Data)
+	action := ""
+	if nr != nil {
+		action = nr.Action
+	}
+	body := buildRDSXML(action, resp.Data)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -55,7 +59,7 @@ func (c *RDSCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderE
 
 const rdsNS = `xmlns="http://rds.amazonaws.com/doc/2014-10-31/"`
 
-func buildRDSXML(data map[string]any) string {
+func buildRDSXML(action string, data map[string]any) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 	}
@@ -122,7 +126,69 @@ func buildRDSXML(data map[string]any) string {
 		sb.WriteString(`</DBSubnetGroups>`)
 		return wrap("DescribeDBSubnetGroups", sb.String())
 	}
+	if v, ok := data["DBParameterGroup"]; ok {
+		a := action
+		if a == "" {
+			a = "CreateDBParameterGroup"
+		}
+		return wrap(a, encodeDBParameterGroup(v))
+	}
+	if list, ok := data["DBParameterGroups"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<DBParameterGroups>`)
+		if items, ok := list.([]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeDBParameterGroup(item))
+			}
+		}
+		sb.WriteString(`</DBParameterGroups>`)
+		return wrap("DescribeDBParameterGroups", sb.String())
+	}
+	if _, ok := data["TagList"]; ok {
+		a := action
+		if a == "" {
+			a = "ListTagsForResource"
+		}
+		return wrap(a, encodeRDSTagList(data["TagList"]))
+	}
+	// Empty response — produce a minimal valid wrapper using the action name
+	if action != "" && len(data) == 0 {
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<` + action + `Response ` + rdsNS + `>` +
+			`<ResponseMetadata><RequestId>jaiscloud-rds</RequestId></ResponseMetadata>` +
+			`</` + action + `Response>`
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+}
+
+func encodeDBParameterGroup(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<DBParameterGroup>`)
+	sb.WriteString(xmlTag("DBParameterGroupName", str(m["DBParameterGroupName"])))
+	sb.WriteString(xmlTag("DBParameterGroupFamily", str(m["DBParameterGroupFamily"])))
+	sb.WriteString(xmlTag("Description", str(m["Description"])))
+	sb.WriteString(xmlTag("DBParameterGroupArn", str(m["DBParameterGroupArn"])))
+	sb.WriteString(`</DBParameterGroup>`)
+	return sb.String()
+}
+
+func encodeRDSTagList(v any) string {
+	var sb strings.Builder
+	sb.WriteString(`<TagList>`)
+	if tags, ok := v.([]map[string]any); ok {
+		for _, t := range tags {
+			sb.WriteString(`<Tag>`)
+			sb.WriteString(xmlTag("Key", str(t["Key"])))
+			sb.WriteString(xmlTag("Value", str(t["Value"])))
+			sb.WriteString(`</Tag>`)
+		}
+	}
+	sb.WriteString(`</TagList>`)
+	return sb.String()
 }
 
 func encodeDBInstance(v any) string {
@@ -143,6 +209,7 @@ func encodeDBInstance(v any) string {
 	sb.WriteString(xmlTag("MultiAZ", str(m["MultiAZ"])))
 	sb.WriteString(xmlTag("EngineVersion", str(m["EngineVersion"])))
 	sb.WriteString(xmlTag("PubliclyAccessible", str(m["PubliclyAccessible"])))
+	sb.WriteString(xmlTag("DBInstanceArn", str(m["DBInstanceArn"])))
 	if sg, ok := m["DBSubnetGroup"]; ok {
 		sb.WriteString(xmlTag("DBSubnetGroup", encodeDBSubnetGroup(sg)))
 	}

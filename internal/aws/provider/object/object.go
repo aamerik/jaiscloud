@@ -1452,12 +1452,16 @@ func (p *ObjectProvider) AbortMultipartUpload(ctx context.Context, nr *model.Nor
 
 func (p *ObjectProvider) ListMultipartUploads(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
+	prefix := strParam(nr.Params, "prefix")
 	uploads, err := p.meta.ListActiveUploads(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]map[string]any, 0, len(uploads))
 	for _, u := range uploads {
+		if prefix != "" && !strings.HasPrefix(u.Key, prefix) {
+			continue
+		}
 		items = append(items, map[string]any{
 			"Key":       u.Key,
 			"UploadId":  u.UploadID,

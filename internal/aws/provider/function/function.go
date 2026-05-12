@@ -332,6 +332,14 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		}
 	}
 
+	var tags map[string]string
+	if rawTags, ok := nr.Params["Tags"].(map[string]any); ok {
+		tags = make(map[string]string, len(rawTags))
+		for k, v := range rawTags {
+			tags[k] = fmt.Sprint(v)
+		}
+	}
+
 	cfg := functionConfig{
 		FunctionName: name,
 		FunctionArn:  p.functionARN(nr, name),
@@ -345,6 +353,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		LastModified: time.Now().UTC().Format(time.RFC3339),
 		RevisionId:   "1",
 		Environment:  parseEnvVars(nr.Params),
+		Tags:         tags,
 	}
 
 	if err := p.saveConfig(ctx, cfg); err != nil {

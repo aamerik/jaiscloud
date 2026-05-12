@@ -356,6 +356,11 @@ func (s *PostgresS3ObjectMetaStore) GetMultipartMeta(ctx context.Context, upload
 }
 
 func (s *PostgresS3ObjectMetaStore) ListParts(ctx context.Context, uploadID string) ([]PartMeta, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jc_s3_multipart_uploads WHERE upload_id=$1)`, uploadID).Scan(&exists)
+	if err != nil || !exists {
+		return nil, fmt.Errorf("NoSuchUpload")
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT part_number, etag, size FROM jc_s3_multipart_parts
 		WHERE upload_id=$1 ORDER BY part_number

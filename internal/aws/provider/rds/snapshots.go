@@ -221,3 +221,81 @@ func (p *RelationalProvider) ListTagsForResource(ctx context.Context, nr *model.
 	}
 	return provider.OK(map[string]any{"TagList": list}), nil
 }
+
+// ─── DB Parameter Groups ──────────────────────────────────────────────────────
+
+type dbParameterGroup struct {
+	DBParameterGroupName   string `json:"DBParameterGroupName"`
+	DBParameterGroupFamily string `json:"DBParameterGroupFamily"`
+	Description            string `json:"Description"`
+	DBParameterGroupArn    string `json:"DBParameterGroupArn"`
+}
+
+func (g dbParameterGroup) toWire() map[string]any {
+	return map[string]any{
+		"DBParameterGroupName":   g.DBParameterGroupName,
+		"DBParameterGroupFamily": g.DBParameterGroupFamily,
+		"Description":            g.Description,
+		"DBParameterGroupArn":    g.DBParameterGroupArn,
+	}
+}
+
+func (p *RelationalProvider) CreateDBParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "DBParameterGroupName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "DBParameterGroupName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	grp := dbParameterGroup{
+		DBParameterGroupName:   name,
+		DBParameterGroupFamily: strParam(nr.Params, "DBParameterGroupFamily"),
+		Description:            strParam(nr.Params, "Description"),
+		DBParameterGroupArn:    nr.ResourceID("pg", name),
+	}
+	data, _ := json.Marshal(grp)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBParameterGroup, ID: name, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "DBParameterGroupAlreadyExists", Message: "DB parameter group already exists", HTTPStatus: http.StatusBadRequest}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"DBParameterGroup": grp.toWire()}), nil
+}
+
+func (p *RelationalProvider) DescribeDBParameterGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "DBParameterGroupName")
+	if name != "" {
+		e, err := p.resources.Get(ctx, rtDBParameterGroup, name)
+		if err == store.ErrNotFound {
+			return nil, &model.ProviderError{Code: "DBParameterGroupNotFound", Message: "DB parameter group not found", HTTPStatus: http.StatusNotFound}
+		}
+		if err != nil {
+			return nil, err
+		}
+		var grp dbParameterGroup
+		json.Unmarshal(e.Data, &grp)
+		return provider.OK(map[string]any{"DBParameterGroups": []any{grp.toWire()}}), nil
+	}
+	entries, err := p.resources.List(ctx, rtDBParameterGroup, "")
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]any, 0, len(entries))
+	for _, e := range entries {
+		var grp dbParameterGroup
+		json.Unmarshal(e.Data, &grp)
+		groups = append(groups, grp.toWire())
+	}
+	return provider.OK(map[string]any{"DBParameterGroups": groups}), nil
+}
+
+func (p *RelationalProvider) DeleteDBParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "DBParameterGroupName")
+	if err := p.resources.Delete(ctx, rtDBParameterGroup, name); err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBParameterGroupNotFound", Message: "DB parameter group not found", HTTPStatus: http.StatusNotFound}
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *RelationalProvider) DeleteDBParameterGroupIgnoreNotFound(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.DeleteDBParameterGroup(ctx, nr)
+}

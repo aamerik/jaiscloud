@@ -73,7 +73,7 @@ func (p *ParameterProvider) PutParameter(ctx context.Context, nr *model.Normaliz
 		Value:       raw,
 		Tags:        tags,
 	}
-	if err := p.store.PutParameter(ctx, e, overwrite); err != nil {
+	if err := p.store.PutParameter(ctx, &e, overwrite); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
 			return nil, model.NewProviderError("ParameterAlreadyExists",
 				"parameter already exists; use Overwrite=true to update: "+name, 400)
@@ -240,7 +240,7 @@ func (p *ParameterProvider) AddTagsToResource(ctx context.Context, nr *model.Nor
 	for k, v := range newTags {
 		e.Tags[k] = v
 	}
-	if err := p.store.PutParameter(ctx, e, true); err != nil {
+	if err := p.store.PutParameter(ctx, &e, true); err != nil {
 		return nil, fmt.Errorf("ssm: save tags: %w", err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -258,7 +258,7 @@ func (p *ParameterProvider) RemoveTagsFromResource(ctx context.Context, nr *mode
 	for _, k := range extractStringList(nr.Params, "TagKeys") {
 		delete(e.Tags, k)
 	}
-	if err := p.store.PutParameter(ctx, e, true); err != nil {
+	if err := p.store.PutParameter(ctx, &e, true); err != nil {
 		return nil, fmt.Errorf("ssm: save tags: %w", err)
 	}
 	return provider.OK(map[string]any{}), nil

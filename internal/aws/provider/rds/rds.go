@@ -45,13 +45,18 @@ func (p *RelationalProvider) Routes() map[string]provider.HandlerFunc {
 		"RDS.AddTagsToResource":      p.AddTagsToResource,
 		"RDS.RemoveTagsFromResource": p.RemoveTagsFromResource,
 		"RDS.ListTagsForResource":    p.ListTagsForResource,
+		// Parameter Groups
+		"RDS.CreateDBParameterGroup":   p.CreateDBParameterGroup,
+		"RDS.DescribeDBParameterGroups": p.DescribeDBParameterGroups,
+		"RDS.DeleteDBParameterGroup":   p.DeleteDBParameterGroup,
 	}
 }
 
 const (
-	rtDBInstance   = "rds_db_instance"
-	rtDBCluster    = "rds_db_cluster"
-	rtDBSubnetGroup = "rds_db_subnet_group"
+	rtDBInstance        = "rds_db_instance"
+	rtDBCluster         = "rds_db_cluster"
+	rtDBSubnetGroup     = "rds_db_subnet_group"
+	rtDBParameterGroup  = "rds_db_parameter_group"
 )
 
 func newID() string {
@@ -74,6 +79,7 @@ type dbInstance struct {
 	EngineVersion        string `json:"EngineVersion"`
 	PubliclyAccessible   bool   `json:"PubliclyAccessible"`
 	Port                 int    `json:"Port"`
+	DBInstanceArn        string `json:"DBInstanceArn"`
 }
 
 func (d dbInstance) toWire() map[string]any {
@@ -92,6 +98,7 @@ func (d dbInstance) toWire() map[string]any {
 		"MultiAZ":              fmt.Sprintf("%v", d.MultiAZ),
 		"EngineVersion":        d.EngineVersion,
 		"PubliclyAccessible":   fmt.Sprintf("%v", d.PubliclyAccessible),
+		"DBInstanceArn":        d.DBInstanceArn,
 		"Endpoint": map[string]any{
 			"Address": d.DBInstanceIdentifier + ".jaiscloud.local",
 			"Port":    fmt.Sprintf("%d", port),
@@ -127,6 +134,7 @@ func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.Nor
 		DBName:               strParam(nr.Params, "DBName"),
 		AllocatedStorage:     20,
 		EngineVersion:        strParam(nr.Params, "EngineVersion"),
+		DBInstanceArn:        nr.ResourceID("db", id),
 	}
 	if inst.EngineVersion == "" {
 		inst.EngineVersion = "8.0"

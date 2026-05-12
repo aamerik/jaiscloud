@@ -72,6 +72,12 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 		parseXMLBody(body, params)
 		return "CreateHostedZone", params
 	case path == "/hostedzone" && method == "GET":
+		if v := r.URL.Query().Get("maxitems"); v != "" {
+			params["MaxItems"] = v
+		}
+		if v := r.URL.Query().Get("marker"); v != "" {
+			params["Marker"] = v
+		}
 		return "ListHostedZones", params
 	case strings.HasPrefix(path, "/hostedzone/") && !strings.Contains(path[len("/hostedzone/"):], "/"):
 		id := strings.TrimPrefix(path, "/hostedzone/")
@@ -115,8 +121,88 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 		id := strings.TrimPrefix(path, "/change/")
 		params["Id"] = id
 		return "GetChange", params
+	// Tags — /tags/{resourcetype}/{id}
+	case strings.HasPrefix(path, "/tags/"):
+		rest := strings.TrimPrefix(path, "/tags/")
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) == 2 {
+			params["ResourceType"] = parts[0]
+			params["ResourceId"] = parts[1]
+		}
+		if method == "POST" {
+			parseR53TagsBody(body, params)
+			return "ChangeTagsForResource", params
+		}
+		if method == "GET" {
+			return "ListTagsForResource", params
+		}
 	}
 	return "", nil
+}
+
+// parseR53TagsBody parses the ChangeTagsForResource XML body into structured params.
+// It produces params["AddTags"] = []any{{"Key":k,"Value":v},...}
+// and params["RemoveTagKeys"] = []any{"key1",...}.
+func parseR53TagsBody(body []byte, params map[string]any) {
+	if len(body) == 0 {
+		return
+	}
+	dec := xml.NewDecoder(strings.NewReader(string(body)))
+	var stack []string
+	var curKey, curVal string
+	var addTags []any
+	var removeKeys []any
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			stack = append(stack, t.Name.Local)
+			if t.Name.Local == "Tag" {
+				curKey = ""
+				curVal = ""
+			}
+		case xml.CharData:
+			text := strings.TrimSpace(string(t))
+			if len(stack) == 0 {
+				break
+			}
+			top := stack[len(stack)-1]
+			parent := ""
+			if len(stack) >= 2 {
+				parent = stack[len(stack)-2]
+			}
+			if top == "Key" && parent == "Tag" {
+				curKey = text
+			} else if top == "Value" && parent == "Tag" {
+				curVal = text
+			} else if top == "Key" && parent == "RemoveTagKeys" {
+				removeKeys = append(removeKeys, text)
+			}
+		case xml.EndElement:
+			if len(stack) == 0 {
+				break
+			}
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if top == "Tag" && curKey != "" {
+				addTags = append(addTags, map[string]any{"Key": curKey, "Value": curVal})
+				curKey = ""
+				curVal = ""
+			}
+		}
+	}
+	if len(addTags) > 0 {
+		params["AddTags"] = addTags
+	}
+	if len(removeKeys) > 0 {
+		params["RemoveTagKeys"] = removeKeys
+	}
 }
 
 // parseXMLBody does a best-effort parse of the XML request body into the params map.
@@ -249,7 +335,58 @@ func buildRoute53XML(data map[string]any) string {
 			`<ChangeInfo><Id>/change/C1</Id><Status>` + xmlEscape(str(status)) + `</Status></ChangeInfo>` +
 			`</GetChangeResponse>`
 	}
+	// ChangeTagsForResource — no body needed
+	if _, ok := data["ChangeTagsForResourceResponse"]; ok {
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<ChangeTagsForResourceResponse ` + ns + `></ChangeTagsForResourceResponse>`
+	}
+	// ListTagsForResource
+	if rts, ok := data["ResourceTagSet"]; ok {
+		inner := encodeR53TagSet(rts)
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<ListTagsForResourceResponse ` + ns + `>` +
+			`<ResourceTagSet>` + inner + `</ResourceTagSet>` +
+			`</ListTagsForResourceResponse>`
+	}
+	// ListTagsForResources
+	if sets, ok := data["ResourceTagSets"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+		sb.WriteString(`<ListTagsForResourcesResponse ` + ns + `>`)
+		sb.WriteString(`<ResourceTagSets>`)
+		if items, ok := sets.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(`<ResourceTagSet>`)
+				sb.WriteString(encodeR53TagSet(item))
+				sb.WriteString(`</ResourceTagSet>`)
+			}
+		}
+		sb.WriteString(`</ResourceTagSets>`)
+		sb.WriteString(`</ListTagsForResourcesResponse>`)
+		return sb.String()
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+}
+
+func encodeR53TagSet(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(xmlTag("ResourceType", str(m["ResourceType"])))
+	sb.WriteString(xmlTag("ResourceId", str(m["ResourceId"])))
+	sb.WriteString(`<Tags>`)
+	if tags, ok := m["Tags"].([]map[string]any); ok {
+		for _, t := range tags {
+			sb.WriteString(`<Tag>`)
+			sb.WriteString(xmlTag("Key", str(t["Key"])))
+			sb.WriteString(xmlTag("Value", str(t["Value"])))
+			sb.WriteString(`</Tag>`)
+		}
+	}
+	sb.WriteString(`</Tags>`)
+	return sb.String()
 }
 
 func encodeHostedZone(v any) string {

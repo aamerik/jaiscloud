@@ -282,7 +282,7 @@ func TestKinesis_RetentionPeriod(t *testing.T) {
 		StreamName: aws.String("ret-stream"),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int32(48), desc.StreamDescription.RetentionPeriodHours)
+	assert.EqualValues(t, 48, aws.ToInt32(desc.StreamDescription.RetentionPeriodHours))
 }
 
 func TestKinesis_Consumer_Lifecycle(t *testing.T) {

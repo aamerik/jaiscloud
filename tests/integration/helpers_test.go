@@ -384,12 +384,12 @@ func newAWSConfig(t *testing.T) aws.Config {
 	return cfg
 }
 
-// host returns the host JaisCloud is expected to include in queue URLs.
+// host returns the base URL JaisCloud uses in queue URLs (e.g. http://localhost:4566).
 func host() string {
 	if h := os.Getenv("JAISCLOUD_HOST"); h != "" {
 		return h
 	}
-	return "localhost"
+	return "http://localhost:4566"
 }
 
 func newCognitoIDPClient(t *testing.T) *awscognitoidp.Client {

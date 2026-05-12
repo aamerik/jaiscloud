@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -291,11 +293,25 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(map[string]any{"__action__": "PutMetricAlarm"}), nil
 }
 
-func (p *Provider) DescribeAlarms(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) DescribeAlarms(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	entries, err := p.resources.List(ctx, "cloudwatch_alarm", "")
 	if err != nil {
 		return nil, err
 	}
+
+	// Build AlarmNames set for exact-name filter.
+	alarmNames := map[string]bool{}
+	for i := 1; ; i++ {
+		key := fmt.Sprintf("AlarmNames.member.%d", i)
+		name, ok := nr.Params[key].(string)
+		if !ok || name == "" {
+			break
+		}
+		alarmNames[name] = true
+	}
+	prefix, _ := nr.Params["AlarmNamePrefix"].(string)
+	stateFilter, _ := nr.Params["StateValue"].(string)
+
 	out := make([]any, 0, len(entries))
 	for _, e := range entries {
 		var params map[string]any
@@ -303,6 +319,19 @@ func (p *Provider) DescribeAlarms(ctx context.Context, _ *model.NormalizedReques
 			slog.Warn("cloudwatch: failed to unmarshal alarm",
 				"pkg", "cloudwatch", "op", "DescribeAlarms", "alarm", e.ID, "err", err)
 			continue
+		}
+		name, _ := params["AlarmName"].(string)
+		if len(alarmNames) > 0 && !alarmNames[name] {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if stateFilter != "" {
+			state, _ := params["StateValue"].(string)
+			if state != stateFilter {
+				continue
+			}
 		}
 		out = append(out, params)
 	}
@@ -623,7 +652,13 @@ func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRe
 }
 
 func (p *Provider) DescribeAlarmHistory(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"AlarmHistoryItems": []any{}}), nil
+	return provider.OK(map[string]any{"__action__": "DescribeAlarmHistory", "AlarmHistoryItems": []any{}}), nil
+}
+
+func (p *Provider) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.metrics = make(map[string]*metricRing)
 }
 
 // ─── Anomaly Detectors (13.8) ─────────────────────────────────────────────────

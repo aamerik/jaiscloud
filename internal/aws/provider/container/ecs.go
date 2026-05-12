@@ -306,6 +306,9 @@ func (p *ContainerProvider) ListTaskDefinitions(ctx context.Context, nr *model.N
 		json.Unmarshal(e.Data, &td)
 		arns = append(arns, td.TaskDefinitionArn)
 	}
+	if max := intParam(nr.Params, "maxResults"); max > 0 && max < len(arns) {
+		arns = arns[:max]
+	}
 	return provider.OK(map[string]any{"taskDefinitionArns": arns}), nil
 }
 

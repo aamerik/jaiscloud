@@ -209,3 +209,79 @@ func tagsToList(tags map[string]string) []map[string]any {
 	}
 	return out
 }
+
+// ─── Cache Parameter Groups ───────────────────────────────────────────────────
+
+const rtCacheParameterGroup = "elasticache_parameter_group"
+
+type cacheParameterGroup struct {
+	CacheParameterGroupName   string `json:"CacheParameterGroupName"`
+	CacheParameterGroupFamily string `json:"CacheParameterGroupFamily"`
+	Description               string `json:"Description"`
+	ARN                       string `json:"ARN"`
+}
+
+func (g cacheParameterGroup) toWire() map[string]any {
+	return map[string]any{
+		"CacheParameterGroupName":   g.CacheParameterGroupName,
+		"CacheParameterGroupFamily": g.CacheParameterGroupFamily,
+		"Description":               g.Description,
+		"ARN":                       g.ARN,
+	}
+}
+
+func (p *CacheProvider) CreateCacheParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "CacheParameterGroupName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "CacheParameterGroupName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	grp := cacheParameterGroup{
+		CacheParameterGroupName:   name,
+		CacheParameterGroupFamily: strParam(nr.Params, "CacheParameterGroupFamily"),
+		Description:               strParam(nr.Params, "Description"),
+		ARN:                       fmt.Sprintf("arn:aws:elasticache:us-east-1:000000000000:parametergroup:%s", name),
+	}
+	data, _ := json.Marshal(grp)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCacheParameterGroup, ID: name, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "CacheParameterGroupAlreadyExists", Message: "Cache parameter group already exists", HTTPStatus: http.StatusBadRequest}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"CacheParameterGroup": grp.toWire()}), nil
+}
+
+func (p *CacheProvider) DescribeCacheParameterGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "CacheParameterGroupName")
+	if name != "" {
+		e, err := p.resources.Get(ctx, rtCacheParameterGroup, name)
+		if err == store.ErrNotFound {
+			return nil, &model.ProviderError{Code: "CacheParameterGroupNotFound", Message: "Cache parameter group not found", HTTPStatus: http.StatusNotFound}
+		}
+		if err != nil {
+			return nil, err
+		}
+		var grp cacheParameterGroup
+		json.Unmarshal(e.Data, &grp)
+		return provider.OK(map[string]any{"CacheParameterGroups": []any{grp.toWire()}}), nil
+	}
+	entries, err := p.resources.List(ctx, rtCacheParameterGroup, "")
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]any, 0, len(entries))
+	for _, e := range entries {
+		var grp cacheParameterGroup
+		json.Unmarshal(e.Data, &grp)
+		groups = append(groups, grp.toWire())
+	}
+	return provider.OK(map[string]any{"CacheParameterGroups": groups}), nil
+}
+
+func (p *CacheProvider) DeleteCacheParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "CacheParameterGroupName")
+	if err := p.resources.Delete(ctx, rtCacheParameterGroup, name); err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "CacheParameterGroupNotFound", Message: "Cache parameter group not found", HTTPStatus: http.StatusNotFound}
+	}
+	return provider.OK(map[string]any{}), nil
+}

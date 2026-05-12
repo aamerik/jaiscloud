@@ -37,6 +37,7 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
 
 ## Contents
 
+- [Service Reference](#service-reference)
 - [Prerequisites](#prerequisites)
 - [Mode 1 — Lite (in-memory, no dependencies)](#mode-1--lite-in-memory-no-dependencies)
 - [Mode 2 — Full (PostgreSQL persistence)](#mode-2--full-postgresql-persistence)
@@ -77,6 +78,81 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
   - [Azure](#azure-spark-transform)
   - [GCP](#gcp-spark-transform)
 - [Platform Setup](#platform-setup)
+
+---
+
+## Service Reference
+
+### Implementation tiers
+
+| Tier | Meaning |
+|---|---|
+| ✅ Full | Real business logic. Passes the AWS SDK integration test suite. State persists in Postgres in full mode. |
+| ⚙️ Metadata-only | Wire protocol + resource CRUD (create, describe, delete, tag). No execution engine — instances don't run, clusters don't provision VMs. |
+| 🔌 Stub | Endpoint exists, returns plausible responses. Limited operation coverage. |
+
+### Service implementation matrix
+
+| Service | Tier | Lite-mode storage | Full-mode storage | Integration tests |
+|---|---|---|---|---|
+| Amazon S3 | ✅ Full | In-memory + MemoryBlobStore | PostgreSQL + LocalFS blobs | `tests/integration/s3_*.go` |
+| Amazon SQS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sqs_*.go` |
+| Amazon DynamoDB | ✅ Full | In-memory | PostgreSQL | `tests/integration/dynamo_*.go` |
+| Amazon DynamoDB Streams | ✅ Full | In-memory stream store | In-memory stream store | — |
+| Amazon SNS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sns_test.go` |
+| Amazon EventBridge | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/eventbridge/` |
+| AWS IAM | ✅ Full | In-memory | PostgreSQL | `tests/integration/iam_test.go` |
+| AWS STS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sts_test.go` |
+| AWS Lambda | ✅ Full | In-memory | PostgreSQL | `tests/integration/lambda_*.go`, `tests/full_mode/aws/lambda/` |
+| AWS Glue Data Catalog | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/iceberg/` |
+| Amazon Kinesis | ✅ Full | In-memory | In-memory | `tests/integration/kinesis_*.go` |
+| Amazon EMR (on EC2) | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emr/` |
+| Amazon EMR on EKS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emrcontainers/` |
+| AWS KMS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/kms/` |
+| AWS Secrets Manager | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/kms/` |
+| AWS SSM Parameter Store | ✅ Full | In-memory | PostgreSQL (labels: in-memory only) | `tests/integration/ssm_*.go` |
+| AWS API Gateway (REST) | ✅ Full | In-memory | PostgreSQL | `tests/integration/apigw_test.go` |
+| AWS CloudFormation | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/cloudformation/` |
+| Amazon CloudWatch | ✅ Full | In-memory ring | In-memory ring + PostgreSQL alarms | — |
+| Amazon CloudWatch Logs | ✅ Full | In-memory | In-memory | — |
+| Amazon EC2 | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon Route 53 | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon RDS | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon ElastiCache | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon ECS | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon EKS | ⚙️ Metadata-only | In-memory | In-memory | — |
+| AWS Step Functions | 🔌 Stub | In-memory | In-memory | `tests/integration/stepfunctions_*.go` |
+
+### Lambda execution modes
+
+| `JAISCLOUD_EXECUTOR_MODE` | Behavior |
+|---|---|
+| _(empty)_ / `mock` | Echo handler — returns the invocation payload unchanged; instant response |
+| `docker` | Warm Docker container pool per function; containers are reused across invocations |
+| `k8s` | Warm K8s Pod + ClusterIP Service per function; survives JaisCloud restarts |
+
+### EMR / Spark execution modes
+
+| `JAISCLOUD_EXECUTOR_MODE` | EMR on EC2 | EMR on EKS |
+|---|---|---|
+| _(empty)_ / `mock` | Steps complete instantly as `COMPLETED` | Job runs complete instantly as `COMPLETED` |
+| `docker` | Each step runs in a Docker container | Each job run runs in a Docker container |
+| `k8s` | Each step runs as a K8s `batch/v1 Job` | Each job run runs as a K8s `batch/v1 Job`; cluster-mode Spark available |
+
+### What "metadata-only" means in practice
+
+Metadata-only services implement the AWS management plane — you can:
+- Create, describe, list, and delete resources
+- Add and remove tags
+- Describe resource attributes
+
+They do **not** implement the data plane or execution engine:
+- EC2 instances don't boot or run workloads
+- RDS instances don't serve database connections
+- ECS tasks don't schedule containers
+- Route 53 does not resolve DNS queries
+
+This is intentional: these services exist so that IaC tooling (CloudFormation, Terraform, CDK) can create and reference them without failing. Applications that only read resource metadata (e.g. discovering VPC IDs, listing subnets) work correctly. Applications that make data-plane calls to the resource itself will fail or need the real cloud.
 
 ---
 

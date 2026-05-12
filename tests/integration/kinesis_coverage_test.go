@@ -785,7 +785,7 @@ func TestKinesisCov_IncreaseRetentionPeriod(t *testing.T) {
 		StreamName: aws.String("ret-inc-stream"),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int32(48), desc.StreamDescription.RetentionPeriodHours)
+	assert.EqualValues(t, 48, aws.ToInt32(desc.StreamDescription.RetentionPeriodHours))
 }
 
 // TestKinesisCov_DecreaseRetentionPeriod verifies that DecreaseStreamRetentionPeriod
@@ -818,7 +818,7 @@ func TestKinesisCov_DecreaseRetentionPeriod(t *testing.T) {
 		StreamName: aws.String("ret-dec-stream"),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int32(24), desc.StreamDescription.RetentionPeriodHours)
+	assert.EqualValues(t, 24, aws.ToInt32(desc.StreamDescription.RetentionPeriodHours))
 }
 
 // TestKinesisCov_RetentionPeriod_TooShort_Error verifies that setting a
