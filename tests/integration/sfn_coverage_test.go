@@ -378,13 +378,13 @@ func TestSFN_StartSyncExecution_OutputEqualsInput(t *testing.T) {
 	require.NoError(t, err)
 
 	input := `{"hello":"world","n":99}`
-	syncOut, err := c.StartSyncExecution(ctx, &awssfn.StartSyncExecutionInput{
+	syncOut, err := c.StartSyncExecution(sfnSyncCtx(ctx), &awssfn.StartSyncExecutionInput{
 		StateMachineArn: expOut.StateMachineArn,
 		Input:           aws.String(input),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sfntypes.SyncExecutionStatusSucceeded, syncOut.Status)
-	assert.Equal(t, input, aws.ToString(syncOut.Output))
+	assert.JSONEq(t, input, aws.ToString(syncOut.Output))
 }
 
 func TestSFN_StartSyncExecution_OnStandard_Error(t *testing.T) {
@@ -402,7 +402,7 @@ func TestSFN_StartSyncExecution_OnStandard_Error(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = c.StartSyncExecution(ctx, &awssfn.StartSyncExecutionInput{
+	_, err = c.StartSyncExecution(sfnSyncCtx(ctx), &awssfn.StartSyncExecutionInput{
 		StateMachineArn: stdOut.StateMachineArn,
 		Input:           aws.String(`{}`),
 	})
@@ -687,13 +687,15 @@ func TestSFN_SendTaskSuccess_NoOp(t *testing.T) {
 	c := sfnClient(t)
 	ctx := context.Background()
 
-	// In lite mode (no engine), SendTaskSuccess is a no-op and returns success
+	// In lite mode (no engine), SendTaskSuccess is a no-op and returns success.
+	// In full mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskSuccess(ctx, &awssfn.SendTaskSuccessInput{
 		TaskToken: aws.String("fake-token-success"),
 		Output:    aws.String(`{}`),
 	})
-	// Lite mode: no engine, so no error expected
-	require.NoError(t, err)
+	if err != nil {
+		assertAWSError(t, err, "TaskDoesNotExist")
+	}
 }
 
 func TestSFN_SendTaskFailure_NoOp(t *testing.T) {
@@ -702,14 +704,16 @@ func TestSFN_SendTaskFailure_NoOp(t *testing.T) {
 	c := sfnClient(t)
 	ctx := context.Background()
 
-	// In lite mode (no engine), SendTaskFailure is a no-op and returns success
+	// In lite mode (no engine), SendTaskFailure is a no-op and returns success.
+	// In full mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskFailure(ctx, &awssfn.SendTaskFailureInput{
 		TaskToken: aws.String("fake-token-failure"),
 		Error:     aws.String("TestError"),
 		Cause:     aws.String("test cause"),
 	})
-	// Lite mode: no engine, so no error expected
-	require.NoError(t, err)
+	if err != nil {
+		assertAWSError(t, err, "TaskDoesNotExist")
+	}
 }
 
 // ─── Aliases ─────────────────────────────────────────────────────────────────

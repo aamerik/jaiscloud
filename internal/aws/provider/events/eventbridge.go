@@ -102,6 +102,7 @@ func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
 type ruleData struct {
 	Name         string `json:"Name"`
 	Arn          string `json:"Arn"`
+	EventBusName string `json:"EventBusName,omitempty"`
 	EventPattern string `json:"EventPattern,omitempty"`
 	ScheduleExpr string `json:"ScheduleExpression,omitempty"`
 	State        string `json:"State"`
@@ -123,9 +124,14 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 	// AWSResourceID returns arn:aws:events:..., AzureResourceID/GCPResourceID return stubs.
 	arn := nr.ResourceID("events-rule", name)
 
+	busName := strParam(nr.Params, "EventBusName")
+	if busName == "" {
+		busName = "default"
+	}
 	rule := ruleData{
 		Name:         name,
 		Arn:          arn,
+		EventBusName: busName,
 		EventPattern: strParam(nr.Params, "EventPattern"),
 		ScheduleExpr: strParam(nr.Params, "ScheduleExpression"),
 		State:        state,
@@ -177,6 +183,10 @@ func (p *EventBridgeProvider) DescribeRule(ctx context.Context, nr *model.Normal
 
 func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	prefix := strParam(nr.Params, "NamePrefix")
+	busFilter := strParam(nr.Params, "EventBusName")
+	if busFilter == "" {
+		busFilter = "default"
+	}
 	entries, _ := p.resources.List(ctx, resTypeRule, prefix)
 	rules := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
@@ -184,9 +194,17 @@ func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.Normalize
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
 			continue
 		}
+		ruleBus := rule.EventBusName
+		if ruleBus == "" {
+			ruleBus = "default"
+		}
+		if ruleBus != busFilter {
+			continue
+		}
 		rules = append(rules, map[string]any{
 			"Name":               rule.Name,
 			"Arn":                rule.Arn,
+			"EventBusName":       rule.EventBusName,
 			"EventPattern":       rule.EventPattern,
 			"ScheduleExpression": rule.ScheduleExpr,
 			"State":              rule.State,
@@ -333,11 +351,25 @@ func (p *EventBridgeProvider) ListTargetsByRule(ctx context.Context, nr *model.N
 func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	entries, _ := nr.Params["Entries"].([]any)
 	results := make([]map[string]any, 0, len(entries))
+	failed := 0
 	for _, raw := range entries {
 		em, ok := raw.(map[string]any)
 		if !ok {
 			results = append(results, map[string]any{"ErrorCode": "MalformedEntry", "ErrorMessage": "entry must be a JSON object"})
+			failed++
 			continue
+		}
+		// Validate event bus exists (skip for default bus which always exists).
+		busName, _ := em["EventBusName"].(string)
+		if busName != "" && busName != "default" {
+			if _, err := p.resources.Get(ctx, resTypeBus, busName); err != nil {
+				results = append(results, map[string]any{
+					"ErrorCode":    "InvalidParameterException",
+					"ErrorMessage": "Event bus " + busName + " does not exist",
+				})
+				failed++
+				continue
+			}
 		}
 		// Detail is a JSON string in the wire protocol; parse it so pattern
 		// matching on nested fields (e.g. {"detail":{"state":["X"]}}) works.
@@ -362,7 +394,7 @@ func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.Normalize
 		results = append(results, map[string]any{"EventId": envelope["id"]})
 	}
 	return provider.OK(map[string]any{
-		"FailedEntryCount": 0,
+		"FailedEntryCount": failed,
 		"Entries":          results,
 	}), nil
 }
@@ -726,15 +758,28 @@ func (p *EventBridgeProvider) DescribeEventBus(ctx context.Context, nr *model.No
 }
 
 func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	limit := 50
+	if lv, ok := nr.Params["Limit"].(float64); ok && lv > 0 {
+		limit = int(lv)
+	}
 	entries, _ := p.resources.List(ctx, resTypeBus, "")
 	buses := make([]map[string]any, 0, len(entries)+1)
-	// Always include default bus first.
-	buses = append(buses, map[string]any{"Name": "default", "Arn": nr.ResourceID("events-bus", "default")})
+	// Include default bus if no prefix filter or "default" matches the prefix.
+	if namePrefix == "" || strings.HasPrefix("default", namePrefix) {
+		buses = append(buses, map[string]any{"Name": "default", "Arn": nr.ResourceID("events-bus", "default")})
+	}
 	for _, e := range entries {
 		var bd eventBusData
 		if json.Unmarshal(e.Data, &bd) == nil {
+			if namePrefix != "" && !strings.HasPrefix(bd.Name, namePrefix) {
+				continue
+			}
 			buses = append(buses, map[string]any{"Name": bd.Name, "Arn": bd.Arn})
 		}
+	}
+	if len(buses) > limit {
+		buses = buses[:limit]
 	}
 	return provider.OK(map[string]any{"EventBuses": buses}), nil
 }

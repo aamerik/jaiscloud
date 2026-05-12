@@ -109,6 +109,19 @@ func (p *ContainerProvider) CreateCluster(ctx context.Context, nr *model.Normali
 		}
 		return nil, err
 	}
+	if rawTags, ok := nr.Params["tags"].([]any); ok && len(rawTags) > 0 {
+		tags := p.loadECSTags(ctx, c.ClusterArn)
+		for _, t := range rawTags {
+			if m, ok := t.(map[string]any); ok {
+				if k, ok := m["key"].(string); ok {
+					if v, ok := m["value"].(string); ok {
+						tags[k] = v
+					}
+				}
+			}
+		}
+		p.saveECSTags(ctx, c.ClusterArn, tags)
+	}
 	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
 }
 

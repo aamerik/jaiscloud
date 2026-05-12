@@ -412,6 +412,23 @@ func compareValues(a, b any, op string) bool {
 			return an >= bn
 		}
 	}
+	// Handle BOOL type explicitly — AttrVal returns "" for both true and false
+	// which would incorrectly make all BOOL equality checks return true.
+	if am, ok := a.(map[string]any); ok {
+		if boolA, okA := am["BOOL"].(bool); okA {
+			if bm, ok := b.(map[string]any); ok {
+				if boolB, okB := bm["BOOL"].(bool); okB {
+					switch op {
+					case "=":
+						return boolA == boolB
+					case "<>":
+						return boolA != boolB
+					}
+					return false
+				}
+			}
+		}
+	}
 	as, _ := AttrVal(a)
 	bs, _ := AttrVal(b)
 	switch op {

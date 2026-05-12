@@ -210,7 +210,7 @@ func TestSFN_ExecutionLifecycle_LiteMode_InstantSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
 	assert.Equal(t, input, *descOut.Input)
-	assert.Equal(t, input, *descOut.Output) // passthrough in lite mode
+	assert.JSONEq(t, input, aws.ToString(descOut.Output)) // passthrough (JSON equality in full mode)
 	assert.NotNil(t, descOut.StopDate)
 }
 
@@ -238,7 +238,7 @@ func TestSFN_StartExecution_OutputEqualsInput(t *testing.T) {
 		ExecutionArn: startOut.ExecutionArn,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, input, *descOut.Output)
+	assert.JSONEq(t, input, aws.ToString(descOut.Output))
 }
 
 func TestSFN_StartExecution_DuplicateName_SameInput_Idempotent(t *testing.T) {
@@ -328,9 +328,9 @@ func TestSFN_GetExecutionHistory_LiteMode_TwoEvents(t *testing.T) {
 		ExecutionArn: startOut.ExecutionArn,
 	})
 	require.NoError(t, err)
-	require.Len(t, histOut.Events, 2)
+	require.GreaterOrEqual(t, len(histOut.Events), 2)
 	assert.Equal(t, sfntypes.HistoryEventTypeExecutionStarted, histOut.Events[0].Type)
-	assert.Equal(t, sfntypes.HistoryEventTypeExecutionSucceeded, histOut.Events[1].Type)
+	assert.Equal(t, sfntypes.HistoryEventTypeExecutionSucceeded, histOut.Events[len(histOut.Events)-1].Type)
 }
 
 func TestSFN_ListExecutions(t *testing.T) {
@@ -534,6 +534,8 @@ func TestSFN_StartSyncExecution_ExpressOnly(t *testing.T) {
 	ctx := context.Background()
 	name := sfnName(t)
 
+	syncCtx := sfnSyncCtx(ctx)
+
 	// STANDARD machine → error
 	stdOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
 		Name:       aws.String(name + "-std"),
@@ -543,7 +545,7 @@ func TestSFN_StartSyncExecution_ExpressOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = client.StartSyncExecution(ctx, &awssfn.StartSyncExecutionInput{
+	_, err = client.StartSyncExecution(syncCtx, &awssfn.StartSyncExecutionInput{
 		StateMachineArn: stdOut.StateMachineArn,
 	})
 	require.Error(t, err)
@@ -558,7 +560,7 @@ func TestSFN_StartSyncExecution_ExpressOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncOut, err := client.StartSyncExecution(ctx, &awssfn.StartSyncExecutionInput{
+	syncOut, err := client.StartSyncExecution(syncCtx, &awssfn.StartSyncExecutionInput{
 		StateMachineArn: expOut.StateMachineArn,
 		Input:           aws.String(`{"hello":"world"}`),
 	})

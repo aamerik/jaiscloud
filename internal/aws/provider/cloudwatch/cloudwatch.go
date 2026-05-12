@@ -249,11 +249,19 @@ func (p *Provider) GetMetricData(_ context.Context, nr *model.NormalizedRequest)
 	return provider.OK(map[string]any{"MetricDataResults": results, "Messages": []any{}}), nil
 }
 
-func (p *Provider) ListMetrics(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) ListMetrics(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	nsFilter, _ := nr.Params["Namespace"].(string)
+	nameFilter, _ := nr.Params["MetricName"].(string)
 	out := make([]any, 0, len(p.metrics))
 	for _, r := range p.metrics {
+		if nsFilter != "" && r.namespace != nsFilter {
+			continue
+		}
+		if nameFilter != "" && r.name != nameFilter {
+			continue
+		}
 		out = append(out, map[string]any{"Namespace": r.namespace, "MetricName": r.name})
 	}
 	return provider.OK(map[string]any{"__action__": "ListMetrics", "Metrics": out}), nil

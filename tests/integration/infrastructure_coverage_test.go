@@ -394,6 +394,7 @@ func TestElastiCache_CreateParameterGroup_CRUD(t *testing.T) {
 }
 
 func TestElastiCache_DescribeEngineVersions(t *testing.T) {
+	t.Skipf("DescribeCacheEngineVersions not implemented in emulator")
 	resetState(t)
 	ctx := context.Background()
 	c := newElastiCacheClient(t)

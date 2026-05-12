@@ -689,15 +689,38 @@ func (p *Provider) DescribeActivity(ctx context.Context, nr *model.NormalizedReq
 
 func (p *Provider) ListActivities(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	activities := p.store.ListActivities()
-	items := make([]any, len(activities))
-	for i, a := range activities {
+	maxResults := 1000
+	if mr, ok := nr.Params["maxResults"].(float64); ok && mr > 0 {
+		maxResults = int(mr)
+	}
+	nextToken, _ := nr.Params["nextToken"].(string)
+	start := 0
+	if nextToken != "" {
+		for i, a := range activities {
+			if a.ARN == nextToken {
+				start = i + 1
+				break
+			}
+		}
+	}
+	end := start + maxResults
+	if end > len(activities) {
+		end = len(activities)
+	}
+	page := activities[start:end]
+	items := make([]any, len(page))
+	for i, a := range page {
 		items[i] = map[string]any{
 			"activityArn":  a.ARN,
 			"name":         a.Name,
 			"creationDate": a.CreationDate.Unix(),
 		}
 	}
-	return provider.OK(map[string]any{"activities": items}), nil
+	resp := map[string]any{"activities": items}
+	if end < len(activities) {
+		resp["nextToken"] = activities[end-1].ARN
+	}
+	return provider.OK(resp), nil
 }
 
 // GetActivityTask, SendTask* are stubs (no real task workers in lite mode).
