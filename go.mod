@@ -43,6 +43,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/apigateway v1.39.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/athena v1.57.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.63.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.57.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.73.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentity v1.33.24 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.60.2 // indirect

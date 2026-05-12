@@ -34,6 +34,8 @@ github.com/aws/aws-sdk-go-v2/service/cloudformation v1.71.9 h1:AISf54dn2oMUmhoWt
 github.com/aws/aws-sdk-go-v2/service/cloudformation v1.71.9/go.mod h1:YWA53lezhB2wltdgeVvDQEIwGVKWh/n+yU5Wh0YTxCw=
 github.com/aws/aws-sdk-go-v2/service/cloudfront v1.63.0 h1:YNpvY2mAGhoTHPEvsqPuDb8K5JBjorbVMaitP8i4OXI=
 github.com/aws/aws-sdk-go-v2/service/cloudfront v1.63.0/go.mod h1:brhMG/gR2xEB5lezxL2Cx+hqsEzGUn4LhNUtu7+ePFE=
+github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.57.0 h1:dlkFtYOrwOuM7IIBD6FPLtt0Xvnph+8hqmmbzyowkCk=
+github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.57.0/go.mod h1:7900IH3EvTrwNGLNx3QDKnQwPF/Cw+pD9cuvBDQ4org=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.73.0 h1:JmrHkELR2Q0O28swrFMm0hZNwpQrV8qmbhnb7suKIfc=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.73.0/go.mod h1:MLJu3PUd8fp5Qvj4CiLvyY5H8y7kxHKlTp060Wsd+Vc=
 github.com/aws/aws-sdk-go-v2/service/cognitoidentity v1.33.24 h1:DLQWli3xz20zXXwMahVJ7xVgAZTmYLfMx7bB2Blwx18=

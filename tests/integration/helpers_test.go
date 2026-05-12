@@ -5,10 +5,14 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	smithy "github.com/aws/smithy-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	awsathena "github.com/aws/aws-sdk-go-v2/service/athena"
 	awscloudfront "github.com/aws/aws-sdk-go-v2/service/cloudfront"
@@ -345,6 +349,39 @@ func resetState(t *testing.T) {
 		t.Fatalf("reset: %v", err)
 	}
 	resp.Body.Close()
+}
+
+// assertAWSError asserts that err is an AWS API error with the given code.
+func assertAWSError(t *testing.T, err error, expectedCode string) {
+	t.Helper()
+	require.Error(t, err)
+	var apiErr smithy.APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, expectedCode, apiErr.ErrorCode())
+}
+
+// waitFor polls until check() returns true or timeout is reached.
+func waitFor(t *testing.T, timeout time.Duration, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("condition not met within timeout")
+}
+
+// newAWSConfig returns a base AWS config pointing at the local emulator.
+func newAWSConfig(t *testing.T) aws.Config {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	require.NoError(t, err)
+	return cfg
 }
 
 // host returns the host JaisCloud is expected to include in queue URLs.
