@@ -122,6 +122,7 @@ clean: ## Remove compiled binaries
 ##@ Unit tests
 
 test: ## Run all unit tests with the race detector  (no server needed)
+	go clean -testcache
 	go test -race ./internal/...
 
 ##@ Server — foreground (Ctrl-C to stop)
@@ -289,6 +290,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	  printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-e2e.log)\033[0m\n"; \
 	fi
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
+	@go clean -testcache
 	@JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ \
 	  > /tmp/integration-results.txt 2>&1; \
@@ -322,6 +324,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 
 test-e2e-emr-docker: _check-docker-prereq ## EMR Docker Spark tests — tests/full_mode/aws/emr/ (tag: spark_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE)
+	go clean -testcache
 	SPARK_E2E_DOCKER_IMAGE=$(SPARK_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/emr/
 	$(MAKE) down-docker
@@ -333,75 +336,88 @@ test-e2e-emrcontainers-k8s: _check-k8s-prereq ## EMR Containers K8s tests — te
 	#   TestSparkJob_K8s_MultipleJobRuns_Concurrent
 	#   TestSparkJob_K8s_FailedJobRun_ReportsFailure
 	$(MAKE) _start-k8s
+	go clean -testcache
 	SPARK_E2E_SPARK_IMAGE=$(SPARK_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/emrcontainers/
 	$(MAKE) _stop-k8s
 
 test-e2e-eventbridge: ## EventBridge notification tests — tests/full_mode/aws/eventbridge/ (no Docker/K8s)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/eventbridge/
 	$(MAKE) down-docker
 
 test-e2e-dpc-docker: _check-docker-prereq ## DPC Spark tests via Docker — tests/full_mode/aws/dpc/ (tag: spark_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE)
+	go clean -testcache
 	SPARK_E2E_DOCKER_IMAGE=$(SPARK_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/dpc/
 	$(MAKE) down-docker
 
 test-e2e-dpc-k8s: _check-k8s-prereq ## DPC Spark tests via K8s — tests/full_mode/aws/dpc/ (tag: spark_e2e)
 	$(MAKE) _start-k8s
+	go clean -testcache
 	SPARK_E2E_SPARK_IMAGE=$(SPARK_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/dpc/
 	$(MAKE) _stop-k8s
 
 test-e2e-lambda-docker: _check-docker-prereq ## Lambda Docker tests — tests/full_mode/aws/lambda/ (tag: lambda_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_LAMBDA_IMAGE=$(LAMBDA_IMAGE)
+	go clean -testcache
 	LAMBDA_E2E_DOCKER_IMAGE=$(LAMBDA_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags lambda_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/lambda/
 	$(MAKE) down-docker
 
 test-e2e-lambda-k8s: _check-k8s-prereq ## Lambda K8s tests — tests/full_mode/aws/lambda/ (tag: lambda_e2e)
 	$(MAKE) _start-k8s
+	go clean -testcache
 	LAMBDA_E2E_K8S_IMAGE=$(LAMBDA_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags lambda_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/lambda/
 	$(MAKE) _stop-k8s
 
 test-e2e-cloudformation: ## CloudFormation e2e tests — tests/full_mode/aws/cloudformation/ (tag: cfn_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags cfn_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/cloudformation/
 	$(MAKE) down-docker
 
 test-e2e-dynamodb: ## DynamoDB GSI/LSI e2e tests — tests/full_mode/aws/dynamodb/ (tag: dynamo_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags dynamo_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/dynamodb/
 	$(MAKE) down-docker
 
 test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/full_mode/aws/kms/ (tag: kms_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags kms_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kms/
 	$(MAKE) down-docker
 
 test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/full_mode/aws/s3/ (tag: s3_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags s3_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/s3/
 	$(MAKE) down-docker
 
 test-e2e-kinesis: ## Kinesis full mode e2e tests — tests/full_mode/aws/kinesis/ (tag: kinesis_e2e, requires kinesis-mock binary)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags kinesis_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kinesis/
 	$(MAKE) down-docker
 
 test-e2e-ecr: ## ECR full mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/ecr/
 
 test-e2e-sfn: ## Step Functions full mode e2e tests — tests/full_mode/aws/stepfunctions/ (tag: sfn_e2e)
+	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/full_mode/aws/stepfunctions/
 
@@ -409,6 +425,7 @@ test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + K
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/full_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
 	SPARK_E2E_ICEBERG_IMAGE=$(SPARK_E2E_ICEBERG_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags iceberg_e2e -timeout 30m ./tests/full_mode/aws/iceberg/
 	$(MAKE) down-docker
