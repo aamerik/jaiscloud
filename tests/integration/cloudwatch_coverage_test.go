@@ -692,7 +692,14 @@ func TestCW_SetAlarmState_NonExistent_Error(t *testing.T) {
 	assertAWSError(t, err, "ResourceNotFoundException")
 }
 
+// TestCW_DescribeAlarmHistory_AfterStateChange verifies that SetAlarmState produces
+// a history item retrievable via DescribeAlarmHistory.
+//
+// Parity gap: alarm-history recording is not implemented; DescribeAlarmHistory
+// returns a hardcoded empty list. Closing this gap requires a per-alarm ring of
+// history items appended on PutMetricAlarm/SetAlarmState/state transitions.
 func TestCW_DescribeAlarmHistory_AfterStateChange(t *testing.T) {
+	t.Skip("alarm-history recording not implemented; see docs/parity/_cloudwatch.md")
 	resetState(t)
 	ctx := context.Background()
 	c := newCWClient(t)
@@ -720,7 +727,7 @@ func TestCW_DescribeAlarmHistory_AfterStateChange(t *testing.T) {
 		AlarmName: aws.String("history-alarm"),
 	})
 	require.NoError(t, err)
-	_ = out.AlarmHistoryItems // emulator returns empty list; just verify no error
+	require.NotEmpty(t, out.AlarmHistoryItems, "SetAlarmState must produce a history item")
 }
 
 func TestCW_PutMetricAlarm_InvalidPeriod_Error(t *testing.T) {
@@ -789,7 +796,14 @@ func TestCW_EnableDisableAlarmActions(t *testing.T) {
 	assert.True(t, aws.ToBool(out2.MetricAlarms[0].ActionsEnabled), "actions must be re-enabled")
 }
 
+// TestCW_DescribeAlarmsForMetric verifies that an alarm registered on a (namespace, metric)
+// pair is returned by DescribeAlarmsForMetric.
+//
+// Parity gap: the emulator has no metric→alarm reverse index; DescribeAlarmsForMetric
+// always returns empty. Closing this gap requires indexing alarms by (namespace, metric)
+// at PutMetricAlarm time.
 func TestCW_DescribeAlarmsForMetric(t *testing.T) {
+	t.Skip("metric→alarm reverse index not implemented; see docs/parity/_cloudwatch.md")
 	resetState(t)
 	ctx := context.Background()
 	c := newCWClient(t)
@@ -813,5 +827,5 @@ func TestCW_DescribeAlarmsForMetric(t *testing.T) {
 		Statistic:  cwtypes.StatisticAverage,
 	})
 	require.NoError(t, err)
-	_ = out.MetricAlarms // emulator returns empty list; just verify no error
+	require.NotEmpty(t, out.MetricAlarms, "alarm registered on (namespace, metric) must be returned")
 }

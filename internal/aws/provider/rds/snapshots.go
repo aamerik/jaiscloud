@@ -39,7 +39,7 @@ func (s dbSnapshot) toWire() map[string]any {
 		"EngineVersion":        s.EngineVersion,
 		"AllocatedStorage":     fmt.Sprintf("%d", s.AllocatedStorage),
 		"DBSnapshotArn":        s.ARN,
-		"SnapshotCreateTime":   s.SnapshotCreateTime.Format(time.RFC3339),
+		"SnapshotCreateTime":   s.SnapshotCreateTime.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -249,7 +249,7 @@ func (p *RelationalProvider) CreateDBParameterGroup(ctx context.Context, nr *mod
 		DBParameterGroupName:   name,
 		DBParameterGroupFamily: strParam(nr.Params, "DBParameterGroupFamily"),
 		Description:            strParam(nr.Params, "Description"),
-		DBParameterGroupArn:    nr.ResourceID("pg", name),
+		DBParameterGroupArn:    nr.ResourceID("rds-pg", name),
 	}
 	data, _ := json.Marshal(grp)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBParameterGroup, ID: name, Data: data}); err != nil {

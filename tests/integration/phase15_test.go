@@ -767,7 +767,6 @@ func TestS3Select_SelectObjectContent(t *testing.T) {
 // ─── S3 Access Points ─────────────────────────────────────────────────────────
 
 func TestS3AccessPoints_CRUD(t *testing.T) {
-	t.Skip("S3 Control adds account-ID host prefix which DNS cannot resolve against localhost")
 	resetState(t)
 	ctx := context.Background()
 	s3c := newS3Client(t)

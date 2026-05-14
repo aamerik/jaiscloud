@@ -193,13 +193,9 @@ func TestBoolAndNullTypes(t *testing.T) {
 		}
 	})
 
-	// BOOL values: AttrVal returns "" for both {"BOOL":true} and {"BOOL":false}
-	// because BOOL is not in the S/N/B set. Both reduce to the same empty string,
-	// so "=" between any two BOOL values returns true, and "<>" returns false.
-	t.Run("bool_eq_any_bool_returns_true", func(t *testing.T) {
-		// Implementation detail: AttrVal("") == AttrVal("") → true regardless of BOOL value
-		if !evalOK(t, item, "active = :v", nil, map[string]any{":v": boolAttr(false)}) {
-			t.Error("expected true: both BOOL attrs stringify to '' via AttrVal")
+	t.Run("bool_true_neq_false", func(t *testing.T) {
+		if evalOK(t, item, "active = :v", nil, map[string]any{":v": boolAttr(false)}) {
+			t.Error("expected false: BOOL true should not equal BOOL false")
 		}
 	})
 
@@ -221,10 +217,9 @@ func TestBoolAndNullTypes(t *testing.T) {
 		}
 	})
 
-	t.Run("bool_neq_any_bool_returns_false", func(t *testing.T) {
-		// Both BOOL values reduce to "" via AttrVal, so "<>" between them is false
-		if evalOK(t, item, "active <> :v", nil, map[string]any{":v": boolAttr(false)}) {
-			t.Error("expected false: BOOL neq BOOL collapses to '' <> '' = false")
+	t.Run("bool_neq_different_bool", func(t *testing.T) {
+		if !evalOK(t, item, "active <> :v", nil, map[string]any{":v": boolAttr(false)}) {
+			t.Error("expected true: BOOL true <> BOOL false")
 		}
 	})
 }

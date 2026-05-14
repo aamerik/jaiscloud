@@ -1110,7 +1110,7 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 	respData := map[string]any{
 		"CopyObjectResult": map[string]any{
 			"ETag":         etagVal,
-			"LastModified": now.Format(time.RFC3339),
+			"LastModified": now.UTC().Format(time.RFC3339),
 		},
 	}
 	if versionID != "" {
@@ -1165,7 +1165,7 @@ func (p *ObjectProvider) listObjects(ctx context.Context, nr *model.NormalizedRe
 			"Key":          k,
 			"ETag":         obj.ETag,
 			"Size":         obj.Size,
-			"LastModified": obj.LastModified.Format(time.RFC3339),
+			"LastModified": obj.LastModified.UTC().Format(time.RFC3339),
 			"StorageClass": obj.StorageClass,
 		})
 	}
@@ -1534,7 +1534,7 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 	return provider.OK(map[string]any{
 		"CopyPartResult": map[string]any{
 			"ETag":         etagVal,
-			"LastModified": now.Format(time.RFC3339),
+			"LastModified": now.UTC().Format(time.RFC3339),
 		},
 	}), nil
 }

@@ -88,7 +88,7 @@ func distToWire(d distribution) map[string]any {
 		"ARN":          d.ARN,
 		"Status":       d.Status,
 		"DomainName":   d.DomainName,
-		"LastModifiedTime": d.LastModified.Format(time.RFC3339),
+		"LastModifiedTime": d.LastModified.UTC().Format(time.RFC3339),
 		"_etag":        d.ETag,
 		"DistributionConfig": map[string]any{
 			"CallerReference": d.CallerReference,

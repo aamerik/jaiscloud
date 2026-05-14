@@ -117,7 +117,7 @@ func clusterToWire(c redshiftCluster) map[string]any {
 			"Address": c.Endpoint.Address,
 			"Port":    fmt.Sprintf("%d", c.Endpoint.Port),
 		},
-		"ClusterCreateTime":    c.ClusterCreateTime.Format(time.RFC3339),
+		"ClusterCreateTime":    c.ClusterCreateTime.UTC().Format(time.RFC3339),
 		"ClusterNamespaceArn":  c.ARN,
 	}
 }

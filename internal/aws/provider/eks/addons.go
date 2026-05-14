@@ -37,8 +37,8 @@ func addonToWire(a eksAddon) map[string]any {
 		"status":                a.Status,
 		"serviceAccountRoleArn": a.ServiceAccountRoleArn,
 		"configurationValues":   a.ConfigurationValues,
-		"createdAt":             a.CreatedAt.Format(time.RFC3339),
-		"modifiedAt":            a.ModifiedAt.Format(time.RFC3339),
+		"createdAt":             a.CreatedAt.UTC().Format(time.RFC3339),
+		"modifiedAt":            a.ModifiedAt.UTC().Format(time.RFC3339),
 	}
 }
 

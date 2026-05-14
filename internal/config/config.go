@@ -169,6 +169,12 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"elasticache-subnetgroup": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:elasticache:%s:%s:subnetgroup:%s", r, a, n)
 	},
+	"elasticache-parametergroup": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticache:%s:%s:parametergroup:%s", r, a, n)
+	},
+	"rds-pg": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:rds:%s:%s:pg:%s", r, a, n)
+	},
 	// Phase 15 additions
 	"cognito-userpool":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", r, a, n) },
 	"cognito-identitypool":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-identity:%s:%s:identitypool/%s", r, a, n) },

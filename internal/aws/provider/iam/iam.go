@@ -271,7 +271,7 @@ func roleMap(r roleData) map[string]any {
 		"AssumeRolePolicyDocument": r.AssumeRolePolicyDocument,
 		"Description":              r.Description,
 		"MaxSessionDuration":       r.MaxSessionDuration,
-		"CreateDate":               r.CreateDate.Format(time.RFC3339),
+		"CreateDate":               r.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -358,8 +358,8 @@ func policyMap(pol policyData) map[string]any {
 		"Path":            pol.Path,
 		"Description":     pol.Description,
 		"AttachmentCount": pol.AttachmentCount,
-		"CreateDate":      pol.CreateDate.Format(time.RFC3339),
-		"UpdateDate":      pol.UpdateDate.Format(time.RFC3339),
+		"CreateDate":      pol.CreateDate.UTC().Format(time.RFC3339),
+		"UpdateDate":      pol.UpdateDate.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -544,7 +544,7 @@ func userMap(u userData) map[string]any {
 		"UserId":     u.UserID,
 		"Arn":        u.Arn,
 		"Path":       u.Path,
-		"CreateDate": u.CreateDate.Format(time.RFC3339),
+		"CreateDate": u.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -575,7 +575,7 @@ func (p *IAMProvider) CreateAccessKey(ctx context.Context, nr *model.NormalizedR
 		"SecretAccessKey": ak.SecretAccessKey,
 		"UserName":        ak.UserName,
 		"Status":          ak.Status,
-		"CreateDate":      ak.CreateDate.Format(time.RFC3339),
+		"CreateDate":      ak.CreateDate.UTC().Format(time.RFC3339),
 	}}), nil
 }
 
@@ -597,7 +597,7 @@ func (p *IAMProvider) ListAccessKeys(ctx context.Context, nr *model.NormalizedRe
 					"AccessKeyId": ak.AccessKeyID,
 					"UserName":    ak.UserName,
 					"Status":      ak.Status,
-					"CreateDate":  ak.CreateDate.Format(time.RFC3339),
+					"CreateDate":  ak.CreateDate.UTC().Format(time.RFC3339),
 				})
 			}
 		}
@@ -971,7 +971,7 @@ func groupMap(g groupData) map[string]any {
 		"GroupId":    g.GroupID,
 		"Arn":        g.Arn,
 		"Path":       g.Path,
-		"CreateDate": g.CreateDate.Format(time.RFC3339),
+		"CreateDate": g.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -1109,7 +1109,7 @@ func instanceProfileMap(ip instanceProfileData, roles []map[string]any) map[stri
 		"Arn":                 ip.Arn,
 		"Path":                ip.Path,
 		"Roles":               roles,
-		"CreateDate":          ip.CreateDate.Format(time.RFC3339),
+		"CreateDate":          ip.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 

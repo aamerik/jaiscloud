@@ -239,7 +239,7 @@ func (p *CacheProvider) CreateCacheParameterGroup(ctx context.Context, nr *model
 		CacheParameterGroupName:   name,
 		CacheParameterGroupFamily: strParam(nr.Params, "CacheParameterGroupFamily"),
 		Description:               strParam(nr.Params, "Description"),
-		ARN:                       fmt.Sprintf("arn:aws:elasticache:us-east-1:000000000000:parametergroup:%s", name),
+		ARN:                       nr.ResourceID("elasticache-parametergroup", name),
 	}
 	data, _ := json.Marshal(grp)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCacheParameterGroup, ID: name, Data: data}); err != nil {

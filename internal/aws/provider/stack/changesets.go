@@ -68,7 +68,7 @@ func (cs cfChangeSet) toWire() map[string]any {
 		"Changes":       changes,
 		"Parameters":    params,
 		"Description":   cs.Description,
-		"CreationTime":  cs.CreationTime.Format(time.RFC3339),
+		"CreationTime":  cs.CreationTime.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -152,7 +152,7 @@ func (p *StackProvider) ListChangeSets(ctx context.Context, nr *model.Normalized
 			"StackName":     cs.StackName,
 			"Status":        cs.Status,
 			"Description":   cs.Description,
-			"CreationTime":  cs.CreationTime.Format(time.RFC3339),
+			"CreationTime":  cs.CreationTime.UTC().Format(time.RFC3339),
 		})
 	}
 	if summaries == nil {
@@ -245,7 +245,7 @@ func (p *StackProvider) DescribeStackEvents(ctx context.Context, nr *model.Norma
 		"PhysicalResourceId": s.StackId,
 		"ResourceType":       "AWS::CloudFormation::Stack",
 		"ResourceStatus":     s.StackStatus,
-		"Timestamp":          s.CreationTime.Format(time.RFC3339),
+		"Timestamp":          s.CreationTime.UTC().Format(time.RFC3339),
 	})
 	// Per-resource events
 	for _, r := range s.Resources {
@@ -257,7 +257,7 @@ func (p *StackProvider) DescribeStackEvents(ctx context.Context, nr *model.Norma
 			"PhysicalResourceId": r.PhysicalResourceId,
 			"ResourceType":       r.ResourceType,
 			"ResourceStatus":     r.ResourceStatus,
-			"Timestamp":          s.CreationTime.Format(time.RFC3339),
+			"Timestamp":          s.CreationTime.UTC().Format(time.RFC3339),
 		})
 	}
 	return provider.OK(map[string]any{"StackEvents": events}), nil

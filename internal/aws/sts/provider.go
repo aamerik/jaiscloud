@@ -307,7 +307,7 @@ func credMap(c credentials) map[string]any {
 		"AccessKeyId":     c.AccessKeyId,
 		"SecretAccessKey": c.SecretAccessKey,
 		"SessionToken":    c.SessionToken,
-		"Expiration":      c.Expiration.Format(time.RFC3339),
+		"Expiration":      c.Expiration.UTC().Format(time.RFC3339),
 	}
 }
 

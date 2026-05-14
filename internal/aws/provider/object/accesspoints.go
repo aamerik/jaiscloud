@@ -127,7 +127,7 @@ func (p *ObjectProvider) GetAccessPoint(ctx context.Context, nr *model.Normalize
 		"AccessPointArn":          ap.ARN,
 		"Alias":                   ap.Alias,
 		"NetworkOrigin":           ap.NetworkOrigin,
-		"CreationDate":            ap.CreationDate.Format(time.RFC3339),
+		"CreationDate":            ap.CreationDate.UTC().Format(time.RFC3339),
 		"PublicAccessBlockConfiguration": map[string]any{
 			"BlockPublicAcls":       true,
 			"IgnorePublicAcls":      true,

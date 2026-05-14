@@ -175,6 +175,6 @@ func policyVersionMap(v policyVersionData) map[string]any {
 		"VersionId":        v.VersionId,
 		"Document":         v.Document,
 		"IsDefaultVersion": v.IsDefaultVersion,
-		"CreateDate":       v.CreateDate.Format(time.RFC3339),
+		"CreateDate":       v.CreateDate.UTC().Format(time.RFC3339),
 	}
 }

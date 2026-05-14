@@ -203,7 +203,7 @@ func oidcToWire(op oidcProviderData) map[string]any {
 		"ClientIDList":    clientIDs,
 		"ThumbprintList":  thumbprints,
 		"Tags":            tags,
-		"CreateDate":      op.CreateDate.Format(time.RFC3339),
+		"CreateDate":      op.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 

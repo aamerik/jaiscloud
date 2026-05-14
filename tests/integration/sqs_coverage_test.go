@@ -75,10 +75,18 @@ func TestRetention_AboveMax14Days_Error(t *testing.T) {
 }
 
 // TestRetention_LazyExpire_OnReceive_NotReturned verifies that a message sent
-// to a queue with a 1-second retention period is not returned after the
-// retention window has elapsed.
+// to a queue with the AWS-minimum 60s retention period is not returned after
+// the retention window has elapsed.
+//
+// AWS rejects MessageRetentionPeriod < 60 seconds, so the smallest period we
+// can exercise via the public API is 60s. The retention worker runs every 10s,
+// so we wait 75s to be safe (60s retention + worst-case 10s tick + buffer).
+//
+// Skipped under `go test -short` to keep the fast suite under a minute.
 func TestRetention_LazyExpire_OnReceive_NotReturned(t *testing.T) {
-	t.Skip("requires sub-60s retention period; emulator enforces AWS minimum of 60s")
+	if testing.Short() {
+		t.Skip("skipping 75s retention-expiry test under -short")
+	}
 	resetState(t)
 	ctx := context.Background()
 	c := newSQSClient(t)
@@ -86,7 +94,7 @@ func TestRetention_LazyExpire_OnReceive_NotReturned(t *testing.T) {
 	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
 		QueueName: aws.String("retention-expire"),
 		Attributes: map[string]string{
-			"MessageRetentionPeriod": "1",
+			"MessageRetentionPeriod": "60", // AWS minimum
 		},
 	})
 	require.NoError(t, err)
@@ -97,8 +105,8 @@ func TestRetention_LazyExpire_OnReceive_NotReturned(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Wait longer than the 1s retention window.
-	time.Sleep(1500 * time.Millisecond)
+	// Wait past the 60s retention window plus a worker tick.
+	time.Sleep(75 * time.Second)
 
 	recv, err := c.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl:            out.QueueUrl,

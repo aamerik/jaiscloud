@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssfn "github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -41,8 +41,10 @@ func sfnClient(t *testing.T) *awssfn.Client {
 	})
 }
 
+var sfnNameCounter atomic.Uint64
+
 func sfnName(t *testing.T) string {
-	return fmt.Sprintf("sm-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano()%100000)
+	return fmt.Sprintf("sm-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), sfnNameCounter.Add(1))
 }
 
 // ─── State Machine CRUD ───────────────────────────────────────────────────────

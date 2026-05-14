@@ -117,6 +117,6 @@ func clusterToWire(c eksCluster) map[string]any {
 		"name":      c.Name,
 		"status":    c.Status,
 		"arn":       c.Arn,
-		"createdAt": c.CreatedAt.Format(time.RFC3339),
+		"createdAt": c.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

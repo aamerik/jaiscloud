@@ -45,8 +45,8 @@ func nodegroupToWire(ng eksNodegroup) map[string]any {
 		"releaseVersion": ng.ReleaseVersion,
 		"labels":         ng.Labels,
 		"scalingConfig":  ng.ScalingConfig,
-		"createdAt":      ng.CreatedAt.Format(time.RFC3339),
-		"modifiedAt":     ng.ModifiedAt.Format(time.RFC3339),
+		"createdAt":      ng.CreatedAt.UTC().Format(time.RFC3339),
+		"modifiedAt":     ng.ModifiedAt.UTC().Format(time.RFC3339),
 	}
 }
 

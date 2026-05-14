@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	smithy "github.com/aws/smithy-go"
+	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
@@ -504,6 +506,19 @@ func newRedshiftClient(t *testing.T) *awsredshift.Client {
 	})
 }
 
+// s3ControlFlatEndpoint bypasses the S3 Control endpoint-rules engine, which
+// would otherwise prepend the account-ID as a host prefix. It always returns
+// the emulator's base URL unchanged so requests reach localhost:4566.
+type s3ControlFlatEndpoint struct{ base string }
+
+func (r *s3ControlFlatEndpoint) ResolveEndpoint(ctx context.Context, params awss3control.EndpointParameters) (smithyendpoints.Endpoint, error) {
+	u, err := url.Parse(r.base)
+	if err != nil {
+		return smithyendpoints.Endpoint{}, err
+	}
+	return smithyendpoints.Endpoint{URI: *u}, nil
+}
+
 func newS3ControlClient(t *testing.T) *awss3control.Client {
 	t.Helper()
 	cfg, err := config.LoadDefaultConfig(context.Background(),
@@ -514,6 +529,6 @@ func newS3ControlClient(t *testing.T) *awss3control.Client {
 		t.Fatalf("load config: %v", err)
 	}
 	return awss3control.NewFromConfig(cfg, func(o *awss3control.Options) {
-		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+		o.EndpointResolverV2 = &s3ControlFlatEndpoint{base: jaiscloudEndpoint}
 	})
 }

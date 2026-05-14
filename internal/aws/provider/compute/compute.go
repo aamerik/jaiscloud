@@ -156,7 +156,7 @@ func instanceToWire(inst ec2Instance) map[string]any {
 		"PrivateIpAddress": inst.PrivateIpAddress,
 		"PrivateDnsName":   inst.PrivateDnsName,
 		"State":            map[string]any{"Code": stateCode(inst.State), "Name": inst.State},
-		"LaunchTime":       inst.LaunchTime.Format(time.RFC3339),
+		"LaunchTime":       inst.LaunchTime.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -947,7 +947,7 @@ func ngwToWire(ngw ec2NatGateway) map[string]any {
 		"VpcId":        ngw.VpcId,
 		"SubnetId":     ngw.SubnetId,
 		"State":        ngw.State,
-		"CreateTime":   ngw.CreateTime.Format(time.RFC3339),
+		"CreateTime":   ngw.CreateTime.UTC().Format(time.RFC3339),
 	}
 }
 

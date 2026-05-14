@@ -127,6 +127,11 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 	msg.MD5OfBody = fmt.Sprintf("%x", md5.Sum([]byte(msg.Body)))
 	msg.ReceiptHandle = newHandle()
 
+	// SQS stamps SentTimestamp on the broker side at accept time; the API
+	// provides no way for callers to set it. Overwrite unconditionally so any
+	// caller-supplied value is ignored, matching AWS semantics.
+	msg.SentAt = time.Now().UTC()
+
 	cp := msg // copy to avoid caller mutation
 	q := s.getOrCreateQueue(msg.QueueURL)
 	q.messages = append(q.messages, &cp)

@@ -190,7 +190,7 @@ func (vc virtualCluster) toWire(resourceID func(string, string) string) map[stri
 				},
 			},
 		},
-		"createdAt": vc.CreatedAt.Format(time.RFC3339),
+		"createdAt": vc.CreatedAt.UTC().Format(time.RFC3339),
 		"tags":      vc.Tags,
 	}
 }
@@ -220,7 +220,7 @@ func (jr jobRun) toWire(resourceID func(string, string) string) map[string]any {
 		"arn":              resourceID("emr-job-run", jr.VirtualClusterID+"/"+jr.ID),
 		"releaseLabel":     jr.ReleaseLabel,
 		"executionRoleArn": jr.ExecutionRole,
-		"createdAt":        jr.CreatedAt.Format(time.RFC3339),
+		"createdAt":        jr.CreatedAt.UTC().Format(time.RFC3339),
 		"tags":             jr.Tags,
 		"jobDriver":        jr.JobDriver,
 		// JobHandle is internal state; never included in API responses.
@@ -255,7 +255,7 @@ func (me managedEndpoint) toWire(resourceID func(string, string) string) map[str
 		"executionRoleArn": me.ExecutionRole,
 		"state":            me.State,
 		"arn":              resourceID("emr-managed-endpoint", me.VirtualClusterID+"/"+me.ID),
-		"createdAt":        me.CreatedAt.Format(time.RFC3339),
+		"createdAt":        me.CreatedAt.UTC().Format(time.RFC3339),
 		"tags":             me.Tags,
 	}
 }
@@ -773,7 +773,7 @@ func (p *EMRContainersProvider) DescribeSecurityConfiguration(ctx context.Contex
 			"name":                      sc.Name,
 			"arn":                       sc.ARN,
 			"securityConfigurationData": sc.SecurityConfigurationData,
-			"createdAt":                 sc.CreatedAt.Format(time.RFC3339),
+			"createdAt":                 sc.CreatedAt.UTC().Format(time.RFC3339),
 			"createdBy":                 sc.CreatedBy,
 			"tags":                      sc.Tags,
 		},
@@ -802,7 +802,7 @@ func (p *EMRContainersProvider) ListSecurityConfigurations(ctx context.Context, 
 			"id":        sc.ID,
 			"name":      sc.Name,
 			"arn":       sc.ARN,
-			"createdAt": sc.CreatedAt.Format(time.RFC3339),
+			"createdAt": sc.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return provider.OK(map[string]any{"securityConfigurations": items}), nil

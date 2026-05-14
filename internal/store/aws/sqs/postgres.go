@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,13 +15,57 @@ import (
 )
 
 // PostgresSQSMessageStore implements SQSMessageStore against PostgreSQL.
-// It expects the schema from migration 002_sqs_messages.sql to already exist.
+// MessageRetentionPeriod is read directly from jc_resources (where QueueProvider
+// persists it on CreateQueue/SetQueueAttributes) — no separate retention table.
+// A background eviction worker deletes expired messages every 10 seconds.
 type PostgresSQSMessageStore struct {
 	pool *pgxpool.Pool
+
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func NewPostgresSQSMessageStore(pool *pgxpool.Pool) *PostgresSQSMessageStore {
-	return &PostgresSQSMessageStore{pool: pool}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &PostgresSQSMessageStore{pool: pool, cancel: cancel}
+	s.wg.Add(1)
+	go s.retentionWorker(ctx)
+	return s
+}
+
+// Shutdown stops the retention eviction worker.
+func (s *PostgresSQSMessageStore) Shutdown() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.wg.Wait()
+}
+
+func (s *PostgresSQSMessageStore) retentionWorker(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Resolve retention via the control-plane resource entry, falling
+			// back to AWS's 4-day default for queues without a row (e.g. if the
+			// resource entry was deleted out-of-band).
+			if _, err := s.pool.Exec(ctx, `
+				DELETE FROM jc_sqs_messages m
+				WHERE m.sent_at < now() - make_interval(secs => COALESCE(
+				    (SELECT (data->>'MessageRetentionPeriod')::int
+				     FROM jc_resources
+				     WHERE resource_type = 'sqs_queues' AND id = m.queue_url),
+				    345600
+				))
+			`); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("sqs retention sweep failed", "err", err)
+			}
+		}
+	}
 }
 
 func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (string, error) {
@@ -52,6 +98,11 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (str
 	msg.MD5OfBody = fmt.Sprintf("%x", md5.Sum([]byte(msg.Body)))
 	msg.ReceiptHandle = newHandle()
 
+	// SQS stamps SentTimestamp on the broker side at accept time; the API
+	// provides no way for callers to set it. Overwrite unconditionally so any
+	// caller-supplied value is ignored, matching AWS semantics.
+	msg.SentAt = time.Now().UTC()
+
 	var delayUntil *time.Time
 	if !msg.DelayUntil.IsZero() {
 		delayUntil = &msg.DelayUntil
@@ -79,6 +130,11 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (str
 
 func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {
 	// SELECT ... FOR UPDATE SKIP LOCKED — safe for concurrent consumers.
+	//
+	// Lazy retention filter: exclude messages older than the queue's
+	// MessageRetentionPeriod as resolved from jc_resources. A scalar subquery
+	// (not a JOIN) is required because Postgres forbids FOR UPDATE SKIP LOCKED
+	// on the nullable side of an outer join (SQLSTATE 0A000).
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, receipt_handle, body, md5_of_body, group_id, dedup_id,
 		       sequence_number, sent_at, delay_until, visible_at,
@@ -87,6 +143,12 @@ func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, 
 		WHERE queue_url = $1
 		  AND (delay_until IS NULL OR delay_until <= $2)
 		  AND (visible_at IS NULL OR visible_at <= $2)
+		  AND sent_at > $2 - make_interval(secs => COALESCE(
+		      (SELECT (data->>'MessageRetentionPeriod')::int
+		       FROM jc_resources
+		       WHERE resource_type = 'sqs_queues' AND id = $1),
+		      345600
+		  ))
 		ORDER BY sent_at
 		LIMIT $3
 		FOR UPDATE SKIP LOCKED
@@ -197,6 +259,12 @@ func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, queu
 			count(*) AS cnt
 		FROM jc_sqs_messages
 		WHERE queue_url=$1
+		  AND sent_at > $2 - make_interval(secs => COALESCE(
+		      (SELECT (data->>'MessageRetentionPeriod')::int
+		       FROM jc_resources
+		       WHERE resource_type = 'sqs_queues' AND id = $1),
+		      345600
+		  ))
 		GROUP BY state
 	`, queueURL, now)
 	if err != nil {
@@ -221,8 +289,9 @@ func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, queu
 	return visible, notVisible, delayed, rows.Err()
 }
 
-// SetQueueRetention is a no-op for the postgres store; TTL is enforced via DB-side
-// expiry or a separate housekeeping job.
+// SetQueueRetention is a no-op for the postgres store: MessageRetentionPeriod
+// is read directly from jc_resources, where QueueProvider persists it on
+// CreateQueue / SetQueueAttributes. The single source of truth lives there.
 func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _ string, _ int) error {
 	return nil
 }

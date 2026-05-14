@@ -1290,6 +1290,65 @@ func s3BuildXML(action string, data map[string]any) []byte {
 		sb.WriteString(xmlTag("ObjectOwnership", str(data["ObjectOwnership"])))
 		sb.WriteString("</Rule>")
 		sb.WriteString("</OwnershipControls>")
+
+	case "CreateAccessPoint":
+		sb.WriteString(`<CreateAccessPointResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">`)
+		sb.WriteString(xmlTag("AccessPointArn", str(data["AccessPointArn"])))
+		sb.WriteString(xmlTag("Alias", str(data["Alias"])))
+		sb.WriteString("</CreateAccessPointResult>")
+
+	case "GetAccessPoint":
+		sb.WriteString(`<GetAccessPointResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">`)
+		sb.WriteString(xmlTag("Name", str(data["Name"])))
+		sb.WriteString(xmlTag("Bucket", str(data["Bucket"])))
+		sb.WriteString(xmlTag("AccessPointArn", str(data["AccessPointArn"])))
+		sb.WriteString(xmlTag("Alias", str(data["Alias"])))
+		sb.WriteString(xmlTag("NetworkOrigin", str(data["NetworkOrigin"])))
+		if cd := str(data["CreationDate"]); cd != "" {
+			sb.WriteString(xmlTag("CreationDate", cd))
+		}
+		sb.WriteString("</GetAccessPointResult>")
+
+	case "ListAccessPoints":
+		sb.WriteString(`<ListAccessPointsResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">`)
+		sb.WriteString("<AccessPointList>")
+		if aps, ok := data["AccessPointList"].([]map[string]any); ok {
+			for _, ap := range aps {
+				sb.WriteString("<AccessPoint>")
+				sb.WriteString(xmlTag("Name", str(ap["Name"])))
+				sb.WriteString(xmlTag("Bucket", str(ap["Bucket"])))
+				sb.WriteString(xmlTag("AccessPointArn", str(ap["AccessPointArn"])))
+				sb.WriteString(xmlTag("Alias", str(ap["Alias"])))
+				sb.WriteString(xmlTag("NetworkOrigin", str(ap["NetworkOrigin"])))
+				if cd := str(ap["CreationDate"]); cd != "" {
+					sb.WriteString(xmlTag("CreationDate", cd))
+				}
+				sb.WriteString("</AccessPoint>")
+			}
+		}
+		sb.WriteString("</AccessPointList>")
+		if nt := str(data["NextToken"]); nt != "" {
+			sb.WriteString(xmlTag("NextToken", nt))
+		}
+		sb.WriteString("</ListAccessPointsResult>")
+
+	case "GetAccessPointPolicy":
+		sb.WriteString(`<GetAccessPointPolicyResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">`)
+		sb.WriteString(xmlTag("Policy", str(data["Policy"])))
+		sb.WriteString("</GetAccessPointPolicyResult>")
+
+	case "GetAccessPointPolicyStatus":
+		sb.WriteString(`<GetAccessPointPolicyStatusResult xmlns="http://awss3control.amazonaws.com/doc/2018-08-20/">`)
+		sb.WriteString("<PolicyStatus>")
+		isPublic := false
+		if ps, ok := data["PolicyStatus"].(map[string]any); ok {
+			if v, ok := ps["IsPublic"].(bool); ok {
+				isPublic = v
+			}
+		}
+		sb.WriteString(xmlTag("IsPublic", strconv.FormatBool(isPublic)))
+		sb.WriteString("</PolicyStatus>")
+		sb.WriteString("</GetAccessPointPolicyStatusResult>")
 	}
 
 	return []byte(sb.String())
