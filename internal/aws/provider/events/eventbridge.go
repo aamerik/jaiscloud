@@ -94,7 +94,40 @@ func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
 		"EventBridge.UpdateApiDestination":      p.UpdateApiDestination,
 		"EventBridge.DeleteApiDestination":      p.DeleteApiDestination,
 		"EventBridge.ListApiDestinations":       p.ListApiDestinations,
+		// Extras
+		"EventBridge.TestEventPattern":        p.TestEventPattern,
+		"EventBridge.ListRuleNamesByTarget":   p.ListRuleNamesByTarget,
+		// Permissions
+		"EventBridge.PutPermission":    p.PutPermission,
+		"EventBridge.RemovePermission": p.RemovePermission,
 	}
+}
+
+// ─── bus-scoped key helpers ───────────────────────────────────────────────────
+
+// ruleKey returns the store ID for a rule scoped to its event bus.
+// Format: "busName/ruleName"
+func ruleKey(busName, ruleName string) string {
+	return busName + "/" + ruleName
+}
+
+// targetKey returns the store ID for a target scoped to its event bus and rule.
+// Format: "busName/ruleName/targetID"
+func targetKey(busName, ruleName, targetID string) string {
+	return busName + "/" + ruleName + "/" + targetID
+}
+
+// targetKeyPrefix returns the prefix used to list all targets for a given bus+rule.
+func targetKeyPrefix(busName, ruleName string) string {
+	return busName + "/" + ruleName + "/"
+}
+
+// normBus returns "default" when the bus name is empty.
+func normBus(busName string) string {
+	if busName == "" {
+		return "default"
+	}
+	return busName
 }
 
 // ─── rule CRUD ────────────────────────────────────────────────────────────────
@@ -124,10 +157,7 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 	// AWSResourceID returns arn:aws:events:..., AzureResourceID/GCPResourceID return stubs.
 	arn := nr.ResourceID("events-rule", name)
 
-	busName := strParam(nr.Params, "EventBusName")
-	if busName == "" {
-		busName = "default"
-	}
+	busName := normBus(strParam(nr.Params, "EventBusName"))
 	rule := ruleData{
 		Name:         name,
 		Arn:          arn,
@@ -138,7 +168,7 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 		Description:  strParam(nr.Params, "Description"),
 	}
 	raw, _ := json.Marshal(rule)
-	entry := store.ResourceEntry{Type: resTypeRule, ID: name, Data: raw}
+	entry := store.ResourceEntry{Type: resTypeRule, ID: ruleKey(busName, name), Data: raw}
 	if err := p.resources.Create(ctx, entry); err != nil {
 		if err == store.ErrAlreadyExists {
 			_ = p.resources.Update(ctx, entry)
@@ -154,9 +184,10 @@ func (p *EventBridgeProvider) DeleteRule(ctx context.Context, nr *model.Normaliz
 	if name == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
 	}
-	_ = p.resources.Delete(ctx, resTypeRule, name)
+	busName := normBus(strParam(nr.Params, "EventBusName"))
+	_ = p.resources.Delete(ctx, resTypeRule, ruleKey(busName, name))
 	// Cascade: remove all targets for this rule.
-	entries, _ := p.resources.List(ctx, resTypeTarget, name+"/")
+	entries, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, name))
 	for _, e := range entries {
 		_ = p.resources.Delete(ctx, resTypeTarget, e.ID)
 	}
@@ -165,7 +196,8 @@ func (p *EventBridgeProvider) DeleteRule(ctx context.Context, nr *model.Normaliz
 
 func (p *EventBridgeProvider) DescribeRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeRule, name)
+	busName := normBus(strParam(nr.Params, "EventBusName"))
+	e, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, name))
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + name + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
@@ -182,23 +214,18 @@ func (p *EventBridgeProvider) DescribeRule(ctx context.Context, nr *model.Normal
 }
 
 func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	prefix := strParam(nr.Params, "NamePrefix")
-	busFilter := strParam(nr.Params, "EventBusName")
-	if busFilter == "" {
-		busFilter = "default"
+	namePrefix := strParam(nr.Params, "NamePrefix")
+	busFilter := normBus(strParam(nr.Params, "EventBusName"))
+	// List all rules under this bus; apply optional name-prefix filter.
+	storePrefix := busFilter + "/"
+	if namePrefix != "" {
+		storePrefix = busFilter + "/" + namePrefix
 	}
-	entries, _ := p.resources.List(ctx, resTypeRule, prefix)
+	entries, _ := p.resources.List(ctx, resTypeRule, storePrefix)
 	rules := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
-			continue
-		}
-		ruleBus := rule.EventBusName
-		if ruleBus == "" {
-			ruleBus = "default"
-		}
-		if ruleBus != busFilter {
 			continue
 		}
 		rules = append(rules, map[string]any{
@@ -214,15 +241,16 @@ func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.Normalize
 }
 
 func (p *EventBridgeProvider) EnableRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setRuleState(ctx, strParam(nr.Params, "Name"), "ENABLED")
+	return p.setRuleState(ctx, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "ENABLED")
 }
 
 func (p *EventBridgeProvider) DisableRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setRuleState(ctx, strParam(nr.Params, "Name"), "DISABLED")
+	return p.setRuleState(ctx, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "DISABLED")
 }
 
-func (p *EventBridgeProvider) setRuleState(ctx context.Context, name, state string) (*model.ProviderResponse, error) {
-	e, err := p.resources.Get(ctx, resTypeRule, name)
+func (p *EventBridgeProvider) setRuleState(ctx context.Context, busName, name, state string) (*model.ProviderResponse, error) {
+	key := ruleKey(busName, name)
+	e, err := p.resources.Get(ctx, resTypeRule, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + name + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
@@ -230,7 +258,7 @@ func (p *EventBridgeProvider) setRuleState(ctx context.Context, name, state stri
 	_ = json.Unmarshal(e.Data, &rule)
 	rule.State = state
 	raw, _ := json.Marshal(rule)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeRule, ID: name, Data: raw})
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeRule, ID: key, Data: raw})
 	return provider.OK(nil), nil
 }
 
@@ -252,7 +280,8 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 	if ruleName == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Rule is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, resTypeRule, ruleName); err != nil {
+	busName := normBus(strParam(nr.Params, "EventBusName"))
+	if _, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, ruleName)); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + ruleName + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -273,7 +302,7 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		// Storing the full queue URL means delivery never touches the resource store.
 		td := resolveTargetMeta(nr.Cloud, id, arn, nr.AccountID)
 		raw, _ := json.Marshal(td)
-		storeID := ruleName + "/" + id
+		storeID := targetKey(busName, ruleName, id)
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
 		if err := p.resources.Create(ctx, entry); err != nil {
 			if err == store.ErrAlreadyExists {
@@ -313,6 +342,7 @@ func resolveTargetMeta(cloud model.Cloud, id, arn, accountID string) targetData 
 
 func (p *EventBridgeProvider) RemoveTargets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ruleName := strParam(nr.Params, "Rule")
+	busName := normBus(strParam(nr.Params, "EventBusName"))
 	ids, _ := nr.Params["Ids"].([]any)
 	var failed []map[string]any
 	for _, idAny := range ids {
@@ -320,7 +350,7 @@ func (p *EventBridgeProvider) RemoveTargets(ctx context.Context, nr *model.Norma
 		if id == "" {
 			continue
 		}
-		if err := p.resources.Delete(ctx, resTypeTarget, ruleName+"/"+id); err != nil {
+		if err := p.resources.Delete(ctx, resTypeTarget, targetKey(busName, ruleName, id)); err != nil {
 			failed = append(failed, map[string]any{"TargetId": id, "ErrorCode": "TargetNotFound", "ErrorMessage": err.Error()})
 		}
 	}
@@ -332,7 +362,8 @@ func (p *EventBridgeProvider) RemoveTargets(ctx context.Context, nr *model.Norma
 
 func (p *EventBridgeProvider) ListTargetsByRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ruleName := strParam(nr.Params, "Rule")
-	entries, _ := p.resources.List(ctx, resTypeTarget, ruleName+"/")
+	busName := normBus(strParam(nr.Params, "EventBusName"))
+	entries, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, ruleName))
 	targets := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var td targetData
@@ -443,7 +474,8 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 		if !matchesPattern(rule.EventPattern, envelope) {
 			continue
 		}
-		targets, _ := p.resources.List(ctx, resTypeTarget, rule.Name+"/")
+		busName := normBus(rule.EventBusName)
+		targets, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, rule.Name))
 		for _, te := range targets {
 			var td targetData
 			if err := json.Unmarshal(te.Data, &td); err != nil {

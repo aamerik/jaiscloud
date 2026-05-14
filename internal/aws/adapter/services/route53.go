@@ -121,6 +121,55 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 		id := strings.TrimPrefix(path, "/change/")
 		params["Id"] = id
 		return "GetChange", params
+	// ListHostedZonesByName
+	case path == "/hostedzonesbyname" && method == "GET":
+		if v := r.URL.Query().Get("dnsname"); v != "" {
+			params["DNSName"] = v
+		}
+		return "ListHostedZonesByName", params
+	// Reusable delegation sets
+	case path == "/delegationset" && method == "POST":
+		parseXMLBody(body, params)
+		return "CreateReusableDelegationSet", params
+	case path == "/delegationset" && method == "GET":
+		return "ListReusableDelegationSets", params
+	case strings.HasPrefix(path, "/delegationset/") && !strings.Contains(path[len("/delegationset/"):], "/"):
+		id := strings.TrimPrefix(path, "/delegationset/")
+		params["Id"] = id
+		if method == "GET" {
+			return "GetReusableDelegationSet", params
+		}
+		if method == "DELETE" {
+			return "DeleteReusableDelegationSet", params
+		}
+	// UpdateHostedZoneComment — POST /2013-04-01/hostedzone/{id}
+	// (same prefix as GetHostedZone/DeleteHostedZone, routed by POST method)
+	case strings.HasPrefix(path, "/hostedzone/") && !strings.Contains(path[len("/hostedzone/"):], "/") && method == "POST":
+		id := strings.TrimPrefix(path, "/hostedzone/")
+		params["Id"] = id
+		parseXMLBody(body, params)
+		return "UpdateHostedZoneComment", params
+	// VPC association/disassociation — /2013-04-01/hostedzone/{id}/associatevpc|disassociatevpc
+	case strings.HasSuffix(path, "/associatevpc") && method == "POST":
+		parts := strings.Split(path, "/")
+		if len(parts) >= 3 {
+			params["HostedZoneId"] = parts[2]
+		}
+		parseXMLBody(body, params)
+		return "AssociateVPCWithHostedZone", params
+	case strings.HasSuffix(path, "/disassociatevpc") && method == "POST":
+		parts := strings.Split(path, "/")
+		if len(parts) >= 3 {
+			params["HostedZoneId"] = parts[2]
+		}
+		parseXMLBody(body, params)
+		return "DisassociateVPCFromHostedZone", params
+	// UpdateHealthCheck — POST /2013-04-01/healthcheck/{id}
+	case strings.HasPrefix(path, "/healthcheck/") && !strings.Contains(path[len("/healthcheck/"):], "/") && method == "POST":
+		id := strings.TrimPrefix(path, "/healthcheck/")
+		params["Id"] = id
+		parseXMLBody(body, params)
+		return "UpdateHealthCheck", params
 	// Tags — /tags/{resourcetype}/{id}
 	case strings.HasPrefix(path, "/tags/"):
 		rest := strings.TrimPrefix(path, "/tags/")
@@ -300,9 +349,13 @@ func buildRoute53XML(data map[string]any) string {
 	if _, ok := data["CreateHostedZoneResponse"]; ok {
 		inner := encodeHostedZone(data["HostedZoneCreated"])
 		loc := str(data["Location"])
+		changeID := str(data["ChangeId"])
+		if changeID == "" {
+			changeID = "C1"
+		}
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<CreateHostedZoneResponse ` + ns + `>` + inner +
-			`<ChangeInfo><Id>/change/C1</Id><Status>INSYNC</Status></ChangeInfo>` +
+			`<ChangeInfo><Id>/change/` + xmlEscape(changeID) + `</Id><Status>INSYNC</Status></ChangeInfo>` +
 			`<Location>` + xmlEscape(loc) + `</Location>` +
 			`</CreateHostedZoneResponse>`
 	}
@@ -339,16 +392,24 @@ func buildRoute53XML(data map[string]any) string {
 		return sb.String()
 	}
 	if _, ok := data["DeleteHostedZoneResponse"]; ok {
+		changeID := str(data["ChangeId"])
+		if changeID == "" {
+			changeID = "C1"
+		}
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<DeleteHostedZoneResponse ` + ns + `>` +
-			`<ChangeInfo><Id>/change/C1</Id><Status>INSYNC</Status><SubmittedAt>` +
+			`<ChangeInfo><Id>/change/` + xmlEscape(changeID) + `</Id><Status>INSYNC</Status><SubmittedAt>` +
 			xmlEscape(str(data["SubmittedAt"])) + `</SubmittedAt></ChangeInfo>` +
 			`</DeleteHostedZoneResponse>`
 	}
 	if _, ok := data["ChangeInfo"]; ok {
+		changeID := str(data["ChangeId"])
+		if changeID == "" {
+			changeID = "C1"
+		}
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<ChangeResourceRecordSetsResponse ` + ns + `>` +
-			`<ChangeInfo><Id>/change/C1</Id><Status>INSYNC</Status><SubmittedAt>` +
+			`<ChangeInfo><Id>/change/` + xmlEscape(changeID) + `</Id><Status>INSYNC</Status><SubmittedAt>` +
 			str(data["SubmittedAt"]) + `</SubmittedAt></ChangeInfo>` +
 			`</ChangeResourceRecordSetsResponse>`
 	}
@@ -375,10 +436,46 @@ func buildRoute53XML(data map[string]any) string {
 	}
 	// GetChange
 	if status, ok := data["Status"]; ok {
+		changeID := str(data["ChangeId"])
+		if changeID == "" {
+			changeID = "C1"
+		}
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<GetChangeResponse ` + ns + `>` +
-			`<ChangeInfo><Id>/change/C1</Id><Status>` + xmlEscape(str(status)) + `</Status></ChangeInfo>` +
+			`<ChangeInfo><Id>/change/` + xmlEscape(changeID) + `</Id><Status>` + xmlEscape(str(status)) + `</Status></ChangeInfo>` +
 			`</GetChangeResponse>`
+	}
+	// DelegationSet operations
+	if ds, ok := data["DelegationSet"]; ok {
+		inner := encodeDelegationSet(ds)
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<GetReusableDelegationSetResponse ` + ns + `>` + inner + `</GetReusableDelegationSetResponse>`
+	}
+	if sets, ok := data["DelegationSets"]; ok {
+		var sb strings.Builder
+		sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+		sb.WriteString(`<ListReusableDelegationSetsResponse ` + ns + `>`)
+		sb.WriteString(`<DelegationSets>`)
+		if items, ok := sets.([]map[string]any); ok {
+			for _, item := range items {
+				sb.WriteString(encodeDelegationSet(item))
+			}
+		}
+		sb.WriteString(`</DelegationSets>`)
+		sb.WriteString(`<IsTruncated>false</IsTruncated>`)
+		sb.WriteString(`</ListReusableDelegationSetsResponse>`)
+		return sb.String()
+	}
+	// VPC association responses
+	if ci, ok := data["ChangeInfo"]; ok {
+		status := ""
+		if m, ok := ci.(map[string]any); ok {
+			status, _ = m["Status"].(string)
+		}
+		return `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<AssociateVPCWithHostedZoneResponse ` + ns + `>` +
+			`<ChangeInfo><Status>` + xmlEscape(status) + `</Status></ChangeInfo>` +
+			`</AssociateVPCWithHostedZoneResponse>`
 	}
 	// ChangeTagsForResource — no body needed
 	if _, ok := data["ChangeTagsForResourceResponse"]; ok {
@@ -478,4 +575,24 @@ func encodeHealthCheck(v any) string {
 		`</HealthCheckConfig>` +
 		`<HealthCheckVersion>1</HealthCheckVersion>` +
 		`</HealthCheck>`
+}
+
+func encodeDelegationSet(v any) string {
+	ds, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(`<DelegationSet>`)
+	sb.WriteString(xmlTag("Id", str(ds["Id"])))
+	sb.WriteString(xmlTag("CallerReference", str(ds["CallerReference"])))
+	sb.WriteString(`<NameServers>`)
+	if nsList, ok := ds["NameServers"].([]string); ok {
+		for _, ns := range nsList {
+			sb.WriteString(xmlTag("NameServer", ns))
+		}
+	}
+	sb.WriteString(`</NameServers>`)
+	sb.WriteString(`</DelegationSet>`)
+	return sb.String()
 }

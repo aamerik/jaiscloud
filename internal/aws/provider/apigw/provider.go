@@ -88,7 +88,7 @@ type restAPI struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	CreatedDate int64             `json:"createdDate"`
+	CreatedDate time.Time         `json:"createdDate"`
 	Tags        map[string]string `json:"tags,omitempty"`
 }
 
@@ -102,7 +102,7 @@ func (p *GatewayProvider) CreateRestApi(ctx context.Context, nr *model.Normalize
 		ID:          apiID,
 		Name:        name,
 		Description: strParam(nr.Params, "description"),
-		CreatedDate: time.Now().Unix(),
+		CreatedDate: time.Now().UTC(),
 	}
 	if err := p.save(ctx, rtAPI, apiID, api); err != nil {
 		return nil, fmt.Errorf("apigw: create api: %w", err)
@@ -391,10 +391,10 @@ func (p *GatewayProvider) PutIntegrationResponse(ctx context.Context, nr *model.
 // ─── Deployments ──────────────────────────────────────────────────────────────
 
 type deployment struct {
-	ID          string `json:"id"`
-	APIID       string `json:"apiId"`
-	Description string `json:"description"`
-	CreatedDate int64  `json:"createdDate"`
+	ID          string    `json:"id"`
+	APIID       string    `json:"apiId"`
+	Description string    `json:"description"`
+	CreatedDate time.Time `json:"createdDate"`
 }
 
 func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -404,14 +404,14 @@ func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.Normal
 
 	d := deployment{
 		ID: shortID(), APIID: apiID, Description: desc,
-		CreatedDate: time.Now().Unix(),
+		CreatedDate: time.Now().UTC(),
 	}
 	p.save(ctx, rtDeployment, d.ID, d)
 
 	// Auto-create or update the stage if stageName is provided.
 	if stageName != "" {
 		stageKey := apiID + "/" + stageName
-		st := apiStage{Name: stageName, APIID: apiID, DeploymentID: d.ID}
+		st := apiStage{Name: stageName, APIID: apiID, DeploymentID: d.ID, CreatedDate: time.Now().UTC()}
 		p.save(ctx, rtStage, stageKey, st)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
@@ -426,7 +426,7 @@ func (p *GatewayProvider) GetDeployments(ctx context.Context, nr *model.Normaliz
 	for _, e := range entries {
 		var d deployment
 		if json.Unmarshal(e.Data, &d) == nil && d.APIID == apiID {
-			items = append(items, map[string]any{"id": d.ID, "createdDate": d.CreatedDate})
+			items = append(items, map[string]any{"id": d.ID, "createdDate": d.CreatedDate.Format(time.RFC3339)})
 		}
 	}
 	return provider.OK(map[string]any{"item": items}), nil
@@ -446,7 +446,7 @@ type apiStage struct {
 	DeploymentID string            `json:"deploymentId"`
 	Description  string            `json:"description"`
 	Variables    map[string]string `json:"variables,omitempty"`
-	CreatedDate  int64             `json:"createdDate"`
+	CreatedDate  time.Time         `json:"createdDate"`
 }
 
 func (p *GatewayProvider) CreateStage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -456,7 +456,7 @@ func (p *GatewayProvider) CreateStage(ctx context.Context, nr *model.NormalizedR
 
 	st := apiStage{
 		Name: stageName, APIID: apiID, DeploymentID: deploymentID,
-		CreatedDate: time.Now().Unix(),
+		CreatedDate: time.Now().UTC(),
 	}
 	stageKey := apiID + "/" + stageName
 	p.save(ctx, rtStage, stageKey, st)
@@ -674,7 +674,7 @@ func (p *GatewayProvider) notFound(err error, msg string) error {
 func apiToWire(a restAPI) map[string]any {
 	return map[string]any{
 		"id": a.ID, "name": a.Name, "description": a.Description,
-		"createdDate": a.CreatedDate,
+		"createdDate": a.CreatedDate.Format(time.RFC3339),
 	}
 }
 
@@ -698,7 +698,7 @@ func integrationToWire(i *methodIntegration) map[string]any {
 func stageToWire(st apiStage) map[string]any {
 	return map[string]any{
 		"stageName": st.Name, "deploymentId": st.DeploymentID,
-		"description": st.Description, "createdDate": st.CreatedDate,
+		"description": st.Description, "createdDate": st.CreatedDate.Format(time.RFC3339),
 		"variables": st.Variables,
 	}
 }

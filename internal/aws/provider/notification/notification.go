@@ -65,6 +65,30 @@ func (p *SNSProvider) Routes() map[string]provider.HandlerFunc {
 		"Notification.TagResource":               p.TagResource,
 		"Notification.UntagResource":             p.UntagResource,
 		"Notification.ListTagsForResource":       p.ListTagsForResource,
+		// Permissions
+		"Notification.AddPermission":    p.AddPermission,
+		"Notification.RemovePermission": p.RemovePermission,
+		// Platform applications and endpoints
+		"Notification.CreatePlatformApplication":          p.CreatePlatformApplication,
+		"Notification.GetPlatformApplicationAttributes":   p.GetPlatformApplicationAttributes,
+		"Notification.SetPlatformApplicationAttributes":   p.SetPlatformApplicationAttributes,
+		"Notification.DeletePlatformApplication":          p.DeletePlatformApplication,
+		"Notification.ListPlatformApplications":           p.ListPlatformApplications,
+		"Notification.CreatePlatformEndpoint":             p.CreatePlatformEndpoint,
+		"Notification.GetEndpointAttributes":              p.GetEndpointAttributes,
+		"Notification.SetEndpointAttributes":              p.SetEndpointAttributes,
+		"Notification.DeleteEndpoint":                     p.DeleteEndpoint,
+		"Notification.ListEndpointsByPlatformApplication": p.ListEndpointsByPlatformApplication,
+		// SMS
+		"Notification.SetSMSAttributes":              p.SetSMSAttributes,
+		"Notification.GetSMSAttributes":              p.GetSMSAttributes,
+		"Notification.OptInPhoneNumber":              p.OptInPhoneNumber,
+		"Notification.CheckIfPhoneNumberIsOptedOut":  p.CheckIfPhoneNumberIsOptedOut,
+		"Notification.ListPhoneNumbersOptedOut":      p.ListPhoneNumbersOptedOut,
+		"Notification.ListOriginationNumbers":        p.ListOriginationNumbers,
+		// Data protection
+		"Notification.PutDataProtectionPolicy": p.PutDataProtectionPolicy,
+		"Notification.GetDataProtectionPolicy": p.GetDataProtectionPolicy,
 	}
 }
 

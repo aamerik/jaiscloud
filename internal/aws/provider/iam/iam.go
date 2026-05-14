@@ -227,6 +227,11 @@ func (p *IAMProvider) GetRole(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *IAMProvider) DeleteRole(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "RoleName")
 	arn := nr.ResourceID("iam-role", name)
+	// Check for attached managed policies
+	attachments, _ := p.resources.List(ctx, "iam_attachments", arn)
+	if len(attachments) > 0 {
+		return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must detach all policies first", 409)
+	}
 	if err := p.resources.Delete(ctx, "iam_roles", arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
@@ -329,6 +334,13 @@ func (p *IAMProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *IAMProvider) DeletePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PolicyArn")
+	var pol policyData
+	if err := loadEntry(ctx, p.resources, "iam_policies", arn, &pol); err != nil {
+		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
+	}
+	if pol.AttachmentCount > 0 {
+		return nil, model.NewProviderError("DeleteConflict", "Cannot delete a default version of a policy. To delete a policy, delete all versions of the policy and then delete the policy", 409)
+	}
 	if err := p.resources.Delete(ctx, "iam_policies", arn); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
@@ -522,6 +534,19 @@ func (p *IAMProvider) GetUser(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *IAMProvider) DeleteUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "UserName")
 	arn := nr.ResourceID("iam-user", name)
+	// Check for attached managed policies
+	attachments, _ := p.resources.List(ctx, "iam_user_attachments", arn)
+	if len(attachments) > 0 {
+		return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must detach all policies first", 409)
+	}
+	// Check for access keys
+	allKeys, _ := p.resources.List(ctx, "iam_access_keys", "")
+	for _, e := range allKeys {
+		var ak accessKeyData
+		if json.Unmarshal(e.Data, &ak) == nil && ak.UserName == name {
+			return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must delete access keys first", 409)
+		}
+	}
 	_ = p.resources.Delete(ctx, "iam_users", arn)
 	return provider.OK(nil), nil
 }

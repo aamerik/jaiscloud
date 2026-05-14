@@ -147,6 +147,16 @@ type memStore struct {
 	queryDefinitions map[string]*QueryDefinition
 	// exportTasks maps taskID → *ExportTask
 	exportTasks map[string]*ExportTask
+	// metricFilters maps logGroupName → filterName → *MetricFilter
+	metricFilters map[string]map[string]*MetricFilter
+}
+
+// MetricFilter holds a CloudWatch Logs metric filter.
+type MetricFilter struct {
+	FilterName            string           `json:"filterName"`
+	LogGroupName          string           `json:"logGroupName"`
+	FilterPattern         string           `json:"filterPattern"`
+	MetricTransformations []map[string]any `json:"metricTransformations"`
 }
 
 func newMemStore() *memStore {
@@ -165,6 +175,7 @@ func (s *memStore) reset() {
 	s.queries = make(map[string]*LogQuery)
 	s.queryDefinitions = make(map[string]*QueryDefinition)
 	s.exportTasks = make(map[string]*ExportTask)
+	s.metricFilters = make(map[string]map[string]*MetricFilter)
 }
 
 // Reset wipes all state (called on POST /_jaiscloud/reset).

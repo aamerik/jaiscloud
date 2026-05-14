@@ -45,6 +45,8 @@ func (p *CacheProvider) Routes() map[string]provider.HandlerFunc {
 		"ElastiCache.CreateCacheParameterGroup":   p.CreateCacheParameterGroup,
 		"ElastiCache.DescribeCacheParameterGroups": p.DescribeCacheParameterGroups,
 		"ElastiCache.DeleteCacheParameterGroup":   p.DeleteCacheParameterGroup,
+		// Reboot
+		"ElastiCache.RebootCacheCluster": p.RebootCacheCluster,
 	}
 }
 
@@ -193,6 +195,27 @@ func (p *CacheProvider) DeleteCacheCluster(ctx context.Context, nr *model.Normal
 	c.CacheClusterStatus = "deleting"
 	p.resources.Delete(ctx, rtCacheCluster, id)
 	return provider.OK(map[string]any{"CacheClusterDeleted": c.toWire()}), nil
+}
+
+func (p *CacheProvider) RebootCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "CacheClusterId")
+	e, err := p.resources.Get(ctx, rtCacheCluster, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "CacheClusterNotFound", Message: "Cache cluster not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c cacheCluster
+	json.Unmarshal(e.Data, &c)
+	// Transition through rebooting and back to available.
+	c.CacheClusterStatus = "rebooting"
+	data, _ := json.Marshal(c)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
+	c.CacheClusterStatus = "available"
+	data, _ = json.Marshal(c)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
+	return provider.OK(map[string]any{"CacheCluster": c.toWire()}), nil
 }
 
 // ─── Replication Groups ───────────────────────────────────────────────────────

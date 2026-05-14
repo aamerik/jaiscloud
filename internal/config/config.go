@@ -190,6 +190,16 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"rds-pg": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:rds:%s:%s:pg:%s", r, a, n)
 	},
+	// SNS platform
+	"sns-platform-app":      func(r, a, n string) string { return fmt.Sprintf("arn:aws:sns:%s:%s:app/%s", r, a, n) },
+	"sns-platform-endpoint": func(r, a, n string) string { return fmt.Sprintf("arn:aws:sns:%s:%s:endpoint/%s", r, a, n) },
+	// Lambda code signing
+	"lambda-code-signing-config": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:lambda:%s:%s:code-signing-config/%s", r, a, n)
+	},
+	// ECS task set and capacity provider
+	"ecs-task-set":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:task-set/%s", r, a, n) },
+	"ecs-capacity-provider": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:capacity-provider/%s", r, a, n) },
 	// Phase 15 additions
 	"cognito-userpool":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", r, a, n) },
 	"cognito-identitypool":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-identity:%s:%s:identitypool/%s", r, a, n) },

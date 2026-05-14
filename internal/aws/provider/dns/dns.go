@@ -43,6 +43,16 @@ func (p *DNSProvider) Routes() map[string]provider.HandlerFunc {
 		"DNS.ChangeTagsForResource":    p.ChangeTagsForResource,
 		"DNS.ListTagsForResource":      p.ListTagsForResource,
 		"DNS.ListTagsForResources":     p.ListTagsForResources,
+		// Extras
+		"DNS.ListHostedZonesByName":           p.ListHostedZonesByName,
+		"DNS.UpdateHealthCheck":               p.UpdateHealthCheck,
+		"DNS.AssociateVPCWithHostedZone":      p.AssociateVPCWithHostedZone,
+		"DNS.DisassociateVPCFromHostedZone":   p.DisassociateVPCFromHostedZone,
+		"DNS.CreateReusableDelegationSet":     p.CreateReusableDelegationSet,
+		"DNS.GetReusableDelegationSet":        p.GetReusableDelegationSet,
+		"DNS.ListReusableDelegationSets":      p.ListReusableDelegationSets,
+		"DNS.DeleteReusableDelegationSet":     p.DeleteReusableDelegationSet,
+		"DNS.UpdateHostedZoneComment":         p.UpdateHostedZoneComment,
 	}
 }
 
@@ -59,6 +69,13 @@ func newShortID() string {
 	b := make([]byte, 7)
 	rand.Read(b)
 	return "Z" + strings.ToUpper(hex.EncodeToString(b))[:14]
+}
+
+// newChangeID generates a unique Route53 change ID: "C" + 14 uppercase hex chars.
+func newChangeID() string {
+	b := make([]byte, 7)
+	rand.Read(b)
+	return "C" + strings.ToUpper(hex.EncodeToString(b))[:14]
 }
 
 // ─── Hosted Zone metadata ─────────────────────────────────────────────────────
@@ -117,6 +134,7 @@ func (p *DNSProvider) CreateHostedZone(ctx context.Context, nr *model.Normalized
 			"CreateHostedZoneResponse": true,
 			"HostedZoneCreated":        zoneToWire(hz),
 			"Location":                 loc,
+			"ChangeId":                 newChangeID(),
 		},
 	}, nil
 }
@@ -163,6 +181,7 @@ func (p *DNSProvider) DeleteHostedZone(ctx context.Context, nr *model.Normalized
 		"DeleteHostedZoneResponse": true,
 		"Status":                   "INSYNC",
 		"SubmittedAt":              time.Now().UTC().Format(time.RFC3339),
+		"ChangeId":                 newChangeID(),
 	}), nil
 }
 
@@ -183,16 +202,20 @@ func rrID(zoneId, name, rrtype string) string {
 func (p *DNSProvider) ChangeResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	zoneId := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
 
+	changeID := newChangeID()
+
 	// Typed batch path: codec sets params["Changes"] = []map[string]any{...}
 	if rawChanges, ok := nr.Params["Changes"]; ok {
 		if changes, ok := rawChanges.([]map[string]any); ok {
 			for _, c := range changes {
 				p.applyRRSetChange(ctx, zoneId, c)
 			}
+			p.updateZoneRRSetCount(ctx, zoneId)
 			return provider.OK(map[string]any{
 				"ChangeInfo":  true,
 				"Status":      "INSYNC",
 				"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+				"ChangeId":    changeID,
 			}), nil
 		}
 	}
@@ -210,10 +233,12 @@ func (p *DNSProvider) ChangeResourceRecordSets(ctx context.Context, nr *model.No
 			"Records": []string{strParam(nr.Params, "Value")},
 		})
 	}
+	p.updateZoneRRSetCount(ctx, zoneId)
 	return provider.OK(map[string]any{
 		"ChangeInfo":  true,
 		"Status":      "INSYNC",
 		"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+		"ChangeId":    changeID,
 	}), nil
 }
 
@@ -354,6 +379,32 @@ func (p *DNSProvider) DeleteHealthCheck(ctx context.Context, nr *model.Normalize
 
 func (p *DNSProvider) GetChange(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{"Status": "INSYNC"}), nil
+}
+
+// updateZoneRRSetCount recounts RRSets for a zone and persists the updated count.
+func (p *DNSProvider) updateZoneRRSetCount(ctx context.Context, zoneId string) {
+	entries, err := p.resources.List(ctx, rtRRSet, zoneId)
+	if err != nil {
+		return
+	}
+	count := 0
+	for _, e := range entries {
+		var rr rrSet
+		if json.Unmarshal(e.Data, &rr) == nil && rr.ZoneId == zoneId {
+			count++
+		}
+	}
+	e, err := p.resources.Get(ctx, rtHostedZone, zoneId)
+	if err != nil {
+		return
+	}
+	var hz hostedZone
+	if json.Unmarshal(e.Data, &hz) != nil {
+		return
+	}
+	hz.ResourceRecordSetCount = count
+	data, _ := json.Marshal(hz)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtHostedZone, ID: zoneId, Data: data})
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

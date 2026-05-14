@@ -408,8 +408,39 @@ func (p *ObjectProvider) CreateBucket(ctx context.Context, nr *model.NormalizedR
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidBucketName", "The specified bucket is not valid", 400)
 	}
-	if err := p.meta.CreateBucket(ctx, bucket, nil); err != nil {
+	// Determine requested region (LocationConstraint in body, or nr.Region)
+	locationConstraint := strParam(nr.Params, "LocationConstraint")
+	if locationConstraint == "" {
+		locationConstraint = nr.Region
+	}
+	meta := map[string]any{
+		"AccountID": nr.AccountID,
+		"Region":    locationConstraint,
+	}
+	if err := p.meta.CreateBucket(ctx, bucket, meta); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
+			// S3 idempotency: load existing bucket metadata
+			existing, getErr := p.meta.GetBucket(ctx, bucket)
+			if getErr != nil {
+				// Can't read existing — treat as success (idempotent)
+				return provider.OK(map[string]any{"Location": "/" + bucket}), nil
+			}
+			existingOwner, _ := existing["AccountID"].(string)
+			existingRegion, _ := existing["Region"].(string)
+			if existingOwner != nr.AccountID {
+				// Different account owns this bucket
+				return nil, model.NewProviderError("BucketAlreadyExists", "The requested bucket name is not available", 409)
+			}
+			// Same account owns the bucket
+			if existingRegion == "us-east-1" && locationConstraint == "us-east-1" {
+				// Same account, us-east-1: idempotent success
+				return provider.OK(map[string]any{"Location": "/" + bucket}), nil
+			}
+			if existingRegion != locationConstraint {
+				// Same account but different region
+				return nil, model.NewProviderError("BucketAlreadyOwnedByYou", "Your previous request to create the named bucket succeeded and you already own it", 409)
+			}
+			// Same account, same region: idempotent success
 			return provider.OK(map[string]any{"Location": "/" + bucket}), nil
 		}
 		return nil, model.NewProviderError("InternalError", err.Error(), 500)

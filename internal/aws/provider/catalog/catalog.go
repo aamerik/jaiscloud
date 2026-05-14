@@ -332,6 +332,23 @@ func (p *GlueProvider) DeleteDatabase(ctx context.Context, nr *model.NormalizedR
 	if _, err := p.loadDB(ctx, name); err != nil {
 		return nil, err
 	}
+	// Cascade: delete all partitions then tables belonging to this database
+	// Partitions use MD5 IDs — must full-scan and filter by DatabaseName
+	partEntries, _ := p.resources.List(ctx, rtPartition, "")
+	for _, pe := range partEntries {
+		var part gluePartition
+		if json.Unmarshal(pe.Data, &part) == nil && strings.EqualFold(part.DatabaseName, name) {
+			_ = p.resources.Delete(ctx, rtPartition, pe.ID)
+		}
+	}
+	tablePrefix := tableID(name, "")
+	tableEntries, _ := p.resources.List(ctx, rtTable, tablePrefix)
+	for _, te := range tableEntries {
+		var t glueTable
+		if json.Unmarshal(te.Data, &t) == nil && strings.EqualFold(t.DatabaseName, name) {
+			_ = p.resources.Delete(ctx, rtTable, te.ID)
+		}
+	}
 	if err := p.resources.Delete(ctx, rtDatabase, dbID(name)); err != nil {
 		return nil, err
 	}
@@ -488,6 +505,10 @@ func (p *GlueProvider) CreatePartition(ctx context.Context, nr *model.Normalized
 	if inp == nil {
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "PartitionInput is required", HTTPStatus: http.StatusBadRequest}
 	}
+	// Validate parent table exists
+	if _, err := p.resources.Get(ctx, rtTable, tableID(dbName, tableName)); err != nil {
+		return nil, &model.ProviderError{Code: "EntityNotFoundException", Message: fmt.Sprintf("Table %s not found in database %s", tableName, dbName), HTTPStatus: http.StatusBadRequest}
+	}
 	values := strSliceParam(inp, "Values")
 
 	now := time.Now()
@@ -642,7 +663,7 @@ func dbToWire(db glueDatabase) map[string]any {
 		"Description": db.Description,
 		"LocationUri": db.LocationUri,
 		"Parameters":  db.Parameters,
-		"CreateTime":  db.CreateTime.Unix(),
+		"CreateTime":  db.CreateTime.Format(time.RFC3339),
 	}
 }
 
@@ -656,8 +677,8 @@ func tableToWire(t glueTable) map[string]any {
 		"Parameters":        t.Parameters,
 		"StorageDescriptor": t.StorageDescriptor,
 		"PartitionKeys":     t.PartitionKeys,
-		"CreateTime":        t.CreateTime.Unix(),
-		"UpdateTime":        t.UpdateTime.Unix(),
+		"CreateTime":        t.CreateTime.Format(time.RFC3339),
+		"UpdateTime":        t.UpdateTime.Format(time.RFC3339),
 	}
 }
 
@@ -668,8 +689,8 @@ func partitionToWire(part gluePartition) map[string]any {
 		"Values":            part.Values,
 		"Parameters":        part.Parameters,
 		"StorageDescriptor": part.StorageDescriptor,
-		"CreationTime":      part.CreationTime.Unix(),
-		"LastAccessTime":    part.LastAccessTime.Unix(),
+		"CreationTime":      part.CreationTime.Format(time.RFC3339),
+		"LastAccessTime":    part.LastAccessTime.Format(time.RFC3339),
 	}
 }
 

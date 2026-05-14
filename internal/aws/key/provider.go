@@ -83,6 +83,8 @@ func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 		"Key.GetParametersForImport":    p.GetParametersForImport,
 		"Key.ImportKeyMaterial":         p.ImportKeyMaterial,
 		"Key.DeleteImportedKeyMaterial": p.DeleteImportedKeyMaterial,
+		// Description update
+		"Key.UpdateKeyDescription": p.UpdateKeyDescription,
 	}
 }
 
@@ -1734,6 +1736,23 @@ func kmsMarkerIndex[T any](items []T, marker string, keyFn func(int) string) int
 		}
 	}
 	return len(items) // beyond last element → empty page
+}
+
+func (p *KeyProvider) UpdateKeyDescription(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	keyID, err := p.resolveKeyID(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, p.keyErr(err)
+	}
+	desc, _ := nr.Params["Description"].(string)
+	e.Description = desc
+	if err := p.store.UpdateKey(ctx, e); err != nil {
+		return nil, fmt.Errorf("kms: update key description: %w", err)
+	}
+	return provider.OK(map[string]any{}), nil
 }
 
 func grantItems(grants []GrantEntry) []map[string]any {

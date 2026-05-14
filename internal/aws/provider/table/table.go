@@ -260,6 +260,9 @@ func (p *TableProvider) DeleteTable(ctx context.Context, nr *model.NormalizedReq
 	}
 	_ = p.resources.Delete(ctx, "dynamodb_tables", name)
 	_ = p.items.DropTableSchema(ctx, name)
+	if p.streams != nil {
+		p.streams.Disable(name)
+	}
 	return provider.OK(map[string]any{"TableDescription": tableDesc(ts)}), nil
 }
 

@@ -103,6 +103,29 @@ func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 		"Function.DeleteFunctionConcurrency":   p.DeleteFunctionConcurrency,
 		// Account
 		"Function.GetAccountSettings":          p.GetAccountSettings,
+		// Code signing configs
+		"Function.CreateCodeSigningConfig":               p.CreateCodeSigningConfig,
+		"Function.GetCodeSigningConfig":                  p.GetCodeSigningConfig,
+		"Function.UpdateCodeSigningConfig":               p.UpdateCodeSigningConfig,
+		"Function.DeleteCodeSigningConfig":               p.DeleteCodeSigningConfig,
+		"Function.ListCodeSigningConfigs":                p.ListCodeSigningConfigs,
+		"Function.PutFunctionCodeSigningConfig":          p.PutFunctionCodeSigningConfig,
+		"Function.GetFunctionCodeSigningConfig":          p.GetFunctionCodeSigningConfig,
+		"Function.DeleteFunctionCodeSigningConfig":       p.DeleteFunctionCodeSigningConfig,
+		"Function.ListFunctionsByCodeSigningConfig":      p.ListFunctionsByCodeSigningConfig,
+		// Provisioned concurrency
+		"Function.PutProvisionedConcurrencyConfig":    p.PutProvisionedConcurrencyConfig,
+		"Function.GetProvisionedConcurrencyConfig":    p.GetProvisionedConcurrencyConfig,
+		"Function.DeleteProvisionedConcurrencyConfig": p.DeleteProvisionedConcurrencyConfig,
+		"Function.ListProvisionedConcurrencyConfigs":  p.ListProvisionedConcurrencyConfigs,
+		// Event invoke config
+		"Function.PutFunctionEventInvokeConfig":    p.PutFunctionEventInvokeConfig,
+		"Function.GetFunctionEventInvokeConfig":    p.GetFunctionEventInvokeConfig,
+		"Function.UpdateFunctionEventInvokeConfig": p.UpdateFunctionEventInvokeConfig,
+		"Function.DeleteFunctionEventInvokeConfig": p.DeleteFunctionEventInvokeConfig,
+		"Function.ListFunctionEventInvokeConfigs":  p.ListFunctionEventInvokeConfigs,
+		// Async invoke
+		"Function.InvokeAsync": p.InvokeAsync,
 	}
 }
 

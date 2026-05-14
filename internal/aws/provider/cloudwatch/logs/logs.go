@@ -53,6 +53,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudWatchLogs.CreateExportTask":    p.CreateExportTask,
 		"CloudWatchLogs.DescribeExportTasks": p.DescribeExportTasks,
 		"CloudWatchLogs.CancelExportTask":    p.CancelExportTask,
+		// Metric filters
+		"CloudWatchLogs.PutMetricFilter":        p.PutMetricFilter,
+		"CloudWatchLogs.DescribeMetricFilters":  p.DescribeMetricFilters,
+		"CloudWatchLogs.DeleteMetricFilter":     p.DeleteMetricFilter,
+		"CloudWatchLogs.TestMetricFilter":       p.TestMetricFilter,
 	}
 }
 

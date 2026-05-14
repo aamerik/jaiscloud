@@ -1296,7 +1296,7 @@ func (p *EMRProvider) saveCluster(ctx context.Context, c emrCluster) {
 
 // ─── Build helpers ────────────────────────────────────────────────────────────
 
-func buildInstanceCollections(instances map[string]any, now float64) (fleets, groups []map[string]any, collectionType string) {
+func buildInstanceCollections(instances map[string]any, now string) (fleets, groups []map[string]any, collectionType string) {
 	if rawFleets, ok := instances["InstanceFleets"].([]any); ok && len(rawFleets) > 0 {
 		for _, f := range rawFleets {
 			m, ok := f.(map[string]any)
@@ -1548,9 +1548,11 @@ func stepID() string    { return randID("s-", 13) }
 func groupID() string   { return randID("ig-", 13) }
 func fleetID() string   { return randID("if-", 13) }
 
-func nowUnix() float64 {
-	return float64(time.Now().Unix())
+func nowUnix() string {
+	return time.Now().UTC().Format(time.RFC3339)
 }
+
+func awsTimestamp() string { return time.Now().UTC().Format(time.RFC3339) }
 
 // rewriteYARNToK8s substitutes "--master yarn" with "--master k8s://kubernetes.default.svc"
 // in EMR-on-EC2 step args. This is an emulation lie — EMR classic uses YARN but JaisCloud

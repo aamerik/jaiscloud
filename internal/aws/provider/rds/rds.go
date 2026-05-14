@@ -49,6 +49,8 @@ func (p *RelationalProvider) Routes() map[string]provider.HandlerFunc {
 		"RDS.CreateDBParameterGroup":   p.CreateDBParameterGroup,
 		"RDS.DescribeDBParameterGroups": p.DescribeDBParameterGroups,
 		"RDS.DeleteDBParameterGroup":   p.DeleteDBParameterGroup,
+		// Restore
+		"RDS.RestoreDBInstanceFromDBSnapshot": p.RestoreDBInstanceFromDBSnapshot,
 	}
 }
 

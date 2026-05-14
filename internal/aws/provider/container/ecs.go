@@ -47,6 +47,28 @@ func (p *ContainerProvider) Routes() map[string]provider.HandlerFunc {
 		"ECS.ListTagsForResource":       p.ListTagsForResource,
 		// ExecuteCommand stub (14.1)
 		"ECS.ExecuteCommand":            p.ExecuteCommand,
+		// UpdateCluster / StartTask
+		"ECS.UpdateCluster": p.UpdateCluster,
+		"ECS.StartTask":     p.StartTask,
+		// TaskSet CRUD
+		"ECS.CreateTaskSet":                p.CreateTaskSet,
+		"ECS.DescribeTaskSets":             p.DescribeTaskSets,
+		"ECS.UpdateTaskSet":                p.UpdateTaskSet,
+		"ECS.DeleteTaskSet":                p.DeleteTaskSet,
+		"ECS.UpdateServicePrimaryTaskSet":  p.UpdateServicePrimaryTaskSet,
+		// ContainerInstance
+		"ECS.RegisterContainerInstance":     p.RegisterContainerInstance,
+		"ECS.DeregisterContainerInstance":   p.DeregisterContainerInstance,
+		"ECS.DescribeContainerInstances":    p.DescribeContainerInstances,
+		"ECS.ListContainerInstances":        p.ListContainerInstances,
+		"ECS.UpdateContainerInstancesState": p.UpdateContainerInstancesState,
+		"ECS.UpdateContainerAgent":          p.UpdateContainerAgent,
+		// CapacityProvider
+		"ECS.CreateCapacityProvider":        p.CreateCapacityProvider,
+		"ECS.DescribeCapacityProviders":     p.DescribeCapacityProviders,
+		"ECS.DeleteCapacityProvider":        p.DeleteCapacityProvider,
+		"ECS.PutClusterCapacityProviders":   p.PutClusterCapacityProviders,
+		"ECS.UpdateCapacityProvider":        p.UpdateCapacityProvider,
 	}
 }
 
@@ -544,6 +566,26 @@ func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedR
 		}
 	}
 	return provider.OK(map[string]any{"taskArns": arns}), nil
+}
+
+func (p *ContainerProvider) UpdateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["cluster"].(string)
+	name = splitARN(name)
+	e, err := p.resources.Get(ctx, rtCluster, name)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "ClusterNotFoundException", Message: "Cluster not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var c cluster
+	json.Unmarshal(e.Data, &c)
+	// Apply any settings updates (stub — persist unchanged).
+	data, _ := json.Marshal(c)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtCluster, ID: name, Data: data})
+	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
+}
+
+func (p *ContainerProvider) StartTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// StartTask is like RunTask but for specific container instances.
+	return p.RunTask(ctx, nr)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

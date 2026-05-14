@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -26,21 +27,33 @@ import (
 // It is cloud-agnostic — the SQS codec translates wire format, this
 // provider works with NormalizedRequest.Params maps.
 type QueueProvider struct {
-	resources store.ResourceStore
-	messages  sqsstore.SQSMessageStore
-	clock     clock.Clock
-	bus       *events.EventBus
-	waiters   *Waiters
+	resources     store.ResourceStore
+	messages      sqsstore.SQSMessageStore
+	clock         clock.Clock
+	bus           *events.EventBus
+	waiters       *Waiters
+	recentDeletes map[string]time.Time // queueName → deletion time
+	rdMu          sync.Mutex
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, clk clock.Clock, bus *events.EventBus) *QueueProvider {
-	return &QueueProvider{resources: resources, messages: messages, clock: clk, bus: bus, waiters: NewWaiters()}
+	return &QueueProvider{
+		resources:     resources,
+		messages:      messages,
+		clock:         clk,
+		bus:           bus,
+		waiters:       NewWaiters(),
+		recentDeletes: make(map[string]time.Time),
+	}
 }
 
 // Reset clears in-memory waiter state; satisfies admin.Resetter.
 func (p *QueueProvider) Reset() {
 	p.waiters.Reset()
 	resetMoveTasks()
+	p.rdMu.Lock()
+	p.recentDeletes = make(map[string]time.Time)
+	p.rdMu.Unlock()
 }
 
 // Routes returns the provider's route map for registration in the Registry.
@@ -77,6 +90,9 @@ func (p *QueueProvider) Routes() map[string]provider.HandlerFunc {
 		"Queue.ListMessageMoveTasks":  p.ListMessageMoveTasks,
 		// DLQ
 		"Queue.ListDeadLetterSourceQueues": p.ListDeadLetterSourceQueues,
+		// Permissions
+		"Queue.AddPermission":    p.AddPermission,
+		"Queue.RemovePermission": p.RemovePermission,
 	}
 }
 
@@ -117,6 +133,18 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		return nil, model.NewProviderError("InvalidParameterValue",
 			"The specified queue name is not valid.", 400)
 	}
+
+	// §1.5.7: QueueDeletedRecently gate — AWS blocks re-creation for 60s.
+	p.rdMu.Lock()
+	if deletedAt, ok := p.recentDeletes[name]; ok {
+		if time.Since(deletedAt) < 60*time.Second {
+			p.rdMu.Unlock()
+			return nil, model.NewProviderError("QueueDeletedRecently",
+				"You must wait 60 seconds after deleting a queue before you can create another with the same name.", 400)
+		}
+		delete(p.recentDeletes, name)
+	}
+	p.rdMu.Unlock()
 
 	attrs := attrsParam(nr.Params, "Attributes")
 
@@ -206,6 +234,11 @@ func (p *QueueProvider) DeleteQueue(ctx context.Context, nr *model.NormalizedReq
 		return nil, err
 	}
 	p.messages.Purge(ctx, queueURL)
+	// Record deletion for QueueDeletedRecently gate.
+	queueName := queueURL[strings.LastIndex(queueURL, "/")+1:]
+	p.rdMu.Lock()
+	p.recentDeletes[queueName] = time.Now()
+	p.rdMu.Unlock()
 	return provider.OK(map[string]any{}), nil
 }
 
