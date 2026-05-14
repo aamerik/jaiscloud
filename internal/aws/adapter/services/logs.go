@@ -52,7 +52,7 @@ func (c *LogsCodec) EncodeError(_ *model.NormalizedRequest, perr *model.Provider
 	h.Set("Content-Type", "application/x-amz-json-1.1")
 	out := map[string]any{
 		"__type":  perr.Code,
-		"message": perr.Message,
+		"Message": perr.Message,
 	}
 	body, _ := json.Marshal(out)
 	return perr.HTTPStatus, h, body

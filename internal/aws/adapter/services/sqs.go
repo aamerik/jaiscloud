@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -328,7 +329,15 @@ func extractMessageAttributes(values url.Values) map[string]any {
 		}
 		dt := values.Get(fmt.Sprintf("MessageAttribute.%d.Value.DataType", i))
 		sv := values.Get(fmt.Sprintf("MessageAttribute.%d.Value.StringValue", i))
-		result[name] = map[string]any{"DataType": dt, "StringValue": sv}
+		attr := map[string]any{"DataType": dt, "StringValue": sv}
+		if bvEncoded := values.Get(fmt.Sprintf("MessageAttribute.%d.Value.BinaryValue", i)); bvEncoded != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(bvEncoded); err == nil {
+				attr["BinaryValue"] = decoded
+			} else {
+				attr["BinaryValue"] = []byte(bvEncoded)
+			}
+		}
+		result[name] = attr
 	}
 	return result
 }
@@ -420,6 +429,9 @@ func buildXMLResult(action string, data map[string]any) string {
 		if v, ok := data["MD5OfMessageAttributes"]; ok && str(v) != "" {
 			sb.WriteString(xmlTag("MD5OfMessageAttributes", str(v)))
 		}
+		if v, ok := data["SequenceNumber"]; ok && str(v) != "" {
+			sb.WriteString(xmlTag("SequenceNumber", str(v)))
+		}
 	case "ReceiveMessage":
 		if msgs, ok := data["Messages"].([]map[string]any); ok {
 			for _, m := range msgs {
@@ -450,6 +462,9 @@ func buildXMLResult(action string, data map[string]any) string {
 			sb.WriteString(xmlTag("MD5OfMessageBody", str(s["MD5OfMessageBody"])))
 			if v, ok := s["MD5OfMessageAttributes"]; ok && str(v) != "" {
 				sb.WriteString(xmlTag("MD5OfMessageAttributes", str(v)))
+			}
+			if v, ok := s["SequenceNumber"]; ok && str(v) != "" {
+				sb.WriteString(xmlTag("SequenceNumber", str(v)))
 			}
 			sb.WriteString("</SendMessageBatchResultEntry>")
 		}
@@ -504,9 +519,20 @@ func encodeMessageAttributesXML(v any) string {
 			sb.WriteString("<Value>")
 			switch a := attr.(type) {
 			case map[string]any:
-				sb.WriteString(xmlTag("DataType", str(a["DataType"])))
-				if sv, ok := a["StringValue"]; ok {
+				dt := str(a["DataType"])
+				sb.WriteString(xmlTag("DataType", dt))
+				if sv, ok := a["StringValue"]; ok && str(sv) != "" {
 					sb.WriteString(xmlTag("StringValue", str(sv)))
+				}
+				// Binary* data types: encode BinaryValue as base64.
+				if strings.HasPrefix(dt, "Binary") {
+					switch bv := a["BinaryValue"].(type) {
+					case []byte:
+						sb.WriteString(xmlTag("BinaryValue", base64.StdEncoding.EncodeToString(bv)))
+					case string:
+						// Already base64-encoded string coming back from store.
+						sb.WriteString(xmlTag("BinaryValue", bv))
+					}
 				}
 			}
 			sb.WriteString("</Value>")

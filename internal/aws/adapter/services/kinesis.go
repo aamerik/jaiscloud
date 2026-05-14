@@ -54,7 +54,7 @@ func (c *KinesisCodec) EncodeError(_ *model.NormalizedRequest, perr *model.Provi
 	h.Set("Content-Type", "application/x-amz-json-1.1")
 	body, _ := json.Marshal(map[string]any{
 		"__type":  perr.Code,
-		"message": perr.Message,
+		"Message": perr.Message,
 	})
 	return perr.HTTPStatus, h, body
 }

@@ -55,7 +55,7 @@ func (c *StepFunctionsCodec) EncodeError(_ *model.NormalizedRequest, perr *model
 	h.Set("Content-Type", "application/x-amz-json-1.0")
 	body, _ := json.Marshal(map[string]any{
 		"__type":  perr.Code,
-		"message": perr.Message,
+		"Message": perr.Message,
 	})
 	return perr.HTTPStatus, h, body
 }

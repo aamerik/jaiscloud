@@ -181,38 +181,78 @@ func rrID(zoneId, name, rrtype string) string {
 
 func (p *DNSProvider) ChangeResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	zoneId := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
-	// The full batch change body is already flattened via parseXMLBody.
-	// Accept it as a no-op success — SDK tests typically just verify no error.
-	action := strParam(nr.Params, "Action") // CREATE, DELETE, UPSERT
+
+	// Typed batch path: codec sets params["Changes"] = []map[string]any{...}
+	if rawChanges, ok := nr.Params["Changes"]; ok {
+		if changes, ok := rawChanges.([]map[string]any); ok {
+			for _, c := range changes {
+				p.applyRRSetChange(ctx, zoneId, c)
+			}
+			return provider.OK(map[string]any{
+				"ChangeInfo":  true,
+				"Status":      "INSYNC",
+				"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+			}), nil
+		}
+	}
+
+	// Legacy flat-parse fallback (single change body without batch wrapper).
+	action := strParam(nr.Params, "Action")
 	name := strParam(nr.Params, "Name")
 	rrtype := strParam(nr.Params, "Type")
-	ttl := 300
-
 	if name != "" && rrtype != "" {
-		rr := rrSet{
-			ZoneId:  zoneId,
-			Name:    name,
-			Type:    rrtype,
-			TTL:     ttl,
-			Records: []string{strParam(nr.Params, "Value")},
-		}
-		data, _ := json.Marshal(rr)
-		id := rrID(zoneId, name, rrtype)
-		entry := store.ResourceEntry{Type: rtRRSet, ID: id, Data: data}
-		if action == "DELETE" {
-			p.resources.Delete(ctx, rtRRSet, id)
-		} else {
-			err := p.resources.Create(ctx, entry)
-			if err == store.ErrAlreadyExists {
-				p.resources.Update(ctx, entry)
-			}
-		}
+		p.applyRRSetChange(ctx, zoneId, map[string]any{
+			"Action":  action,
+			"Name":    name,
+			"Type":    rrtype,
+			"TTL":     strParam(nr.Params, "TTL"),
+			"Records": []string{strParam(nr.Params, "Value")},
+		})
 	}
 	return provider.OK(map[string]any{
 		"ChangeInfo":  true,
 		"Status":      "INSYNC",
 		"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
 	}), nil
+}
+
+func (p *DNSProvider) applyRRSetChange(ctx context.Context, zoneId string, c map[string]any) {
+	name := strParam(c, "Name")
+	rrtype := strParam(c, "Type")
+	action := strParam(c, "Action")
+	if name == "" || rrtype == "" {
+		return
+	}
+	ttl := 300
+	if tv := strParam(c, "TTL"); tv != "" {
+		if n, err := strconv.Atoi(tv); err == nil {
+			ttl = n
+		}
+	}
+	var records []string
+	if rv, ok := c["Records"]; ok {
+		switch v := rv.(type) {
+		case []string:
+			records = v
+		case []any:
+			for _, r := range v {
+				if s, ok := r.(string); ok {
+					records = append(records, s)
+				}
+			}
+		}
+	}
+	id := rrID(zoneId, name, rrtype)
+	if action == "DELETE" {
+		p.resources.Delete(ctx, rtRRSet, id)
+		return
+	}
+	rr := rrSet{ZoneId: zoneId, Name: name, Type: rrtype, TTL: ttl, Records: records}
+	data, _ := json.Marshal(rr)
+	entry := store.ResourceEntry{Type: rtRRSet, ID: id, Data: data}
+	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, entry)
+	}
 }
 
 func (p *DNSProvider) ListResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

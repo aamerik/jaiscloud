@@ -99,7 +99,7 @@ func (s *MemoryMessageStore) getOrCreateQueue(queueURL string) *queueData {
 	return q
 }
 
-func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID string, err error) {
+func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -113,7 +113,7 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 			dedupKey = msg.QueueURL + ":" + msg.DeduplicationID
 		}
 		if entry, ok := s.dedup[dedupKey]; ok && time.Now().Before(entry.expiry) {
-			return entry.messageID, nil // return original MessageID to caller
+			return entry.messageID, "", nil // return original MessageID to caller
 		}
 		s.dedup[dedupKey] = dedupEntry{expiry: time.Now().Add(5 * time.Minute), messageID: msg.MessageID}
 	}
@@ -135,7 +135,7 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 	cp := msg // copy to avoid caller mutation
 	q := s.getOrCreateQueue(msg.QueueURL)
 	q.messages = append(q.messages, &cp)
-	return "", nil
+	return "", msg.SequenceNumber, nil
 }
 
 func (s *MemoryMessageStore) Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {

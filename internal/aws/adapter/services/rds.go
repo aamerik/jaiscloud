@@ -144,6 +144,7 @@ func buildRDSXML(action string, data map[string]any) string {
 		sb.WriteString(`</DBParameterGroups>`)
 		return wrap("DescribeDBParameterGroups", sb.String())
 	}
+	// TagList check comes last so action-specific shapes take priority.
 	if _, ok := data["TagList"]; ok {
 		a := action
 		if a == "" {
@@ -151,14 +152,40 @@ func buildRDSXML(action string, data map[string]any) string {
 		}
 		return wrap(a, encodeRDSTagList(data["TagList"]))
 	}
-	// Empty response — produce a minimal valid wrapper using the action name
-	if action != "" && len(data) == 0 {
-		return `<?xml version="1.0" encoding="UTF-8"?>` +
-			`<` + action + `Response ` + rdsNS + `>` +
-			`<ResponseMetadata><RequestId>jaiscloud-rds</RequestId></ResponseMetadata>` +
-			`</` + action + `Response>`
+	// Any action with unknown or empty data: emit a proper wrapper, never bare <Response/>.
+	if action != "" {
+		var inner strings.Builder
+		for k, v := range data {
+			inner.WriteString(encodeRDSValue(k, v))
+		}
+		return wrap(action, inner.String())
 	}
-	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+	return `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Response ` + rdsNS + `>` +
+		`<ResponseMetadata><RequestId>jaiscloud-rds</RequestId></ResponseMetadata>` +
+		`</Response>`
+}
+
+func encodeRDSValue(k string, v any) string {
+	switch val := v.(type) {
+	case map[string]any:
+		var sb strings.Builder
+		sb.WriteString(`<` + k + `>`)
+		for ck, cv := range val {
+			sb.WriteString(encodeRDSValue(ck, cv))
+		}
+		sb.WriteString(`</` + k + `>`)
+		return sb.String()
+	case []any:
+		var sb strings.Builder
+		for _, item := range val {
+			sb.WriteString(encodeRDSValue(k, item))
+		}
+		return sb.String()
+	default:
+		_ = val
+		return xmlTag(k, str(v))
+	}
 }
 
 func encodeDBParameterGroup(v any) string {

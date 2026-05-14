@@ -69,7 +69,7 @@ func (c *DynamoDBCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Pro
 	h.Set("Content-Type", "application/x-amz-json-1.0")
 	out := map[string]any{
 		"__type":  code,
-		"message": perr.Message,
+		"Message": perr.Message,
 	}
 	for k, v := range perr.Data {
 		out[k] = v

@@ -35,10 +35,11 @@ type MessageAttribute struct {
 // SQSMessageStore manages data-plane message storage for SQS.
 // Phase 0: MemoryMessageStore. Phase 1: PostgresMessageStore.
 type SQSMessageStore interface {
-	// Send enqueues a message. For FIFO queues with deduplication, if a
-	// duplicate is detected the original MessageID is returned with no error.
-	// A non-empty returned messageID indicates a deduplicated send.
-	Send(ctx context.Context, msg SQSMessage) (dedupMessageID string, err error)
+	// Send enqueues a message. Returns (dedupMessageID, sequenceNumber, err).
+	// For FIFO queues with deduplication, if a duplicate is detected the original
+	// MessageID is returned as dedupMessageID. For FIFO queues, sequenceNumber is
+	// the assigned 20-digit sequence number; it is empty for standard queues.
+	Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error)
 	Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error)
 	Delete(ctx context.Context, queueURL, receiptHandle string) error
 	ChangeVisibility(ctx context.Context, queueURL, receiptHandle string, timeoutSec int, now time.Time) error

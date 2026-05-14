@@ -24,7 +24,7 @@ func TestMemoryMessageStore_SendReceiveDelete(t *testing.T) {
 	s := sqsstore.NewMemoryMessageStore()
 	now := time.Now()
 
-	if _, err := s.Send(ctx, newMsg("hello")); err != nil {
+	if _, _, err := s.Send(ctx, newMsg("hello")); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 

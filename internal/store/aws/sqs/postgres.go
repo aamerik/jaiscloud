@@ -68,20 +68,20 @@ func (s *PostgresSQSMessageStore) retentionWorker(ctx context.Context) {
 	}
 }
 
-func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (string, error) {
+func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
 	// FIFO deduplication.
 	if msg.DeduplicationID != "" {
 		dedupKey := msg.QueueURL + ":" + msg.DeduplicationID
 		var origID string
-		err := s.pool.QueryRow(ctx, `
+		scanErr := s.pool.QueryRow(ctx, `
 			SELECT message_id FROM jc_sqs_dedup
 			WHERE dedup_key=$1 AND expires_at > now()
 		`, dedupKey).Scan(&origID)
-		if err == nil {
-			return origID, nil // duplicate
+		if scanErr == nil {
+			return origID, "", nil // duplicate
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("dedup check: %w", err)
+		if !errors.Is(scanErr, pgx.ErrNoRows) {
+			return "", "", fmt.Errorf("dedup check: %w", scanErr)
 		}
 		// Record dedup entry (upsert).
 		_, err = s.pool.Exec(ctx, `
@@ -91,8 +91,23 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (str
 				SET message_id=$2, expires_at=$3
 		`, dedupKey, msg.MessageID, time.Now().Add(5*time.Minute))
 		if err != nil {
-			return "", fmt.Errorf("dedup upsert: %w", err)
+			return "", "", fmt.Errorf("dedup upsert: %w", err)
 		}
+	}
+
+	// Assign FIFO sequence number via DB sequence so it's monotonic across instances.
+	if msg.GroupID != "" {
+		err = s.pool.QueryRow(ctx, `SELECT nextval('jc_sqs_fifo_seq')`).Scan(&sequenceNumber)
+		if err != nil {
+			// Fallback: use timestamp-based number if sequence not present.
+			sequenceNumber = fmt.Sprintf("%020d", time.Now().UnixNano())
+		} else {
+			// Format as 20-digit decimal string to match AWS format.
+			var n int64
+			fmt.Sscanf(sequenceNumber, "%d", &n)
+			sequenceNumber = fmt.Sprintf("%020d", n)
+		}
+		msg.SequenceNumber = sequenceNumber
 	}
 
 	msg.MD5OfBody = fmt.Sprintf("%x", md5.Sum([]byte(msg.Body)))
@@ -108,9 +123,9 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (str
 		delayUntil = &msg.DelayUntil
 	}
 
-	attrsJSON, err := json.Marshal(msg.MessageAttributes)
-	if err != nil {
-		return "", fmt.Errorf("marshal message attributes: %w", err)
+	attrsJSON, marshalErr := json.Marshal(msg.MessageAttributes)
+	if marshalErr != nil {
+		return "", "", fmt.Errorf("marshal message attributes: %w", marshalErr)
 	}
 
 	_, err = s.pool.Exec(ctx, `
@@ -123,9 +138,9 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (str
 		msg.GroupID, msg.DeduplicationID, msg.SequenceNumber,
 		msg.SentAt, delayUntil, 0, attrsJSON)
 	if err != nil {
-		return "", fmt.Errorf("insert message: %w", err)
+		return "", "", fmt.Errorf("insert message: %w", err)
 	}
-	return "", nil
+	return "", msg.SequenceNumber, nil
 }
 
 func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {

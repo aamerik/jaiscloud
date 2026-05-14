@@ -575,7 +575,11 @@ func (p *GatewayProvider) invokeHTTP(ctx context.Context, method, uri string, bo
 	respBody, _ := io.ReadAll(resp.Body)
 	return &model.ProviderResponse{
 		HTTPStatus: resp.StatusCode,
-		Data:       map[string]any{"_raw": respBody, "_status": resp.StatusCode},
+		Data: map[string]any{
+			"_raw":         respBody,
+			"_status":      resp.StatusCode,
+			"_contentType": resp.Header.Get("Content-Type"),
+		},
 	}, nil
 }
 

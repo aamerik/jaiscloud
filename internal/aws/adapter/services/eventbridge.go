@@ -65,7 +65,7 @@ func (c *EventBridgeCodec) EncodeError(_ *model.NormalizedRequest, perr *model.P
 	h.Set("Content-Type", "application/x-amz-json-1.1")
 	out := map[string]any{
 		"__type":  perr.Code,
-		"message": perr.Message,
+		"Message": perr.Message,
 	}
 	for k, v := range perr.Data {
 		out[k] = v

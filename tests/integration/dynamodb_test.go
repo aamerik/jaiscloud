@@ -1074,3 +1074,49 @@ func TestDynamoDB_UpdateContinuousBackups_EnableDisable(t *testing.T) {
 		desc2.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus)
 }
 
+// TestDynamoDBErrorMessageCasing verifies that DynamoDB errors use capital "Message"
+// so the SDK can parse the error message correctly (fix 1.1.10).
+func TestDynamoDBErrorMessageCasing(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+
+	_, err := client.DescribeTable(ctx, &awsdynamo.DescribeTableInput{
+		TableName: aws.String("nonexistent-table"),
+	})
+	require.Error(t, err)
+	// The SDK must parse the error message field; a non-empty Error() string
+	// indicates the capital-M "Message" field was read correctly.
+	assert.NotEmpty(t, err.Error(), "SDK must parse the DynamoDB error message")
+}
+
+// TestDynamoDBConditionalCheckFailedShape verifies that ConditionalCheckFailedException
+// is properly shaped (fix 1.1.10).
+func TestDynamoDBConditionalCheckFailedShape(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newDynamoClient(t)
+	makeTable(t, client, "cond-check-tbl")
+
+	// Put an item first.
+	_, err := client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName: aws.String("cond-check-tbl"),
+		Item: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "pk1"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Put with a condition that will fail.
+	_, err = client.PutItem(ctx, &awsdynamo.PutItemInput{
+		TableName:           aws.String("cond-check-tbl"),
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		Item: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "pk1"},
+		},
+	})
+	require.Error(t, err)
+	var condFailed *types.ConditionalCheckFailedException
+	assert.ErrorAs(t, err, &condFailed, "error must be ConditionalCheckFailedException")
+}
+

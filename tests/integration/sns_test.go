@@ -446,3 +446,47 @@ func TestSNS_RawMessageDelivery(t *testing.T) {
 	require.Len(t, rOut.Messages, 1)
 	assert.Equal(t, "raw-payload", aws.ToString(rOut.Messages[0].Body))
 }
+
+// TestSNSPublishFIFOWire verifies that MessageGroupId reaches the provider over the wire (fix 1.1.8).
+func TestSNSPublishFIFOWire(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSNSClient(t)
+
+	topicOut, err := client.CreateTopic(ctx, &awssns.CreateTopicInput{
+		Name: aws.String("fifo-wire-test.fifo"),
+		Attributes: map[string]string{
+			"FifoTopic":                 "true",
+			"ContentBasedDeduplication": "true",
+		},
+	})
+	require.NoError(t, err)
+	topicArn := aws.ToString(topicOut.TopicArn)
+
+	_, err = client.Publish(ctx, &awssns.PublishInput{
+		TopicArn:       aws.String(topicArn),
+		Message:        aws.String("fifo-msg"),
+		MessageGroupId: aws.String("g1"),
+	})
+	// Must not fail with an error about missing MessageGroupId on the wire.
+	require.NoError(t, err)
+}
+
+// TestSNSPublishWithMessageAttributes verifies that MessageAttributes reach the provider (fix 1.1.8).
+func TestSNSPublishWithMessageAttributes(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSNSClient(t)
+
+	topicOut, err := client.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("attr-test-topic")})
+	require.NoError(t, err)
+
+	_, err = client.Publish(ctx, &awssns.PublishInput{
+		TopicArn: aws.String(aws.ToString(topicOut.TopicArn)),
+		Message:  aws.String("hello"),
+		MessageAttributes: map[string]snstypes.MessageAttributeValue{
+			"color": {DataType: aws.String("String"), StringValue: aws.String("blue")},
+		},
+	})
+	require.NoError(t, err)
+}

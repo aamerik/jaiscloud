@@ -467,7 +467,7 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 		Body:      bodyStr,
 		SentAt:    time.Now(),
 	}
-	_, _ = p.messages.Send(ctx, msg)
+	_, _, _ = p.messages.Send(ctx, msg)
 }
 
 func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, messageID, message, subject, functionName string, msgAttrs map[string]any) {

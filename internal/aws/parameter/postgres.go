@@ -210,25 +210,59 @@ func isPgUnique(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// Label operations: store labels in the JSON metadata blob.
-// For full-mode postgres, labels are stored in a separate map column in jc_ssm_parameters.
-// This minimal implementation delegates to an in-memory overlay via the history approach.
-// (Full SQL implementation left for a future migration step.)
-
-func (s *PostgresParameterStore) LabelParameterVersion(_ context.Context, _ string, _ int64, labels []string) ([]string, error) {
+func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error) {
 	var invalid []string
+	var valid []string
 	for _, lbl := range labels {
 		if lbl == "" || strings.HasPrefix(lbl, "aws") || strings.HasPrefix(lbl, "ssm") {
 			invalid = append(invalid, lbl)
+		} else {
+			valid = append(valid, lbl)
+		}
+	}
+	for _, lbl := range valid {
+		_, err := s.pool.Exec(ctx,
+			`INSERT INTO jc_ssm_parameter_labels (parameter_name, version, label)
+			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+			name, version, lbl,
+		)
+		if err != nil {
+			return invalid, fmt.Errorf("ssm postgres: label parameter: %w", err)
 		}
 	}
 	return invalid, nil
 }
 
-func (s *PostgresParameterStore) UnlabelParameterVersion(_ context.Context, _ string, _ int64, _ []string) error {
-	return nil
+func (s *PostgresParameterStore) UnlabelParameterVersion(ctx context.Context, name string, version int64, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM jc_ssm_parameter_labels
+		 WHERE parameter_name=$1 AND version=$2 AND label=ANY($3)`,
+		name, version, labels,
+	)
+	return err
 }
 
-func (s *PostgresParameterStore) GetLabelsByVersion(_ context.Context, _ string, _ int64) ([]string, error) {
-	return nil, nil
+func (s *PostgresParameterStore) GetLabelsByVersion(ctx context.Context, name string, version int64) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT label FROM jc_ssm_parameter_labels
+		 WHERE parameter_name=$1 AND version=$2
+		 ORDER BY label`,
+		name, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ssm postgres: get labels: %w", err)
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var lbl string
+		if err := rows.Scan(&lbl); err != nil {
+			return nil, err
+		}
+		result = append(result, lbl)
+	}
+	return result, rows.Err()
 }

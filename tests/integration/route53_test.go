@@ -127,3 +127,67 @@ func TestRoute53_CreateGetDeleteHealthCheck(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, listOut.HealthChecks, 0)
 }
+
+// TestRoute53MultiChangeBatch verifies that a batch with multiple Change entries
+// persists all changes with correct TTLs (fix 1.1.3).
+func TestRoute53MultiChangeBatch(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newRoute53Client(t)
+
+	// Create hosted zone.
+	zoneOut, err := client.CreateHostedZone(ctx, &awsroute53.CreateHostedZoneInput{
+		Name:            aws.String("example.com"),
+		CallerReference: aws.String("ref-batch"),
+	})
+	require.NoError(t, err)
+	zoneID := aws.ToString(zoneOut.HostedZone.Id)
+
+	ttl60 := int64(60)
+	ttl600 := int64(600)
+
+	// Submit 2 changes in a single batch.
+	_, err = client.ChangeResourceRecordSets(ctx, &awsroute53.ChangeResourceRecordSetsInput{
+		HostedZoneId: aws.String(zoneID),
+		ChangeBatch: &types.ChangeBatch{
+			Changes: []types.Change{
+				{
+					Action: types.ChangeActionCreate,
+					ResourceRecordSet: &types.ResourceRecordSet{
+						Name: aws.String("a.example.com"),
+						Type: types.RRTypeA,
+						TTL:  &ttl60,
+						ResourceRecords: []types.ResourceRecord{
+							{Value: aws.String("1.2.3.4")},
+						},
+					},
+				},
+				{
+					Action: types.ChangeActionCreate,
+					ResourceRecordSet: &types.ResourceRecordSet{
+						Name: aws.String("mx.example.com"),
+						Type: types.RRTypeMx,
+						TTL:  &ttl600,
+						ResourceRecords: []types.ResourceRecord{
+							{Value: aws.String("10 mail.example.com")},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Both changes must appear in ListResourceRecordSets.
+	listOut, err := client.ListResourceRecordSets(ctx, &awsroute53.ListResourceRecordSetsInput{
+		HostedZoneId: aws.String(zoneID),
+	})
+	require.NoError(t, err)
+
+	names := map[string]int64{}
+	for _, rr := range listOut.ResourceRecordSets {
+		names[aws.ToString(rr.Name)] = aws.ToInt64(rr.TTL)
+	}
+	assert.Equal(t, ttl60, names["a.example.com"], "A record TTL must be 60")
+	assert.Equal(t, ttl600, names["mx.example.com"], "MX record TTL must be 600")
+}

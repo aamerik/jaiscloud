@@ -273,3 +273,67 @@ func TestEC2_RunDescribeTerminateInstances(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, descOut.Reservations, 0)
 }
+
+// TestEC2SGAuthDescribeRoundtrip tests multi-rule SG authorize, describe, and revoke (fix 1.1.4).
+func TestEC2SGAuthDescribeRoundtrip(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	// Create a VPC and SG.
+	vpcOut, err := client.CreateVpc(ctx, &awsec2.CreateVpcInput{CidrBlock: aws.String("10.0.0.0/16")})
+	require.NoError(t, err)
+	vpcID := aws.ToString(vpcOut.Vpc.VpcId)
+
+	sgOut, err := client.CreateSecurityGroup(ctx, &awsec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("test-sg"),
+		Description: aws.String("test"),
+		VpcId:       aws.String(vpcID),
+	})
+	require.NoError(t, err)
+	sgID := aws.ToString(sgOut.GroupId)
+
+	// Authorize 2 ingress rules each with 1 CIDR.
+	_, err = client.AuthorizeSecurityGroupIngress(ctx, &awsec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []types.IpPermission{
+			{
+				IpProtocol: aws.String("tcp"),
+				FromPort:   aws.Int32(80),
+				ToPort:     aws.Int32(80),
+				IpRanges:   []types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+			},
+			{
+				IpProtocol: aws.String("tcp"),
+				FromPort:   aws.Int32(443),
+				ToPort:     aws.Int32(443),
+				IpRanges:   []types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Describe — both rules must surface with IpPermissions.
+	descOut, err := client.DescribeSecurityGroups(ctx, &awsec2.DescribeSecurityGroupsInput{
+		GroupIds: []string{sgID},
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.SecurityGroups, 1)
+	assert.Len(t, descOut.SecurityGroups[0].IpPermissions, 2, "both ingress rules must be present")
+
+	// Revoke port 80 rule and verify only port 443 remains.
+	_, err = client.RevokeSecurityGroupIngress(ctx, &awsec2.RevokeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []types.IpPermission{
+			{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(80), ToPort: aws.Int32(80)},
+		},
+	})
+	require.NoError(t, err)
+
+	descOut2, err := client.DescribeSecurityGroups(ctx, &awsec2.DescribeSecurityGroupsInput{
+		GroupIds: []string{sgID},
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut2.SecurityGroups, 1)
+	assert.Len(t, descOut2.SecurityGroups[0].IpPermissions, 1, "only port-443 rule should remain after revoke")
+}

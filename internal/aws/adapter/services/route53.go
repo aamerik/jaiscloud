@@ -95,7 +95,7 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 			params["HostedZoneId"] = parts[2]
 		}
 		if method == "POST" {
-			parseXMLBody(body, params)
+			parseChangeBatchBody(body, params)
 			return "ChangeResourceRecordSets", params
 		}
 		if method == "GET" {
@@ -238,6 +238,51 @@ func parseXMLBody(body []byte, params map[string]any) {
 			}
 		}
 	}
+}
+
+// parseChangeBatchBody parses a ChangeResourceRecordSets XML body into a typed
+// Changes slice so the provider can iterate over each change independently.
+func parseChangeBatchBody(body []byte, params map[string]any) {
+	if len(body) == 0 {
+		return
+	}
+	type xmlResourceRecord struct {
+		Value string `xml:"Value"`
+	}
+	type xmlResourceRecordSet struct {
+		Name            string              `xml:"Name"`
+		Type            string              `xml:"Type"`
+		TTL             string              `xml:"TTL"`
+		ResourceRecords []xmlResourceRecord `xml:"ResourceRecords>ResourceRecord"`
+	}
+	type xmlChange struct {
+		Action           string               `xml:"Action"`
+		ResourceRecordSet xmlResourceRecordSet `xml:"ResourceRecordSet"`
+	}
+	type xmlChangeBatch struct {
+		Changes []xmlChange `xml:"ChangeBatch>Changes>Change"`
+	}
+	var batch xmlChangeBatch
+	if err := xml.Unmarshal(body, &batch); err != nil || len(batch.Changes) == 0 {
+		// Fall back to flat parse so non-ChangeBatch bodies still work.
+		parseXMLBody(body, params)
+		return
+	}
+	changes := make([]map[string]any, 0, len(batch.Changes))
+	for _, c := range batch.Changes {
+		records := make([]string, 0, len(c.ResourceRecordSet.ResourceRecords))
+		for _, r := range c.ResourceRecordSet.ResourceRecords {
+			records = append(records, r.Value)
+		}
+		changes = append(changes, map[string]any{
+			"Action":  c.Action,
+			"Name":    c.ResourceRecordSet.Name,
+			"Type":    c.ResourceRecordSet.Type,
+			"TTL":     c.ResourceRecordSet.TTL,
+			"Records": records,
+		})
+	}
+	params["Changes"] = changes
 }
 
 // buildRoute53XML serialises the provider response data as Route53 XML.

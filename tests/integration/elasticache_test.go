@@ -116,3 +116,18 @@ func TestElastiCache_ModifyCacheCluster(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cache.t3.small", aws.ToString(modOut.CacheCluster.CacheNodeType))
 }
+
+// TestElastiCacheUnknownActionEnvelope verifies that an unmodelled action still
+// produces a valid XML envelope with a non-empty RequestId (fix 1.1.1).
+func TestElastiCacheUnknownActionEnvelope(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newElastiCacheClient(t)
+	// DescribeEvents is not modelled in the provider; the response must be a valid
+	// XML wrapper — not a bare <Response/> — so the SDK does not raise xml:EOF.
+	_, err := client.DescribeEvents(ctx, &awselasticache.DescribeEventsInput{})
+	// Not an SDK serialisation error (which would contain "xml: EOF" or similar).
+	if err != nil {
+		assert.NotContains(t, err.Error(), "EOF", "response must be a valid XML envelope, not bare <Response/>")
+	}
+}

@@ -147,6 +147,8 @@ func encodeEC2Result(action string, data map[string]any) string {
 				sb.WriteString(xmlTag("groupDescription", str(g["Description"])))
 				sb.WriteString(xmlTag("vpcId", str(g["VpcId"])))
 				sb.WriteString(xmlTag("ownerId", str(g["OwnerId"])))
+				sb.WriteString(encodeSGIPPermissions("ipPermissions", g["IngressRules"]))
+				sb.WriteString(encodeSGIPPermissions("ipPermissionsEgress", g["EgressRules"]))
 				sb.WriteString("</item>")
 			}
 		}
@@ -367,5 +369,39 @@ func encodeNatGateway(ngw map[string]any) string {
 	sb.WriteString(xmlTag("subnetId", str(ngw["SubnetId"])))
 	sb.WriteString(xmlTag("state", str(ngw["State"])))
 	sb.WriteString(xmlTag("createTime", str(ngw["CreateTime"])))
+	return sb.String()
+}
+
+// encodeSGIPPermissions serialises a slice of SG rules as <ipPermissions> or
+// <ipPermissionsEgress> XML items.
+func encodeSGIPPermissions(label string, v any) string {
+	rules, ok := v.([]map[string]any)
+	if !ok || len(rules) == 0 {
+		return "<" + label + "/>"
+	}
+	var sb strings.Builder
+	sb.WriteString("<" + label + ">")
+	for _, r := range rules {
+		sb.WriteString("<item>")
+		sb.WriteString(xmlTag("ipProtocol", str(r["IpProtocol"])))
+		sb.WriteString(xmlTag("fromPort", str(r["FromPort"])))
+		sb.WriteString(xmlTag("toPort", str(r["ToPort"])))
+		if ranges, ok := r["IpRanges"].([]map[string]any); ok && len(ranges) > 0 {
+			sb.WriteString("<ipRanges>")
+			for _, rng := range ranges {
+				sb.WriteString("<item>")
+				sb.WriteString(xmlTag("cidrIp", str(rng["CidrIp"])))
+				if desc := str(rng["Description"]); desc != "" {
+					sb.WriteString(xmlTag("description", desc))
+				}
+				sb.WriteString("</item>")
+			}
+			sb.WriteString("</ipRanges>")
+		} else {
+			sb.WriteString("<ipRanges/>")
+		}
+		sb.WriteString("</item>")
+	}
+	sb.WriteString("</" + label + ">")
 	return sb.String()
 }

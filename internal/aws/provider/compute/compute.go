@@ -378,12 +378,22 @@ func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.
 		if len(filterIds) > 0 && !containsStr(filterIds, sg.GroupId) {
 			continue
 		}
+		ingress := sg.IngressRules
+		if ingress == nil {
+			ingress = []map[string]any{}
+		}
+		egress := sg.EgressRules
+		if egress == nil {
+			egress = []map[string]any{}
+		}
 		groups = append(groups, map[string]any{
-			"GroupId":     sg.GroupId,
-			"GroupName":   sg.GroupName,
-			"Description": sg.Description,
-			"VpcId":       sg.VpcId,
-			"OwnerId":     sg.OwnerId,
+			"GroupId":          sg.GroupId,
+			"GroupName":        sg.GroupName,
+			"Description":      sg.Description,
+			"VpcId":            sg.VpcId,
+			"OwnerId":          sg.OwnerId,
+			"IngressRules":     ingress,
+			"EgressRules":      egress,
 		})
 	}
 	return provider.OK(map[string]any{"SecurityGroups": groups}), nil
@@ -406,6 +416,17 @@ func (p *ComputeProvider) AuthorizeSecurityGroupEgress(ctx context.Context, nr *
 }
 
 func (p *ComputeProvider) RevokeSecurityGroupIngress(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "GroupId")
+	e, err := p.resources.Get(ctx, rtSecurityGroup, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: "security group not found", HTTPStatus: http.StatusBadRequest}
+	}
+	var sg securityGroup
+	json.Unmarshal(e.Data, &sg)
+	toRevoke := parseSGRules(nr.Params)
+	sg.IngressRules = removeSGRules(sg.IngressRules, toRevoke)
+	data, _ := json.Marshal(sg)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
 	return provider.OK(nil), nil
 }
 
@@ -417,19 +438,76 @@ func (p *ComputeProvider) addSGRule(ctx context.Context, nr *model.NormalizedReq
 	}
 	var sg securityGroup
 	json.Unmarshal(e.Data, &sg)
-	rule := map[string]any{
-		"IpProtocol": strParam(nr.Params, "IpPermissions.1.IpProtocol"),
-		"FromPort":   strParam(nr.Params, "IpPermissions.1.FromPort"),
-		"ToPort":     strParam(nr.Params, "IpPermissions.1.ToPort"),
-	}
+	rules := parseSGRules(nr.Params)
 	if ingress {
-		sg.IngressRules = append(sg.IngressRules, rule)
+		sg.IngressRules = append(sg.IngressRules, rules...)
 	} else {
-		sg.EgressRules = append(sg.EgressRules, rule)
+		sg.EgressRules = append(sg.EgressRules, rules...)
 	}
 	data, _ := json.Marshal(sg)
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
 	return provider.OK(nil), nil
+}
+
+// parseSGRules reads IpPermissions.N.{IpProtocol,FromPort,ToPort} and nested
+// IpPermissions.N.IpRanges.M.CidrIp from params into a slice of rule maps.
+func parseSGRules(params map[string]any) []map[string]any {
+	var rules []map[string]any
+	for i := 1; ; i++ {
+		proto, ok := params[fmt.Sprintf("IpPermissions.%d.IpProtocol", i)].(string)
+		if !ok || proto == "" {
+			break
+		}
+		rule := map[string]any{
+			"IpProtocol": proto,
+			"FromPort":   strParam(params, fmt.Sprintf("IpPermissions.%d.FromPort", i)),
+			"ToPort":     strParam(params, fmt.Sprintf("IpPermissions.%d.ToPort", i)),
+		}
+		var ipRanges []map[string]any
+		for j := 1; ; j++ {
+			cidr, ok := params[fmt.Sprintf("IpPermissions.%d.IpRanges.%d.CidrIp", i, j)].(string)
+			if !ok || cidr == "" {
+				break
+			}
+			ipRanges = append(ipRanges, map[string]any{"CidrIp": cidr})
+		}
+		if len(ipRanges) > 0 {
+			rule["IpRanges"] = ipRanges
+		}
+		rules = append(rules, rule)
+	}
+	// Fallback: legacy single-rule without index (IpPermissions.1.*).
+	if len(rules) == 0 {
+		proto := strParam(params, "IpPermissions.1.IpProtocol")
+		if proto != "" {
+			rules = append(rules, map[string]any{
+				"IpProtocol": proto,
+				"FromPort":   strParam(params, "IpPermissions.1.FromPort"),
+				"ToPort":     strParam(params, "IpPermissions.1.ToPort"),
+			})
+		}
+	}
+	return rules
+}
+
+// removeSGRules removes from existing any rule whose (IpProtocol,FromPort,ToPort) matches a revoke entry.
+func removeSGRules(existing, toRevoke []map[string]any) []map[string]any {
+	result := existing[:0:0]
+	for _, e := range existing {
+		matched := false
+		for _, r := range toRevoke {
+			if strParam(e, "IpProtocol") == strParam(r, "IpProtocol") &&
+				strParam(e, "FromPort") == strParam(r, "FromPort") &&
+				strParam(e, "ToPort") == strParam(r, "ToPort") {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 // ─── Key Pair operations ──────────────────────────────────────────────────────
@@ -525,12 +603,14 @@ func (p *ComputeProvider) ImportKeyPair(ctx context.Context, nr *model.Normalize
 // ─── VPC operations ───────────────────────────────────────────────────────────
 
 type ec2Vpc struct {
-	VpcId     string            `json:"VpcId"`
-	State     string            `json:"State"`
-	CidrBlock string            `json:"CidrBlock"`
-	IsDefault bool              `json:"IsDefault"`
-	OwnerId   string            `json:"OwnerId"`
-	Tags      map[string]string `json:"Tags"`
+	VpcId              string            `json:"VpcId"`
+	State              string            `json:"State"`
+	CidrBlock          string            `json:"CidrBlock"`
+	IsDefault          bool              `json:"IsDefault"`
+	OwnerId            string            `json:"OwnerId"`
+	Tags               map[string]string `json:"Tags"`
+	EnableDnsSupport   bool              `json:"EnableDnsSupport"`
+	EnableDnsHostnames bool              `json:"EnableDnsHostnames"`
 }
 
 func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -590,6 +670,21 @@ func (p *ComputeProvider) DeleteVpc(ctx context.Context, nr *model.NormalizedReq
 }
 
 func (p *ComputeProvider) ModifyVpcAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "VpcId")
+	e, err := p.resources.Get(ctx, rtVpc, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "InvalidVpcID.NotFound", Message: fmt.Sprintf("The vpc ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
+	}
+	var vpc ec2Vpc
+	json.Unmarshal(e.Data, &vpc)
+	if v, ok := nr.Params["EnableDnsSupport.Value"].(string); ok {
+		vpc.EnableDnsSupport = v == "true"
+	}
+	if v, ok := nr.Params["EnableDnsHostnames.Value"].(string); ok {
+		vpc.EnableDnsHostnames = v == "true"
+	}
+	data, _ := json.Marshal(vpc)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtVpc, ID: id, Data: data})
 	return provider.OK(nil), nil
 }
 

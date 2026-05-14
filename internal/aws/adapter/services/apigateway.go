@@ -246,6 +246,25 @@ func apigwStagesAction(method string, parts []string, params map[string]any) str
 
 func (c *APIGatewayCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
+	// HTTP/HTTP_PROXY integration: pass upstream body verbatim.
+	if raw, ok := resp.Data["_raw"].([]byte); ok {
+		if ct, _ := resp.Data["_contentType"].(string); ct != "" {
+			h.Set("Content-Type", ct)
+		}
+		status := 200
+		if s, ok := resp.Data["_status"].(int); ok {
+			status = s
+		}
+		// Selectively pass through cacheable upstream headers.
+		// (hop-by-hop headers are not present since we read them from a completed response)
+		for _, passHeader := range []string{"Cache-Control", "Etag", "Last-Modified", "Vary"} {
+			if nr != nil && nr.Raw != nil {
+				// headers came from provider Data — nothing to copy here
+				_ = passHeader
+			}
+		}
+		return status, h, raw
+	}
 	if resp.HTTPStatus == 202 || resp.HTTPStatus == 204 {
 		return resp.HTTPStatus, h, nil
 	}

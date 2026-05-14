@@ -1136,3 +1136,67 @@ func computeExpectedMD5(attrs map[string]struct {
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
+
+// TestSQSFifoSequenceNumberSurface verifies that FIFO SendMessage returns a SequenceNumber (fix 1.1.9).
+func TestSQSFifoSequenceNumberSurface(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	// Create FIFO queue.
+	cq, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("seq-test.fifo"),
+		Attributes: map[string]string{
+			"FifoQueue":                 "true",
+			"ContentBasedDeduplication": "true",
+		},
+	})
+	require.NoError(t, err)
+	qURL := aws.ToString(cq.QueueUrl)
+
+	out, err := client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:       aws.String(qURL),
+		MessageBody:    aws.String("hello fifo"),
+		MessageGroupId: aws.String("g1"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.SequenceNumber, "SequenceNumber must be returned for FIFO queues")
+	assert.Regexp(t, `^\d+$`, aws.ToString(out.SequenceNumber), "SequenceNumber must be numeric")
+}
+
+// TestSQSBinaryAttributeRoundtrip verifies that Binary message attributes round-trip (fix 1.1.9).
+func TestSQSBinaryAttributeRoundtrip(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newSQSClient(t)
+
+	cq, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("binary-attr-q"),
+	})
+	require.NoError(t, err)
+	qURL := aws.ToString(cq.QueueUrl)
+
+	payload := []byte{0x00, 0xDE, 0xAD, 0xFF}
+	_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    aws.String(qURL),
+		MessageBody: aws.String("binary-test"),
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			"data": {
+				DataType:    aws.String("Binary"),
+				BinaryValue: payload,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:              aws.String(qURL),
+		MaxNumberOfMessages:   1,
+		MessageAttributeNames: []string{"All"},
+	})
+	require.NoError(t, err)
+	require.Len(t, recv.Messages, 1)
+	attr, ok := recv.Messages[0].MessageAttributes["data"]
+	require.True(t, ok, "data attribute must be present")
+	assert.Equal(t, payload, attr.BinaryValue, "binary payload must round-trip unchanged")
+}

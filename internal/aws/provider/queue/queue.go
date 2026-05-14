@@ -415,7 +415,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 		msg.MessageAttributes = parseMessageAttributes(ma)
 	}
 
-	origID, err := p.messages.Send(ctx, msg)
+	origID, seqNum, err := p.messages.Send(ctx, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -428,6 +428,9 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	resp := map[string]any{
 		"MessageId":        msgID,
 		"MD5OfMessageBody": md5Body,
+	}
+	if seqNum != "" {
+		resp["SequenceNumber"] = seqNum
 	}
 	if len(msg.MessageAttributes) > 0 {
 		resp["MD5OfMessageAttributes"] = md5MessageAttributes(msg.MessageAttributes)
@@ -715,7 +718,7 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 			msg.MessageAttributes = parseMessageAttributes(ma)
 		}
 
-		origID, sendErr := p.messages.Send(ctx, msg)
+		origID, seqNum, sendErr := p.messages.Send(ctx, msg)
 		if sendErr != nil {
 			failed = append(failed, map[string]any{"Id": id, "Code": "InternalError", "Message": sendErr.Error(), "SenderFault": false})
 			continue
@@ -728,6 +731,9 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 			"Id":               id,
 			"MessageId":        msgID,
 			"MD5OfMessageBody": md5Body,
+		}
+		if seqNum != "" {
+			entry["SequenceNumber"] = seqNum
 		}
 		if len(msg.MessageAttributes) > 0 {
 			entry["MD5OfMessageAttributes"] = md5MessageAttributes(msg.MessageAttributes)
@@ -926,7 +932,7 @@ func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queu
 	dlqMsg.VisibleAt = time.Time{}  // clear in-flight timeout
 	dlqMsg.DelayUntil = time.Time{} // no delay in DLQ
 	dlqMsg.ReceiveCount = 0
-	p.messages.Send(ctx, dlqMsg)
+	p.messages.Send(ctx, dlqMsg) //nolint:errcheck
 	p.messages.Delete(ctx, queueURL, msg.ReceiptHandle)
 
 	p.bus.Publish(events.Event{

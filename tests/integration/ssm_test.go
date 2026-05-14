@@ -241,3 +241,30 @@ func TestSSM_StringListParameter(t *testing.T) {
 	assert.Equal(t, "a,b,c", aws.ToString(getOut.Parameter.Value))
 	assert.Equal(t, types.ParameterTypeStringList, getOut.Parameter.Type)
 }
+
+// TestSSMLabelInvalid verifies that labels starting with "aws" or "ssm" are
+// returned in InvalidLabels — both lite and full mode (fix 1.1.7).
+func TestSSMLabelInvalid(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newSSMClient(t)
+
+	// Put a parameter to label.
+	_, err := c.PutParameter(ctx, &awsssm.PutParameterInput{
+		Name:  aws.String("/label-test"),
+		Value: aws.String("v1"),
+		Type:  types.ParameterTypeString,
+	})
+	require.NoError(t, err)
+
+	// Label with one valid label and two reserved prefixes.
+	out, err := c.LabelParameterVersion(ctx, &awsssm.LabelParameterVersionInput{
+		Name:          aws.String("/label-test"),
+		ParameterVersion: aws.Int64(1),
+		Labels:        []string{"prod", "aws-internal", "ssm-reserved"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.InvalidLabels, "aws-internal", "labels starting with aws must be invalid")
+	assert.Contains(t, out.InvalidLabels, "ssm-reserved", "labels starting with ssm must be invalid")
+	assert.NotContains(t, out.InvalidLabels, "prod", "valid label must not be in InvalidLabels")
+}

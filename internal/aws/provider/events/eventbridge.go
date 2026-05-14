@@ -464,7 +464,7 @@ func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData
 	host := fmt.Sprintf("localhost:%d", p.port)
 	queueURL := strings.Replace(td.QueueURL, jaiscloudHostPlaceholder, host, 1)
 	body, _ := json.Marshal(envelope)
-	_, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
+	_, _, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
 		QueueURL:  queueURL,
 		MessageID: newEventID(),
 		Body:      string(body),

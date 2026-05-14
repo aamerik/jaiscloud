@@ -83,6 +83,14 @@ func flattenSNSParams(values url.Values) map[string]any {
 		"TopicArn", "Name", "SubscriptionArn", "Protocol", "Endpoint",
 		"Message", "Subject", "MessageStructure", "PhoneNumber",
 		"AttributeName", "AttributeValue", "ResourceArn",
+		// FIFO publish fields
+		"MessageGroupId", "MessageDeduplicationId",
+		// ConfirmSubscription
+		"Token",
+		// AddPermission
+		"Label",
+		// Pagination
+		"NextToken",
 	} {
 		if val := values.Get(k); val != "" {
 			params[k] = val
@@ -92,6 +100,17 @@ func flattenSNSParams(values url.Values) map[string]any {
 	attrs := extractSNSMessageAttributes(values)
 	if len(attrs) > 0 {
 		params["MessageAttributes"] = attrs
+	}
+	// Parse Attributes.entry.N.{key,value} (subscription/topic attribute map — different shape than MessageAttributes).
+	if snsAttrs := extractSNSAttributesEntry(values); len(snsAttrs) > 0 {
+		params["Attributes"] = snsAttrs
+	}
+	// Parse AWSAccountId.member.N and ActionName.member.N for AddPermission.
+	if accts := extractMemberStrings(values, "AWSAccountId"); len(accts) > 0 {
+		params["AWSAccountId"] = accts
+	}
+	if actions := extractMemberStrings(values, "ActionName"); len(actions) > 0 {
+		params["ActionName"] = actions
 	}
 	// Parse Tags.member.N.{Key,Value} for TagResource/ListTagsForResource.
 	if tags := extractSNSTags(values); len(tags) > 0 {
@@ -106,6 +125,34 @@ func flattenSNSParams(values url.Values) map[string]any {
 		params["PublishBatchRequestEntries"] = entries
 	}
 	return params
+}
+
+// extractSNSAttributesEntry parses Attributes.entry.N.key / Attributes.entry.N.value
+// into a map[string]string (used for SetTopicAttributes, SetSubscriptionAttributes, etc.).
+func extractSNSAttributesEntry(values url.Values) map[string]string {
+	result := map[string]string{}
+	for i := 1; ; i++ {
+		k := values.Get(fmt.Sprintf("Attributes.entry.%d.key", i))
+		if k == "" {
+			break
+		}
+		v := values.Get(fmt.Sprintf("Attributes.entry.%d.value", i))
+		result[k] = v
+	}
+	return result
+}
+
+// extractMemberStrings parses {prefix}.member.N from SNS Query protocol into a []string.
+func extractMemberStrings(values url.Values, prefix string) []string {
+	var result []string
+	for i := 1; ; i++ {
+		v := values.Get(fmt.Sprintf("%s.member.%d", prefix, i))
+		if v == "" {
+			break
+		}
+		result = append(result, v)
+	}
+	return result
 }
 
 // extractSNSMessageAttributes parses SNS MessageAttributes from Query protocol form:

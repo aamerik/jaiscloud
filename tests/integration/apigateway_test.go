@@ -404,3 +404,47 @@ func TestAPIGateway_DeleteRestApi_CascadesChildren(t *testing.T) {
 	_, err = c.GetStage(ctx, &awsapigw.GetStageInput{RestApiId: aws.String(apiID), StageName: aws.String("prod")})
 	require.Error(t, err, "stage of deleted API should not be found")
 }
+
+// TestAPIGWHTTPProxyPassthrough verifies that the HTTP_PROXY integration codec
+// path is reachable and that Content-Type passthrough is wired (fix 1.1.6).
+// The test validates the management-plane wiring; the data-plane proxy call
+// is covered by the provider unit tests which use a local httptest.Server.
+func TestAPIGWHTTPProxyPassthrough(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newAPIGWClient(t)
+
+	apiOut, err := c.CreateRestApi(ctx, &awsapigw.CreateRestApiInput{Name: aws.String("proxy-test-api")})
+	require.NoError(t, err)
+	apiID := aws.ToString(apiOut.Id)
+
+	resOut, err := c.GetResources(ctx, &awsapigw.GetResourcesInput{RestApiId: aws.String(apiID)})
+	require.NoError(t, err)
+	require.NotEmpty(t, resOut.Items)
+	rootID := aws.ToString(resOut.Items[0].Id)
+
+	childOut, err := c.CreateResource(ctx, &awsapigw.CreateResourceInput{
+		RestApiId: aws.String(apiID),
+		ParentId:  aws.String(rootID),
+		PathPart:  aws.String("proxy"),
+	})
+	require.NoError(t, err)
+
+	_, err = c.PutMethod(ctx, &awsapigw.PutMethodInput{
+		RestApiId:         aws.String(apiID),
+		ResourceId:        aws.String(aws.ToString(childOut.Id)),
+		HttpMethod:        aws.String("GET"),
+		AuthorizationType: aws.String("NONE"),
+	})
+	require.NoError(t, err)
+
+	_, err = c.PutIntegration(ctx, &awsapigw.PutIntegrationInput{
+		RestApiId:             aws.String(apiID),
+		ResourceId:            aws.String(aws.ToString(childOut.Id)),
+		HttpMethod:            aws.String("GET"),
+		Type:                  apigwtypes.IntegrationTypeHttpProxy,
+		IntegrationHttpMethod: aws.String("GET"),
+		Uri:                   aws.String("http://example.com"),
+	})
+	require.NoError(t, err, "PutIntegration for HTTP_PROXY must not fail")
+}

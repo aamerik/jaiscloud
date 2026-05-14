@@ -153,14 +153,42 @@ func buildElastiCacheXML(action string, data map[string]any) string {
 		}
 		return wrap(a, encodeECTagList(data["TagList"]))
 	}
-	// Empty response — use the action name to produce a valid wrapper
-	if action != "" && len(data) == 0 {
-		return `<?xml version="1.0" encoding="UTF-8"?>` +
-			`<` + action + `Response ` + ecNS + `>` +
-			`<ResponseMetadata><RequestId>jaiscloud-ec</RequestId></ResponseMetadata>` +
-			`</` + action + `Response>`
+	// Any action with unknown or empty data: emit a proper wrapper, never bare <Response/>.
+	if action != "" {
+		var inner strings.Builder
+		for k, v := range data {
+			inner.WriteString(encodeECValue(k, v))
+		}
+		return wrap(action, inner.String())
 	}
-	return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+	// No action at all — last resort bare wrapper.
+	return `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<Response ` + ecNS + `>` +
+		`<ResponseMetadata><RequestId>jaiscloud-ec</RequestId></ResponseMetadata>` +
+		`</Response>`
+}
+
+// encodeECValue emits an arbitrary data map value as XML suitable for embedding
+// inside an ElastiCache response.
+func encodeECValue(k string, v any) string {
+	switch val := v.(type) {
+	case map[string]any:
+		var sb strings.Builder
+		sb.WriteString(`<` + k + `>`)
+		for ck, cv := range val {
+			sb.WriteString(encodeECValue(ck, cv))
+		}
+		sb.WriteString(`</` + k + `>`)
+		return sb.String()
+	case []any:
+		var sb strings.Builder
+		for _, item := range val {
+			sb.WriteString(encodeECValue(k, item))
+		}
+		return sb.String()
+	default:
+		return xmlTag(k, str(v))
+	}
 }
 
 func encodeCacheSubnetGroup(v any) string {

@@ -158,3 +158,18 @@ func TestRDS_ModifyDBInstance(t *testing.T) {
 
 // ensure types import is used
 var _ types.DBInstance
+
+// TestRDSUnroutedReturnsEnvelope verifies that an unrouted RDS action returns a
+// valid XML envelope rather than a bare <Response/> (fix 1.1.2).
+func TestRDSUnroutedReturnsEnvelope(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newRDSClient(t)
+	// DescribeAccountAttributes is not registered in the provider; the codec must
+	// still return a valid XML wrapper so the SDK does not raise a parse error.
+	_, err := client.DescribeAccountAttributes(ctx, &awsrds.DescribeAccountAttributesInput{})
+	if err != nil {
+		assert.NotContains(t, err.Error(), "EOF", "response must be a valid XML envelope, not bare <Response/>")
+		assert.NotContains(t, err.Error(), "SerializationError")
+	}
+}
