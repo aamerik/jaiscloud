@@ -7,6 +7,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
 
 // CloudFormationCodec handles the CloudFormation Query/XML wire protocol.
@@ -34,35 +35,52 @@ func (c *CloudFormationCodec) Encode(nr *model.NormalizedRequest, resp *model.Pr
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
 	action := ""
+	reqID := ""
 	if nr != nil {
 		action = nr.Action
+		if nr.Raw != nil {
+			reqID = reqctx.GetRequestID(nr.Raw.Context())
+		}
 	}
-	body := buildCFXML(action, resp.Data)
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
+	body := buildCFXML(action, resp.Data, reqID)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
-func (c *CloudFormationCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *CloudFormationCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
+	reqID := ""
+	if nr != nil && nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">`+
 			`<Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error>`+
-			`<RequestId>jaiscloud-cf</RequestId>`+
+			`<RequestId>%s</RequestId>`+
 			`</ErrorResponse>`,
-		xmlEscape(perr.Code), xmlEscape(perr.Message),
+		xmlEscape(perr.Code), xmlEscape(perr.Message), reqID,
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }
 
 const cfNS = `xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/"`
 
-func buildCFXML(action string, data map[string]any) string {
+func buildCFXML(action string, data map[string]any, reqID string) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 
-	meta := `<ResponseMetadata><RequestId>jaiscloud-cf</RequestId></ResponseMetadata>`
+	meta := `<ResponseMetadata><RequestId>` + reqID + `</RequestId></ResponseMetadata>`
 
 	wrap := func(act, inner string) string {
 		return `<?xml version="1.0" encoding="UTF-8"?>` +

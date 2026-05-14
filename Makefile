@@ -46,7 +46,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
 
-.PHONY: help build test docker clean \
+.PHONY: lint help build test docker clean \
         server-lite server-full server-docker server-k8s server-full-all \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
@@ -118,6 +118,10 @@ endif
 
 clean: ## Remove compiled binaries
 	rm -f jaiscloud-aws jaiscloud-azure jaiscloud-gcp
+
+lint: ## Run ARN lint guard + go vet
+	@bash scripts/check_no_hardcoded_arn.sh
+	@go vet ./...
 
 ##@ Unit tests
 

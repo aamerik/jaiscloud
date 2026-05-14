@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
 
 // IAMCodec handles IAM and STS wire format (Query protocol + XML responses).
@@ -50,7 +51,11 @@ func (c *IAMCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 func (c *IAMCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
-	body := buildIAMXML(nr.Action, nr.Service, resp.Data)
+	reqID := reqctx.GetRequestID(nr.Raw.Context())
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
+	body := buildIAMXML(nr.Action, nr.Service, resp.Data, reqID)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -63,6 +68,13 @@ func (c *IAMCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	if code == "" {
 		code = perr.Code
 	}
+	reqID := ""
+	if nr != nil && nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 	var extra strings.Builder
 	for k, v := range perr.Data {
 		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
@@ -71,9 +83,9 @@ func (c *IAMCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
 			`<Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message>%s</Error>`+
-			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId>`+
+			`<RequestId>%s</RequestId>`+
 			`</ErrorResponse>`,
-		xmlEscape(code), xmlEscape(perr.Message), extra.String(),
+		xmlEscape(code), xmlEscape(perr.Message), extra.String(), reqID,
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }
@@ -159,10 +171,13 @@ func parseMemberStrings(values url.Values, prefix string) []any {
 }
 
 // buildIAMXML produces the AWS IAM/STS XML response envelope.
-func buildIAMXML(action, service string, data map[string]any) string {
+func buildIAMXML(action, service string, data map[string]any, reqID string) string {
 	xmlns := "https://iam.amazonaws.com/doc/2010-05-08/"
 	if service == "sts" {
 		xmlns = "https://sts.amazonaws.com/doc/2011-06-15/"
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
 	}
 
 	inner := buildIAMResult(action, data)
@@ -176,7 +191,7 @@ func buildIAMXML(action, service string, data map[string]any) string {
 	return `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<` + action + `Response xmlns="` + xmlns + `">` +
 		resultXML +
-		`<ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata>` +
+		`<ResponseMetadata><RequestId>` + reqID + `</RequestId></ResponseMetadata>` +
 		`</` + action + `Response>`
 }
 

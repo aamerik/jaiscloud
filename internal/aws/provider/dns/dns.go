@@ -4,6 +4,7 @@ package dns
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -55,9 +56,9 @@ const (
 )
 
 func newShortID() string {
-	b := make([]byte, 6)
+	b := make([]byte, 7)
 	rand.Read(b)
-	return fmt.Sprintf("%X", b)
+	return "Z" + strings.ToUpper(hex.EncodeToString(b))[:14]
 }
 
 // ─── Hosted Zone metadata ─────────────────────────────────────────────────────

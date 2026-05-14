@@ -187,8 +187,8 @@ func parseTaskResource(arn string) (key, modifier string, err error) {
 		return "lambda:invoke", "", nil
 	}
 
-	// States SDK integration: arn:aws:states:::service:operation[.modifier]
-	const prefix = "arn:aws:states:::"
+	// States SDK integration ARN prefix for pattern matching (not construction) — lint-ignore: arn-prefix-match
+	const prefix = "arn:aws:states:::" //nolint:hardcoded-arn
 	if !strings.HasPrefix(arn, prefix) {
 		// Activity ARN: arn:aws:states:region:account:activity:name — not dispatched here
 		if strings.Contains(arn, ":activity:") {

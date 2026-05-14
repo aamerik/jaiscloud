@@ -64,7 +64,7 @@ func (p *EKSProvider) CreateCluster(ctx context.Context, nr *model.NormalizedReq
 	c := eksCluster{
 		Name:      name,
 		Status:    "ACTIVE",
-		Arn:       nr.ResourceID("emr-virtual-cluster", name), // reuse closest ARN format; EKS ARN: arn:aws:eks:{r}:{a}:cluster/{name}
+		Arn:       nr.ResourceID("eks-cluster", name),
 		CreatedAt: time.Now().UTC(),
 	}
 	data, _ := json.Marshal(c)

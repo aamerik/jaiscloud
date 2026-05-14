@@ -192,5 +192,17 @@ func TestECS_RunDescribeStopTask(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestECSARNFormat(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newECSClient(t)
+	out, err := c.CreateCluster(ctx, &awsecs.CreateClusterInput{
+		ClusterName: aws.String("arn-cluster"),
+	})
+	require.NoError(t, err)
+	arn := aws.ToString(out.Cluster.ClusterArn)
+	assert.Regexp(t, `^arn:aws:ecs:us-east-1:000000000000:cluster/arn-cluster$`, arn)
+}
+
 // ensure types import is used
 var _ types.Cluster

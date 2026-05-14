@@ -16,14 +16,15 @@ var (
 
 // SecretEntry holds metadata for a secret (not the value).
 type SecretEntry struct {
-	SecretID    string
-	Name        string
-	Description string
-	KMSKeyID    string // empty = use account default key
-	Tags        map[string]string
-	DeletedAt   *time.Time // non-nil when scheduled for deletion
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	SecretID     string
+	Name         string
+	Description  string
+	KMSKeyID     string // empty = use account default key
+	Tags         map[string]string
+	DeletedAt    *time.Time // non-nil when scheduled for deletion
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	RandomSuffix string // 6-char suffix appended to ARN (AWS: name-XXXXXX)
 	// Rotation fields.
 	RotationEnabled      bool
 	RotationLambdaARN    string

@@ -3,7 +3,6 @@ package services
 import (
 	"encoding/base64"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
 
 // SQSCodec handles SQS wire format in two protocols:
@@ -95,7 +95,7 @@ func (c *SQSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 	if nr.GetMeta("sqs_protocol") == "json" {
 		return c.encodeJSON(resp)
 	}
-	return c.encodeXML(nr.Action, resp)
+	return c.encodeXML(nr, resp)
 }
 
 func (c *SQSCodec) encodeJSON(resp *model.ProviderResponse) (int, http.Header, []byte) {
@@ -111,19 +111,16 @@ func (c *SQSCodec) encodeJSON(resp *model.ProviderResponse) (int, http.Header, [
 //	  <CreateQueueResult>...</CreateQueueResult>
 //	  <ResponseMetadata><RequestId>...</RequestId></ResponseMetadata>
 //	</CreateQueueResponse>
-func (c *SQSCodec) encodeXML(action string, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *SQSCodec) encodeXML(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
 
+	action := nr.Action
 	result := buildXMLResult(action, resp.Data)
 
-	type ResponseMetadata struct {
-		RequestId string `xml:"RequestId"`
-	}
-	type Envelope struct {
-		XMLName        xml.Name         `xml:""`
-		Result         any              `xml:",omitempty"`
-		ResponseMetadata ResponseMetadata `xml:"ResponseMetadata"`
+	reqID := reqctx.GetRequestID(nr.Raw.Context())
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
 	}
 
 	// We build XML manually to get the right element names
@@ -133,7 +130,7 @@ func (c *SQSCodec) encodeXML(action string, resp *model.ProviderResponse) (int, 
 	sb.WriteString("<" + action + "Result>")
 	sb.WriteString(result)
 	sb.WriteString("</" + action + "Result>")
-	sb.WriteString("<ResponseMetadata><RequestId>00000000-0000-0000-0000-000000000000</RequestId></ResponseMetadata>")
+	sb.WriteString("<ResponseMetadata><RequestId>" + reqID + "</RequestId></ResponseMetadata>")
 	sb.WriteString("</" + action + "Response>")
 
 	return resp.HTTPStatus, h, []byte(sb.String())
@@ -150,7 +147,14 @@ func (c *SQSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	if nr != nil && nr.GetMeta("sqs_protocol") == "json" {
 		return encodeJSONError(awsCode, perr.Message, perr.HTTPStatus, perr.Data)
 	}
-	return encodeXMLError(awsCode, perr.Message, perr.HTTPStatus, perr.Data)
+	reqID := ""
+	if nr != nil && nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
+	return encodeXMLError(awsCode, perr.Message, perr.HTTPStatus, perr.Data, reqID)
 }
 
 func encodeJSONError(code, msg string, status int, data map[string]any) (int, http.Header, []byte) {
@@ -167,18 +171,21 @@ func encodeJSONError(code, msg string, status int, data map[string]any) (int, ht
 	return status, h, body
 }
 
-func encodeXMLError(code, msg string, status int, data map[string]any) (int, http.Header, []byte) {
+func encodeXMLError(code, msg string, status int, data map[string]any, reqID string) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
 	var extra strings.Builder
 	for k, v := range data {
 		extra.WriteString(fmt.Sprintf("<%s>%s</%s>", xmlEscape(k), xmlEscape(fmt.Sprint(v)), xmlEscape(k)))
 	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message>%s</Error>`+
-			`<RequestId>00000000-0000-0000-0000-000000000000</RequestId></ErrorResponse>`,
-		xmlEscape(code), xmlEscape(msg), extra.String(),
+			`<RequestId>%s</RequestId></ErrorResponse>`,
+		xmlEscape(code), xmlEscape(msg), extra.String(), reqID,
 	)
 	return status, h, []byte(body)
 }

@@ -60,7 +60,7 @@ func (p *STSProvider) Reset() {
 func (p *STSProvider) GetCallerIdentity(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{
 		"Account": nr.AccountID,
-		"Arn":     fmt.Sprintf("arn:aws:iam::%s:root", nr.AccountID),
+		"Arn":     nr.ResourceID("iam-root", ""),
 		"UserId":  nr.AccountID,
 	}), nil
 }
@@ -164,7 +164,7 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 		"Credentials": credMap(creds),
 		"AssumedRoleUser": map[string]any{
 			"AssumedRoleId": "AROA" + randID(16) + ":" + sessionName,
-			"Arn":           fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", nr.AccountID, roleName, sessionName),
+			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
 		},
 		"PackedPolicySize": 0,
 	}), nil
@@ -197,7 +197,7 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 		"Credentials": credMap(creds),
 		"AssumedRoleUser": map[string]any{
 			"AssumedRoleId": "AROA" + randID(16) + ":" + sessionName,
-			"Arn":           fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", nr.AccountID, roleName, sessionName),
+			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
 		},
 		"SubjectFromWebIdentityToken": subject,
 		"PackedPolicySize":            0,
@@ -223,7 +223,7 @@ func (p *STSProvider) AssumeRoleWithSAML(_ context.Context, nr *model.Normalized
 		"Credentials": credMap(creds),
 		"AssumedRoleUser": map[string]any{
 			"AssumedRoleId": "AROA" + randID(16) + ":saml-session",
-			"Arn":           fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/saml-session", nr.AccountID, roleName),
+			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/saml-session"),
 		},
 		"Subject":       "saml-subject",
 		"SubjectType":   "persistent",
@@ -268,7 +268,7 @@ func (p *STSProvider) GetFederationToken(_ context.Context, nr *model.Normalized
 		"Credentials": credMap(creds),
 		"FederatedUser": map[string]any{
 			"FederatedUserId": fmt.Sprintf("%s:%s", nr.AccountID, name),
-			"Arn":             fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", nr.AccountID, name),
+			"Arn":             nr.ResourceID("sts-federated-user", name),
 		},
 		"PackedPolicySize": policySize,
 	}), nil

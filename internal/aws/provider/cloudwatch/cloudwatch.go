@@ -430,7 +430,7 @@ func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest
 	d := dashboardEntry{
 		DashboardName: name,
 		DashboardBody: body,
-		DashboardArn:  "arn:aws:cloudwatch::" + name,
+		DashboardArn:  nr.ResourceID("cloudwatch-dashboard", name),
 		LastModified:  time.Now().UTC().Format(time.RFC3339),
 	}
 	data, _ := json.Marshal(d)

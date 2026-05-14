@@ -173,3 +173,16 @@ func TestRDSUnroutedReturnsEnvelope(t *testing.T) {
 		assert.NotContains(t, err.Error(), "SerializationError")
 	}
 }
+
+func TestRDSClusterARNFormat(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newRDSClient(t)
+	out, err := c.CreateDBCluster(ctx, &awsrds.CreateDBClusterInput{
+		DBClusterIdentifier: aws.String("arn-cluster"),
+		Engine:              aws.String("aurora"),
+	})
+	require.NoError(t, err)
+	arn := aws.ToString(out.DBCluster.DBClusterArn)
+	assert.Regexp(t, `^arn:aws:rds:us-east-1:000000000000:cluster:arn-cluster$`, arn)
+}

@@ -7,6 +7,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
 
 // ElastiCacheCodec handles the ElastiCache Query/XML wire protocol.
@@ -34,39 +35,56 @@ func (c *ElastiCacheCodec) Encode(nr *model.NormalizedRequest, resp *model.Provi
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
 	action := ""
+	reqID := ""
 	if nr != nil {
 		action = nr.Action
+		if nr.Raw != nil {
+			reqID = reqctx.GetRequestID(nr.Raw.Context())
+		}
 	}
-	body := buildElastiCacheXML(action, resp.Data)
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
+	body := buildElastiCacheXML(action, resp.Data, reqID)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
-func (c *ElastiCacheCodec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *ElastiCacheCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
+	reqID := ""
+	if nr != nil && nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="http://elasticache.amazonaws.com/doc/2015-02-02/">`+
 			`<Error><Code>%s</Code><Message>%s</Message></Error>`+
-			`<RequestId>jaiscloud-ec</RequestId>`+
+			`<RequestId>%s</RequestId>`+
 			`</ErrorResponse>`,
-		xmlEscape(perr.Code), xmlEscape(perr.Message),
+		xmlEscape(perr.Code), xmlEscape(perr.Message), reqID,
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }
 
 const ecNS = `xmlns="http://elasticache.amazonaws.com/doc/2015-02-02/"`
 
-func buildElastiCacheXML(action string, data map[string]any) string {
+func buildElastiCacheXML(action string, data map[string]any, reqID string) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
 	}
 
 	wrap := func(action, inner string) string {
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<` + action + `Response ` + ecNS + `>` +
 			`<` + action + `Result>` + inner + `</` + action + `Result>` +
-			`<ResponseMetadata><RequestId>jaiscloud-ec</RequestId></ResponseMetadata>` +
+			`<ResponseMetadata><RequestId>` + reqID + `</RequestId></ResponseMetadata>` +
 			`</` + action + `Response>`
 	}
 
@@ -164,7 +182,7 @@ func buildElastiCacheXML(action string, data map[string]any) string {
 	// No action at all — last resort bare wrapper.
 	return `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<Response ` + ecNS + `>` +
-		`<ResponseMetadata><RequestId>jaiscloud-ec</RequestId></ResponseMetadata>` +
+		`<ResponseMetadata><RequestId>` + xmlEscape(reqID) + `</RequestId></ResponseMetadata>` +
 		`</Response>`
 }
 

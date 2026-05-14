@@ -11,6 +11,7 @@ import (
 	smithycbor "github.com/aws/smithy-go/encoding/cbor"
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
 
 // CloudWatchCodec handles two CloudWatch wire protocols:
@@ -131,7 +132,11 @@ func (c *CloudWatchCodec) Encode(nr *model.NormalizedRequest, resp *model.Provid
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
-	body := buildCloudWatchXML(resp.Data)
+	reqID := reqctx.GetRequestID(nr.Raw.Context())
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
+	body := buildCloudWatchXML(resp.Data, reqID)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -146,15 +151,22 @@ func (c *CloudWatchCodec) EncodeError(nr *model.NormalizedRequest, perr *model.P
 		}
 		return perr.HTTPStatus, h, smithycbor.Encode(errMap)
 	}
+	reqID := ""
+	if nr != nil && nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
+	if reqID == "" {
+		reqID = "00000000-0000-0000-0000-000000000000"
+	}
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml")
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">`+
 			`<Error><Code>%s</Code><Message>%s</Message></Error>`+
-			`<RequestId>jaiscloud-cloudwatch</RequestId>`+
+			`<RequestId>%s</RequestId>`+
 			`</ErrorResponse>`,
-		xmlEscape(perr.Code), xmlEscape(perr.Message),
+		xmlEscape(perr.Code), xmlEscape(perr.Message), reqID,
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }
@@ -263,7 +275,7 @@ func parseGraniteActionFromPath(path string) string {
 
 // buildCloudWatchXML renders a CloudWatch Query-protocol XML response.
 // Provider handlers set data["__action__"] to name the wrapper.
-func buildCloudWatchXML(data map[string]any) string {
+func buildCloudWatchXML(data map[string]any, reqID string) string {
 	if data == nil {
 		return `<?xml version="1.0" encoding="UTF-8"?><Response/>`
 	}
@@ -278,7 +290,7 @@ func buildCloudWatchXML(data map[string]any) string {
 	b.WriteString(`<` + action + `Result>`)
 	writeCWResult(&b, data)
 	b.WriteString(`</` + action + `Result>`)
-	fmt.Fprintf(&b, `<ResponseMetadata><RequestId>jaiscloud-cloudwatch</RequestId></ResponseMetadata>`)
+	fmt.Fprintf(&b, `<ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata>`, xmlEscape(reqID))
 	fmt.Fprintf(&b, `</%sResponse>`, action)
 	return b.String()
 }

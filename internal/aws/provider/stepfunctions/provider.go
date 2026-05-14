@@ -301,7 +301,7 @@ func (p *Provider) StartExecution(ctx context.Context, nr *model.NormalizedReque
 
 	// Extract state machine name from ARN
 	smName := smNameFromARN(sm.ARN)
-	execARN := fmt.Sprintf("arn:aws:states:%s:%s:execution:%s:%s", nr.Region, nr.AccountID, smName, execName)
+	execARN := nr.ResourceID("sfn-execution", smName+"/"+execName)
 
 	t := time.Now().UTC()
 
@@ -384,7 +384,7 @@ func (p *Provider) StartSyncExecution(ctx context.Context, nr *model.NormalizedR
 	}
 
 	smName := smNameFromARN(sm.ARN)
-	execARN := fmt.Sprintf("arn:aws:states:%s:%s:express:%s:%s:%s", nr.Region, nr.AccountID, smName, execName, newUUID())
+	execARN := nr.ResourceID("sfn-express-execution", smName+"/"+execName+":"+newUUID())
 	t := time.Now().UTC()
 
 	return provider.OK(map[string]any{
@@ -648,7 +648,7 @@ func (p *Provider) CreateActivity(ctx context.Context, nr *model.NormalizedReque
 		return nil, sfnErr("InvalidName", fmt.Sprintf("Invalid activity name: '%s'", name), 400)
 	}
 
-	arn := fmt.Sprintf("arn:aws:states:%s:%s:activity:%s", nr.Region, nr.AccountID, name)
+	arn := nr.ResourceID("sfn-activity", name)
 	act := &sfnstore.Activity{
 		Name:         name,
 		ARN:          arn,

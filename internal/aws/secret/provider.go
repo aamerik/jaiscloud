@@ -15,6 +15,26 @@ import (
 	"jaiscloud/internal/provider"
 )
 
+const sfxAlpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+func randSuffix6() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	out := make([]byte, 6)
+	for i := range b {
+		out[i] = sfxAlpha[int(b[i])%len(sfxAlpha)]
+	}
+	return string(out)
+}
+
+// arnName returns the name component used in the secret ARN: "name-suffix".
+func (e SecretEntry) arnName() string {
+	if e.RandomSuffix != "" {
+		return e.Name + "-" + e.RandomSuffix
+	}
+	return e.Name
+}
+
 // SecretProvider handles SecretsManager API operations.
 type SecretProvider struct {
 	store  SecretStore
@@ -66,11 +86,12 @@ func (p *SecretProvider) CreateSecret(ctx context.Context, nr *model.NormalizedR
 	tags := extractTags(nr.Params)
 
 	e := SecretEntry{
-		SecretID:    secretID,
-		Name:        name,
-		Description: desc,
-		KMSKeyID:    kmsKeyID,
-		Tags:        tags,
+		SecretID:     secretID,
+		Name:         name,
+		Description:  desc,
+		KMSKeyID:     kmsKeyID,
+		Tags:         tags,
+		RandomSuffix: randSuffix6(),
 	}
 	if err := p.store.CreateSecret(ctx, e); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
@@ -79,7 +100,7 @@ func (p *SecretProvider) CreateSecret(ctx context.Context, nr *model.NormalizedR
 		return nil, fmt.Errorf("sm: create secret: %w", err)
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 
 	// Store initial value if provided.
 	if sv, _ := nr.Params["SecretString"].(string); sv != "" {
@@ -128,7 +149,7 @@ func (p *SecretProvider) UpdateSecret(ctx context.Context, nr *model.NormalizedR
 	if err := p.store.UpdateSecret(ctx, e); err != nil {
 		return nil, fmt.Errorf("sm: update secret: %w", err)
 	}
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":  secretARN,
 		"Name": e.Name,
@@ -162,7 +183,7 @@ func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedR
 		}
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 
 	if forceDelete {
 		if err := p.store.DeleteSecret(ctx, e.SecretID); err != nil {
@@ -199,7 +220,7 @@ func (p *SecretProvider) RestoreSecret(ctx context.Context, nr *model.Normalized
 	if err := p.store.UpdateSecret(ctx, e); err != nil {
 		return nil, fmt.Errorf("sm: restore secret: %w", err)
 	}
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":  secretARN,
 		"Name": e.Name,
@@ -214,7 +235,7 @@ func (p *SecretProvider) ListSecrets(ctx context.Context, nr *model.NormalizedRe
 	items := make([]map[string]any, 0, len(secrets))
 	for _, e := range secrets {
 		items = append(items, map[string]any{
-			"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+			"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
 			"Name": e.Name,
 		})
 	}
@@ -265,7 +286,7 @@ func (p *SecretProvider) PutSecretValue(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":           secretARN,
 		"Name":          e.Name,
@@ -304,7 +325,7 @@ func (p *SecretProvider) GetSecretValue(ctx context.Context, nr *model.Normalize
 		return nil, fmt.Errorf("sm: decrypt value: %w", err)
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	resp := map[string]any{
 		"ARN":           secretARN,
 		"Name":          e.Name,
@@ -337,7 +358,7 @@ func (p *SecretProvider) ListSecretVersionIds(ctx context.Context, nr *model.Nor
 			"CreatedDate":   v.CreatedAt.Unix(),
 		})
 	}
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":      secretARN,
 		"Name":     e.Name,
@@ -456,7 +477,7 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 		return nil, fmt.Errorf("sm: update secret rotation fields: %w", err)
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":       secretARN,
 		"Name":      e.Name,
@@ -484,7 +505,7 @@ func (p *SecretProvider) CancelRotateSecret(ctx context.Context, nr *model.Norma
 		return nil, fmt.Errorf("sm: cancel rotation: %w", err)
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{
 		"ARN":  secretARN,
 		"Name": e.Name,
@@ -502,7 +523,7 @@ func (p *SecretProvider) GetResourcePolicy(ctx context.Context, nr *model.Normal
 		return nil, model.NewProviderError("ResourceNotFoundException", "resource policy not found for secret: "+e.Name, 400)
 	}
 	return provider.OK(map[string]any{
-		"ARN":            nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"ARN":            nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
 		"Name":           e.Name,
 		"ResourcePolicy": e.ResourcePolicy,
 	}), nil
@@ -519,7 +540,7 @@ func (p *SecretProvider) PutResourcePolicy(ctx context.Context, nr *model.Normal
 		return nil, fmt.Errorf("secretsmanager: put resource policy: %w", err)
 	}
 	return provider.OK(map[string]any{
-		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
 		"Name": e.Name,
 	}), nil
 }
@@ -534,7 +555,7 @@ func (p *SecretProvider) DeleteResourcePolicy(ctx context.Context, nr *model.Nor
 		return nil, fmt.Errorf("secretsmanager: delete resource policy: %w", err)
 	}
 	return provider.OK(map[string]any{
-		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
 		"Name": e.Name,
 	}), nil
 }
@@ -631,7 +652,7 @@ func (p *SecretProvider) UpdateSecretVersionStage(ctx context.Context, nr *model
 		}
 	}
 
-	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.Name)
+	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
 	return provider.OK(map[string]any{"ARN": secretARN, "Name": e.Name}), nil
 }
 
@@ -680,7 +701,7 @@ func (p *SecretProvider) secretDetail(e SecretEntry, versions []VersionEntry, nr
 		tags = append(tags, map[string]string{"Key": k, "Value": v})
 	}
 	d := map[string]any{
-		"ARN":              nr.ResourceID(model.RTSecretsManagerSecret, e.Name),
+		"ARN":              nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
 		"Name":             e.Name,
 		"Description":      e.Description,
 		"KmsKeyId":         e.KMSKeyID,

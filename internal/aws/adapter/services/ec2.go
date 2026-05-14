@@ -7,7 +7,17 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/reqctx"
 )
+
+func ec2ReqID(nr *model.NormalizedRequest) string {
+	if nr != nil {
+		if id := reqctx.GetRequestID(nr.Raw.Context()); id != "" {
+			return id
+		}
+	}
+	return "00000000-0000-0000-0000-000000000000"
+}
 
 // EC2Codec handles the EC2 Query protocol (shared by EC2, VPC, RDS, ElastiCache, CloudFormation).
 // Protocol: POST form-encoded body with Action=<Action> + XML responses.
@@ -47,7 +57,7 @@ func (c *EC2Codec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 func (c *EC2Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml;charset=UTF-8")
-	body := buildEC2XML(nr.Action, resp.Data)
+	body := buildEC2XML(nr.Action, ec2ReqID(nr), resp.Data)
 	return resp.HTTPStatus, h, []byte(body)
 }
 
@@ -55,24 +65,25 @@ func (c *EC2Codec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	h := http.Header{}
 	h.Set("Content-Type", "text/xml;charset=UTF-8")
 	code := perr.Code
+	reqID := ec2ReqID(nr)
 	body := fmt.Sprintf(
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<Response>`+
 			`<Errors><Error><Code>%s</Code><Message>%s</Message></Error></Errors>`+
-			`<RequestID>00000000-0000-0000-0000-000000000000</RequestID>`+
+			`<RequestID>%s</RequestID>`+
 			`</Response>`,
-		xmlEscape(code), xmlEscape(perr.Message),
+		xmlEscape(code), xmlEscape(perr.Message), xmlEscape(reqID),
 	)
 	return perr.HTTPStatus, h, []byte(body)
 }
 
 // buildEC2XML produces the EC2 XML response envelope.
-func buildEC2XML(action string, data map[string]any) string {
+func buildEC2XML(action, reqID string, data map[string]any) string {
 	xmlns := "http://ec2.amazonaws.com/doc/2016-11-15/"
 	inner := encodeEC2Result(action, data)
 	return `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<` + action + `Response xmlns="` + xmlns + `">` +
-		`<requestId>00000000-0000-0000-0000-000000000000</requestId>` +
+		`<requestId>` + xmlEscape(reqID) + `</requestId>` +
 		inner +
 		`</` + action + `Response>`
 }

@@ -79,13 +79,13 @@ func strParam(params map[string]any, key string) string {
 	return ""
 }
 
-func topicArn(region, accountID, name string) string {
-	return fmt.Sprintf("arn:aws:sns:%s:%s:%s", region, accountID, name)
+func topicArn(nr *model.NormalizedRequest, name string) string {
+	return nr.ResourceID("sns-topic", name)
 }
 
-func subArn(region, accountID, topicName string) string {
-	return fmt.Sprintf("arn:aws:sns:%s:%s:%s:%x",
-		region, accountID, topicName, md5.Sum([]byte(topicName+time.Now().String())))
+func subArn(nr *model.NormalizedRequest, topicName string) string {
+	suffix := fmt.Sprintf("%x", md5.Sum([]byte(topicName+time.Now().String())))
+	return nr.ResourceID("sns-subscription", topicName+":"+suffix)
 }
 
 func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, data any) error {
@@ -124,7 +124,7 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 	if name == "" {
 		return nil, model.NewProviderError("InvalidParameter", "Name is required", 400)
 	}
-	arn := topicArn(nr.Region, nr.AccountID, name)
+	arn := topicArn(nr, name)
 
 	isFIFO := strings.HasSuffix(name, ".fifo")
 	attrs := map[string]string{
@@ -238,7 +238,7 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 
 	parts := strings.Split(tArn, ":")
 	topicName := parts[len(parts)-1]
-	sArn := subArn(nr.Region, nr.AccountID, topicName)
+	sArn := subArn(nr, topicName)
 
 	// Generate confirmation token for http/https; auto-confirm everything else.
 	token := ""

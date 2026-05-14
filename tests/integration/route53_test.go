@@ -191,3 +191,16 @@ func TestRoute53MultiChangeBatch(t *testing.T) {
 	assert.Equal(t, ttl60, names["a.example.com"], "A record TTL must be 60")
 	assert.Equal(t, ttl600, names["mx.example.com"], "MX record TTL must be 600")
 }
+
+func TestRoute53HostedZoneIDFormat(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newRoute53Client(t)
+	out, err := c.CreateHostedZone(ctx, &awsroute53.CreateHostedZoneInput{
+		Name:            aws.String("zoneformat.example.com"),
+		CallerReference: aws.String("ref-format"),
+	})
+	require.NoError(t, err)
+	id := aws.ToString(out.HostedZone.Id)
+	assert.Regexp(t, `^/hostedzone/Z[A-Z0-9]{14}$`, id, "hosted zone ID must have Z prefix")
+}

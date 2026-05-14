@@ -140,7 +140,7 @@ func (p *TableProvider) GetRecords(ctx context.Context, nr *model.NormalizedRequ
 			"eventSource":  "aws:dynamodb",
 			"eventName":    r.EventName,
 			"dynamodb": map[string]any{
-				"SequenceNumber":              fmt.Sprintf("%d", r.SequenceNumber),
+				"SequenceNumber":              fmt.Sprintf("%021d", r.SequenceNumber),
 				"ApproximateCreationDateTime": r.ApproximateCreationDateTime.Unix(),
 				"StreamViewType":              "NEW_AND_OLD_IMAGES",
 				"Keys":                        r.Keys,

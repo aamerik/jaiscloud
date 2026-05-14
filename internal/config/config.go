@@ -160,8 +160,23 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 		return fmt.Sprintf("arn:aws:states:%s:%s:activity:%s", r, a, n)
 	},
 	// Phase 14 additions
+	"eks-cluster":   func(r, a, n string) string { return fmt.Sprintf("arn:aws:eks:%s:%s:cluster/%s", r, a, n) },
 	"eks-nodegroup": func(r, a, n string) string { return fmt.Sprintf("arn:aws:eks:%s:%s:nodegroup/%s", r, a, n) },
 	"eks-addon":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:eks:%s:%s:addon/%s", r, a, n) },
+	// ECS
+	"ecs-cluster":            func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:cluster/%s", r, a, n) },
+	"ecs-task":               func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:task/%s", r, a, n) },
+	"ecs-task-definition":    func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:task-definition/%s", r, a, n) },
+	"ecs-service":            func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:service/%s", r, a, n) },
+	"ecs-container-instance": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:container-instance/%s", r, a, n) },
+	// RDS
+	"rds-cluster":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:cluster:%s", r, a, n) },
+	"rds-instance": func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:db:%s", r, a, n) },
+	// STS / IAM additional types
+	"sts-assumed-role":     func(_, a, n string) string { return fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s", a, n) },
+	"sts-federated-user":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", a, n) },
+	"iam-group":            func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:group/%s", a, n) },
+	"iam-instance-profile": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:instance-profile/%s", a, n) },
 	"rds-snapshot":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:snapshot:%s", r, a, n) },
 	"cfn-changeset": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:changeSet/%s", r, a, n)
@@ -184,6 +199,23 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"athena-workgroup":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
 	"redshift-cluster":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
 	"s3-accesspoint":           func(r, a, n string) string { return fmt.Sprintf("arn:aws:s3:%s:%s:accesspoint/%s", r, a, n) },
+	// CloudWatch
+	"cloudwatch-dashboard": func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch::%s:dashboard/%s", a, n) },
+	// IAM OIDC
+	"iam-oidc-provider": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },
+	// Step Functions executions — n encodes "sm-name/exec-name"
+	"sfn-execution": func(r, a, n string) string {
+		if sm, exec, ok := strings.Cut(n, "/"); ok {
+			return fmt.Sprintf("arn:aws:states:%s:%s:execution:%s:%s", r, a, sm, exec)
+		}
+		return fmt.Sprintf("arn:aws:states:%s:%s:execution:%s", r, a, n)
+	},
+	"sfn-express-execution": func(r, a, n string) string {
+		if sm, exec, ok := strings.Cut(n, "/"); ok {
+			return fmt.Sprintf("arn:aws:states:%s:%s:express:%s:%s", r, a, sm, exec)
+		}
+		return fmt.Sprintf("arn:aws:states:%s:%s:express:%s", r, a, n)
+	},
 }
 
 // AWSResourceID returns a ResourceID function that formats AWS ARNs.

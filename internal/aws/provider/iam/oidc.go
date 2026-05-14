@@ -24,11 +24,10 @@ type oidcProviderData struct {
 	CreateDate   time.Time         `json:"CreateDate"`
 }
 
-func oidcARN(accountID, url string) string {
-	// strip https:// prefix for ARN host portion
+func oidcARN(nr *model.NormalizedRequest, url string) string {
 	host := strings.TrimPrefix(url, "https://")
 	host = strings.TrimPrefix(host, "http://")
-	return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", accountID, host)
+	return nr.ResourceID("iam-oidc-provider", host)
 }
 
 // extractStrList reads param.member.N indexed list.
@@ -49,7 +48,7 @@ func (p *IAMProvider) CreateOpenIDConnectProvider(ctx context.Context, nr *model
 	if url == "" {
 		return nil, model.NewProviderError("ValidationError", "Url is required", http.StatusBadRequest)
 	}
-	arn := oidcARN(nr.AccountID, url)
+	arn := oidcARN(nr, url)
 	op := oidcProviderData{
 		Arn:         arn,
 		URL:         url,

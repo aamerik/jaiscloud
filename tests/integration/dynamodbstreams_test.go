@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -353,5 +354,77 @@ func TestDynamoDB_Streams_ViewTypes(t *testing.T) {
 			// regardless of view type (that is always correct for INSERT).
 			assert.Nil(t, rec.Dynamodb.OldImage, "INSERT records must not have OldImage")
 		})
+	}
+}
+
+func TestDynamoStreamsEventIDUnique(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	ddb := newDynamoClient(t)
+	streams := newDynamoStreamsClient(t)
+
+	tbl := "EventIDTable"
+	_, err := ddb.CreateTable(ctx, &awsdynamo.CreateTableInput{
+		TableName:   aws.String(tbl),
+		BillingMode: dyntype.BillingModePayPerRequest,
+		KeySchema: []dyntype.KeySchemaElement{
+			{AttributeName: aws.String("PK"), KeyType: dyntype.KeyTypeHash},
+		},
+		AttributeDefinitions: []dyntype.AttributeDefinition{
+			{AttributeName: aws.String("PK"), AttributeType: dyntype.ScalarAttributeTypeS},
+		},
+		StreamSpecification: &dyntype.StreamSpecification{
+			StreamEnabled:  aws.Bool(true),
+			StreamViewType: dyntype.StreamViewTypeNewAndOldImages,
+		},
+	})
+	require.NoError(t, err)
+
+	// Write the same key 3 times to produce 3 stream records.
+	for i := 0; i < 3; i++ {
+		_, err = ddb.PutItem(ctx, &awsdynamo.PutItemInput{
+			TableName: aws.String(tbl),
+			Item: map[string]dyntype.AttributeValue{
+				"PK": &dyntype.AttributeValueMemberS{Value: "same-key"},
+				"V":  &dyntype.AttributeValueMemberN{Value: fmt.Sprintf("%d", i)},
+			},
+		})
+		require.NoError(t, err)
+	}
+
+	listOut, err := streams.ListStreams(ctx, &awsstreams.ListStreamsInput{
+		TableName: aws.String(tbl),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, listOut.Streams)
+
+	descOut, err := streams.DescribeStream(ctx, &awsstreams.DescribeStreamInput{
+		StreamArn: listOut.Streams[0].StreamArn,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, descOut.StreamDescription.Shards)
+
+	iterOut, err := streams.GetShardIterator(ctx, &awsstreams.GetShardIteratorInput{
+		StreamArn:         listOut.Streams[0].StreamArn,
+		ShardId:           descOut.StreamDescription.Shards[0].ShardId,
+		ShardIteratorType: streamtypes.ShardIteratorTypeTrimHorizon,
+	})
+	require.NoError(t, err)
+
+	recOut, err := streams.GetRecords(ctx, &awsstreams.GetRecordsInput{
+		ShardIterator: iterOut.ShardIterator,
+		Limit:         aws.Int32(10),
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(recOut.Records), 3, "expected at least 3 stream records")
+
+	eventIDs := map[string]bool{}
+	for _, rec := range recOut.Records {
+		id := aws.ToString(rec.EventID)
+		assert.False(t, eventIDs[id], "duplicate eventID: %s", id)
+		eventIDs[id] = true
+		// SequenceNumber must be 21-digit zero-padded.
+		seq := aws.ToString(rec.Dynamodb.SequenceNumber)
+		assert.Regexp(t, `^\d{21}$`, seq, "SequenceNumber must be 21-digit zero-padded")
 	}
 }

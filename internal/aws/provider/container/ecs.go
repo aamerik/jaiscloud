@@ -95,7 +95,7 @@ func (p *ContainerProvider) CreateCluster(ctx context.Context, nr *model.Normali
 	}
 	c := cluster{
 		ClusterName: name,
-		ClusterArn:  fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:cluster/%s", name),
+		ClusterArn:  nr.ResourceID("ecs-cluster", name),
 		Status:      "ACTIVE",
 	}
 	data, _ := json.Marshal(c)
@@ -247,7 +247,7 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 	td := taskDefinition{
 		Family:               family,
 		Revision:             revision,
-		TaskDefinitionArn:    fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:task-definition/%s:%d", family, revision),
+		TaskDefinitionArn:    nr.ResourceID("ecs-task-definition", fmt.Sprintf("%s:%d", family, revision)),
 		Status:               "ACTIVE",
 		ContainerDefinitions: containers,
 		Cpu:                  cpu,
@@ -349,8 +349,8 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 
 	svc := service{
 		ServiceName:    svcName,
-		ServiceArn:     fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:service/%s/%s", clusterName, svcName),
-		ClusterArn:     fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:cluster/%s", clusterName),
+		ServiceArn:     nr.ResourceID("ecs-service", clusterName+"/"+svcName),
+		ClusterArn:     nr.ResourceID("ecs-cluster", clusterName),
 		TaskDefinition: td,
 		DesiredCount:   desired,
 		RunningCount:   desired,
@@ -480,8 +480,8 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 	for i := 0; i < count; i++ {
 		id := newID()
 		t := task{
-			TaskArn:        fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:task/%s/%s", clusterName, id),
-			ClusterArn:     fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:cluster/%s", clusterName),
+			TaskArn:        nr.ResourceID("ecs-task", clusterName+"/"+id),
+			ClusterArn:     nr.ResourceID("ecs-cluster", clusterName),
 			TaskDefinition: td,
 			LastStatus:     "RUNNING",
 			DesiredStatus:  "RUNNING",
@@ -537,7 +537,7 @@ func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedR
 	for _, e := range entries {
 		var t task
 		json.Unmarshal(e.Data, &t)
-		if clusterName == "" || t.ClusterArn == fmt.Sprintf("arn:aws:ecs:us-east-1:000000000000:cluster/%s", clusterName) {
+		if clusterName == "" || t.ClusterArn == nr.ResourceID("ecs-cluster", clusterName) {
 			if t.LastStatus != "STOPPED" {
 				arns = append(arns, t.TaskArn)
 			}

@@ -3,6 +3,7 @@ package table
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -139,17 +140,11 @@ type tableSchema struct {
 }
 
 func tableArn(nr *model.NormalizedRequest, name string) string {
-	if nr.ResourceID != nil {
-		return nr.ResourceID("dynamodb-table", name)
-	}
-	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
+	return nr.ResourceID("dynamodb-table", name)
 }
 
 func streamResourceID(nr *model.NormalizedRequest, tableName, label string) string {
-	if nr.ResourceID != nil {
-		return nr.ResourceID("dynamodb-stream", tableName+"/stream/"+label)
-	}
-	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s/stream/%s", nr.Region, nr.AccountID, tableName, label)
+	return nr.ResourceID("dynamodb-stream", tableName+"/stream/"+label)
 }
 
 func strParam(params map[string]any, key string) string {
@@ -394,7 +389,7 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	if existingForStream != nil {
 		eventName = "MODIFY"
 	}
-	p.appendStreamRecord(name, eventName, pkHash, extractKeys(item, ts), item, existingForStream)
+	p.appendStreamRecord(name, eventName, newEventID(), extractKeys(item, ts), item, existingForStream)
 	result := map[string]any{}
 	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
 		result["Attributes"] = oldItem
@@ -447,7 +442,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, storeErrToProvider(err)
 	}
-	p.appendStreamRecord(name, "REMOVE", pkHash, key, nil, oldItem)
+	p.appendStreamRecord(name, "REMOVE", newEventID(), key, nil, oldItem)
 	result := map[string]any{}
 	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
 		result["Attributes"] = oldItem
@@ -481,7 +476,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, storeErrToProvider(err)
 	}
-	p.appendStreamRecord(name, "MODIFY", pkHash, key, updated, oldItem)
+	p.appendStreamRecord(name, "MODIFY", newEventID(), key, updated, oldItem)
 	result := map[string]any{}
 	switch spec.ReturnValues {
 	case "ALL_NEW":
@@ -1366,6 +1361,13 @@ func itemParam(params map[string]any, key string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// newEventID returns a UUID-like string for DynamoDB stream event IDs.
+func newEventID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // computePKHash builds a stable hash from the key attributes as defined in the table schema.

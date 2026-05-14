@@ -160,7 +160,7 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	state := map[string]any{
 		"QueueName":                     name,
 		"QueueUrl":                      queueURL,
-		"QueueArn":                      fmt.Sprintf("arn:aws:sqs:%s:000000000000:%s", nr.Region, name),
+		"QueueArn":                      nr.ResourceID("sqs-queue", name),
 		"IsFifo":                        isFIFO,
 		"Attributes":                    attrs,
 		"Tags":                          map[string]string{},

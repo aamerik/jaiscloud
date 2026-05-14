@@ -134,7 +134,7 @@ func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.Nor
 		DBName:               strParam(nr.Params, "DBName"),
 		AllocatedStorage:     20,
 		EngineVersion:        strParam(nr.Params, "EngineVersion"),
-		DBInstanceArn:        nr.ResourceID("db", id),
+		DBInstanceArn:        nr.ResourceID("rds-instance", id),
 	}
 	if inst.EngineVersion == "" {
 		inst.EngineVersion = "8.0"
@@ -250,7 +250,7 @@ func (p *RelationalProvider) CreateDBCluster(ctx context.Context, nr *model.Norm
 	engine := strParam(nr.Params, "Engine")
 	c := dbCluster{
 		DBClusterIdentifier: id,
-		DBClusterArn:        fmt.Sprintf("arn:aws:rds:us-east-1:000000000000:cluster:%s", id),
+		DBClusterArn:        nr.ResourceID("rds-cluster", id),
 		Status:              "available",
 		Engine:              engine,
 		EngineVersion:       strParam(nr.Params, "EngineVersion"),
