@@ -118,7 +118,10 @@ func (c *SQSCodec) encodeXML(nr *model.NormalizedRequest, resp *model.ProviderRe
 	action := nr.Action
 	result := buildXMLResult(action, resp.Data)
 
-	reqID := reqctx.GetRequestID(nr.Raw.Context())
+	var reqID string
+	if nr.Raw != nil {
+		reqID = reqctx.GetRequestID(nr.Raw.Context())
+	}
 	if reqID == "" {
 		reqID = "00000000-0000-0000-0000-000000000000"
 	}

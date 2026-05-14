@@ -32,6 +32,9 @@ func nr(params map[string]any) *model.NormalizedRequest {
 		Port:      4566,
 		Params:    params,
 		Clock:     clock.FixedClock{T: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		ResourceID: func(resourceType, name string) string {
+			return "arn:aws:sqs:us-east-1:000000000000:" + name
+		},
 	}
 }
 
