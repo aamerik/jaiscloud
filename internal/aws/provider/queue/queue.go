@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -1161,6 +1162,19 @@ func parseMessageAttributes(v any) map[string]sqsstore.MessageAttribute {
 				}
 				if sv, ok := attr["StringValue"]; ok {
 					ma.StringValue = str(sv)
+				}
+				if bv, ok := attr["BinaryValue"]; ok {
+					switch v := bv.(type) {
+					case []byte:
+						ma.BinaryValue = v
+					case string:
+						// JSON protocol sends binary as base64; decode it.
+						if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
+							ma.BinaryValue = decoded
+						} else {
+							ma.BinaryValue = []byte(v)
+						}
+					}
 				}
 				result[k] = ma
 			}

@@ -3,8 +3,10 @@ package dns
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -133,29 +135,31 @@ func (p *DNSProvider) UpdateHealthCheck(ctx context.Context, nr *model.Normalize
 // ─── VPC associations ─────────────────────────────────────────────────────────
 
 func (p *DNSProvider) AssociateVPCWithHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Metadata-only: validate zone exists and return success
 	zoneID := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
 	if _, err := p.resources.Get(ctx, rtHostedZone, zoneID); err != nil {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{
-		"ChangeInfo": map[string]any{
-			"Status": "INSYNC",
-		},
+		"ChangeInfo": changeInfo(),
 	}), nil
 }
 
 func (p *DNSProvider) DisassociateVPCFromHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Metadata-only: validate zone exists and return success
 	zoneID := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
 	if _, err := p.resources.Get(ctx, rtHostedZone, zoneID); err != nil {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{
-		"ChangeInfo": map[string]any{
-			"Status": "INSYNC",
-		},
+		"ChangeInfo": changeInfo(),
 	}), nil
+}
+
+func changeInfo() map[string]any {
+	return map[string]any{
+		"Id":          fmt.Sprintf("/change/%s", newChangeID()),
+		"Status":      "INSYNC",
+		"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 // ─── Hosted zone comment update ───────────────────────────────────────────────
@@ -193,13 +197,13 @@ func (p *DNSProvider) ListHostedZonesByName(ctx context.Context, nr *model.Norma
 		if json.Unmarshal(e.Data, &hz) != nil {
 			continue
 		}
-		// Filter by DNS name prefix if provided
+		// Filter by DNS name: return zones that are subdomains of or equal to dnsName.
 		if dnsName != "" {
 			normalised := dnsName
 			if !strings.HasSuffix(normalised, ".") {
 				normalised += "."
 			}
-			if !strings.HasPrefix(hz.Name, normalised) {
+			if hz.Name != normalised && !strings.HasSuffix(hz.Name, "."+normalised) {
 				continue
 			}
 		}

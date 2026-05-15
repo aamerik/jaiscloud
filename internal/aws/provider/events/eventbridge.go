@@ -625,7 +625,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 			if err := json.Unmarshal(te.Data, &td); err != nil {
 				continue
 			}
-			go p.deliverToTarget(ctx, td, envelope)
+			go p.deliverToTarget(context.Background(), td, envelope)
 		}
 	}
 

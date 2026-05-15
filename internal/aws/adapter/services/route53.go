@@ -116,6 +116,10 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 		if method == "DELETE" {
 			return "DeleteHealthCheck", params
 		}
+		if method == "POST" {
+			parseXMLBody(body, params)
+			return "UpdateHealthCheck", params
+		}
 	// Change info
 	case strings.HasPrefix(path, "/change/"):
 		id := strings.TrimPrefix(path, "/change/")
@@ -164,12 +168,6 @@ func route53ActionFromRequest(r *http.Request, body []byte) (string, map[string]
 		}
 		parseXMLBody(body, params)
 		return "DisassociateVPCFromHostedZone", params
-	// UpdateHealthCheck — POST /2013-04-01/healthcheck/{id}
-	case strings.HasPrefix(path, "/healthcheck/") && !strings.Contains(path[len("/healthcheck/"):], "/") && method == "POST":
-		id := strings.TrimPrefix(path, "/healthcheck/")
-		params["Id"] = id
-		parseXMLBody(body, params)
-		return "UpdateHealthCheck", params
 	// Tags — /tags/{resourcetype}/{id}
 	case strings.HasPrefix(path, "/tags/"):
 		rest := strings.TrimPrefix(path, "/tags/")
@@ -402,7 +400,19 @@ func buildRoute53XML(data map[string]any) string {
 			xmlEscape(str(data["SubmittedAt"])) + `</SubmittedAt></ChangeInfo>` +
 			`</DeleteHostedZoneResponse>`
 	}
-	if _, ok := data["ChangeInfo"]; ok {
+	if ci, ok := data["ChangeInfo"]; ok {
+		// If ChangeInfo is a nested map, it's a VPC association response.
+		if ciMap, ok := ci.(map[string]any); ok {
+			ciID, _ := ciMap["Id"].(string)
+			status, _ := ciMap["Status"].(string)
+			submittedAt, _ := ciMap["SubmittedAt"].(string)
+			return `<?xml version="1.0" encoding="UTF-8"?>` +
+				`<AssociateVPCWithHostedZoneResponse ` + ns + `>` +
+				`<ChangeInfo><Id>` + xmlEscape(ciID) + `</Id><Status>` + xmlEscape(status) +
+				`</Status><SubmittedAt>` + xmlEscape(submittedAt) + `</SubmittedAt></ChangeInfo>` +
+				`</AssociateVPCWithHostedZoneResponse>`
+		}
+		// Otherwise it's a sentinel bool from ChangeResourceRecordSets.
 		changeID := str(data["ChangeId"])
 		if changeID == "" {
 			changeID = "C1"
@@ -465,17 +475,6 @@ func buildRoute53XML(data map[string]any) string {
 		sb.WriteString(`<IsTruncated>false</IsTruncated>`)
 		sb.WriteString(`</ListReusableDelegationSetsResponse>`)
 		return sb.String()
-	}
-	// VPC association responses
-	if ci, ok := data["ChangeInfo"]; ok {
-		status := ""
-		if m, ok := ci.(map[string]any); ok {
-			status, _ = m["Status"].(string)
-		}
-		return `<?xml version="1.0" encoding="UTF-8"?>` +
-			`<AssociateVPCWithHostedZoneResponse ` + ns + `>` +
-			`<ChangeInfo><Status>` + xmlEscape(status) + `</Status></ChangeInfo>` +
-			`</AssociateVPCWithHostedZoneResponse>`
 	}
 	// ChangeTagsForResource — no body needed
 	if _, ok := data["ChangeTagsForResourceResponse"]; ok {

@@ -951,6 +951,7 @@ func (p *SecretProvider) BatchGetSecretValue(ctx context.Context, nr *model.Norm
 			ResourceID: nr.ResourceID,
 			Region:     nr.Region,
 			AccountID:  nr.AccountID,
+			Clock:      nr.Clock,
 		}
 		resp, err := p.GetSecretValue(ctx, fakeNR)
 		if err != nil {

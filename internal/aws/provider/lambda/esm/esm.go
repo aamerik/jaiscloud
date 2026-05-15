@@ -137,8 +137,13 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("InvalidParameterValueException", err.Error(), 400)
 	}
 
-	// Validate function exists
-	if _, err := p.resources.Get(ctx, "lambda_functions", functionName); err != nil {
+	// Validate function exists (strip ARN to plain name for lookup).
+	lookupName := functionName
+	if strings.HasPrefix(lookupName, "arn:") {
+		parts := strings.Split(lookupName, ":")
+		lookupName = parts[len(parts)-1]
+	}
+	if _, err := p.resources.Get(ctx, "lambda_functions", lookupName); err != nil {
 		return nil, model.NewProviderError("ResourceNotFoundException",
 			"Function not found: "+functionName, 404)
 	}

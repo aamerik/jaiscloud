@@ -31,9 +31,6 @@ func ValidatePolicyDocument(doc string) error {
 	if err := json.Unmarshal([]byte(doc), &pd); err != nil {
 		return fmt.Errorf("MalformedPolicyDocument: %s", err.Error())
 	}
-	if len(pd.Statement) == 0 {
-		return fmt.Errorf("MalformedPolicyDocument: Policy must contain at least one Statement")
-	}
 	for i, s := range pd.Statement {
 		if s.Effect != "Allow" && s.Effect != "Deny" {
 			return fmt.Errorf("MalformedPolicyDocument: Statement[%d] Effect must be Allow or Deny, got %q", i, s.Effect)

@@ -51,7 +51,7 @@ func (p *Provider) InternalPutMetricData(_ context.Context, namespace string, da
 
 // fireAlarmActions dispatches alarm action ARNs for the given new state.
 // Called after SetAlarmState persists the change.
-func (p *Provider) fireAlarmActions(ctx context.Context, alarmParams map[string]any, newState string) {
+func (p *Provider) fireAlarmActions(_ context.Context, alarmParams map[string]any, newState string) {
 	actionsEnabled, _ := alarmParams["ActionsEnabled"].(bool)
 	if !actionsEnabled {
 		return
@@ -78,12 +78,13 @@ func (p *Provider) fireAlarmActions(ctx context.Context, alarmParams map[string]
 		"StateChangeTime": time.Now().UTC().Format(time.RFC3339),
 	})
 
+	bgCtx := context.Background()
 	for i := 1; i <= 10; i++ {
 		arn, _ := alarmParams[actionKey+fmt.Sprintf("%d", i)].(string)
 		if arn == "" {
 			break
 		}
-		go p.dispatchAction(ctx, arn, payload)
+		go p.dispatchAction(bgCtx, arn, payload)
 	}
 }
 

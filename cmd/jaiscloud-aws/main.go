@@ -523,6 +523,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
+	notifP.SetSQSSender(sqsSenderAdapter{q: queueP})
 	objectP := objectprovider.NewWithBus(s.s3Meta, s.blobs, bus).WithResourceStore(s.resources)
 	stackP := stackprovider.New(s.resources)
 
@@ -1024,4 +1025,18 @@ func importCmd() *cobra.Command {
 	cmd.Flags().StringP("input", "i", "-", "Input file (default: stdin)")
 	cmd.Flags().Bool("new-instance", false, "Assign a fresh instance ID on import (blocks snapshots with KMS key material)")
 	return cmd
+}
+
+// sqsSenderAdapter adapts *queue.QueueProvider to notification.SQSSender.
+type sqsSenderAdapter struct{ q *queue.QueueProvider }
+
+func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]notification.SQSMessageAttribute, src notification.SQSSourceContext) error {
+	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))
+	for k, v := range attrs {
+		queueAttrs[k] = queue.MessageAttribute{DataType: v.DataType, StringValue: v.StringValue}
+	}
+	return a.q.InternalSend(ctx, queueARNorURL, body, queueAttrs, queue.SourceContext{
+		SourceArn:        src.SourceArn,
+		ServicePrincipal: src.ServicePrincipal,
+	})
 }

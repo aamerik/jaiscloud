@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,6 +35,10 @@ func (s *PostgresS3ObjectMetaStore) CreateBucket(ctx context.Context, bucket str
 		INSERT INTO jc_s3_buckets (name, meta) VALUES ($1, $2)
 	`, bucket, json.RawMessage(raw))
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("bucket already exists")
+		}
 		return fmt.Errorf("CreateBucket: %w", err)
 	}
 	return nil

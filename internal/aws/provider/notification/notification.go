@@ -25,12 +25,31 @@ type FunctionInvoker interface {
 	InvokeInternal(ctx context.Context, functionName string, payload []byte) ([]byte, error)
 }
 
+// SQSSender is the narrow interface SNS uses to deliver messages to SQS queues.
+// Implementations must resolve ARNs to queue URLs before writing.
+type SQSSender interface {
+	InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]SQSMessageAttribute, src SQSSourceContext) error
+}
+
+// SQSMessageAttribute carries a single SQS message attribute for cross-service delivery.
+type SQSMessageAttribute struct {
+	DataType    string
+	StringValue string
+}
+
+// SQSSourceContext carries caller identity for internal SQS deliveries.
+type SQSSourceContext struct {
+	SourceArn        string
+	ServicePrincipal string
+}
+
 // SNSProvider handles SNS operations.
 type SNSProvider struct {
 	resources  store.ResourceStore
 	messages   sqsstore.SQSMessageStore
 	bus        *events.EventBus
 	invoker    FunctionInvoker
+	sqsSender  SQSSender
 	httpClient *http.Client
 }
 
@@ -45,6 +64,9 @@ func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *
 
 // SetLambdaInvoker wires the Lambda invoker for SNS→Lambda protocol delivery.
 func (p *SNSProvider) SetLambdaInvoker(inv FunctionInvoker) { p.invoker = inv }
+
+// SetSQSSender wires the SQS sender for SNS→SQS protocol delivery with ARN resolution.
+func (p *SNSProvider) SetSQSSender(s SQSSender) { p.sqsSender = s }
 
 func (p *SNSProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
@@ -272,13 +294,19 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 		confirmed = true // auto-confirm for local dev
 	}
 
+	attrs := map[string]string{"SubscriptionArn": sArn}
+	if reqAttrs, ok := nr.Params["Attributes"].(map[string]string); ok {
+		for k, v := range reqAttrs {
+			attrs[k] = v
+		}
+	}
 	sd := subscriptionData{
 		SubscriptionArn: sArn,
 		TopicArn:        tArn,
 		Protocol:        protocol,
 		Endpoint:        endpoint,
 		Owner:           nr.AccountID,
-		Attributes:      map[string]string{"SubscriptionArn": sArn},
+		Attributes:      attrs,
 		Token:           token,
 		Confirmed:       confirmed,
 	}
@@ -463,9 +491,6 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any, rawDelivery bool) {
-	if p.messages == nil {
-		return
-	}
 	var bodyStr string
 	if rawDelivery {
 		bodyStr = message
@@ -483,6 +508,19 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 		}
 		b, _ := json.Marshal(envelope)
 		bodyStr = string(b)
+	}
+
+	// Prefer sqsSender (resolves ARN → URL correctly) over raw message store.
+	if p.sqsSender != nil {
+		_ = p.sqsSender.InternalSend(ctx, queueURL, bodyStr, nil, SQSSourceContext{
+			SourceArn:        tArn,
+			ServicePrincipal: "sns.amazonaws.com",
+		})
+		return
+	}
+
+	if p.messages == nil {
+		return
 	}
 	sqsMsgID := fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), rand.Int31())
 	msg := sqsstore.SQSMessage{

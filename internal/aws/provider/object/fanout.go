@@ -89,7 +89,7 @@ func buildS3EventRecord(bucket, key, eventName, etag string, size int64, region,
 }
 
 // dispatchS3Notification fans out an S3 event to all configured notification targets.
-func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key, eventName, etag string, size int64, region, accountID string) {
+func (p *ObjectProvider) dispatchS3Notification(_ context.Context, bucket, key, eventName, etag string, size int64, region, accountID string) {
 	raw, ok := p.notifStore.Load(bucket)
 	if !ok {
 		return
@@ -100,6 +100,8 @@ func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key
 	}
 	now := time.Now().UTC()
 
+	bgCtx := context.Background()
+
 	for _, q := range cfg.QueueConfigurations {
 		if !matchesEvent(q.Events, eventName) || !matchesFilter(q.Filter, key) {
 			continue
@@ -107,7 +109,7 @@ func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key
 		payload := buildS3EventRecord(bucket, key, eventName, etag, size, region, accountID, q.Id, now)
 		go func(arn string, body []byte) {
 			if p.fanout.SQS != nil {
-				_ = p.fanout.SQS.InternalSend(ctx, arn, string(body), nil, queue.SourceContext{
+				_ = p.fanout.SQS.InternalSend(bgCtx, arn, string(body), nil, queue.SourceContext{
 					SourceArn:        "arn:aws:s3:::" + bucket,
 					ServicePrincipal: "s3.amazonaws.com",
 				})
@@ -122,7 +124,7 @@ func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key
 		payload := buildS3EventRecord(bucket, key, eventName, etag, size, region, accountID, t.Id, now)
 		go func(arn string, body []byte) {
 			if p.fanout.SNSPublisher != nil {
-				_ = p.fanout.SNSPublisher.InternalPublishRaw(ctx, arn, string(body))
+				_ = p.fanout.SNSPublisher.InternalPublishRaw(bgCtx, arn, string(body))
 			}
 		}(t.TopicArn, payload)
 	}
@@ -134,7 +136,7 @@ func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key
 		payload := buildS3EventRecord(bucket, key, eventName, etag, size, region, accountID, l.Id, now)
 		go func(arn string, body []byte) {
 			if p.fanout.Lambda != nil {
-				_ = p.fanout.Lambda.InternalInvokeRaw(ctx, arn, body)
+				_ = p.fanout.Lambda.InternalInvokeRaw(bgCtx, arn, body)
 			}
 		}(l.LambdaFuncArn, payload)
 	}
@@ -143,7 +145,7 @@ func (p *ObjectProvider) dispatchS3Notification(ctx context.Context, bucket, key
 	if p.fanout.EventBridge != nil {
 		ebPayload := buildEBS3Event(bucket, key, eventName, etag, size, region, accountID, now)
 		go func(payload map[string]any) {
-			_ = p.fanout.EventBridge.InternalPutEvents(ctx, []map[string]any{payload})
+			_ = p.fanout.EventBridge.InternalPutEvents(bgCtx, []map[string]any{payload})
 		}(ebPayload)
 	}
 }

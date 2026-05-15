@@ -198,7 +198,7 @@ type methodIntegration struct {
 func (p *GatewayProvider) GetResources(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
 	entries, _ := p.resources.List(ctx, rtResource, "")
-	var items []map[string]any
+	items := []map[string]any{}
 	for _, e := range entries {
 		var r apiResource
 		if json.Unmarshal(e.Data, &r) == nil && r.APIID == apiID {
@@ -415,7 +415,7 @@ func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.Normal
 		p.save(ctx, rtStage, stageKey, st)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
-		"id": d.ID, "createdDate": d.CreatedDate, "description": d.Description,
+		"id": d.ID, "createdDate": d.CreatedDate.Unix(), "description": d.Description,
 	}}, nil
 }
 
@@ -426,7 +426,7 @@ func (p *GatewayProvider) GetDeployments(ctx context.Context, nr *model.Normaliz
 	for _, e := range entries {
 		var d deployment
 		if json.Unmarshal(e.Data, &d) == nil && d.APIID == apiID {
-			items = append(items, map[string]any{"id": d.ID, "createdDate": d.CreatedDate.Format(time.RFC3339)})
+			items = append(items, map[string]any{"id": d.ID, "createdDate": d.CreatedDate.Unix()})
 		}
 	}
 	return provider.OK(map[string]any{"item": items}), nil
@@ -674,7 +674,7 @@ func (p *GatewayProvider) notFound(err error, msg string) error {
 func apiToWire(a restAPI) map[string]any {
 	return map[string]any{
 		"id": a.ID, "name": a.Name, "description": a.Description,
-		"createdDate": a.CreatedDate.Format(time.RFC3339),
+		"createdDate": a.CreatedDate.Unix(),
 	}
 }
 
@@ -698,7 +698,7 @@ func integrationToWire(i *methodIntegration) map[string]any {
 func stageToWire(st apiStage) map[string]any {
 	return map[string]any{
 		"stageName": st.Name, "deploymentId": st.DeploymentID,
-		"description": st.Description, "createdDate": st.CreatedDate.Format(time.RFC3339),
+		"description": st.Description, "createdDate": st.CreatedDate.Unix(),
 		"variables": st.Variables,
 	}
 }

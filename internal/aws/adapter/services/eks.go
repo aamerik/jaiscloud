@@ -80,7 +80,7 @@ func eksActionFromRequest(r *http.Request) (string, map[string]any) {
 		return "", nil
 	}
 	clusterName := segments[1]
-	params := map[string]any{"name": clusterName}
+	params := map[string]any{"name": clusterName, "clusterName": clusterName}
 	// /clusters/{name}
 	if len(segments) == 2 {
 		switch method {
