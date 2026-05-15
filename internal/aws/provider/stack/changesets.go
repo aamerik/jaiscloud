@@ -21,10 +21,11 @@ const (
 // ─── ChangeSet types ──────────────────────────────────────────────────────────
 
 type cfChange struct {
-	Action            string `json:"Action"`
-	LogicalResourceId string `json:"LogicalResourceId"`
-	ResourceType      string `json:"ResourceType"`
-	Replacement       string `json:"Replacement"`
+	Action            string   `json:"Action"`
+	LogicalResourceId string   `json:"LogicalResourceId"`
+	ResourceType      string   `json:"ResourceType"`
+	Replacement       string   `json:"Replacement"`
+	Scope             []string `json:"Scope,omitempty"`
 }
 
 type cfChangeSet struct {
@@ -44,14 +45,18 @@ type cfChangeSet struct {
 func (cs cfChangeSet) toWire() map[string]any {
 	changes := make([]map[string]any, 0, len(cs.Changes))
 	for _, c := range cs.Changes {
+		rc := map[string]any{
+			"Action":            c.Action,
+			"LogicalResourceId": c.LogicalResourceId,
+			"ResourceType":      c.ResourceType,
+			"Replacement":       c.Replacement,
+		}
+		if len(c.Scope) > 0 {
+			rc["Scope"] = c.Scope
+		}
 		changes = append(changes, map[string]any{
-			"Type": "Resource",
-			"ResourceChange": map[string]any{
-				"Action":            c.Action,
-				"LogicalResourceId": c.LogicalResourceId,
-				"ResourceType":      c.ResourceType,
-				"Replacement":       c.Replacement,
-			},
+			"Type":           "Resource",
+			"ResourceChange": rc,
 		})
 	}
 	params := make([]map[string]any, 0, len(cs.Parameters))
@@ -95,6 +100,34 @@ func (p *StackProvider) CreateChangeSet(ctx context.Context, nr *model.Normalize
 	callerParams := parseCallerParams(nr.Params)
 	params := paramsToSlice(callerParams)
 
+	// Compute real diff between old and new templates.
+	newTemplateBody := strParam(nr.Params, "TemplateBody")
+	computedChanges := []cfChange{}
+	if newTemplateBody != "" {
+		newDoc, parseErr := parseTemplate(newTemplateBody)
+		if parseErr == nil {
+			var oldDoc map[string]any
+			if serr == nil {
+				var existingStack cfStack
+				_ = json.Unmarshal(se.Data, &existingStack)
+				oldDoc, _ = parseTemplate(existingStack.Template)
+			}
+			if oldDoc == nil {
+				oldDoc = map[string]any{"Resources": map[string]any{}}
+			}
+			rawChanges := BuildChangeSet(oldDoc, newDoc, p.handlers)
+			for _, rc := range rawChanges {
+				computedChanges = append(computedChanges, cfChange{
+					Action:            rc.Action,
+					LogicalResourceId: rc.LogicalResourceID,
+					ResourceType:      rc.ResourceType,
+					Replacement:       rc.Replacement,
+					Scope:             rc.Scope,
+				})
+			}
+		}
+	}
+
 	cs := cfChangeSet{
 		ChangeSetId:   nr.ResourceID("cfn-changeset", changeSetKey(stackName, csName)),
 		ChangeSetName: csName,
@@ -102,9 +135,9 @@ func (p *StackProvider) CreateChangeSet(ctx context.Context, nr *model.Normalize
 		StackId:       stackID,
 		Status:        "CREATE_COMPLETE",
 		StatusReason:  "Complete",
-		Changes:       []cfChange{},
+		Changes:       computedChanges,
 		Parameters:    params,
-		TemplateBody:  strParam(nr.Params, "TemplateBody"),
+		TemplateBody:  newTemplateBody,
 		Description:   strParam(nr.Params, "Description"),
 		CreationTime:  time.Now().UTC(),
 	}

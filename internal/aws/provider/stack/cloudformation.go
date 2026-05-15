@@ -29,6 +29,8 @@ type StackProvider struct {
 	// handlers maps AWS resource type (e.g. "AWS::SQS::Queue") to a handler.
 	// If no handler is registered for a type, the resource is metadata-only.
 	handlers map[string]ResourceHandler
+	// exports holds cross-stack export values for Fn::ImportValue resolution.
+	exports *ExportTable
 }
 
 // New constructs a StackProvider.
@@ -36,7 +38,13 @@ func New(resources store.ResourceStore) *StackProvider {
 	return &StackProvider{
 		resources: resources,
 		handlers:  make(map[string]ResourceHandler),
+		exports:   NewExportTable(),
 	}
+}
+
+// Reset wipes all in-memory CloudFormation state (stacks, changesets, exports).
+func (p *StackProvider) Reset() {
+	p.exports.Reset()
 }
 
 // RegisterHandler registers a provisioning handler for an AWS resource type.
@@ -88,6 +96,7 @@ type cfOutput struct {
 	OutputValue string `json:"OutputValue"`
 	Description string `json:"Description"`
 	ExportName  string `json:"ExportName,omitempty"`
+	Condition   string `json:"Condition,omitempty"`
 }
 
 type cfStack struct {
@@ -104,12 +113,52 @@ type cfStack struct {
 }
 
 func (s cfStack) toWire() map[string]any {
+	return s.toWireWithDoc(nil, nil)
+}
+
+// toWireWithDoc produces the DescribeStacks wire response, applying NoEcho masking
+// and filtering conditional outputs. doc and conditions may be nil (no masking/filtering).
+func (s cfStack) toWireWithDoc(doc map[string]any, conditions map[string]bool) map[string]any {
+	// Build NoEcho set from template Parameters section.
+	noEcho := map[string]bool{}
+	if doc != nil {
+		if tplParams, ok := doc["Parameters"].(map[string]any); ok {
+			for paramName, def := range tplParams {
+				if defMap, ok := def.(map[string]any); ok {
+					if ne, ok := defMap["NoEcho"]; ok {
+						switch v := ne.(type) {
+						case bool:
+							if v {
+								noEcho[paramName] = true
+							}
+						case string:
+							if strings.EqualFold(v, "true") {
+								noEcho[paramName] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	params := make([]map[string]any, len(s.Parameters))
 	for i, p := range s.Parameters {
-		params[i] = map[string]any{"ParameterKey": p.ParameterKey, "ParameterValue": p.ParameterValue}
+		val := p.ParameterValue
+		if noEcho[p.ParameterKey] {
+			val = "****"
+		}
+		params[i] = map[string]any{"ParameterKey": p.ParameterKey, "ParameterValue": val}
 	}
-	outputs := make([]map[string]any, len(s.Outputs))
-	for i, o := range s.Outputs {
+
+	// Build outputs, skipping those whose Condition evaluates to false.
+	outputs := make([]map[string]any, 0, len(s.Outputs))
+	for _, o := range s.Outputs {
+		if o.Condition != "" && conditions != nil {
+			if !conditions[o.Condition] {
+				continue
+			}
+		}
 		m := map[string]any{
 			"OutputKey":   o.OutputKey,
 			"OutputValue": o.OutputValue,
@@ -118,8 +167,9 @@ func (s cfStack) toWire() map[string]any {
 		if o.ExportName != "" {
 			m["ExportName"] = o.ExportName
 		}
-		outputs[i] = m
+		outputs = append(outputs, m)
 	}
+
 	return map[string]any{
 		"StackId":      s.StackId,
 		"StackName":    s.StackName,
@@ -158,11 +208,19 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template: " + err.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
+	if isSAMTemplate(doc) {
+		doc, err = TransformSAM(doc)
+		if err != nil {
+			return nil, model.NewProviderError("ValidationError", "SAM transform failed: "+err.Error(), 400)
+		}
+	}
+
 	stackID := nr.ResourceID(model.RTCFNStack, name+"/"+shortID())
 
 	rc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
 	rc.pseudoParams["AWS::StackName"] = name
 	rc.pseudoParams["AWS::StackId"] = stackID
+	rc.exports = p.exports
 
 	// Resolve Parameters.
 	callerParams := parseCallerParams(nr.Params)
@@ -258,6 +316,14 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 		}
 		return nil, err
 	}
+
+	// Register cross-stack exports.
+	for _, o := range outputs {
+		if o.ExportName != "" {
+			p.exports.Register(o.ExportName, o.OutputValue, stackID)
+		}
+	}
+
 	return provider.OK(map[string]any{"StackId": stackID}), nil
 }
 
@@ -268,29 +334,43 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 
-	newTemplate := strParam(nr.Params, "TemplateBody")
-	if newTemplate == "" {
-		newTemplate = s.Template // UsePreviousTemplate
+	newTemplateBody := strParam(nr.Params, "TemplateBody")
+	if newTemplateBody == "" {
+		newTemplateBody = s.Template // UsePreviousTemplate
 	}
-	s.Template = newTemplate
 
-	doc, err := parseTemplate(newTemplate)
+	newDoc, err := parseTemplate(newTemplateBody)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "invalid template: " + err.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	// SAM transform on new template.
+	if isSAMTemplate(newDoc) {
+		newDoc, err = TransformSAM(newDoc)
+		if err != nil {
+			return nil, model.NewProviderError("ValidationError", "SAM transform failed: "+err.Error(), 400)
+		}
+	}
+
+	// Parse old template for diff.
+	oldDoc, _ := parseTemplate(s.Template)
+	if oldDoc == nil {
+		oldDoc = map[string]any{"Resources": map[string]any{}}
 	}
 
 	rc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
 	rc.pseudoParams["AWS::StackName"] = name
 	rc.pseudoParams["AWS::StackId"] = s.StackId
+	rc.exports = p.exports
 
 	callerParams := parseCallerParams(nr.Params)
-	if tplParams, ok := doc["Parameters"].(map[string]any); ok {
+	if tplParams, ok := newDoc["Parameters"].(map[string]any); ok {
 		rc.resolveParameters(tplParams, callerParams)
 	}
-	if m, ok := doc["Mappings"].(map[string]any); ok {
+	if m, ok := newDoc["Mappings"].(map[string]any); ok {
 		rc.mappings = m
 	}
-	if conds, ok := doc["Conditions"].(map[string]any); ok {
+	if conds, ok := newDoc["Conditions"].(map[string]any); ok {
 		rc.evaluateConditions(conds)
 	}
 
@@ -299,7 +379,7 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 		rc.resources[s.Resources[i].LogicalResourceId] = &s.Resources[i]
 	}
 
-	resourcesDef, _ := doc["Resources"].(map[string]any)
+	resourcesDef, _ := newDoc["Resources"].(map[string]any)
 	if len(resourcesDef) == 0 {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "template must have at least one resource", HTTPStatus: http.StatusBadRequest}
 	}
@@ -309,13 +389,36 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 		return nil, &model.ProviderError{Code: "ValidationError", Message: err.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
-	// Build new resource list, keeping or recreating each resource.
+	// Compute diff between old and new templates.
+	changes := BuildChangeSet(oldDoc, newDoc, p.handlers)
+
+	// Build lookup maps for the diff.
 	oldByLogical := make(map[string]cfResource, len(s.Resources))
 	for _, r := range s.Resources {
 		oldByLogical[r.LogicalResourceId] = r
 	}
 
+	// changeMap maps logicalID → ResourceChange for quick lookup.
+	changeMap := make(map[string]ResourceChange, len(changes))
+	for _, c := range changes {
+		changeMap[c.LogicalResourceID] = c
+	}
+
+	// Process removes first (resources no longer in new template).
+	for _, c := range changes {
+		if c.Action != "Remove" {
+			continue
+		}
+		if old, ok := oldByLogical[c.LogicalResourceID]; ok {
+			p.deprovisionResource(ctx, old)
+		}
+	}
+
+	// Build new resource list in topo order.
 	newResources := make([]cfResource, 0, len(order))
+	var updateErr error
+	var updatedSoFar []cfResource
+
 	for _, logicalID := range order {
 		resDef, _ := resourcesDef[logicalID].(map[string]any)
 		resType, _ := resDef["Type"].(string)
@@ -329,18 +432,26 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 		props, _ := resDef["Properties"].(map[string]any)
 		resolvedProps := rc.resolvePropsMap(props)
 
-		if old, exists := oldByLogical[logicalID]; exists && old.ResourceType == resType {
-			// Existing resource: update in-place (metadata).
-			old.Attributes = updateAttributes(old.Attributes, resolvedProps)
-			newResources = append(newResources, old)
-			rc.resources[logicalID] = &newResources[len(newResources)-1]
-		} else {
-			// New resource or type changed: provision it.
-			physicalID, attrs, err := p.provisionResource(ctx, logicalID, resType, resolvedProps, s.StackId, nr)
-			if err != nil {
-				slog.Warn("cloudformation: update resource creation failed", "logical", logicalID, "err", err)
-				physicalID = name + "-" + logicalID
-				attrs = nil
+		change, hasChange := changeMap[logicalID]
+
+		switch {
+		case !hasChange:
+			// Unchanged resource: keep as-is.
+			if old, exists := oldByLogical[logicalID]; exists {
+				newResources = append(newResources, old)
+				rc.resources[logicalID] = &newResources[len(newResources)-1]
+				continue
+			}
+			// Not in old template (shouldn't happen if diff is correct) — provision.
+			fallthrough
+
+		case hasChange && change.Action == "Add":
+			// New resource.
+			physicalID, attrs, provErr := p.provisionResource(ctx, logicalID, resType, resolvedProps, s.StackId, nr)
+			if provErr != nil {
+				slog.Warn("cloudformation: update add failed", "logical", logicalID, "err", provErr)
+				updateErr = fmt.Errorf("resource %s (%s) failed: %w", logicalID, resType, provErr)
+				break
 			}
 			r := cfResource{
 				LogicalResourceId:  logicalID,
@@ -351,28 +462,122 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 			}
 			newResources = append(newResources, r)
 			rc.resources[logicalID] = &newResources[len(newResources)-1]
+			updatedSoFar = append(updatedSoFar, r)
+
+		case hasChange && change.Action == "Modify":
+			old, _ := oldByLogical[logicalID]
+			oldProps := oldPropsFor(oldDoc, logicalID)
+
+			if change.Replacement == "True" {
+				// Replace: delete old, create new.
+				p.deprovisionResource(ctx, old)
+				physicalID, attrs, provErr := p.provisionResource(ctx, logicalID, resType, resolvedProps, s.StackId, nr)
+				if provErr != nil {
+					slog.Warn("cloudformation: update replace failed", "logical", logicalID, "err", provErr)
+					updateErr = fmt.Errorf("resource %s (%s) failed: %w", logicalID, resType, provErr)
+					break
+				}
+				r := cfResource{
+					LogicalResourceId:  logicalID,
+					PhysicalResourceId: physicalID,
+					ResourceType:       resType,
+					ResourceStatus:     "UPDATE_COMPLETE",
+					Attributes:         attrs,
+				}
+				newResources = append(newResources, r)
+				rc.resources[logicalID] = &newResources[len(newResources)-1]
+				updatedSoFar = append(updatedSoFar, r)
+			} else {
+				// In-place update.
+				h, hasHandler := p.handlers[resType]
+				if hasHandler && h.Update != nil {
+					newPhysID, attrs, replacement, updErr := h.Update(ctx, logicalID, old.PhysicalResourceId, oldProps, resolvedProps, nr)
+					if updErr != nil {
+						slog.Warn("cloudformation: update modify failed", "logical", logicalID, "err", updErr)
+						updateErr = fmt.Errorf("resource %s (%s) failed: %w", logicalID, resType, updErr)
+						break
+					}
+					if replacement {
+						// Handler decided replacement is needed.
+						p.deprovisionResource(ctx, old)
+					}
+					r := cfResource{
+						LogicalResourceId:  logicalID,
+						PhysicalResourceId: newPhysID,
+						ResourceType:       resType,
+						ResourceStatus:     "UPDATE_COMPLETE",
+						Attributes:         attrs,
+					}
+					newResources = append(newResources, r)
+					rc.resources[logicalID] = &newResources[len(newResources)-1]
+					updatedSoFar = append(updatedSoFar, r)
+				} else if hasHandler && h.Update == nil {
+					// No Update func: do Delete+Create replacement.
+					p.deprovisionResource(ctx, old)
+					physicalID, attrs, provErr := p.provisionResource(ctx, logicalID, resType, resolvedProps, s.StackId, nr)
+					if provErr != nil {
+						slog.Warn("cloudformation: update recreate failed", "logical", logicalID, "err", provErr)
+						updateErr = fmt.Errorf("resource %s (%s) failed: %w", logicalID, resType, provErr)
+						break
+					}
+					r := cfResource{
+						LogicalResourceId:  logicalID,
+						PhysicalResourceId: physicalID,
+						ResourceType:       resType,
+						ResourceStatus:     "UPDATE_COMPLETE",
+						Attributes:         attrs,
+					}
+					newResources = append(newResources, r)
+					rc.resources[logicalID] = &newResources[len(newResources)-1]
+					updatedSoFar = append(updatedSoFar, r)
+				} else {
+					// Metadata-only: update attributes.
+					old.Attributes = updateAttributes(old.Attributes, resolvedProps)
+					old.ResourceStatus = "UPDATE_COMPLETE"
+					newResources = append(newResources, old)
+					rc.resources[logicalID] = &newResources[len(newResources)-1]
+				}
+			}
+		}
+
+		if updateErr != nil {
+			break
 		}
 	}
 
-	// Delete resources removed in the new template.
-	newByLogical := make(map[string]bool, len(newResources))
-	for _, r := range newResources {
-		newByLogical[r.LogicalResourceId] = true
-	}
-	for _, old := range s.Resources {
-		if !newByLogical[old.LogicalResourceId] {
-			p.deprovisionResource(ctx, old)
+	// On error: attempt rollback of newly-created/modified resources, restore old state.
+	if updateErr != nil {
+		for i := len(updatedSoFar) - 1; i >= 0; i-- {
+			p.deprovisionResource(ctx, updatedSoFar[i])
 		}
+		s.StackStatus = "UPDATE_ROLLBACK_COMPLETE"
+		p.saveStack(ctx, s)
+		return nil, &model.ProviderError{Code: "UpdateStack_ROLLBACK_COMPLETE", Message: updateErr.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
-	outputs := p.resolveOutputs(doc, rc, name)
+	outputs := p.resolveOutputs(newDoc, rc, name)
 
 	s.Resources = newResources
 	s.Outputs = outputs
 	s.StackStatus = "UPDATE_COMPLETE"
 	s.Parameters = paramsToSlice(rc.params)
+	s.Template = newTemplateBody
 	p.saveStack(ctx, s)
 	return provider.OK(map[string]any{"StackId": s.StackId}), nil
+}
+
+// oldPropsFor extracts the Properties map for a logical resource from an old template doc.
+func oldPropsFor(oldDoc map[string]any, logicalID string) map[string]any {
+	resources, _ := oldDoc["Resources"].(map[string]any)
+	if resources == nil {
+		return nil
+	}
+	res, _ := resources[logicalID].(map[string]any)
+	if res == nil {
+		return nil
+	}
+	props, _ := res["Properties"].(map[string]any)
+	return props
 }
 
 func (p *StackProvider) DeleteStack(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -386,6 +591,10 @@ func (p *StackProvider) DeleteStack(ctx context.Context, nr *model.NormalizedReq
 
 	s, err := p.loadStack(ctx, name)
 	if err == nil {
+		// Guard: reject if any exported value is imported by another stack.
+		if exportErr := p.exports.DeleteStack(s.StackId); exportErr != nil {
+			return nil, &model.ProviderError{Code: "ExportInUseException", Message: exportErr.Error(), HTTPStatus: http.StatusBadRequest}
+		}
 		// Delete resources in reverse creation order.
 		p.rollback(ctx, s.Resources)
 	}
@@ -411,14 +620,18 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 		if err != nil {
 			return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 		}
-		return provider.OK(map[string]any{"Stacks": []map[string]any{s.toWire()}}), nil
+		doc, _ := parseTemplate(s.Template)
+		conds := p.stackConditions(doc, s)
+		return provider.OK(map[string]any{"Stacks": []map[string]any{s.toWireWithDoc(doc, conds)}}), nil
 	}
 	entries, _ := p.resources.List(ctx, rtStack, "")
 	stacks := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var s cfStack
 		json.Unmarshal(e.Data, &s)
-		stacks = append(stacks, s.toWire())
+		doc, _ := parseTemplate(s.Template)
+		conds := p.stackConditions(doc, s)
+		stacks = append(stacks, s.toWireWithDoc(doc, conds))
 	}
 	return provider.OK(map[string]any{"Stacks": stacks}), nil
 }
@@ -511,12 +724,18 @@ func (p *StackProvider) resolveOutputs(doc map[string]any, rc *resolveCtx, stack
 		if !ok {
 			continue
 		}
+		// Skip outputs whose Condition evaluates to false.
+		condName, _ := m["Condition"].(string)
+		if condName != "" && !rc.conditions[condName] {
+			continue
+		}
 		value := fmt.Sprintf("%v", rc.Resolve(m["Value"]))
 		desc, _ := m["Description"].(string)
 		o := cfOutput{
 			OutputKey:   key,
 			OutputValue: value,
 			Description: desc,
+			Condition:   condName,
 		}
 		if export, ok := m["Export"].(map[string]any); ok {
 			o.ExportName = fmt.Sprintf("%v", rc.Resolve(export["Name"]))
@@ -528,13 +747,13 @@ func (p *StackProvider) resolveOutputs(doc map[string]any, rc *resolveCtx, stack
 
 // ─── Template parsing ─────────────────────────────────────────────────────────
 
-// parseTemplate unmarshals a CloudFormation template from JSON.
+// parseTemplate unmarshals a CloudFormation template from JSON or YAML.
 func parseTemplate(body string) (map[string]any, error) {
 	if body == "" {
 		return nil, fmt.Errorf("empty template body")
 	}
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+	doc, err := ParseTemplate([]byte(body))
+	if err != nil {
 		return nil, err
 	}
 	return doc, nil
@@ -615,5 +834,24 @@ func updateAttributes(old map[string]any, props map[string]any) map[string]any {
 
 func shortID() string {
 	return fmt.Sprintf("%016x", time.Now().UnixNano())
+}
+
+// stackConditions rebuilds the conditions map for a stored stack by re-evaluating
+// the template's Conditions section with the stack's saved parameter values.
+// Returns nil if doc is nil or has no Conditions section.
+func (p *StackProvider) stackConditions(doc map[string]any, s cfStack) map[string]bool {
+	if doc == nil {
+		return nil
+	}
+	condsDef, ok := doc["Conditions"].(map[string]any)
+	if !ok || len(condsDef) == 0 {
+		return nil
+	}
+	rc := newResolveCtx("", "", 0)
+	for _, param := range s.Parameters {
+		rc.params[param.ParameterKey] = param.ParameterValue
+	}
+	rc.evaluateConditions(condsDef)
+	return rc.conditions
 }
 

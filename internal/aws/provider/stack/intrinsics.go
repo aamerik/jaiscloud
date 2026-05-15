@@ -2,7 +2,10 @@ package stack
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -13,6 +16,7 @@ type resolveCtx struct {
 	conditions   map[string]bool        // Conditions: name → bool
 	mappings     map[string]any         // Mappings section
 	pseudoParams map[string]string      // AWS::Region, AWS::AccountId, etc.
+	exports      *ExportTable           // cross-stack exports for Fn::ImportValue
 }
 
 // newResolveCtx builds a resolveCtx from a parsed template and runtime values.
@@ -70,6 +74,41 @@ func (rc *resolveCtx) Resolve(val any) any {
 				return rc.resolveEquals(fnVal)
 			case "Fn::Length":
 				return rc.resolveLength(fnVal)
+			case "Fn::GetAZs":
+				region, _ := fnVal.(string)
+				if region == "" {
+					region = rc.pseudoParams["AWS::Region"]
+				}
+				return []any{region + "a", region + "b", region + "c"}
+			case "Fn::Cidr":
+				args, _ := fnVal.([]any)
+				if len(args) < 3 {
+					return nil
+				}
+				resolvedArgs := make([]any, len(args))
+				for i, a := range args {
+					resolvedArgs[i] = rc.Resolve(a)
+				}
+				block, _ := resolvedArgs[0].(string)
+				count := toIntVal(resolvedArgs[1])
+				cidrBits := toIntVal(resolvedArgs[2])
+				result, _ := computeCIDRs(block, count, cidrBits)
+				return result
+			case "Fn::ToJsonString":
+				resolved := rc.Resolve(fnVal)
+				b, err := json.Marshal(resolved)
+				if err != nil {
+					return nil
+				}
+				return string(b)
+			case "Fn::ImportValue":
+				name, _ := fnVal.(string)
+				if rc.exports != nil {
+					if val, ok := rc.exports.Get(name); ok {
+						return val
+					}
+				}
+				return "${" + name + "}"
 			case "Condition":
 				name := fmt.Sprintf("%v", fnVal)
 				if b, ok := rc.conditions[name]; ok {
@@ -152,6 +191,10 @@ func (rc *resolveCtx) resolveSub(val any) string {
 			if vv, ok := localVars[key]; ok {
 				return fmt.Sprintf("%v", rc.Resolve(vv))
 			}
+		}
+		// Handle dotted attribute: ${LogicalId.AttrName} → Fn::GetAtt
+		if dot := strings.IndexByte(key, '.'); dot >= 0 {
+			return rc.resolveGetAtt([]any{key[:dot], key[dot+1:]})
 		}
 		return rc.resolveRef(key)
 	})
@@ -369,6 +412,59 @@ func (rc *resolveCtx) resolveParameters(tplParams map[string]any, callerValues m
 		if _, exists := rc.params[k]; !exists {
 			rc.params[k] = v
 		}
+	}
+}
+
+// ─── Integer helper ───────────────────────────────────────────────────────────
+
+func toIntVal(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case float64:
+		return int(x)
+	case string:
+		n, _ := strconv.Atoi(x)
+		return n
+	}
+	return 0
+}
+
+// ─── CIDR helpers ─────────────────────────────────────────────────────────────
+
+func computeCIDRs(block string, count, cidrBits int) ([]any, error) {
+	_, network, err := net.ParseCIDR(block)
+	if err != nil {
+		return nil, fmt.Errorf("Fn::Cidr: invalid block %q: %w", block, err)
+	}
+	ones, bits := network.Mask.Size()
+	newOnes := bits - cidrBits
+	if newOnes <= ones {
+		return nil, fmt.Errorf("Fn::Cidr: cidrBits %d too large for /%d", cidrBits, ones)
+	}
+	var results []any
+	ip := cloneIP(network.IP)
+	for i := 0; i < count; i++ {
+		subnet := &net.IPNet{IP: cloneIP(ip), Mask: net.CIDRMask(newOnes, bits)}
+		results = append(results, subnet.String())
+		incrementIP(ip, cidrBits)
+	}
+	return results, nil
+}
+
+func cloneIP(ip net.IP) net.IP {
+	out := make(net.IP, len(ip))
+	copy(out, ip)
+	return out
+}
+
+func incrementIP(ip net.IP, cidrBits int) {
+	// increment by 2^cidrBits
+	carry := 1 << uint(cidrBits)
+	for i := len(ip) - 1; i >= 0 && carry > 0; i-- {
+		val := int(ip[i]) + carry
+		ip[i] = byte(val & 0xff)
+		carry = val >> 8
 	}
 }
 
