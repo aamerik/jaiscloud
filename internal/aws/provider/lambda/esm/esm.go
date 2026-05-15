@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 	"log/slog"
@@ -243,7 +244,21 @@ func (p *Provider) handleListESMs(ctx context.Context, nr *model.NormalizedReque
 	if mappings == nil {
 		mappings = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"EventSourceMappings": mappings}), nil
+
+	maxResults := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(mappings, maxResults, token, "ListEventSourceMappings")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValueException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"EventSourceMappings": page}
+	if next != "" {
+		data["NextMarker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *Provider) handleUpdateESM(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

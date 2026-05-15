@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 )
 
@@ -140,15 +141,30 @@ func (p *ParameterProvider) GetParametersByPath(ctx context.Context, nr *model.N
 	if err != nil {
 		return nil, fmt.Errorf("ssm: get parameters by path: %w", err)
 	}
+
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(entries, maxResults, token, "GetParametersByPath")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidNextToken", pgErr.Error(), 400)
+	}
+
 	var items []map[string]any
-	for _, e := range entries {
+	for _, e := range page {
 		value, err := p.decryptValue(ctx, e, withDecryption)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, paramDetail(e, value, nr))
 	}
-	return provider.OK(map[string]any{"Parameters": items}), nil
+	respData := map[string]any{"Parameters": items}
+	if next != "" {
+		respData["NextToken"] = next
+	}
+	return provider.OK(respData), nil
 }
 
 func (p *ParameterProvider) DeleteParameter(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -183,8 +199,19 @@ func (p *ParameterProvider) DescribeParameters(ctx context.Context, nr *model.No
 	if err != nil {
 		return nil, fmt.Errorf("ssm: describe parameters: %w", err)
 	}
-	items := make([]map[string]any, 0, len(entries))
-	for _, e := range entries {
+
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(entries, maxResults, token, "DescribeParameters")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidNextToken", pgErr.Error(), 400)
+	}
+
+	items := make([]map[string]any, 0, len(page))
+	for _, e := range page {
 		items = append(items, map[string]any{
 			"Name":        e.Name,
 			"Type":        e.Type,
@@ -192,7 +219,11 @@ func (p *ParameterProvider) DescribeParameters(ctx context.Context, nr *model.No
 			"Version":     e.Version,
 		})
 	}
-	return provider.OK(map[string]any{"Parameters": items}), nil
+	respData := map[string]any{"Parameters": items}
+	if next != "" {
+		respData["NextToken"] = next
+	}
+	return provider.OK(respData), nil
 }
 
 func (p *ParameterProvider) GetParameterHistory(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

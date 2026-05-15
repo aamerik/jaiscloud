@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -145,12 +146,22 @@ func (p *DNSProvider) ListHostedZones(ctx context.Context, nr *model.NormalizedR
 		json.Unmarshal(e.Data, &hz)
 		zones = append(zones, zoneToWire(hz))
 	}
+	maxResults := 100
 	if maxStr, _ := nr.Params["MaxItems"].(string); maxStr != "" {
-		if max, err := strconv.Atoi(maxStr); err == nil && max > 0 && max < len(zones) {
-			zones = zones[:max]
+		if max, convErr := strconv.Atoi(maxStr); convErr == nil && max > 0 {
+			maxResults = max
 		}
 	}
-	return provider.OK(map[string]any{"HostedZones": zones}), nil
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(zones, maxResults, token, "ListHostedZones")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidInput", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"HostedZones": page}
+	if next != "" {
+		data["NextMarker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *DNSProvider) DeleteHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

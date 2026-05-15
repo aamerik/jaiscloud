@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -99,7 +100,20 @@ func (p *EKSProvider) ListAddons(ctx context.Context, nr *model.NormalizedReques
 			names = append(names, a.AddonName)
 		}
 	}
-	return provider.OK(map[string]any{"addons": names}), nil
+	maxResults := 100
+	if v, ok := nr.Params["maxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["nextToken"].(string)
+	page, next, pgErr := pagination.Paginate(names, maxResults, token, "ListAddons")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"addons": page}
+	if next != "" {
+		data["nextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *EKSProvider) DeleteAddon(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

@@ -14,6 +14,7 @@ import (
 
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 	sqsstore "jaiscloud/internal/store/aws/sqs"
@@ -210,7 +211,20 @@ func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.Normalize
 			"State":              rule.State,
 		})
 	}
-	return provider.OK(map[string]any{"Rules": rules}), nil
+	maxResults := 100
+	if v, ok := nr.Params["Limit"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, err := pagination.Paginate(rules, maxResults, token, "ListRules")
+	if err != nil {
+		return nil, model.NewProviderError("InvalidParameterException", err.Error(), 400)
+	}
+	data := map[string]any{"Rules": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *EventBridgeProvider) EnableRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -341,7 +355,20 @@ func (p *EventBridgeProvider) ListTargetsByRule(ctx context.Context, nr *model.N
 		}
 		targets = append(targets, map[string]any{"Id": td.ID, "Arn": td.Arn})
 	}
-	return provider.OK(map[string]any{"Targets": targets}), nil
+	maxResults := 100
+	if v, ok := nr.Params["Limit"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, err := pagination.Paginate(targets, maxResults, token, "ListTargetsByRule")
+	if err != nil {
+		return nil, model.NewProviderError("InvalidParameterException", err.Error(), 400)
+	}
+	data := map[string]any{"Targets": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── PutEvents ────────────────────────────────────────────────────────────────
@@ -759,9 +786,9 @@ func (p *EventBridgeProvider) DescribeEventBus(ctx context.Context, nr *model.No
 
 func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	namePrefix := strParam(nr.Params, "NamePrefix")
-	limit := 50
+	maxResults := 100
 	if lv, ok := nr.Params["Limit"].(float64); ok && lv > 0 {
-		limit = int(lv)
+		maxResults = int(lv)
 	}
 	entries, _ := p.resources.List(ctx, resTypeBus, "")
 	buses := make([]map[string]any, 0, len(entries)+1)
@@ -778,10 +805,16 @@ func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.Norm
 			buses = append(buses, map[string]any{"Name": bd.Name, "Arn": bd.Arn})
 		}
 	}
-	if len(buses) > limit {
-		buses = buses[:limit]
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, err := pagination.Paginate(buses, maxResults, token, "ListEventBuses")
+	if err != nil {
+		return nil, model.NewProviderError("InvalidParameterException", err.Error(), 400)
 	}
-	return provider.OK(map[string]any{"EventBuses": buses}), nil
+	data := map[string]any{"EventBuses": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────

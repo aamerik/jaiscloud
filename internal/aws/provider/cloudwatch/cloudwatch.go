@@ -16,6 +16,7 @@ import (
 
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -256,7 +257,7 @@ func (p *Provider) ListMetrics(_ context.Context, nr *model.NormalizedRequest) (
 	defer p.mu.Unlock()
 	nsFilter, _ := nr.Params["Namespace"].(string)
 	nameFilter, _ := nr.Params["MetricName"].(string)
-	out := make([]any, 0, len(p.metrics))
+	all := make([]any, 0, len(p.metrics))
 	for _, r := range p.metrics {
 		if nsFilter != "" && r.namespace != nsFilter {
 			continue
@@ -264,9 +265,19 @@ func (p *Provider) ListMetrics(_ context.Context, nr *model.NormalizedRequest) (
 		if nameFilter != "" && r.name != nameFilter {
 			continue
 		}
-		out = append(out, map[string]any{"Namespace": r.namespace, "MetricName": r.name})
+		all = append(all, map[string]any{"Namespace": r.namespace, "MetricName": r.name})
 	}
-	return provider.OK(map[string]any{"__action__": "ListMetrics", "Metrics": out}), nil
+	maxResults := 100
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, err := pagination.Paginate(all, maxResults, token, "ListMetrics")
+	if err != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", err.Error(), 400)
+	}
+	data := map[string]any{"__action__": "ListMetrics", "Metrics": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -335,7 +346,20 @@ func (p *Provider) DescribeAlarms(ctx context.Context, nr *model.NormalizedReque
 		}
 		out = append(out, params)
 	}
-	return provider.OK(map[string]any{"__action__": "DescribeAlarms", "MetricAlarms": out}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxRecords"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(out, maxResults, token, "DescribeAlarms")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	respData := map[string]any{"__action__": "DescribeAlarms", "MetricAlarms": page}
+	if next != "" {
+		respData["NextToken"] = next
+	}
+	return provider.OK(respData), nil
 }
 
 func (p *Provider) DescribeAlarmsForMetric(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
