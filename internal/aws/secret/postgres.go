@@ -130,6 +130,24 @@ func (s *PostgresSecretStore) PutVersion(ctx context.Context, v VersionEntry) er
 	if err != nil {
 		return fmt.Errorf("sm postgres: put version: %w", err)
 	}
+
+	// 3.7.2 — prune unlabeled versions (empty Stages array) beyond 100 oldest.
+	_, err = tx.Exec(ctx, `
+		DELETE FROM jc_sm_versions
+		WHERE secret_id=$1
+		  AND cardinality(stages) = 0
+		  AND version_id NOT IN (
+		    SELECT version_id FROM jc_sm_versions
+		    WHERE secret_id=$1 AND cardinality(stages) = 0
+		    ORDER BY created_at DESC
+		    LIMIT 100
+		  )`,
+		v.SecretID,
+	)
+	if err != nil {
+		return fmt.Errorf("sm postgres: prune versions: %w", err)
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -203,6 +221,21 @@ func (s *PostgresSecretStore) UpdateVersionStages(ctx context.Context, secretID,
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrVersionNotFound
+	}
+	return nil
+}
+
+func (s *PostgresSecretStore) DeleteVersionsByIDs(ctx context.Context, secretID string, versionIDs []string) error {
+	if len(versionIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_sm_versions
+		WHERE secret_id=$1 AND version_id = ANY($2)`,
+		secretID, versionIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("sm postgres: delete versions: %w", err)
 	}
 	return nil
 }

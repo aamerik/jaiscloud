@@ -477,7 +477,7 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []Tr
 	anyFailed := false
 	for i, op := range ops {
 		if op.Cond.ConditionExpression == "" && op.Type != "ConditionCheck" {
-			reasons[i] = CancellationReason{Code: "None"}
+			reasons[i] = CancellationReason{Code: CancelCodeNone}
 			continue
 		}
 		existing := s.tableMap(op.Table)[op.PKHash]
@@ -486,7 +486,7 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []Tr
 		}
 		condExpr := op.Cond.ConditionExpression
 		if op.Type == "ConditionCheck" && condExpr == "" {
-			reasons[i] = CancellationReason{Code: "None"}
+			reasons[i] = CancellationReason{Code: CancelCodeNone}
 			continue
 		}
 		ok, err := matchesFilter(existing, condExpr, op.Cond.ExpressionAttributeNames, op.Cond.ExpressionAttributeValues)
@@ -494,10 +494,19 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []Tr
 			return nil, err
 		}
 		if !ok {
-			reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+			reason := CancellationReason{Code: CancelCodeConditionalCheckFailed, Message: "The conditional request failed"}
+			if op.ReturnValuesOnConditionCheckFailure == "ALL_OLD" {
+				// Attach current item (may be empty if it doesn't exist).
+				if t := s.tables[op.Table]; t != nil {
+					if cur := t[op.PKHash]; cur != nil {
+						reason.Item = copyItem(cur)
+					}
+				}
+			}
+			reasons[i] = reason
 			anyFailed = true
 		} else {
-			reasons[i] = CancellationReason{Code: "None"}
+			reasons[i] = CancellationReason{Code: CancelCodeNone}
 		}
 	}
 	if anyFailed {
@@ -702,18 +711,33 @@ func buildAttrTypes(schema TableSchema) map[string]string {
 }
 
 // extractEqValue finds the equality value for attrName in a key condition expression.
+// Handles both "attr = :val" (spaced) and "attr=:val" (no spaces).
 func extractEqValue(expr, attrName string, names map[string]string, values map[string]any) (string, bool) {
 	for _, cond := range splitAND(expr) {
 		cond = strings.TrimSpace(cond)
-		if !strings.Contains(cond, " = ") {
+		// Try spaced form first, then no-space form.
+		var lhs, rhs string
+		if idx := strings.Index(cond, " = "); idx >= 0 {
+			lhs = strings.TrimSpace(cond[:idx])
+			rhs = strings.TrimSpace(cond[idx+3:])
+		} else if idx := strings.Index(cond, "="); idx >= 0 {
+			// Ensure not <> or <= or >=
+			if idx > 0 && (cond[idx-1] == '<' || cond[idx-1] == '>') {
+				continue
+			}
+			if idx+1 < len(cond) && (cond[idx+1] == '>' || cond[idx+1] == '=') {
+				continue
+			}
+			lhs = strings.TrimSpace(cond[:idx])
+			rhs = strings.TrimSpace(cond[idx+1:])
+		} else {
 			continue
 		}
-		parts := strings.SplitN(cond, " = ", 2)
-		attr := resolveExprName(strings.TrimSpace(parts[0]), names)
+		attr := resolveExprName(lhs, names)
 		if attr != attrName {
 			continue
 		}
-		val := resolveExprValue(strings.TrimSpace(parts[1]), values)
+		val := resolveExprValue(rhs, values)
 		s, ok := AttrVal(val)
 		if !ok {
 			s = fmt.Sprintf("%v", extractDynamoString(val))

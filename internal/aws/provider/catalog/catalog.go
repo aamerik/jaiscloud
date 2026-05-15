@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -292,7 +293,20 @@ func (p *GlueProvider) GetDatabases(ctx context.Context, nr *model.NormalizedReq
 		json.Unmarshal(e.Data, &db)
 		dbs = append(dbs, dbToWire(db))
 	}
-	return provider.OK(map[string]any{"DatabaseList": dbs}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(dbs, maxResults, token, "GetDatabases")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidInputException", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"DatabaseList": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *GlueProvider) UpdateDatabase(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -420,7 +434,20 @@ func (p *GlueProvider) GetTables(ctx context.Context, nr *model.NormalizedReques
 			tables = append(tables, tableToWire(t))
 		}
 	}
-	return provider.OK(map[string]any{"TableList": tables}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(tables, maxResults, token, "GetTables")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidInputException", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"TableList": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // UpdateTable supports Iceberg metadata_location CAS:

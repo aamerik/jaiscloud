@@ -305,3 +305,213 @@ func TestKeyProvider_ScheduleKeyDeletion_AlreadyPending(t *testing.T) {
 	}))
 	require.Error(t, err)
 }
+
+// ─── Phase E.6: KMS hardening ─────────────────────────────────────────────────
+
+// Item 3.8.1 — Decrypt enforces caller KeyId.
+func TestKeyProvider_Decrypt_KeyIdMismatch(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	// Create two keys.
+	data1 := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID1 := data1["KeyMetadata"].(map[string]any)["KeyId"].(string)
+	data2 := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID2 := data2["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	// Encrypt with key1.
+	encData := callKey(t, routes, "Encrypt", map[string]any{
+		"KeyId":     keyID1,
+		"Plaintext": base64.StdEncoding.EncodeToString([]byte("secret")),
+	})
+	ctB64 := encData["CiphertextBlob"].(string)
+
+	// Decrypt with correct key — must succeed.
+	decData := callKey(t, routes, "Decrypt", map[string]any{
+		"CiphertextBlob": ctB64,
+		"KeyId":          keyID1,
+	})
+	require.NotEmpty(t, decData["Plaintext"])
+
+	// Decrypt with wrong key — must return IncorrectKeyException.
+	_, err := routes["Key.Decrypt"](context.Background(), nr(map[string]any{
+		"CiphertextBlob": ctB64,
+		"KeyId":          keyID2,
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "IncorrectKeyException")
+}
+
+// Decrypt without KeyId param must still work (backward compat).
+func TestKeyProvider_Decrypt_NoKeyIdParam(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	encData := callKey(t, routes, "Encrypt", map[string]any{
+		"KeyId":     keyID,
+		"Plaintext": base64.StdEncoding.EncodeToString([]byte("no-keyid-test")),
+	})
+	decData := callKey(t, routes, "Decrypt", map[string]any{
+		"CiphertextBlob": encData["CiphertextBlob"].(string),
+	})
+	pt, _ := base64.StdEncoding.DecodeString(decData["Plaintext"].(string))
+	assert.Equal(t, []byte("no-keyid-test"), pt)
+}
+
+// Item 3.8.2 — RetireGrant by token.
+func TestKeyProvider_RetireGrant_ByToken(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	grantData := callKey(t, routes, "CreateGrant", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/test",
+		"Operations":       []any{"Encrypt"},
+	})
+	grantToken := grantData["GrantToken"].(string)
+	require.NotEmpty(t, grantToken)
+
+	// Retire by token.
+	callKey(t, routes, "RetireGrant", map[string]any{
+		"GrantToken": grantToken,
+	})
+
+	// Grant must be gone.
+	listData := callKey(t, routes, "ListGrants", map[string]any{"KeyId": keyID})
+	assert.Empty(t, listData["Grants"])
+}
+
+func TestKeyProvider_RetireGrant_UnknownToken(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	_, err := routes["Key.RetireGrant"](context.Background(), nr(map[string]any{
+		"GrantToken": "nonexistent-token",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NotFoundException")
+}
+
+// Item 3.8.3 — ListGrants filters.
+func TestKeyProvider_ListGrants_FilterByGrantId(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	g1 := callKey(t, routes, "CreateGrant", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/roleA",
+		"Operations":       []any{"Encrypt"},
+	})
+	callKey(t, routes, "CreateGrant", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/roleB",
+		"Operations":       []any{"Decrypt"},
+	})
+
+	grantID1 := g1["GrantId"].(string)
+
+	// Filter by GrantId.
+	listData := callKey(t, routes, "ListGrants", map[string]any{
+		"KeyId":   keyID,
+		"GrantId": grantID1,
+	})
+	grants := listData["Grants"].([]map[string]any)
+	require.Len(t, grants, 1)
+	assert.Equal(t, grantID1, grants[0]["GrantId"])
+}
+
+func TestKeyProvider_ListGrants_FilterByGranteePrincipal(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	callKey(t, routes, "CreateGrant", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/roleA",
+		"Operations":       []any{"Encrypt"},
+	})
+	callKey(t, routes, "CreateGrant", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/roleB",
+		"Operations":       []any{"Decrypt"},
+	})
+
+	// Filter by GranteePrincipal.
+	listData := callKey(t, routes, "ListGrants", map[string]any{
+		"KeyId":            keyID,
+		"GranteePrincipal": "arn:aws:iam::000000000000:role/roleA",
+	})
+	grants := listData["Grants"].([]map[string]any)
+	require.Len(t, grants, 1)
+	assert.Equal(t, "arn:aws:iam::000000000000:role/roleA", grants[0]["GranteePrincipal"])
+}
+
+// Item 3.8.4 — RSA plaintext size pre-validation.
+func TestKeyProvider_Encrypt_RSA_PlaintextTooLong(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{
+		"KeySpec":  "RSA_2048",
+		"KeyUsage": "ENCRYPT_DECRYPT",
+	})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	// RSA_2048 + RSAES_OAEP_SHA_256: max = 256 - 66 = 190 bytes. Use 191 bytes.
+	tooLong := make([]byte, 191)
+	_, err := routes["Key.Encrypt"](context.Background(), nr(map[string]any{
+		"KeyId":               keyID,
+		"Plaintext":           base64.StdEncoding.EncodeToString(tooLong),
+		"EncryptionAlgorithm": "RSAES_OAEP_SHA_256",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidPlaintextException")
+}
+
+func TestKeyProvider_Encrypt_RSA_PlaintextAtLimit(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{
+		"KeySpec":  "RSA_2048",
+		"KeyUsage": "ENCRYPT_DECRYPT",
+	})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	// RSA_2048 + RSAES_OAEP_SHA_256: max = 256 - 66 = 190 bytes. Exactly 190 must succeed.
+	atLimit := make([]byte, 190)
+	encData := callKey(t, routes, "Encrypt", map[string]any{
+		"KeyId":               keyID,
+		"Plaintext":           base64.StdEncoding.EncodeToString(atLimit),
+		"EncryptionAlgorithm": "RSAES_OAEP_SHA_256",
+	})
+	require.NotEmpty(t, encData["CiphertextBlob"])
+}
+
+func TestKeyProvider_Encrypt_Symmetric_PlaintextTooLong(t *testing.T) {
+	p, _ := newKeyProvider(t)
+	routes := p.Routes()
+
+	data := callKey(t, routes, "CreateKey", map[string]any{})
+	keyID := data["KeyMetadata"].(map[string]any)["KeyId"].(string)
+
+	// Symmetric max = 4096 bytes. Use 4097.
+	tooLong := make([]byte, 4097)
+	_, err := routes["Key.Encrypt"](context.Background(), nr(map[string]any{
+		"KeyId":     keyID,
+		"Plaintext": base64.StdEncoding.EncodeToString(tooLong),
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidPlaintextException")
+}

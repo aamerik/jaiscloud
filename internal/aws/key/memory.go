@@ -147,6 +147,17 @@ func (s *MemoryKeyStore) GetGrant(_ context.Context, grantID string) (GrantEntry
 	return e, nil
 }
 
+func (s *MemoryKeyStore) GetGrantByToken(_ context.Context, token string) (GrantEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, g := range s.grants {
+		if g.Token == token {
+			return g, nil
+		}
+	}
+	return GrantEntry{}, ErrGrantNotFound
+}
+
 func (s *MemoryKeyStore) RevokeGrant(_ context.Context, grantID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

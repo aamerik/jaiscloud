@@ -187,6 +187,7 @@ func paramMeta(e ParameterEntry) map[string]any {
 		"type":        e.Type,
 		"description": e.Description,
 		"kms_key_id":  e.KMSKeyID,
+		"tier":        e.Tier,
 		"tags":        e.Tags,
 	}
 }
@@ -196,12 +197,14 @@ func unmarshalParamMeta(e *ParameterEntry, data []byte) {
 		Type        string            `json:"type"`
 		Description string            `json:"description"`
 		KMSKeyID    string            `json:"kms_key_id"`
+		Tier        string            `json:"tier"`
 		Tags        map[string]string `json:"tags"`
 	}
 	_ = json.Unmarshal(data, &meta)
 	e.Type = meta.Type
 	e.Description = meta.Description
 	e.KMSKeyID = meta.KMSKeyID
+	e.Tier = meta.Tier
 	e.Tags = meta.Tags
 }
 

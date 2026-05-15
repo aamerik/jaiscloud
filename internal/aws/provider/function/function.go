@@ -16,6 +16,7 @@ import (
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/reqctx"
 	"jaiscloud/internal/store"
@@ -467,7 +468,20 @@ func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.Normaliz
 			functions = append(functions, cfgToWire(cfg))
 		}
 	}
-	return provider.OK(map[string]any{"Functions": functions}), nil
+	maxResults := 50
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(functions, maxResults, token, "ListFunctions")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValueException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Functions": page}
+	if next != "" {
+		data["NextMarker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -745,7 +759,20 @@ func (p *FunctionProvider) ListVersionsByFunction(ctx context.Context, nr *model
 	latestWire["Version"] = "$LATEST"
 	versions = append(versions, latestWire)
 
-	return provider.OK(map[string]any{"Versions": versions}), nil
+	maxResults := 50
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(versions, maxResults, token, "ListVersionsByFunction")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValueException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Versions": page}
+	if next != "" {
+		data["NextMarker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── Aliases ──────────────────────────────────────────────────────────────────
@@ -857,7 +884,20 @@ func (p *FunctionProvider) ListAliases(ctx context.Context, nr *model.Normalized
 			aliases = append(aliases, aliasToWire(a))
 		}
 	}
-	return provider.OK(map[string]any{"Aliases": aliases}), nil
+	maxResults := 50
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(aliases, maxResults, token, "ListAliases")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValueException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Aliases": page}
+	if next != "" {
+		data["NextMarker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func aliasToWire(a aliasEntry) map[string]any {

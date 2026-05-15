@@ -147,14 +147,37 @@ func (p *SecretProvider) UpdateSecret(ctx context.Context, nr *model.NormalizedR
 	if k, ok := nr.Params["KmsKeyId"].(string); ok {
 		e.KMSKeyID = k
 	}
+
+	// 3.7.1 — store new secret value when SecretString or SecretBinary is present.
+	var newVersionID string
+	if sv, _ := nr.Params["SecretString"].(string); sv != "" {
+		newVersionID = newID()
+		if err := p.putValueWithStages(ctx, e.SecretID, e.KMSKeyID, []byte(sv), e.Name, newVersionID, false, []string{"AWSCURRENT"}); err != nil {
+			return nil, err
+		}
+	} else if svb, _ := nr.Params["SecretBinary"].(string); svb != "" {
+		raw, decErr := base64.StdEncoding.DecodeString(svb)
+		if decErr != nil {
+			return nil, model.NewProviderError("ValidationException", "SecretBinary must be base64-encoded", 400)
+		}
+		newVersionID = newID()
+		if err := p.putValueWithStages(ctx, e.SecretID, e.KMSKeyID, raw, e.Name, newVersionID, true, []string{"AWSCURRENT"}); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := p.store.UpdateSecret(ctx, e); err != nil {
 		return nil, fmt.Errorf("sm: update secret: %w", err)
 	}
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
-	return provider.OK(map[string]any{
+	resp := map[string]any{
 		"ARN":  secretARN,
 		"Name": e.Name,
-	}), nil
+	}
+	if newVersionID != "" {
+		resp["VersionId"] = newVersionID
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *SecretProvider) DeleteSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -235,10 +258,7 @@ func (p *SecretProvider) ListSecrets(ctx context.Context, nr *model.NormalizedRe
 	}
 	items := make([]map[string]any, 0, len(secrets))
 	for _, e := range secrets {
-		items = append(items, map[string]any{
-			"ARN":  nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
-			"Name": e.Name,
-		})
+		items = append(items, p.secretSummary(e, nr))
 	}
 	return provider.OK(map[string]any{"SecretList": items}), nil
 }
@@ -324,6 +344,13 @@ func (p *SecretProvider) GetSecretValue(ctx context.Context, nr *model.Normalize
 	pt, err := p.decrypt(ctx, e.KMSKeyID, v.SecretBinary, e.Name)
 	if err != nil {
 		return nil, fmt.Errorf("sm: decrypt value: %w", err)
+	}
+
+	// 3.7.4 — update LastAccessedDate to today midnight UTC (date precision, skip if already today).
+	todayMidnight := nr.Clock.Now().UTC().Truncate(24 * time.Hour)
+	if e.LastAccessedDate == nil || !e.LastAccessedDate.Equal(todayMidnight) {
+		e.LastAccessedDate = &todayMidnight
+		_ = p.store.UpdateSecret(ctx, e)
 	}
 
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
@@ -707,15 +734,63 @@ func (p *SecretProvider) secretDetail(e SecretEntry, versions []VersionEntry, nr
 	for k, v := range e.Tags {
 		tags = append(tags, map[string]string{"Key": k, "Value": v})
 	}
+	// 3.7.3 — full DescribeSecret shape.
 	d := map[string]any{
-		"ARN":              nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
-		"Name":             e.Name,
-		"Description":      e.Description,
-		"KmsKeyId":         e.KMSKeyID,
-		"Tags":             tags,
+		"ARN":                nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
+		"Name":               e.Name,
+		"Description":        e.Description,
+		"KmsKeyId":           e.KMSKeyID,
+		"Tags":               tags,
 		"VersionIdsToStages": versionIDs,
-		"CreatedDate":      e.CreatedAt.Unix(),
-		"LastChangedDate":  e.UpdatedAt.Unix(),
+		"CreatedDate":        e.CreatedAt.Unix(),
+		"LastChangedDate":    e.UpdatedAt.Unix(),
+		"RotationEnabled":    e.RotationEnabled,
+		"RotationLambdaARN":  e.RotationLambdaARN,
+		"ReplicationStatus":  []any{},
+		"OwningService":      "",
+	}
+	if e.LastRotatedDate != nil {
+		d["LastRotatedDate"] = e.LastRotatedDate.UnixMilli()
+	}
+	if e.LastAccessedDate != nil {
+		d["LastAccessedDate"] = e.LastAccessedDate.UnixMilli()
+	}
+	if e.AutoRotateAfterDays > 0 {
+		d["RotationRules"] = map[string]any{"AutomaticallyAfterDays": e.AutoRotateAfterDays}
+	}
+	if e.DeletedAt != nil {
+		d["DeletedDate"] = e.DeletedAt.Unix()
+	}
+	return d
+}
+
+// secretSummary returns the subset of fields used by ListSecrets (same shape, no VersionIdsToStages).
+func (p *SecretProvider) secretSummary(e SecretEntry, nr *model.NormalizedRequest) map[string]any {
+	tags := make([]map[string]string, 0, len(e.Tags))
+	for k, v := range e.Tags {
+		tags = append(tags, map[string]string{"Key": k, "Value": v})
+	}
+	d := map[string]any{
+		"ARN":               nr.ResourceID(model.RTSecretsManagerSecret, e.arnName()),
+		"Name":              e.Name,
+		"Description":       e.Description,
+		"KmsKeyId":          e.KMSKeyID,
+		"Tags":              tags,
+		"CreatedDate":       e.CreatedAt.Unix(),
+		"LastChangedDate":   e.UpdatedAt.Unix(),
+		"RotationEnabled":   e.RotationEnabled,
+		"RotationLambdaARN": e.RotationLambdaARN,
+		"ReplicationStatus": []any{},
+		"OwningService":     "",
+	}
+	if e.LastRotatedDate != nil {
+		d["LastRotatedDate"] = e.LastRotatedDate.UnixMilli()
+	}
+	if e.LastAccessedDate != nil {
+		d["LastAccessedDate"] = e.LastAccessedDate.UnixMilli()
+	}
+	if e.AutoRotateAfterDays > 0 {
+		d["RotationRules"] = map[string]any{"AutomaticallyAfterDays": e.AutoRotateAfterDays}
 	}
 	if e.DeletedAt != nil {
 		d["DeletedDate"] = e.DeletedAt.Unix()

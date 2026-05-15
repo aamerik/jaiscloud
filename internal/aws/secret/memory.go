@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 )
@@ -123,7 +124,45 @@ func (s *MemorySecretStore) PutVersion(_ context.Context, v VersionEntry) error 
 		}
 	}
 	s.versions[v.SecretID] = append(s.versions[v.SecretID], v)
+
+	// 3.7.2 — prune unlabeled versions (empty Stages) beyond 100.
+	s.pruneUnlabeledVersions(v.SecretID)
+
 	return nil
+}
+
+// pruneUnlabeledVersions deletes the oldest unlabeled versions (Stages == nil/empty)
+// when there are more than 100 of them. Must be called with s.mu held.
+func (s *MemorySecretStore) pruneUnlabeledVersions(secretID string) {
+	const maxUnlabeled = 100
+	all := s.versions[secretID]
+
+	// Collect unlabeled versions sorted oldest-first.
+	var unlabeled []VersionEntry
+	for _, v := range all {
+		if len(v.Stages) == 0 {
+			unlabeled = append(unlabeled, v)
+		}
+	}
+	if len(unlabeled) <= maxUnlabeled {
+		return
+	}
+	sort.Slice(unlabeled, func(i, j int) bool {
+		return unlabeled[i].CreatedAt.Before(unlabeled[j].CreatedAt)
+	})
+	// Mark the oldest excess for deletion.
+	excess := len(unlabeled) - maxUnlabeled
+	toDelete := make(map[string]struct{}, excess)
+	for i := 0; i < excess; i++ {
+		toDelete[unlabeled[i].VersionID] = struct{}{}
+	}
+	kept := all[:0]
+	for _, v := range all {
+		if _, remove := toDelete[v.VersionID]; !remove {
+			kept = append(kept, v)
+		}
+	}
+	s.versions[secretID] = kept
 }
 
 func (s *MemorySecretStore) GetVersion(_ context.Context, secretID, versionID string) (VersionEntry, error) {
@@ -167,6 +206,24 @@ func (s *MemorySecretStore) UpdateVersionStages(_ context.Context, secretID, ver
 		}
 	}
 	return ErrVersionNotFound
+}
+
+func (s *MemorySecretStore) DeleteVersionsByIDs(_ context.Context, secretID string, versionIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	del := make(map[string]struct{}, len(versionIDs))
+	for _, id := range versionIDs {
+		del[id] = struct{}{}
+	}
+	cur := s.versions[secretID]
+	kept := cur[:0]
+	for _, v := range cur {
+		if _, remove := del[v.VersionID]; !remove {
+			kept = append(kept, v)
+		}
+	}
+	s.versions[secretID] = kept
+	return nil
 }
 
 func (s *MemorySecretStore) Reset() {

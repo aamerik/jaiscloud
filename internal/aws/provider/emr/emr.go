@@ -19,6 +19,7 @@ import (
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
@@ -566,7 +567,17 @@ func (p *EMRProvider) ListClusters(ctx context.Context, nr *model.NormalizedRequ
 		}
 		summaries = append(summaries, c.toSummary())
 	}
-	return provider.OK(map[string]any{"Clusters": summaries}), nil
+	maxResults := 100
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(summaries, maxResults, token, "ListClusters")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"Clusters": page}
+	if next != "" {
+		data["Marker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -753,7 +764,17 @@ func (p *EMRProvider) ListSteps(ctx context.Context, nr *model.NormalizedRequest
 		}
 		steps = append(steps, s)
 	}
-	return provider.OK(map[string]any{"Steps": steps}), nil
+	maxResults := 100
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(steps, maxResults, token, "ListSteps")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"Steps": page}
+	if next != "" {
+		data["Marker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -924,7 +945,17 @@ func (p *EMRProvider) ListInstanceGroups(ctx context.Context, nr *model.Normaliz
 	if groups == nil {
 		groups = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"InstanceGroups": groups}), nil
+	maxResults := 100
+	token, _ := nr.Params["Marker"].(string)
+	page, next, pgErr := pagination.Paginate(groups, maxResults, token, "ListInstanceGroups")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+	data := map[string]any{"InstanceGroups": page}
+	if next != "" {
+		data["Marker"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *EMRProvider) ModifyInstanceGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

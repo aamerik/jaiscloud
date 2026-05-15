@@ -210,6 +210,30 @@ func (s *PostgresKeyStore) RevokeGrant(ctx context.Context, grantID string) erro
 	return nil
 }
 
+func (s *PostgresKeyStore) GetGrantByToken(ctx context.Context, token string) (GrantEntry, error) {
+	// Scan all grants and match by token field stored in JSONB.
+	rows, err := s.pool.Query(ctx, `SELECT grant_id, key_id, grant_data FROM jc_kms_grants`)
+	if err != nil {
+		return GrantEntry{}, fmt.Errorf("kms postgres: get grant by token: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e GrantEntry
+		var data []byte
+		if err := rows.Scan(&e.GrantID, &e.KeyID, &data); err != nil {
+			return GrantEntry{}, err
+		}
+		_ = json.Unmarshal(data, &e)
+		if e.Token == token {
+			return e, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return GrantEntry{}, fmt.Errorf("kms postgres: get grant by token scan: %w", err)
+	}
+	return GrantEntry{}, ErrGrantNotFound
+}
+
 func (s *PostgresKeyStore) ListGrants(ctx context.Context, keyID string) ([]GrantEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT grant_id, key_id, grant_data FROM jc_kms_grants WHERE key_id=$1`, keyID)

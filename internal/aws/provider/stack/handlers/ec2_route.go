@@ -1,0 +1,41 @@
+package handlers
+
+import (
+	"context"
+
+	stackprovider "jaiscloud/internal/aws/provider/stack"
+	"jaiscloud/internal/aws/provider/compute"
+	"jaiscloud/internal/model"
+)
+
+// NewEC2RouteHandler returns a ResourceHandler for AWS::EC2::Route.
+func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.ResourceHandler {
+	return stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			rtID := propStr(props, "RouteTableId", "")
+			dest := propStr(props, "DestinationCidrBlock", "")
+			gwID := propStr(props, "GatewayId", "")
+			if _, err := computeP.CreateRoute(ctx, child(nr, map[string]any{
+				"RouteTableId":         rtID,
+				"DestinationCidrBlock": dest,
+				"GatewayId":            gwID,
+			})); err != nil {
+				return "", nil, err
+			}
+			// Composite physical ID: routeTableId/destinationCidrBlock
+			physicalID := rtID + "/" + dest
+			return physicalID, map[string]any{}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
+			rtID := propStr(props, "RouteTableId", "")
+			dest := propStr(props, "DestinationCidrBlock", "")
+			_, err := computeP.DeleteRoute(ctx, &model.NormalizedRequest{
+				Params: map[string]any{
+					"RouteTableId":         rtID,
+					"DestinationCidrBlock": dest,
+				},
+			})
+			return err
+		},
+	}
+}

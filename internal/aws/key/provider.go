@@ -584,27 +584,32 @@ func (p *KeyProvider) RetireGrant(ctx context.Context, nr *model.NormalizedReque
 	grantToken, _ := nr.Params["GrantToken"].(string)
 	grantID, _ := nr.Params["GrantId"].(string)
 
-	if grantToken != "" {
-		// Find grant by token via full scan (no KeyId required for token-based retire).
-		// We use GrantId path via a scan of all grants for any key if needed.
-		// Simplest: RevokeGrant by token requires scanning; use grantID path if both absent.
-		// Fall through to grantID handling — callers should set GrantId.
-		// If only token is set, we can't efficiently look up without knowing the KeyId.
-		// Return success for unknown tokens (idempotent).
-		_ = grantToken
-	}
-
 	if grantID == "" && grantToken == "" {
 		return nil, model.NewProviderError("ValidationException", "GrantId or GrantToken is required", 400)
 	}
-	if grantID != "" {
-		if err := p.store.RevokeGrant(ctx, grantID); err != nil {
+
+	// Token-based retire: look up the grant by token then revoke it.
+	if grantToken != "" {
+		g, err := p.store.GetGrantByToken(ctx, grantToken)
+		if err != nil {
 			if errors.Is(err, ErrGrantNotFound) {
-				// Retire is idempotent — already retired/not found is OK.
-				return provider.OK(map[string]any{}), nil
+				return nil, model.NewProviderError("NotFoundException", "grant not found for token", 400)
 			}
-			return nil, fmt.Errorf("kms: retire grant: %w", err)
+			return nil, fmt.Errorf("kms: retire grant by token: %w", err)
 		}
+		if revokeErr := p.store.RevokeGrant(ctx, g.GrantID); revokeErr != nil && !errors.Is(revokeErr, ErrGrantNotFound) {
+			return nil, fmt.Errorf("kms: retire grant: %w", revokeErr)
+		}
+		return provider.OK(map[string]any{}), nil
+	}
+
+	// GrantId-based retire.
+	if err := p.store.RevokeGrant(ctx, grantID); err != nil {
+		if errors.Is(err, ErrGrantNotFound) {
+			// Retire is idempotent — already retired/not found is OK.
+			return provider.OK(map[string]any{}), nil
+		}
+		return nil, fmt.Errorf("kms: retire grant: %w", err)
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -618,6 +623,27 @@ func (p *KeyProvider) ListGrants(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, fmt.Errorf("kms: list grants: %w", err)
 	}
+
+	// Apply optional filters.
+	if filterGrantID, ok := nr.Params["GrantId"].(string); ok && filterGrantID != "" {
+		filtered := grants[:0]
+		for _, g := range grants {
+			if g.GrantID == filterGrantID {
+				filtered = append(filtered, g)
+			}
+		}
+		grants = filtered
+	}
+	if filterGrantee, ok := nr.Params["GranteePrincipal"].(string); ok && filterGrantee != "" {
+		filtered := grants[:0]
+		for _, g := range grants {
+			if g.GranteeARN == filterGrantee {
+				filtered = append(filtered, g)
+			}
+		}
+		grants = filtered
+	}
+
 	sort.Slice(grants, func(i, j int) bool { return grants[i].GrantID < grants[j].GrantID })
 	marker, _ := nr.Params["Marker"].(string)
 	limit := kmsLimit(nr.Params)
@@ -667,6 +693,21 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 		if algo == "" {
 			algo = "RSAES_OAEP_SHA_256"
 		}
+		// Validate plaintext size against RSA modulus constraints.
+		modulusBytes := rsaModulusBytes(e.KeySpec)
+		if modulusBytes > 0 {
+			var maxPlaintext int
+			switch algo {
+			case "RSAES_OAEP_SHA_1":
+				maxPlaintext = modulusBytes - 42
+			default: // RSAES_OAEP_SHA_256
+				maxPlaintext = modulusBytes - 66
+			}
+			if len(pt) > maxPlaintext {
+				return nil, model.NewProviderError("InvalidPlaintextException",
+					"The plaintext is too long to be encrypted using the specified key.", 400)
+			}
+		}
 		ct, err := rsaEncryptOAEP(e.PublicKey, pt, algo)
 		if err != nil {
 			return nil, fmt.Errorf("kms: rsa encrypt: %w", err)
@@ -677,6 +718,12 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 			"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
 			"EncryptionAlgorithm": algo,
 		}), nil
+	}
+
+	// Validate symmetric plaintext size.
+	if len(pt) > 4096 {
+		return nil, model.NewProviderError("InvalidPlaintextException",
+			"The plaintext is too long to be encrypted using the specified key.", 400)
 	}
 
 	encCtx := extractEncCtx(nr.Params)
@@ -709,6 +756,17 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	keyID, ct, err := parseCiphertextBlob(blob)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid ciphertext blob", 400)
+	}
+	// If the caller supplied a KeyId, verify it matches the key embedded in the blob.
+	if callerKeyID, _ := nr.Params["KeyId"].(string); callerKeyID != "" {
+		resolvedCallerKeyID, resolveErr := p.resolveKeyIDStr(ctx, callerKeyID)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if resolvedCallerKeyID != keyID {
+			return nil, model.NewProviderError("IncorrectKeyException",
+				"The key ID in the request does not identify a CMK that can perform this operation.", 400)
+		}
 	}
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {

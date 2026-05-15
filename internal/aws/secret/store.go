@@ -62,6 +62,8 @@ type SecretStore interface {
 	GetVersionByStage(ctx context.Context, secretID, stage string) (VersionEntry, error)
 	ListVersions(ctx context.Context, secretID string) ([]VersionEntry, error)
 	UpdateVersionStages(ctx context.Context, secretID, versionID string, stages []string) error
+	// DeleteVersionsByIDs hard-deletes the specified versions (used for pruning).
+	DeleteVersionsByIDs(ctx context.Context, secretID string, versionIDs []string) error
 
 	Reset()
 }

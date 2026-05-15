@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -236,7 +237,20 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 			"Instances":     []map[string]any{instanceToWire(inst)},
 		})
 	}
-	return provider.OK(map[string]any{"Reservations": reservations}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(reservations, maxResults, token, "DescribeInstances")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Reservations": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -396,7 +410,20 @@ func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.
 			"EgressRules":      egress,
 		})
 	}
-	return provider.OK(map[string]any{"SecurityGroups": groups}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(groups, maxResults, token, "DescribeSecurityGroups")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	data := map[string]any{"SecurityGroups": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *ComputeProvider) DeleteSecurityGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -658,7 +685,20 @@ func (p *ComputeProvider) DescribeVpcs(ctx context.Context, nr *model.Normalized
 		}
 		vpcs = append(vpcs, vpcToWire(vpc))
 	}
-	return provider.OK(map[string]any{"Vpcs": vpcs}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(vpcs, maxResults, token, "DescribeVpcs")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Vpcs": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *ComputeProvider) DeleteVpc(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -765,7 +805,20 @@ func (p *ComputeProvider) DescribeSubnets(ctx context.Context, nr *model.Normali
 		}
 		subnets = append(subnets, subnetToWire(sn))
 	}
-	return provider.OK(map[string]any{"Subnets": subnets}), nil
+	maxResults := 100
+	if v, ok := nr.Params["MaxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["NextToken"].(string)
+	page, next, pgErr := pagination.Paginate(subnets, maxResults, token, "DescribeSubnets")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	data := map[string]any{"Subnets": page}
+	if next != "" {
+		data["NextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *ComputeProvider) DeleteSubnet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

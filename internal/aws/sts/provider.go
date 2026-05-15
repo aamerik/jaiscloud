@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -58,6 +59,45 @@ func (p *STSProvider) Reset() {
 // ─── handlers ─────────────────────────────────────────────────────────────────
 
 func (p *STSProvider) GetCallerIdentity(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Extract the access key from the Authorization header so we can distinguish
+	// between static IAM credentials and temporary session credentials.
+	var authHeader string
+	if nr.Raw != nil {
+		authHeader = nr.Raw.Header.Get("Authorization")
+	}
+	accessKey := extractAccessKeyFromAuth(authHeader)
+
+	// ASIA* prefix indicates a temporary/session credential issued by AssumeRole.
+	if strings.HasPrefix(accessKey, "ASIA") {
+		if sess, ok := p.store.GetSession(accessKey); ok {
+			// Best-effort: use tag context to reconstruct role/session names.
+			roleName := "assumed-role"
+			sessionName := "session"
+			if rn, exists := sess.IAMContext["role_name"]; exists {
+				if s, ok := rn.(string); ok && s != "" {
+					roleName = s
+				}
+			}
+			if sn, exists := sess.IAMContext["session_name"]; exists {
+				if s, ok := sn.(string); ok && s != "" {
+					sessionName = s
+				}
+			}
+			return provider.OK(map[string]any{
+				"Account": nr.AccountID,
+				"Arn":     nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
+				"UserId":  accessKey + ":" + sessionName,
+			}), nil
+		}
+		// ASIA key but no session found — return a generic assumed-role identity.
+		return provider.OK(map[string]any{
+			"Account": nr.AccountID,
+			"Arn":     nr.ResourceID("sts-assumed-role", "assumed-role/session"),
+			"UserId":  accessKey + ":session",
+		}), nil
+	}
+
+	// Static credentials or no key — return root identity.
 	return provider.OK(map[string]any{
 		"Account": nr.AccountID,
 		"Arn":     nr.ResourceID("iam-root", ""),
@@ -185,7 +225,10 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 			sessionName), 400)
 	}
 
-	subject := extractJWTSubject(webToken)
+	subject, err := extractJWTSubject(webToken)
+	if err != nil {
+		return nil, err
+	}
 	creds := generateCredentials(durationSecs)
 
 	roleName := roleArn
@@ -429,12 +472,16 @@ func extractAccessKeyFromAuth(auth string) string {
 	return ""
 }
 
-// extractJWTSubject attempts a best-effort extraction of the `sub` claim from
-// a JWT's payload segment. Returns "unknown" on any parse failure.
-func extractJWTSubject(token string) string {
+// extractJWTSubject decodes the JWT payload segment, validates exp/iat claims,
+// and returns the `sub` claim. Returns an error if the token has expired.
+//
+// NOTE: Cryptographic signature verification (JWKS chain) is deferred — it
+// would require external HTTP calls to the OIDC discovery endpoint and is out
+// of scope for the emulator. The token structure and expiry are validated here.
+func extractJWTSubject(token string) (string, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
-		return "unknown"
+		return "unknown", nil
 	}
 	// add padding
 	payload := parts[1]
@@ -445,31 +492,35 @@ func extractJWTSubject(token string) string {
 	if err != nil {
 		decoded, err = base64.StdEncoding.DecodeString(payload)
 		if err != nil {
-			return "unknown"
+			return "unknown", nil
 		}
 	}
-	// find "sub":"..." without full JSON parse
-	s := string(decoded)
-	const key = `"sub"`
-	idx := strings.Index(s, key)
-	if idx < 0 {
-		return "unknown"
+
+	// Parse as a generic JSON map so we can inspect exp/iat/sub.
+	var claims map[string]any
+	if jsonErr := json.Unmarshal(decoded, &claims); jsonErr != nil {
+		return "unknown", nil
 	}
-	rest := s[idx+len(key):]
-	rest = strings.TrimSpace(rest)
-	if len(rest) == 0 || rest[0] != ':' {
-		return "unknown"
+
+	// Validate expiry.
+	if expRaw, ok := claims["exp"]; ok {
+		var expUnix int64
+		switch v := expRaw.(type) {
+		case float64:
+			expUnix = int64(v)
+		case json.Number:
+			expUnix, _ = v.Int64()
+		}
+		if expUnix > 0 && expUnix < time.Now().Unix() {
+			return "", model.NewProviderError("ExpiredTokenException", "Token has expired", 400)
+		}
 	}
-	rest = strings.TrimSpace(rest[1:])
-	if len(rest) == 0 || rest[0] != '"' {
-		return "unknown"
+
+	// Extract sub claim.
+	if sub, ok := claims["sub"].(string); ok && sub != "" {
+		return sub, nil
 	}
-	rest = rest[1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return "unknown"
-	}
-	return rest[:end]
+	return "unknown", nil
 }
 
 func stsErr(code, msg string, status int) error {

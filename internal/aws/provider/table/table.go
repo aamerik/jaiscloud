@@ -3,11 +3,15 @@ package table
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -550,16 +554,45 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 			"Can not use both expression and non-expression parameters in the same request: Non-expression parameters: {Select} Expression parameters: {ProjectionExpression}", 400)
 	}
 
+	keyCondExpr := strParam(nr.Params, "KeyConditionExpression")
+	esk, eskErr := exclusiveStartKeyE(nr.Params)
+	if eskErr != nil {
+		return nil, model.NewProviderError("ValidationException", "invalid pagination token", 400)
+	}
+
+	// Validate KeyConditionExpression operators.
+	if keyCondExpr != "" {
+		idxSchema := resolveIndexSchema(ts, indexName)
+		var pkAttr, skAttr string
+		if idxSchema != nil {
+			pkAttr = idxSchema.PKAttr
+			skAttr = idxSchema.SKAttr
+		} else {
+			// Use table primary key.
+			for _, k := range ts.KeySchema {
+				switch k["KeyType"] {
+				case "HASH":
+					pkAttr = k["AttributeName"]
+				case "RANGE":
+					skAttr = k["AttributeName"]
+				}
+			}
+		}
+		if validErr := dynamostore.ValidateKeyConditionExpression(keyCondExpr, pkAttr, skAttr, exprNames(nr.Params), exprValues(nr.Params)); validErr != nil {
+			return nil, model.NewProviderError("ValidationException", validErr.Error(), 400)
+		}
+	}
+
 	q := dynamostore.QuerySpec{
 		IndexName:                 indexName,
 		IndexSchema:               resolveIndexSchema(ts, indexName),
-		KeyConditionExpression:    strParam(nr.Params, "KeyConditionExpression"),
+		KeyConditionExpression:    keyCondExpr,
 		FilterExpression:          strParam(nr.Params, "FilterExpression"),
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		ScanIndexForward:          scanFwd,
 		Limit:                     intParam(nr.Params, "Limit", 0),
-		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
+		ExclusiveStartKey:         esk,
 	}
 	items, scannedCount, lastKey, err := p.items.Query(ctx, name, q)
 	if err != nil {
@@ -619,6 +652,11 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 			"Can not use both expression and non-expression parameters in the same request: Non-expression parameters: {Select} Expression parameters: {ProjectionExpression}", 400)
 	}
 
+	eskScan, eskScanErr := exclusiveStartKeyE(nr.Params)
+	if eskScanErr != nil {
+		return nil, model.NewProviderError("ValidationException", "invalid pagination token", 400)
+	}
+
 	sc := dynamostore.ScanSpec{
 		IndexName:                 indexName,
 		IndexSchema:               resolveIndexSchema(ts, indexName),
@@ -626,7 +664,7 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		ExpressionAttributeNames:  exprNames(nr.Params),
 		ExpressionAttributeValues: exprValues(nr.Params),
 		Limit:                     intParam(nr.Params, "Limit", 0),
-		ExclusiveStartKey:         exclusiveStartKey(nr.Params),
+		ExclusiveStartKey:         eskScan,
 	}
 
 	// Parallel scan validation and wiring.
@@ -690,6 +728,19 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	requestItems, _ := nr.Params["RequestItems"].(map[string]any)
+
+	// Validate total request count across all tables (cap: 25).
+	totalRequests := 0
+	for _, v := range requestItems {
+		if writeReqs, ok := v.([]any); ok {
+			totalRequests += len(writeReqs)
+		}
+	}
+	if totalRequests > 25 {
+		return nil, model.NewProviderError("ValidationException",
+			"Too many items requested for the BatchWriteItem call", 400)
+	}
+
 	var reqs []dynamostore.BatchWriteRequest
 	for tableName, v := range requestItems {
 		ts, _ := p.loadTable(ctx, tableName)
@@ -729,6 +780,21 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 
 func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	requestItems, _ := nr.Params["RequestItems"].(map[string]any)
+
+	// Validate total key count across all tables (cap: 100).
+	totalKeys := 0
+	for _, v := range requestItems {
+		if m, ok := v.(map[string]any); ok {
+			if rawKeys, ok := m["Keys"].([]any); ok {
+				totalKeys += len(rawKeys)
+			}
+		}
+	}
+	if totalKeys > 100 {
+		return nil, model.NewProviderError("ValidationException",
+			"Too many items requested for the BatchGetItem call", 400)
+	}
+
 	var reqs []dynamostore.BatchGetRequest
 	type tableProjection struct{ attrs []string }
 	projections := map[string]tableProjection{}
@@ -803,6 +869,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 					ExpressionAttributeValues: exprValuesFrom(put),
 					Schema:                    buildItemSchema(ts),
 				},
+				ReturnValuesOnConditionCheckFailure: strParam(put, "ReturnValuesOnConditionCheckFailure"),
 			}
 		case m["Delete"] != nil:
 			del, _ := m["Delete"].(map[string]any)
@@ -821,6 +888,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 					ExpressionAttributeValues: exprValuesFrom(del),
 					Schema:                    buildItemSchema(ts),
 				},
+				ReturnValuesOnConditionCheckFailure: strParam(del, "ReturnValuesOnConditionCheckFailure"),
 			}
 		case m["Update"] != nil:
 			upd, _ := m["Update"].(map[string]any)
@@ -845,6 +913,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 					ExpressionAttributeValues: exprValuesFrom(upd),
 					Schema:                    buildItemSchema(ts),
 				},
+				ReturnValuesOnConditionCheckFailure: strParam(upd, "ReturnValuesOnConditionCheckFailure"),
 			}
 		case m["ConditionCheck"] != nil:
 			cc, _ := m["ConditionCheck"].(map[string]any)
@@ -862,6 +931,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 					ExpressionAttributeNames:  exprNamesFrom(cc),
 					ExpressionAttributeValues: exprValuesFrom(cc),
 				},
+				ReturnValuesOnConditionCheckFailure: strParam(cc, "ReturnValuesOnConditionCheckFailure"),
 			}
 		default:
 			continue
@@ -883,7 +953,11 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 	if reasons != nil {
 		cancelReasons := make([]map[string]any, len(reasons))
 		for i, r := range reasons {
-			cancelReasons[i] = map[string]any{"Code": r.Code, "Message": r.Message}
+			entry := map[string]any{"Code": r.Code, "Message": r.Message}
+			if r.Item != nil {
+				entry["Item"] = r.Item
+			}
+			cancelReasons[i] = entry
 		}
 		codes := make([]string, len(reasons))
 		for i, r := range reasons {
@@ -1447,6 +1521,7 @@ func unmarshalKey(s string) map[string]any {
 
 // buildLastEvaluatedKey extracts only the key attributes from a full-item JSON string.
 // For index queries it also includes the index key attributes.
+// An HMAC (_jc_mac) is appended to the key map so that we can detect tampered tokens.
 func buildLastEvaluatedKey(lastKeyJSON string, ts tableSchema, indexName string) map[string]any {
 	var item map[string]any
 	if err := json.Unmarshal([]byte(lastKeyJSON), &item); err != nil {
@@ -1474,13 +1549,69 @@ func buildLastEvaluatedKey(lastKeyJSON string, ts tableSchema, indexName string)
 			}
 		}
 	}
-	lek := make(map[string]any, len(keyAttrs))
+	lek := make(map[string]any, len(keyAttrs)+1)
 	for attr := range keyAttrs {
 		if v, ok := item[attr]; ok {
 			lek[attr] = v
 		}
 	}
+	// Append HMAC so we can verify the token on the next page request.
+	lek["_jc_mac"] = map[string]any{"S": computeLEKMac(lek)}
 	return lek
+}
+
+// computeLEKMac computes an HMAC-SHA256 over the canonical JSON of the key map
+// (excluding the _jc_mac field itself), keyed by the instance ID or a fallback string.
+func computeLEKMac(keyMap map[string]any) string {
+	// Collect all keys except _jc_mac, sort them for a canonical representation.
+	keys := make([]string, 0, len(keyMap))
+	for k := range keyMap {
+		if k != "_jc_mac" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	canonical := make(map[string]any, len(keys))
+	for _, k := range keys {
+		canonical[k] = keyMap[k]
+	}
+	b, _ := json.Marshal(canonical)
+	instanceID := os.Getenv("JAISCLOUD_INSTANCE_ID")
+	if instanceID == "" {
+		instanceID = "jaiscloud-default-lek-key"
+	}
+	mac := hmac.New(sha256.New, []byte(instanceID))
+	mac.Write(b)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// verifyAndStripLEKMac verifies the _jc_mac on an ExclusiveStartKey and returns
+// the key map without _jc_mac on success.  If _jc_mac is present and invalid,
+// returns an error.  If _jc_mac is absent, the key is passed through unchanged
+// (for compatibility with keys from before this feature was added).
+func verifyAndStripLEKMac(m map[string]any) (map[string]any, error) {
+	macVal, hasMac := m["_jc_mac"]
+	if !hasMac {
+		// Old token without MAC — allow through for backwards compat.
+		return m, nil
+	}
+	// Extract the MAC string value.
+	var providedMac string
+	if macMap, ok := macVal.(map[string]any); ok {
+		providedMac, _ = macMap["S"].(string)
+	}
+	// Build the stripped map for recomputation.
+	stripped := make(map[string]any, len(m)-1)
+	for k, v := range m {
+		if k != "_jc_mac" {
+			stripped[k] = v
+		}
+	}
+	expected := computeLEKMac(stripped)
+	if !hmac.Equal([]byte(providedMac), []byte(expected)) {
+		return nil, fmt.Errorf("invalid pagination token")
+	}
+	return stripped, nil
 }
 
 // ─── Item size validation ─────────────────────────────────────────────────────
@@ -1892,20 +2023,33 @@ func (p *TableProvider) BatchExecuteStatement(_ context.Context, _ *model.Normal
 
 // exclusiveStartKey returns a JSON-encoded ExclusiveStartKey from request params,
 // or an empty string when the param is absent or not a map.
+// If _jc_mac is present it is verified; an invalid MAC causes a ValidationException
+// to be returned as a sentinel string that callers must handle — see exclusiveStartKeyE.
 func exclusiveStartKey(params map[string]any) string {
+	s, _ := exclusiveStartKeyE(params)
+	return s
+}
+
+// exclusiveStartKeyE returns (jsonKey, error). error is non-nil when _jc_mac
+// verification fails.
+func exclusiveStartKeyE(params map[string]any) (string, error) {
 	v, ok := params["ExclusiveStartKey"]
 	if !ok {
-		return ""
+		return "", nil
 	}
 	m, ok := v.(map[string]any)
 	if !ok || len(m) == 0 {
-		return ""
+		return "", nil
 	}
-	b, err := json.Marshal(m)
+	stripped, err := verifyAndStripLEKMac(m)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("invalid pagination token")
 	}
-	return string(b)
+	b, err := json.Marshal(stripped)
+	if err != nil {
+		return "", nil
+	}
+	return string(b), nil
 }
 
 // ─── Misc stubs (Task 1.4) ────────────────────────────────────────────────────

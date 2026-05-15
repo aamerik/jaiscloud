@@ -1,0 +1,30 @@
+package handlers
+
+import (
+	"context"
+
+	stackprovider "jaiscloud/internal/aws/provider/stack"
+	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
+	"jaiscloud/internal/model"
+)
+
+// NewStepFunctionsStateMachineHandler returns a ResourceHandler for AWS::StepFunctions::StateMachine.
+func NewStepFunctionsStateMachineHandler(sfnP *sfnprovider.Provider) stackprovider.ResourceHandler {
+	return stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "StateMachineName", logicalID)
+			params := copyProps(props)
+			params["name"] = name
+			resp, err := sfnP.CreateStateMachine(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, err
+			}
+			smArn, _ := resp.Data["stateMachineArn"].(string)
+			return smArn, map[string]any{"Arn": smArn, "Name": name}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			_, err := sfnP.DeleteStateMachine(ctx, &model.NormalizedRequest{Params: map[string]any{"stateMachineArn": physicalID}})
+			return err
+		},
+	}
+}

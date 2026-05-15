@@ -91,14 +91,29 @@ type TransactWriteOp struct {
 	Key       map[string]any // Delete, Update, ConditionCheck
 	Cond      ConditionSpec
 	Update    UpdateSpec
+	// ReturnValuesOnConditionCheckFailure controls what is returned in a
+	// CancellationReason when this operation's condition fails.
+	// Valid value: "ALL_OLD".  Empty string means do not return the item.
+	ReturnValuesOnConditionCheckFailure string
 }
 
 // CancellationReason is the per-item failure detail for TransactionCanceledException.
 type CancellationReason struct {
-	Code    string         // "None" or "ConditionalCheckFailed"
+	Code    string         // "None", "ConditionalCheckFailed", "TransactionConflict", "ThrottlingError", "ValidationError", "ResourceNotFound", "ItemCollectionSizeLimitExceeded"
 	Message string
-	Item    map[string]any // ReturnValuesOnConditionCheckFailure
+	Item    map[string]any // ReturnValuesOnConditionCheckFailure — set when Code=="ConditionalCheckFailed" and the caller requested ALL_OLD
 }
+
+// Cancellation reason code constants.
+const (
+	CancelCodeNone                         = "None"
+	CancelCodeConditionalCheckFailed       = "ConditionalCheckFailed"
+	CancelCodeTransactionConflict          = "TransactionConflict"
+	CancelCodeThrottlingError              = "ThrottlingError"
+	CancelCodeValidationError              = "ValidationError"
+	CancelCodeResourceNotFound             = "ResourceNotFound"
+	CancelCodeItemCollectionSizeLimitExceed = "ItemCollectionSizeLimitExceeded"
+)
 
 // DynamoDBItemStore manages the DynamoDB item data plane.
 type DynamoDBItemStore interface {

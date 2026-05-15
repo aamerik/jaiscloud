@@ -944,10 +944,13 @@ func evalSetValue(item map[string]any, expr string, names map[string]string, val
 	expr = strings.TrimSpace(expr)
 	lower := strings.ToLower(expr)
 
-	// if_not_exists(path, value)
+	// if_not_exists(path, value)  — supports nested calls like if_not_exists(a, if_not_exists(b, :v))
 	if strings.HasPrefix(lower, "if_not_exists(") {
-		inner := strings.TrimSpace(expr[len("if_not_exists("):])
-		inner = strings.TrimSuffix(inner, ")")
+		// Find the matching closing paren for the outer call.
+		inner, ok := extractFunctionBody(expr, len("if_not_exists"))
+		if !ok {
+			return nil, &ExpressionError{Message: "malformed if_not_exists expression"}
+		}
 		parts := splitComma(inner)
 		if len(parts) != 2 {
 			return nil, &ExpressionError{Message: "if_not_exists requires exactly 2 arguments"}
@@ -959,13 +962,16 @@ func evalSetValue(item map[string]any, expr string, names map[string]string, val
 		if exists {
 			return v, nil // return current value (set is a no-op)
 		}
-		return resolveExprValue(valRef, values), nil
+		// The fallback value may itself be an if_not_exists call.
+		return evalSetValue(item, valRef, names, values)
 	}
 
 	// list_append(list1, list2)
 	if strings.HasPrefix(lower, "list_append(") {
-		inner := strings.TrimSpace(expr[len("list_append("):])
-		inner = strings.TrimSuffix(inner, ")")
+		inner, ok := extractFunctionBody(expr, len("list_append"))
+		if !ok {
+			return nil, &ExpressionError{Message: "malformed list_append expression"}
+		}
 		parts := splitComma(inner)
 		if len(parts) != 2 {
 			return nil, &ExpressionError{Message: "list_append requires exactly 2 arguments"}
@@ -975,26 +981,208 @@ func evalSetValue(item map[string]any, expr string, names map[string]string, val
 		return appendLists(left, right), nil
 	}
 
-	// Arithmetic with + or - (check in reverse order so longer ops match first in complex exprs)
-	for _, op := range []string{" + ", " - "} {
-		idx := strings.Index(expr, op)
-		if idx > 0 {
-			leftRef := strings.TrimSpace(expr[:idx])
-			rightRef := strings.TrimSpace(expr[idx+len(op):])
-			left := evalOperandForSet(item, leftRef, names, values)
-			right := evalOperandForSet(item, rightRef, names, values)
-			ln, lOk := ParseNumeric(left)
-			rn, rOk := ParseNumeric(right)
-			if lOk && rOk {
-				if op == " + " {
-					return map[string]any{"N": fmt.Sprintf("%g", ln+rn)}, nil
-				}
-				return map[string]any{"N": fmt.Sprintf("%g", ln-rn)}, nil
+	// Arithmetic with + or - at top-level (outside any parentheses/brackets).
+	// Scan for the LAST occurrence at depth 0 to correctly handle expressions like
+	// "attribute_exists(Foo) + :n" or "a + b - c".
+	if idx := findTopLevelArithOp(expr); idx >= 0 {
+		op := string(expr[idx])
+		leftRef := strings.TrimSpace(expr[:idx])
+		rightRef := strings.TrimSpace(expr[idx+1:])
+		left := evalOperandForSet(item, leftRef, names, values)
+		right := evalOperandForSet(item, rightRef, names, values)
+		ln, lOk := ParseNumeric(left)
+		rn, rOk := ParseNumeric(right)
+		if lOk && rOk {
+			if op == "+" {
+				return map[string]any{"N": fmt.Sprintf("%g", ln+rn)}, nil
 			}
+			return map[string]any{"N": fmt.Sprintf("%g", ln-rn)}, nil
 		}
 	}
 
 	return evalOperandForSet(item, expr, names, values), nil
+}
+
+// extractFunctionBody returns the content inside the outermost parentheses of a
+// function call "funcName(...)".  funcNameLen is the length of the function name.
+func extractFunctionBody(expr string, funcNameLen int) (string, bool) {
+	if len(expr) <= funcNameLen+1 {
+		return "", false
+	}
+	if expr[funcNameLen] != '(' {
+		return "", false
+	}
+	// Find matching closing paren.
+	depth := 0
+	for i := funcNameLen; i < len(expr); i++ {
+		switch expr[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return expr[funcNameLen+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
+// findTopLevelArithOp finds the index of a top-level '+' or '-' operator in expr
+// (i.e., not inside parentheses or brackets).  Returns -1 if none found.
+// We search left-to-right and return the FIRST top-level +/- so that
+// "a + b - c" is evaluated left-to-right.
+func findTopLevelArithOp(expr string) int {
+	depth := 0
+	for i := 0; i < len(expr); i++ {
+		switch expr[i] {
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		case '+', '-':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// ValidateKeyConditionExpression validates that a KeyConditionExpression conforms
+// to DynamoDB rules:
+//   - The partition key must use the equality operator (=).
+//   - The sort key may use =, <, <=, >, >=, BETWEEN, or begins_with.
+//   - Any other operator is rejected with a ValidationException.
+//
+// pkAttr and skAttr are the table/index attribute names.
+// An empty skAttr means the table has no sort key.
+func ValidateKeyConditionExpression(expr string, pkAttr, skAttr string, names map[string]string, values map[string]any) error {
+	if expr == "" {
+		return &ExpressionError{Message: "KeyConditionExpression cannot be empty"}
+	}
+
+	conditions := splitAND(expr)
+	for _, raw := range conditions {
+		cond := strings.TrimSpace(raw)
+		if cond == "" {
+			continue
+		}
+		condUpper := strings.ToUpper(cond)
+
+		// Determine which attribute this condition targets.
+		attr := extractConditionAttr(cond, names)
+		if attr == "" {
+			// Can't determine attr — allow through (eval will catch errors).
+			continue
+		}
+
+		if attr == pkAttr {
+			// Partition key MUST use =
+			if !isEqualityCondition(cond) {
+				return &ExpressionError{Message: "Query key condition not supported: " + attr + " must use = operator for partition key"}
+			}
+			continue
+		}
+
+		if skAttr != "" && attr == skAttr {
+			// Sort key may use =, <, <=, >, >=, BETWEEN, begins_with
+			if !isValidSortKeyCondition(cond, condUpper) {
+				return &ExpressionError{Message: "Query key condition not supported: " + attr + " uses an invalid operator for sort key"}
+			}
+			continue
+		}
+
+		// Neither PK nor SK — not allowed in KeyConditionExpression.
+		return &ExpressionError{Message: "Query key condition not supported: " + attr + " is not a key attribute"}
+	}
+	return nil
+}
+
+// extractConditionAttr extracts the attribute name from the LHS of a simple
+// condition like "pk = :v", "#pk = :v", "sk BETWEEN :lo AND :hi", "begins_with(sk, :pfx)".
+func extractConditionAttr(cond string, names map[string]string) string {
+	cond = strings.TrimSpace(cond)
+	condUpper := strings.ToUpper(cond)
+
+	// begins_with(attr, :val)
+	if strings.HasPrefix(strings.ToLower(cond), "begins_with(") {
+		inner, ok := extractFunctionBody(cond, len("begins_with"))
+		if !ok {
+			return ""
+		}
+		parts := splitComma(inner)
+		if len(parts) < 1 {
+			return ""
+		}
+		return resolveExprName(strings.TrimSpace(parts[0]), names)
+	}
+
+	// Check for BETWEEN: "attr BETWEEN :lo AND :hi"
+	betweenIdx := strings.Index(condUpper, " BETWEEN ")
+	if betweenIdx > 0 {
+		return resolveExprName(strings.TrimSpace(cond[:betweenIdx]), names)
+	}
+
+	// Comparison operators — split on first occurrence.
+	for _, op := range []string{" <> ", " <= ", " >= ", " < ", " > ", " = ", "<>", "<=", ">=", "<", ">", "="} {
+		idx := strings.Index(cond, op)
+		if idx > 0 {
+			lhs := strings.TrimSpace(cond[:idx])
+			// Make sure lhs is a simple path (no spaces).
+			if !strings.Contains(lhs, " ") {
+				return resolveExprName(lhs, names)
+			}
+		}
+	}
+	return ""
+}
+
+// isEqualityCondition returns true if cond is of the form "attr = :val".
+func isEqualityCondition(cond string) bool {
+	// Try both "attr = :val" (space) and "attr=:val" (no space).
+	for _, op := range []string{" = ", "="} {
+		idx := strings.Index(cond, op)
+		if idx > 0 {
+			// Make sure there's no other comparison-style operator present.
+			rest := strings.TrimSpace(cond[idx+len(op):])
+			if rest == "" {
+				continue
+			}
+			upper := strings.ToUpper(cond)
+			if !strings.Contains(upper, " <> ") &&
+				!strings.Contains(upper, " < ") &&
+				!strings.Contains(upper, " > ") &&
+				!strings.Contains(upper, " BETWEEN ") &&
+				!strings.Contains(upper, " IN ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isValidSortKeyCondition returns true if cond uses an operator valid for a sort key.
+func isValidSortKeyCondition(cond, condUpper string) bool {
+	// begins_with(sk, :val)
+	if strings.HasPrefix(strings.ToLower(cond), "begins_with(") {
+		return true
+	}
+	// BETWEEN :lo AND :hi
+	if strings.Contains(condUpper, " BETWEEN ") {
+		return true
+	}
+	// = < <= > >=
+	for _, op := range []string{" <= ", " >= ", " < ", " > ", " = ", "<=", ">=", "<", ">", "="} {
+		if strings.Contains(cond, op) {
+			// Make sure it's not <> (inequality) which is not valid for SK.
+			if strings.Contains(cond, "<>") {
+				return false
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func evalOperandForSet(item map[string]any, ref string, names map[string]string, values map[string]any) any {

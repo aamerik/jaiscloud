@@ -324,6 +324,20 @@ func isAsymmetricSpec(keySpec string) bool {
 	return strings.HasPrefix(keySpec, "RSA_") || strings.HasPrefix(keySpec, "ECC_")
 }
 
+// rsaModulusBytes returns the RSA modulus size in bytes for a given key spec.
+// Returns 0 for non-RSA specs.
+func rsaModulusBytes(keySpec string) int {
+	switch keySpec {
+	case "RSA_2048":
+		return 256
+	case "RSA_3072":
+		return 384
+	case "RSA_4096":
+		return 512
+	}
+	return 0
+}
+
 // signingAlgorithmsForSpec returns the supported signing algorithms for a key spec.
 func signingAlgorithmsForSpec(keySpec string) []string {
 	switch {

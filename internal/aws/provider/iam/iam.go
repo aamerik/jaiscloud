@@ -23,7 +23,9 @@ type IAMProvider struct {
 }
 
 func New(resources store.ResourceStore) *IAMProvider {
-	return &IAMProvider{resources: resources}
+	p := &IAMProvider{resources: resources}
+	p.seedManagedPolicies(context.Background())
+	return p
 }
 
 // Routes returns handler registrations for both IAM and STS prefixes.
@@ -90,9 +92,13 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		"IAM.AddRoleToInstanceProfile":      p.AddRoleToInstanceProfile,
 		"IAM.RemoveRoleFromInstanceProfile": p.RemoveRoleFromInstanceProfile,
 		"IAM.ListInstanceProfiles":          p.ListInstanceProfiles,
-		// Policy simulation (always-allow stub)
+		// Policy simulation
 		"IAM.SimulatePrincipalPolicy":   p.SimulatePrincipalPolicy,
 		"IAM.SimulateCustomPolicy":      p.SimulateCustomPolicy,
+		// Service-linked roles
+		"IAM.CreateServiceLinkedRole":              p.CreateServiceLinkedRole,
+		"IAM.DeleteServiceLinkedRole":              p.DeleteServiceLinkedRole,
+		"IAM.GetServiceLinkedRoleDeletionStatus":   p.GetServiceLinkedRoleDeletionStatus,
 		// Policy versioning (14.9)
 		"IAM.CreatePolicyVersion":     p.CreatePolicyVersion,
 		"IAM.GetPolicyVersion":        p.GetPolicyVersion,
@@ -185,6 +191,10 @@ func (p *IAMProvider) CreateRole(ctx context.Context, nr *model.NormalizedReques
 	if name == "" {
 		return nil, model.NewProviderError("ValidationError", "RoleName is required", 400)
 	}
+	assumeDoc := strParam(nr.Params, "AssumeRolePolicyDocument")
+	if err := ValidatePolicyDocument(assumeDoc); err != nil {
+		return nil, model.NewProviderError("MalformedPolicyDocument", err.Error(), 400)
+	}
 	arn := nr.ResourceID("iam-role", name)
 	path := strParam(nr.Params, "Path")
 	if path == "" {
@@ -196,7 +206,7 @@ func (p *IAMProvider) CreateRole(ctx context.Context, nr *model.NormalizedReques
 		RoleID:                   "AROA" + randID(16),
 		Arn:                      arn,
 		Path:                     path,
-		AssumeRolePolicyDocument: strParam(nr.Params, "AssumeRolePolicyDocument"),
+		AssumeRolePolicyDocument: assumeDoc,
 		Description:              strParam(nr.Params, "Description"),
 		MaxSessionDuration:       maxDur,
 		Tags:                     map[string]string{},
@@ -302,6 +312,10 @@ func (p *IAMProvider) CreatePolicy(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, model.NewProviderError("ValidationError", "PolicyName is required", 400)
 	}
+	doc := strParam(nr.Params, "PolicyDocument")
+	if err := ValidatePolicyDocument(doc); err != nil {
+		return nil, model.NewProviderError("MalformedPolicyDocument", err.Error(), 400)
+	}
 	arn := nr.ResourceID("iam-policy", name)
 	now := time.Now().UTC()
 	pol := policyData{
@@ -310,7 +324,7 @@ func (p *IAMProvider) CreatePolicy(ctx context.Context, nr *model.NormalizedRequ
 		Arn:         arn,
 		Path:        "/",
 		Description: strParam(nr.Params, "Description"),
-		Document:    strParam(nr.Params, "PolicyDocument"),
+		Document:    doc,
 		CreateDate:  now,
 		UpdateDate:  now,
 	}
@@ -436,6 +450,9 @@ func (p *IAMProvider) PutRolePolicy(ctx context.Context, nr *model.NormalizedReq
 	roleName := strParam(nr.Params, "RoleName")
 	policyName := strParam(nr.Params, "PolicyName")
 	doc := strParam(nr.Params, "PolicyDocument")
+	if err := ValidatePolicyDocument(doc); err != nil {
+		return nil, model.NewProviderError("MalformedPolicyDocument", err.Error(), 400)
+	}
 	d := inlinePolicyData{RoleName: roleName, PolicyName: policyName, PolicyDocument: doc}
 	_ = saveEntry(ctx, p.resources, "iam_inline_policies", roleName+"::"+policyName, d)
 	return provider.OK(nil), nil
@@ -753,6 +770,9 @@ func (p *IAMProvider) PutUserPolicy(ctx context.Context, nr *model.NormalizedReq
 	userName := strParam(nr.Params, "UserName")
 	policyName := strParam(nr.Params, "PolicyName")
 	doc := strParam(nr.Params, "PolicyDocument")
+	if err := ValidatePolicyDocument(doc); err != nil {
+		return nil, model.NewProviderError("MalformedPolicyDocument", err.Error(), 400)
+	}
 	d := inlinePolicyData{RoleName: userName, PolicyName: policyName, PolicyDocument: doc}
 	_ = saveEntry(ctx, p.resources, "iam_user_inline_policies", userName+"::"+policyName, d)
 	return provider.OK(nil), nil
@@ -1136,14 +1156,55 @@ func instanceProfileMap(ip instanceProfileData, roles []map[string]any) map[stri
 // ─── Policy simulation ────────────────────────────────────────────────────────
 
 func (p *IAMProvider) SimulatePrincipalPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return simulationAllow(nr.Params), nil
+	// Gather inline + attached policy documents for the principal ARN.
+	principalArn := strParam(nr.Params, "PolicySourceArn")
+	var docs []string
+
+	// Try role inline policies first.
+	roleName := ""
+	if parts := strings.Split(principalArn, "/"); len(parts) > 1 {
+		roleName = parts[len(parts)-1]
+	}
+	if roleName != "" {
+		inlineEntries, _ := p.resources.List(ctx, "iam_inline_policies", roleName+"::")
+		for _, e := range inlineEntries {
+			var d inlinePolicyData
+			if json.Unmarshal(e.Data, &d) == nil && d.PolicyDocument != "" {
+				docs = append(docs, d.PolicyDocument)
+			}
+		}
+		// Attached managed policies.
+		roleArn := nr.ResourceID("iam-role", roleName)
+		attachEntries, _ := p.resources.List(ctx, "iam_attachments", roleArn)
+		for _, e := range attachEntries {
+			var att attachmentData
+			if json.Unmarshal(e.Data, &att) != nil {
+				continue
+			}
+			var pol policyData
+			if loadEntry(ctx, p.resources, "iam_policies", att.PolicyArn, &pol) == nil && pol.Document != "" {
+				docs = append(docs, pol.Document)
+			}
+		}
+	}
+
+	return evalSimulation(nr.Params, docs), nil
 }
 
 func (p *IAMProvider) SimulateCustomPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return simulationAllow(nr.Params), nil
+	// Use caller-supplied policy documents.
+	var docs []string
+	if v, ok := nr.Params["PolicyInputList"].([]any); ok {
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				docs = append(docs, s)
+			}
+		}
+	}
+	return evalSimulation(nr.Params, docs), nil
 }
 
-func simulationAllow(params map[string]any) *model.ProviderResponse {
+func evalSimulation(params map[string]any, policyDocs []string) *model.ProviderResponse {
 	var actions []string
 	if v, ok := params["ActionNames"].([]any); ok {
 		for _, a := range v {
@@ -1152,17 +1213,120 @@ func simulationAllow(params map[string]any) *model.ProviderResponse {
 			}
 		}
 	}
-	results := make([]map[string]any, len(actions))
-	for i, action := range actions {
-		results[i] = map[string]any{
-			"EvalActionName":   action,
-			"EvalDecision":     "allowed",
-			"MatchedStatements": []any{},
+	var resources []string
+	if v, ok := params["ResourceArns"].([]any); ok {
+		for _, r := range v {
+			if s, ok := r.(string); ok {
+				resources = append(resources, s)
+			}
+		}
+	}
+	if len(resources) == 0 {
+		resources = []string{"*"}
+	}
+
+	evalResults := SimulatePolicies(policyDocs, actions, resources)
+
+	results := make([]map[string]any, 0, len(evalResults))
+	for _, er := range evalResults {
+		results = append(results, map[string]any{
+			"EvalActionName":       er.EvalActionName,
+			"EvalResourceName":     er.EvalResourceName,
+			"EvalDecision":         er.EvalDecision,
+			"MatchedStatements":    []any{},
 			"MissingContextValues": []any{},
+		})
+	}
+	// Fallback: if no policy docs were provided, default to allowed (open emulator).
+	if len(policyDocs) == 0 {
+		results = make([]map[string]any, 0, len(actions))
+		for _, action := range actions {
+			for _, resource := range resources {
+				results = append(results, map[string]any{
+					"EvalActionName":       action,
+					"EvalResourceName":     resource,
+					"EvalDecision":         "allowed",
+					"MatchedStatements":    []any{},
+					"MissingContextValues": []any{},
+				})
+			}
 		}
 	}
 	return provider.OK(map[string]any{
 		"EvaluationResults": results,
 		"IsTruncated":       false,
 	})
+}
+
+// ─── Service-linked roles ──────────────────────────────────────────────────────
+
+func (p *IAMProvider) CreateServiceLinkedRole(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	serviceName := strParam(nr.Params, "AWSServiceName")
+	if serviceName == "" {
+		serviceName = strParam(nr.Params, "ServiceName")
+	}
+	if serviceName == "" {
+		return nil, model.NewProviderError("ValidationError", "AWSServiceName is required", 400)
+	}
+
+	entry, ok := slrCatalog[serviceName]
+	if !ok {
+		// Unknown service — create a generic SLR.
+		entry = slrEntry{
+			RoleName:    "AWSServiceRoleFor" + strings.Title(strings.Split(serviceName, ".")[0]),
+			PolicyARN:   "",
+			Description: "Service-linked role for " + serviceName,
+		}
+	}
+
+	customSuffix := strParam(nr.Params, "CustomSuffix")
+	roleName := "aws-service-role/" + serviceName + "/" + entry.RoleName
+	if customSuffix != "" {
+		roleName = roleName + "_" + customSuffix
+	}
+	displayRoleName := entry.RoleName
+	if customSuffix != "" {
+		displayRoleName = entry.RoleName + "_" + customSuffix
+	}
+
+	// Build the assume role policy document granting the service principal.
+	assumeDoc := fmt.Sprintf(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"%s"},"Action":"sts:AssumeRole"}]}`,
+		serviceName,
+	)
+
+	arn := nr.ResourceID("iam-role", roleName)
+	r := roleData{
+		RoleName:                 displayRoleName,
+		RoleID:                   "AROA" + randID(16),
+		Arn:                      arn,
+		Path:                     "/aws-service-role/" + serviceName + "/",
+		AssumeRolePolicyDocument: assumeDoc,
+		Description:              entry.Description,
+		MaxSessionDuration:       3600,
+		Tags:                     map[string]string{},
+		CreateDate:               time.Now().UTC(),
+	}
+	if err := saveEntry(ctx, p.resources, "iam_roles", arn, r); err != nil && err != store.ErrAlreadyExists {
+		return nil, err
+	}
+
+	return provider.OK(map[string]any{"Role": roleMap(r)}), nil
+}
+
+func (p *IAMProvider) DeleteServiceLinkedRole(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	roleName := strParam(nr.Params, "RoleName")
+	if roleName == "" {
+		return nil, model.NewProviderError("ValidationError", "RoleName is required", 400)
+	}
+	// The deletion task ID is the role name (simplified — no async tracking needed).
+	deletionTaskID := "task/" + roleName
+	// Attempt deletion — ignore not-found.
+	_ = p.resources.Delete(ctx, "iam_roles", nr.ResourceID("iam-role", roleName))
+	return provider.OK(map[string]any{"DeletionTaskId": deletionTaskID}), nil
+}
+
+func (p *IAMProvider) GetServiceLinkedRoleDeletionStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Always report SUCCEEDED — deletion is synchronous in the emulator.
+	return provider.OK(map[string]any{"Status": "SUCCEEDED"}), nil
 }

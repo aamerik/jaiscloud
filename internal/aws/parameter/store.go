@@ -21,6 +21,7 @@ type ParameterEntry struct {
 	KMSKeyID    string // only for SecureString
 	Value       []byte // AES-GCM ciphertext for SecureString; plaintext bytes otherwise
 	Version     int64
+	Tier        string // "Standard" | "Advanced"
 	Tags        map[string]string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

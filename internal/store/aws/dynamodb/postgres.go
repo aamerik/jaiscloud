@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -289,11 +290,29 @@ func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, reqs []Ba
 	return result, nil
 }
 
+// isSerializationFailure returns true when err is a PostgreSQL serialization
+// failure (SQLSTATE 40001 — could not serialize access).
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001"
+	}
+	return false
+}
+
 // TransactWriteItems runs all condition checks and writes in a single Serializable transaction.
 // SELECT ... FOR UPDATE locks each row during condition evaluation to prevent TOCTOU races.
+// A PostgreSQL serialization failure (40001) is surfaced as TransactionConflict.
 func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
+		if isSerializationFailure(err) {
+			reasons := make([]CancellationReason, len(ops))
+			for i := range reasons {
+				reasons[i] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+			}
+			return reasons, nil
+		}
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
@@ -311,6 +330,13 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 		if err == nil {
 			json.Unmarshal(raw, &item)
 		} else if !errors.Is(err, pgx.ErrNoRows) {
+			if isSerializationFailure(err) {
+				// Populate all remaining reasons as TransactionConflict.
+				for j := range reasons {
+					reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+				}
+				return reasons, nil
+			}
 			return nil, err
 		}
 		if item == nil {
@@ -323,12 +349,20 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 				return nil, ferr
 			}
 			if !ok {
-				reasons[i] = CancellationReason{Code: "ConditionalCheckFailed", Message: "The conditional request failed"}
+				reason := CancellationReason{Code: CancelCodeConditionalCheckFailed, Message: "The conditional request failed"}
+				if op.ReturnValuesOnConditionCheckFailure == "ALL_OLD" && len(raw) > 0 {
+					// Attach the current item that was just fetched.
+					var cur map[string]any
+					if json.Unmarshal(raw, &cur) == nil {
+						reason.Item = cur
+					}
+				}
+				reasons[i] = reason
 				anyFailed = true
 				continue
 			}
 		}
-		reasons[i] = CancellationReason{Code: "None"}
+		reasons[i] = CancellationReason{Code: CancelCodeNone}
 	}
 	if anyFailed {
 		return reasons, nil
@@ -345,12 +379,24 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 				ON CONFLICT (table_name, pk_hash) DO UPDATE
 					SET item=$3, updated_at=now()
 			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				if isSerializationFailure(err) {
+					for j := range reasons {
+						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+					}
+					return reasons, nil
+				}
 				return nil, err
 			}
 		case "Delete":
 			if _, err := tx.Exec(ctx, `
 				DELETE FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
 			`, op.Table, op.PKHash); err != nil {
+				if isSerializationFailure(err) {
+					for j := range reasons {
+						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+					}
+					return reasons, nil
+				}
 				return nil, err
 			}
 		case "Update":
@@ -363,6 +409,12 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 			if err == nil {
 				json.Unmarshal(existingRaw, &existing)
 			} else if !errors.Is(err, pgx.ErrNoRows) {
+				if isSerializationFailure(err) {
+					for j := range reasons {
+						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+					}
+					return reasons, nil
+				}
 				return nil, err
 			}
 			if existing == nil {
@@ -384,11 +436,26 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 				ON CONFLICT (table_name, pk_hash) DO UPDATE
 					SET item=$3, updated_at=now()
 			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				if isSerializationFailure(err) {
+					for j := range reasons {
+						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+					}
+					return reasons, nil
+				}
 				return nil, err
 			}
 		}
 	}
-	return nil, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if isSerializationFailure(err) {
+			for j := range reasons {
+				reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
+			}
+			return reasons, nil
+		}
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (s *PostgresDynamoDBItemStore) Reset() {

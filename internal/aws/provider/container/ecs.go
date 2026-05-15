@@ -14,6 +14,7 @@ import (
 
 	ecsexec "jaiscloud/internal/executor/ecs"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -243,7 +244,20 @@ func (p *ContainerProvider) ListClusters(ctx context.Context, nr *model.Normaliz
 		json.Unmarshal(e.Data, &c)
 		arns = append(arns, c.ClusterArn)
 	}
-	return provider.OK(map[string]any{"clusterArns": arns}), nil
+	maxResults := 100
+	if v, ok := nr.Params["maxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["nextToken"].(string)
+	page, next, pgErr := pagination.Paginate(arns, maxResults, token, "ListClusters")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"clusterArns": page}
+	if next != "" {
+		data["nextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── Task Definitions ─────────────────────────────────────────────────────────
@@ -363,10 +377,20 @@ func (p *ContainerProvider) ListTaskDefinitions(ctx context.Context, nr *model.N
 		json.Unmarshal(e.Data, &td)
 		arns = append(arns, td.TaskDefinitionArn)
 	}
-	if max := intParam(nr.Params, "maxResults"); max > 0 && max < len(arns) {
-		arns = arns[:max]
+	maxResults := 100
+	if v := intParam(nr.Params, "maxResults"); v > 0 {
+		maxResults = v
 	}
-	return provider.OK(map[string]any{"taskDefinitionArns": arns}), nil
+	token, _ := nr.Params["nextToken"].(string)
+	page, next, pgErr := pagination.Paginate(arns, maxResults, token, "ListTaskDefinitions")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"taskDefinitionArns": page}
+	if next != "" {
+		data["nextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── Services ─────────────────────────────────────────────────────────────────
@@ -501,7 +525,20 @@ func (p *ContainerProvider) ListServices(ctx context.Context, nr *model.Normaliz
 			arns = append(arns, svc.ServiceArn)
 		}
 	}
-	return provider.OK(map[string]any{"serviceArns": arns}), nil
+	maxResults := 100
+	if v, ok := nr.Params["maxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["nextToken"].(string)
+	page, next, pgErr := pagination.Paginate(arns, maxResults, token, "ListServices")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"serviceArns": page}
+	if next != "" {
+		data["nextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -832,7 +869,20 @@ func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedR
 			}
 		}
 	}
-	return provider.OK(map[string]any{"taskArns": arns}), nil
+	maxResults := 100
+	if v, ok := nr.Params["maxResults"].(float64); ok && v > 0 {
+		maxResults = int(v)
+	}
+	token, _ := nr.Params["nextToken"].(string)
+	page, next, pgErr := pagination.Paginate(arns, maxResults, token, "ListTasks")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterException", pgErr.Error(), 400)
+	}
+	data := map[string]any{"taskArns": page}
+	if next != "" {
+		data["nextToken"] = next
+	}
+	return provider.OK(data), nil
 }
 
 func (p *ContainerProvider) UpdateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

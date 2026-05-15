@@ -86,6 +86,7 @@ type KeyStore interface {
 	// Grant operations
 	CreateGrant(ctx context.Context, e GrantEntry) error
 	GetGrant(ctx context.Context, grantID string) (GrantEntry, error)
+	GetGrantByToken(ctx context.Context, token string) (GrantEntry, error)
 	RevokeGrant(ctx context.Context, grantID string) error
 	ListGrants(ctx context.Context, keyID string) ([]GrantEntry, error)
 

@@ -1,0 +1,44 @@
+package handlers
+
+import (
+	"context"
+
+	stackprovider "jaiscloud/internal/aws/provider/stack"
+	apigwprovider "jaiscloud/internal/aws/provider/apigw"
+	"jaiscloud/internal/model"
+)
+
+// NewAPIGatewayMethodHandler returns a ResourceHandler for AWS::ApiGateway::Method.
+func NewAPIGatewayMethodHandler(apigwP *apigwprovider.GatewayProvider) stackprovider.ResourceHandler {
+	return stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			restAPIID := propStr(props, "RestApiId", "")
+			resourceID := propStr(props, "ResourceId", "")
+			httpMethod := propStr(props, "HttpMethod", "GET")
+			authType := propStr(props, "AuthorizationType", "NONE")
+			if _, err := apigwP.PutMethod(ctx, child(nr, map[string]any{
+				"restApiId":         restAPIID,
+				"resourceId":        resourceID,
+				"httpMethod":        httpMethod,
+				"authorizationType": authType,
+			})); err != nil {
+				return "", nil, err
+			}
+			physicalID := restAPIID + "/" + resourceID + "/" + httpMethod
+			return physicalID, map[string]any{}, nil
+		},
+		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
+			restAPIID := propStr(props, "RestApiId", "")
+			resourceID := propStr(props, "ResourceId", "")
+			httpMethod := propStr(props, "HttpMethod", "")
+			_, err := apigwP.DeleteMethod(ctx, &model.NormalizedRequest{
+				Params: map[string]any{
+					"restApiId":  restAPIID,
+					"resourceId": resourceID,
+					"httpMethod": httpMethod,
+				},
+			})
+			return err
+		},
+	}
+}

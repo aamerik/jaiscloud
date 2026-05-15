@@ -1,0 +1,35 @@
+package handlers
+
+import (
+	"context"
+
+	stackprovider "jaiscloud/internal/aws/provider/stack"
+	"jaiscloud/internal/aws/provider/table"
+	"jaiscloud/internal/model"
+)
+
+// NewDynamoDBGlobalTableHandler returns a ResourceHandler for AWS::DynamoDB::GlobalTable.
+func NewDynamoDBGlobalTableHandler(tableP *table.TableProvider) stackprovider.ResourceHandler {
+	return stackprovider.ResourceHandler{
+		Create: func(ctx context.Context, logicalID string, props map[string]any, nr *model.NormalizedRequest) (string, map[string]any, error) {
+			name := propStr(props, "TableName", logicalID)
+			replicas := props["Replicas"]
+			resp, err := tableP.CreateGlobalTable(ctx, child(nr, map[string]any{
+				"GlobalTableName":   name,
+				"ReplicationGroup":  replicas,
+			}))
+			if err != nil {
+				return "", nil, err
+			}
+			globalTableName := ""
+			if gtd, ok := resp.Data["GlobalTableDescription"].(map[string]any); ok {
+				globalTableName, _ = gtd["GlobalTableName"].(string)
+			}
+			return globalTableName, map[string]any{"TableName": globalTableName}, nil
+		},
+		// GlobalTable cannot be deleted directly in real AWS; no-op.
+		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
+			return nil
+		},
+	}
+}
