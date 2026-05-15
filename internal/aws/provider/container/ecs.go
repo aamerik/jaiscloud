@@ -6,8 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strconv"
+	"sync"
+	"time"
 
+	ecsexec "jaiscloud/internal/executor/ecs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -15,11 +20,41 @@ import (
 
 // ContainerProvider handles ECS clusters, task definitions, services, and tasks.
 type ContainerProvider struct {
-	resources store.ResourceStore
+	resources         store.ResourceStore
+	executor          ecsexec.Executor
+	jaisCloudEndpoint string
+	mu                sync.Mutex
+	handles           map[string]ecsexec.TaskHandle // taskShortID → handle
+	wg                sync.WaitGroup
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 func New(resources store.ResourceStore) *ContainerProvider {
-	return &ContainerProvider{resources: resources}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ContainerProvider{
+		resources: resources,
+		executor:  &ecsexec.MockExecutor{},
+		handles:   make(map[string]ecsexec.TaskHandle),
+		ctx:       ctx,
+		cancel:    cancel,
+	}
+}
+
+// SetExecutor replaces the container backend used for RunTask/StopTask.
+func (p *ContainerProvider) SetExecutor(e ecsexec.Executor) {
+	p.executor = e
+}
+
+// SetJaisCloudEndpoint sets the endpoint injected as AWS_ENDPOINT_URL in task containers.
+func (p *ContainerProvider) SetJaisCloudEndpoint(ep string) {
+	p.jaisCloudEndpoint = ep
+}
+
+// Shutdown waits for all background task-watcher goroutines to finish.
+func (p *ContainerProvider) Shutdown() {
+	p.cancel()
+	p.wg.Wait()
 }
 
 func (p *ContainerProvider) Routes() map[string]provider.HandlerFunc {
@@ -472,47 +507,245 @@ func (p *ContainerProvider) ListServices(ctx context.Context, nr *model.Normaliz
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
 type task struct {
-	TaskArn        string `json:"taskArn"`
-	ClusterArn     string `json:"clusterArn"`
-	TaskDefinition string `json:"taskDefinition"`
-	LastStatus     string `json:"lastStatus"`
-	DesiredStatus  string `json:"desiredStatus"`
-	Group          string `json:"group"`
+	TaskArn        string           `json:"taskArn"`
+	ClusterArn     string           `json:"clusterArn"`
+	TaskDefinition string           `json:"taskDefinition"`
+	LastStatus     string           `json:"lastStatus"`
+	DesiredStatus  string           `json:"desiredStatus"`
+	Group          string           `json:"group"`
+	Containers     []taskContainer  `json:"containers,omitempty"`
+}
+
+type taskContainer struct {
+	Name       string `json:"name"`
+	LastStatus string `json:"lastStatus"`
+	ExitCode   *int   `json:"exitCode,omitempty"`
 }
 
 func (t task) toWire() map[string]any {
+	containers := make([]map[string]any, 0, len(t.Containers))
+	for _, c := range t.Containers {
+		m := map[string]any{
+			"name":       c.Name,
+			"lastStatus": c.LastStatus,
+		}
+		if c.ExitCode != nil {
+			m["exitCode"] = *c.ExitCode
+		}
+		containers = append(containers, m)
+	}
 	return map[string]any{
-		"taskArn":        t.TaskArn,
-		"clusterArn":     t.ClusterArn,
+		"taskArn":           t.TaskArn,
+		"clusterArn":        t.ClusterArn,
 		"taskDefinitionArn": t.TaskDefinition,
-		"lastStatus":     t.LastStatus,
-		"desiredStatus":  t.DesiredStatus,
-		"group":          t.Group,
+		"lastStatus":        t.LastStatus,
+		"desiredStatus":     t.DesiredStatus,
+		"group":             t.Group,
+		"containers":        containers,
 	}
 }
 
 func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName := clusterParam(nr.Params)
-	td, _ := nr.Params["taskDefinition"].(string)
+	tdParam, _ := nr.Params["taskDefinition"].(string)
 	count := intParam(nr.Params, "count")
 	if count == 0 {
 		count = 1
 	}
+
+	// Resolve task definition.
+	tdID := resolveTaskDefID(tdParam)
+	var td taskDefinition
+	if e, err := p.resources.Get(ctx, rtTaskDefinition, tdID); err == nil {
+		json.Unmarshal(e.Data, &td)
+	}
+
 	tasks := []map[string]any{}
 	for i := 0; i < count; i++ {
 		id := newID()
+		taskARN := nr.ResourceID("ecs-task", clusterName+"/"+id)
+
+		var containers []taskContainer
+		for _, cd := range td.ContainerDefinitions {
+			name, _ := cd["name"].(string)
+			containers = append(containers, taskContainer{Name: name, LastStatus: "PROVISIONING"})
+		}
+
 		t := task{
-			TaskArn:        nr.ResourceID("ecs-task", clusterName+"/"+id),
+			TaskArn:        taskARN,
 			ClusterArn:     nr.ResourceID("ecs-cluster", clusterName),
-			TaskDefinition: td,
-			LastStatus:     "RUNNING",
+			TaskDefinition: tdParam,
+			LastStatus:     "PROVISIONING",
 			DesiredStatus:  "RUNNING",
+			Containers:     containers,
 		}
 		data, _ := json.Marshal(t)
 		p.resources.Create(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+
+		spec := p.buildTaskSpec(nr, clusterName, taskARN, td)
+		handle, err := p.executor.Run(ctx, spec)
+		if err != nil {
+			t.LastStatus = "STOPPED"
+			t.DesiredStatus = "STOPPED"
+			data, _ = json.Marshal(t)
+			p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+			slog.Warn("ecs: run task failed", "task", id, "err", err)
+		} else {
+			// Mock handles advance immediately to RUNNING so callers see a stable
+			// pre-STOPPED state; real executors start at PROVISIONING and the
+			// watcher advances the status as containers start.
+			if handle.Mode == ecsexec.ModeMock {
+				t.LastStatus = "RUNNING"
+				for i := range t.Containers {
+					t.Containers[i].LastStatus = "RUNNING"
+				}
+				data, _ = json.Marshal(t)
+				p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+			}
+			p.mu.Lock()
+			p.handles[id] = handle
+			p.mu.Unlock()
+			p.wg.Add(1)
+			go p.watchTask(id, taskARN, handle)
+		}
+
 		tasks = append(tasks, t.toWire())
 	}
 	return provider.OK(map[string]any{"tasks": tasks, "failures": []any{}}), nil
+}
+
+// buildTaskSpec constructs an ecsexec.TaskSpec from a resolved task definition.
+func (p *ContainerProvider) buildTaskSpec(nr *model.NormalizedRequest, clusterName, taskARN string, td taskDefinition) ecsexec.TaskSpec {
+	awsCreds := map[string]string{
+		"AWS_ACCESS_KEY_ID":     nr.AccountID,
+		"AWS_SECRET_ACCESS_KEY": "test",
+		"AWS_SESSION_TOKEN":     "test",
+		"AWS_REGION":            nr.Region,
+	}
+	if p.jaisCloudEndpoint != "" {
+		awsCreds["AWS_ENDPOINT_URL"] = p.jaisCloudEndpoint
+	}
+
+	var containers []ecsexec.ContainerSpec
+	for _, cd := range td.ContainerDefinitions {
+		name, _ := cd["name"].(string)
+		image, _ := cd["image"].(string)
+		env := make(map[string]string)
+		// Inject AWS creds first; user env vars can override below.
+		for k, v := range awsCreds {
+			env[k] = v
+		}
+		if rawEnv, ok := cd["environment"].([]any); ok {
+			for _, item := range rawEnv {
+				if m, ok := item.(map[string]any); ok {
+					k, _ := m["name"].(string)
+					v, _ := m["value"].(string)
+					if k != "" {
+						env[k] = v
+					}
+				}
+			}
+		}
+
+		var mem, cpu int64
+		if v, ok := cd["memory"]; ok {
+			mem = toMB(v) * 1024 * 1024
+		}
+		if v, ok := cd["cpu"]; ok {
+			cpu = toInt64(v)
+		}
+
+		var portMappings []ecsexec.PortMapping
+		if raw, ok := cd["portMappings"].([]any); ok {
+			for _, pm := range raw {
+				if m, ok := pm.(map[string]any); ok {
+					portMappings = append(portMappings, ecsexec.PortMapping{
+						ContainerPort: int(toInt64(m["containerPort"])),
+						HostPort:      int(toInt64(m["hostPort"])),
+						Protocol:      stringOrDefault(m["protocol"], "tcp"),
+					})
+				}
+			}
+		}
+
+		var logCfg ecsexec.LogConfig
+		if rawLog, ok := cd["logConfiguration"].(map[string]any); ok {
+			logCfg.LogDriver, _ = rawLog["logDriver"].(string)
+			if opts, ok := rawLog["options"].(map[string]any); ok {
+				logCfg.Options = make(map[string]string)
+				for k, v := range opts {
+					logCfg.Options[k], _ = v.(string)
+				}
+			}
+		}
+
+		containers = append(containers, ecsexec.ContainerSpec{
+			Name:         name,
+			Image:        image,
+			Env:          env,
+			Memory:       mem,
+			CPU:          cpu,
+			PortMappings: portMappings,
+			LogConfig:    logCfg,
+		})
+	}
+
+	return ecsexec.TaskSpec{
+		ClusterName:       clusterName,
+		TaskARN:           taskARN,
+		TaskDefName:       td.Family,
+		Containers:        containers,
+		AccountID:         nr.AccountID,
+		Region:            nr.Region,
+		JaisCloudEndpoint: p.jaisCloudEndpoint,
+	}
+}
+
+// watchTask polls the executor every 2s and updates the persisted task record.
+func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.TaskHandle) {
+	defer p.wg.Done()
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+
+		st, err := p.executor.StatusOf(p.ctx, handle)
+		if err != nil {
+			slog.Warn("ecs: status poll error", "task", shortID, "err", err)
+			continue
+		}
+
+		e, getErr := p.resources.Get(p.ctx, rtTask, shortID)
+		if getErr != nil {
+			return
+		}
+		var t task
+		json.Unmarshal(e.Data, &t)
+		t.LastStatus = st.LastStatus
+
+		// Sync per-container statuses.
+		for i := range t.Containers {
+			for _, cst := range st.Containers {
+				if cst.Name == t.Containers[i].Name {
+					t.Containers[i].LastStatus = cst.LastStatus
+					t.Containers[i].ExitCode = cst.ExitCode
+					break
+				}
+			}
+		}
+
+		data, _ := json.Marshal(t)
+		p.resources.Update(p.ctx, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
+
+		if st.LastStatus == "STOPPED" {
+			p.mu.Lock()
+			delete(p.handles, shortID)
+			p.mu.Unlock()
+			return
+		}
+	}
 }
 
 func (p *ContainerProvider) DescribeTasks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -542,11 +775,45 @@ func (p *ContainerProvider) StopTask(ctx context.Context, nr *model.NormalizedRe
 	}
 	var t task
 	json.Unmarshal(e.Data, &t)
+
+	p.mu.Lock()
+	handle, hasHandle := p.handles[shortID]
+	p.mu.Unlock()
+	if hasHandle {
+		p.executor.Stop(ctx, handle) //nolint:errcheck
+	}
+
 	t.LastStatus = "STOPPED"
 	t.DesiredStatus = "STOPPED"
 	data, _ := json.Marshal(t)
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
 	return provider.OK(map[string]any{"task": t.toWire()}), nil
+}
+
+// ─── numeric helpers ──────────────────────────────────────────────────────────
+
+func toInt64(v any) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case string:
+		n, _ := strconv.ParseInt(t, 10, 64)
+		return n
+	}
+	return 0
+}
+
+func toMB(v any) int64 { return toInt64(v) }
+
+func stringOrDefault(v any, def string) string {
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return def
 }
 
 func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

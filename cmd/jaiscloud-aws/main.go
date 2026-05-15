@@ -57,6 +57,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
+	ecsexec "jaiscloud/internal/executor/ecs"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
 	"jaiscloud/internal/model"
@@ -553,7 +554,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(dns.New(s.resources).Routes())
 	registry.RegisterAll(rdsprovider.New(s.resources).Routes())
 	registry.RegisterAll(cacheprovider.New(s.resources).Routes())
-	registry.RegisterAll(containerprovider.New(s.resources).Routes())
+	ecsP := containerprovider.New(s.resources)
+	registry.RegisterAll(ecsP.Routes())
 	registry.RegisterAll(stackP.Routes())
 	registry.RegisterAll(emrP.Routes())
 	registry.RegisterAll(emrcP.Routes())
@@ -566,7 +568,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	logsProvider := cwlogs.New()
 	registry.RegisterAll(logsProvider.Routes())
 
-	// Wire code loader and CW Logs ingestor into real executors.
+	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
 		dockerExec.SetCodeLoader(funcP)
 		dockerExec.SetLogsAPI(logsProvider)
@@ -574,6 +576,22 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
 		k8sExec.SetCodeLoader(funcP)
 		k8sExec.SetLogsAPI(logsProvider)
+	}
+
+	// Wire ECS executor.
+	ecsMode, _ := config.ExecutorMode("ecs", "mock")
+	var ecsExec ecsexec.Executor
+	switch ecsMode {
+	case "docker":
+		ecsExec = ecsexec.New(ecsexec.ModeDocker, logsProvider)
+	case "k8s":
+		ecsExec = ecsexec.New(ecsexec.ModeK8s, logsProvider)
+	default:
+		ecsExec = ecsexec.New(ecsexec.ModeMock, nil)
+	}
+	ecsP.SetExecutor(ecsExec)
+	if cfg.AWSEmulatorEndpoint != "" {
+		ecsP.SetJaisCloudEndpoint(cfg.AWSEmulatorEndpoint)
 	}
 
 	// Phase 15 providers
