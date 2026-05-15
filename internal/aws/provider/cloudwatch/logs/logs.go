@@ -9,7 +9,9 @@ import (
 
 // Provider handles CloudWatch Logs API operations.
 type Provider struct {
-	store *memStore
+	store      *memStore
+	subInvoker LambdaRawInvoker
+	cwMetrics  MetricDataPutter
 }
 
 // New constructs a Provider with a fresh in-memory store.

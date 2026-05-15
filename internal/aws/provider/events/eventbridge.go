@@ -9,9 +9,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"jaiscloud/internal/aws/provider/events/pattern"
+	"jaiscloud/internal/aws/provider/events/scheduler"
+	"jaiscloud/internal/aws/provider/events/targets"
+	"jaiscloud/internal/aws/provider/events/transform"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -20,27 +25,43 @@ import (
 )
 
 const (
-	resTypeRule              = "eb_rule"
-	resTypeTarget            = "eb_target"
-	resTypeBus               = "eb_bus"
-	resTypeEBTags            = "eb_tags"
-	resTypeArchive           = "eb_archive"
-	resTypeReplay            = "eb_replay"
-	resTypeConnection        = "eb_connection"
-	resTypeApiDestination    = "eb_api_destination"
+	resTypeRule           = "eb_rule"
+	resTypeTarget         = "eb_target"
+	resTypeBus            = "eb_bus"
+	resTypeEBTags         = "eb_tags"
+	resTypeArchive        = "eb_archive"
+	resTypeReplay         = "eb_replay"
+	resTypeConnection     = "eb_connection"
+	resTypeApiDestination = "eb_api_destination"
+	// jaiscloudHostPlaceholder kept for backward compat with existing stored targets.
 	jaiscloudHostPlaceholder = "jaiscloud-host"
 )
 
 // EventBridgeProvider handles EventBridge (CloudWatch Events) operations.
 type EventBridgeProvider struct {
-	resources store.ResourceStore
-	messages  sqsstore.SQSMessageStore
-	bus       *events.EventBus
-	port      int
+	resources  store.ResourceStore
+	messages   sqsstore.SQSMessageStore
+	bus        *events.EventBus
+	port       int
+	dispatcher *targets.Dispatcher
+	scheduler  *scheduler.Scheduler
+
+	patternMu    sync.Mutex
+	patternCache map[string]*pattern.Pattern
+
+	// archiveEvents holds in-memory event ring per archive name.
+	archiveMu     sync.Mutex
+	archiveEvents map[string][]map[string]any
 }
 
 func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *EventBridgeProvider {
-	p := &EventBridgeProvider{resources: resources, messages: messages, bus: bus}
+	p := &EventBridgeProvider{
+		resources:     resources,
+		messages:      messages,
+		bus:           bus,
+		patternCache:  make(map[string]*pattern.Pattern),
+		archiveEvents: make(map[string][]map[string]any),
+	}
 	p.subscribeToEventBus()
 	return p
 }
@@ -49,6 +70,59 @@ func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *
 func (p *EventBridgeProvider) WithPort(port int) *EventBridgeProvider {
 	p.port = port
 	return p
+}
+
+// SetTargetDispatcher wires the cross-service target dispatcher (second-pass wiring).
+func (p *EventBridgeProvider) SetTargetDispatcher(d *targets.Dispatcher) {
+	p.dispatcher = d
+}
+
+// SetScheduler wires the cron/rate scheduler (second-pass wiring).
+func (p *EventBridgeProvider) SetScheduler(s *scheduler.Scheduler) {
+	p.scheduler = s
+}
+
+// InternalPutEvents delivers events into the rule-matching pipeline from other services.
+func (p *EventBridgeProvider) InternalPutEvents(ctx context.Context, entries []map[string]any) error {
+	for _, em := range entries {
+		var detail any = em["Detail"]
+		if s, ok := em["Detail"].(string); ok {
+			var parsed any
+			if json.Unmarshal([]byte(s), &parsed) == nil {
+				detail = parsed
+			}
+		}
+		envelope := map[string]any{
+			"version":     "0",
+			"id":          newEventID(),
+			"source":      em["Source"],
+			"detail-type": em["DetailType"],
+			"detail":      detail,
+			"account":     "",
+			"region":      "",
+			"time":        time.Now().UTC().Format(time.RFC3339),
+		}
+		p.deliverEvent(ctx, envelope)
+	}
+	return nil
+}
+
+// compiledPattern returns a cached compiled pattern, compiling on first access.
+func (p *EventBridgeProvider) compiledPattern(raw string) (*pattern.Pattern, error) {
+	if raw == "" {
+		return &pattern.Pattern{}, nil
+	}
+	p.patternMu.Lock()
+	defer p.patternMu.Unlock()
+	if pat, ok := p.patternCache[raw]; ok {
+		return pat, nil
+	}
+	pat, err := pattern.Compile(raw, pattern.ModeEventBridge)
+	if err != nil {
+		return nil, err
+	}
+	p.patternCache[raw] = pat
+	return pat, nil
 }
 
 func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
@@ -153,17 +227,24 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 		state = "ENABLED"
 	}
 
-	// nr.ResourceID is always set by the gateway for every cloud.
-	// AWSResourceID returns arn:aws:events:..., AzureResourceID/GCPResourceID return stubs.
 	arn := nr.ResourceID("events-rule", name)
-
 	busName := normBus(strParam(nr.Params, "EventBusName"))
+	eventPattern := strParam(nr.Params, "EventPattern")
+	schedExpr := strParam(nr.Params, "ScheduleExpression")
+
+	// Validate EventPattern at write time.
+	if eventPattern != "" {
+		if _, err := p.compiledPattern(eventPattern); err != nil {
+			return nil, &model.ProviderError{Code: "InvalidEventPatternException", Message: err.Error(), HTTPStatus: http.StatusBadRequest}
+		}
+	}
+
 	rule := ruleData{
 		Name:         name,
 		Arn:          arn,
 		EventBusName: busName,
-		EventPattern: strParam(nr.Params, "EventPattern"),
-		ScheduleExpr: strParam(nr.Params, "ScheduleExpression"),
+		EventPattern: eventPattern,
+		ScheduleExpr: schedExpr,
 		State:        state,
 		Description:  strParam(nr.Params, "Description"),
 	}
@@ -176,6 +257,14 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 			return nil, err
 		}
 	}
+
+	// Wire scheduler if ScheduleExpression is set and scheduler is available.
+	if schedExpr != "" && p.scheduler != nil && state == "ENABLED" {
+		hctx := scheduler.HandlerCtx{Region: nr.Region, AccountID: nr.AccountID}
+		// Targets are loaded when EnableRule/DisableRule fires; here just register.
+		_ = p.scheduler.Add(arn, schedExpr, hctx, nil)
+	}
+
 	return provider.OK(map[string]any{"RuleArn": arn}), nil
 }
 
@@ -264,15 +353,21 @@ func (p *EventBridgeProvider) setRuleState(ctx context.Context, busName, name, s
 
 // ─── target CRUD ──────────────────────────────────────────────────────────────
 
-// targetData stores a rule target. TargetType and QueueURL are resolved
-// at PutTargets time from the cloud-specific ARN so delivery is cloud-agnostic.
-// Storing QueueURL directly avoids a runtime resource-store lookup and removes
-// any coupling to the cloud's queue resource type name ("sqs_queues", etc.).
+// targetData stores a rule target with full transformation fields.
 type targetData struct {
-	ID         string `json:"Id"`
-	Arn        string `json:"Arn"`
-	TargetType string `json:"TargetType,omitempty"` // "sqs" | "" (unsupported type)
-	QueueURL   string `json:"QueueURL,omitempty"`   // pre-resolved queue URL for sqs targets
+	ID               string            `json:"Id"`
+	Arn              string            `json:"Arn"`
+	TargetType       string            `json:"TargetType,omitempty"`
+	QueueURL         string            `json:"QueueURL,omitempty"`
+	Input            string            `json:"Input,omitempty"`
+	InputPath        string            `json:"InputPath,omitempty"`
+	InputTransformer *inputTransformer `json:"InputTransformer,omitempty"`
+	DLQArn           string            `json:"DLQArn,omitempty"`
+}
+
+type inputTransformer struct {
+	InputPathsMap map[string]string `json:"InputPathsMap,omitempty"`
+	InputTemplate string            `json:"InputTemplate,omitempty"`
 }
 
 func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -285,9 +380,9 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + ruleName + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
 
-	targets, _ := nr.Params["Targets"].([]any)
+	rawTargets, _ := nr.Params["Targets"].([]any)
 	var failed []map[string]any
-	for _, t := range targets {
+	for _, t := range rawTargets {
 		tm, ok := t.(map[string]any)
 		if !ok {
 			continue
@@ -298,9 +393,36 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 			failed = append(failed, map[string]any{"TargetId": id, "ErrorCode": "ValidationException", "ErrorMessage": "Id and Arn are required"})
 			continue
 		}
-		// Resolve target type and queue URL at write time.
-		// Storing the full queue URL means delivery never touches the resource store.
+		// Validate mutually exclusive transform options.
+		hasInputPath := tm["InputPath"] != nil && tm["InputPath"] != ""
+		hasTransformer := tm["InputTransformer"] != nil
+		if hasInputPath && hasTransformer {
+			failed = append(failed, map[string]any{"TargetId": id, "ErrorCode": "ValidationException", "ErrorMessage": "InputPath and InputTransformer are mutually exclusive"})
+			continue
+		}
+
 		td := resolveTargetMeta(nr.Cloud, id, arn, nr.AccountID)
+		if input, _ := tm["Input"].(string); input != "" {
+			td.Input = input
+		}
+		if ip, _ := tm["InputPath"].(string); ip != "" {
+			td.InputPath = ip
+		}
+		if it, ok := tm["InputTransformer"].(map[string]any); ok {
+			td.InputTransformer = &inputTransformer{}
+			if tmpl, _ := it["InputTemplate"].(string); tmpl != "" {
+				td.InputTransformer.InputTemplate = tmpl
+			}
+			if ipm, ok := it["InputPathsMap"].(map[string]any); ok {
+				td.InputTransformer.InputPathsMap = make(map[string]string, len(ipm))
+				for k, v := range ipm {
+					td.InputTransformer.InputPathsMap[k] = fmt.Sprint(v)
+				}
+			}
+		}
+		if dlq, ok := tm["DeadLetterConfig"].(map[string]any); ok {
+			td.DLQArn, _ = dlq["Arn"].(string)
+		}
 		raw, _ := json.Marshal(td)
 		storeID := targetKey(busName, ruleName, id)
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
@@ -317,25 +439,15 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 }
 
 // resolveTargetMeta extracts TargetType and QueueURL from the cloud-specific ARN.
-// The queue URL is stored with a placeholder host that is resolved at delivery time
-// so the URL remains correct after a server restart on a different port.
-// This is the only place that knows about cloud-specific ARN formats for targets.
+// The queue URL is stored with a placeholder host that is resolved at delivery time.
 func resolveTargetMeta(cloud model.Cloud, id, arn, accountID string) targetData {
 	td := targetData{ID: id, Arn: arn}
-	switch cloud {
-	case model.CloudAWS:
-		// AWS SQS ARN: arn:aws:sqs:{region}:{account}:{queueName}
-		if strings.Contains(arn, ":sqs:") {
-			parts := strings.Split(arn, ":")
-			if len(parts) >= 6 {
-				td.TargetType = "sqs"
-				td.QueueURL = fmt.Sprintf("http://%s/%s/%s", jaiscloudHostPlaceholder, accountID, parts[5])
-			}
+	if cloud == model.CloudAWS && strings.Contains(arn, ":sqs:") {
+		parts := strings.Split(arn, ":")
+		if len(parts) >= 6 {
+			td.TargetType = "sqs"
+			td.QueueURL = fmt.Sprintf("http://%s/%s/%s", jaiscloudHostPlaceholder, accountID, parts[len(parts)-1])
 		}
-	case model.CloudAzure:
-		// Azure Service Bus format (future): /subscriptions/.../queues/{name}
-	case model.CloudGCP:
-		// GCP Pub/Sub format (future): projects/{project}/topics/{topic}
 	}
 	return td
 }
@@ -460,10 +572,11 @@ func (p *EventBridgeProvider) subscribeToEventBus() {
 	})
 }
 
-// deliverEvent matches envelope against all ENABLED rules and sends to matching SQS targets.
+// deliverEvent matches envelope against all ENABLED rules and sends to matching targets.
+// It also checks all archives and appends matching events to their in-memory rings.
 func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[string]any) {
-	entries, _ := p.resources.List(ctx, resTypeRule, "")
-	for _, e := range entries {
+	ruleEntries, _ := p.resources.List(ctx, resTypeRule, "")
+	for _, e := range ruleEntries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
 			continue
@@ -471,25 +584,62 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 		if rule.State != "ENABLED" {
 			continue
 		}
-		if !matchesPattern(rule.EventPattern, envelope) {
+		pat, err := p.compiledPattern(rule.EventPattern)
+		if err != nil {
+			continue
+		}
+		if !pat.Match(envelope) {
 			continue
 		}
 		busName := normBus(rule.EventBusName)
-		targets, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, rule.Name))
-		for _, te := range targets {
+		tgts, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, rule.Name))
+		for _, te := range tgts {
 			var td targetData
 			if err := json.Unmarshal(te.Data, &td); err != nil {
 				continue
 			}
-			p.deliverToTarget(ctx, td, envelope)
+			go p.deliverToTarget(ctx, td, envelope)
 		}
+	}
+
+	// Archive matching.
+	archiveEntries, _ := p.resources.List(ctx, resTypeArchive, "")
+	for _, e := range archiveEntries {
+		var arch ebArchive
+		if err := json.Unmarshal(e.Data, &arch); err != nil {
+			continue
+		}
+		if arch.State != "ENABLED" {
+			continue
+		}
+		pat, err := p.compiledPattern(arch.EventPattern)
+		if err != nil {
+			continue
+		}
+		if !pat.Match(envelope) {
+			continue
+		}
+		b, _ := json.Marshal(envelope)
+		arch.EventCount++
+		arch.SizeBytes += int64(len(b))
+		data, _ := json.Marshal(arch)
+		_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeArchive, ID: arch.Name, Data: data})
+
+		p.archiveMu.Lock()
+		p.archiveEvents[arch.Name] = append(p.archiveEvents[arch.Name], envelope)
+		p.archiveMu.Unlock()
 	}
 }
 
-// deliverToTarget sends the event to the target.
-// Uses pre-resolved TargetType/QueueURL — no resource-store lookup, no cloud coupling.
-// The placeholder host in QueueURL is replaced with the actual localhost:port at delivery time.
+// deliverToTarget sends the event to the target using the dispatcher if available,
+// falling back to the legacy SQS-only path for backward compatibility.
 func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData, envelope map[string]any) {
+	if p.dispatcher != nil {
+		tgt := buildTarget(td)
+		_ = p.dispatcher.Send(ctx, tgt, envelope)
+		return
+	}
+	// Legacy fallback: SQS only.
 	if td.TargetType != "sqs" || td.QueueURL == "" {
 		return
 	}
@@ -501,6 +651,28 @@ func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData
 		MessageID: newEventID(),
 		Body:      string(body),
 	})
+}
+
+// buildTarget converts stored targetData to a targets.Target.
+func buildTarget(td targetData) targets.Target {
+	t := targets.Target{
+		ID:    td.ID,
+		Arn:   td.Arn,
+		Input: td.Input,
+	}
+	if td.InputPath != "" {
+		t.InputPath = td.InputPath
+	}
+	if td.InputTransformer != nil {
+		t.InputTransformer = &transform.InputTransformer{
+			InputPathsMap: td.InputTransformer.InputPathsMap,
+			InputTemplate: td.InputTransformer.InputTemplate,
+		}
+	}
+	if td.DLQArn != "" {
+		t.DeadLetterConfig.Arn = td.DLQArn
+	}
+	return t
 }
 
 // ─── event envelope builders ──────────────────────────────────────────────────
@@ -649,59 +821,19 @@ func buildEMRClusterEnvelope(ev events.EMRClusterStateEvent) map[string]any {
 	}
 }
 
-// ─── pattern matching ─────────────────────────────────────────────────────────
+// ─── pattern matching (legacy helper kept for TestEventPattern and extras) ────
 
-// matchesPattern checks whether an event envelope matches an EventBridge event pattern.
-// Supports top-level field matching and nested detail field matching.
-// An empty pattern matches all events.
-func matchesPattern(pattern string, envelope map[string]any) bool {
-	if pattern == "" {
+// matchesPattern compiles and tests an EventBridge pattern against envelope.
+// Kept for backward compatibility with extras.go / permissions.go usage.
+func matchesPattern(rawPattern string, envelope map[string]any) bool {
+	if rawPattern == "" {
 		return true
 	}
-	var p map[string]any
-	if err := json.Unmarshal([]byte(pattern), &p); err != nil {
+	pat, err := pattern.Compile(rawPattern, pattern.ModeEventBridge)
+	if err != nil {
 		return false
 	}
-	return matchObject(p, envelope)
-}
-
-func matchObject(pattern, event map[string]any) bool {
-	for key, patternVal := range pattern {
-		eventVal, exists := event[key]
-		if !exists {
-			return false
-		}
-		switch pv := patternVal.(type) {
-		case []any:
-			// Array in pattern means "value must be one of these"
-			if !matchOneOf(pv, eventVal) {
-				return false
-			}
-		case map[string]any:
-			// Nested object: recurse into detail sub-fields
-			evMap, ok := eventVal.(map[string]any)
-			if !ok {
-				return false
-			}
-			if !matchObject(pv, evMap) {
-				return false
-			}
-		default:
-			if fmt.Sprintf("%v", patternVal) != fmt.Sprintf("%v", eventVal) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func matchOneOf(options []any, val any) bool {
-	for _, opt := range options {
-		if fmt.Sprintf("%v", opt) == fmt.Sprintf("%v", val) {
-			return true
-		}
-	}
-	return false
+	return pat.Match(envelope)
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -1038,18 +1170,17 @@ func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.Normali
 			}
 		}
 	}
+	srcARN := strParam(nr.Params, "EventSourceArn")
 	replay := ebReplay{
 		Name:            name,
 		ARN:             nr.ResourceID("events-replay", name),
-		EventSourceARN:  strParam(nr.Params, "EventSourceArn"),
+		EventSourceARN:  srcARN,
 		DestinationARN:  destARN,
 		FilterARNs:      filterARNs,
 		Description:     strParam(nr.Params, "Description"),
-		State:           "COMPLETED",
+		State:           "RUNNING",
 		ReplayStartTime: time.Now().UTC(),
 	}
-	now := time.Now().UTC()
-	replay.ReplayEndTime = &now
 	data, _ := json.Marshal(replay)
 	entry := store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data}
 	if err := p.resources.Create(ctx, entry); err != nil {
@@ -1059,7 +1190,55 @@ func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.Normali
 			return nil, err
 		}
 	}
+
+	// Look up archive name from ARN suffix, replay stored events.
+	archiveName := srcARN
+	if idx := strings.LastIndex(srcARN, "/"); idx >= 0 {
+		archiveName = srcARN[idx+1:]
+	}
+	// Strip "archive/" prefix if present from ARN format.
+	if idx := strings.LastIndex(archiveName, ":"); idx >= 0 {
+		archiveName = archiveName[idx+1:]
+	}
+	go p.replayArchive(context.Background(), name, archiveName, destARN)
+
 	return provider.OK(map[string]any{"ReplayArn": replay.ARN, "State": replay.State, "ReplayStartTime": replay.ReplayStartTime.Unix()}), nil
+}
+
+func (p *EventBridgeProvider) replayArchive(ctx context.Context, replayName, archiveName, destARN string) {
+	p.archiveMu.Lock()
+	evts := make([]map[string]any, len(p.archiveEvents[archiveName]))
+	copy(evts, p.archiveEvents[archiveName])
+	p.archiveMu.Unlock()
+
+	for i := 0; i < len(evts); i += 10 {
+		end := i + 10
+		if end > len(evts) {
+			end = len(evts)
+		}
+		batch := evts[i:end]
+		for _, ev := range batch {
+			ev["replay-name"] = replayName
+			if p.dispatcher != nil && destARN != "" {
+				t := targets.Target{ID: "replay", Arn: destARN}
+				_ = p.dispatcher.Send(ctx, t, ev)
+			} else {
+				p.deliverEvent(ctx, ev)
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	e, err := p.resources.Get(ctx, resTypeReplay, replayName)
+	if err != nil {
+		return
+	}
+	var r ebReplay
+	json.Unmarshal(e.Data, &r)
+	r.State = "COMPLETED"
+	r.ReplayEndTime = &now
+	data, _ := json.Marshal(r)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeReplay, ID: replayName, Data: data})
 }
 
 func (p *EventBridgeProvider) DescribeReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

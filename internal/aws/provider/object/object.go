@@ -39,6 +39,7 @@ type ObjectProvider struct {
 	resources  store.ResourceStore
 	notifStore sync.Map
 	bus        *events.EventBus
+	fanout     S3FanoutConfig
 }
 
 func New(meta objectstore.ObjectMetaStore, blobs blobfs.BlobStore) *ObjectProvider {

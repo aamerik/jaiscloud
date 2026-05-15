@@ -29,6 +29,9 @@ type Provider struct {
 
 	mu      sync.Mutex
 	metrics map[string]*metricRing // key: ringKey(ns, name, dims)
+
+	snsPublisher  SNSPublisher
+	lambdaInvoker LambdaInvoker
 }
 
 const ringSize = 256
@@ -381,6 +384,7 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	if err := p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}); err != nil {
 		slog.Error("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 	}
+	go p.fireAlarmActions(ctx, params, stateValue)
 	return provider.OK(map[string]any{"__action__": "SetAlarmState"}), nil
 }
 

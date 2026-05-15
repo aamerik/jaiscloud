@@ -15,11 +15,10 @@ import (
 )
 
 // PutLogEvents ingests a batch of log events into a stream.
-func (p *Provider) PutLogEvents(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) PutLogEvents(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	groupName := paramStr(nr.Params, "logGroupName")
 	streamName := paramStr(nr.Params, "logStreamName")
 
-	// Parse logEvents from []any where each element is map[string]any
 	rawEvents, _ := nr.Params["logEvents"].([]any)
 	if len(rawEvents) == 0 {
 		return nil, logsErr("InvalidParameterException", "logEvents must contain at least 1 event", 400)
@@ -61,22 +60,23 @@ func (p *Provider) PutLogEvents(_ context.Context, nr *model.NormalizedRequest) 
 	}
 
 	p.store.mu.Lock()
-	defer p.store.mu.Unlock()
 
 	if _, err := p.verifyGroupExists(groupName); err != nil {
+		p.store.mu.Unlock()
 		return nil, err
 	}
 
 	streams := p.store.streams[groupName]
 	if streams == nil {
+		p.store.mu.Unlock()
 		return nil, logsErr("ResourceNotFoundException", "The specified log stream does not exist: "+streamName, 400)
 	}
 	stream, ok := streams[streamName]
 	if !ok {
+		p.store.mu.Unlock()
 		return nil, logsErr("ResourceNotFoundException", "The specified log stream does not exist: "+streamName, 400)
 	}
 
-	// Append to ring
 	eventMap := p.store.events[groupName]
 	if eventMap == nil {
 		eventMap = make(map[string]*eventRing)
@@ -89,7 +89,6 @@ func (p *Provider) PutLogEvents(_ context.Context, nr *model.NormalizedRequest) 
 	}
 	ring.Append(events)
 
-	// Update stream metadata
 	stream.LastIngestionTime = now
 	if stream.FirstEventTimestamp == 0 {
 		stream.FirstEventTimestamp = minTS
@@ -101,7 +100,6 @@ func (p *Provider) PutLogEvents(_ context.Context, nr *model.NormalizedRequest) 
 		stream.StoredBytes += int64(len(e.Message))
 	}
 
-	// Increment seq token
 	seqTokens := p.store.seqToken[groupName]
 	if seqTokens == nil {
 		seqTokens = make(map[string]int64)
@@ -109,6 +107,20 @@ func (p *Provider) PutLogEvents(_ context.Context, nr *model.NormalizedRequest) 
 	}
 	seqTokens[streamName]++
 	counter := seqTokens[streamName]
+
+	// Snapshot metric filters while holding the lock so goroutines below are safe.
+	mfSnap := make([]*MetricFilter, 0)
+	for _, mf := range p.store.metricFilters[groupName] {
+		mfSnap = append(mfSnap, mf)
+	}
+
+	p.store.mu.Unlock()
+
+	// Fan out to subscription filters (Lambda only) and metric filter extraction
+	// without holding the store lock.
+	accountID := nr.AccountID
+	go p.dispatchSubscriptionFilters(ctx, accountID, groupName, streamName, events)
+	go p.extractMetricFilters(ctx, groupName, mfSnap, events)
 
 	return provider.OK(map[string]any{
 		"nextSequenceToken": fmt.Sprintf("%056d", counter),

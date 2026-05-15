@@ -37,8 +37,9 @@ func (e SecretEntry) arnName() string {
 
 // SecretProvider handles SecretsManager API operations.
 type SecretProvider struct {
-	store  SecretStore
-	kms    model.KeyEncryptor // nil → NoopKeyEncryptor behaviour
+	store   SecretStore
+	kms     model.KeyEncryptor // nil → NoopKeyEncryptor behaviour
+	invoker RotationInvoker    // nil → rotation Lambda not invoked
 }
 
 // New constructs a SecretProvider.
@@ -463,7 +464,7 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 		if err := p.store.PutVersion(ctx, VersionEntry{
 			SecretID:      e.SecretID,
 			VersionID:     pendingVersionID,
-			SecretBinary: currentV.SecretBinary,
+			SecretBinary:  currentV.SecretBinary,
 			IsBinary:      currentV.IsBinary,
 			Stages:        []string{"AWSCURRENT"},
 		}); err != nil {
@@ -478,6 +479,12 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 	}
 
 	secretARN := nr.ResourceID(model.RTSecretsManagerSecret, e.arnName())
+
+	// Invoke rotation Lambda asynchronously when wired and rotating now.
+	if rotateNow && e.RotationLambdaARN != "" && p.invoker != nil {
+		go p.runRotationLambda(ctx, e.SecretID, secretARN, pendingVersionID, e.RotationLambdaARN)
+	}
+
 	return provider.OK(map[string]any{
 		"ARN":       secretARN,
 		"Name":      e.Name,

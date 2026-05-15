@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -198,59 +197,17 @@ func (p *ObjectProvider) GetBucketNotificationConfiguration(_ context.Context, n
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-func (p *ObjectProvider) dispatchNotification(_ context.Context, bucket, key, eventName string) {
+// dispatchNotification is the legacy entry point called from PutObject/etc. with only
+// event name. It delegates to dispatchS3Notification when the fanout is wired.
+func (p *ObjectProvider) dispatchNotification(ctx context.Context, bucket, key, eventName string) {
+	// Use new fanout path if wired.
+	if p.fanout.SQS != nil || p.fanout.SNSPublisher != nil || p.fanout.Lambda != nil || p.fanout.EventBridge != nil {
+		p.dispatchS3Notification(ctx, bucket, key, eventName, "", 0, "", "")
+		return
+	}
+	// Legacy bus path (no-op if bus is nil).
 	if p.bus == nil {
 		return
-	}
-	raw, ok := p.notifStore.Load(bucket)
-	if !ok {
-		return
-	}
-	var cfg bucketNotificationConfig
-	if err := json.Unmarshal([]byte(raw.(string)), &cfg); err != nil {
-		return
-	}
-	for _, q := range cfg.QueueConfigurations {
-		if matchesEvent(q.Events, eventName) && matchesFilter(q.Filter, key) {
-			p.bus.Publish(events.Event{
-				Type: "s3:notification",
-				Payload: map[string]any{
-					"target":     q.QueueArn,
-					"targetType": "sqs",
-					"bucket":     bucket,
-					"key":        key,
-					"eventName":  eventName,
-				},
-			})
-		}
-	}
-	for _, t := range cfg.TopicConfigurations {
-		if matchesEvent(t.Events, eventName) && matchesFilter(t.Filter, key) {
-			p.bus.Publish(events.Event{
-				Type: "s3:notification",
-				Payload: map[string]any{
-					"target":     t.TopicArn,
-					"targetType": "sns",
-					"bucket":     bucket,
-					"key":        key,
-					"eventName":  eventName,
-				},
-			})
-		}
-	}
-	for _, l := range cfg.LambdaConfigurations {
-		if matchesEvent(l.Events, eventName) && matchesFilter(l.Filter, key) {
-			p.bus.Publish(events.Event{
-				Type: "s3:notification",
-				Payload: map[string]any{
-					"target":     l.LambdaFuncArn,
-					"targetType": "lambda",
-					"bucket":     bucket,
-					"key":        key,
-					"eventName":  eventName,
-				},
-			})
-		}
 	}
 }
 

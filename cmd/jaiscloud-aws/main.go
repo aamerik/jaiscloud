@@ -577,7 +577,32 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(athenaprovider.New(s.resources).Routes())
 	registry.RegisterAll(redshiftprovider.New(s.resources).Routes())
 
+	// Second-pass cross-service wiring.
+	objectP.SetFanout(objectprovider.S3FanoutConfig{
+		SQS:          queueP,
+		SNSPublisher: notifP,
+		Lambda:       funcP,
+	})
+	cwP.SetSNSPublisher(notifP)
+	cwP.SetLambdaInvoker(funcP)
+	logsProvider.SetSubscriptionDispatcher(funcP)
+	logsProvider.SetMetricDataPutter(&cwMetricAdapter{cwP})
+	secretProv.SetInvoker(funcP)
+
 	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP
+}
+
+// cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
+// to the cwlogs.MetricDataPutter interface (uses logs.MetricDatum). Both types are structurally
+// identical; the adapter copies fields to satisfy the distinct type system.
+type cwMetricAdapter struct{ p *cloudwatchprovider.Provider }
+
+func (a *cwMetricAdapter) InternalPutMetricData(ctx context.Context, namespace string, data []cwlogs.MetricDatum) error {
+	cw := make([]cloudwatchprovider.MetricDatum, len(data))
+	for i, d := range data {
+		cw[i] = cloudwatchprovider.MetricDatum{Name: d.Name, Value: d.Value, Unit: d.Unit}
+	}
+	return a.p.InternalPutMetricData(ctx, namespace, cw)
 }
 
 // buildK8sClient constructs a kubernetes.Interface using in-cluster config if
