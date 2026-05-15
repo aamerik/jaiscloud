@@ -88,6 +88,16 @@ func (p *Provider) Shutdown(ctx context.Context) {
 	p.wg.Wait()
 }
 
+// CreateEventSourceMapping is the exported entry point used by CFN handlers.
+func (p *Provider) CreateEventSourceMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.handleCreateESM(ctx, nr)
+}
+
+// DeleteEventSourceMapping is the exported entry point used by CFN handlers.
+func (p *Provider) DeleteEventSourceMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.handleDeleteESM(ctx, nr)
+}
+
 // RehydratePollers starts pollers for all enabled ESMs on startup.
 func (p *Provider) RehydratePollers(ctx context.Context) {
 	entries, err := p.resources.List(ctx, esmResourceType, "")
