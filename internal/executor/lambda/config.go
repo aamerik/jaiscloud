@@ -33,6 +33,13 @@ type LambdaConfig struct {
 	// Populated by main.go from config.LoadOrCreateInstanceID.
 	InstanceID string
 
+	// CodeURL is the base URL of the JaisCloud admin endpoint reachable from K8s
+	// init containers (e.g. http://jaiscloud:4566). Used to fetch Lambda zip bytes.
+	CodeURL string
+	// InitImage is the container image used in the code-fetch init container.
+	// Defaults to "alpine:latest" when empty.
+	InitImage string
+
 	// ConcurrencyLimit caps account-level concurrent invocations (0 = unlimited).
 	ConcurrencyLimit int64
 	// SyncPayloadMax is the max sync invocation payload in bytes (0 = unlimited).
@@ -58,6 +65,7 @@ func DefaultLambdaConfig() LambdaConfig {
 		Network:       "jaiscloud-net",
 		KeepaliveSecs: 300,
 		Namespace:     "jaiscloud",
+		InitImage:     "alpine:latest",
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
 		cfg.APIServer = v

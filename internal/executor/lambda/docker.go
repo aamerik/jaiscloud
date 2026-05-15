@@ -10,12 +10,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"jaiscloud/internal/platform"
 )
+
+// CodeLoader fetches function zip bytes for mounting into a container.
+type CodeLoader interface {
+	LoadCode(ctx context.Context, account, funcName, version string) ([]byte, error)
+}
 
 const (
 	dockerSocket   = "/var/run/docker.sock"
@@ -27,6 +33,7 @@ type warmContainer struct {
 	id       string
 	hostPort int
 	lastUsed time.Time
+	codeDir  string // temp dir holding extracted /var/task; empty = no code mounted
 }
 
 // DockerExecutor manages warm Docker containers per Lambda function.
@@ -41,7 +48,15 @@ type DockerExecutor struct {
 	nextPort   int
 	done       chan struct{}
 	wg         sync.WaitGroup
+	codeLoader CodeLoader   // optional; nil in tests
+	logsAPI    LogsIngestor // optional; nil in tests
 }
+
+// SetCodeLoader injects the code loader used to mount /var/task into containers.
+func (e *DockerExecutor) SetCodeLoader(l CodeLoader) { e.codeLoader = l }
+
+// SetLogsAPI injects the CloudWatch Logs ingestor for container log streaming.
+func (e *DockerExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
 
 // NewDockerExecutor creates a DockerExecutor and starts the GC goroutine.
 // plat may be nil.
@@ -146,7 +161,7 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 	e.mu.Unlock()
 
 	image := ImageForRuntime(req, e.cfg)
-	id, err := e.startContainer(ctx, req, image, port)
+	id, codeDir, err := e.startContainer(ctx, req, image, port)
 	if err != nil {
 		// Remove the sentinel so the next caller can retry.
 		e.mu.Lock()
@@ -157,23 +172,31 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 		return nil, err
 	}
 
-	c := &warmContainer{id: id, hostPort: port, lastUsed: time.Now()}
+	c := &warmContainer{id: id, hostPort: port, lastUsed: time.Now(), codeDir: codeDir}
 	e.mu.Lock()
 	e.containers[req.FunctionName] = c
 	e.mu.Unlock()
 	return c, nil
 }
 
-func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, image string, hostPort int) (string, error) {
+func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, image string, hostPort int) (id string, codeDir string, err error) {
 	pfx := instancePrefix(e.cfg.InstanceID)
 	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
 	env := []string{
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", req.FunctionName),
 		fmt.Sprintf("AWS_DEFAULT_REGION=%s", regionOrDefault(e.cfg.Region)),
+		fmt.Sprintf("AWS_REGION=%s", regionOrDefault(e.cfg.Region)),
 		fmt.Sprintf("_HANDLER=%s", req.Handler),
+		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", req.AccountID),
+		"AWS_SECRET_ACCESS_KEY=test",
+		"AWS_SESSION_TOKEN=test",
+		"LAMBDA_TASK_ROOT=/var/task",
+		"LAMBDA_RUNTIME_DIR=/var/runtime",
+		"AWS_LAMBDA_RUNTIME_API=127.0.0.1:9001",
 	}
 	if e.cfg.JaisCloudEndpoint != "" {
+		env = append(env, "AWS_ENDPOINT_URL="+e.cfg.JaisCloudEndpoint)
 		env = append(env, "JAISCLOUD_ENDPOINT="+e.cfg.JaisCloudEndpoint)
 	}
 	for k, v := range req.EnvVars {
@@ -183,9 +206,9 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	// Platform layer: TLS PEM bundle + extra env for this container.
 	var binds []string
 	if e.platform != nil {
-		volArgs, envArgs, err := platform.ApplyDocker(e.platform)
-		if err != nil {
-			slog.Warn("lambda docker: platform apply failed", "err", err)
+		volArgs, envArgs, applyErr := platform.ApplyDocker(e.platform)
+		if applyErr != nil {
+			slog.Warn("lambda docker: platform apply failed", "err", applyErr)
 		}
 		// volArgs are pairs ["-v", "src:dst:ro"]; extract bind strings.
 		for i := 1; i < len(volArgs); i += 2 {
@@ -194,6 +217,18 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 		// envArgs are pairs ["-e", "KEY=VAL"]; extract env strings.
 		for i := 1; i < len(envArgs); i += 2 {
 			env = append(env, envArgs[i])
+		}
+	}
+
+	// Extract and mount function code into /var/task when a code loader is available.
+	if e.codeLoader != nil && req.AccountID != "" && req.FunctionName != "" {
+		if zipBytes, loadErr := e.codeLoader.LoadCode(context.Background(), req.AccountID, req.FunctionName, "$LATEST"); loadErr == nil && len(zipBytes) > 0 {
+			if dir, mkErr := os.MkdirTemp("", "lambda-code-*"); mkErr == nil {
+				if extErr := ExtractZip(zipBytes, dir); extErr == nil {
+					codeDir = dir
+					binds = append(binds, dir+":/var/task:ro")
+				}
+			}
 		}
 	}
 
@@ -220,30 +255,30 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	})
 
 	createURL := fmt.Sprintf("http://localhost/v1.41/containers/create?name=%s", name)
-	respBody, statusCode, err := e.dockerCall(ctx, http.MethodPost, createURL, body)
-	if err != nil {
-		return "", fmt.Errorf("docker create: %w", err)
+	respBody, statusCode, createErr := e.dockerCall(ctx, http.MethodPost, createURL, body)
+	if createErr != nil {
+		return "", codeDir, fmt.Errorf("docker create: %w", createErr)
 	}
 	if statusCode >= 300 {
-		return "", fmt.Errorf("docker create: HTTP %d: %s", statusCode, respBody)
+		return "", codeDir, fmt.Errorf("docker create: HTTP %d: %s", statusCode, respBody)
 	}
 
 	var createResp struct{ Id string }
 	json.Unmarshal(respBody, &createResp)
 
 	startURL := fmt.Sprintf("http://localhost/v1.41/containers/%s/start", createResp.Id)
-	_, statusCode, err = e.dockerCall(ctx, http.MethodPost, startURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("docker start: %w", err)
+	_, statusCode, startErr := e.dockerCall(ctx, http.MethodPost, startURL, nil)
+	if startErr != nil {
+		return "", codeDir, fmt.Errorf("docker start: %w", startErr)
 	}
 	if statusCode >= 300 {
-		return "", fmt.Errorf("docker start: HTTP %d", statusCode)
+		return "", codeDir, fmt.Errorf("docker start: HTTP %d", statusCode)
 	}
 
 	// Brief readiness wait.
 	time.Sleep(500 * time.Millisecond)
 	slog.Info("lambda docker: started container", "function", req.FunctionName, "port", hostPort)
-	return createResp.Id, nil
+	return createResp.Id, codeDir, nil
 }
 
 func (e *DockerExecutor) removeContainer(functionName string) {
@@ -262,6 +297,9 @@ func (e *DockerExecutor) removeContainer(functionName string) {
 	e.dockerCall(ctx, http.MethodPost, stopURL, nil)
 	rmURL := fmt.Sprintf("http://localhost/v1.41/containers/%s?force=true", c.id)
 	e.dockerCall(ctx, http.MethodDelete, rmURL, nil)
+	if c.codeDir != "" {
+		os.RemoveAll(c.codeDir)
+	}
 	slog.Info("lambda docker: removed container", "function", functionName)
 }
 

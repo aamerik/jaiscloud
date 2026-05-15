@@ -3,6 +3,7 @@ package function
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/reqctx"
@@ -32,6 +34,7 @@ const (
 type FunctionProvider struct {
 	resources          store.ResourceStore
 	executor           lambdaexec.LambdaExecutor
+	blobs              blobfs.BlobStore
 	concurrencyLimit   int64
 	syncPayloadMax     int64
 	asyncPayloadMax    int64
@@ -40,22 +43,30 @@ type FunctionProvider struct {
 }
 
 func New(resources store.ResourceStore) *FunctionProvider {
-	return &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}}
+	return &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}, blobs: blobfs.NewMemoryBlobStore()}
 }
 
 func NewWithExecutor(resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *FunctionProvider {
-	return &FunctionProvider{resources: resources, executor: exec}
+	return &FunctionProvider{resources: resources, executor: exec, blobs: blobfs.NewMemoryBlobStore()}
 }
 
 func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig) *FunctionProvider {
 	return &FunctionProvider{
 		resources:          resources,
 		executor:           exec,
+		blobs:              blobfs.NewMemoryBlobStore(),
 		concurrencyLimit:   cfg.ConcurrencyLimit,
 		syncPayloadMax:     cfg.SyncPayloadMax,
 		asyncPayloadMax:    cfg.AsyncPayloadMax,
 		responsePayloadMax: cfg.ResponsePayloadMax,
 	}
+}
+
+// NewWithBlobs constructs a FunctionProvider with an explicit BlobStore (used in main.go for full mode).
+func NewWithBlobs(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig, blobs blobfs.BlobStore) *FunctionProvider {
+	p := NewWithLimits(resources, exec, cfg)
+	p.blobs = blobs
+	return p
 }
 
 func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
@@ -160,6 +171,8 @@ type functionConfig struct {
 	LastModified        string            `json:"LastModified"`
 	RevisionId          string            `json:"RevisionId"`
 	CodeSize            int64             `json:"CodeSize"`
+	CodeSha256          string            `json:"CodeSha256,omitempty"`
+	BlobKey             string            `json:"BlobKey,omitempty"`
 	Environment         map[string]string `json:"Environment,omitempty"`
 	Tags                map[string]string `json:"Tags,omitempty"`
 	ReservedConcurrency *int              `json:"ReservedConcurrency,omitempty"`
@@ -379,6 +392,22 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		Tags:         tags,
 	}
 
+	var zipBytes []byte
+	if zf, ok := nr.Params["Code"].(map[string]any); ok {
+		if b64, ok := zf["ZipFile"].(string); ok {
+			zipBytes, _ = base64.StdEncoding.DecodeString(b64)
+		}
+	}
+	if len(zipBytes) > 0 {
+		sha256hex, codeSize, blobKey, err := p.storeCode(ctx, nr.AccountID, name, "$LATEST", zipBytes)
+		if err != nil {
+			return nil, fmt.Errorf("lambda: store code: %w", err)
+		}
+		cfg.CodeSha256 = sha256hex
+		cfg.CodeSize = codeSize
+		cfg.BlobKey = blobKey
+	}
+
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, model.NewProviderError("ResourceConflictException", "Function already exists", 409)
 	}
@@ -415,8 +444,12 @@ func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *mod
 
 func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
+	cfg, cfgErr := p.loadConfig(ctx, name)
 	if err := p.resources.Delete(ctx, resTypeFunction, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
+	}
+	if cfgErr == nil && cfg.BlobKey != "" {
+		_ = p.blobs.Delete(ctx, "lambda-code", cfg.BlobKey)
 	}
 	p.executor.DeleteFunction(ctx, name)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -482,6 +515,19 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
+	var zipBytes []byte
+	if zf, ok := nr.Params["ZipFile"].(string); ok {
+		zipBytes, _ = base64.StdEncoding.DecodeString(zf)
+	}
+	if len(zipBytes) > 0 {
+		sha256hex, codeSize, blobKey, err := p.storeCode(ctx, nr.AccountID, cfg.FunctionName, "$LATEST", zipBytes)
+		if err != nil {
+			return nil, fmt.Errorf("lambda: store code: %w", err)
+		}
+		cfg.CodeSha256 = sha256hex
+		cfg.CodeSize = codeSize
+		cfg.BlobKey = blobKey
+	}
 	if err := p.saveConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
@@ -580,6 +626,7 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		TimeoutSecs:  cfg.Timeout,
 		EnvVars:      cfg.Environment,
 		Payload:      payload,
+		AccountID:    nr.AccountID,
 	}
 	result, err := p.executor.Invoke(invCtx, req)
 	if err != nil {
@@ -878,6 +925,14 @@ func (p *FunctionProvider) PublishLayerVersion(ctx context.Context, nr *model.No
 		LicenseInfo:        strParam(nr.Params, "LicenseInfo"),
 		CompatibleRuntimes: runtimes,
 		CreatedDate:        time.Now().UTC().Format(time.RFC3339),
+	}
+	if zf, ok := nr.Params["Content"].(map[string]any); ok {
+		if b64, ok := zf["ZipFile"].(string); ok {
+			if zipBytes, err := base64.StdEncoding.DecodeString(b64); err == nil && len(zipBytes) > 0 {
+				_, codeSize, _, _ := p.storeLayerCode(ctx, nr.AccountID, layerName, version, zipBytes)
+				le.CodeSize = codeSize
+			}
+		}
 	}
 	data, _ := json.Marshal(le)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeLayers, ID: layerVersionKey(layerName, version), Data: data}); err != nil {

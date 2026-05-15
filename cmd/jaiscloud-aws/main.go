@@ -566,6 +566,16 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	logsProvider := cwlogs.New()
 	registry.RegisterAll(logsProvider.Routes())
 
+	// Wire code loader and CW Logs ingestor into real executors.
+	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
+		dockerExec.SetCodeLoader(funcP)
+		dockerExec.SetLogsAPI(logsProvider)
+	}
+	if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
+		k8sExec.SetCodeLoader(funcP)
+		k8sExec.SetLogsAPI(logsProvider)
+	}
+
 	// Phase 15 providers
 	registry.RegisterAll(cognitoprovider.New(s.resources).Routes())
 	registry.RegisterAll(cognitoidentityprovider.New(s.resources).Routes())

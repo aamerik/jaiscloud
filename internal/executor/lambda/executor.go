@@ -15,6 +15,7 @@ type InvokeRequest struct {
 	TimeoutSecs  int
 	EnvVars      map[string]string
 	Payload      []byte
+	AccountID    string
 }
 
 // LambdaExecutor is the interface satisfied by MockExecutor, DockerExecutor,

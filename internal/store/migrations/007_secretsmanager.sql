@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS jc_sm_secrets (
 CREATE TABLE IF NOT EXISTS jc_sm_versions (
     secret_id       TEXT        NOT NULL REFERENCES jc_sm_secrets(secret_id) ON DELETE CASCADE,
     version_id      TEXT        NOT NULL,
-    secret_binary   BYTEA,                              -- encrypted secret value
+    secret_binary   BYTEA,
+    is_binary       BOOLEAN     NOT NULL DEFAULT FALSE,
     stages          TEXT[]      NOT NULL DEFAULT ARRAY['AWSCURRENT'],
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (secret_id, version_id)

@@ -58,16 +58,24 @@ type warmPod struct {
 
 // K8sExecutor manages warm Pods per Lambda function using the Lambda RIE HTTP protocol.
 type K8sExecutor struct {
-	cfg      LambdaConfig
-	platform *platform.PlatformConfig
-	k8s      *http.Client // talks to K8s API server (30s timeout, custom TLS)
-	invoke   *http.Client // talks to Lambda RIE pods (5min timeout)
-	token    string
-	mu       sync.Mutex
-	pods     map[string]*warmPod // functionName -> warm pod
-	done     chan struct{}
-	wg       sync.WaitGroup
+	cfg        LambdaConfig
+	platform   *platform.PlatformConfig
+	k8s        *http.Client // talks to K8s API server (30s timeout, custom TLS)
+	invoke     *http.Client // talks to Lambda RIE pods (5min timeout)
+	token      string
+	mu         sync.Mutex
+	pods       map[string]*warmPod // functionName -> warm pod
+	done       chan struct{}
+	wg         sync.WaitGroup
+	codeLoader CodeLoader   // optional; nil in tests
+	logsAPI    LogsIngestor // optional; nil in tests
 }
+
+// SetCodeLoader injects the code loader for /var/task init-container mounting.
+func (e *K8sExecutor) SetCodeLoader(l CodeLoader) { e.codeLoader = l }
+
+// SetLogsAPI injects the CloudWatch Logs ingestor for pod log streaming.
+func (e *K8sExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
 
 // NewK8sExecutor creates a K8sExecutor with warm-pod-per-function architecture.
 // plat may be nil.
@@ -283,8 +291,17 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	env := []k8stypes.EnvVar{
 		{Name: "AWS_LAMBDA_FUNCTION_NAME", Value: req.FunctionName},
 		{Name: "AWS_DEFAULT_REGION", Value: regionOrDefault(e.cfg.Region)},
+		{Name: "AWS_REGION", Value: regionOrDefault(e.cfg.Region)},
+		{Name: "_HANDLER", Value: req.Handler},
+		{Name: "AWS_ACCESS_KEY_ID", Value: req.AccountID},
+		{Name: "AWS_SECRET_ACCESS_KEY", Value: "test"},
+		{Name: "AWS_SESSION_TOKEN", Value: "test"},
+		{Name: "LAMBDA_TASK_ROOT", Value: "/var/task"},
+		{Name: "LAMBDA_RUNTIME_DIR", Value: "/var/runtime"},
+		{Name: "AWS_LAMBDA_RUNTIME_API", Value: "127.0.0.1:9001"},
 	}
 	if e.cfg.JaisCloudEndpoint != "" {
+		env = append(env, k8stypes.EnvVar{Name: "AWS_ENDPOINT_URL", Value: e.cfg.JaisCloudEndpoint})
 		env = append(env, k8stypes.EnvVar{Name: "JAISCLOUD_ENDPOINT", Value: e.cfg.JaisCloudEndpoint})
 	}
 	for k, v := range req.EnvVars {
@@ -328,6 +345,27 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		if err := platform.ApplyK8s(&podSpec, &podSpec.Containers[0], e.platform); err != nil {
 			return nil, fmt.Errorf("platform apply: %w", err)
 		}
+	}
+
+	// Code volume: inject an init container that fetches the zip and unpacks it
+	// into /var/task via a shared emptyDir when a code URL base is configured.
+	if e.codeLoader != nil && e.cfg.CodeURL != "" {
+		codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", e.cfg.CodeURL, req.AccountID, req.FunctionName)
+		podSpec.Volumes = append(podSpec.Volumes, k8stypes.Volume{
+			Name:     "code",
+			EmptyDir: &k8stypes.EmptyDirVol{},
+		})
+		podSpec.InitContainers = []k8stypes.Container{{
+			Name:    "code-fetch",
+			Image:   e.cfg.InitImage,
+			Command: []string{"/bin/sh", "-c"},
+			Args:    []string{fmt.Sprintf("wget -qO /tmp/code.zip %s && unzip /tmp/code.zip -d /var/task", codeURL)},
+			Env:     []k8stypes.EnvVar{{Name: "JAISCLOUD_LAMBDA_CODE_URL", Value: codeURL}},
+			VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: "/var/task"}},
+		}}
+		podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts,
+			k8stypes.VolumeMount{Name: "code", MountPath: "/var/task", ReadOnly: true},
+		)
 	}
 
 	podLabels := map[string]string{
