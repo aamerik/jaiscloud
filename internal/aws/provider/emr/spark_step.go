@@ -9,6 +9,28 @@ import (
 	"jaiscloud/internal/sparkhelpers"
 )
 
+// clusterConfToSparkConfs converts cluster Configurations[] spark-defaults entries
+// into "--conf k=v" flags suitable for appending to SparkSubmitArgs.
+//
+// For core-site/hdfs-site/yarn-site classifications, we note them in a comment
+// but skip actual implementation (would require ConfigMap-mounted XML in k8s mode).
+func clusterConfToSparkConfs(confs []emrConfiguration) []string {
+	var out []string
+	for _, c := range confs {
+		switch c.Classification {
+		case "spark-defaults":
+			for k, v := range c.Properties {
+				out = append(out, "--conf", k+"="+v)
+			}
+		// TODO(future): core-site / hdfs-site / yarn-site would be mounted as
+		// ConfigMap XML files at /etc/hadoop/conf/<site>.xml in k8s mode.
+		default:
+			// other classifications (e.g. hadoop) — ignored for now
+		}
+	}
+	return out
+}
+
 // runSparkSubmitStep executes a spark-submit step via sparkhelpers.SubmitClientMode.
 // Runs in a goroutine; publishes state transitions via emitStepStateChange.
 func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
@@ -17,11 +39,13 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		actionOnFailure = "CONTINUE"
 	}
 
+	sink := p.LogSinkForStep(clusterID, stepID, "")
 	p.emitStepStateChange(h, clusterID, stepID, "RUNNING", "")
 
 	// failStep emits FAILED and applies ActionOnFailure cascade. Every error path
 	// uses this helper so the cascade is never forgotten.
 	failStep := func(reason string) {
+		p.flushStepLogs(ctx, clusterID, stepID, sink)
 		p.emitStepStateChange(h, clusterID, stepID, "FAILED", reason)
 		p.cascadeOnStepFailure(ctx, h, clusterID, stepID, actionOnFailure)
 	}
@@ -30,6 +54,12 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 	if len(argv) == 0 {
 		failStep("empty HadoopJarStep.Args")
 		return
+	}
+
+	// Load cluster Configurations to build spark-defaults --conf flags.
+	var confArgs []string
+	if c, loadErr := p.loadCluster(ctx, clusterID); loadErr == nil {
+		confArgs = clusterConfToSparkConfs(c.Configurations)
 	}
 
 	// argv[0] is "spark-submit"; translate YARN master → k8s client mode.
@@ -44,6 +74,10 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		failStep(err.Error())
 		return
 	}
+
+	// Prepend cluster Configurations confs before step-level spark args.
+	// Spark last-value-wins, so step args override cluster defaults.
+	sparkArgs = append(confArgs, sparkArgs...)
 
 	ns := p.namespace
 	if ns == "" {
@@ -108,6 +142,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		}
 		failStep(reason)
 	} else {
+		p.flushStepLogs(ctx, clusterID, stepID, sink)
 		p.emitStepStateChange(h, clusterID, stepID, state, reason)
 		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID,
 			k8shelpers.BuildSnapshot(final.Final, state)); snapErr != nil {

@@ -16,12 +16,13 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/k8shelpers"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
-	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
@@ -45,6 +46,10 @@ type EMRContainersProvider struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup // tracks in-flight runJobRun goroutines
 	patcherStop func()         // stops the executor OwnershipPatcher; nil when no k8s
+
+	// s3Uploader and logsIngestor are optional sinks for job-run log flushing (§3.10.5).
+	s3Uploader   s3LogUploader
+	logsIngestor logstream.Ingestor
 
 	// cancelsMu guards both cancels and cancelClaimed.
 	cancelsMu sync.Mutex
@@ -152,6 +157,11 @@ func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
 		"EMRContainers.ListSecurityConfigurations":   p.ListSecurityConfigurations,
 		// Session credentials (13.4)
 		"EMRContainers.GetManagedEndpointSessionCredentials": p.GetManagedEndpointSessionCredentials,
+		// Job templates (§3.10.4)
+		"EMRContainers.CreateJobTemplate":   p.CreateJobTemplate,
+		"EMRContainers.DescribeJobTemplate": p.DescribeJobTemplate,
+		"EMRContainers.DeleteJobTemplate":   p.DeleteJobTemplate,
+		"EMRContainers.ListJobTemplates":    p.ListJobTemplates,
 	}
 }
 
@@ -354,6 +364,14 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 	vc, err := p.loadVC(ctx, vcID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
+	}
+
+	// Merge job template defaults if jobTemplateId is supplied.
+	// Template values are defaults; request-level params take precedence.
+	if jtID := strParam(nr.Params, "jobTemplateId"); jtID != "" {
+		if jt, jtErr := p.loadJobTemplate(ctx, jtID); jtErr == nil {
+			nr.Params = applyJobTemplateDefaults(nr.Params, jt.JobTemplateData)
+		}
 	}
 
 	id := shortID()

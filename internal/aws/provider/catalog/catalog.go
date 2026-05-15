@@ -19,7 +19,9 @@ import (
 
 // GlueProvider handles all Glue Data Catalog operations.
 type GlueProvider struct {
-	resources store.ResourceStore
+	resources      store.ResourceStore
+	objectProvider ObjectProviderAPI
+	sparkExecutor  SparkExecutorAPI
 }
 
 func New(resources store.ResourceStore) *GlueProvider {
@@ -51,6 +53,44 @@ func (p *GlueProvider) Routes() map[string]provider.HandlerFunc {
 		"Glue.TagResource":   p.TagResource,
 		"Glue.UntagResource": p.UntagResource,
 		"Glue.GetTags":       p.GetTags,
+		// Jobs (§3.9)
+		"Glue.CreateJob":       p.CreateJob,
+		"Glue.UpdateJob":       p.UpdateJob,
+		"Glue.DeleteJob":       p.DeleteJob,
+		"Glue.GetJob":          p.GetJob,
+		"Glue.GetJobs":         p.GetJobs,
+		"Glue.StartJobRun":     p.StartJobRun,
+		"Glue.GetJobRun":       p.GetJobRun,
+		"Glue.GetJobRuns":      p.GetJobRuns,
+		"Glue.BatchStopJobRun": p.BatchStopJobRun,
+		// Crawlers (§3.9)
+		"Glue.CreateCrawler":      p.CreateCrawler,
+		"Glue.UpdateCrawler":      p.UpdateCrawler,
+		"Glue.DeleteCrawler":      p.DeleteCrawler,
+		"Glue.GetCrawler":         p.GetCrawler,
+		"Glue.GetCrawlers":        p.GetCrawlers,
+		"Glue.StartCrawler":       p.StartCrawler,
+		"Glue.StopCrawler":        p.StopCrawler,
+		"Glue.GetCrawlerMetrics":  p.GetCrawlerMetrics,
+		// Table Versions (§3.9)
+		"Glue.GetTableVersion":        p.GetTableVersion,
+		"Glue.GetTableVersions":       p.GetTableVersions,
+		"Glue.DeleteTableVersions":    p.DeleteTableVersions,
+		"Glue.BatchDeleteTableVersion": p.BatchDeleteTableVersion,
+		// Connections (stub)
+		"Glue.CreateConnection": p.CreateConnection,
+		"Glue.GetConnection":    p.GetConnection,
+		"Glue.GetConnections":   p.GetConnections,
+		"Glue.UpdateConnection": p.UpdateConnection,
+		"Glue.DeleteConnection": p.DeleteConnection,
+		// Resource Policy (stub)
+		"Glue.PutResourcePolicy":    p.PutResourcePolicy,
+		"Glue.GetResourcePolicy":    p.GetResourcePolicy,
+		"Glue.DeleteResourcePolicy": p.DeleteResourcePolicy,
+		// Partition Indexes (stub)
+		"Glue.CreatePartitionIndex":  p.CreatePartitionIndex,
+		"Glue.GetPartitionIndexes":   p.GetPartitionIndexes,
+		"Glue.DeletePartitionIndex":  p.DeletePartitionIndex,
 	}
 }
 
@@ -464,6 +504,9 @@ func (p *GlueProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
+
+	// Write a version snapshot before applying changes
+	p.WriteTableVersion(ctx, t)
 
 	// Iceberg CAS: check ExpectedMetadataLocation if provided
 	if expected, ok := nr.Params["VersionId"].(string); ok && expected != "" {

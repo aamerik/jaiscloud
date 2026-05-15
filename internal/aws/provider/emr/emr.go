@@ -74,6 +74,8 @@ type EMRProvider struct {
 	awsEmulator        *sparkaws.AWSEmulatorConfig
 	instanceID         string
 	serviceAccountName string
+	// objectProvider is used for LogUri S3 log upload. Wired via SetObjectProvider.
+	objectProvider     s3LogUploader
 	// ctx is the provider lifecycle context. runStep goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
 	ctx         context.Context
@@ -372,6 +374,17 @@ type emrCluster struct {
 	InstanceGroups        []map[string]any `json:"InstanceGroups"`
 	Steps                 []map[string]any `json:"Steps"`
 	ManagedScalingPolicy  map[string]any   `json:"ManagedScalingPolicy,omitempty"`
+	// Configurations holds the EMR Configurations[] parsed from RunJobFlow.
+	// Classification "spark-defaults" properties are translated to --conf k=v flags
+	// when submitting Spark steps.
+	Configurations []emrConfiguration `json:"Configurations,omitempty"`
+}
+
+// emrConfiguration represents a single element of the Configurations[] array.
+// Classification is e.g. "spark-defaults", "core-site", "hdfs-site", "yarn-site".
+type emrConfiguration struct {
+	Classification string            `json:"Classification"`
+	Properties     map[string]string `json:"Properties,omitempty"`
 }
 
 type clusterStatus struct {
@@ -479,6 +492,26 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 		concurrency = int(v)
 	}
 
+	// Configurations — parse before building cluster struct.
+	var configurations []emrConfiguration
+	if rawConfs, ok := nr.Params["Configurations"].([]any); ok {
+		for _, rc := range rawConfs {
+			if cm, ok := rc.(map[string]any); ok {
+				class, _ := cm["Classification"].(string)
+				conf := emrConfiguration{Classification: class}
+				if rawProps, ok := cm["Properties"].(map[string]any); ok {
+					conf.Properties = make(map[string]string, len(rawProps))
+					for k, v := range rawProps {
+						if s, ok := v.(string); ok {
+							conf.Properties[k] = s
+						}
+					}
+				}
+				configurations = append(configurations, conf)
+			}
+		}
+	}
+
 	c := emrCluster{
 		Id:         clusterID,
 		Name:       name,
@@ -506,6 +539,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 		InstanceFleets:          instanceFleets,
 		InstanceGroups:          instanceGroups,
 		Steps:                   []map[string]any{},
+		Configurations:          configurations,
 	}
 
 	// Steps at creation time

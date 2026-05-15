@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"jaiscloud/internal/k8shelpers"
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/sparkhelpers"
 )
 
@@ -15,6 +15,16 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 	vc virtualCluster, jrID string, executionRoleArn string, params map[string]any) {
 
 	vcID := vc.ID
+
+	// Set up the log sink and extract monitoringConfiguration early so it is
+	// available at every terminal exit point below.
+	monitoringConfig, _ := params["monitoringConfiguration"].(map[string]any)
+	logSink := p.LogSinkForJobRun(vcID, jrID, "")
+
+	// flushLogs is a helper called at every terminal exit to ship buffered logs.
+	flushLogs := func() {
+		p.flushJobRunLogs(context.Background(), vcID, jrID, monitoringConfig, logSink)
+	}
 
 	// Per-jobrun cancellable context — CancelJobRun signals this to interrupt.
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -90,6 +100,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
+		flushLogs()
 		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		return
 	}
@@ -115,6 +126,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
+		flushLogs()
 		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		return
 	}
@@ -124,6 +136,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 	if state == "FAILED" {
 		reason = final.SparkReason
 	}
+	flushLogs()
 	p.emitJobRunStateChange(h, vcID, jrID, state, reason)
 	if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, "emroneks/jobruns", jrID,
 		k8shelpers.BuildSnapshot(final.Final, state)); snapErr != nil {
