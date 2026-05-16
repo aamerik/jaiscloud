@@ -203,7 +203,12 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	// Persist new attributes (Task 1.11).
-	for _, k := range []string{"RedrivePolicy", "MaxReceiveCount", "SqsManagedSseEnabled", "KmsMasterKeyId", "FifoThroughputLimit", "RedriveAllowPolicy"} {
+	for _, k := range []string{
+		"RedrivePolicy", "MaxReceiveCount",
+		"SqsManagedSseEnabled", "KmsMasterKeyId", "KmsDataKeyReusePeriodSeconds",
+		"FifoThroughputLimit", "DeduplicationScope", "RedriveAllowPolicy",
+		"ContentBasedDeduplication",
+	} {
 		if v, ok := attrs[k]; ok {
 			state[k] = v
 		}
@@ -1120,10 +1125,23 @@ func buildAttributes(state map[string]any, visible, notVisible, delayed int) map
 	if isFIFO, _ := state["IsFifo"].(bool); isFIFO {
 		a["FifoQueue"] = "true"
 	}
-	// New attributes (Task 1.11).
-	for _, k := range []string{"SqsManagedSseEnabled", "KmsMasterKeyId", "FifoThroughputLimit", "RedriveAllowPolicy"} {
+	// Extended attributes.
+	for _, k := range []string{
+		"SqsManagedSseEnabled", "KmsMasterKeyId", "KmsDataKeyReusePeriodSeconds",
+		"FifoThroughputLimit", "DeduplicationScope", "RedriveAllowPolicy",
+		"ContentBasedDeduplication",
+	} {
 		if v, ok := state[k]; ok {
 			a[k] = str(v)
+		}
+	}
+	// FIFO-only attrs from Attributes sub-map
+	if isFIFO, _ := state["IsFifo"].(bool); isFIFO {
+		queueAttrs := attrsFromState(state)
+		for _, k := range []string{"FifoThroughputLimit", "DeduplicationScope", "ContentBasedDeduplication"} {
+			if v, ok := queueAttrs[k]; ok && v != "" && a[k] == "" {
+				a[k] = v
+			}
 		}
 	}
 	return a

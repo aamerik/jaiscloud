@@ -568,3 +568,70 @@ func TestDeleteMessage_MakesAvailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, recv2.Messages, "deleted message must not be returned on subsequent receive")
 }
+
+// ─── G-PENDING-6: Approximate message count attributes ───────────────────────
+
+// TestSQSGetQueueAttributesApproxCount verifies that GetQueueAttributes returns
+// correct ApproximateNumberOfMessages after sending messages.
+func TestSQSGetQueueAttributesApproxCount(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newSQSClient(t)
+
+	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("approx-count-queue"),
+	})
+	require.NoError(t, err)
+	queueURL := out.QueueUrl
+
+	// Send 3 messages
+	for i := 0; i < 3; i++ {
+		_, err := c.SendMessage(ctx, &sqs.SendMessageInput{
+			QueueUrl:    queueURL,
+			MessageBody: aws.String("test message"),
+		})
+		require.NoError(t, err)
+	}
+
+	attrs, err := c.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       queueURL,
+		AttributeNames: []sqstypes.QueueAttributeName{"All"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "3", attrs.Attributes["ApproximateNumberOfMessages"],
+		"expected 3 visible messages")
+	// In-flight and delayed should be 0 initially
+	assert.Equal(t, "0", attrs.Attributes["ApproximateNumberOfMessagesNotVisible"])
+	assert.Equal(t, "0", attrs.Attributes["ApproximateNumberOfMessagesDelayed"])
+}
+
+// TestSQSSetQueueAttributes_KMS verifies that KMS-related attributes can be set
+// and returned via GetQueueAttributes.
+func TestSQSSetQueueAttributes_KMS(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newSQSClient(t)
+
+	out, err := c.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("kms-attr-queue"),
+	})
+	require.NoError(t, err)
+
+	_, err = c.SetQueueAttributes(ctx, &sqs.SetQueueAttributesInput{
+		QueueUrl: out.QueueUrl,
+		Attributes: map[string]string{
+			"KmsMasterKeyId":             "alias/my-key",
+			"KmsDataKeyReusePeriodSeconds": "300",
+			"SqsManagedSseEnabled":        "false",
+		},
+	})
+	require.NoError(t, err)
+
+	attrs, err := c.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       out.QueueUrl,
+		AttributeNames: []sqstypes.QueueAttributeName{"All"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "alias/my-key", attrs.Attributes["KmsMasterKeyId"])
+	assert.Equal(t, "300", attrs.Attributes["KmsDataKeyReusePeriodSeconds"])
+}

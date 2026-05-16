@@ -460,3 +460,90 @@ func TestECR_PullThroughCache_CRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, listOut2.PullThroughCacheRules)
 }
+
+// ─── H-PENDING-23: Manifest Validation ───────────────────────────────────────
+
+// TestECR_PutImageManifest verifies that a valid 2-layer Docker manifest is
+// accepted and its layers are recoverable via BatchGetImage.
+func TestECR_PutImageManifest(t *testing.T) {
+	resetState(t)
+	client := ecrClient(t)
+	ctx := context.Background()
+
+	_, err := client.CreateRepository(ctx, &awsecr.CreateRepositoryInput{
+		RepositoryName: aws.String("manifest-repo"),
+	})
+	require.NoError(t, err)
+
+	// Valid 2-layer Docker distribution manifest v2
+	manifest := `{
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+		"config": {
+			"mediaType": "application/vnd.docker.container.image.v1+json",
+			"digest": "sha256:abc123",
+			"size": 1234
+		},
+		"layers": [
+			{
+				"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+				"digest": "sha256:layer1digest",
+				"size": 10240
+			},
+			{
+				"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+				"digest": "sha256:layer2digest",
+				"size": 20480
+			}
+		]
+	}`
+
+	putOut, err := client.PutImage(ctx, &awsecr.PutImageInput{
+		RepositoryName: aws.String("manifest-repo"),
+		ImageManifest:  aws.String(manifest),
+		ImageTag:       aws.String("v1.0"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, putOut.Image)
+	assert.NotEmpty(t, aws.ToString(putOut.Image.ImageId.ImageDigest))
+
+	// BatchGetImage should return the stored manifest
+	digest := aws.ToString(putOut.Image.ImageId.ImageDigest)
+	getOut, err := client.BatchGetImage(ctx, &awsecr.BatchGetImageInput{
+		RepositoryName: aws.String("manifest-repo"),
+		ImageIds: []ecrtypes.ImageIdentifier{
+			{ImageDigest: aws.String(digest)},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, getOut.Images, 1)
+	assert.Equal(t, manifest, aws.ToString(getOut.Images[0].ImageManifest))
+}
+
+// TestECR_PutImage_InvalidMediaType verifies that a manifest with an
+// unsupported mediaType is rejected with InvalidParameterException.
+func TestECR_PutImage_InvalidMediaType(t *testing.T) {
+	resetState(t)
+	client := ecrClient(t)
+	ctx := context.Background()
+
+	_, err := client.CreateRepository(ctx, &awsecr.CreateRepositoryInput{
+		RepositoryName: aws.String("invalid-manifest-repo"),
+	})
+	require.NoError(t, err)
+
+	// Manifest with invalid/unsupported mediaType
+	invalidManifest := `{
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.unsupported.format+json",
+		"layers": []
+	}`
+
+	_, err = client.PutImage(ctx, &awsecr.PutImageInput{
+		RepositoryName: aws.String("invalid-manifest-repo"),
+		ImageManifest:  aws.String(invalidManifest),
+		ImageTag:       aws.String("bad"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterException")
+}
