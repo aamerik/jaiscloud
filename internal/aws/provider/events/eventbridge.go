@@ -629,13 +629,19 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 		}
 		busName := normBus(rule.EventBusName)
 		tgts, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, rule.Name))
+		var wg sync.WaitGroup
 		for _, te := range tgts {
 			var td targetData
 			if err := json.Unmarshal(te.Data, &td); err != nil {
 				continue
 			}
-			go p.deliverToTarget(context.Background(), td, envelope)
+			wg.Add(1)
+			go func(td targetData) {
+				defer wg.Done()
+				p.deliverToTarget(context.Background(), td, envelope)
+			}(td)
 		}
+		wg.Wait()
 	}
 
 	// Archive matching.
