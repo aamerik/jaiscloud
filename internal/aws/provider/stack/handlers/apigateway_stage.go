@@ -25,7 +25,20 @@ func NewAPIGatewayStageHandler(apigwP *apigwprovider.GatewayProvider) stackprovi
 			}
 			_ = resp
 			physicalID := restAPIID + "/" + stageName
-			return physicalID, map[string]any{"StageName": stageName}, nil
+			arn := nr.ResourceID("apigateway-stage", restAPIID+"/stages/"+stageName)
+			return physicalID, map[string]any{"StageName": stageName, "StageArn": arn}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			restAPIID := propStr(newProps, "RestApiId", "")
+			stageName := propStr(newProps, "StageName", logicalID)
+			if _, err := apigwP.UpdateStage(ctx, child(nr, map[string]any{
+				"restApiId": restAPIID,
+				"stageName": stageName,
+			})); err != nil {
+				return "", nil, false, err
+			}
+			arn := nr.ResourceID("apigateway-stage", restAPIID+"/stages/"+stageName)
+			return physicalID, map[string]any{"StageName": stageName, "StageArn": arn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			restAPIID := propStr(props, "RestApiId", "")
@@ -34,6 +47,10 @@ func NewAPIGatewayStageHandler(apigwP *apigwprovider.GatewayProvider) stackprovi
 				Params: map[string]any{"restApiId": restAPIID, "stageName": stageName},
 			})
 			return err
+		},
+		GetAttAttrs: []string{"StageArn"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireUpdate: []string{"Description", "Variables"},
 		},
 	}
 }

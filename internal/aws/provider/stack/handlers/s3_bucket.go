@@ -23,11 +23,24 @@ func NewS3BucketHandler(objectP *objectprovider.ObjectProvider) stackprovider.Re
 				return "", nil, err
 			}
 			arn := nr.ResourceID("s3-bucket", name)
-			return name, map[string]any{"Arn": arn, "DomainName": name + ".s3.amazonaws.com"}, nil
+			return name, map[string]any{"Arn": arn, "DomainName": name + ".s3.amazonaws.com", "WebsiteURL": ""}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "BucketName", logicalID) != propStr(newProps, "BucketName", logicalID) {
+				return "", nil, true, nil
+			}
+			// In-place: bucket settings can be updated; no provider-level UpdateBucket call needed
+			arn := nr.ResourceID("s3-bucket", physicalID)
+			return physicalID, map[string]any{"Arn": arn, "DomainName": physicalID + ".s3.amazonaws.com", "WebsiteURL": ""}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := objectP.DeleteBucket(ctx, &model.NormalizedRequest{Params: map[string]any{"_bucket": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"Arn", "DomainName", "WebsiteURL"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"BucketName"},
+			RequireUpdate:      []string{"Tags", "WebsiteConfiguration", "CorsConfiguration", "LifecycleConfiguration", "NotificationConfiguration"},
 		},
 	}
 }

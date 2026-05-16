@@ -22,9 +22,16 @@ func NewKMSAliasHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHan
 			}
 			return aliasName, map[string]any{}, nil
 		},
+		// KMS alias names are immutable — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := keyP.DeleteAlias(ctx, &model.NormalizedRequest{Params: map[string]any{"AliasName": physicalID}})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"AliasName"},
 		},
 	}
 }

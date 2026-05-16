@@ -24,11 +24,38 @@ func NewKMSKeyHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHandl
 			}
 			return keyID, map[string]any{"Arn": arn, "KeyId": keyID}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			// Update description if changed
+			if propStr(oldProps, "Description", "") != propStr(newProps, "Description", "") {
+				if _, err := keyP.UpdateKeyDescription(ctx, child(nr, map[string]any{
+					"KeyId":       physicalID,
+					"Description": propStr(newProps, "Description", ""),
+				})); err != nil {
+					return "", nil, false, err
+				}
+			}
+			// Update key policy if changed
+			if propStr(oldProps, "KeyPolicy", "") != propStr(newProps, "KeyPolicy", "") {
+				if _, err := keyP.PutKeyPolicy(ctx, child(nr, map[string]any{
+					"KeyId":      physicalID,
+					"PolicyName": "default",
+					"Policy":     propStr(newProps, "KeyPolicy", ""),
+				})); err != nil {
+					return "", nil, false, err
+				}
+			}
+			arn := nr.ResourceID("kms-key", physicalID)
+			return physicalID, map[string]any{"Arn": arn, "KeyId": physicalID}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := keyP.ScheduleKeyDeletion(ctx, &model.NormalizedRequest{
 				Params: map[string]any{"KeyId": physicalID, "PendingWindowInDays": float64(7)},
 			})
 			return err
+		},
+		GetAttAttrs: []string{"Arn", "KeyId"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireUpdate: []string{"Description", "EnableKeyRotation", "KeyPolicy", "Tags"},
 		},
 	}
 }

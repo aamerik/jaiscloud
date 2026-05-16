@@ -22,12 +22,19 @@ func NewLogsLogStreamHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandl
 			}
 			return streamName, map[string]any{}, nil
 		},
+		// Log streams are immutable — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			groupName := propStr(props, "LogGroupName", "")
 			_, err := logsP.DeleteLogStream(ctx, &model.NormalizedRequest{
 				Params: map[string]any{"logGroupName": groupName, "logStreamName": physicalID},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"LogGroupName", "LogStreamName"},
 		},
 	}
 }

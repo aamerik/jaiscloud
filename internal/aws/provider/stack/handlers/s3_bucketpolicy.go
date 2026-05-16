@@ -30,10 +30,35 @@ func NewS3BucketPolicyHandler(objectP *objectprovider.ObjectProvider) stackprovi
 			}
 			return bucket + "/policy", map[string]any{}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "Bucket", "") != propStr(newProps, "Bucket", "") {
+				return "", nil, true, nil
+			}
+			// Re-apply the policy in place
+			bucket := propStr(newProps, "Bucket", "")
+			var policyBytes []byte
+			switch p := newProps["PolicyDocument"].(type) {
+			case string:
+				policyBytes = []byte(p)
+			default:
+				policyBytes, _ = json.Marshal(p)
+			}
+			if _, err := objectP.PutBucketPolicy(ctx, child(nr, map[string]any{
+				"_bucket": bucket,
+				"_body":   policyBytes,
+			})); err != nil {
+				return "", nil, false, err
+			}
+			return physicalID, map[string]any{}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			bucket := propStr(props, "Bucket", "")
 			_, err := objectP.DeleteBucketPolicy(ctx, &model.NormalizedRequest{Params: map[string]any{"_bucket": bucket}})
 			return err
+		},
+		GetAttAttrs: []string{},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"Bucket"},
 		},
 	}
 }

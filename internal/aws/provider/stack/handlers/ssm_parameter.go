@@ -18,11 +18,33 @@ func NewSSMParameterHandler(paramP *paramprovider.ParameterProvider) stackprovid
 			if _, err := paramP.PutParameter(ctx, child(nr, params)); err != nil {
 				return "", nil, err
 			}
-			return name, map[string]any{}, nil
+			value := propStr(props, "Value", "")
+			return name, map[string]any{"Value": value}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "Name", logicalID) != propStr(newProps, "Name", logicalID) {
+				return "", nil, true, nil
+			}
+			if propStr(oldProps, "Type", "") != propStr(newProps, "Type", "") {
+				return "", nil, true, nil
+			}
+			// In-place update — PutParameter with Overwrite=true
+			params := copyProps(newProps)
+			params["Name"] = physicalID
+			params["Overwrite"] = true
+			if _, err := paramP.PutParameter(ctx, child(nr, params)); err != nil {
+				return "", nil, false, err
+			}
+			value := propStr(newProps, "Value", "")
+			return physicalID, map[string]any{"Value": value}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := paramP.DeleteParameter(ctx, &model.NormalizedRequest{Params: map[string]any{"Name": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"Value"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"Name", "Type"},
 		},
 	}
 }

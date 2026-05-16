@@ -22,6 +22,10 @@ func NewLambdaPermissionHandler(funcP *functionprovider.FunctionProvider) stackp
 			}
 			return funcName + "/policy/" + stmtID, map[string]any{}, nil
 		},
+		// Lambda permissions are immutable — always require replacement.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			funcName := propStr(props, "FunctionName", "")
 			stmtID := propStr(props, "StatementId", "")
@@ -29,6 +33,9 @@ func NewLambdaPermissionHandler(funcP *functionprovider.FunctionProvider) stackp
 				Params: map[string]any{"_function_name": funcName, "_statement_id": stmtID},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"FunctionName", "StatementId"},
 		},
 	}
 }

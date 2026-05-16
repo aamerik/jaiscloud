@@ -26,12 +26,19 @@ func NewAPIGatewayResourceHandler(apigwP *apigwprovider.GatewayProvider) stackpr
 			resourceID, _ := resp.Data["id"].(string)
 			return resourceID, map[string]any{"ResourceId": resourceID}, nil
 		},
+		// Resources are immutable on key fields — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			restAPIID := propStr(props, "RestApiId", "")
 			_, err := apigwP.DeleteResource(ctx, &model.NormalizedRequest{
 				Params: map[string]any{"restApiId": restAPIID, "resourceId": physicalID},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"RestApiId", "ParentId", "PathPart"},
 		},
 	}
 }

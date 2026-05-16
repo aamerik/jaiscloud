@@ -23,9 +23,19 @@ func NewIAMInstanceProfileHandler(iamP *iamprovider.IAMProvider) stackprovider.R
 			}
 			return name, map[string]any{"Arn": arn}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "InstanceProfileName", logicalID) != propStr(newProps, "InstanceProfileName", logicalID) {
+				return "", nil, true, nil
+			}
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := iamP.DeleteInstanceProfile(ctx, &model.NormalizedRequest{Params: map[string]any{"InstanceProfileName": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"Arn"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"InstanceProfileName"},
 		},
 	}
 }

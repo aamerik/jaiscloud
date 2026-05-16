@@ -27,6 +27,10 @@ func NewLogsSubscriptionFilterHandler(logsP *cwlogs.Provider) stackprovider.Reso
 			physicalID := logGroupName + "/" + filterName
 			return physicalID, map[string]any{}, nil
 		},
+		// Subscription filters are immutable — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			logGroupName := propStr(props, "LogGroupName", "")
 			filterName := propStr(props, "FilterName", "")
@@ -37,6 +41,9 @@ func NewLogsSubscriptionFilterHandler(logsP *cwlogs.Provider) stackprovider.Reso
 				},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"LogGroupName", "FilterName"},
 		},
 	}
 }
