@@ -38,6 +38,37 @@ import (
 //	GET    /restapis/{restApiId}/stages/{stageName}                     → GetStage
 //	PATCH  /restapis/{restApiId}/stages/{stageName}                     → UpdateStage
 //	DELETE /restapis/{restApiId}/stages/{stageName}                     → DeleteStage
+//	POST   /restapis/{restApiId}/requestvalidators                      → CreateRequestValidator
+//	GET    /restapis/{restApiId}/requestvalidators                      → GetRequestValidators
+//	GET    /restapis/{restApiId}/requestvalidators/{validatorId}        → GetRequestValidator
+//	PATCH  /restapis/{restApiId}/requestvalidators/{validatorId}        → UpdateRequestValidator
+//	DELETE /restapis/{restApiId}/requestvalidators/{validatorId}        → DeleteRequestValidator
+//	GET    /restapis/{restApiId}/stages/{stageName}/exports/{exportType} → GetExport
+//	POST   /domainnames                                                 → CreateDomainName
+//	GET    /domainnames                                                 → GetDomainNames
+//	GET    /domainnames/{domainName}                                    → GetDomainName
+//	PATCH  /domainnames/{domainName}                                    → UpdateDomainName
+//	DELETE /domainnames/{domainName}                                    → DeleteDomainName
+//	POST   /domainnames/{domainName}/basepathmappings                   → CreateBasePathMapping
+//	GET    /domainnames/{domainName}/basepathmappings                   → GetBasePathMappings
+//	GET    /domainnames/{domainName}/basepathmappings/{basePath}        → GetBasePathMapping
+//	DELETE /domainnames/{domainName}/basepathmappings/{basePath}        → DeleteBasePathMapping
+//	POST   /usageplans                                                  → CreateUsagePlan
+//	GET    /usageplans                                                  → GetUsagePlans
+//	GET    /usageplans/{usagePlanId}                                    → GetUsagePlan
+//	PATCH  /usageplans/{usagePlanId}                                    → UpdateUsagePlan
+//	DELETE /usageplans/{usagePlanId}                                    → DeleteUsagePlan
+//	POST   /usageplans/{usagePlanId}/keys                               → CreateUsagePlanKey
+//	GET    /usageplans/{usagePlanId}/keys                               → GetUsagePlanKeys
+//	DELETE /usageplans/{usagePlanId}/keys/{keyId}                       → DeleteUsagePlanKey
+//	POST   /apikeys                                                     → CreateApiKey
+//	GET    /apikeys                                                     → GetApiKeys
+//	GET    /apikeys/{apiKey}                                            → GetApiKey
+//	PATCH  /apikeys/{apiKey}                                            → UpdateApiKey
+//	DELETE /apikeys/{apiKey}                                            → DeleteApiKey
+//	GET    /tags/{resourceArn}                                          → GetTags
+//	PUT    /tags/{resourceArn}                                          → TagResource
+//	DELETE /tags/{resourceArn}                                          → UntagResource
 type APIGatewayCodec struct{}
 
 func (c *APIGatewayCodec) ServiceName() string { return "apigateway" }
@@ -70,6 +101,137 @@ func (c *APIGatewayCodec) Decode(r *http.Request, body []byte) (*model.Normalize
 	}, nil
 }
 
+// apigwTopLevelAction handles paths not under /restapis: /domainnames, /usageplans, /apikeys, /tags.
+func apigwTopLevelAction(method string, parts []string, params map[string]any) string {
+	switch parts[0] {
+	case "domainnames":
+		return apigwDomainNamesAction(method, parts, params)
+	case "usageplans":
+		return apigwUsagePlansAction(method, parts, params)
+	case "apikeys":
+		return apigwAPIKeysAction(method, parts, params)
+	case "tags":
+		// /tags/{resourceArn}
+		if len(parts) >= 2 {
+			params["resourceArn"] = strings.Join(parts[1:], "/")
+		}
+		switch method {
+		case http.MethodGet:
+			return "GetTags"
+		case http.MethodPut:
+			return "TagResource"
+		case http.MethodDelete:
+			return "UntagResource"
+		}
+	}
+	return "Unknown"
+}
+
+func apigwDomainNamesAction(method string, parts []string, params map[string]any) string {
+	if len(parts) == 1 {
+		switch method {
+		case http.MethodPost:
+			return "CreateDomainName"
+		case http.MethodGet:
+			return "GetDomainNames"
+		}
+		return "Unknown"
+	}
+	params["domainName"] = parts[1]
+	if len(parts) == 2 {
+		switch method {
+		case http.MethodGet:
+			return "GetDomainName"
+		case http.MethodPatch:
+			return "UpdateDomainName"
+		case http.MethodDelete:
+			return "DeleteDomainName"
+		}
+		return "Unknown"
+	}
+	if parts[2] == "basepathmappings" {
+		if len(parts) == 3 {
+			switch method {
+			case http.MethodPost:
+				return "CreateBasePathMapping"
+			case http.MethodGet:
+				return "GetBasePathMappings"
+			}
+			return "Unknown"
+		}
+		params["basePath"] = parts[3]
+		switch method {
+		case http.MethodGet:
+			return "GetBasePathMapping"
+		case http.MethodDelete:
+			return "DeleteBasePathMapping"
+		}
+	}
+	return "Unknown"
+}
+
+func apigwUsagePlansAction(method string, parts []string, params map[string]any) string {
+	if len(parts) == 1 {
+		switch method {
+		case http.MethodPost:
+			return "CreateUsagePlan"
+		case http.MethodGet:
+			return "GetUsagePlans"
+		}
+		return "Unknown"
+	}
+	params["usagePlanId"] = parts[1]
+	if len(parts) == 2 {
+		switch method {
+		case http.MethodGet:
+			return "GetUsagePlan"
+		case http.MethodPatch:
+			return "UpdateUsagePlan"
+		case http.MethodDelete:
+			return "DeleteUsagePlan"
+		}
+		return "Unknown"
+	}
+	if parts[2] == "keys" {
+		if len(parts) == 3 {
+			switch method {
+			case http.MethodPost:
+				return "CreateUsagePlanKey"
+			case http.MethodGet:
+				return "GetUsagePlanKeys"
+			}
+			return "Unknown"
+		}
+		params["keyId"] = parts[3]
+		if method == http.MethodDelete {
+			return "DeleteUsagePlanKey"
+		}
+	}
+	return "Unknown"
+}
+
+func apigwAPIKeysAction(method string, parts []string, params map[string]any) string {
+	if len(parts) == 1 {
+		switch method {
+		case http.MethodPost:
+			return "CreateApiKey"
+		case http.MethodGet:
+			return "GetApiKeys"
+		}
+		return "Unknown"
+	}
+	params["apiKey"] = parts[1]
+	switch method {
+	case http.MethodGet:
+		return "GetApiKey"
+	case http.MethodPatch:
+		return "UpdateApiKey"
+	case http.MethodDelete:
+		return "DeleteApiKey"
+	}
+	return "Unknown"
+}
+
 // apigwDetectAction maps (method, path segments) → action name, injecting path
 // parameters into params.
 //
@@ -77,8 +239,11 @@ func (c *APIGatewayCodec) Decode(r *http.Request, body []byte) (*model.Normalize
 //
 //	[0]="restapis"  [1]={restApiId}  [2]=sub-resource  [3]={id}  [4]=methods  [5]={httpMethod}  [6]=integration|responses  ...
 func apigwDetectAction(method string, parts []string, params map[string]any) string {
-	if len(parts) == 0 || parts[0] != "restapis" {
+	if len(parts) == 0 {
 		return "Unknown"
+	}
+	if parts[0] != "restapis" {
+		return apigwTopLevelAction(method, parts, params)
 	}
 
 	// /restapis
@@ -114,6 +279,8 @@ func apigwDetectAction(method string, parts []string, params map[string]any) str
 		return apigwDeploymentsAction(method, parts, params)
 	case "stages":
 		return apigwStagesAction(method, parts, params)
+	case "requestvalidators":
+		return apigwRequestValidatorsAction(method, parts, params)
 	}
 
 	return "Unknown"
@@ -233,13 +400,47 @@ func apigwStagesAction(method string, parts []string, params map[string]any) str
 	}
 	// /restapis/{id}/stages/{stageName}
 	params["stageName"] = parts[3]
+	if len(parts) == 4 {
+		switch method {
+		case http.MethodGet:
+			return "GetStage"
+		case http.MethodPatch:
+			return "UpdateStage"
+		case http.MethodDelete:
+			return "DeleteStage"
+		}
+		return "Unknown"
+	}
+	// /restapis/{id}/stages/{stageName}/exports/{exportType}
+	if len(parts) >= 6 && parts[4] == "exports" {
+		params["exportType"] = parts[5]
+		if method == http.MethodGet {
+			return "GetExport"
+		}
+	}
+	return "Unknown"
+}
+
+func apigwRequestValidatorsAction(method string, parts []string, params map[string]any) string {
+	// /restapis/{id}/requestvalidators
+	if len(parts) == 3 {
+		switch method {
+		case http.MethodPost:
+			return "CreateRequestValidator"
+		case http.MethodGet:
+			return "GetRequestValidators"
+		}
+		return "Unknown"
+	}
+	// /restapis/{id}/requestvalidators/{validatorId}
+	params["requestValidatorId"] = parts[3]
 	switch method {
 	case http.MethodGet:
-		return "GetStage"
+		return "GetRequestValidator"
 	case http.MethodPatch:
-		return "UpdateStage"
+		return "UpdateRequestValidator"
 	case http.MethodDelete:
-		return "DeleteStage"
+		return "DeleteRequestValidator"
 	}
 	return "Unknown"
 }
