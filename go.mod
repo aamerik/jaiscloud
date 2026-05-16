@@ -47,7 +47,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.73.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentity v1.33.24 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.60.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/configservice v1.62.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.57.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.54.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/firehose v1.42.16 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.13 // indirect
@@ -57,6 +59,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.43.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/redshift v1.62.7 // indirect
+	github.com/aws/aws-sdk-go-v2/service/resourcegroups v1.33.26 // indirect
+	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.31.12 // indirect
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.70.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ses v1.34.24 // indirect
