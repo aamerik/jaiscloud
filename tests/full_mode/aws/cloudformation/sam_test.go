@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscf "github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,15 +34,8 @@ Resources:
 `
 
 // TestCFNSAMTransformFunction deploys a SAM template with Transform:
-// AWS::Serverless-2016-10-31 and verifies the Lambda function is created and
-// accessible via the Lambda API, then deletes the stack.
+// AWS::Serverless-2016-10-31 and verifies the Lambda function is created.
 func TestCFNSAMTransformFunction(t *testing.T) {
-	TestCFN_SAMTransform(t)
-}
-
-// TestCFN_SAMTransform deploys a SAM template containing an AWS::Serverless::Function
-// and verifies it transforms correctly into a Lambda function resource.
-func TestCFN_SAMTransform(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
 	cfClient := newCFClient(t)
@@ -53,7 +47,7 @@ func TestCFN_SAMTransform(t *testing.T) {
 	_, err := cfClient.CreateStack(ctx, &awscf.CreateStackInput{
 		StackName:    aws.String(stackName),
 		TemplateBody: aws.String(samTemplate),
-		Capabilities: []string{"CAPABILITY_IAM", "CAPABILITY_AUTO_EXPAND"},
+		Capabilities: []cftypes.Capability{cftypes.CapabilityCapabilityIam, cftypes.CapabilityCapabilityAutoExpand},
 	})
 	require.NoError(t, err, "CreateStack with SAM template")
 
