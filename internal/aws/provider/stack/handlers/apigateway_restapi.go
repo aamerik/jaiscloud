@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	apigwprovider "jaiscloud/internal/aws/provider/apigw"
@@ -21,7 +20,7 @@ func NewAPIGatewayRestApiHandler(apigwP *apigwprovider.GatewayProvider) stackpro
 				return "", nil, err
 			}
 			apiID, _ := resp.Data["id"].(string)
-			arn := fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", nr.Region, apiID)
+			arn := nr.ResourceID("apigateway-restapi", apiID)
 			return apiID, map[string]any{"RestApiId": apiID, "RootResourceId": resp.Data["rootResourceId"], "Arn": arn}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {

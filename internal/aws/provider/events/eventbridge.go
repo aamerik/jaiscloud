@@ -275,11 +275,20 @@ func (p *EventBridgeProvider) DeleteRule(ctx context.Context, nr *model.Normaliz
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
 	}
 	busName := normBus(strParam(nr.Params, "EventBusName"))
+	// Load rule before deleting so we can retrieve the ARN for scheduler removal.
+	var rd ruleData
+	if e, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, name)); err == nil {
+		_ = json.Unmarshal(e.Data, &rd)
+	}
 	_ = p.resources.Delete(ctx, resTypeRule, ruleKey(busName, name))
 	// Cascade: remove all targets for this rule.
 	entries, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, name))
 	for _, e := range entries {
 		_ = p.resources.Delete(ctx, resTypeTarget, e.ID)
+	}
+	// Unschedule if the rule had a schedule expression.
+	if p.scheduler != nil && rd.Arn != "" {
+		p.scheduler.Remove(rd.Arn)
 	}
 	return provider.OK(nil), nil
 }
@@ -921,6 +930,24 @@ func (p *EventBridgeProvider) DeleteEventBus(ctx context.Context, nr *model.Norm
 	name := strParam(nr.Params, "Name")
 	if name == "default" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Cannot delete default event bus", HTTPStatus: 400}
+	}
+	// Cascade: remove all rules (and their targets) bound to this bus.
+	allRules, _ := p.resources.List(ctx, resTypeRule, "")
+	for _, e := range allRules {
+		var rd ruleData
+		if json.Unmarshal(e.Data, &rd) == nil && rd.EventBusName == name {
+			// Remove targets for this rule.
+			tgts, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(name, rd.Name))
+			for _, t := range tgts {
+				_ = p.resources.Delete(ctx, resTypeTarget, t.ID)
+			}
+			// Remove the rule itself.
+			_ = p.resources.Delete(ctx, resTypeRule, e.ID)
+			// Unschedule if the rule had a schedule expression.
+			if p.scheduler != nil && rd.ScheduleExpr != "" {
+				p.scheduler.Remove(rd.Arn)
+			}
+		}
 	}
 	if err := p.resources.Delete(ctx, resTypeBus, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event bus not found: "+name)

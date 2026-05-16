@@ -7,12 +7,13 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
+	"jaiscloud/internal/aws/provider/events/pattern"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -154,6 +155,21 @@ func loadEntry(ctx context.Context, rs store.ResourceStore, resType, id string, 
 	return json.Unmarshal(e.Data, out)
 }
 
+// dlqARNFromPolicy parses a RedrivePolicy JSON string and returns the
+// deadLetterTargetArn, or an empty string if the policy is absent or malformed.
+func dlqARNFromPolicy(rdp string) string {
+	if rdp == "" {
+		return ""
+	}
+	var v struct {
+		DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+	}
+	if err := json.Unmarshal([]byte(rdp), &v); err != nil {
+		return ""
+	}
+	return v.DeadLetterTargetArn
+}
+
 // ─── Topic data ───────────────────────────────────────────────────────────────
 
 type topicData struct {
@@ -271,6 +287,7 @@ type subscriptionData struct {
 	Attributes      map[string]string `json:"Attributes"`
 	Token           string            `json:"Token,omitempty"` // confirmation token for http/https
 	Confirmed       bool              `json:"Confirmed"`
+	RedrivePolicy   string            `json:"RedrivePolicy,omitempty"` // JSON: {"deadLetterTargetArn":"arn:..."}
 }
 
 func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -309,6 +326,7 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 		Attributes:      attrs,
 		Token:           token,
 		Confirmed:       confirmed,
+		RedrivePolicy:   attrs["RedrivePolicy"],
 	}
 	if err := saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd); err != nil {
 		return nil, err
@@ -394,6 +412,9 @@ func (p *SNSProvider) SetSubscriptionAttributes(ctx context.Context, nr *model.N
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")
 	}
 	sd.Attributes[attr] = val
+	if attr == "RedrivePolicy" {
+		sd.RedrivePolicy = val
+	}
 	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd)
 }
 
@@ -476,36 +497,65 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 			}
 		}
 		rawDelivery := sd.Attributes["RawMessageDelivery"] == "true"
+
+		// buildBody returns the message body that would be sent to the subscriber,
+		// used both for delivery and for DLQ forwarding on failure.
+		buildBody := func() string {
+			if rawDelivery {
+				return message
+			}
+			envelope := buildSNSEnvelope(tArn, message, subject, messageID, sd.SubscriptionArn, msgAttrs)
+			b, _ := json.Marshal(envelope)
+			return string(b)
+		}
+
+		var deliveryErr error
 		switch sd.Protocol {
 		case "sqs":
-			p.deliverToSQS(ctx, sd.Endpoint, tArn, messageID, message, subject,
-				nr.Region, nr.AccountID, msgAttrs, rawDelivery)
+			deliveryErr = p.deliverToSQS(ctx, sd.Endpoint, tArn, messageID, message, subject,
+				nr.Region, nr.AccountID, sd.SubscriptionArn, msgAttrs, rawDelivery)
 		case "lambda":
-			go p.deliverToLambda(ctx, sd.SubscriptionArn, tArn, messageID, message, subject, sd.Endpoint, msgAttrs)
+			sdCopy := sd
+			go func() {
+				if err := p.deliverToLambda(ctx, sdCopy.SubscriptionArn, tArn, messageID, message, subject, sdCopy.Endpoint, msgAttrs); err != nil {
+					p.sendToDLQ(ctx, sdCopy.RedrivePolicy, tArn, buildBody())
+				}
+			}()
+			continue // DLQ is handled inside the goroutine
 		case "http", "https":
-			go p.deliverToHTTP(tArn, messageID, message, subject, sd.Endpoint, msgAttrs)
+			sdCopy := sd
+			go func() {
+				if err := p.deliverToHTTP(tArn, messageID, message, subject, sdCopy.Endpoint, msgAttrs); err != nil {
+					p.sendToDLQ(ctx, sdCopy.RedrivePolicy, tArn, buildBody())
+				}
+			}()
+			continue // DLQ is handled inside the goroutine
+		case "email", "email-json":
+			slog.Debug("sns: email delivery (stub)", "endpoint", sd.Endpoint, "msgID", messageID)
+			continue
+		case "sms":
+			slog.Debug("sns: SMS delivery (stub)", "endpoint", sd.Endpoint)
+			continue
+		case "application":
+			slog.Debug("sns: application delivery (stub)", "endpoint", sd.Endpoint)
+			continue
+		}
+
+		// For synchronous protocols (sqs), route to DLQ on failure.
+		if deliveryErr != nil {
+			p.sendToDLQ(ctx, sd.RedrivePolicy, tArn, buildBody())
 		}
 	}
 
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
-func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageID, message, subject, region, accountID string, msgAttrs map[string]any, rawDelivery bool) {
+func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageID, message, subject, region, accountID, subARN string, msgAttrs map[string]any, rawDelivery bool) error {
 	var bodyStr string
 	if rawDelivery {
 		bodyStr = message
 	} else {
-		envelope := map[string]any{
-			"Type":      "Notification",
-			"MessageId": messageID,
-			"TopicArn":  tArn,
-			"Subject":   subject,
-			"Message":   message,
-			"Timestamp": time.Now().UTC().Format(time.RFC3339),
-		}
-		if len(msgAttrs) > 0 {
-			envelope["MessageAttributes"] = msgAttrs
-		}
+		envelope := buildSNSEnvelope(tArn, message, subject, messageID, subARN, msgAttrs)
 		b, _ := json.Marshal(envelope)
 		bodyStr = string(b)
 	}
@@ -520,15 +570,14 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 				sqsAttrs[k] = SQSMessageAttribute{DataType: dt, StringValue: sv}
 			}
 		}
-		_ = p.sqsSender.InternalSend(ctx, queueURL, bodyStr, sqsAttrs, SQSSourceContext{
+		return p.sqsSender.InternalSend(ctx, queueURL, bodyStr, sqsAttrs, SQSSourceContext{
 			SourceArn:        tArn,
 			ServicePrincipal: "sns.amazonaws.com",
 		})
-		return
 	}
 
 	if p.messages == nil {
-		return
+		return nil
 	}
 	sqsMsgID := fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), rand.Int31())
 	msg := sqsstore.SQSMessage{
@@ -537,12 +586,13 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 		Body:      bodyStr,
 		SentAt:    time.Now(),
 	}
-	_, _, _ = p.messages.Send(ctx, msg)
+	_, _, err := p.messages.Send(ctx, msg)
+	return err
 }
 
-func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, messageID, message, subject, functionName string, msgAttrs map[string]any) {
+func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, messageID, message, subject, functionName string, msgAttrs map[string]any) error {
 	if p.invoker == nil {
-		return
+		return nil
 	}
 	// Extract bare function name from ARN or use as-is.
 	fnName := functionName
@@ -568,10 +618,11 @@ func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, message
 		},
 	}
 	payload, _ := json.Marshal(map[string]any{"Records": []any{record}})
-	_, _ = p.invoker.InvokeInternal(ctx, fnName, payload)
+	_, err := p.invoker.InvokeInternal(ctx, fnName, payload)
+	return err
 }
 
-func (p *SNSProvider) deliverToHTTP(tArn, messageID, message, subject, endpoint string, msgAttrs map[string]any) {
+func (p *SNSProvider) deliverToHTTP(tArn, messageID, message, subject, endpoint string, msgAttrs map[string]any) error {
 	envelope := map[string]any{
 		"Type":             "Notification",
 		"MessageId":        messageID,
@@ -589,15 +640,33 @@ func (p *SNSProvider) deliverToHTTP(tArn, messageID, message, subject, endpoint 
 	body, _ := json.Marshal(envelope)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "text/plain")
 	req.Header.Set("x-amz-sns-message-type", "Notification")
 	req.Header.Set("x-amz-sns-topic-arn", tArn)
 	req.Header.Set("x-amz-sns-message-id", messageID)
 	resp, err := p.httpClient.Do(req)
-	if err == nil {
-		resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// sendToDLQ delivers a failed message to the dead-letter queue specified in the
+// subscription's RedrivePolicy. It is a best-effort operation: errors are logged
+// but not propagated to the caller.
+func (p *SNSProvider) sendToDLQ(ctx context.Context, redrivePolicy, topicARN, body string) {
+	dlqARN := dlqARNFromPolicy(redrivePolicy)
+	if dlqARN == "" || p.sqsSender == nil {
+		return
+	}
+	if err := p.sqsSender.InternalSend(ctx, dlqARN, body, nil, SQSSourceContext{
+		SourceArn:        topicARN,
+		ServicePrincipal: "sns.amazonaws.com",
+	}); err != nil {
+		slog.Warn("sns: failed to send message to DLQ", "dlq", dlqARN, "err", err)
 	}
 }
 
@@ -625,120 +694,38 @@ func (p *SNSProvider) PublishBatch(ctx context.Context, nr *model.NormalizedRequ
 // ─── Filter policy ────────────────────────────────────────────────────────────
 
 // matchesFilterPolicy returns true if the message attributes satisfy the filter policy.
+// It delegates to the EventBridge pattern engine in SNS mode.
 func matchesFilterPolicy(filterPolicyJSON string, msgAttrs map[string]any) bool {
 	if filterPolicyJSON == "" {
 		return true
 	}
-	var policy map[string][]any
-	if err := json.Unmarshal([]byte(filterPolicyJSON), &policy); err != nil {
-		return true // malformed policy → pass-through
+	pat, err := pattern.Compile(filterPolicyJSON, pattern.ModeSNS)
+	if err != nil {
+		return false
 	}
-	for key, rules := range policy {
-		attr, hasAttr := msgAttrs[key]
-		if !hasAttr {
-			// "exists: false" rule passes when attribute is absent.
-			for _, r := range rules {
-				if m, ok := r.(map[string]any); ok {
-					if ex, ok := m["exists"].(bool); ok && !ex {
-						goto nextKey
-					}
-				}
-			}
-			return false // attribute absent and no matching rule
-		nextKey:
-			continue
-		}
-		attrMap, _ := attr.(map[string]any)
-		strVal, _ := attrMap["StringValue"].(string)
-		dataType, _ := attrMap["DataType"].(string)
-		isNum := strings.HasPrefix(dataType, "Number")
-		var numVal float64
-		if isNum {
-			numVal, _ = strconv.ParseFloat(strVal, 64)
-		}
-		if !filterRulesMatch(rules, strVal, numVal, isNum) {
-			return false
-		}
-	}
-	return true
+	return pat.Match(snsAttrsToEventDoc(msgAttrs))
 }
 
-func filterRulesMatch(rules []any, strVal string, numVal float64, isNum bool) bool {
-	for _, rule := range rules {
-		switch r := rule.(type) {
-		case string:
-			if r == strVal {
-				return true
-			}
+// snsAttrsToEventDoc unwraps the SNS attribute envelope
+// {"key":{"DataType":"String","StringValue":"x"}} → {"key":"x"}
+// so the pattern engine receives a flat document it can match against.
+func snsAttrsToEventDoc(msgAttrs map[string]any) map[string]any {
+	doc := make(map[string]any, len(msgAttrs))
+	for k, v := range msgAttrs {
+		switch m := v.(type) {
 		case map[string]any:
-			if filterSingleRuleMatch(r, strVal, numVal, isNum) {
-				return true
+			if sv, ok := m["StringValue"].(string); ok {
+				doc[k] = sv
+			} else if sv, ok := m["Value"].(string); ok {
+				doc[k] = sv
+			} else {
+				doc[k] = v
 			}
+		default:
+			doc[k] = v
 		}
 	}
-	return false
-}
-
-func filterSingleRuleMatch(r map[string]any, strVal string, numVal float64, isNum bool) bool {
-	if prefix, ok := r["prefix"].(string); ok {
-		return strings.HasPrefix(strVal, prefix)
-	}
-	if ab, ok := r["anything-but"]; ok {
-		switch v := ab.(type) {
-		case []any:
-			for _, item := range v {
-				if fmt.Sprint(item) == strVal {
-					return false
-				}
-			}
-			return true
-		case string:
-			return v != strVal
-		}
-	}
-	if numCond, ok := r["numeric"].([]any); ok && isNum {
-		return evaluateNumericCondition(numCond, numVal)
-	}
-	if ex, ok := r["exists"].(bool); ok {
-		return ex // attribute exists, so "exists: true" matches
-	}
-	return false
-}
-
-func evaluateNumericCondition(cond []any, val float64) bool {
-	for i := 0; i+1 < len(cond); i += 2 {
-		op, _ := cond[i].(string)
-		var thresh float64
-		switch t := cond[i+1].(type) {
-		case float64:
-			thresh = t
-		case string:
-			thresh, _ = strconv.ParseFloat(t, 64)
-		}
-		switch op {
-		case ">":
-			if !(val > thresh) {
-				return false
-			}
-		case ">=":
-			if !(val >= thresh) {
-				return false
-			}
-		case "<":
-			if !(val < thresh) {
-				return false
-			}
-		case "<=":
-			if !(val <= thresh) {
-				return false
-			}
-		case "=":
-			if val != thresh {
-				return false
-			}
-		}
-	}
-	return true
+	return doc
 }
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────

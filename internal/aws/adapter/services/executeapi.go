@@ -58,7 +58,7 @@ func (c *ExecuteAPICodec) Decode(r *http.Request, body []byte) (*model.Normalize
 	}
 
 	// Fall back: if no apiId from Host, try first path segment as apiId when
-	// path looks like /{apiId}/{stage}/{resource+} (LocalStack-style path routing).
+	// path looks like /{apiId}/{stage}/{resource+} (standard AWS API Gateway path routing).
 	if apiID == "" && len(pathParts) >= 1 {
 		// Heuristic: treat first segment as apiId only if it is short (≤12 chars)
 		// and second+ segments are present.  Otherwise treat first as stage.

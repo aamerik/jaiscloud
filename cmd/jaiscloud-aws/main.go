@@ -31,6 +31,10 @@ import (
 	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
 	stsprovider "jaiscloud/internal/aws/sts"
+	"jaiscloud/internal/aws/provider/events/targets"
+	ebscheduler "jaiscloud/internal/aws/provider/events/scheduler"
+	"jaiscloud/internal/workers"
+	"jaiscloud/internal/logstream"
 	kinesisstore "jaiscloud/internal/store/aws/kinesis"
 	ecrstore "jaiscloud/internal/store/aws/ecr"
 	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
@@ -627,6 +631,20 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	paramProv.SetEventPublisher(eventsP)
 	paramProv.SetSecretGetter(secretProv)
 
+	// Wire EventBridge target dispatcher and scheduler.
+	tgtDisp := targets.New(queueP, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
+	eventsP.SetTargetDispatcher(tgtDisp)
+	sched := ebscheduler.New(tgtDisp, cfg.Clock)
+	eventsP.SetScheduler(sched)
+
+	// Wire workers registry — start all background workers.
+	workerReg := workers.New()
+	workerReg.Add("eventbridge-scheduler", sched)
+	workerReg.Add("cw-alarm-evaluator", cwP.Evaluator())
+	workerReg.Start(ctx)
+	prevCleanup3 := cleanup
+	cleanup = func() { workerReg.Stop(); prevCleanup3() }
+
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv,
 		logsProvider, cwP, eventsP, ecsP, sfnP, esmProvider, apigwP, computeP)
 
@@ -1025,6 +1043,19 @@ func importCmd() *cobra.Command {
 	cmd.Flags().StringP("input", "i", "-", "Input file (default: stdin)")
 	cmd.Flags().Bool("new-instance", false, "Assign a fresh instance ID on import (blocks snapshots with KMS key material)")
 	return cmd
+}
+
+// logsWriterAdapter adapts cwlogs.Provider to targets.LogsWriter ([]string events).
+type logsWriterAdapter struct{ p *cwlogs.Provider }
+
+func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupName, logStreamName string, events []string) error {
+	_ = a.p.InternalCreateLogGroup(ctx, logGroupName)
+	lsEvents := make([]logstream.Event, len(events))
+	now := time.Now().UnixMilli()
+	for i, e := range events {
+		lsEvents[i] = logstream.Event{Timestamp: now, Message: e}
+	}
+	return a.p.InternalPutEvents(ctx, logGroupName, logStreamName, lsEvents)
 }
 
 // sqsSenderAdapter adapts *queue.QueueProvider to notification.SQSSender.

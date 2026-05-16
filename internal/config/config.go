@@ -210,6 +210,7 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"redshift-cluster":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
 	"s3-accesspoint":           func(r, a, n string) string { return fmt.Sprintf("arn:aws:s3:%s:%s:accesspoint/%s", r, a, n) },
 	// CloudWatch
+	"cloudwatch-alarm":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch:%s:%s:alarm:%s", r, a, n) },
 	"cloudwatch-dashboard": func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch::%s:dashboard/%s", a, n) },
 	// IAM OIDC
 	"iam-oidc-provider": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },

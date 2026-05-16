@@ -320,12 +320,18 @@ func matchClause(clause Clause, flat map[string]any, envelope map[string]any) bo
 	path := strings.Join(clause.Path, ".")
 	val, exists := flat[path]
 
+	if len(clause.Conds) == 0 {
+		return true
+	}
+	// AWS EventBridge/SNS semantics: conditions within a clause are OR-ed.
+	// e.g. {"color":["red","blue"]} matches if color is "red" OR "blue".
+	// AND-semantics live within a single Condition's NumOps (numeric range checks).
 	for _, cond := range clause.Conds {
-		if !matchCondition(cond, val, exists) {
-			return false
+		if matchCondition(cond, val, exists) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func matchCondition(cond Condition, val any, exists bool) bool {

@@ -1,6 +1,6 @@
 // Package sts implements the AWS STS provider for JaisCloud.
 // It handles temporary credential issuance (AssumeRole variants, GetSessionToken,
-// GetFederationToken) and session tag propagation, matching LocalStack behavioral parity.
+// GetFederationToken) and session tag propagation per AWS STS specification.
 package sts
 
 import (
@@ -21,7 +21,6 @@ import (
 )
 
 var (
-	// from LocalStack provider.py lines 39–41
 	roleARNRegex           = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
 	sessionNameRegex       = regexp.MustCompile(`^[\w+=,.@-]*$`)
 	federationNameRegex    = regexp.MustCompile(`^[\w+=,.@-]+$`)

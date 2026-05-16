@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	cwlogs "jaiscloud/internal/aws/provider/cloudwatch/logs"
@@ -19,7 +18,7 @@ func NewLogsLogGroupHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandle
 			if _, err := logsP.CreateLogGroup(ctx, child(nr, params)); err != nil {
 				return "", nil, err
 			}
-			arn := fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s:*", nr.Region, nr.AccountID, name)
+			arn := nr.ResourceID("logs-group", name)
 			return name, map[string]any{"Arn": arn}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {

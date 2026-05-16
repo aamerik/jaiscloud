@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -266,7 +267,20 @@ func (p *IAMProvider) ListRoles(ctx context.Context, nr *model.NormalizedRequest
 	if roles == nil {
 		roles = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Roles": roles, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(roles, maxItems, marker, "ListRoles")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Roles": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *IAMProvider) UpdateAssumeRolePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -376,7 +390,20 @@ func (p *IAMProvider) ListPolicies(ctx context.Context, nr *model.NormalizedRequ
 	if policies == nil {
 		policies = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Policies": policies, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(policies, maxItems, marker, "ListPolicies")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Policies": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func policyMap(pol policyData) map[string]any {
@@ -436,7 +463,20 @@ func (p *IAMProvider) ListAttachedRolePolicies(ctx context.Context, nr *model.No
 	if attached == nil {
 		attached = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"AttachedPolicies": attached, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(attached, maxItems, marker, "ListAttachedRolePolicies")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"AttachedPolicies": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // Inline role policies.
@@ -492,7 +532,20 @@ func (p *IAMProvider) ListRolePolicies(ctx context.Context, nr *model.Normalized
 	if names == nil {
 		names = []string{}
 	}
-	return provider.OK(map[string]any{"PolicyNames": names, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(names, maxItems, marker, "ListRolePolicies")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"PolicyNames": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -580,7 +633,20 @@ func (p *IAMProvider) ListUsers(ctx context.Context, nr *model.NormalizedRequest
 	if users == nil {
 		users = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Users": users, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(users, maxItems, marker, "ListUsers")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Users": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func userMap(u userData) map[string]any {
@@ -650,7 +716,20 @@ func (p *IAMProvider) ListAccessKeys(ctx context.Context, nr *model.NormalizedRe
 	if keys == nil {
 		keys = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"AccessKeyMetadata": keys, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(keys, maxItems, marker, "ListAccessKeys")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"AccessKeyMetadata": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── Tags ─────────────────────────────────────────────────────────────────────
@@ -703,7 +782,20 @@ func (p *IAMProvider) ListRoleTags(ctx context.Context, nr *model.NormalizedRequ
 	if tags == nil {
 		tags = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Tags": tags, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(tags, maxItems, marker, "ListRoleTags")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Tags": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── STS ─────────────────────────────────────────────────────────────────────
@@ -763,7 +855,20 @@ func (p *IAMProvider) ListAttachedUserPolicies(ctx context.Context, nr *model.No
 	if attached == nil {
 		attached = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"AttachedPolicies": attached, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(attached, maxItems, marker, "ListAttachedUserPolicies")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"AttachedPolicies": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *IAMProvider) PutUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -812,7 +917,20 @@ func (p *IAMProvider) ListUserPolicies(ctx context.Context, nr *model.Normalized
 	if names == nil {
 		names = []string{}
 	}
-	return provider.OK(map[string]any{"PolicyNames": names, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(names, maxItems, marker, "ListUserPolicies")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"PolicyNames": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── User tags ────────────────────────────────────────────────────────────────
@@ -865,7 +983,20 @@ func (p *IAMProvider) ListUserTags(ctx context.Context, nr *model.NormalizedRequ
 	if tags == nil {
 		tags = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Tags": tags, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(tags, maxItems, marker, "ListUserTags")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Tags": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── UpdateAccessKey ──────────────────────────────────────────────────────────
@@ -970,7 +1101,20 @@ func (p *IAMProvider) ListGroups(ctx context.Context, nr *model.NormalizedReques
 	if groups == nil {
 		groups = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Groups": groups, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(groups, maxItems, marker, "ListGroups")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Groups": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *IAMProvider) AddUserToGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1006,7 +1150,20 @@ func (p *IAMProvider) ListGroupsForUser(ctx context.Context, nr *model.Normalize
 	if groups == nil {
 		groups = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"Groups": groups, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(groups, maxItems, marker, "ListGroupsForUser")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"Groups": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func groupMap(g groupData) map[string]any {
@@ -1121,7 +1278,20 @@ func (p *IAMProvider) ListInstanceProfiles(ctx context.Context, nr *model.Normal
 	if profiles == nil {
 		profiles = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"InstanceProfiles": profiles, "IsTruncated": false}), nil
+	maxItems := 100
+	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
+		maxItems = int(v)
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, err := pagination.Paginate(profiles, maxItems, marker, "ListInstanceProfiles")
+	if err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: err.Error(), HTTPStatus: 400}
+	}
+	resp := map[string]any{"InstanceProfiles": page, "IsTruncated": nextMarker != ""}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *IAMProvider) loadProfileRoles(ctx context.Context, ip instanceProfileData, resourceIDFn func(string, string) string) []map[string]any {

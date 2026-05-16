@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	cloudwatchprovider "jaiscloud/internal/aws/provider/cloudwatch"
@@ -19,7 +18,7 @@ func NewCloudWatchAlarmHandler(cwP *cloudwatchprovider.Provider) stackprovider.R
 			if _, err := cwP.PutMetricAlarm(ctx, child(nr, params)); err != nil {
 				return "", nil, err
 			}
-			arn := fmt.Sprintf("arn:aws:cloudwatch:%s:%s:alarm:%s", nr.Region, nr.AccountID, name)
+			arn := nr.ResourceID("cloudwatch-alarm", name)
 			return name, map[string]any{"Arn": arn}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {

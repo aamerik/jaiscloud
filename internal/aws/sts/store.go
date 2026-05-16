@@ -12,7 +12,6 @@ type Tag struct {
 }
 
 // SessionConfig captures tagging context for an issued session credential.
-// Mirrors LocalStack's SessionConfig TypedDict.
 type SessionConfig struct {
 	// lowercase key → Tag{case-preserved key, value}
 	Tags map[string]Tag `json:"tags"`

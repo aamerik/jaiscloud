@@ -22,7 +22,7 @@ func NewS3BucketHandler(objectP *objectprovider.ObjectProvider) stackprovider.Re
 			if _, err := objectP.CreateBucket(ctx, child(nr, map[string]any{"_bucket": name})); err != nil {
 				return "", nil, err
 			}
-			arn := "arn:aws:s3:::" + name
+			arn := nr.ResourceID("s3-bucket", name)
 			return name, map[string]any{"Arn": arn, "DomainName": name + ".s3.amazonaws.com"}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {

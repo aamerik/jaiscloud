@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/aws/provider/table"
@@ -19,7 +18,7 @@ func NewDynamoDBTableHandler(tableP *table.TableProvider) stackprovider.Resource
 			if _, err := tableP.CreateTable(ctx, child(nr, params)); err != nil {
 				return "", nil, err
 			}
-			arn := fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", nr.Region, nr.AccountID, name)
+			arn := nr.ResourceID("dynamodb-table", name)
 			return name, map[string]any{"Arn": arn, "StreamArn": ""}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/aws/provider/queue"
@@ -19,7 +18,7 @@ func NewSQSQueueHandler(queueP *queue.QueueProvider) stackprovider.ResourceHandl
 				return "", nil, err
 			}
 			url := resp.Data["QueueUrl"].(string)
-			arn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", nr.Region, nr.AccountID, name)
+			arn := nr.ResourceID("sqs-queue", name)
 			return url, map[string]any{"QueueUrl": url, "Arn": arn}, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
