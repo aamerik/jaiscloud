@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awscw "github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -799,11 +801,11 @@ func TestCW_EnableDisableAlarmActions(t *testing.T) {
 // TestCW_DescribeAlarmsForMetric verifies that an alarm registered on a (namespace, metric)
 // pair is returned by DescribeAlarmsForMetric.
 //
-// Parity gap: the emulator has no metric→alarm reverse index; DescribeAlarmsForMetric
+// Parity gap: the emulator has no metric->alarm reverse index; DescribeAlarmsForMetric
 // always returns empty. Closing this gap requires indexing alarms by (namespace, metric)
 // at PutMetricAlarm time.
 func TestCW_DescribeAlarmsForMetric(t *testing.T) {
-	t.Skip("metric→alarm reverse index not implemented; see docs/parity/_cloudwatch.md")
+	t.Skip("metric->alarm reverse index not implemented; see docs/parity/_cloudwatch.md")
 	resetState(t)
 	ctx := context.Background()
 	c := newCWClient(t)
@@ -828,4 +830,94 @@ func TestCW_DescribeAlarmsForMetric(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, out.MetricAlarms, "alarm registered on (namespace, metric) must be returned")
+}
+
+// TestCloudWatchAlarmEvaluatorTransition verifies that after metric data exceeding
+// a threshold is published, the background evaluator transitions the alarm to ALARM
+// within one evaluator tick (30 s). The test waits up to 35 s for the transition.
+func TestCloudWatchAlarmEvaluatorTransition(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWClient(t)
+
+	// Create an SQS queue to act as the alarm action target.
+	sqsCfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	require.NoError(t, err)
+	sqsClient := sqs.NewFromConfig(sqsCfg, func(o *sqs.Options) {
+		o.BaseEndpoint = aws.String("http://localhost:4566")
+	})
+
+	createQ, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String("eval-alarm-queue"),
+	})
+	require.NoError(t, err)
+	queueURL := aws.ToString(createQ.QueueUrl)
+
+	attrOut, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       aws.String(queueURL),
+		AttributeNames: []sqstypes.QueueAttributeName{"QueueArn"},
+	})
+	require.NoError(t, err)
+	queueARN := attrOut.Attributes["QueueArn"]
+	require.NotEmpty(t, queueARN, "queue ARN must not be empty")
+
+	// Create an alarm: GreaterThanThreshold 10.0, EvaluationPeriods=1, Period=60s.
+	_, err = c.PutMetricAlarm(ctx, &awscw.PutMetricAlarmInput{
+		AlarmName:          aws.String("eval-test-alarm"),
+		Namespace:          aws.String("Test/Eval"),
+		MetricName:         aws.String("Value"),
+		Statistic:          cwtypes.StatisticAverage,
+		Threshold:          aws.Float64(10.0),
+		ComparisonOperator: cwtypes.ComparisonOperatorGreaterThanThreshold,
+		Period:             aws.Int32(60),
+		EvaluationPeriods:  aws.Int32(1),
+		ActionsEnabled:     aws.Bool(true),
+		AlarmActions:       []string{queueARN},
+	})
+	require.NoError(t, err)
+
+	// Publish a metric value that exceeds the threshold (20 > 10).
+	_, err = c.PutMetricData(ctx, &awscw.PutMetricDataInput{
+		Namespace: aws.String("Test/Eval"),
+		MetricData: []cwtypes.MetricDatum{{
+			MetricName: aws.String("Value"),
+			Value:      aws.Float64(20.0),
+			Timestamp:  aws.Time(time.Now()),
+		}},
+	})
+	require.NoError(t, err)
+
+	// Immediately after publish the alarm may still be INSUFFICIENT_DATA or OK
+	// (the evaluator has not yet ticked). Both are acceptable pre-evaluation states.
+	immediateOut, err := c.DescribeAlarms(ctx, &awscw.DescribeAlarmsInput{
+		AlarmNames: []string{"eval-test-alarm"},
+	})
+	require.NoError(t, err)
+	require.Len(t, immediateOut.MetricAlarms, 1)
+	preState := string(immediateOut.MetricAlarms[0].StateValue)
+	assert.NotEqual(t, "ALARM", preState,
+		"alarm should not be in ALARM state before the evaluator ticks")
+
+	// Wait up to 35 s for the evaluator (ticks every 30 s) to transition the alarm.
+	waitFor(t, 35*time.Second, func() bool {
+		pollOut, pollErr := c.DescribeAlarms(ctx, &awscw.DescribeAlarmsInput{
+			AlarmNames: []string{"eval-test-alarm"},
+		})
+		if pollErr != nil || len(pollOut.MetricAlarms) == 0 {
+			return false
+		}
+		return string(pollOut.MetricAlarms[0].StateValue) == "ALARM"
+	})
+
+	// Final assertion: alarm must now be in ALARM state.
+	finalOut, err := c.DescribeAlarms(ctx, &awscw.DescribeAlarmsInput{
+		AlarmNames: []string{"eval-test-alarm"},
+	})
+	require.NoError(t, err)
+	require.Len(t, finalOut.MetricAlarms, 1)
+	assert.Equal(t, cwtypes.StateValueAlarm, finalOut.MetricAlarms[0].StateValue,
+		"alarm must be in ALARM state after evaluator tick")
 }

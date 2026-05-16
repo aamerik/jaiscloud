@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -267,6 +268,9 @@ func (p *IAMProvider) ListRoles(ctx context.Context, nr *model.NormalizedRequest
 	if roles == nil {
 		roles = []map[string]any{}
 	}
+	sort.Slice(roles, func(i, j int) bool {
+		return fmt.Sprint(roles[i]["RoleName"]) < fmt.Sprint(roles[j]["RoleName"])
+	})
 	maxItems := 100
 	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
 		maxItems = int(v)

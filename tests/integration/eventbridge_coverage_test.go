@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -446,4 +447,76 @@ func TestEventBridge_ListEventBuses_Pagination(t *testing.T) {
 	require.NoError(t, err)
 	// default bus always exists, so we have at least 6 total
 	assert.LessOrEqual(t, len(out.EventBuses), 3)
+}
+
+// TestEventBridgeDeleteEventBusCascade verifies that deleting a custom event bus
+// also removes all rules and targets that belong to it.
+func TestEventBridgeDeleteEventBusCascade(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	eb := newEventBridgeClient(t)
+	sqsClient := newSQSClient(t)
+
+	// Create a queue to use as a target ARN.
+	_, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("cascade-q")})
+	require.NoError(t, err)
+	queueARN := "arn:aws:sqs:us-east-1:000000000000:cascade-q"
+
+	// Create a custom event bus.
+	busOut, err := eb.CreateEventBus(ctx, &awseb.CreateEventBusInput{
+		Name: aws.String("cascade-bus"),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, aws.ToString(busOut.EventBusArn), "cascade-bus")
+
+	// Put a rule on the custom bus.
+	_, err = eb.PutRule(ctx, &awseb.PutRuleInput{
+		Name:         aws.String("cascade-rule"),
+		EventBusName: aws.String("cascade-bus"),
+		EventPattern: aws.String(`{"source":["cascade.app"]}`),
+		State:        ebtypes.RuleStateEnabled,
+	})
+	require.NoError(t, err)
+
+	// Put a target on that rule.
+	ptOut, err := eb.PutTargets(ctx, &awseb.PutTargetsInput{
+		Rule:         aws.String("cascade-rule"),
+		EventBusName: aws.String("cascade-bus"),
+		Targets: []ebtypes.Target{
+			{Id: aws.String("cascade-t1"), Arn: aws.String(queueARN)},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), ptOut.FailedEntryCount)
+
+	// Verify the rule exists on the bus before deletion.
+	descBefore, err := eb.DescribeRule(ctx, &awseb.DescribeRuleInput{
+		Name:         aws.String("cascade-rule"),
+		EventBusName: aws.String("cascade-bus"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "cascade-rule", aws.ToString(descBefore.Name))
+
+	// Delete the event bus — this must cascade to rules and targets.
+	_, err = eb.DeleteEventBus(ctx, &awseb.DeleteEventBusInput{
+		Name: aws.String("cascade-bus"),
+	})
+	require.NoError(t, err)
+
+	// DescribeRule on the now-gone bus must return ResourceNotFoundException.
+	_, err = eb.DescribeRule(ctx, &awseb.DescribeRuleInput{
+		Name:         aws.String("cascade-rule"),
+		EventBusName: aws.String("cascade-bus"),
+	})
+	require.Error(t, err, "rule should not exist after bus deletion")
+
+	// ListTargetsByRule on the deleted rule should return empty (targets were cascade-deleted).
+	listOut, err := eb.ListTargetsByRule(ctx, &awseb.ListTargetsByRuleInput{
+		Rule:         aws.String("cascade-rule"),
+		EventBusName: aws.String("cascade-bus"),
+	})
+	// The provider may return an error (bus gone) or an empty list; both are acceptable.
+	if err == nil {
+		assert.Empty(t, listOut.Targets, "targets should be empty after bus deletion cascade")
+	}
 }

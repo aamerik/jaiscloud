@@ -2,12 +2,13 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
-	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -434,4 +435,62 @@ func TestIAMAdvanced_ListUsers(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, keysOut.AccessKeyMetadata, 0)
+}
+
+// TestIAMListRolesPagination verifies that ListRoles honours MaxItems and Marker,
+// and that iterating all pages yields exactly the expected roles with no duplicates.
+func TestIAMListRolesPagination(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newIAMClient(t)
+
+	const total = 12
+	for i := 0; i < total; i++ {
+		// Zero-pad to two digits so lexicographic sort equals numeric sort,
+		// keeping pagination cursors (index-based) stable across calls.
+		name := fmt.Sprintf("role-pag-%02d", i)
+		_, err := client.CreateRole(ctx, &awsiam.CreateRoleInput{
+			RoleName:                 aws.String(name),
+			AssumeRolePolicyDocument: aws.String(advTrustPolicy),
+		})
+		require.NoError(t, err)
+	}
+
+	// Page 1: MaxItems=5 → expect 5 roles and a Marker.
+	page1, err := client.ListRoles(ctx, &awsiam.ListRolesInput{
+		MaxItems: aws.Int32(5),
+	})
+	require.NoError(t, err)
+	assert.Len(t, page1.Roles, 5, "page 1 must contain exactly 5 roles")
+	assert.True(t, page1.IsTruncated, "page 1 must be truncated")
+	require.NotEmpty(t, aws.ToString(page1.Marker), "page 1 must return a non-empty Marker")
+
+	// Page 2: MaxItems=5, continuing from page 1's Marker.
+	page2, err := client.ListRoles(ctx, &awsiam.ListRolesInput{
+		MaxItems: aws.Int32(5),
+		Marker:   page1.Marker,
+	})
+	require.NoError(t, err)
+	assert.Len(t, page2.Roles, 5, "page 2 must contain exactly 5 roles")
+	assert.True(t, page2.IsTruncated, "page 2 must be truncated")
+	require.NotEmpty(t, aws.ToString(page2.Marker), "page 2 must return a non-empty Marker")
+
+	// Page 3: remaining 2 roles — no more pages.
+	page3, err := client.ListRoles(ctx, &awsiam.ListRolesInput{
+		MaxItems: aws.Int32(5),
+		Marker:   page2.Marker,
+	})
+	require.NoError(t, err)
+	assert.Len(t, page3.Roles, 2, "page 3 must contain exactly 2 roles")
+	assert.False(t, page3.IsTruncated, "page 3 must not be truncated")
+
+	// Collect all role names across all pages.
+	seen := make(map[string]struct{})
+	for _, r := range append(append(page1.Roles, page2.Roles...), page3.Roles...) {
+		name := aws.ToString(r.RoleName)
+		_, dup := seen[name]
+		assert.False(t, dup, "duplicate role %q returned across pages", name)
+		seen[name] = struct{}{}
+	}
+	assert.Len(t, seen, total, "total unique roles across all pages must equal %d", total)
 }

@@ -989,3 +989,149 @@ func TestSNS_ConfirmSubscription_TokenFlow(t *testing.T) {
 	assert.Equal(t, "sqs", getOut.Attributes["Protocol"])
 	assert.Equal(t, aws.ToString(qOut.QueueUrl), getOut.Attributes["Endpoint"])
 }
+
+// TestSNSDLQOnDeliveryFailure verifies that a message published to a topic whose
+// only subscriber is a non-existent Lambda (with a RedrivePolicy) ends up in the
+// specified dead-letter SQS queue.
+func TestSNSDLQOnDeliveryFailure(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+
+	// Create the DLQ.
+	dlqOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("dlq-test-queue")})
+	require.NoError(t, err)
+	dlqURL := aws.ToString(dlqOut.QueueUrl)
+	dlqARN := "arn:aws:sqs:us-east-1:000000000000:dlq-test-queue"
+
+	// Create the SNS topic.
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("dlq-test-topic")})
+	require.NoError(t, err)
+	topicARN := aws.ToString(tOut.TopicArn)
+
+	// Subscribe a non-existent Lambda; delivery will always fail.
+	fakeLambdaARN := "arn:aws:lambda:us-east-1:000000000000:function:nonexistent"
+	sOut, err := snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: aws.String(topicARN),
+		Protocol: aws.String("lambda"),
+		Endpoint: aws.String(fakeLambdaARN),
+	})
+	require.NoError(t, err)
+	subARN := aws.ToString(sOut.SubscriptionArn)
+
+	// Attach a RedrivePolicy pointing at the DLQ.
+	redrivePolicy := `{"deadLetterTargetArn":"` + dlqARN + `"}`
+	_, err = snsClient.SetSubscriptionAttributes(ctx, &awssns.SetSubscriptionAttributesInput{
+		SubscriptionArn: aws.String(subARN),
+		AttributeName:   aws.String("RedrivePolicy"),
+		AttributeValue:  aws.String(redrivePolicy),
+	})
+	require.NoError(t, err)
+
+	// Publish a message — delivery to Lambda will fail; the message should land in DLQ.
+	_, err = snsClient.Publish(ctx, &awssns.PublishInput{
+		TopicArn: aws.String(topicARN),
+		Message:  aws.String("dlq-test-payload"),
+	})
+	require.NoError(t, err)
+
+	// Poll the DLQ; expect at least one message.
+	msgs := pollSQS(ctx, sqsClient, dlqURL)
+	require.NotEmpty(t, msgs, "failed Lambda delivery should route message to DLQ")
+}
+
+// TestSNSEmailSubscribeAccepted verifies that subscribing with Protocol="email"
+// is accepted (no error) and that publishing to a topic with such a subscriber
+// also succeeds (delivery is silently stubbed out).
+func TestSNSEmailSubscribeAccepted(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	snsClient := newSNSClient(t)
+
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("email-topic")})
+	require.NoError(t, err)
+	topicARN := aws.ToString(tOut.TopicArn)
+
+	// Subscribe with email protocol — must not return an error.
+	sOut, err := snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: aws.String(topicARN),
+		Protocol: aws.String("email"),
+		Endpoint: aws.String("test@example.com"),
+	})
+	require.NoError(t, err, "Subscribe with protocol=email should be accepted")
+	assert.NotEmpty(t, aws.ToString(sOut.SubscriptionArn))
+
+	// Publish to the topic — no error expected (delivery is a no-op stub).
+	_, err = snsClient.Publish(ctx, &awssns.PublishInput{
+		TopicArn: aws.String(topicARN),
+		Message:  aws.String("hello email subscriber"),
+	})
+	require.NoError(t, err, "Publish to topic with email subscriber should succeed")
+}
+
+// TestSNSToSQSEnvelopeCompleteness verifies that every SNS notification delivered
+// to an SQS queue carries all 10 required envelope fields.
+func TestSNSToSQSEnvelopeCompleteness(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	snsClient := newSNSClient(t)
+	sqsClient := newSQSClient(t)
+
+	// Create queue, topic, and subscription.
+	qOut, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("envelope-q")})
+	require.NoError(t, err)
+	qURL := aws.ToString(qOut.QueueUrl)
+
+	tOut, err := snsClient.CreateTopic(ctx, &awssns.CreateTopicInput{Name: aws.String("envelope-topic")})
+	require.NoError(t, err)
+	topicARN := aws.ToString(tOut.TopicArn)
+
+	_, err = snsClient.Subscribe(ctx, &awssns.SubscribeInput{
+		TopicArn: aws.String(topicARN),
+		Protocol: aws.String("sqs"),
+		Endpoint: aws.String(qURL),
+	})
+	require.NoError(t, err)
+
+	// Publish a message.
+	_, err = snsClient.Publish(ctx, &awssns.PublishInput{
+		TopicArn: aws.String(topicARN),
+		Message:  aws.String("hello-world"),
+	})
+	require.NoError(t, err)
+
+	// Receive from SQS.
+	msgs := pollSQS(ctx, sqsClient, qURL)
+	require.Len(t, msgs, 1, "expected exactly one SQS message")
+
+	// Parse the SNS envelope JSON.
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal([]byte(aws.ToString(msgs[0].Body)), &envelope))
+
+	// Assert all 10 mandatory SNS notification fields are present.
+	requiredFields := []string{
+		"Type",
+		"MessageId",
+		"TopicArn",
+		"Subject",
+		"Message",
+		"Timestamp",
+		"SignatureVersion",
+		"Signature",
+		"SigningCertURL",
+		"UnsubscribeURL",
+	}
+	for _, field := range requiredFields {
+		_, ok := envelope[field]
+		assert.True(t, ok, "SNS envelope is missing required field: %s", field)
+	}
+
+	// Spot-check key values.
+	assert.Equal(t, "Notification", envelope["Type"])
+	assert.Equal(t, topicARN, envelope["TopicArn"])
+	assert.Equal(t, "hello-world", envelope["Message"])
+	assert.NotEmpty(t, envelope["MessageId"])
+	assert.NotEmpty(t, envelope["Timestamp"])
+	assert.NotEmpty(t, envelope["UnsubscribeURL"])
+}

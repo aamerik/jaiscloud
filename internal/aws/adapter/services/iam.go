@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"jaiscloud/internal/adapter"
@@ -140,6 +141,16 @@ func flattenIAMQueryParams(values url.Values) map[string]any {
 		}
 	}
 
+	// Coerce known integer fields from string to float64 so providers can use
+	// a uniform float64 type assertion (matching JSON-decoded params).
+	for _, key := range []string{"MaxItems", "MaxSessionDuration", "DurationSeconds"} {
+		if s, ok := params[key].(string); ok && s != "" {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				params[key] = f
+			}
+		}
+	}
+
 	return params
 }
 
@@ -217,7 +228,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Roles>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "CreatePolicy", "GetPolicy":
 		if p, ok := data["Policy"].(map[string]any); ok {
 			sb.WriteString("<Policy>")
@@ -234,7 +245,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Policies>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "ListAttachedRolePolicies":
 		sb.WriteString("<AttachedPolicies>")
 		if attached, ok := data["AttachedPolicies"].([]map[string]any); ok {
@@ -246,7 +257,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</AttachedPolicies>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "ListRolePolicies":
 		sb.WriteString("<PolicyNames>")
 		if names, ok := data["PolicyNames"].([]string); ok {
@@ -255,7 +266,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</PolicyNames>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "GetRolePolicy":
 		sb.WriteString(xmlTag("RoleName", str(data["RoleName"])))
 		sb.WriteString(xmlTag("PolicyName", str(data["PolicyName"])))
@@ -276,7 +287,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Users>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "CreateAccessKey":
 		if ak, ok := data["AccessKey"].(map[string]any); ok {
 			sb.WriteString("<AccessKey>")
@@ -299,7 +310,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</AccessKeyMetadata>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "ListRoleTags":
 		sb.WriteString("<Tags>")
 		if tags, ok := data["Tags"].([]map[string]any); ok {
@@ -311,7 +322,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Tags>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 
 	// STS actions
 	case "AssumeRole":
@@ -399,7 +410,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Users>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "ListGroups", "ListGroupsForUser":
 		sb.WriteString("<Groups>")
 		if groups, ok := data["Groups"].([]map[string]any); ok {
@@ -410,7 +421,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Groups>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 
 	// User policy attachments
 	case "ListAttachedUserPolicies":
@@ -424,7 +435,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</AttachedPolicies>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "ListUserPolicies":
 		sb.WriteString("<PolicyNames>")
 		if names, ok := data["PolicyNames"].([]string); ok {
@@ -433,7 +444,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</PolicyNames>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	case "GetUserPolicy":
 		sb.WriteString(xmlTag("UserName", str(data["UserName"])))
 		sb.WriteString(xmlTag("PolicyName", str(data["PolicyName"])))
@@ -451,7 +462,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</Tags>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 
 	// Instance profiles
 	case "CreateInstanceProfile", "GetInstanceProfile":
@@ -470,7 +481,7 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</InstanceProfiles>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 
 	// Simulation
 	case "SimulatePrincipalPolicy", "SimulateCustomPolicy":
@@ -484,9 +495,24 @@ func buildIAMResult(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</EvaluationResults>")
-		sb.WriteString(xmlTag("IsTruncated", "false"))
+		sb.WriteString(xmlPaginationFields(data))
 	}
 	return sb.String()
+}
+
+// xmlPaginationFields emits IsTruncated and, when present, Marker from the
+// provider response map. All IAM list operations must use this instead of
+// hardcoding IsTruncated=false so that paginated responses are correct.
+func xmlPaginationFields(data map[string]any) string {
+	truncated := "false"
+	if v, ok := data["IsTruncated"].(bool); ok && v {
+		truncated = "true"
+	}
+	s := xmlTag("IsTruncated", truncated)
+	if m, ok := data["Marker"].(string); ok && m != "" {
+		s += xmlTag("Marker", m)
+	}
+	return s
 }
 
 // roleInline outputs Role fields without a wrapper element (for use inside <member> or <Role>).
