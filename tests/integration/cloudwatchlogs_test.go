@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -372,4 +373,535 @@ func TestCWL_DescribeLogStreams(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, prefixOut.LogStreams, 1, "prefix filter must return exactly 1 stream")
 	assert.Equal(t, "stream-a", aws.ToString(prefixOut.LogStreams[0].LogStreamName))
+}
+
+// ─── I-PENDING-4: CW Logs subscription + filter matrix ───────────────────────
+
+// TestCWLogs_FilterPattern_LiteralMatch puts logs with "ERROR" and asserts
+// FilterLogEvents with pattern "ERROR" returns only the matching event.
+func TestCWLogs_FilterPattern_LiteralMatch(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/filter-literal"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UnixMilli()
+	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents: []types.InputLogEvent{
+			{Timestamp: aws.Int64(now), Message: aws.String("ERROR something went wrong")},
+			{Timestamp: aws.Int64(now + 1000), Message: aws.String("INFO all good")},
+		},
+	})
+	require.NoError(t, err)
+
+	out, err := c.FilterLogEvents(ctx, &awscwl.FilterLogEventsInput{
+		LogGroupName:  aws.String(group),
+		FilterPattern: aws.String("ERROR"),
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Events, 1, "literal 'ERROR' filter must return exactly 1 event")
+	assert.Contains(t, aws.ToString(out.Events[0].Message), "ERROR")
+}
+
+// TestCWLogs_FilterPattern_NoMatch filters with "CRITICAL" on logs that only
+// have "ERROR" and asserts zero results.
+func TestCWLogs_FilterPattern_NoMatch(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/filter-nomatch"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UnixMilli()
+	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents: []types.InputLogEvent{
+			{Timestamp: aws.Int64(now), Message: aws.String("ERROR minor failure")},
+			{Timestamp: aws.Int64(now + 1000), Message: aws.String("ERROR another failure")},
+		},
+	})
+	require.NoError(t, err)
+
+	out, err := c.FilterLogEvents(ctx, &awscwl.FilterLogEventsInput{
+		LogGroupName:  aws.String(group),
+		FilterPattern: aws.String("CRITICAL"),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.Events, "CRITICAL filter must return zero events when none match")
+}
+
+// TestCWLogs_FilterPattern_JSONField puts a JSON log entry and filters on a
+// JSON field using a CloudWatch Logs JSON filter pattern.
+func TestCWLogs_FilterPattern_JSONField(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/filter-json"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UnixMilli()
+	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents: []types.InputLogEvent{
+			{Timestamp: aws.Int64(now), Message: aws.String(`{"level":"error","msg":"oops"}`)},
+			{Timestamp: aws.Int64(now + 1000), Message: aws.String(`{"level":"info","msg":"ok"}`)},
+		},
+	})
+	require.NoError(t, err)
+
+	// JSON field filter — AWS pattern syntax: { $.level = "error" }
+	out, err := c.FilterLogEvents(ctx, &awscwl.FilterLogEventsInput{
+		LogGroupName:  aws.String(group),
+		FilterPattern: aws.String(`{ $.level = "error" }`),
+	})
+	require.NoError(t, err)
+	// In lite mode the filter may be treated as a substring match or a JSON match;
+	// either way the "error" message must be in the results.
+	assert.NotEmpty(t, out.Events, "JSON field filter must return at least 1 event")
+	for _, ev := range out.Events {
+		assert.Contains(t, aws.ToString(ev.Message), "error")
+	}
+}
+
+// TestCWLogs_FilterPattern_MetricFilter verifies PutMetricFilter, DescribeMetricFilters,
+// and DeleteMetricFilter roundtrip.
+func TestCWLogs_FilterPattern_MetricFilter(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/metric-filter"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	const filterName = "error-count"
+	_, err = c.PutMetricFilter(ctx, &awscwl.PutMetricFilterInput{
+		LogGroupName:  aws.String(group),
+		FilterName:    aws.String(filterName),
+		FilterPattern: aws.String("ERROR"),
+		MetricTransformations: []types.MetricTransformation{
+			{
+				MetricName:      aws.String("ErrorCount"),
+				MetricNamespace: aws.String("MyApp"),
+				MetricValue:     aws.String("1"),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	descOut, err := c.DescribeMetricFilters(ctx, &awscwl.DescribeMetricFiltersInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.MetricFilters, 1, "expected exactly 1 metric filter")
+	assert.Equal(t, filterName, aws.ToString(descOut.MetricFilters[0].FilterName))
+	assert.Equal(t, "ERROR", aws.ToString(descOut.MetricFilters[0].FilterPattern))
+
+	_, err = c.DeleteMetricFilter(ctx, &awscwl.DeleteMetricFilterInput{
+		LogGroupName: aws.String(group),
+		FilterName:   aws.String(filterName),
+	})
+	require.NoError(t, err)
+
+	descOut2, err := c.DescribeMetricFilters(ctx, &awscwl.DescribeMetricFiltersInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, descOut2.MetricFilters, "metric filter must be gone after delete")
+}
+
+// TestCWLogs_SubscriptionFilter_CRUD verifies PutSubscriptionFilter,
+// DescribeSubscriptionFilters, and DeleteSubscriptionFilter roundtrip.
+func TestCWLogs_SubscriptionFilter_CRUD(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/sub-filter"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	const filterName = "my-sub-filter"
+	const destARN = "arn:aws:lambda:us-east-1:000000000000:function:my-processor"
+
+	_, err = c.PutSubscriptionFilter(ctx, &awscwl.PutSubscriptionFilterInput{
+		LogGroupName:  aws.String(group),
+		FilterName:    aws.String(filterName),
+		FilterPattern: aws.String("ERROR"),
+		DestinationArn: aws.String(destARN),
+	})
+	require.NoError(t, err)
+
+	descOut, err := c.DescribeSubscriptionFilters(ctx, &awscwl.DescribeSubscriptionFiltersInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.SubscriptionFilters, 1, "expected 1 subscription filter")
+	assert.Equal(t, filterName, aws.ToString(descOut.SubscriptionFilters[0].FilterName))
+	assert.Equal(t, destARN, aws.ToString(descOut.SubscriptionFilters[0].DestinationArn))
+
+	_, err = c.DeleteSubscriptionFilter(ctx, &awscwl.DeleteSubscriptionFilterInput{
+		LogGroupName: aws.String(group),
+		FilterName:   aws.String(filterName),
+	})
+	require.NoError(t, err)
+
+	descOut2, err := c.DescribeSubscriptionFilters(ctx, &awscwl.DescribeSubscriptionFiltersInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, descOut2.SubscriptionFilters, "subscription filter must be gone after delete")
+}
+
+// TestCWLogs_GetLogEvents_Pagination puts 20 log events then paginates with
+// limit=5, following nextForwardToken until all events are consumed.
+func TestCWLogs_GetLogEvents_Pagination(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/get-pagination"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	const total = 20
+	now := time.Now().UnixMilli()
+	events := make([]types.InputLogEvent, total)
+	for i := 0; i < total; i++ {
+		events[i] = types.InputLogEvent{
+			Timestamp: aws.Int64(now + int64(i)*1000),
+			Message:   aws.String(fmt.Sprintf("msg-%02d", i)),
+		}
+	}
+	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents:     events,
+	})
+	require.NoError(t, err)
+
+	// Paginate with limit=5.
+	var collected []string
+	var nextToken *string
+	for {
+		out, err := c.GetLogEvents(ctx, &awscwl.GetLogEventsInput{
+			LogGroupName:  aws.String(group),
+			LogStreamName: aws.String(stream),
+			StartFromHead: aws.Bool(true),
+			Limit:         aws.Int32(5),
+			NextToken:     nextToken,
+		})
+		require.NoError(t, err)
+		if len(out.Events) == 0 {
+			break
+		}
+		for _, ev := range out.Events {
+			collected = append(collected, aws.ToString(ev.Message))
+		}
+		// GetLogEvents returns the same token when exhausted — detect that.
+		if nextToken != nil && aws.ToString(out.NextForwardToken) == aws.ToString(nextToken) {
+			break
+		}
+		nextToken = out.NextForwardToken
+		if nextToken == nil {
+			break
+		}
+	}
+
+	assert.Len(t, collected, total, "pagination must collect all %d events", total)
+}
+
+// TestCWLogs_FilterLogEvents_Pagination puts 15 events and paginates
+// FilterLogEvents with limit=5, following nextToken until all consumed.
+func TestCWLogs_FilterLogEvents_Pagination(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/filter-pagination"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	const total = 15
+	now := time.Now().UnixMilli()
+	events := make([]types.InputLogEvent, total)
+	for i := 0; i < total; i++ {
+		events[i] = types.InputLogEvent{
+			Timestamp: aws.Int64(now + int64(i)*1000),
+			Message:   aws.String(fmt.Sprintf("event-%02d", i)),
+		}
+	}
+	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents:     events,
+	})
+	require.NoError(t, err)
+
+	var collected []string
+	var nextToken *string
+	for {
+		out, err := c.FilterLogEvents(ctx, &awscwl.FilterLogEventsInput{
+			LogGroupName: aws.String(group),
+			Limit:        aws.Int32(5),
+			NextToken:    nextToken,
+		})
+		require.NoError(t, err)
+		for _, ev := range out.Events {
+			collected = append(collected, aws.ToString(ev.Message))
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	assert.Len(t, collected, total, "pagination must collect all %d events", total)
+}
+
+// TestCWLogs_PutLogEvents_SequenceToken puts two batches to the same stream,
+// using the sequence token from the first response for the second call.
+func TestCWLogs_PutLogEvents_SequenceToken(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/seq-token"
+	const stream = "s1"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+	_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UnixMilli()
+
+	// First batch — no sequence token needed.
+	put1, err := c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents: []types.InputLogEvent{
+			{Timestamp: aws.Int64(now), Message: aws.String("first batch")},
+		},
+	})
+	require.NoError(t, err)
+
+	// Second batch — pass sequence token from first response if provided.
+	put2Input := &awscwl.PutLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		LogEvents: []types.InputLogEvent{
+			{Timestamp: aws.Int64(now + 5000), Message: aws.String("second batch")},
+		},
+	}
+	if put1.NextSequenceToken != nil {
+		put2Input.SequenceToken = put1.NextSequenceToken
+	}
+	_, err = c.PutLogEvents(ctx, put2Input)
+	require.NoError(t, err)
+
+	// Verify both batches are readable.
+	out, err := c.GetLogEvents(ctx, &awscwl.GetLogEventsInput{
+		LogGroupName:  aws.String(group),
+		LogStreamName: aws.String(stream),
+		StartFromHead: aws.Bool(true),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.Events, 2, "both batches must be readable")
+}
+
+// TestCWLogs_CreateExportTask verifies CreateExportTask returns without error
+// (stub implementation — no actual S3 export).
+func TestCWLogs_CreateExportTask(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/export-task"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	now := time.Now().UnixMilli()
+	out, err := c.CreateExportTask(ctx, &awscwl.CreateExportTaskInput{
+		LogGroupName: aws.String(group),
+		Destination:  aws.String("my-export-bucket"),
+		From:         aws.Int64(now - 3600_000),
+		To:           aws.Int64(now),
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, aws.ToString(out.TaskId), "CreateExportTask must return a non-empty task ID")
+}
+
+// TestCWLogs_DescribeLogStreams_OrderBy creates 3 streams and verifies that
+// DescribeLogStreams returns them in consistent order with and without Descending.
+func TestCWLogs_DescribeLogStreams_OrderBy(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/order-by"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	// Create in alphabetical order.
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		_, err = c.CreateLogStream(ctx, &awscwl.CreateLogStreamInput{
+			LogGroupName:  aws.String(group),
+			LogStreamName: aws.String(name),
+		})
+		require.NoError(t, err)
+	}
+
+	// Ascending order (default).
+	ascOut, err := c.DescribeLogStreams(ctx, &awscwl.DescribeLogStreamsInput{
+		LogGroupName: aws.String(group),
+		Descending:   aws.Bool(false),
+		OrderBy:      types.OrderByLogStreamName,
+	})
+	require.NoError(t, err)
+	require.Len(t, ascOut.LogStreams, 3, "expected 3 streams")
+
+	// Descending order.
+	descOut, err := c.DescribeLogStreams(ctx, &awscwl.DescribeLogStreamsInput{
+		LogGroupName: aws.String(group),
+		Descending:   aws.Bool(true),
+		OrderBy:      types.OrderByLogStreamName,
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.LogStreams, 3, "expected 3 streams")
+
+	// The first stream in ascending must differ from the first in descending.
+	ascFirst := aws.ToString(ascOut.LogStreams[0].LogStreamName)
+	descFirst := aws.ToString(descOut.LogStreams[0].LogStreamName)
+	assert.NotEqual(t, ascFirst, descFirst, "ascending and descending order must differ")
+}
+
+// TestCWLogs_TagLogGroup verifies TagLogGroup, ListTagsLogGroup, and UntagLogGroup.
+func TestCWLogs_TagLogGroup(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/tag-test"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	// Apply tags.
+	_, err = c.TagLogGroup(ctx, &awscwl.TagLogGroupInput{
+		LogGroupName: aws.String(group),
+		Tags: map[string]string{
+			"env":   "staging",
+			"owner": "platform-team",
+		},
+	})
+	require.NoError(t, err)
+
+	// List tags — both must be present.
+	listOut, err := c.ListTagsLogGroup(ctx, &awscwl.ListTagsLogGroupInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "staging", listOut.Tags["env"], "tag 'env' must be 'staging'")
+	assert.Equal(t, "platform-team", listOut.Tags["owner"], "tag 'owner' must be 'platform-team'")
+
+	// Remove one tag.
+	_, err = c.UntagLogGroup(ctx, &awscwl.UntagLogGroupInput{
+		LogGroupName: aws.String(group),
+		Tags:         []string{"env"},
+	})
+	require.NoError(t, err)
+
+	// Verify 'env' is gone, 'owner' remains.
+	listOut2, err := c.ListTagsLogGroup(ctx, &awscwl.ListTagsLogGroupInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, listOut2.Tags, "env", "tag 'env' must be removed")
+	assert.Equal(t, "platform-team", listOut2.Tags["owner"], "tag 'owner' must still be present")
+}
+
+// TestCWLogs_RetentionPolicy verifies PutRetentionPolicy, DescribeLogGroups reflects
+// the setting, and DeleteRetentionPolicy removes it.
+func TestCWLogs_RetentionPolicy(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newCWLClient(t)
+
+	const group = "/cwlogs/retention-policy"
+	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
+	require.NoError(t, err)
+
+	// Set retention to 7 days.
+	_, err = c.PutRetentionPolicy(ctx, &awscwl.PutRetentionPolicyInput{
+		LogGroupName:    aws.String(group),
+		RetentionInDays: aws.Int32(7),
+	})
+	require.NoError(t, err)
+
+	// DescribeLogGroups must reflect retentionInDays=7.
+	descOut, err := c.DescribeLogGroups(ctx, &awscwl.DescribeLogGroupsInput{
+		LogGroupNamePrefix: aws.String(group),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.LogGroups, 1)
+	assert.Equal(t, int32(7), aws.ToInt32(descOut.LogGroups[0].RetentionInDays),
+		"retentionInDays must be 7 after PutRetentionPolicy")
+
+	// Delete retention policy.
+	_, err = c.DeleteRetentionPolicy(ctx, &awscwl.DeleteRetentionPolicyInput{
+		LogGroupName: aws.String(group),
+	})
+	require.NoError(t, err)
+
+	// After deletion, RetentionInDays must be nil/absent.
+	descOut2, err := c.DescribeLogGroups(ctx, &awscwl.DescribeLogGroupsInput{
+		LogGroupNamePrefix: aws.String(group),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut2.LogGroups, 1)
+	assert.Nil(t, descOut2.LogGroups[0].RetentionInDays,
+		"RetentionInDays must be nil after DeleteRetentionPolicy")
 }

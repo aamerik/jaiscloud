@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssfn "github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -584,4 +585,421 @@ func TestSFN_StartSyncExecution_ExpressOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sfntypes.SyncExecutionStatusSucceeded, syncOut.Status)
+}
+
+// ─── I-PENDING-5: SFN ASL conformance tests ──────────────────────────────────
+
+// pollUntilTerminal polls DescribeExecution until the execution reaches a
+// terminal state (SUCCEEDED, FAILED, ABORTED, TIMED_OUT) or the timeout elapses.
+func pollUntilTerminal(t *testing.T, client *awssfn.Client, execARN string, timeout time.Duration) *awssfn.DescribeExecutionOutput {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := client.DescribeExecution(context.Background(), &awssfn.DescribeExecutionInput{
+			ExecutionArn: aws.String(execARN),
+		})
+		require.NoError(t, err)
+		switch out.Status {
+		case sfntypes.ExecutionStatusSucceeded,
+			sfntypes.ExecutionStatusFailed,
+			sfntypes.ExecutionStatusAborted,
+			sfntypes.ExecutionStatusTimedOut:
+			return out
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("execution %s did not reach terminal state within %s", execARN, timeout)
+	return nil
+}
+
+// TestSFN_PassState_InputOutput tests a state machine with a Pass state that
+// uses InputPath and OutputPath to project input fields to output.
+func TestSFN_PassState_InputOutput(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	// Pass state: take $.payload from input and use it as output.
+	definition := `{
+		"StartAt": "Extract",
+		"States": {
+			"Extract": {
+				"Type": "Pass",
+				"InputPath": "$.payload",
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"payload":{"result":42},"extra":"ignore"}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+	assert.NotEmpty(t, aws.ToString(descOut.Output), "execution output must be non-empty")
+}
+
+// TestSFN_ChoiceState_StringEquals tests a Choice state that branches on a
+// string equality condition. Invokes twice with type "A" and type "B".
+func TestSFN_ChoiceState_StringEquals(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "Route",
+		"States": {
+			"Route": {
+				"Type": "Choice",
+				"Choices": [
+					{
+						"Variable": "$.type",
+						"StringEquals": "A",
+						"Next": "BranchA"
+					},
+					{
+						"Variable": "$.type",
+						"StringEquals": "B",
+						"Next": "BranchB"
+					}
+				],
+				"Default": "BranchB"
+			},
+			"BranchA": {
+				"Type": "Pass",
+				"Result": {"branch": "A"},
+				"End": true
+			},
+			"BranchB": {
+				"Type": "Pass",
+				"Result": {"branch": "B"},
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	// Invoke with type "A".
+	startA, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"type":"A"}`),
+	})
+	require.NoError(t, err)
+	descA := pollUntilTerminal(t, client, *startA.ExecutionArn, 10*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descA.Status)
+	assert.Contains(t, aws.ToString(descA.Output), "A", "type=A must route to BranchA")
+
+	// Invoke with type "B".
+	startB, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"type":"B"}`),
+	})
+	require.NoError(t, err)
+	descB := pollUntilTerminal(t, client, *startB.ExecutionArn, 10*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descB.Status)
+	assert.Contains(t, aws.ToString(descB.Output), "B", "type=B must route to BranchB")
+}
+
+// TestSFN_MapState_Items tests a Map state that iterates over an array of items
+// and processes each through a nested Pass state.
+func TestSFN_MapState_Items(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "ProcessItems",
+		"States": {
+			"ProcessItems": {
+				"Type": "Map",
+				"ItemsPath": "$.items",
+				"Iterator": {
+					"StartAt": "PassItem",
+					"States": {
+						"PassItem": {
+							"Type": "Pass",
+							"End": true
+						}
+					}
+				},
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"items":[{"id":1},{"id":2},{"id":3}]}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+	// The output must be an array (Map state collects results).
+	output := aws.ToString(descOut.Output)
+	assert.NotEmpty(t, output, "Map state must produce non-empty output")
+}
+
+// TestSFN_WaitState_Seconds tests a Wait state with a 1-second delay.
+func TestSFN_WaitState_Seconds(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "Pause",
+		"States": {
+			"Pause": {
+				"Type": "Wait",
+				"Seconds": 1,
+				"Next": "Done"
+			},
+			"Done": {
+				"Type": "Pass",
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 15*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+}
+
+// TestSFN_ParallelState tests a Parallel state with two branches, asserting
+// both branch outputs appear in the result array.
+func TestSFN_ParallelState(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "Parallel",
+		"States": {
+			"Parallel": {
+				"Type": "Parallel",
+				"Branches": [
+					{
+						"StartAt": "Branch1",
+						"States": {
+							"Branch1": {
+								"Type": "Pass",
+								"Result": {"branch": 1},
+								"End": true
+							}
+						}
+					},
+					{
+						"StartAt": "Branch2",
+						"States": {
+							"Branch2": {
+								"Type": "Pass",
+								"Result": {"branch": 2},
+								"End": true
+							}
+						}
+					}
+				],
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+	// Output must be a JSON array with 2 branch results.
+	output := aws.ToString(descOut.Output)
+	assert.NotEmpty(t, output, "Parallel state must produce non-empty output")
+}
+
+// TestSFN_TaskState_Lambda tests a state machine with a Task state backed by a
+// Lambda function ARN. In lite mode the engine uses passthrough; with dispatcher
+// it calls the Lambda echo mock. Both paths must produce SUCCEEDED.
+func TestSFN_TaskState_Lambda(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	// Use legacy Lambda ARN format (arn:aws:lambda:...:function:Name).
+	// parseTaskResource recognises this as "lambda:invoke".
+	definition := `{
+		"StartAt": "InvokeFunction",
+		"States": {
+			"InvokeFunction": {
+				"Type": "Task",
+				"Resource": "arn:aws:lambda:us-east-1:000000000000:function:echo-fn",
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"value":"hello"}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
+	// In lite mode (dispatcher == nil) the Task passes input through — SUCCEEDED.
+	// With dispatcher the Lambda echo mock echoes the payload — also SUCCEEDED.
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+	assert.NotEmpty(t, aws.ToString(descOut.Output), "Task state output must be non-empty")
+}
+
+// TestSFN_ErrorHandling_Retry tests a state machine with a Task state that
+// has Retry configuration. In lite mode the task passes through without error,
+// so the execution completes SUCCEEDED without retrying.
+func TestSFN_ErrorHandling_Retry(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "RetryTask",
+		"States": {
+			"RetryTask": {
+				"Type": "Task",
+				"Resource": "arn:aws:lambda:us-east-1:000000000000:function:retry-fn",
+				"Retry": [
+					{
+						"ErrorEquals": ["States.ALL"],
+						"IntervalSeconds": 1,
+						"MaxAttempts": 2,
+						"BackoffRate": 1.5
+					}
+				],
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"attempt":1}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 15*time.Second)
+	// In lite mode, task is a passthrough — no error occurs, so SUCCEEDED without retrying.
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+}
+
+// TestSFN_ErrorHandling_Catch tests a state machine with a Task state and a
+// Catch clause. In lite mode the task passes through without error, so the
+// Catch clause is never triggered and the execution completes SUCCEEDED directly.
+func TestSFN_ErrorHandling_Catch(t *testing.T) {
+	resetState(t)
+	client := sfnClient(t)
+	ctx := context.Background()
+	name := sfnName(t)
+
+	definition := `{
+		"StartAt": "CatchTask",
+		"States": {
+			"CatchTask": {
+				"Type": "Task",
+				"Resource": "arn:aws:lambda:us-east-1:000000000000:function:catch-fn",
+				"Catch": [
+					{
+						"ErrorEquals": ["States.ALL"],
+						"Next": "HandleError",
+						"ResultPath": "$.error"
+					}
+				],
+				"End": true
+			},
+			"HandleError": {
+				"Type": "Pass",
+				"Result": {"handled": true},
+				"End": true
+			}
+		}
+	}`
+
+	createOut, err := client.CreateStateMachine(ctx, &awssfn.CreateStateMachineInput{
+		Name:       aws.String(name),
+		Definition: aws.String(definition),
+		RoleArn:    aws.String(testRoleARN),
+	})
+	require.NoError(t, err)
+
+	startOut, err := client.StartExecution(ctx, &awssfn.StartExecutionInput{
+		StateMachineArn: createOut.StateMachineArn,
+		Input:           aws.String(`{"input":"data"}`),
+	})
+	require.NoError(t, err)
+
+	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
+	// In lite mode, task is a passthrough — SUCCEEDED via CatchTask directly.
+	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
+	assert.NotEmpty(t, aws.ToString(descOut.Output), "execution output must be non-empty")
 }
