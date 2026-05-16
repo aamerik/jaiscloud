@@ -56,3 +56,13 @@ func (p *FunctionProvider) LoadCode(ctx context.Context, account, funcName, vers
 	return p.loadCode(ctx, account, funcName, version)
 }
 
+// GetFunctionCodeZip implements admin.LambdaCodeFetcher.
+func (p *FunctionProvider) GetFunctionCodeZip(ctx context.Context, account, funcName, qualifier string) ([]byte, error) {
+	return p.loadCode(ctx, account, funcName, qualifier)
+}
+
+// GetLayerCodeZip implements admin.LambdaCodeFetcher.
+func (p *FunctionProvider) GetLayerCodeZip(ctx context.Context, account, layerName string, version int64) ([]byte, error) {
+	return p.loadLayerCode(ctx, account, layerName, version)
+}
+

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -188,6 +189,39 @@ func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.Nor
 	}, nil
 }
 
+// parseRDSFilters parses AWS RDS filter format: Filters.member.N.Name / Filters.member.N.Values.member.M
+func parseRDSFilters(params map[string]any) map[string][]string {
+	filters := map[string][]string{}
+	for i := 1; ; i++ {
+		prefix := fmt.Sprintf("Filters.member.%d", i)
+		name, ok := params[prefix+".Name"].(string)
+		if !ok || name == "" {
+			break
+		}
+		var vals []string
+		for j := 1; ; j++ {
+			v, ok := params[fmt.Sprintf("%s.Values.member.%d", prefix, j)].(string)
+			if !ok || v == "" {
+				break
+			}
+			vals = append(vals, v)
+		}
+		if len(vals) > 0 {
+			filters[name] = vals
+		}
+	}
+	return filters
+}
+
+func matchesAny(val string, allowed []string) bool {
+	for _, a := range allowed {
+		if val == a {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *RelationalProvider) DescribeDBInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
 	if id != "" {
@@ -206,13 +240,40 @@ func (p *RelationalProvider) DescribeDBInstances(ctx context.Context, nr *model.
 	if err != nil {
 		return nil, err
 	}
-	list := []map[string]any{}
+
+	filters := parseRDSFilters(nr.Params)
+	var all []dbInstance
 	for _, e := range entries {
 		var inst dbInstance
 		json.Unmarshal(e.Data, &inst)
+		if vals, ok := filters["db-instance-id"]; ok && !matchesAny(inst.DBInstanceIdentifier, vals) {
+			continue
+		}
+		if vals, ok := filters["engine"]; ok && !matchesAny(inst.Engine, vals) {
+			continue
+		}
+		if vals, ok := filters["db-cluster-id"]; ok && !matchesAny(inst.DBInstanceIdentifier, vals) {
+			continue
+		}
+		all = append(all, inst)
+	}
+
+	maxRecords := intParam(nr.Params, "MaxRecords", 100)
+	marker := strParam(nr.Params, "Marker")
+	page, nextMarker, pgErr := pagination.Paginate(all, maxRecords, marker, "DescribeDBInstances")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	list := make([]map[string]any, 0, len(page))
+	for _, inst := range page {
 		list = append(list, inst.toWire())
 	}
-	return provider.OK(map[string]any{"DBInstances": list}), nil
+	resp := map[string]any{"DBInstances": list}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -462,13 +523,37 @@ func (p *RelationalProvider) DescribeDBClusters(ctx context.Context, nr *model.N
 	if err != nil {
 		return nil, err
 	}
-	list := []map[string]any{}
+
+	filters := parseRDSFilters(nr.Params)
+	var all []dbCluster
 	for _, e := range entries {
 		var c dbCluster
 		json.Unmarshal(e.Data, &c)
+		if vals, ok := filters["db-cluster-id"]; ok && !matchesAny(c.DBClusterIdentifier, vals) {
+			continue
+		}
+		if vals, ok := filters["engine"]; ok && !matchesAny(c.Engine, vals) {
+			continue
+		}
+		all = append(all, c)
+	}
+
+	maxRecords := intParam(nr.Params, "MaxRecords", 100)
+	marker := strParam(nr.Params, "Marker")
+	page, nextMarker, pgErr := pagination.Paginate(all, maxRecords, marker, "DescribeDBClusters")
+	if pgErr != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: pgErr.Error(), HTTPStatus: http.StatusBadRequest}
+	}
+
+	list := make([]map[string]any, 0, len(page))
+	for _, c := range page {
 		list = append(list, c.toWire())
 	}
-	return provider.OK(map[string]any{"DBClusters": list}), nil
+	resp := map[string]any{"DBClusters": list}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *RelationalProvider) ModifyDBCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

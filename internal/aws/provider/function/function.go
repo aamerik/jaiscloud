@@ -41,18 +41,23 @@ type FunctionProvider struct {
 	asyncPayloadMax    int64
 	responsePayloadMax int64
 	activeInvocations  atomic.Int64
+	asyncQueue         *AsyncQueue
 }
 
 func New(resources store.ResourceStore) *FunctionProvider {
-	return &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}, blobs: blobfs.NewMemoryBlobStore()}
+	p := &FunctionProvider{resources: resources, executor: &lambdaexec.MockExecutor{}, blobs: blobfs.NewMemoryBlobStore()}
+	p.asyncQueue = NewAsyncQueue(p, nil)
+	return p
 }
 
 func NewWithExecutor(resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *FunctionProvider {
-	return &FunctionProvider{resources: resources, executor: exec, blobs: blobfs.NewMemoryBlobStore()}
+	p := &FunctionProvider{resources: resources, executor: exec, blobs: blobfs.NewMemoryBlobStore()}
+	p.asyncQueue = NewAsyncQueue(p, nil)
+	return p
 }
 
 func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig) *FunctionProvider {
-	return &FunctionProvider{
+	p := &FunctionProvider{
 		resources:          resources,
 		executor:           exec,
 		blobs:              blobfs.NewMemoryBlobStore(),
@@ -61,6 +66,8 @@ func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor
 		asyncPayloadMax:    cfg.AsyncPayloadMax,
 		responsePayloadMax: cfg.ResponsePayloadMax,
 	}
+	p.asyncQueue = NewAsyncQueue(p, nil)
+	return p
 }
 
 // NewWithBlobs constructs a FunctionProvider with an explicit BlobStore (used in main.go for full mode).
@@ -68,6 +75,16 @@ func NewWithBlobs(resources store.ResourceStore, exec lambdaexec.LambdaExecutor,
 	p := NewWithLimits(resources, exec, cfg)
 	p.blobs = blobs
 	return p
+}
+
+// AsyncQueue returns the provider's async invocation queue (for worker registration).
+func (p *FunctionProvider) AsyncQueue() *AsyncQueue {
+	return p.asyncQueue
+}
+
+// SetAsyncSQSSend wires the SQS DLQ sender into the async queue.
+func (p *FunctionProvider) SetAsyncSQSSend(fn asyncQueueSQSSend) {
+	p.asyncQueue.sqsSend = fn
 }
 
 func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
@@ -178,6 +195,7 @@ type functionConfig struct {
 	Tags                map[string]string `json:"Tags,omitempty"`
 	ReservedConcurrency *int              `json:"ReservedConcurrency,omitempty"`
 	VersionCounter      int64             `json:"VersionCounter,omitempty"`
+	Layers              []string          `json:"Layers,omitempty"` // layer version ARNs
 }
 
 type versionEntry struct {
@@ -249,6 +267,20 @@ func extractFunctionName(name string) string {
 		}
 	}
 	return name
+}
+
+func parseLayerARNs(params map[string]any) []string {
+	raw, ok := params["Layers"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func parseEnvVars(params map[string]any) map[string]string {
@@ -391,6 +423,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		RevisionId:   "1",
 		Environment:  parseEnvVars(nr.Params),
 		Tags:         tags,
+		Layers:       parseLayerARNs(nr.Params),
 	}
 
 	var zipBytes []byte
@@ -502,6 +535,9 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 	if env := parseEnvVars(nr.Params); env != nil {
 		cfg.Environment = env
 	}
+	if layers := parseLayerARNs(nr.Params); layers != nil {
+		cfg.Layers = layers
+	}
 	if t, ok := nr.Params["Timeout"]; ok {
 		var newTimeout int
 		switch v := t.(type) {
@@ -564,6 +600,7 @@ func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName stri
 		TimeoutSecs:  cfg.Timeout,
 		EnvVars:      cfg.Environment,
 		Payload:      payload,
+		Layers:       p.resolveLayerInfos(cfg.Layers),
 	}
 	timeout := time.Duration(cfg.Timeout) * time.Second
 	if timeout <= 0 {
@@ -572,6 +609,44 @@ func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName stri
 	invCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return p.executor.Invoke(invCtx, req)
+}
+
+// resolveLayerInfos maps layer version ARNs to LayerInfo structs by extracting
+// the layer name and version from the ARN and looking up the blob key.
+// ARN format: arn:aws:lambda:{region}:{account}:layer:{name}:{version}
+func (p *FunctionProvider) resolveLayerInfos(layerARNs []string) []lambdaexec.LayerInfo {
+	if len(layerARNs) == 0 {
+		return nil
+	}
+	infos := make([]lambdaexec.LayerInfo, 0, len(layerARNs))
+	for _, arn := range layerARNs {
+		name, version := parseLayerARN(arn)
+		if name == "" {
+			continue
+		}
+		key := layerBlobKey("", name, version) // account not stored in blob key
+		infos = append(infos, lambdaexec.LayerInfo{ARN: arn, BlobKey: key})
+	}
+	return infos
+}
+
+// parseLayerARN extracts (layerName, versionNumber) from a layer version ARN.
+// arn:aws:lambda:{region}:{account}:layer:{name}:{version}
+func parseLayerARN(arn string) (name string, version int64) {
+	// Split by ":" — parts[6] = name, parts[7] = version
+	parts := strings.Split(arn, ":")
+	if len(parts) >= 8 {
+		name = parts[6]
+		fmt.Sscanf(parts[7], "%d", &version)
+		return name, version
+	}
+	// Try to extract from the last two colon-separated segments
+	if len(parts) >= 2 {
+		name = parts[len(parts)-2]
+		fmt.Sscanf(parts[len(parts)-1], "%d", &version)
+		return name, version
+	}
+	return "", 0
 }
 
 func (p *FunctionProvider) Shutdown(_ context.Context) {

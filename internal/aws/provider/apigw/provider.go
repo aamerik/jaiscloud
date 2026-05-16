@@ -21,10 +21,16 @@ import (
 )
 
 const (
-	rtAPI        = "apigw_api"
-	rtResource   = "apigw_resource"
-	rtStage      = "apigw_stage"
-	rtDeployment = "apigw_deployment"
+	rtAPI              = "apigw_api"
+	rtResource         = "apigw_resource"
+	rtStage            = "apigw_stage"
+	rtDeployment       = "apigw_deployment"
+	rtValidator        = "apigw_validator"
+	rtDomainName       = "apigw_domain_name"
+	rtBasePathMapping  = "apigw_base_path_mapping"
+	rtUsagePlan        = "apigw_usage_plan"
+	rtApiKey           = "apigw_api_key"
+	rtUsagePlanKey     = "apigw_usage_plan_key"
 )
 
 // GatewayProvider handles API Gateway management operations and execute-api dispatch.
@@ -61,24 +67,53 @@ func (p *GatewayProvider) Routes() map[string]provider.HandlerFunc {
 		"Gateway.GetMethod":        p.GetMethod,
 		"Gateway.DeleteMethod":     p.DeleteMethod,
 		// Integrations
-		"Gateway.PutIntegration":   p.PutIntegration,
-		"Gateway.GetIntegration":   p.GetIntegration,
+		"Gateway.PutIntegration":    p.PutIntegration,
+		"Gateway.GetIntegration":    p.GetIntegration,
 		"Gateway.DeleteIntegration": p.DeleteIntegration,
 		// Method/Integration responses
-		"Gateway.PutMethodResponse":       p.PutMethodResponse,
-		"Gateway.PutIntegrationResponse":  p.PutIntegrationResponse,
+		"Gateway.PutMethodResponse":      p.PutMethodResponse,
+		"Gateway.PutIntegrationResponse": p.PutIntegrationResponse,
 		// Deployments
 		"Gateway.CreateDeployment": p.CreateDeployment,
 		"Gateway.GetDeployments":   p.GetDeployments,
 		"Gateway.DeleteDeployment": p.DeleteDeployment,
 		// Stages
-		"Gateway.CreateStage":      p.CreateStage,
-		"Gateway.GetStage":         p.GetStage,
-		"Gateway.GetStages":        p.GetStages,
-		"Gateway.UpdateStage":      p.UpdateStage,
-		"Gateway.DeleteStage":      p.DeleteStage,
+		"Gateway.CreateStage": p.CreateStage,
+		"Gateway.GetStage":    p.GetStage,
+		"Gateway.GetStages":   p.GetStages,
+		"Gateway.UpdateStage": p.UpdateStage,
+		"Gateway.DeleteStage": p.DeleteStage,
+		// Request validators (H-PENDING-27)
+		"Gateway.CreateRequestValidator": p.CreateRequestValidator,
+		"Gateway.GetRequestValidator":    p.GetRequestValidator,
+		"Gateway.GetRequestValidators":   p.GetRequestValidators,
+		"Gateway.UpdateRequestValidator": p.UpdateRequestValidator,
+		"Gateway.DeleteRequestValidator": p.DeleteRequestValidator,
+		// Custom domain names (H-PENDING-28)
+		"Gateway.CreateDomainName":       p.CreateDomainName,
+		"Gateway.GetDomainName":          p.GetDomainName,
+		"Gateway.GetDomainNames":         p.GetDomainNames,
+		"Gateway.UpdateDomainName":       p.UpdateDomainName,
+		"Gateway.DeleteDomainName":       p.DeleteDomainName,
+		"Gateway.CreateBasePathMapping":  p.CreateBasePathMapping,
+		"Gateway.GetBasePathMapping":     p.GetBasePathMapping,
+		"Gateway.GetBasePathMappings":    p.GetBasePathMappings,
+		"Gateway.DeleteBasePathMapping":  p.DeleteBasePathMapping,
+		// Usage plans + API keys (H-PENDING-29)
+		"Gateway.CreateUsagePlan":    p.CreateUsagePlan,
+		"Gateway.GetUsagePlan":       p.GetUsagePlan,
+		"Gateway.GetUsagePlans":      p.GetUsagePlans,
+		"Gateway.UpdateUsagePlan":    p.UpdateUsagePlan,
+		"Gateway.DeleteUsagePlan":    p.DeleteUsagePlan,
+		"Gateway.CreateApiKey":       p.CreateApiKey,
+		"Gateway.GetApiKey":          p.GetApiKey,
+		"Gateway.GetApiKeys":         p.GetApiKeys,
+		"Gateway.UpdateApiKey":       p.UpdateApiKey,
+		"Gateway.DeleteApiKey":       p.DeleteApiKey,
+		"Gateway.CreateUsagePlanKey": p.CreateUsagePlanKey,
+		"Gateway.GetUsagePlanKeys":   p.GetUsagePlanKeys,
 		// Execute-API (invoke plane)
-		"Gateway.Invoke":           p.Invoke,
+		"Gateway.Invoke": p.Invoke,
 	}
 }
 
@@ -756,4 +791,528 @@ func shortID() string {
 		out[i*2+1] = chars[byt&0xf%36]
 	}
 	return string(out)
+}
+
+// ─── Request Validators (H-PENDING-27) ────────────────────────────────────────
+
+type requestValidator struct {
+	ID                      string `json:"id"`
+	APIID                   string `json:"restApiId"`
+	Name                    string `json:"name"`
+	ValidateRequestBody     bool   `json:"validateRequestBody"`
+	ValidateRequestParameters bool `json:"validateRequestParameters"`
+}
+
+func (p *GatewayProvider) CreateRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	name, _ := nr.Params["name"].(string)
+	validateBody, _ := nr.Params["validateRequestBody"].(bool)
+	validateParams, _ := nr.Params["validateRequestParameters"].(bool)
+
+	id := shortID()
+	v := requestValidator{
+		ID:                      id,
+		APIID:                   apiID,
+		Name:                    name,
+		ValidateRequestBody:     validateBody,
+		ValidateRequestParameters: validateParams,
+	}
+	key := apiID + "/" + id
+	if err := p.save(ctx, rtValidator, key, v); err != nil {
+		return nil, fmt.Errorf("apigw: create validator: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: validatorToWire(v)}, nil
+}
+
+func (p *GatewayProvider) GetRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	validatorID, _ := nr.Params["requestValidatorId"].(string)
+	var v requestValidator
+	if err := p.load(ctx, rtValidator, apiID+"/"+validatorID, &v); err != nil {
+		return nil, p.notFound(err, "Request validator not found: "+validatorID)
+	}
+	return provider.OK(validatorToWire(v)), nil
+}
+
+func (p *GatewayProvider) GetRequestValidators(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	entries, _ := p.resources.List(ctx, rtValidator, apiID+"/")
+	var items []map[string]any
+	for _, e := range entries {
+		var v requestValidator
+		if json.Unmarshal(e.Data, &v) == nil {
+			items = append(items, validatorToWire(v))
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func (p *GatewayProvider) UpdateRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	validatorID, _ := nr.Params["requestValidatorId"].(string)
+	key := apiID + "/" + validatorID
+	var v requestValidator
+	if err := p.load(ctx, rtValidator, key, &v); err != nil {
+		return nil, p.notFound(err, "Request validator not found: "+validatorID)
+	}
+	if ops, ok := nr.Params["patchOperations"].([]any); ok {
+		for _, op := range ops {
+			if m, ok := op.(map[string]any); ok {
+				path, _ := m["path"].(string)
+				value, _ := m["value"].(string)
+				switch path {
+				case "/name":
+					v.Name = value
+				case "/validateRequestBody":
+					v.ValidateRequestBody = value == "true"
+				case "/validateRequestParameters":
+					v.ValidateRequestParameters = value == "true"
+				}
+			}
+		}
+	}
+	_ = p.save(ctx, rtValidator, key, v)
+	return provider.OK(validatorToWire(v)), nil
+}
+
+func (p *GatewayProvider) DeleteRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	validatorID, _ := nr.Params["requestValidatorId"].(string)
+	_ = p.resources.Delete(ctx, rtValidator, apiID+"/"+validatorID)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+func validatorToWire(v requestValidator) map[string]any {
+	return map[string]any{
+		"id":                        v.ID,
+		"name":                      v.Name,
+		"validateRequestBody":       v.ValidateRequestBody,
+		"validateRequestParameters": v.ValidateRequestParameters,
+	}
+}
+
+// ─── Custom domain names (H-PENDING-28) ──────────────────────────────────────
+
+type domainName struct {
+	DomainName             string `json:"domainName"`
+	CertificateARN         string `json:"certificateArn,omitempty"`
+	DistributionDomainName string `json:"distributionDomainName"`
+	EndpointType           string `json:"endpointType"`
+}
+
+type basePathMapping struct {
+	DomainName string `json:"domainName"`
+	BasePath   string `json:"basePath"`
+	RestAPIID  string `json:"restApiId"`
+	Stage      string `json:"stage"`
+}
+
+func (p *GatewayProvider) CreateDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["domainName"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("BadRequestException", "domainName is required", 400)
+	}
+	certARN, _ := nr.Params["certificateArn"].(string)
+	endpointType := "EDGE"
+	if ep, ok := nr.Params["endpointConfiguration"].(map[string]any); ok {
+		if types, ok := ep["types"].([]any); ok && len(types) > 0 {
+			endpointType, _ = types[0].(string)
+		}
+	}
+	d := domainName{
+		DomainName:             name,
+		CertificateARN:         certARN,
+		DistributionDomainName: randLower(16) + ".cloudfront.net",
+		EndpointType:           endpointType,
+	}
+	if err := p.save(ctx, rtDomainName, name, d); err != nil {
+		return nil, fmt.Errorf("apigw: create domain: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: domainToWire(d)}, nil
+}
+
+func (p *GatewayProvider) GetDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["domainName"].(string)
+	var d domainName
+	if err := p.load(ctx, rtDomainName, name, &d); err != nil {
+		return nil, p.notFound(err, "Domain name not found: "+name)
+	}
+	return provider.OK(domainToWire(d)), nil
+}
+
+func (p *GatewayProvider) GetDomainNames(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, rtDomainName, "")
+	var items []map[string]any
+	for _, e := range entries {
+		var d domainName
+		if json.Unmarshal(e.Data, &d) == nil {
+			items = append(items, domainToWire(d))
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func (p *GatewayProvider) UpdateDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["domainName"].(string)
+	var d domainName
+	if err := p.load(ctx, rtDomainName, name, &d); err != nil {
+		return nil, p.notFound(err, "Domain name not found: "+name)
+	}
+	if ops, ok := nr.Params["patchOperations"].([]any); ok {
+		for _, op := range ops {
+			if m, ok := op.(map[string]any); ok {
+				path, _ := m["path"].(string)
+				value, _ := m["value"].(string)
+				if path == "/certificateArn" {
+					d.CertificateARN = value
+				}
+			}
+		}
+	}
+	_ = p.save(ctx, rtDomainName, name, d)
+	return provider.OK(domainToWire(d)), nil
+}
+
+func (p *GatewayProvider) DeleteDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["domainName"].(string)
+	_ = p.resources.Delete(ctx, rtDomainName, name)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+func (p *GatewayProvider) CreateBasePathMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	domName, _ := nr.Params["domainName"].(string)
+	basePath, _ := nr.Params["basePath"].(string)
+	if basePath == "" {
+		basePath = "(none)"
+	}
+	restAPIID, _ := nr.Params["restApiId"].(string)
+	stage, _ := nr.Params["stage"].(string)
+
+	bpm := basePathMapping{
+		DomainName: domName,
+		BasePath:   basePath,
+		RestAPIID:  restAPIID,
+		Stage:      stage,
+	}
+	key := domName + "/" + basePath
+	if err := p.save(ctx, rtBasePathMapping, key, bpm); err != nil {
+		return nil, fmt.Errorf("apigw: create base path mapping: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: bpmToWire(bpm)}, nil
+}
+
+func (p *GatewayProvider) GetBasePathMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	domName, _ := nr.Params["domainName"].(string)
+	basePath, _ := nr.Params["basePath"].(string)
+	var bpm basePathMapping
+	if err := p.load(ctx, rtBasePathMapping, domName+"/"+basePath, &bpm); err != nil {
+		return nil, p.notFound(err, "Base path mapping not found")
+	}
+	return provider.OK(bpmToWire(bpm)), nil
+}
+
+func (p *GatewayProvider) GetBasePathMappings(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	domName, _ := nr.Params["domainName"].(string)
+	entries, _ := p.resources.List(ctx, rtBasePathMapping, domName+"/")
+	var items []map[string]any
+	for _, e := range entries {
+		var bpm basePathMapping
+		if json.Unmarshal(e.Data, &bpm) == nil {
+			items = append(items, bpmToWire(bpm))
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func (p *GatewayProvider) DeleteBasePathMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	domName, _ := nr.Params["domainName"].(string)
+	basePath, _ := nr.Params["basePath"].(string)
+	_ = p.resources.Delete(ctx, rtBasePathMapping, domName+"/"+basePath)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+func domainToWire(d domainName) map[string]any {
+	return map[string]any{
+		"domainName":             d.DomainName,
+		"certificateArn":         d.CertificateARN,
+		"distributionDomainName": d.DistributionDomainName,
+		"endpointConfiguration":  map[string]any{"types": []string{d.EndpointType}},
+	}
+}
+
+func bpmToWire(b basePathMapping) map[string]any {
+	return map[string]any{
+		"basePath":  b.BasePath,
+		"restApiId": b.RestAPIID,
+		"stage":     b.Stage,
+	}
+}
+
+// ─── Usage plans + API keys (H-PENDING-29) ────────────────────────────────────
+
+type usagePlan struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	APIStages   []map[string]any `json:"apiStages,omitempty"`
+	Throttle    map[string]any `json:"throttle,omitempty"`
+	Quota       map[string]any `json:"quota,omitempty"`
+}
+
+type apiKey struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Value       string `json:"value"`
+}
+
+type usagePlanKey struct {
+	PlanID string `json:"usagePlanId"`
+	KeyID  string `json:"id"`
+	KeyType string `json:"type"`
+}
+
+func (p *GatewayProvider) CreateUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("BadRequestException", "name is required", 400)
+	}
+	id := shortID()
+	plan := usagePlan{
+		ID:          id,
+		Name:        name,
+		Description: strParam(nr.Params, "description"),
+	}
+	if stages, ok := nr.Params["apiStages"].([]any); ok {
+		for _, s := range stages {
+			if m, ok := s.(map[string]any); ok {
+				plan.APIStages = append(plan.APIStages, m)
+			}
+		}
+	}
+	if t, ok := nr.Params["throttle"].(map[string]any); ok {
+		plan.Throttle = t
+	}
+	if q, ok := nr.Params["quota"].(map[string]any); ok {
+		plan.Quota = q
+	}
+	if err := p.save(ctx, rtUsagePlan, id, plan); err != nil {
+		return nil, fmt.Errorf("apigw: create usage plan: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: planToWire(plan)}, nil
+}
+
+func (p *GatewayProvider) GetUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["usagePlanId"].(string)
+	var plan usagePlan
+	if err := p.load(ctx, rtUsagePlan, id, &plan); err != nil {
+		return nil, p.notFound(err, "Usage plan not found: "+id)
+	}
+	return provider.OK(planToWire(plan)), nil
+}
+
+func (p *GatewayProvider) GetUsagePlans(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, rtUsagePlan, "")
+	var items []map[string]any
+	for _, e := range entries {
+		var plan usagePlan
+		if json.Unmarshal(e.Data, &plan) == nil {
+			items = append(items, planToWire(plan))
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func (p *GatewayProvider) UpdateUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["usagePlanId"].(string)
+	var plan usagePlan
+	if err := p.load(ctx, rtUsagePlan, id, &plan); err != nil {
+		return nil, p.notFound(err, "Usage plan not found: "+id)
+	}
+	if ops, ok := nr.Params["patchOperations"].([]any); ok {
+		for _, op := range ops {
+			if m, ok := op.(map[string]any); ok {
+				path, _ := m["path"].(string)
+				value, _ := m["value"].(string)
+				if path == "/name" {
+					plan.Name = value
+				} else if path == "/description" {
+					plan.Description = value
+				}
+			}
+		}
+	}
+	_ = p.save(ctx, rtUsagePlan, id, plan)
+	return provider.OK(planToWire(plan)), nil
+}
+
+func (p *GatewayProvider) DeleteUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["usagePlanId"].(string)
+	_ = p.resources.Delete(ctx, rtUsagePlan, id)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+func (p *GatewayProvider) CreateApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("BadRequestException", "name is required", 400)
+	}
+	id := shortID()
+	k := apiKey{
+		ID:          id,
+		Name:        name,
+		Description: strParam(nr.Params, "description"),
+		Enabled:     true,
+		Value:       randAlphanumKey(40),
+	}
+	if enabled, ok := nr.Params["enabled"].(bool); ok {
+		k.Enabled = enabled
+	}
+	if err := p.save(ctx, rtApiKey, id, k); err != nil {
+		return nil, fmt.Errorf("apigw: create api key: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: keyToWire(k)}, nil
+}
+
+func (p *GatewayProvider) GetApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["apiKey"].(string)
+	var k apiKey
+	if err := p.load(ctx, rtApiKey, id, &k); err != nil {
+		return nil, p.notFound(err, "API key not found: "+id)
+	}
+	return provider.OK(keyToWire(k)), nil
+}
+
+func (p *GatewayProvider) GetApiKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, rtApiKey, "")
+	var items []map[string]any
+	for _, e := range entries {
+		var k apiKey
+		if json.Unmarshal(e.Data, &k) == nil {
+			items = append(items, keyToWire(k))
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func (p *GatewayProvider) UpdateApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["apiKey"].(string)
+	var k apiKey
+	if err := p.load(ctx, rtApiKey, id, &k); err != nil {
+		return nil, p.notFound(err, "API key not found: "+id)
+	}
+	if ops, ok := nr.Params["patchOperations"].([]any); ok {
+		for _, op := range ops {
+			if m, ok := op.(map[string]any); ok {
+				path, _ := m["path"].(string)
+				value, _ := m["value"].(string)
+				switch path {
+				case "/name":
+					k.Name = value
+				case "/description":
+					k.Description = value
+				case "/enabled":
+					k.Enabled = value == "true"
+				}
+			}
+		}
+	}
+	_ = p.save(ctx, rtApiKey, id, k)
+	return provider.OK(keyToWire(k)), nil
+}
+
+func (p *GatewayProvider) DeleteApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, _ := nr.Params["apiKey"].(string)
+	_ = p.resources.Delete(ctx, rtApiKey, id)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+func (p *GatewayProvider) CreateUsagePlanKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	planID, _ := nr.Params["usagePlanId"].(string)
+	keyID, _ := nr.Params["keyId"].(string)
+	keyType, _ := nr.Params["keyType"].(string)
+	if keyType == "" {
+		keyType = "API_KEY"
+	}
+
+	upk := usagePlanKey{
+		PlanID:  planID,
+		KeyID:   keyID,
+		KeyType: keyType,
+	}
+	key := planID + "/" + keyID
+	if err := p.save(ctx, rtUsagePlanKey, key, upk); err != nil {
+		return nil, fmt.Errorf("apigw: create usage plan key: %w", err)
+	}
+	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
+		"id":   keyID,
+		"type": keyType,
+	}}, nil
+}
+
+func (p *GatewayProvider) GetUsagePlanKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	planID, _ := nr.Params["usagePlanId"].(string)
+	entries, _ := p.resources.List(ctx, rtUsagePlanKey, planID+"/")
+	var items []map[string]any
+	for _, e := range entries {
+		var upk usagePlanKey
+		if json.Unmarshal(e.Data, &upk) == nil {
+			items = append(items, map[string]any{
+				"id":   upk.KeyID,
+				"type": upk.KeyType,
+			})
+		}
+	}
+	return provider.OK(map[string]any{"item": items}), nil
+}
+
+func planToWire(plan usagePlan) map[string]any {
+	m := map[string]any{
+		"id":          plan.ID,
+		"name":        plan.Name,
+		"description": plan.Description,
+	}
+	if plan.APIStages != nil {
+		m["apiStages"] = plan.APIStages
+	}
+	if plan.Throttle != nil {
+		m["throttle"] = plan.Throttle
+	}
+	if plan.Quota != nil {
+		m["quota"] = plan.Quota
+	}
+	return m
+}
+
+func keyToWire(k apiKey) map[string]any {
+	return map[string]any{
+		"id":          k.ID,
+		"name":        k.Name,
+		"description": k.Description,
+		"enabled":     k.Enabled,
+		"value":       k.Value,
+	}
+}
+
+// randAlphanumKey generates a random alphanumeric string of length n.
+func randAlphanumKey(n int) string {
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	io.ReadFull(rand.Reader, b)
+	for i, byt := range b {
+		b[i] = chars[int(byt)%len(chars)]
+	}
+	return string(b)
+}
+
+// randLower generates a random lowercase alphanumeric string of length n.
+func randLower(n int) string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	io.ReadFull(rand.Reader, b)
+	for i, byt := range b {
+		b[i] = chars[int(byt)%len(chars)]
+	}
+	return string(b)
 }

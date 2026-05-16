@@ -6,13 +6,16 @@ import "fmt"
 // It is built by the provider at CreateTable time and passed on every data-plane
 // call so the store knows which attributes are key columns.
 type TableSchema struct {
-	TableName string     // e.g. "Orders"
-	PKAttr    string     // partition key attribute name
-	SKAttr    string     // sort key attribute name; "" if table has no sort key
-	PKType    string     // "S", "N", or "B"
-	SKType    string     // "S", "N", or "B"; "" if no sort key
-	GSIs      []IndexDef // up to 20
-	LSIs      []IndexDef // up to 5; immutable after CreateTable
+	TableName   string     // e.g. "Orders"
+	PKAttr      string     // partition key attribute name
+	SKAttr      string     // sort key attribute name; "" if table has no sort key
+	PKType      string     // "S", "N", or "B"
+	SKType      string     // "S", "N", or "B"; "" if no sort key
+	GSIs        []IndexDef // up to 20
+	LSIs        []IndexDef // up to 5; immutable after CreateTable
+	BillingMode string     // "PROVISIONED" or "PAY_PER_REQUEST"
+	WCU         int64      // WriteCapacityUnits (PROVISIONED mode only); 0 = unlimited
+	RCU         int64      // ReadCapacityUnits (PROVISIONED mode only); 0 = unlimited
 }
 
 // IndexDef describes a single GSI or LSI.

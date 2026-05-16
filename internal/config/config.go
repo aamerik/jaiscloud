@@ -58,6 +58,12 @@ type Config struct {
 	// service endpoint at JaisCloud.
 	IMDSEnabled bool
 
+	// OIDCIssuers maps OIDC issuer URLs to their JWKS endpoint URLs.
+	// Used by AssumeRoleWithWebIdentity to verify JWT signatures.
+	// Env var: JAISCLOUD_OIDC_ISSUERS=issuer1=jwks_url1,issuer2=jwks_url2
+	// If empty, JWT verification is skipped (back-compat for tests).
+	OIDCIssuers map[string]string
+
 	// K8s/Spark image configuration
 	K8sNamespace     string
 	K8sSparkImage    string
@@ -321,6 +327,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("deterministic", false)
 	viper.SetDefault("seed", 0)
 	viper.SetDefault("time_mode", "offset")
+	viper.SetDefault("oidc_issuers", "")
 
 	viper.SetEnvPrefix("JAISCLOUD")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -352,10 +359,22 @@ func Load() (*Config, error) {
 		Deterministic: viper.GetBool("deterministic"),
 		Seed:          viper.GetInt64("seed"),
 		TimeMode:      viper.GetString("time_mode"),
+		OIDCIssuers:   nil, // populated below from oidc_issuers
 	}
 
 	if cfg.Mode != ModeLite && cfg.Mode != ModeFull {
 		return nil, fmt.Errorf("invalid mode %q: must be lite or full", cfg.Mode)
+	}
+
+	// Parse OIDC_ISSUERS: "issuer1=jwks_url1,issuer2=jwks_url2"
+	if raw := viper.GetString("oidc_issuers"); raw != "" {
+		cfg.OIDCIssuers = make(map[string]string)
+		for _, pair := range strings.Split(raw, ",") {
+			pair = strings.TrimSpace(pair)
+			if k, v, ok := strings.Cut(pair, "="); ok {
+				cfg.OIDCIssuers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
 	}
 
 

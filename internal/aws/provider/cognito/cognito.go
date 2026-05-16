@@ -4,8 +4,10 @@ package cognito
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -20,6 +22,8 @@ const (
 	rtUserPool       = "cognito_user_pool"
 	rtPoolClient     = "cognito_pool_client"
 	rtPoolUser       = "cognito_pool_user"
+	rtConfirmCode    = "cognito_confirm_code"
+	rtResetCode      = "cognito_reset_code"
 )
 
 type Provider struct {
@@ -51,6 +55,15 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Cognito.AdminUpdateUserAttributes":  p.AdminUpdateUserAttributes,
 		"Cognito.AdminConfirmSignUp":         p.AdminConfirmSignUp,
 		"Cognito.ListUsers":                  p.ListUsers,
+		// Self-service auth flows
+		"Cognito.SignUp":                      p.SignUp,
+		"Cognito.ConfirmSignUp":               p.ConfirmSignUp,
+		"Cognito.InitiateAuth":                p.InitiateAuth,
+		"Cognito.AdminInitiateAuth":           p.AdminInitiateAuth,
+		"Cognito.RespondToAuthChallenge":      p.RespondToAuthChallenge,
+		"Cognito.ForgotPassword":              p.ForgotPassword,
+		"Cognito.ConfirmForgotPassword":       p.ConfirmForgotPassword,
+		"Cognito.ResendConfirmationCode":      p.ResendConfirmationCode,
 	}
 }
 
@@ -75,13 +88,23 @@ type cognitoPoolClient struct {
 }
 
 type cognitoUser struct {
-	UserPoolID           string            `json:"UserPoolId"`
-	Username             string            `json:"Username"`
+	UserPoolID           string              `json:"UserPoolId"`
+	Username             string              `json:"Username"`
+	UserID               string              `json:"UserId"`
 	Attributes           []map[string]string `json:"Attributes"`
-	UserStatus           string            `json:"UserStatus"`
-	Enabled              bool              `json:"Enabled"`
-	UserCreateDate       time.Time         `json:"UserCreateDate"`
-	UserLastModifiedDate time.Time         `json:"UserLastModifiedDate"`
+	UserStatus           string              `json:"UserStatus"`
+	Enabled              bool                `json:"Enabled"`
+	Password             string              `json:"Password,omitempty"`
+	UserCreateDate       time.Time           `json:"UserCreateDate"`
+	UserLastModifiedDate time.Time           `json:"UserLastModifiedDate"`
+}
+
+type confirmCodeRecord struct {
+	Code string `json:"Code"`
+}
+
+type resetCodeRecord struct {
+	Code string `json:"Code"`
 }
 
 // ─── ID generators ────────────────────────────────────────────────────────────
@@ -480,4 +503,349 @@ func (p *Provider) ListUsers(ctx context.Context, nr *model.NormalizedRequest) (
 		}
 	}
 	return provider.OK(map[string]any{"Users": users}), nil
+}
+
+// ─── Self-service auth flows ──────────────────────────────────────────────────
+
+// rand6Digits returns a random 6-digit string for confirmation codes.
+func rand6Digits() string {
+	n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
+	return fmt.Sprintf("%06d", n.Int64())
+}
+
+// resolvePoolIDFromClient resolves the pool ID from a client ID.
+// Falls back to using the clientID as pool ID for emulator simplicity.
+func (p *Provider) resolvePoolIDFromClient(ctx context.Context, clientID string) string {
+	entries, _ := p.resources.List(ctx, rtPoolClient, "")
+	for _, e := range entries {
+		var c cognitoPoolClient
+		if json.Unmarshal(e.Data, &c) == nil && c.ClientID == clientID {
+			return c.UserPoolID
+		}
+	}
+	return clientID
+}
+
+// findUserByUsername scans all pool users for a matching username.
+func (p *Provider) findUserByUsername(ctx context.Context, username string) (cognitoUser, error) {
+	entries, _ := p.resources.List(ctx, rtPoolUser, "")
+	for _, e := range entries {
+		var u cognitoUser
+		if json.Unmarshal(e.Data, &u) == nil && u.Username == username {
+			return u, nil
+		}
+	}
+	return cognitoUser{}, cognErr("UserNotFoundException", "User "+username+" not found", http.StatusBadRequest)
+}
+
+// saveUser creates or updates a user record.
+func (p *Provider) saveUser(ctx context.Context, u cognitoUser) error {
+	key := poolUserKey(u.UserPoolID, u.Username)
+	data, _ := json.Marshal(u)
+	entry := store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}
+	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
+		return p.resources.Update(ctx, entry)
+	} else {
+		return err
+	}
+}
+
+func maskEmail(email string) string {
+	at := strings.Index(email, "@")
+	if at < 2 {
+		return "***"
+	}
+	return email[:2] + "***" + email[at:]
+}
+
+func findAttr(attrs []map[string]string, name string) string {
+	for _, a := range attrs {
+		if a["Name"] == name {
+			return a["Value"]
+		}
+	}
+	return ""
+}
+
+func buildMockJWT(userID, username, poolID, tokenType string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	exp := time.Now().Add(time.Hour).Unix()
+	payload := fmt.Sprintf(`{"sub":%q,"email":%q,"iss":"https://cognito-idp.us-east-1.amazonaws.com/%s","token_use":%q,"exp":%d}`,
+		userID, username, poolID, tokenType, exp)
+	claims := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	return header + "." + claims + ".JAISCLOUD_MOCK_SIG"
+}
+
+func buildAuthResult(u cognitoUser, poolID string) map[string]any {
+	refreshToken := base64.StdEncoding.EncodeToString([]byte("refresh-" + u.Username))
+	return map[string]any{
+		"AuthenticationResult": map[string]any{
+			"AccessToken":  buildMockJWT(u.UserID, u.Username, poolID, "access"),
+			"IdToken":      buildMockJWT(u.UserID, u.Username, poolID, "id"),
+			"RefreshToken": refreshToken,
+			"ExpiresIn":    3600,
+			"TokenType":    "Bearer",
+		},
+	}
+}
+
+// parseAuthParameters handles both direct map and member.N style params.
+func parseAuthParameters(params map[string]any) map[string]string {
+	out := make(map[string]string)
+	if m, ok := params["AuthParameters"].(map[string]any); ok {
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	}
+	// member.N style: AuthParameters.member.1.key / .value
+	for i := 1; i <= 20; i++ {
+		pfx := fmt.Sprintf("AuthParameters.member.%d.", i)
+		k, ok1 := params[pfx+"key"].(string)
+		v, ok2 := params[pfx+"value"].(string)
+		if !ok1 || !ok2 {
+			break
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func (p *Provider) SignUp(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	username := str(nr.Params, "Username")
+	password := str(nr.Params, "Password")
+	if username == "" {
+		return nil, cognErr("InvalidParameterException", "Username is required", http.StatusBadRequest)
+	}
+
+	clientID := str(nr.Params, "ClientId")
+	poolID := p.resolvePoolIDFromClient(ctx, clientID)
+
+	key := poolUserKey(poolID, username)
+	if _, err := p.resources.Get(ctx, rtPoolUser, key); err == nil {
+		return nil, cognErr("UsernameExistsException", "User "+username+" already exists", http.StatusBadRequest)
+	}
+
+	now := time.Now().UTC()
+	u := cognitoUser{
+		UserPoolID:           poolID,
+		Username:             username,
+		UserID:               randAlphaNum(32),
+		Attributes:           parseAttributes(nr.Params),
+		UserStatus:           "UNCONFIRMED",
+		Enabled:              true,
+		Password:             password,
+		UserCreateDate:       now,
+		UserLastModifiedDate: now,
+	}
+	data, _ := json.Marshal(u)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}); err != nil {
+		return nil, err
+	}
+
+	// Generate 6-digit confirmation code
+	code := rand6Digits()
+	slog.Info("cognito: confirmation code", "user", username, "code", code)
+	codeData, _ := json.Marshal(confirmCodeRecord{Code: code})
+	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
+
+	return provider.OK(map[string]any{
+		"UserConfirmed": false,
+		"UserSub":       u.UserID,
+	}), nil
+}
+
+func (p *Provider) ConfirmSignUp(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	username := str(nr.Params, "Username")
+	confirmCode := str(nr.Params, "ConfirmationCode")
+
+	clientID := str(nr.Params, "ClientId")
+	poolID := p.resolvePoolIDFromClient(ctx, clientID)
+
+	key := poolUserKey(poolID, username)
+	e, err := p.resources.Get(ctx, rtPoolUser, key)
+	if err != nil {
+		return nil, cognErr("UserNotFoundException", "User not found", http.StatusBadRequest)
+	}
+
+	// Validate code if stored
+	if codeEntry, cerr := p.resources.Get(ctx, rtConfirmCode, key); cerr == nil {
+		var rec confirmCodeRecord
+		_ = json.Unmarshal(codeEntry.Data, &rec)
+		if confirmCode != "" && rec.Code != "" && confirmCode != rec.Code {
+			return nil, cognErr("CodeMismatchException", "Invalid verification code provided, please try again.", http.StatusBadRequest)
+		}
+	}
+
+	var u cognitoUser
+	_ = json.Unmarshal(e.Data, &u)
+	u.UserStatus = "CONFIRMED"
+	u.UserLastModifiedDate = time.Now().UTC()
+	data, _ := json.Marshal(u)
+	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
+	_ = p.resources.Delete(ctx, rtConfirmCode, key)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) InitiateAuth(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.handleAuth(ctx, nr.Params)
+}
+
+func (p *Provider) AdminInitiateAuth(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.handleAuth(ctx, nr.Params)
+}
+
+func (p *Provider) handleAuth(ctx context.Context, params map[string]any) (*model.ProviderResponse, error) {
+	authFlow := str(params, "AuthFlow")
+	authParams := parseAuthParameters(params)
+	username := authParams["USERNAME"]
+	password := authParams["PASSWORD"]
+
+	if username == "" {
+		return nil, cognErr("InvalidParameterException", "USERNAME is required in AuthParameters", http.StatusBadRequest)
+	}
+
+	// Determine pool
+	poolID := str(params, "UserPoolId")
+	if poolID == "" {
+		clientID := str(params, "ClientId")
+		poolID = p.resolvePoolIDFromClient(ctx, clientID)
+	}
+
+	// Find user — first try pool-scoped lookup, then global scan
+	var u cognitoUser
+	key := poolUserKey(poolID, username)
+	if e, err := p.resources.Get(ctx, rtPoolUser, key); err == nil {
+		_ = json.Unmarshal(e.Data, &u)
+	} else {
+		found, ferr := p.findUserByUsername(ctx, username)
+		if ferr != nil {
+			return nil, cognErr("UserNotFoundException", "User not found", http.StatusBadRequest)
+		}
+		u = found
+	}
+
+	if u.UserStatus == "UNCONFIRMED" {
+		return nil, cognErr("UserNotConfirmedException", "User is not confirmed.", http.StatusBadRequest)
+	}
+
+	// Verify password for password-based flows
+	if (authFlow == "USER_PASSWORD_AUTH" || authFlow == "USER_SRP_AUTH") &&
+		password != "" && u.Password != "" && password != u.Password {
+		return nil, cognErr("NotAuthorizedException", "Incorrect username or password.", http.StatusBadRequest)
+	}
+
+	return provider.OK(buildAuthResult(u, u.UserPoolID)), nil
+}
+
+func (p *Provider) RespondToAuthChallenge(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	challengeName := str(nr.Params, "ChallengeName")
+	responses := parseAuthParameters(nr.Params)
+	username := responses["USERNAME"]
+
+	u, err := p.findUserByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	if challengeName == "NEW_PASSWORD_REQUIRED" {
+		newPw := responses["NEW_PASSWORD"]
+		if newPw != "" {
+			u.Password = newPw
+		}
+		u.UserStatus = "CONFIRMED"
+		u.UserLastModifiedDate = time.Now().UTC()
+		_ = p.saveUser(ctx, u)
+	}
+
+	return provider.OK(buildAuthResult(u, u.UserPoolID)), nil
+}
+
+func (p *Provider) ForgotPassword(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	username := str(nr.Params, "Username")
+
+	u, err := p.findUserByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	code := rand6Digits()
+	slog.Info("cognito: password reset code", "user", username, "code", code)
+	key := poolUserKey(u.UserPoolID, username)
+	codeData, _ := json.Marshal(resetCodeRecord{Code: code})
+	if cerr := p.resources.Create(ctx, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
+		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData})
+	}
+
+	email := findAttr(u.Attributes, "email")
+	if email == "" {
+		email = username + "@example.com"
+	}
+	return provider.OK(map[string]any{
+		"CodeDeliveryDetails": map[string]any{
+			"Destination":    maskEmail(email),
+			"DeliveryMedium": "EMAIL",
+			"AttributeName":  "email",
+		},
+	}), nil
+}
+
+func (p *Provider) ConfirmForgotPassword(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	username := str(nr.Params, "Username")
+	code := str(nr.Params, "ConfirmationCode")
+	newPassword := str(nr.Params, "Password")
+
+	u, err := p.findUserByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	key := poolUserKey(u.UserPoolID, username)
+	if codeEntry, cerr := p.resources.Get(ctx, rtResetCode, key); cerr == nil {
+		var rec resetCodeRecord
+		_ = json.Unmarshal(codeEntry.Data, &rec)
+		if code != "" && rec.Code != "" && code != rec.Code {
+			return nil, cognErr("CodeMismatchException", "Invalid verification code provided, please try again.", http.StatusBadRequest)
+		}
+		_ = p.resources.Delete(ctx, rtResetCode, key)
+	}
+
+	if newPassword != "" {
+		u.Password = newPassword
+	}
+	u.UserStatus = "CONFIRMED"
+	u.UserLastModifiedDate = time.Now().UTC()
+	_ = p.saveUser(ctx, u)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) ResendConfirmationCode(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	username := str(nr.Params, "Username")
+
+	u, err := p.findUserByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	code := rand6Digits()
+	slog.Info("cognito: confirmation code", "user", username, "code", code)
+	key := poolUserKey(u.UserPoolID, username)
+	codeData, _ := json.Marshal(confirmCodeRecord{Code: code})
+	if cerr := p.resources.Create(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
+		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
+	}
+
+	email := findAttr(u.Attributes, "email")
+	if email == "" {
+		email = username + "@example.com"
+	}
+	return provider.OK(map[string]any{
+		"CodeDeliveryDetails": map[string]any{
+			"Destination":    maskEmail(email),
+			"DeliveryMedium": "EMAIL",
+			"AttributeName":  "email",
+		},
+	}), nil
 }

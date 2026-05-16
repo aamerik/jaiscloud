@@ -3,6 +3,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // InvokeResult holds the result of an internal Lambda invocation.
@@ -31,6 +32,30 @@ func (p *FunctionProvider) InternalInvoke(ctx context.Context, funcARNorName str
 		return nil, fmt.Errorf("lambda: function %q not found: %w", name, err)
 	}
 	if invocationType == "Event" {
+		// Look up event invoke config for retry and DLQ settings.
+		maxAttempts := defaultMaxAttempts
+		var dlqARN string
+		var maxAge int64
+		if eiEntry, eiErr := p.resources.Get(ctx, resTypeEventInvoke, eiKey(name, "")); eiErr == nil {
+			var eiCfg eventInvokeConfig
+			if jsonErr := eiCfg.unmarshal(eiEntry.Data); jsonErr == nil {
+				if eiCfg.MaximumRetryAttempts > 0 {
+					maxAttempts = eiCfg.MaximumRetryAttempts
+				}
+				maxAge = int64(eiCfg.MaximumEventAgeInSeconds)
+				if dc, ok := eiCfg.DestinationConfig["OnFailure"].(map[string]any); ok {
+					dlqARN, _ = dc["Destination"].(string)
+				}
+			}
+		}
+		p.asyncQueue.Enqueue(asyncInvokeJob{
+			funcARN:       cfg.FunctionArn,
+			payload:       payload,
+			maxAttempts:   maxAttempts,
+			dlqARN:        dlqARN,
+			createdAt:     time.Now(),
+			maxAgeSeconds: maxAge,
+		})
 		return &InvokeResult{StatusCode: 202}, nil
 	}
 	result, err := p.invokeConfig(ctx, cfg, payload)

@@ -5,6 +5,12 @@ package lambda
 
 import "context"
 
+// LayerInfo carries the information needed to mount a Lambda layer.
+type LayerInfo struct {
+	ARN     string // layer version ARN
+	BlobKey string // blob store key for the layer zip
+}
+
 // InvokeRequest carries everything needed to invoke a Lambda function.
 type InvokeRequest struct {
 	FunctionName string
@@ -16,6 +22,7 @@ type InvokeRequest struct {
 	EnvVars      map[string]string
 	Payload      []byte
 	AccountID    string
+	Layers       []LayerInfo // resolved layer zip blobs to mount at /opt
 }
 
 // LambdaExecutor is the interface satisfied by MockExecutor, DockerExecutor,

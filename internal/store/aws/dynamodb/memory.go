@@ -14,17 +14,19 @@ import (
 // MemoryDynamoDBItemStore is an in-memory DynamoDBItemStore.
 // Items are stored per table keyed by pkHash (caller-computed primary key string).
 type MemoryDynamoDBItemStore struct {
-	mu      sync.RWMutex
-	schemas map[string]TableSchema                    // tableName → schema
-	tables  map[string]map[string]map[string]any      // table → pkHash → item
-	gsiIdx  map[string]map[string]map[string][]string // tableName → indexName → gsiPKVal → []pkHash
+	mu        sync.RWMutex
+	schemas   map[string]TableSchema                    // tableName → schema
+	tables    map[string]map[string]map[string]any      // table → pkHash → item
+	gsiIdx    map[string]map[string]map[string][]string // tableName → indexName → gsiPKVal → []pkHash
+	throttles map[string]*tokenBucket                   // tableName → write token bucket
 }
 
 func NewMemoryDynamoDBItemStore() *MemoryDynamoDBItemStore {
 	return &MemoryDynamoDBItemStore{
-		schemas: make(map[string]TableSchema),
-		tables:  make(map[string]map[string]map[string]any),
-		gsiIdx:  make(map[string]map[string]map[string][]string),
+		schemas:   make(map[string]TableSchema),
+		tables:    make(map[string]map[string]map[string]any),
+		gsiIdx:    make(map[string]map[string]map[string][]string),
+		throttles: make(map[string]*tokenBucket),
 	}
 }
 
@@ -35,7 +37,17 @@ func (s *MemoryDynamoDBItemStore) tableMap(table string) map[string]map[string]a
 	return s.tables[table]
 }
 
+// provisionedThroughputError is returned when a table's write capacity is exceeded.
+type provisionedThroughputError struct{ table string }
+
+func (e *provisionedThroughputError) Error() string {
+	return "ProvisionedThroughputExceededException: The level of configured provisioned throughput for the table was exceeded. Consider increasing your provisioning level with the UpdateTable API"
+}
+
 func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
+	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
+		return nil, &provisionedThroughputError{table: table}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tableMap(table)
@@ -84,6 +96,9 @@ func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, table, pkHash strin
 }
 
 func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
+	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
+		return nil, &provisionedThroughputError{table: table}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tables[table]
@@ -123,6 +138,9 @@ type conditionFailedError struct{}
 func (e *conditionFailedError) Error() string { return "ConditionalCheckFailedException" }
 
 func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
+	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
+		return nil, &provisionedThroughputError{table: table}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tableMap(table)
@@ -422,9 +440,15 @@ func paginateItems(items []map[string]any, exclusiveStartKey string, limit int) 
 }
 
 func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
+	var unprocessed []BatchWriteRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, req := range reqs {
+		// Throttle check per write request.
+		if b := s.throttles[req.Table]; b != nil && !b.TryConsume(1) {
+			unprocessed = append(unprocessed, req)
+			continue
+		}
 		t := s.tableMap(req.Table)
 		if req.PutItem != nil {
 			if req.Schema != nil {
@@ -445,7 +469,7 @@ func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []Batc
 			delete(t, req.DeleteHash)
 		}
 	}
-	return nil, nil
+	return unprocessed, nil
 }
 
 func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
@@ -562,6 +586,7 @@ func (s *MemoryDynamoDBItemStore) Reset() {
 	s.schemas = make(map[string]TableSchema)
 	s.tables = make(map[string]map[string]map[string]any)
 	s.gsiIdx = make(map[string]map[string]map[string][]string)
+	s.throttles = make(map[string]*tokenBucket)
 }
 
 func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, schema TableSchema) error {
@@ -575,6 +600,18 @@ func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, schema Ta
 	for _, gsi := range schema.GSIs {
 		s.gsiIdx[schema.TableName][gsi.IndexName] = make(map[string][]string)
 	}
+	// Set up write throttle bucket based on billing mode / WCU.
+	if s.throttles == nil {
+		s.throttles = make(map[string]*tokenBucket)
+	}
+	if schema.BillingMode == "PAY_PER_REQUEST" {
+		// Effectively unlimited for emulation purposes.
+		s.throttles[schema.TableName] = newTokenBucket(40000, 40000.0)
+	} else if schema.WCU > 0 {
+		// PROVISIONED with explicit WCU.
+		s.throttles[schema.TableName] = newTokenBucket(int(schema.WCU), float64(schema.WCU))
+	}
+	// If billing mode is PROVISIONED but WCU==0, no bucket is set (no throttling).
 	return nil
 }
 
@@ -584,6 +621,7 @@ func (s *MemoryDynamoDBItemStore) DropTableSchema(_ context.Context, tableName s
 	delete(s.schemas, tableName)
 	delete(s.tables, tableName)
 	delete(s.gsiIdx, tableName)
+	delete(s.throttles, tableName)
 	return nil
 }
 

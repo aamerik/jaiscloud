@@ -94,6 +94,9 @@ func (s *Server) buildRouter() {
 		r.Post("/reset", s.adminHandler.Reset)
 		r.Get("/export", s.adminHandler.Export)
 		r.Post("/import", s.adminHandler.Import)
+		r.Get("/lambda/code/{account}/{function}/{qualifier}", s.adminHandler.LambdaCodeHandler)
+		r.Get("/lambda/layer/{account}/{layer}/{version}", s.adminHandler.LambdaLayerHandler)
+		r.Post("/firehose/flush", s.adminHandler.FirehoseFlushHandler)
 	})
 
 	if s.cfg.Metrics {

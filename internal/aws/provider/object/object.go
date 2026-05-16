@@ -3,6 +3,7 @@ package object
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -2946,12 +2948,38 @@ func (p *ObjectProvider) InternalGetObject(ctx context.Context, bucket, key stri
 
 // ─── P15.9: SelectObjectContent ──────────────────────────────────────────────
 
+// selectRequest is the XML body of a SelectObjectContent request.
+type selectRequest struct {
+	Expression     string `xml:"Expression"`
+	ExpressionType string `xml:"ExpressionType"`
+	InputSerialization struct {
+		CSV *struct {
+			FileHeaderInfo                 string `xml:"FileHeaderInfo"`
+			RecordDelimiter                string `xml:"RecordDelimiter"`
+			FieldDelimiter                 string `xml:"FieldDelimiter"`
+			QuoteCharacter                 string `xml:"QuoteCharacter"`
+			AllowQuotedRecordDelimiter     string `xml:"AllowQuotedRecordDelimiter"`
+		} `xml:"CSV"`
+		JSON *struct {
+			Type string `xml:"Type"` // DOCUMENT | LINES
+		} `xml:"JSON"`
+	} `xml:"InputSerialization"`
+	OutputSerialization struct {
+		CSV *struct {
+			FieldDelimiter  string `xml:"FieldDelimiter"`
+			RecordDelimiter string `xml:"RecordDelimiter"`
+		} `xml:"CSV"`
+		JSON *struct {
+			RecordDelimiter string `xml:"RecordDelimiter"`
+		} `xml:"JSON"`
+	} `xml:"OutputSerialization"`
+}
+
 func (p *ObjectProvider) SelectObjectContent(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "_bucket")
 	key := strParam(nr.Params, "_key")
 
-	m, err := p.meta.GetObjectMeta(ctx, bucket, key)
-	if err != nil {
+	if _, err := p.meta.GetObjectMeta(ctx, bucket, key); err != nil {
 		return nil, model.NewProviderError("NoSuchKey", "The specified key does not exist", 404)
 	}
 
@@ -2961,10 +2989,153 @@ func (p *ObjectProvider) SelectObjectContent(ctx context.Context, nr *model.Norm
 	}
 	defer rc.Close()
 
-	payload, err := io.ReadAll(rc)
+	objectBytes, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, model.NewProviderError("InternalError", "Failed to read object", 500)
 	}
-	_ = m
+
+	// Parse the select request XML from the request body.
+	var req selectRequest
+	reqBody, _ := nr.Params["_body"].([]byte)
+	if len(reqBody) > 0 {
+		if xmlErr := xml.Unmarshal(reqBody, &req); xmlErr != nil {
+			return nil, model.NewProviderError("InvalidRequest", "Failed to parse SelectObjectContent request: "+xmlErr.Error(), 400)
+		}
+	}
+
+	payload, processErr := s3SelectProcess(objectBytes, &req)
+	if processErr != nil {
+		return nil, model.NewProviderError("InternalError", "Failed to process select query: "+processErr.Error(), 500)
+	}
+
 	return provider.OK(map[string]any{"_select_payload": payload}), nil
+}
+
+// s3SelectProcess applies the SELECT expression to the object bytes and returns
+// the result rows formatted according to OutputSerialization.
+// For SELECT * (and any SELECT query), all rows are returned.
+// Supports CSV and JSON-lines input.
+func s3SelectProcess(data []byte, req *selectRequest) ([]byte, error) {
+	isCSVInput := req.InputSerialization.CSV != nil
+	isJSONInput := req.InputSerialization.JSON != nil
+
+	var rows [][]string
+	var headers []string
+
+	switch {
+	case isCSVInput:
+		csvSpec := req.InputSerialization.CSV
+		fieldDelim := ","
+		if csvSpec.FieldDelimiter != "" {
+			fieldDelim = csvSpec.FieldDelimiter
+		}
+		r := csv.NewReader(bytes.NewReader(data))
+		r.Comma = rune(fieldDelim[0])
+		r.LazyQuotes = true
+		r.TrimLeadingSpace = true
+
+		allRecords, err := r.ReadAll()
+		if err != nil {
+			return nil, fmt.Errorf("CSV parse error: %w", err)
+		}
+
+		headerInfo := strings.ToUpper(csvSpec.FileHeaderInfo)
+		switch headerInfo {
+		case "USE":
+			if len(allRecords) > 0 {
+				headers = allRecords[0]
+				rows = allRecords[1:]
+			}
+		case "IGNORE":
+			if len(allRecords) > 0 {
+				rows = allRecords[1:]
+			}
+		default: // NONE or empty
+			rows = allRecords
+		}
+
+	case isJSONInput:
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				// Try as JSON array
+				var arr []any
+				if err2 := json.Unmarshal([]byte(line), &arr); err2 != nil {
+					continue
+				}
+				row := make([]string, len(arr))
+				for i, v := range arr {
+					row[i] = fmt.Sprintf("%v", v)
+				}
+				rows = append(rows, row)
+				continue
+			}
+			if len(headers) == 0 {
+				for k := range obj {
+					headers = append(headers, k)
+				}
+			}
+			row := make([]string, len(headers))
+			for i, h := range headers {
+				if v, ok := obj[h]; ok {
+					switch vt := v.(type) {
+					case string:
+						row[i] = vt
+					default:
+						b, _ := json.Marshal(v)
+						row[i] = string(b)
+					}
+				}
+			}
+			rows = append(rows, row)
+		}
+
+	default:
+		// Unknown or unspecified input format — return raw bytes as-is.
+		return data, nil
+	}
+
+	// Format output according to OutputSerialization.
+	isJSONOutput := req.OutputSerialization.JSON != nil
+	var outBuf bytes.Buffer
+
+	if isJSONOutput {
+		recDelim := "\n"
+		if req.OutputSerialization.JSON.RecordDelimiter != "" {
+			recDelim = req.OutputSerialization.JSON.RecordDelimiter
+		}
+		for _, row := range rows {
+			if len(headers) > 0 && len(row) == len(headers) {
+				obj := make(map[string]any, len(headers))
+				for i, h := range headers {
+					obj[h] = row[i]
+				}
+				b, _ := json.Marshal(obj)
+				outBuf.Write(b)
+			} else {
+				b, _ := json.Marshal(row)
+				outBuf.Write(b)
+			}
+			outBuf.WriteString(recDelim)
+		}
+	} else {
+		// Default: CSV output
+		fieldDelim := ","
+		if req.OutputSerialization.CSV != nil && req.OutputSerialization.CSV.FieldDelimiter != "" {
+			fieldDelim = req.OutputSerialization.CSV.FieldDelimiter
+		}
+		w := csv.NewWriter(&outBuf)
+		w.Comma = rune(fieldDelim[0])
+		for _, row := range rows {
+			_ = w.Write(row)
+		}
+		w.Flush()
+	}
+
+	return outBuf.Bytes(), nil
 }

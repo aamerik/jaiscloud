@@ -39,20 +39,33 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	}
 }
 
+type domainValidationOption struct {
+	DomainName       string         `json:"DomainName"`
+	ValidationMethod string         `json:"ValidationMethod"`
+	ValidationStatus string         `json:"ValidationStatus"`
+	ResourceRecord   map[string]any `json:"ResourceRecord"`
+}
+
 type certificate struct {
-	CertificateARN          string            `json:"CertificateArn"`
-	DomainName              string            `json:"DomainName"`
-	SubjectAlternativeNames []string          `json:"SubjectAlternativeNames"`
-	SerialNumber            string            `json:"SerialNumber"`
-	Status                  string            `json:"Status"`
-	Type                    string            `json:"Type"`
-	KeyAlgorithm            string            `json:"KeyAlgorithm"`
-	InUseBy                 []string          `json:"InUseBy"`
-	Tags                    map[string]string `json:"Tags"`
-	CreatedAt               time.Time         `json:"CreatedAt"`
-	IssuedAt                time.Time         `json:"IssuedAt"`
-	NotBefore               time.Time         `json:"NotBefore"`
-	NotAfter                time.Time         `json:"NotAfter"`
+	CertificateARN          string                   `json:"CertificateArn"`
+	DomainName              string                   `json:"DomainName"`
+	SubjectAlternativeNames []string                 `json:"SubjectAlternativeNames"`
+	SerialNumber            string                   `json:"SerialNumber"`
+	Status                  string                   `json:"Status"`
+	Type                    string                   `json:"Type"`
+	KeyAlgorithm            string                   `json:"KeyAlgorithm"`
+	InUseBy                 []string                 `json:"InUseBy"`
+	Tags                    map[string]string        `json:"Tags"`
+	CreatedAt               time.Time                `json:"CreatedAt"`
+	IssuedAt                time.Time                `json:"IssuedAt"`
+	NotBefore               time.Time                `json:"NotBefore"`
+	NotAfter                time.Time                `json:"NotAfter"`
+	ValidationMethod        string                   `json:"ValidationMethod"`
+	DomainValidationOptions []domainValidationOption `json:"DomainValidationOptions"`
+	RenewalEligibility      string                   `json:"RenewalEligibility"`
+	KeyUsages               []map[string]any         `json:"KeyUsages"`
+	ExtendedKeyUsages       []map[string]any         `json:"ExtendedKeyUsages"`
+	Options                 map[string]any           `json:"Options"`
 }
 
 func randUUID() string {
@@ -77,6 +90,27 @@ func acmErr(code, msg string, status int) error {
 }
 
 func certToWire(c certificate) map[string]any {
+	dvo := make([]map[string]any, 0, len(c.DomainValidationOptions))
+	for _, d := range c.DomainValidationOptions {
+		dvo = append(dvo, map[string]any{
+			"DomainName":       d.DomainName,
+			"ValidationMethod": d.ValidationMethod,
+			"ValidationStatus": d.ValidationStatus,
+			"ResourceRecord":   d.ResourceRecord,
+		})
+	}
+	keyUsages := c.KeyUsages
+	if keyUsages == nil {
+		keyUsages = []map[string]any{}
+	}
+	extKeyUsages := c.ExtendedKeyUsages
+	if extKeyUsages == nil {
+		extKeyUsages = []map[string]any{}
+	}
+	options := c.Options
+	if options == nil {
+		options = map[string]any{}
+	}
 	return map[string]any{
 		"CertificateArn":          c.CertificateARN,
 		"DomainName":              c.DomainName,
@@ -90,6 +124,11 @@ func certToWire(c certificate) map[string]any {
 		"IssuedAt":                c.IssuedAt.Unix(),
 		"NotBefore":               c.NotBefore.Unix(),
 		"NotAfter":                c.NotAfter.Unix(),
+		"DomainValidationOptions": dvo,
+		"RenewalEligibility":      c.RenewalEligibility,
+		"KeyUsages":               keyUsages,
+		"ExtendedKeyUsages":       extKeyUsages,
+		"Options":                 options,
 	}
 }
 
@@ -116,6 +155,10 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 	if domain == "" {
 		return nil, acmErr("InvalidParameterException", "DomainName is required", http.StatusBadRequest)
 	}
+	method := str(nr.Params, "ValidationMethod")
+	if method == "" {
+		method = "DNS"
+	}
 	var sans []string
 	if raw, ok := nr.Params["SubjectAlternativeNames"].([]any); ok {
 		for _, v := range raw {
@@ -140,6 +183,23 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 		IssuedAt:                now,
 		NotBefore:               now,
 		NotAfter:                now.Add(365 * 24 * time.Hour),
+		ValidationMethod:        method,
+		DomainValidationOptions: []domainValidationOption{
+			{
+				DomainName:       domain,
+				ValidationMethod: method,
+				ValidationStatus: "SUCCESS",
+				ResourceRecord: map[string]any{
+					"Name":  "_acme-challenge." + domain,
+					"Type":  "CNAME",
+					"Value": "mock-validation-value",
+				},
+			},
+		},
+		RenewalEligibility: "INELIGIBLE",
+		KeyUsages:          []map[string]any{{"Name": "DIGITAL_SIGNATURE"}},
+		ExtendedKeyUsages:  []map[string]any{{"Name": "TLS_WEB_SERVER_AUTHENTICATION"}},
+		Options:            map[string]any{"CertificateTransparencyLoggingPreference": "ENABLED"},
 	}
 	p.saveCert(ctx, c)
 	return provider.OK(map[string]any{"CertificateArn": arn}), nil

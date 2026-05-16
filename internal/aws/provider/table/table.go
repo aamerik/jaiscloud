@@ -238,7 +238,11 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	// Initialise per-table item storage (no-op for memory store, DDL for postgres store).
+	wcu, rcu := parseProvisionedThroughput(nr.Params["ProvisionedThroughput"])
 	storeSchema := toStoreSchema(ts, attrDefs)
+	storeSchema.BillingMode = billing
+	storeSchema.WCU = wcu
+	storeSchema.RCU = rcu
 	if err := p.items.CreateTableSchema(ctx, storeSchema); err != nil {
 		// Non-fatal: legacy store doesn't need this. Log and continue.
 		_ = err
@@ -387,6 +391,9 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	}
 	oldItem, err := p.items.PutItem(ctx, name, pkHash, item, cond)
 	if err != nil {
+		if isThrottled(err) {
+			return nil, storeErrToProvider(err)
+		}
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
@@ -444,6 +451,9 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 	}
 	oldItem, err := p.items.DeleteItem(ctx, name, pkHash, cond)
 	if err != nil {
+		if isThrottled(err) {
+			return nil, storeErrToProvider(err)
+		}
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
@@ -478,6 +488,9 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
 	updated, err := p.items.UpdateItem(ctx, name, pkHash, key, spec)
 	if err != nil {
+		if isThrottled(err) {
+			return nil, storeErrToProvider(err)
+		}
 		if isConditionFailed(err) {
 			return nil, model.NewProviderError("ConditionalCheckFailedException", "The conditional request failed", 400)
 		}
@@ -771,11 +784,30 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 			}
 		}
 	}
-	_, err := p.items.BatchWriteItems(ctx, reqs)
+	unprocessed, err := p.items.BatchWriteItems(ctx, reqs)
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{"UnprocessedItems": map[string]any{}}), nil
+	unprocessedItems := map[string]any{}
+	if len(unprocessed) > 0 {
+		// Group unprocessed requests back by table in the wire format.
+		tableReqs := make(map[string][]any)
+		for _, req := range unprocessed {
+			if req.PutItem != nil {
+				tableReqs[req.Table] = append(tableReqs[req.Table], map[string]any{
+					"PutRequest": map[string]any{"Item": req.PutItem},
+				})
+			} else if req.DeleteKey != nil {
+				tableReqs[req.Table] = append(tableReqs[req.Table], map[string]any{
+					"DeleteRequest": map[string]any{"Key": req.DeleteKey},
+				})
+			}
+		}
+		for t, rs := range tableReqs {
+			unprocessedItems[t] = rs
+		}
+	}
+	return provider.OK(map[string]any{"UnprocessedItems": unprocessedItems}), nil
 }
 
 func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1437,6 +1469,32 @@ func indexDefFromWire(m map[string]any, attrTypes map[string]string, isLSI bool)
 	}
 }
 
+// parseProvisionedThroughput extracts WCU and RCU from a ProvisionedThroughput param map.
+// Returns (0, 0) when pt is nil or not a map.
+func parseProvisionedThroughput(pt any) (wcu, rcu int64) {
+	m, ok := pt.(map[string]any)
+	if !ok {
+		return 0, 0
+	}
+	switch v := m["WriteCapacityUnits"].(type) {
+	case float64:
+		wcu = int64(v)
+	case int64:
+		wcu = v
+	case int:
+		wcu = int64(v)
+	}
+	switch v := m["ReadCapacityUnits"].(type) {
+	case float64:
+		rcu = int64(v)
+	case int64:
+		rcu = v
+	case int:
+		rcu = int64(v)
+	}
+	return wcu, rcu
+}
+
 func itemParam(params map[string]any, key string) map[string]any {
 	if v, ok := params[key]; ok {
 		if m, ok := v.(map[string]any); ok {
@@ -1725,11 +1783,23 @@ func isConditionFailed(err error) bool {
 	return err != nil && err.Error() == "ConditionalCheckFailedException"
 }
 
+// isThrottled returns true when err indicates a provisioned throughput exceeded error.
+func isThrottled(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.HasPrefix(err.Error(), "ProvisionedThroughputExceededException")
+}
+
 // storeErrToProvider converts known store sentinel errors into ProviderErrors.
 // Unknown errors are returned as-is (become HTTP 500 at the gateway).
 func storeErrToProvider(err error) error {
 	if err == nil {
 		return nil
+	}
+	if isThrottled(err) {
+		return model.NewProviderError("ProvisionedThroughputExceededException",
+			"The level of configured provisioned throughput for the table was exceeded. Consider increasing your provisioning level with the UpdateTable API", 400)
 	}
 	var exprErr *dynamostore.ExpressionError
 	if errors.As(err, &exprErr) {

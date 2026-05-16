@@ -268,3 +268,46 @@ func TestLambda_AsyncInvoke(t *testing.T) {
 	assert.Empty(t, out.Payload)
 }
 
+// TestLambdaLayerMountMock verifies that CreateFunction with Layers does not error on
+// Invoke in mock mode. The mock executor does not actually extract or mount layer zips;
+// this test just confirms the plumbing does not break the invocation path.
+func TestLambdaLayerMountMock(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	// Publish a layer so the ARN is resolvable.
+	layerOut, err := c.PublishLayerVersion(ctx, &awslambda.PublishLayerVersionInput{
+		LayerName:   aws.String("my-layer"),
+		Description: aws.String("test layer"),
+		Content: &types.LayerVersionContentInput{
+			ZipFile: []byte("fake-layer-zip"),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, layerOut.LayerVersionArn)
+
+	layerARN := *layerOut.LayerVersionArn
+
+	// Create function referencing the layer.
+	_, err = c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("func-with-layer"),
+		Runtime:      types.RuntimePython311,
+		Role:         aws.String("arn:aws:iam::000000000000:role/exec-role"),
+		Handler:      aws.String("handler.main"),
+		Code:         &types.FunctionCode{ZipFile: []byte("fake-zip")},
+		Layers:       []string{layerARN},
+	})
+	require.NoError(t, err)
+
+	// Invoke should succeed — mock executor echoes payload regardless of layers.
+	payload := []byte(`{"test":"layer-mount"}`)
+	invokeOut, err := c.Invoke(ctx, &awslambda.InvokeInput{
+		FunctionName: aws.String("func-with-layer"),
+		Payload:      payload,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 200, invokeOut.StatusCode)
+	assert.Equal(t, payload, invokeOut.Payload)
+}
+

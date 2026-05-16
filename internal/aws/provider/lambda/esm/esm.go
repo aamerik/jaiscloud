@@ -42,6 +42,7 @@ type Provider struct {
 	resources    store.ResourceStore
 	invoker      FunctionInvoker
 	queueAPI     QueueInternalAPI
+	sqsSender    SQSSenderAPI
 	streamStore  StreamStoreAPI
 	esmMu        sync.Mutex
 	esmPollers   map[string]*esmPoller
@@ -70,6 +71,11 @@ func New(
 		streamStore: ss,
 		esmPollers:  make(map[string]*esmPoller),
 	}
+}
+
+// SetSQSSender wires the SQS sender used for DLQ delivery.
+func (p *Provider) SetSQSSender(s SQSSenderAPI) {
+	p.sqsSender = s
 }
 
 // Routes returns all ESM handler registrations under the "Function" prefix.
@@ -158,6 +164,8 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 	maxBatchingWindow := intParamOrDefault(nr.Params, "MaximumBatchingWindowInSeconds", 0)
 	maxRetry := intParamOrDefault(nr.Params, "MaximumRetryAttempts", -1)
 	bisect := boolParamOrDefault(nr.Params, "BisectBatchOnFunctionError", false)
+	filterCriteria := parseFilterCriteria(nr.Params)
+	destCfg := parseDestinationConfig(nr.Params)
 	enabled := true
 	if v, ok := nr.Params["Enabled"]; ok {
 		if b, ok := v.(bool); ok {
@@ -203,6 +211,8 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		SourceType:                     sourceType,
 		MaximumRetryAttempts:           maxRetry,
 		BisectBatchOnFunctionError:     bisect,
+		FilterCriteria:                 filterCriteria,
+		DestinationConfig:              destCfg,
 		Region:                         region,
 		Cloud:                          cloud,
 		QueueName:                      queueName,
@@ -300,6 +310,12 @@ func (p *Provider) handleUpdateESM(ctx context.Context, nr *model.NormalizedRequ
 		if b, ok := v.(bool); ok {
 			esm.BisectBatchOnFunctionError = b
 		}
+	}
+	if _, ok := nr.Params["FilterCriteria"]; ok {
+		esm.FilterCriteria = parseFilterCriteria(nr.Params)
+	}
+	if _, ok := nr.Params["DestinationConfig"]; ok {
+		esm.DestinationConfig = parseDestinationConfig(nr.Params)
 	}
 
 	wasEnabled := esm.Enabled
@@ -411,7 +427,7 @@ func (p *Provider) esmDuplicateExists(ctx context.Context, functionName, eventSo
 }
 
 func (p *Provider) esmToWireJSON(esm EventSourceMapping) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"UUID":                           esm.UUID,
 		"FunctionArn":                    esm.FunctionArn,
 		"EventSourceArn":                 esm.EventSourceArn,
@@ -424,6 +440,22 @@ func (p *Provider) esmToWireJSON(esm EventSourceMapping) map[string]any {
 		"MaximumRetryAttempts":           esm.MaximumRetryAttempts,
 		"BisectBatchOnFunctionError":     esm.BisectBatchOnFunctionError,
 	}
+	if esm.FilterCriteria != "" {
+		m["FilterCriteria"] = map[string]any{
+			"Filters": []any{map[string]any{"Pattern": esm.FilterCriteria}},
+		}
+	}
+	if esm.DestinationConfig.OnFailure.Destination != "" || esm.DestinationConfig.OnSuccess.Destination != "" {
+		dest := map[string]any{}
+		if esm.DestinationConfig.OnFailure.Destination != "" {
+			dest["OnFailure"] = map[string]any{"Destination": esm.DestinationConfig.OnFailure.Destination}
+		}
+		if esm.DestinationConfig.OnSuccess.Destination != "" {
+			dest["OnSuccess"] = map[string]any{"Destination": esm.DestinationConfig.OnSuccess.Destination}
+		}
+		m["DestinationConfig"] = dest
+	}
+	return m
 }
 
 // restoreTransientFields repopulates the non-serialized fields (QueueName, TableName)
@@ -612,4 +644,40 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-time.After(d):
 		return true
 	}
+}
+
+// parseFilterCriteria extracts the first filter pattern from the FilterCriteria param.
+// AWS format: {"Filters": [{"Pattern": "{...}"}]}
+// We store only the first pattern string for simplicity.
+func parseFilterCriteria(params map[string]any) string {
+	fc, ok := params["FilterCriteria"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	filters, ok := fc["Filters"].([]any)
+	if !ok || len(filters) == 0 {
+		return ""
+	}
+	first, ok := filters[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	pattern, _ := first["Pattern"].(string)
+	return pattern
+}
+
+// parseDestinationConfig extracts destination config from params.
+func parseDestinationConfig(params map[string]any) DestinationConfig {
+	dc, ok := params["DestinationConfig"].(map[string]any)
+	if !ok {
+		return DestinationConfig{}
+	}
+	var cfg DestinationConfig
+	if onF, ok := dc["OnFailure"].(map[string]any); ok {
+		cfg.OnFailure.Destination, _ = onF["Destination"].(string)
+	}
+	if onS, ok := dc["OnSuccess"].(map[string]any); ok {
+		cfg.OnSuccess.Destination, _ = onS["Destination"].(string)
+	}
+	return cfg
 }

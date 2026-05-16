@@ -29,6 +29,11 @@ func eiKey(funcName, qualifier string) string {
 	return fmt.Sprintf("%s:%s", funcName, qualifier)
 }
 
+// unmarshal populates the eventInvokeConfig from raw JSON bytes.
+func (c *eventInvokeConfig) unmarshal(data []byte) error {
+	return json.Unmarshal(data, c)
+}
+
 func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
 	qualifier := strParam(nr.Params, "Qualifier")

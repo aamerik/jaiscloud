@@ -23,6 +23,11 @@ type CodeLoader interface {
 	LoadCode(ctx context.Context, account, funcName, version string) ([]byte, error)
 }
 
+// LayerBlobLoader fetches layer zip bytes by blob key.
+type LayerBlobLoader interface {
+	GetLayerBlob(ctx context.Context, blobKey string) ([]byte, error)
+}
+
 const (
 	dockerSocket   = "/var/run/docker.sock"
 	invocationPort = 8080
@@ -34,26 +39,31 @@ type warmContainer struct {
 	hostPort int
 	lastUsed time.Time
 	codeDir  string // temp dir holding extracted /var/task; empty = no code mounted
+	optDir   string // temp dir holding extracted /opt (layers); empty = no layers mounted
 }
 
 // DockerExecutor manages warm Docker containers per Lambda function.
 // Each distinct function name gets one container reused across invocations
 // until it has been idle for cfg.KeepaliveSecs seconds.
 type DockerExecutor struct {
-	cfg        LambdaConfig
-	platform   *platform.PlatformConfig
-	client     *http.Client // talks to Docker socket
-	mu         sync.Mutex
-	containers map[string]*warmContainer // functionName → container
-	nextPort   int
-	done       chan struct{}
-	wg         sync.WaitGroup
-	codeLoader CodeLoader   // optional; nil in tests
-	logsAPI    LogsIngestor // optional; nil in tests
+	cfg         LambdaConfig
+	platform    *platform.PlatformConfig
+	client      *http.Client // talks to Docker socket
+	mu          sync.Mutex
+	containers  map[string]*warmContainer // functionName → container
+	nextPort    int
+	done        chan struct{}
+	wg          sync.WaitGroup
+	codeLoader  CodeLoader      // optional; nil in tests
+	layerLoader LayerBlobLoader // optional; nil = no layer mounting
+	logsAPI     LogsIngestor    // optional; nil in tests
 }
 
 // SetCodeLoader injects the code loader used to mount /var/task into containers.
 func (e *DockerExecutor) SetCodeLoader(l CodeLoader) { e.codeLoader = l }
+
+// SetLayerBlobLoader injects the layer blob loader used to mount layers at /opt.
+func (e *DockerExecutor) SetLayerBlobLoader(l LayerBlobLoader) { e.layerLoader = l }
 
 // SetLogsAPI injects the CloudWatch Logs ingestor for container log streaming.
 func (e *DockerExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
@@ -161,7 +171,7 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 	e.mu.Unlock()
 
 	image := ImageForRuntime(req, e.cfg)
-	id, codeDir, err := e.startContainer(ctx, req, image, port)
+	id, codeDir, optDir, err := e.startContainer(ctx, req, image, port)
 	if err != nil {
 		// Remove the sentinel so the next caller can retry.
 		e.mu.Lock()
@@ -172,14 +182,14 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 		return nil, err
 	}
 
-	c := &warmContainer{id: id, hostPort: port, lastUsed: time.Now(), codeDir: codeDir}
+	c := &warmContainer{id: id, hostPort: port, lastUsed: time.Now(), codeDir: codeDir, optDir: optDir}
 	e.mu.Lock()
 	e.containers[req.FunctionName] = c
 	e.mu.Unlock()
 	return c, nil
 }
 
-func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, image string, hostPort int) (id string, codeDir string, err error) {
+func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, image string, hostPort int) (id string, codeDir string, optDir string, err error) {
 	pfx := instancePrefix(e.cfg.InstanceID)
 	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
@@ -232,6 +242,40 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 		}
 	}
 
+	// Extract and mount each layer into /opt when a layer blob loader is available.
+	if e.layerLoader != nil && len(req.Layers) > 0 {
+		var mkErr error
+		optDir, mkErr = os.MkdirTemp("", "lambda-opt-*")
+		if mkErr == nil {
+			anyLayerMounted := false
+			for _, layer := range req.Layers {
+				if layer.BlobKey == "" {
+					continue
+				}
+				zipBytes, loadErr := e.layerLoader.GetLayerBlob(context.Background(), layer.BlobKey)
+				if loadErr != nil || len(zipBytes) == 0 {
+					slog.Warn("lambda docker: failed to load layer blob", "arn", layer.ARN, "err", loadErr)
+					continue
+				}
+				if extErr := ExtractZip(zipBytes, optDir); extErr != nil {
+					slog.Warn("lambda docker: failed to extract layer", "arn", layer.ARN, "err", extErr)
+					continue
+				}
+				anyLayerMounted = true
+			}
+			if anyLayerMounted {
+				binds = append(binds, optDir+":/opt:ro")
+			} else {
+				os.RemoveAll(optDir)
+				optDir = ""
+			}
+		} else {
+			optDir = ""
+		}
+	} else if len(req.Layers) > 0 {
+		slog.Debug("lambda docker: layers configured but no layer blob loader set; skipping layer mount", "count", len(req.Layers))
+	}
+
 	hostConfig := map[string]any{
 		"PortBindings": map[string]any{
 			fmt.Sprintf("%d/tcp", invocationPort): []map[string]any{
@@ -257,10 +301,10 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	createURL := fmt.Sprintf("http://localhost/v1.41/containers/create?name=%s", name)
 	respBody, statusCode, createErr := e.dockerCall(ctx, http.MethodPost, createURL, body)
 	if createErr != nil {
-		return "", codeDir, fmt.Errorf("docker create: %w", createErr)
+		return "", codeDir, optDir, fmt.Errorf("docker create: %w", createErr)
 	}
 	if statusCode >= 300 {
-		return "", codeDir, fmt.Errorf("docker create: HTTP %d: %s", statusCode, respBody)
+		return "", codeDir, optDir, fmt.Errorf("docker create: HTTP %d: %s", statusCode, respBody)
 	}
 
 	var createResp struct{ Id string }
@@ -269,16 +313,16 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req InvokeRequest, 
 	startURL := fmt.Sprintf("http://localhost/v1.41/containers/%s/start", createResp.Id)
 	_, statusCode, startErr := e.dockerCall(ctx, http.MethodPost, startURL, nil)
 	if startErr != nil {
-		return "", codeDir, fmt.Errorf("docker start: %w", startErr)
+		return "", codeDir, optDir, fmt.Errorf("docker start: %w", startErr)
 	}
 	if statusCode >= 300 {
-		return "", codeDir, fmt.Errorf("docker start: HTTP %d", statusCode)
+		return "", codeDir, optDir, fmt.Errorf("docker start: HTTP %d", statusCode)
 	}
 
 	// Brief readiness wait.
 	time.Sleep(500 * time.Millisecond)
 	slog.Info("lambda docker: started container", "function", req.FunctionName, "port", hostPort)
-	return createResp.Id, codeDir, nil
+	return createResp.Id, codeDir, optDir, nil
 }
 
 func (e *DockerExecutor) removeContainer(functionName string) {
@@ -299,6 +343,9 @@ func (e *DockerExecutor) removeContainer(functionName string) {
 	e.dockerCall(ctx, http.MethodDelete, rmURL, nil)
 	if c.codeDir != "" {
 		os.RemoveAll(c.codeDir)
+	}
+	if c.optDir != "" {
+		os.RemoveAll(c.optDir)
 	}
 	slog.Info("lambda docker: removed container", "function", functionName)
 }

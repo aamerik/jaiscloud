@@ -54,7 +54,7 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
-        test-e2e-cloudformation test-e2e-kms test-e2e-dynamodb test-e2e-persistence \
+        test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
         test-e2e-iceberg \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
         _build-for-e2e _restart-server-lite _wait-docker _wait-postgres \
@@ -122,6 +122,9 @@ clean: ## Remove compiled binaries
 lint: ## Run ARN lint guard + go vet
 	@bash scripts/check_no_hardcoded_arn.sh
 	@go vet ./...
+
+lint-pagination: ## Heuristic check that List*/Describe* provider methods use pagination
+	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/...
 
 ##@ Unit tests
 
@@ -399,6 +402,13 @@ test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/full_mode/aws/kms/ (
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags kms_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kms/
+	$(MAKE) down-docker
+
+test-e2e-ssm: ## SSM label persistence e2e tests — tests/full_mode/aws/ssm/ (tag: ssm_fullmode)
+	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
+	go clean -testcache
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	  go test -v -tags ssm_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/ssm/
 	$(MAKE) down-docker
 
 test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/full_mode/aws/s3/ (tag: s3_fullmode)

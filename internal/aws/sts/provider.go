@@ -28,12 +28,23 @@ var (
 
 // STSProvider handles STS API operations.
 type STSProvider struct {
-	store SessionStore
+	store        SessionStore
+	oidcIssuers  map[string]string // issuer URL → JWKS URL (nil = skip verification)
+	jwksCache    *JWKSCache
 }
 
 // New constructs an STSProvider.
 func New(store SessionStore) *STSProvider {
-	return &STSProvider{store: store}
+	return &STSProvider{store: store, jwksCache: NewJWKSCache()}
+}
+
+// NewWithOIDC constructs an STSProvider with OIDC JWT signature verification.
+func NewWithOIDC(store SessionStore, oidcIssuers map[string]string) *STSProvider {
+	return &STSProvider{
+		store:       store,
+		oidcIssuers: oidcIssuers,
+		jwksCache:   NewJWKSCache(),
+	}
 }
 
 // Routes returns all STS handler registrations.
@@ -224,7 +235,7 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 			sessionName), 400)
 	}
 
-	subject, err := extractJWTSubject(webToken)
+	subject, err := p.extractJWTSubjectWithVerification(webToken)
 	if err != nil {
 		return nil, err
 	}
@@ -524,4 +535,23 @@ func extractJWTSubject(token string) (string, error) {
 
 func stsErr(code, msg string, status int) error {
 	return model.NewProviderError(code, msg, status)
+}
+
+// extractJWTSubjectWithVerification checks whether OIDC issuers are configured
+// and verifies the JWT signature if so. Falls back to the basic extractJWTSubject
+// (expiry-only check) when OIDCIssuers is empty (back-compat for tests).
+func (p *STSProvider) extractJWTSubjectWithVerification(token string) (string, error) {
+	if len(p.oidcIssuers) == 0 {
+		// No OIDC config — use the legacy path (no signature verification).
+		return extractJWTSubject(token)
+	}
+	claims, err := p.jwksCache.verifyJWT(token, p.oidcIssuers)
+	if err != nil {
+		return "", model.NewProviderError("InvalidIdentityToken",
+			"JWT signature verification failed: "+err.Error(), 400)
+	}
+	if sub, ok := claims["sub"].(string); ok && sub != "" {
+		return sub, nil
+	}
+	return "unknown", nil
 }

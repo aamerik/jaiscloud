@@ -144,7 +144,7 @@ func startCmd() *cobra.Command {
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP, cwResetter := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP, cwResetter, funcP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
 			defer cleanup()
 
 			// Wire Step Functions execution engine — provides real ASL execution.
@@ -161,6 +161,8 @@ func startCmd() *cobra.Command {
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter)
+			adminHandler.SetLambdaCodeFetcher(funcP)
+		adminHandler.SetFirehoseFlusher(firehoseP)
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      "aws",
@@ -370,7 +372,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider, *cloudwatchprovider.Provider) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider, *cloudwatchprovider.Provider, *functionprovider.FunctionProvider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -523,7 +525,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
 	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
 	iamP := iamprovider.New(s.resources)
-	stsP := stsprovider.New(s.stsSession)
+	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
 	notifP := notification.New(s.resources, s.messages, bus)
 	notifP.SetLambdaInvoker(funcP)
@@ -532,6 +534,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	stackP := stackprovider.New(s.resources)
 
 	esmProvider := lambdaesm.New(ctx, s.resources, funcP, queueP, streams, slog.Default())
+	esmProvider.SetSQSSender(esmSQSSenderAdapter{q: queueP})
 	esmProvider.RehydratePollers(ctx)
 	prevCleanup2 := cleanup
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
@@ -611,7 +614,9 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(acmprovider.New(s.resources).Routes())
 	sesP := sesprovider.New(s.resources)
 	registry.RegisterAll(sesP.Routes())
-	registry.RegisterAll(firehoseprovider.New(s.resources).Routes())
+	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(objectP)
+	registry.RegisterAll(firehoseP.Routes())
+	firehoseP.Start()
 	registry.RegisterAll(cloudfrontprovider.New(s.resources).Routes())
 	registry.RegisterAll(athenaprovider.New(s.resources).Routes())
 	registry.RegisterAll(redshiftprovider.New(s.resources).Routes())
@@ -637,10 +642,19 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	sched := ebscheduler.New(tgtDisp, cfg.Clock)
 	eventsP.SetScheduler(sched)
 
+	// Wire SQS DLQ sender into the async queue.
+	funcP.SetAsyncSQSSend(func(ctx context.Context, arn string, body string) error {
+		return queueP.InternalSend(ctx, arn, body, nil, queue.SourceContext{
+			SourceArn:        "lambda.amazonaws.com",
+			ServicePrincipal: "lambda.amazonaws.com",
+		})
+	})
+
 	// Wire workers registry — start all background workers.
 	workerReg := workers.New()
 	workerReg.Add("eventbridge-scheduler", sched)
 	workerReg.Add("cw-alarm-evaluator", cwP.Evaluator())
+	workerReg.Add("lambda-async-queue", funcP.AsyncQueue())
 	workerReg.Start(ctx)
 	prevCleanup3 := cleanup
 	cleanup = func() { workerReg.Stop(); prevCleanup3() }
@@ -648,7 +662,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv,
 		logsProvider, cwP, eventsP, ecsP, sfnP, esmProvider, apigwP, computeP)
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP, funcP
 }
 
 // cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
@@ -1062,6 +1076,20 @@ func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupNa
 type sqsSenderAdapter struct{ q *queue.QueueProvider }
 
 func (a sqsSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]notification.SQSMessageAttribute, src notification.SQSSourceContext) error {
+	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))
+	for k, v := range attrs {
+		queueAttrs[k] = queue.MessageAttribute{DataType: v.DataType, StringValue: v.StringValue}
+	}
+	return a.q.InternalSend(ctx, queueARNorURL, body, queueAttrs, queue.SourceContext{
+		SourceArn:        src.SourceArn,
+		ServicePrincipal: src.ServicePrincipal,
+	})
+}
+
+// esmSQSSenderAdapter adapts *queue.QueueProvider to lambdaesm.SQSSenderAPI.
+type esmSQSSenderAdapter struct{ q *queue.QueueProvider }
+
+func (a esmSQSSenderAdapter) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]lambdaesm.SQSMessageAttribute, src lambdaesm.SQSSourceContext) error {
 	queueAttrs := make(map[string]queue.MessageAttribute, len(attrs))
 	for k, v := range attrs {
 		queueAttrs[k] = queue.MessageAttribute{DataType: v.DataType, StringValue: v.StringValue}

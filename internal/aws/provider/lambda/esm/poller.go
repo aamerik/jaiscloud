@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	sqsPollWaitTimeSec  = 20
-	sqsEmptyPollDelay   = 1 * time.Second
+	sqsPollWaitTimeSec   = 20
+	sqsEmptyPollDelay    = 1 * time.Second
 	maxConsecutiveErrors = 3
 )
 
@@ -76,46 +76,77 @@ func (p *Provider) runSQSPoller(poller *esmPoller, esm EventSourceMapping) {
 			continue
 		}
 
-		// Build payload and invoke
-		payload := buildSQSEventPayload(messages, esm.EventSourceArn, esm.Cloud, esm.Region)
-
-		_, invokeErr := p.invoker.InvokeInternal(poller.ctx, esm.FunctionName, payload)
-		if invokeErr != nil {
-			select {
-			case <-poller.ctx.Done():
-				return
-			default:
+		// Apply filter criteria (if configured) before invoking Lambda.
+		filtered := applyESMFilterCriteria(messages, current.FilterCriteria)
+		if len(filtered) == 0 {
+			// All messages filtered out — delete them so they don't pile up.
+			var handles []string
+			for _, m := range messages {
+				handles = append(handles, m.ReceiptHandle)
 			}
-			logger.Warn("esm: Lambda invocation failed", "err", invokeErr)
-			current.ConsecutiveErrors++
-			current.LastProcessingResult = "PROBLEM: " + invokeErr.Error()
+			_ = p.queueAPI.InternalDeleteBatch(poller.ctx, esm.QueueName, handles)
+			continue
+		}
 
+		// Process the filtered batch (with bisect and DLQ support).
+		succeeded := p.processSQSBatch(poller.ctx, filtered, current, 0)
+
+		if succeeded {
+			// Delete successfully processed messages from queue.
+			var handles []string
+			for _, m := range filtered {
+				handles = append(handles, m.ReceiptHandle)
+			}
+			if delErr := p.queueAPI.InternalDeleteBatch(poller.ctx, esm.QueueName, handles); delErr != nil {
+				logger.Warn("esm: failed to delete SQS messages after successful invocation", "err", delErr)
+			}
+			current.ConsecutiveErrors = 0
+			current.LastProcessingResult = "OK"
+		} else {
+			current.ConsecutiveErrors++
+			current.LastProcessingResult = "PROBLEM: Lambda invocation failed"
 			if current.ConsecutiveErrors >= maxConsecutiveErrors {
 				logger.Error("esm: too many consecutive Lambda errors, disabling ESM", "errors", current.ConsecutiveErrors)
 				current.State = ESMStateDisabled
 				current.StateTransitionReason = "PROBLEM"
-				_ = p.persistESM(context.Background(), current)
-				return
 			}
-			_ = p.persistESM(context.Background(), current)
-			// Messages are not deleted on failure — they become visible again after visibility timeout
-			continue
 		}
-
-		// Success: delete messages from queue
-		var handles []string
-		for _, m := range messages {
-			handles = append(handles, m.ReceiptHandle)
-		}
-		if delErr := p.queueAPI.InternalDeleteBatch(poller.ctx, esm.QueueName, handles); delErr != nil {
-			logger.Warn("esm: failed to delete SQS messages after successful invocation", "err", delErr)
-		}
-
-		// Reset error counter and update last processing result
-		current.ConsecutiveErrors = 0
-		current.LastProcessingResult = "OK"
 		_ = p.persistESM(context.Background(), current)
+
+		if current.State == ESMStateDisabled {
+			return
+		}
 	}
+}
+
+// processSQSBatch invokes Lambda with the given messages, recursively bisecting on error
+// if BisectBatchOnFunctionError is configured.
+// Returns true if all messages were processed successfully.
+func (p *Provider) processSQSBatch(ctx context.Context, msgs []InternalMessage, cfg EventSourceMapping, depth int) bool {
+	if len(msgs) == 0 {
+		return true
+	}
+
+	payload := buildSQSEventPayload(msgs, cfg.EventSourceArn, cfg.Cloud, cfg.Region)
+	_, invokeErr := p.invoker.InvokeInternal(ctx, cfg.FunctionName, payload)
+	if invokeErr == nil {
+		return true
+	}
+
+	// Invocation failed.
+	p.logger.Warn("esm: Lambda invocation failed", "esm_uuid", cfg.UUID, "batch_size", len(msgs), "err", invokeErr)
+
+	// Bisect if configured and batch is splittable.
+	if cfg.BisectBatchOnFunctionError && len(msgs) > 1 {
+		mid := len(msgs) / 2
+		leftOK := p.processSQSBatch(ctx, msgs[:mid], cfg, depth+1)
+		rightOK := p.processSQSBatch(ctx, msgs[mid:], cfg, depth+1)
+		return leftOK && rightOK
+	}
+
+	// Send to DLQ (failure destination).
+	p.sendToFailureDestination(ctx, cfg, msgs, invokeErr)
+	return false
 }
 
 // runDynamoDBStreamsPoller polls DynamoDB Streams and invokes Lambda with batches of records.
