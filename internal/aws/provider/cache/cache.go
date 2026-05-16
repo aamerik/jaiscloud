@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -58,12 +59,14 @@ const (
 // ─── Cache Clusters ───────────────────────────────────────────────────────────
 
 type cacheCluster struct {
-	CacheClusterId     string `json:"CacheClusterId"`
-	CacheClusterStatus string `json:"CacheClusterStatus"`
-	CacheNodeType      string `json:"CacheNodeType"`
-	Engine             string `json:"Engine"`
-	EngineVersion      string `json:"EngineVersion"`
-	NumCacheNodes      int    `json:"NumCacheNodes"`
+	CacheClusterId     string   `json:"CacheClusterId"`
+	CacheClusterStatus string   `json:"CacheClusterStatus"`
+	CacheNodeType      string   `json:"CacheNodeType"`
+	Engine             string   `json:"Engine"`
+	EngineVersion      string   `json:"EngineVersion"`
+	NumCacheNodes      int      `json:"NumCacheNodes"`
+	SubnetGroupName    string   `json:"SubnetGroupName,omitempty"`
+	SecurityGroupIds   []string `json:"SecurityGroupIds,omitempty"`
 }
 
 func defaultEngineVersion(engine string) string {
@@ -85,7 +88,7 @@ func defaultPort(engine string) int {
 
 func (c cacheCluster) toWire() map[string]any {
 	port := defaultPort(c.Engine)
-	return map[string]any{
+	w := map[string]any{
 		"CacheClusterId":     c.CacheClusterId,
 		"CacheClusterStatus": c.CacheClusterStatus,
 		"CacheNodeType":      c.CacheNodeType,
@@ -97,6 +100,33 @@ func (c cacheCluster) toWire() map[string]any {
 			"Port":    fmt.Sprintf("%d", port),
 		},
 	}
+	if c.SubnetGroupName != "" {
+		w["CacheSubnetGroupName"] = c.SubnetGroupName
+	}
+	if len(c.SecurityGroupIds) > 0 {
+		sgList := make([]map[string]any, 0, len(c.SecurityGroupIds))
+		for _, id := range c.SecurityGroupIds {
+			sgList = append(sgList, map[string]any{"SecurityGroupId": id, "Status": "active"})
+		}
+		w["SecurityGroups"] = sgList
+	}
+	return w
+}
+
+// extractSecurityGroupIds reads SecurityGroupIds.member.N from Query-protocol params.
+func extractSecurityGroupIds(params map[string]any) []string {
+	var ids []string
+	for i := 1; ; i++ {
+		key := fmt.Sprintf("SecurityGroupIds.member.%d", i)
+		v, ok := params[key]
+		if !ok {
+			break
+		}
+		if s, ok := v.(string); ok {
+			ids = append(ids, s)
+		}
+	}
+	return ids
 }
 
 func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -114,13 +144,19 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 			numNodes = n
 		}
 	}
+	cacheNodeType := strParam(nr.Params, "CacheNodeType")
+	if cacheNodeType == "" {
+		cacheNodeType = "cache.t3.micro"
+	}
 	c := cacheCluster{
 		CacheClusterId:     id,
 		CacheClusterStatus: "available",
-		CacheNodeType:      strParam(nr.Params, "CacheNodeType"),
+		CacheNodeType:      cacheNodeType,
 		Engine:             engine,
 		EngineVersion:      strParam(nr.Params, "EngineVersion"),
 		NumCacheNodes:      numNodes,
+		SubnetGroupName:    strParam(nr.Params, "CacheSubnetGroupName"),
+		SecurityGroupIds:   extractSecurityGroupIds(nr.Params),
 	}
 	if c.EngineVersion == "" {
 		c.EngineVersion = defaultEngineVersion(engine)
@@ -159,7 +195,22 @@ func (p *CacheProvider) DescribeCacheClusters(ctx context.Context, nr *model.Nor
 		json.Unmarshal(e.Data, &c)
 		list = append(list, c.toWire())
 	}
-	return provider.OK(map[string]any{"CacheClusters": list}), nil
+	maxRecords := 100
+	if v := strParam(nr.Params, "MaxRecords"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxRecords = n
+		}
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, pgErr := pagination.Paginate(list, maxRecords, marker, "DescribeCacheClusters")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	resp := map[string]any{"CacheClusters": page}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *CacheProvider) ModifyCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -284,7 +335,22 @@ func (p *CacheProvider) DescribeReplicationGroups(ctx context.Context, nr *model
 		json.Unmarshal(e.Data, &rg)
 		list = append(list, rg.toWire())
 	}
-	return provider.OK(map[string]any{"ReplicationGroups": list}), nil
+	maxRecords := 100
+	if v := strParam(nr.Params, "MaxRecords"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxRecords = n
+		}
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, pgErr := pagination.Paginate(list, maxRecords, marker, "DescribeReplicationGroups")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	resp := map[string]any{"ReplicationGroups": page}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *CacheProvider) ModifyReplicationGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

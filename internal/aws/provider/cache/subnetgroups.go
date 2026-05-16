@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
@@ -96,7 +98,22 @@ func (p *CacheProvider) DescribeCacheSubnetGroups(ctx context.Context, nr *model
 	if groups == nil {
 		groups = []map[string]any{}
 	}
-	return provider.OK(map[string]any{"CacheSubnetGroups": groups}), nil
+	maxRecords := 100
+	if v := strParam(nr.Params, "MaxRecords"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxRecords = n
+		}
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, pgErr := pagination.Paginate(groups, maxRecords, marker, "DescribeCacheSubnetGroups")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	resp := map[string]any{"CacheSubnetGroups": page}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *CacheProvider) ModifyCacheSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -269,13 +286,28 @@ func (p *CacheProvider) DescribeCacheParameterGroups(ctx context.Context, nr *mo
 	if err != nil {
 		return nil, err
 	}
-	groups := make([]any, 0, len(entries))
+	groups := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var grp cacheParameterGroup
 		json.Unmarshal(e.Data, &grp)
 		groups = append(groups, grp.toWire())
 	}
-	return provider.OK(map[string]any{"CacheParameterGroups": groups}), nil
+	maxRecords := 100
+	if v := strParam(nr.Params, "MaxRecords"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxRecords = n
+		}
+	}
+	marker, _ := nr.Params["Marker"].(string)
+	page, nextMarker, pgErr := pagination.Paginate(groups, maxRecords, marker, "DescribeCacheParameterGroups")
+	if pgErr != nil {
+		return nil, model.NewProviderError("InvalidParameterValue", pgErr.Error(), 400)
+	}
+	resp := map[string]any{"CacheParameterGroups": page}
+	if nextMarker != "" {
+		resp["Marker"] = nextMarker
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *CacheProvider) DeleteCacheParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -130,4 +131,71 @@ func TestElastiCacheUnknownActionEnvelope(t *testing.T) {
 	if err != nil {
 		assert.NotContains(t, err.Error(), "EOF", "response must be a valid XML envelope, not bare <Response/>")
 	}
+}
+
+// TestElastiCacheCreateClusterFullParams verifies that CreateCacheCluster stores and
+// returns extended parameters: Engine, NumCacheNodes, CacheNodeType.
+func TestElastiCacheCreateClusterFullParams(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newElastiCacheClient(t)
+
+	out, err := client.CreateCacheCluster(ctx, &awselasticache.CreateCacheClusterInput{
+		CacheClusterId: aws.String("full-params-cluster"),
+		Engine:         aws.String("redis"),
+		NumCacheNodes:  aws.Int32(3),
+		CacheNodeType:  aws.String("cache.t3.medium"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.CacheCluster)
+	assert.Equal(t, "full-params-cluster", aws.ToString(out.CacheCluster.CacheClusterId))
+	assert.Equal(t, "redis", aws.ToString(out.CacheCluster.Engine))
+	assert.Equal(t, int32(3), aws.ToInt32(out.CacheCluster.NumCacheNodes))
+	assert.Equal(t, "cache.t3.medium", aws.ToString(out.CacheCluster.CacheNodeType))
+
+	// DescribeCacheClusters must also return the same extended fields.
+	descOut, err := client.DescribeCacheClusters(ctx, &awselasticache.DescribeCacheClustersInput{
+		CacheClusterId: aws.String("full-params-cluster"),
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.CacheClusters, 1)
+	cl := descOut.CacheClusters[0]
+	assert.Equal(t, "redis", aws.ToString(cl.Engine))
+	assert.Equal(t, int32(3), aws.ToInt32(cl.NumCacheNodes))
+	assert.Equal(t, "cache.t3.medium", aws.ToString(cl.CacheNodeType))
+}
+
+// TestElastiCacheDescribePagination verifies that DescribeCacheClusters honours MaxRecords
+// and returns a non-empty Marker when there are more results.
+func TestElastiCacheDescribePagination(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newElastiCacheClient(t)
+
+	// Create 5 clusters.
+	for i := 0; i < 5; i++ {
+		_, err := client.CreateCacheCluster(ctx, &awselasticache.CreateCacheClusterInput{
+			CacheClusterId: aws.String(fmt.Sprintf("paginated-cluster-%d", i)),
+			Engine:         aws.String("redis"),
+			CacheNodeType:  aws.String("cache.t3.micro"),
+			NumCacheNodes:  aws.Int32(1),
+		})
+		require.NoError(t, err)
+	}
+
+	// First page: request 2 records.
+	page1, err := client.DescribeCacheClusters(ctx, &awselasticache.DescribeCacheClustersInput{
+		MaxRecords: aws.Int32(2),
+	})
+	require.NoError(t, err)
+	assert.Len(t, page1.CacheClusters, 2, "first page should have exactly 2 clusters")
+	assert.NotEmpty(t, aws.ToString(page1.Marker), "Marker should be set when there are more results")
+
+	// Second page: use the marker to get more.
+	page2, err := client.DescribeCacheClusters(ctx, &awselasticache.DescribeCacheClustersInput{
+		MaxRecords: aws.Int32(2),
+		Marker:     page1.Marker,
+	})
+	require.NoError(t, err)
+	assert.Len(t, page2.CacheClusters, 2, "second page should have exactly 2 clusters")
 }

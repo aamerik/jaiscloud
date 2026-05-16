@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -249,7 +250,8 @@ func TestEC2_RunDescribeTerminateInstances(t *testing.T) {
 	require.Len(t, runOut.Instances, 1)
 	instanceId := aws.ToString(runOut.Instances[0].InstanceId)
 	assert.NotEmpty(t, instanceId)
-	assert.Equal(t, types.InstanceStateNameRunning, runOut.Instances[0].State.Name)
+	// Immediately after RunInstances the instance starts in pending state.
+	assert.Equal(t, types.InstanceStateNamePending, runOut.Instances[0].State.Name)
 
 	descOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceId},
@@ -258,17 +260,24 @@ func TestEC2_RunDescribeTerminateInstances(t *testing.T) {
 	require.Len(t, descOut.Reservations, 1)
 	require.Len(t, descOut.Reservations[0].Instances, 1)
 
+	// Wait for the instance to transition to running before stopping it.
+	time.Sleep(3 * time.Second)
+
 	_, err = client.StopInstances(ctx, &awsec2.StopInstancesInput{
 		InstanceIds: []string{instanceId},
 	})
 	require.NoError(t, err)
+
+	// Wait for stopping → stopped before terminating.
+	time.Sleep(3 * time.Second)
 
 	_, err = client.TerminateInstances(ctx, &awsec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceId},
 	})
 	require.NoError(t, err)
 
-	// Terminated instances are filtered from DescribeInstances
+	// Terminated/shutting-down instances are filtered from DescribeInstances after the transition.
+	time.Sleep(3 * time.Second)
 	descOut, err = client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{})
 	require.NoError(t, err)
 	assert.Len(t, descOut.Reservations, 0)
@@ -336,4 +345,89 @@ func TestEC2SGAuthDescribeRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, descOut2.SecurityGroups, 1)
 	assert.Len(t, descOut2.SecurityGroups[0].IpPermissions, 1, "only port-443 rule should remain after revoke")
+}
+
+// ─── Lifecycle Transitions ────────────────────────────────────────────────────
+
+func TestEC2InstanceLifecycleTransitions(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	runOut, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT3Micro,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	require.Len(t, runOut.Instances, 1)
+	instanceId := aws.ToString(runOut.Instances[0].InstanceId)
+
+	// Immediately after RunInstances: state must be "pending".
+	assert.Equal(t, types.InstanceStateNamePending, runOut.Instances[0].State.Name,
+		"instance should start in pending state")
+
+	descOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceId},
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.Reservations, 1)
+	assert.Equal(t, types.InstanceStateNamePending, descOut.Reservations[0].Instances[0].State.Name,
+		"DescribeInstances should also show pending immediately after launch")
+
+	// Wait 3s for pending → running transition.
+	time.Sleep(3 * time.Second)
+
+	descOut2, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceId},
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut2.Reservations, 1)
+	assert.Equal(t, types.InstanceStateNameRunning, descOut2.Reservations[0].Instances[0].State.Name,
+		"instance should be running after 3s")
+}
+
+// ─── IAM Instance Profile ─────────────────────────────────────────────────────
+
+func TestEC2AssociateIamInstanceProfile(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	runOut, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT3Micro,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	instanceId := aws.ToString(runOut.Instances[0].InstanceId)
+
+	// Wait for the instance to reach running state.
+	time.Sleep(3 * time.Second)
+
+	// Associate an IAM instance profile.
+	assocOut, err := client.AssociateIamInstanceProfile(ctx, &awsec2.AssociateIamInstanceProfileInput{
+		InstanceId: aws.String(instanceId),
+		IamInstanceProfile: &types.IamInstanceProfileSpecification{
+			Arn:  aws.String("arn:aws:iam::000000000000:instance-profile/MyProfile"),
+			Name: aws.String("MyProfile"),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, assocOut.IamInstanceProfileAssociation)
+	assert.Equal(t, "associated", string(assocOut.IamInstanceProfileAssociation.State))
+	assert.NotEmpty(t, aws.ToString(assocOut.IamInstanceProfileAssociation.AssociationId))
+
+	// DescribeInstances should show the IAM profile.
+	descOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceId},
+	})
+	require.NoError(t, err)
+	require.Len(t, descOut.Reservations, 1)
+	inst := descOut.Reservations[0].Instances[0]
+	require.NotNil(t, inst.IamInstanceProfile, "IAM instance profile should be present")
+	assert.Equal(t, "arn:aws:iam::000000000000:instance-profile/MyProfile",
+		aws.ToString(inst.IamInstanceProfile.Arn))
 }
