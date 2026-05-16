@@ -516,17 +516,19 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 				nr.Region, nr.AccountID, sd.SubscriptionArn, msgAttrs, rawDelivery)
 		case "lambda":
 			sdCopy := sd
+			bgCtx := context.WithoutCancel(ctx)
 			go func() {
-				if err := p.deliverToLambda(ctx, sdCopy.SubscriptionArn, tArn, messageID, message, subject, sdCopy.Endpoint, msgAttrs); err != nil {
-					p.sendToDLQ(ctx, sdCopy.RedrivePolicy, tArn, buildBody())
+				if err := p.deliverToLambda(bgCtx, sdCopy.SubscriptionArn, tArn, messageID, message, subject, sdCopy.Endpoint, msgAttrs); err != nil {
+					p.sendToDLQ(bgCtx, sdCopy.RedrivePolicy, tArn, buildBody())
 				}
 			}()
 			continue // DLQ is handled inside the goroutine
 		case "http", "https":
 			sdCopy := sd
+			bgCtx := context.WithoutCancel(ctx)
 			go func() {
 				if err := p.deliverToHTTP(tArn, messageID, message, subject, sdCopy.Endpoint, msgAttrs); err != nil {
-					p.sendToDLQ(ctx, sdCopy.RedrivePolicy, tArn, buildBody())
+					p.sendToDLQ(bgCtx, sdCopy.RedrivePolicy, tArn, buildBody())
 				}
 			}()
 			continue // DLQ is handled inside the goroutine
