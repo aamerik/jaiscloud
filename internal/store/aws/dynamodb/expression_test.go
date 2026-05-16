@@ -1,6 +1,7 @@
 package dynamodb
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -1345,6 +1346,203 @@ func TestComplexExpressions(t *testing.T) {
 				":minAge": numAttr("18"),
 			}) {
 			t.Error("expected true")
+		}
+	})
+}
+
+// ─── 22. TestExpressionOperators (G-PENDING-5) ───────────────────────────────
+
+func TestExpressionOperators(t *testing.T) {
+	t.Run("TestExprORTopLevel", func(t *testing.T) {
+		// FilterExpression: #a = :v1 OR #b = :v2
+		expr := "#a = :v1 OR #b = :v2"
+		names := map[string]string{"#a": "a", "#b": "b"}
+
+		// item {a: "x", b: "y"} with :v1="x" → match (left branch)
+		item1 := map[string]any{"a": strAttr("x"), "b": strAttr("y")}
+		if !evalOK(t, item1, expr, names, map[string]any{":v1": strAttr("x"), ":v2": strAttr("z")}) {
+			t.Error("expected true: a=x matches left branch")
+		}
+
+		// item {a: "z", b: "y"} with :v2="y" → match (right branch)
+		item2 := map[string]any{"a": strAttr("z"), "b": strAttr("y")}
+		if !evalOK(t, item2, expr, names, map[string]any{":v1": strAttr("x"), ":v2": strAttr("y")}) {
+			t.Error("expected true: b=y matches right branch")
+		}
+
+		// item {a: "z", b: "w"} → no match
+		item3 := map[string]any{"a": strAttr("z"), "b": strAttr("w")}
+		if evalOK(t, item3, expr, names, map[string]any{":v1": strAttr("x"), ":v2": strAttr("y")}) {
+			t.Error("expected false: neither branch matches")
+		}
+	})
+
+	t.Run("TestExprNOT", func(t *testing.T) {
+		// FilterExpression: NOT attribute_exists(#a)
+		expr := "NOT attribute_exists(#a)"
+		names := map[string]string{"#a": "a"}
+
+		// item {b: "x"} → match (a doesn't exist)
+		item1 := map[string]any{"b": strAttr("x")}
+		if !evalOK(t, item1, expr, names, nil) {
+			t.Error("expected true: a does not exist")
+		}
+
+		// item {a: "x"} → no match
+		item2 := map[string]any{"a": strAttr("x")}
+		if evalOK(t, item2, expr, names, nil) {
+			t.Error("expected false: a exists")
+		}
+	})
+
+	t.Run("TestExprSizeFunction", func(t *testing.T) {
+		// FilterExpression: size(#list) > :n
+		expr := "size(#list) > :n"
+		names := map[string]string{"#list": "list"}
+
+		// item {list: ["a","b","c"]} with :n=2 → match (size=3 > 2)
+		item1 := map[string]any{"list": listAttr(strAttr("a"), strAttr("b"), strAttr("c"))}
+		if !evalOK(t, item1, expr, names, map[string]any{":n": numAttr("2")}) {
+			t.Error("expected true: size(3) > 2")
+		}
+
+		// item {list: ["a"]} with :n=2 → no match (size=1 not > 2)
+		item2 := map[string]any{"list": listAttr(strAttr("a"))}
+		if evalOK(t, item2, expr, names, map[string]any{":n": numAttr("2")}) {
+			t.Error("expected false: size(1) not > 2")
+		}
+	})
+
+	t.Run("TestExprNestedPaths", func(t *testing.T) {
+		// FilterExpression: #a.#b = :v
+		// item {a: {b: "hello"}} → match with :v="hello"
+		item := map[string]any{
+			"a": mapAttr(map[string]any{
+				"b": strAttr("hello"),
+			}),
+		}
+		expr := "#a.#b = :v"
+		names := map[string]string{"#a": "a", "#b": "b"}
+		if !evalOK(t, item, expr, names, map[string]any{":v": strAttr("hello")}) {
+			t.Error("expected true: a.b = 'hello'")
+		}
+
+		// no match with different value
+		if evalOK(t, item, expr, names, map[string]any{":v": strAttr("world")}) {
+			t.Error("expected false: a.b != 'world'")
+		}
+	})
+
+	t.Run("TestExprIfNotExistsSet", func(t *testing.T) {
+		// SET #a = if_not_exists(#a, :v) — sets a only when absent
+		names := map[string]string{"#a": "a"}
+		values := map[string]any{":v": strAttr("default")}
+
+		// When a is absent: should be set to "default"
+		item1 := map[string]any{"b": strAttr("other")}
+		if err := applyUpdateExpression(item1, "SET #a = if_not_exists(#a, :v)", names, values); err != nil {
+			t.Fatalf("applyUpdateExpression error: %v", err)
+		}
+		got, ok := item1["a"]
+		if !ok {
+			t.Fatal("expected 'a' to be set")
+		}
+		if v, _ := got.(map[string]any); v["S"] != "default" {
+			t.Errorf("expected a='default', got %v", got)
+		}
+
+		// When a is already present: should NOT overwrite
+		item2 := map[string]any{"a": strAttr("existing")}
+		if err := applyUpdateExpression(item2, "SET #a = if_not_exists(#a, :v)", names, values); err != nil {
+			t.Fatalf("applyUpdateExpression error: %v", err)
+		}
+		got2, _ := item2["a"]
+		if v, _ := got2.(map[string]any); v["S"] != "existing" {
+			t.Errorf("expected a='existing' unchanged, got %v", got2)
+		}
+	})
+
+	t.Run("TestExprListAppendSet", func(t *testing.T) {
+		// SET #list = list_append(#list, :vals) appends to list
+		names := map[string]string{"#list": "list"}
+		item := map[string]any{
+			"list": listAttr(strAttr("a"), strAttr("b")),
+		}
+		values := map[string]any{":vals": listAttr(strAttr("c"), strAttr("d"))}
+		if err := applyUpdateExpression(item, "SET #list = list_append(#list, :vals)", names, values); err != nil {
+			t.Fatalf("applyUpdateExpression error: %v", err)
+		}
+		listVal, ok := item["list"].(map[string]any)
+		if !ok {
+			t.Fatal("expected list attribute to be a map")
+		}
+		elems, ok := listVal["L"].([]any)
+		if !ok {
+			t.Fatal("expected L key in list attribute")
+		}
+		if len(elems) != 4 {
+			t.Errorf("expected 4 elements after append, got %d", len(elems))
+		}
+	})
+
+	t.Run("TestExprDeleteClause", func(t *testing.T) {
+		// DELETE #set :v removes element from string set
+		names := map[string]string{"#set": "tags"}
+		item := map[string]any{
+			"tags": ssAttr("go", "python", "rust"),
+		}
+		values := map[string]any{":v": ssAttr("python")}
+		if err := applyUpdateExpression(item, "DELETE #set :v", names, values); err != nil {
+			t.Fatalf("applyUpdateExpression error: %v", err)
+		}
+		// "python" should be removed; "go" and "rust" remain
+		setVal, ok := item["tags"].(map[string]any)
+		if !ok {
+			t.Fatal("expected tags to remain as a map after DELETE")
+		}
+		elems, ok := setVal["SS"].([]any)
+		if !ok {
+			t.Fatal("expected SS key in tags after DELETE")
+		}
+		if len(elems) != 2 {
+			t.Errorf("expected 2 elements after delete, got %d: %v", len(elems), elems)
+		}
+		for _, e := range elems {
+			if fmt.Sprintf("%v", e) == "python" {
+				t.Error("'python' should have been removed from the set")
+			}
+		}
+	})
+
+	t.Run("TestExprParenthesizedGrouping", func(t *testing.T) {
+		// (#a = :v1 OR #b = :v2) AND #c = :v3
+		item := map[string]any{
+			"a": strAttr("x"),
+			"b": strAttr("y"),
+			"c": strAttr("z"),
+		}
+		names := map[string]string{"#a": "a", "#b": "b", "#c": "c"}
+		expr := "(#a = :v1 OR #b = :v2) AND #c = :v3"
+
+		// Both conditions satisfied
+		if !evalOK(t, item, expr, names, map[string]any{
+			":v1": strAttr("x"), ":v2": strAttr("nope"), ":v3": strAttr("z"),
+		}) {
+			t.Error("expected true: (a=x OR b=nope) AND c=z → true")
+		}
+
+		// c doesn't match → overall false even though OR matches
+		if evalOK(t, item, expr, names, map[string]any{
+			":v1": strAttr("x"), ":v2": strAttr("y"), ":v3": strAttr("WRONG"),
+		}) {
+			t.Error("expected false: AND with c=WRONG")
+		}
+
+		// Neither a nor b match → OR is false → AND is false
+		if evalOK(t, item, expr, names, map[string]any{
+			":v1": strAttr("no"), ":v2": strAttr("no"), ":v3": strAttr("z"),
+		}) {
+			t.Error("expected false: (a=no OR b=no) = false")
 		}
 	})
 }

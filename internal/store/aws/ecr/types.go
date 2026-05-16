@@ -36,6 +36,15 @@ type Image struct {
 	Size               int64
 	ScanFindings       *ImageScanFindings
 	ArtifactMediaType  string
+	Layers             []LayerRef // parsed layer references from manifest
+}
+
+// LayerRef holds a digest and size for a single layer, as extracted from the
+// OCI / Docker manifest JSON.
+type LayerRef struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+	MediaType string `json:"mediaType"`
 }
 
 type ImageIdentifier struct {

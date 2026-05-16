@@ -177,11 +177,12 @@ func partitionID(db, table string, values []string) string {
 // ─── Database metadata ────────────────────────────────────────────────────────
 
 type glueDatabase struct {
-	Name        string            `json:"Name"`
-	Description string            `json:"Description"`
-	LocationUri string            `json:"LocationUri,omitempty"`
-	Parameters  map[string]string `json:"Parameters,omitempty"`
-	CreateTime  time.Time         `json:"CreateTime"`
+	Name         string            `json:"Name"`
+	OriginalName string            `json:"OriginalName,omitempty"` // preserves caller's casing
+	Description  string            `json:"Description"`
+	LocationUri  string            `json:"LocationUri,omitempty"`
+	Parameters   map[string]string `json:"Parameters,omitempty"`
+	CreateTime   time.Time         `json:"CreateTime"`
 }
 
 func (p *GlueProvider) saveDB(ctx context.Context, db glueDatabase) error {
@@ -210,17 +211,19 @@ func (p *GlueProvider) loadDB(ctx context.Context, name string) (glueDatabase, e
 // ─── Table metadata ───────────────────────────────────────────────────────────
 
 type glueTable struct {
-	DatabaseName       string            `json:"DatabaseName"`
-	Name               string            `json:"Name"`
-	Description        string            `json:"Description,omitempty"`
-	Owner              string            `json:"Owner,omitempty"`
-	TableType          string            `json:"TableType,omitempty"`
-	Parameters         map[string]string `json:"Parameters,omitempty"`
-	StorageDescriptor  map[string]any    `json:"StorageDescriptor,omitempty"`
-	PartitionKeys      []map[string]any  `json:"PartitionKeys,omitempty"`
-	CreateTime         time.Time         `json:"CreateTime"`
-	UpdateTime         time.Time         `json:"UpdateTime"`
-	IsRegisteredWithLakeFormation bool   `json:"IsRegisteredWithLakeFormation,omitempty"`
+	DatabaseName                   string            `json:"DatabaseName"`
+	OriginalDatabaseName           string            `json:"OriginalDatabaseName,omitempty"` // preserves caller's casing
+	Name                           string            `json:"Name"`
+	OriginalName                   string            `json:"OriginalName,omitempty"` // preserves caller's casing
+	Description                    string            `json:"Description,omitempty"`
+	Owner                          string            `json:"Owner,omitempty"`
+	TableType                      string            `json:"TableType,omitempty"`
+	Parameters                     map[string]string `json:"Parameters,omitempty"`
+	StorageDescriptor              map[string]any    `json:"StorageDescriptor,omitempty"`
+	PartitionKeys                  []map[string]any  `json:"PartitionKeys,omitempty"`
+	CreateTime                     time.Time         `json:"CreateTime"`
+	UpdateTime                     time.Time         `json:"UpdateTime"`
+	IsRegisteredWithLakeFormation  bool              `json:"IsRegisteredWithLakeFormation,omitempty"`
 }
 
 func (p *GlueProvider) saveTable(ctx context.Context, t glueTable) error {
@@ -301,11 +304,12 @@ func (p *GlueProvider) CreateDatabase(ctx context.Context, nr *model.NormalizedR
 	}
 
 	db := glueDatabase{
-		Name:        name,
-		Description: strParam(inp, "Description"),
-		LocationUri: strParam(inp, "LocationUri"),
-		Parameters:  strMapParam(inp, "Parameters"),
-		CreateTime:  time.Now(),
+		Name:         strings.ToLower(name), // canonical lookup key
+		OriginalName: name,
+		Description:  strParam(inp, "Description"),
+		LocationUri:  strParam(inp, "LocationUri"),
+		Parameters:   strMapParam(inp, "Parameters"),
+		CreateTime:   time.Now(),
 	}
 	if err := p.saveDB(ctx, db); err != nil {
 		return nil, err
@@ -432,16 +436,18 @@ func (p *GlueProvider) CreateTable(ctx context.Context, nr *model.NormalizedRequ
 
 	now := time.Now()
 	t := glueTable{
-		DatabaseName:      dbName,
-		Name:              name,
-		Description:       strParam(inp, "Description"),
-		Owner:             strParam(inp, "Owner"),
-		TableType:         strParam(inp, "TableType"),
-		Parameters:        strMapParam(inp, "Parameters"),
-		StorageDescriptor: anyMapParam(inp, "StorageDescriptor"),
-		PartitionKeys:     anySliceParam(inp, "PartitionKeys"),
-		CreateTime:        now,
-		UpdateTime:        now,
+		DatabaseName:         strings.ToLower(dbName), // canonical lookup key
+		OriginalDatabaseName: dbName,
+		Name:                 strings.ToLower(name), // canonical lookup key
+		OriginalName:         name,
+		Description:          strParam(inp, "Description"),
+		Owner:                strParam(inp, "Owner"),
+		TableType:            strParam(inp, "TableType"),
+		Parameters:           strMapParam(inp, "Parameters"),
+		StorageDescriptor:    anyMapParam(inp, "StorageDescriptor"),
+		PartitionKeys:        anySliceParam(inp, "PartitionKeys"),
+		CreateTime:           now,
+		UpdateTime:           now,
 	}
 	if err := p.saveTable(ctx, t); err != nil {
 		return nil, err
@@ -728,8 +734,13 @@ func (p *GlueProvider) UpdatePartition(ctx context.Context, nr *model.Normalized
 // ─── Wire serialisation helpers ───────────────────────────────────────────────
 
 func dbToWire(db glueDatabase) map[string]any {
+	// Return the original casing if available; fall back to stored Name.
+	displayName := db.OriginalName
+	if displayName == "" {
+		displayName = db.Name
+	}
 	return map[string]any{
-		"Name":        db.Name,
+		"Name":        displayName,
 		"Description": db.Description,
 		"LocationUri": db.LocationUri,
 		"Parameters":  db.Parameters,
@@ -738,9 +749,18 @@ func dbToWire(db glueDatabase) map[string]any {
 }
 
 func tableToWire(t glueTable) map[string]any {
+	// Return the original casing if available; fall back to stored names.
+	displayDB := t.OriginalDatabaseName
+	if displayDB == "" {
+		displayDB = t.DatabaseName
+	}
+	displayName := t.OriginalName
+	if displayName == "" {
+		displayName = t.Name
+	}
 	return map[string]any{
-		"DatabaseName":      t.DatabaseName,
-		"Name":              t.Name,
+		"DatabaseName":      displayDB,
+		"Name":              displayName,
 		"Description":       t.Description,
 		"Owner":             t.Owner,
 		"TableType":         t.TableType,

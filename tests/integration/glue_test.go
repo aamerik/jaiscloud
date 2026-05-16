@@ -270,3 +270,66 @@ func TestGlue_BatchCreateDeletePartitions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, listOut.Partitions, 1)
 }
+
+func TestGlueDatabaseCasingPreserved(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newGlueClient(t)
+
+	// Create database with mixed-case name
+	_, err := client.CreateDatabase(ctx, &awsglue.CreateDatabaseInput{
+		DatabaseInput: &types.DatabaseInput{
+			Name:        aws.String("MyDB"),
+			Description: aws.String("casing test"),
+		},
+	})
+	require.NoError(t, err)
+
+	// GetDatabase with lowercase should succeed (case-insensitive lookup)
+	out, err := client.GetDatabase(ctx, &awsglue.GetDatabaseInput{
+		Name: aws.String("mydb"),
+	})
+	require.NoError(t, err)
+	// Response Name must preserve original casing
+	assert.Equal(t, "MyDB", aws.ToString(out.Database.Name))
+
+	// GetDatabases should also preserve casing in list
+	listOut, err := client.GetDatabases(ctx, &awsglue.GetDatabasesInput{})
+	require.NoError(t, err)
+	require.Len(t, listOut.DatabaseList, 1)
+	assert.Equal(t, "MyDB", aws.ToString(listOut.DatabaseList[0].Name))
+}
+
+func TestGlueTableCasingPreserved(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newGlueClient(t)
+
+	_, err := client.CreateDatabase(ctx, &awsglue.CreateDatabaseInput{
+		DatabaseInput: &types.DatabaseInput{Name: aws.String("MyDB")},
+	})
+	require.NoError(t, err)
+
+	_, err = client.CreateTable(ctx, &awsglue.CreateTableInput{
+		DatabaseName: aws.String("MyDB"),
+		TableInput:   &types.TableInput{Name: aws.String("OrderItems")},
+	})
+	require.NoError(t, err)
+
+	// GetTable with lowercase should succeed and return original casing
+	out, err := client.GetTable(ctx, &awsglue.GetTableInput{
+		DatabaseName: aws.String("mydb"),
+		Name:         aws.String("orderitems"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "OrderItems", aws.ToString(out.Table.Name))
+	assert.Equal(t, "MyDB", aws.ToString(out.Table.DatabaseName))
+
+	// GetTables should also preserve casing
+	listOut, err := client.GetTables(ctx, &awsglue.GetTablesInput{
+		DatabaseName: aws.String("MyDB"),
+	})
+	require.NoError(t, err)
+	require.Len(t, listOut.TableList, 1)
+	assert.Equal(t, "OrderItems", aws.ToString(listOut.TableList[0].Name))
+}

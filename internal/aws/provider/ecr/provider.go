@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -17,6 +18,40 @@ import (
 	"jaiscloud/internal/provider"
 	ecrstore "jaiscloud/internal/store/aws/ecr"
 )
+
+// validManifestMediaTypes are the only accepted mediaType values for PutImage.
+var validManifestMediaTypes = map[string]bool{
+	"application/vnd.docker.distribution.manifest.v2+json": true,
+	"application/vnd.oci.image.manifest.v1+json":           true,
+}
+
+// parseManifestLayers parses a Docker v2 or OCI manifest JSON and returns
+// the layer references. Returns nil if the manifest is not parseable or has
+// no layers field.
+func parseManifestLayers(manifest string) []ecrstore.LayerRef {
+	var m struct {
+		Layers []struct {
+			Digest    string `json:"digest"`
+			Size      int64  `json:"size"`
+			MediaType string `json:"mediaType"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal([]byte(manifest), &m); err != nil {
+		return nil
+	}
+	if len(m.Layers) == 0 {
+		return nil
+	}
+	refs := make([]ecrstore.LayerRef, 0, len(m.Layers))
+	for _, l := range m.Layers {
+		refs = append(refs, ecrstore.LayerRef{
+			Digest:    l.Digest,
+			Size:      l.Size,
+			MediaType: l.MediaType,
+		})
+	}
+	return refs
+}
 
 var repoNameRe = regexp.MustCompile(`^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 
@@ -52,11 +87,12 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ECR.DescribeRepositories": p.DescribeRepositories,
 
 		// Image operations
-		"ECR.PutImage":         p.PutImage,
-		"ECR.BatchGetImage":    p.BatchGetImage,
-		"ECR.BatchDeleteImage": p.BatchDeleteImage,
-		"ECR.ListImages":       p.ListImages,
-		"ECR.DescribeImages":   p.DescribeImages,
+		"ECR.PutImage":                   p.PutImage,
+		"ECR.BatchGetImage":              p.BatchGetImage,
+		"ECR.BatchDeleteImage":           p.BatchDeleteImage,
+		"ECR.ListImages":                 p.ListImages,
+		"ECR.DescribeImages":             p.DescribeImages,
+		"ECR.BatchCheckLayerAvailability": p.BatchCheckLayerAvailability,
 
 		// Auth
 		"ECR.GetAuthorizationToken": p.GetAuthorizationToken,
@@ -245,6 +281,27 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 	if manifest == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "imageManifest is required", HTTPStatus: 400}
 	}
+
+	// Parse manifest JSON to validate mediaType field.
+	var manifestMap map[string]any
+	if err := json.Unmarshal([]byte(manifest), &manifestMap); err != nil {
+		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "imageManifest is not valid JSON", HTTPStatus: 400}
+	}
+
+	// Determine media type: prefer explicit param, then manifest field.
+	manifestMediaType, _ := manifestMap["mediaType"].(string)
+	if mediaType == "" {
+		mediaType = manifestMediaType
+	}
+	// Validate media type is one of the accepted values.
+	if mediaType != "" && !validManifestMediaTypes[mediaType] {
+		return nil, &model.ProviderError{
+			Code:       "InvalidParameterException",
+			Message:    fmt.Sprintf("The image manifest media type '%s' is not supported", mediaType),
+			HTTPStatus: 400,
+		}
+	}
+	// Default to docker v2 if still unset (e.g. manifest has no mediaType field).
 	if mediaType == "" {
 		mediaType = "application/vnd.docker.distribution.manifest.v2+json"
 	}
@@ -259,6 +316,8 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 		tags = []string{imageTag}
 	}
 
+	layers := parseManifestLayers(manifest)
+
 	img := &ecrstore.Image{
 		Digest:            digest,
 		Manifest:          manifest,
@@ -266,6 +325,7 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 		Tags:              tags,
 		PushedAt:          time.Now(),
 		Size:              int64(len(manifest)),
+		Layers:            layers,
 	}
 
 	if err := p.store.PutImage(repoName, img); err != nil {
@@ -279,10 +339,10 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 
 	return provider.OK(map[string]any{
 		"image": map[string]any{
-			"registryId":        nr.AccountID,
-			"repositoryName":    repoName,
-			"imageId":           imageID,
-			"imageManifest":     manifest,
+			"registryId":             nr.AccountID,
+			"repositoryName":         repoName,
+			"imageId":                imageID,
+			"imageManifest":          manifest,
 			"imageManifestMediaType": mediaType,
 		},
 	}), nil
@@ -347,6 +407,55 @@ func (p *Provider) BatchDeleteImage(ctx context.Context, nr *model.NormalizedReq
 	return provider.OK(map[string]any{
 		"imageIds": deletedMaps,
 		"failures": failedMaps,
+	}), nil
+}
+
+// BatchCheckLayerAvailability checks whether the specified layer digests exist
+// in the given repository. Returns "AVAILABLE" for stored layers and "MISSING"
+// for unknown ones.
+func (p *Provider) BatchCheckLayerAvailability(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	repoName, _ := nr.Params["repositoryName"].(string)
+
+	// Collect all layer digests stored in the repository by scanning all images.
+	availableDigests := make(map[string]bool)
+	allImages := p.store.ListImages(repoName, "ANY")
+	for _, id := range allImages {
+		ids := []ecrstore.ImageIdentifier{id}
+		found, _ := p.store.BatchGetImages(repoName, ids)
+		for _, img := range found {
+			for _, layer := range img.Layers {
+				if layer.Digest != "" {
+					availableDigests[layer.Digest] = true
+				}
+			}
+		}
+	}
+
+	// Parse requested layer digests.
+	var requestedDigests []string
+	if raw, ok := nr.Params["layerDigests"].([]any); ok {
+		for _, d := range raw {
+			if s, ok := d.(string); ok {
+				requestedDigests = append(requestedDigests, s)
+			}
+		}
+	}
+
+	layers := make([]any, 0, len(requestedDigests))
+	for _, digest := range requestedDigests {
+		status := "MISSING"
+		if availableDigests[digest] {
+			status = "AVAILABLE"
+		}
+		layers = append(layers, map[string]any{
+			"layerDigest":      digest,
+			"layerAvailability": status,
+		})
+	}
+
+	return provider.OK(map[string]any{
+		"layers":     layers,
+		"failures":   []any{},
 	}), nil
 }
 

@@ -119,8 +119,39 @@ func (p *Provider) verifyIdentity(ctx context.Context, identity, idType string) 
 	}
 }
 
+// isVerified checks whether the given email address (or its domain) is
+// verified in the store. Returns true if verified, false otherwise.
+func (p *Provider) isVerified(ctx context.Context, email string) bool {
+	// Check the exact email address.
+	if e, err := p.resources.Get(ctx, rtSESIdentity, email); err == nil {
+		var id sesIdentity
+		if json.Unmarshal(e.Data, &id) == nil && id.VerificationStatus == "Success" {
+			return true
+		}
+	}
+	// Check the domain part.
+	if atIdx := strings.LastIndex(email, "@"); atIdx >= 0 {
+		domain := email[atIdx+1:]
+		if e, err := p.resources.Get(ctx, rtSESIdentity, domain); err == nil {
+			var id sesIdentity
+			if json.Unmarshal(e.Data, &id) == nil && id.VerificationStatus == "Success" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *Provider) SendEmail(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	source := str(nr.Params, "Source")
+
+	// Enforce sender verification.
+	if source != "" && !p.isVerified(ctx, source) {
+		return nil, sesErr("MessageRejected",
+			fmt.Sprintf("Email address not verified. The following identities failed the check in region US-EAST-1: %s", source),
+			http.StatusBadRequest)
+	}
+
 	messageID := newMessageID()
 	var destinations []string
 	if dest, ok := nr.Params["Destination"].(map[string]any); ok {
