@@ -82,9 +82,11 @@ func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 		"Compute.StartInstances":            p.StartInstances,
 		"Compute.StopInstances":             p.StopInstances,
 		"Compute.RebootInstances":           p.RebootInstances,
-		"Compute.ModifyInstanceAttribute":   p.ModifyInstanceAttribute,
-		"Compute.DescribeInstanceAttribute": p.DescribeInstanceAttribute,
-		"Compute.DescribeInstanceStatus":    p.DescribeInstanceStatus,
+		"Compute.ModifyInstanceAttribute":          p.ModifyInstanceAttribute,
+		"Compute.DescribeInstanceAttribute":        p.DescribeInstanceAttribute,
+		"Compute.DescribeInstanceStatus":           p.DescribeInstanceStatus,
+		"Compute.AssociateIamInstanceProfile":      p.AssociateIamInstanceProfile,
+		"Compute.DisassociateIamInstanceProfile":   p.DisassociateIamInstanceProfile,
 		// AMIs
 		"Compute.DescribeImages": p.DescribeImages,
 		// Security Groups
@@ -238,12 +240,14 @@ func stateCode(state string) string {
 		return "0"
 	case "running":
 		return "16"
+	case "shutting-down":
+		return "32"
+	case "terminated":
+		return "48"
 	case "stopping":
 		return "64"
 	case "stopped":
 		return "80"
-	case "terminated":
-		return "48"
 	}
 	return "0"
 }
@@ -292,7 +296,7 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 			SubnetId:               subnetId,
 			SecurityGroupIds:       sgIds,
 			PrivateIpAddress:       fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
-			State:                  "running",
+			State:                  "pending",
 			LaunchTime:             time.Now(),
 			UserData:               userData,
 			IamInstanceProfileArn:  iamArn,
@@ -303,6 +307,12 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 		if err := p.saveInstance(ctx, inst); err != nil {
 			return nil, err
 		}
+		// Transition pending → running after 2s.
+		instCopy := inst
+		time.AfterFunc(2*time.Second, func() {
+			instCopy.State = "running"
+			p.saveInstance(context.Background(), instCopy)
+		})
 		instances = append(instances, instanceToWire(inst))
 	}
 	return provider.OK(map[string]any{
@@ -411,7 +421,7 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 	for _, e := range entries {
 		var inst ec2Instance
 		json.Unmarshal(e.Data, &inst)
-		if inst.State == "terminated" {
+		if inst.State == "terminated" || inst.State == "shutting-down" {
 			continue
 		}
 		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {
@@ -451,11 +461,17 @@ func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.Norm
 			return nil, err
 		}
 		prev := inst.State
-		inst.State = "terminated"
+		inst.State = "shutting-down"
 		p.saveInstance(ctx, inst)
+		// Transition shutting-down → terminated after 2s.
+		instCopy := inst
+		time.AfterFunc(2*time.Second, func() {
+			instCopy.State = "terminated"
+			p.saveInstance(context.Background(), instCopy)
+		})
 		result = append(result, map[string]any{
 			"InstanceId":    id,
-			"CurrentState":  map[string]any{"Code": "48", "Name": "terminated"},
+			"CurrentState":  map[string]any{"Code": stateCode("shutting-down"), "Name": "shutting-down"},
 			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
 		})
 	}
@@ -491,15 +507,21 @@ func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.Normalize
 			return nil, err
 		}
 		prev := inst.State
-		inst.State = "stopped"
+		inst.State = "stopping"
 		p.saveInstance(ctx, inst)
+		// Transition stopping → stopped after 2s.
+		instCopy := inst
+		time.AfterFunc(2*time.Second, func() {
+			instCopy.State = "stopped"
+			p.saveInstance(context.Background(), instCopy)
+		})
 		result = append(result, map[string]any{
 			"InstanceId":    id,
-			"CurrentState":  map[string]any{"Code": "80", "Name": "stopped"},
+			"CurrentState":  map[string]any{"Code": stateCode("stopping"), "Name": "stopping"},
 			"PreviousState": map[string]any{"Code": stateCode(prev), "Name": prev},
 		})
 	}
-	return provider.OK(map[string]any{"TerminatingInstances": result}), nil
+	return provider.OK(map[string]any{"StoppingInstances": result}), nil
 }
 
 func (p *ComputeProvider) RebootInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -562,7 +584,7 @@ func (p *ComputeProvider) DescribeInstanceStatus(ctx context.Context, nr *model.
 	for _, e := range entries {
 		var inst ec2Instance
 		json.Unmarshal(e.Data, &inst)
-		if inst.State == "terminated" {
+		if inst.State == "terminated" || inst.State == "shutting-down" {
 			continue
 		}
 		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {
@@ -578,6 +600,74 @@ func (p *ComputeProvider) DescribeInstanceStatus(ctx context.Context, nr *model.
 		})
 	}
 	return provider.OK(map[string]any{"InstanceStatuses": statuses}), nil
+}
+
+func (p *ComputeProvider) AssociateIamInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	instanceId := strParam(nr.Params, "InstanceId")
+	inst, err := p.loadInstance(ctx, instanceId)
+	if err != nil {
+		return nil, err
+	}
+	// IamInstanceProfile.Arn and IamInstanceProfile.Name from params.
+	iamArn := strParam(nr.Params, "IamInstanceProfile.Arn")
+	iamName := strParam(nr.Params, "IamInstanceProfile.Name")
+	inst.IamInstanceProfileArn = iamArn
+	inst.IamInstanceProfileName = iamName
+	if err := p.saveInstance(ctx, inst); err != nil {
+		return nil, err
+	}
+	assocId := newID("iip-assoc")
+	return provider.OK(map[string]any{
+		"IamInstanceProfileAssociation": map[string]any{
+			"AssociationId": assocId,
+			"InstanceId":    instanceId,
+			"IamInstanceProfile": map[string]any{
+				"Arn":  iamArn,
+				"Id":   newID("aipa"),
+			},
+			"State": "associated",
+		},
+	}), nil
+}
+
+func (p *ComputeProvider) DisassociateIamInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// AssociationId is the primary key in real AWS, but we also accept InstanceId for simplicity.
+	instanceId := strParam(nr.Params, "InstanceId")
+	if instanceId == "" {
+		// Try to look up by AssociationId — for now map to InstanceId param (best-effort).
+		instanceId = strParam(nr.Params, "AssociationId")
+	}
+	inst, err := p.loadInstance(ctx, instanceId)
+	if err != nil {
+		// If not found by AssociationId as InstanceId, return a placeholder response.
+		assocId := strParam(nr.Params, "AssociationId")
+		return provider.OK(map[string]any{
+			"IamInstanceProfileAssociation": map[string]any{
+				"AssociationId": assocId,
+				"State":         "disassociated",
+			},
+		}), nil
+	}
+	prevArn := inst.IamInstanceProfileArn
+	inst.IamInstanceProfileArn = ""
+	inst.IamInstanceProfileName = ""
+	if err := p.saveInstance(ctx, inst); err != nil {
+		return nil, err
+	}
+	assocId := strParam(nr.Params, "AssociationId")
+	if assocId == "" {
+		assocId = newID("iip-assoc")
+	}
+	return provider.OK(map[string]any{
+		"IamInstanceProfileAssociation": map[string]any{
+			"AssociationId": assocId,
+			"InstanceId":    inst.InstanceId,
+			"IamInstanceProfile": map[string]any{
+				"Arn": prevArn,
+			},
+			"State": "disassociated",
+		},
+	}), nil
 }
 
 func (p *ComputeProvider) DescribeImages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
