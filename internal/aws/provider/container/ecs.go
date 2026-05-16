@@ -288,6 +288,40 @@ func (td taskDefinition) toWire() map[string]any {
 	}
 }
 
+// fargateCPUMemoryValid returns true if the (cpu, memory) pair is in the allowed
+// Fargate combinations. cpu and memory are the task-level values in vCPU units
+// and MiB respectively (e.g. "256", "512").
+func fargateCPUMemoryValid(cpu, memory string) bool {
+	type pair struct{ cpu, mem int }
+	allowed := map[pair]bool{}
+	// 256 CPU
+	for _, m := range []int{512, 1024, 2048} {
+		allowed[pair{256, m}] = true
+	}
+	// 512 CPU
+	for _, m := range []int{1024, 2048, 3072, 4096} {
+		allowed[pair{512, m}] = true
+	}
+	// 1024 CPU (1 vCPU)
+	for m := 2048; m <= 8192; m += 1024 {
+		allowed[pair{1024, m}] = true
+	}
+	// 2048 CPU (2 vCPU)
+	for m := 4096; m <= 16384; m += 1024 {
+		allowed[pair{2048, m}] = true
+	}
+	// 4096 CPU (4 vCPU)
+	for m := 8192; m <= 30720; m += 1024 {
+		allowed[pair{4096, m}] = true
+	}
+	cpuInt := int(toInt64(cpu))
+	memInt := int(toInt64(memory))
+	if cpuInt == 0 || memInt == 0 {
+		return false
+	}
+	return allowed[pair{cpuInt, memInt}]
+}
+
 func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	family, _ := nr.Params["family"].(string)
 	if family == "" {
@@ -307,6 +341,30 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 		}
 	}
 
+	// Validation 1: containerDefinitions must be non-empty.
+	if len(containers) == 0 {
+		return nil, &model.ProviderError{Code: "ClientException", Message: "An invalid container list was provided.", HTTPStatus: http.StatusBadRequest}
+	}
+
+	// Validation 2: each container must have name and image; collect names for dedup check.
+	seenNames := make(map[string]bool, len(containers))
+	for i, cd := range containers {
+		name, _ := cd["name"].(string)
+		image, _ := cd["image"].(string)
+		if name == "" || image == "" {
+			label := name
+			if label == "" {
+				label = fmt.Sprintf("%d", i)
+			}
+			return nil, &model.ProviderError{Code: "ClientException", Message: fmt.Sprintf("Essential container %s is missing image", label), HTTPStatus: http.StatusBadRequest}
+		}
+		// Validation 3: duplicate container names.
+		if seenNames[name] {
+			return nil, &model.ProviderError{Code: "ClientException", Message: "Container names must be unique within a task definition", HTTPStatus: http.StatusBadRequest}
+		}
+		seenNames[name] = true
+	}
+
 	cpu, _ := nr.Params["cpu"].(string)
 	memory, _ := nr.Params["memory"].(string)
 	networkMode, _ := nr.Params["networkMode"].(string)
@@ -314,6 +372,16 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 		networkMode = "bridge"
 	}
 	compat := extractStringList(nr.Params, "requiresCompatibilities")
+
+	// Validation 4: Fargate cpu/memory pair validation.
+	for _, c := range compat {
+		if c == "FARGATE" {
+			if !fargateCPUMemoryValid(cpu, memory) {
+				return nil, &model.ProviderError{Code: "ClientException", Message: "Invalid CPU or memory value specified", HTTPStatus: http.StatusBadRequest}
+			}
+			break
+		}
+	}
 
 	td := taskDefinition{
 		Family:               family,
@@ -434,7 +502,7 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 		ClusterArn:     nr.ResourceID("ecs-cluster", clusterName),
 		TaskDefinition: td,
 		DesiredCount:   desired,
-		RunningCount:   desired,
+		RunningCount:   0,
 		PendingCount:   0,
 		Status:         "ACTIVE",
 	}
@@ -445,6 +513,11 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 			return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "Service already exists", HTTPStatus: http.StatusBadRequest}
 		}
 		return nil, err
+	}
+	// Launch background goroutine to ramp RunningCount up to DesiredCount.
+	if desired > 0 {
+		p.wg.Add(1)
+		go p.reconcileService(id)
 	}
 	return provider.OK(map[string]any{"service": svc.toWire()}), nil
 }
@@ -480,17 +553,60 @@ func (p *ContainerProvider) UpdateService(ctx context.Context, nr *model.Normali
 	}
 	var svc service
 	json.Unmarshal(e.Data, &svc)
-	if v, ok := nr.Params["desiredCount"]; ok {
-		svc.DesiredCount = intParam(nr.Params, "desiredCount")
-		svc.RunningCount = svc.DesiredCount
-		_ = v
+	needsRamp := false
+	if _, ok := nr.Params["desiredCount"]; ok {
+		newDesired := intParam(nr.Params, "desiredCount")
+		if newDesired > svc.RunningCount {
+			needsRamp = true
+		} else {
+			// Scale down or no-op: set RunningCount immediately.
+			svc.RunningCount = newDesired
+		}
+		svc.DesiredCount = newDesired
 	}
 	if td, ok := nr.Params["taskDefinition"].(string); ok && td != "" {
 		svc.TaskDefinition = td
 	}
 	data, _ := json.Marshal(svc)
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtService, ID: id, Data: data})
+	if needsRamp {
+		p.wg.Add(1)
+		go p.reconcileService(id)
+	}
 	return provider.OK(map[string]any{"service": svc.toWire()}), nil
+}
+
+// reconcileService increments RunningCount by 1 every 2 seconds until it
+// reaches DesiredCount. It reads the current state from the store each tick
+// so it picks up any concurrent DesiredCount changes (e.g. scale-down or delete).
+func (p *ContainerProvider) reconcileService(id string) {
+	defer p.wg.Done()
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+
+		e, err := p.resources.Get(p.ctx, rtService, id)
+		if err != nil {
+			// Service deleted — stop.
+			return
+		}
+		var svc service
+		json.Unmarshal(e.Data, &svc)
+
+		if svc.RunningCount >= svc.DesiredCount {
+			return
+		}
+
+		svc.RunningCount++
+		data, _ := json.Marshal(svc)
+		p.resources.Update(p.ctx, store.ResourceEntry{Type: rtService, ID: id, Data: data})
+
+		slog.Debug("ecs: service reconciliation tick", "service", id,
+			"running", svc.RunningCount, "desired", svc.DesiredCount)
+	}
 }
 
 func (p *ContainerProvider) DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

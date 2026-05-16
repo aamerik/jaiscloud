@@ -533,13 +533,13 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 			}()
 			continue // DLQ is handled inside the goroutine
 		case "email", "email-json":
-			slog.Debug("sns: email delivery (stub)", "endpoint", sd.Endpoint, "msgID", messageID)
+			slog.Info("SNS email delivery (stub)", "endpoint", sd.Endpoint, "messageID", messageID)
 			continue
 		case "sms":
-			slog.Debug("sns: SMS delivery (stub)", "endpoint", sd.Endpoint)
+			slog.Info("SNS SMS delivery (stub)", "endpoint", sd.Endpoint, "messageID", messageID)
 			continue
 		case "application":
-			slog.Debug("sns: application delivery (stub)", "endpoint", sd.Endpoint)
+			slog.Info("SNS application delivery (stub)", "endpoint", sd.Endpoint, "messageID", messageID)
 			continue
 		}
 
