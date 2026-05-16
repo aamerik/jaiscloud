@@ -512,7 +512,15 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 
 	// Prefer sqsSender (resolves ARN → URL correctly) over raw message store.
 	if p.sqsSender != nil {
-		_ = p.sqsSender.InternalSend(ctx, queueURL, bodyStr, nil, SQSSourceContext{
+		sqsAttrs := make(map[string]SQSMessageAttribute, len(msgAttrs))
+		for k, v := range msgAttrs {
+			if m, ok := v.(map[string]any); ok {
+				dt, _ := m["DataType"].(string)
+				sv, _ := m["StringValue"].(string)
+				sqsAttrs[k] = SQSMessageAttribute{DataType: dt, StringValue: sv}
+			}
+		}
+		_ = p.sqsSender.InternalSend(ctx, queueURL, bodyStr, sqsAttrs, SQSSourceContext{
 			SourceArn:        tArn,
 			ServicePrincipal: "sns.amazonaws.com",
 		})

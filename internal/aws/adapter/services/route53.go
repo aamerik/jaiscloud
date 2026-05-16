@@ -420,7 +420,7 @@ func buildRoute53XML(data map[string]any) string {
 		return `<?xml version="1.0" encoding="UTF-8"?>` +
 			`<ChangeResourceRecordSetsResponse ` + ns + `>` +
 			`<ChangeInfo><Id>/change/` + xmlEscape(changeID) + `</Id><Status>INSYNC</Status><SubmittedAt>` +
-			str(data["SubmittedAt"]) + `</SubmittedAt></ChangeInfo>` +
+			xmlEscape(str(data["SubmittedAt"])) + `</SubmittedAt></ChangeInfo>` +
 			`</ChangeResourceRecordSetsResponse>`
 	}
 	if hc, ok := data["HealthCheck"]; ok {
