@@ -167,7 +167,6 @@ func startCmd() *cobra.Command {
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter)
 			adminHandler.SetLambdaCodeFetcher(funcP)
-		adminHandler.SetFirehoseFlusher(firehoseP)
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      "aws",
@@ -818,6 +817,7 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"config":               &services.GenericJSONTargetCodec{Service: "config", TargetPrefix: "StarlingDoveService."},
 		"resource-groups":      &services.ResourceGroupsCodec{},
 		"tagging":              &services.GenericJSONTargetCodec{Service: "tagging", TargetPrefix: "ResourceGroupsTaggingAPI_20170126."},
+		"email":                &services.SESCodec{},
 	})
 }
 

@@ -287,6 +287,28 @@ func encodeEC2Result(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</routeTableSet>")
+	case "AssociateIamInstanceProfile":
+		if assoc, ok := data["IamInstanceProfileAssociation"].(map[string]any); ok {
+			sb.WriteString("<iamInstanceProfileAssociation>")
+			sb.WriteString(xmlTag("associationId", str(assoc["AssociationId"])))
+			sb.WriteString(xmlTag("instanceId", str(assoc["InstanceId"])))
+			if iap, ok := assoc["IamInstanceProfile"].(map[string]any); ok {
+				sb.WriteString("<iamInstanceProfile>")
+				sb.WriteString(xmlTag("arn", str(iap["Arn"])))
+				sb.WriteString(xmlTag("id", str(iap["Id"])))
+				sb.WriteString("</iamInstanceProfile>")
+			}
+			sb.WriteString(xmlTag("state", str(assoc["State"])))
+			sb.WriteString("</iamInstanceProfileAssociation>")
+		}
+	case "DisassociateIamInstanceProfile":
+		if assoc, ok := data["IamInstanceProfileAssociation"].(map[string]any); ok {
+			sb.WriteString("<iamInstanceProfileAssociation>")
+			sb.WriteString(xmlTag("associationId", str(assoc["AssociationId"])))
+			sb.WriteString(xmlTag("instanceId", str(assoc["InstanceId"])))
+			sb.WriteString(xmlTag("state", str(assoc["State"])))
+			sb.WriteString("</iamInstanceProfileAssociation>")
+		}
 	case "AssociateRouteTable":
 		sb.WriteString(xmlTag("associationId", str(data["AssociationId"])))
 	// ── NAT Gateways ──────────────────────────────────────────────────────────
@@ -329,6 +351,12 @@ func encodeInstance(inst map[string]any) string {
 	}
 	sb.WriteString("</instanceState>")
 	sb.WriteString(xmlTag("launchTime", str(inst["LaunchTime"])))
+	if iap, ok := inst["IamInstanceProfile"].(map[string]any); ok {
+		sb.WriteString("<iamInstanceProfile>")
+		sb.WriteString(xmlTag("arn", str(iap["Arn"])))
+		sb.WriteString(xmlTag("id", str(iap["Id"])))
+		sb.WriteString("</iamInstanceProfile>")
+	}
 	return sb.String()
 }
 

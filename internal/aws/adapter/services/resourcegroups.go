@@ -57,16 +57,24 @@ func (c *ResourceGroupsCodec) Decode(r *http.Request, body []byte) (*model.Norma
 
 // resourceGroupsActionFromRequest maps Resource Groups REST method+path to action + params.
 //
-// Supported path shapes:
+// AWS SDK v2 uses verb-style paths (newer API):
 //
-//	POST   /groups                  → CreateGroup
-//	DELETE /groups/{GroupName}       → DeleteGroup
-//	GET    /groups/{GroupName}       → GetGroup
-//	POST   /groups-list              → ListGroups
-//	PUT    /groups/{GroupName}       → UpdateGroup
-//	PUT    /resources/{Arn}/tags     → Tag
-//	DELETE /resources/{Arn}/tags     → Untag
-//	GET    /resources/{Arn}/tags     → GetTags
+//	POST /create-group           → CreateGroup
+//	POST /delete-group           → DeleteGroup
+//	POST /get-group              → GetGroup
+//	POST /list-groups            → ListGroups
+//	POST /update-group           → UpdateGroup
+//	POST /tag/{Arn}              → Tag
+//	DELETE /tags/{Arn}           → Untag
+//	GET  /tags/{Arn}             → GetTags
+//
+// Older SDK shape (v1 style) also supported:
+//
+//	POST   /groups               → CreateGroup
+//	DELETE /groups/{GroupName}   → DeleteGroup
+//	GET    /groups/{GroupName}   → GetGroup
+//	POST   /groups-list          → ListGroups
+//	PUT    /groups/{GroupName}   → UpdateGroup
 func resourceGroupsActionFromRequest(r *http.Request) (string, map[string]any) {
 	method := r.Method
 	path := strings.Trim(r.URL.Path, "/")
@@ -77,6 +85,43 @@ func resourceGroupsActionFromRequest(r *http.Request) (string, map[string]any) {
 	}
 
 	switch segments[0] {
+	// Newer verb-style paths used by AWS SDK v2
+	case "create-group":
+		if method == http.MethodPost {
+			return "CreateGroup", nil
+		}
+	case "delete-group":
+		if method == http.MethodPost {
+			return "DeleteGroup", nil
+		}
+	case "get-group":
+		if method == http.MethodPost {
+			return "GetGroup", nil
+		}
+	case "list-groups":
+		if method == http.MethodPost {
+			return "ListGroups", nil
+		}
+	case "update-group":
+		if method == http.MethodPost {
+			return "UpdateGroup", nil
+		}
+	case "tag":
+		if method == http.MethodPost && len(segments) >= 2 {
+			return "Tag", map[string]any{"Arn": segments[1]}
+		}
+	case "tags":
+		if len(segments) >= 2 {
+			arn := segments[1]
+			params := map[string]any{"Arn": arn}
+			switch method {
+			case http.MethodDelete:
+				return "Untag", params
+			case http.MethodGet:
+				return "GetTags", params
+			}
+		}
+	// Older path shapes (v1 style)
 	case "groups":
 		if len(segments) == 1 {
 			if method == http.MethodPost {
@@ -99,7 +144,6 @@ func resourceGroupsActionFromRequest(r *http.Request) (string, map[string]any) {
 			return "ListGroups", nil
 		}
 	case "resources":
-		// /resources/{Arn}/tags
 		if len(segments) >= 3 && segments[2] == "tags" {
 			arn := segments[1]
 			params := map[string]any{"Arn": arn}

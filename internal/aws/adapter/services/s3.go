@@ -870,6 +870,8 @@ func s3EmitVersionSSEHeaders(h http.Header, data map[string]any) {
 func (c *S3Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	h := http.Header{}
 	h.Set("Content-Type", "application/xml")
+	// Help SDK error parsers (especially S3 Control) identify the error code.
+	h.Set("x-amzn-errortype", perr.Code)
 	// Consume special header-emitting keys (e.g. delete marker on 404).
 	if dm, ok := perr.Data["_delete_marker"].(bool); ok && dm {
 		h.Set("x-amz-delete-marker", "true")

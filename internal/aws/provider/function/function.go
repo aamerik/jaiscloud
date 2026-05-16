@@ -360,6 +360,14 @@ func cfgToWire(cfg functionConfig) map[string]any {
 	if cfg.Environment != nil {
 		m["Environment"] = map[string]any{"Variables": cfg.Environment}
 	}
+	// Lambda API returns Layers as [{Arn, CodeSize}] objects, not plain strings.
+	if len(cfg.Layers) > 0 {
+		layerObjs := make([]map[string]any, 0, len(cfg.Layers))
+		for _, arn := range cfg.Layers {
+			layerObjs = append(layerObjs, map[string]any{"Arn": arn, "CodeSize": 0})
+		}
+		m["Layers"] = layerObjs
+	}
 	return m
 }
 

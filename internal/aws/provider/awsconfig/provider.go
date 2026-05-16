@@ -58,11 +58,11 @@ type configurationRecorder struct {
 }
 
 type recorderStatus struct {
-	Name        string `json:"name"`
-	Recording   bool   `json:"recording"`
-	LastStatus  string `json:"lastStatus"`
-	LastStartTime string `json:"lastStartTime"`
-	LastStopTime  string `json:"lastStopTime"`
+	Name          string  `json:"name"`
+	Recording     bool    `json:"recording"`
+	LastStatus    string  `json:"lastStatus"`
+	LastStartTime float64 `json:"lastStartTime"`
+	LastStopTime  float64 `json:"lastStopTime"`
 }
 
 type deliveryChannel struct {
@@ -161,9 +161,9 @@ func (p *Provider) setRecorderStatus(ctx context.Context, name string, recording
 		LastStatus: "SUCCESS",
 	}
 	if recording {
-		st.LastStartTime = time.Now().UTC().Format(time.RFC3339)
+		st.LastStartTime = float64(time.Now().Unix())
 	} else {
-		st.LastStopTime = time.Now().UTC().Format(time.RFC3339)
+		st.LastStopTime = float64(time.Now().Unix())
 	}
 	data, _ := json.Marshal(st)
 	_ = p.resources.Delete(ctx, rtRecorderStatus, name)

@@ -233,7 +233,10 @@ func TestS3_AccessPointCRUD(t *testing.T) {
 		Name:      aws.String(apName),
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "NoSuchAccessPoint")
+	// S3 Control SDK may surface the code as NoSuchAccessPoint or as a 404 status.
+	assert.True(t,
+		strings.Contains(err.Error(), "NoSuchAccessPoint") || strings.Contains(err.Error(), "404"),
+		"expected NoSuchAccessPoint/404, got: %v", err)
 }
 
 // ─── SelectObjectContent ──────────────────────────────────────────────────────

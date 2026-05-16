@@ -505,6 +505,14 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		contentType = "application/octet-stream"
 	}
 
+	// If-None-Match: * — fail if object already exists.
+	if strParam(nr.Params, "_cond_if_none_match") == "*" {
+		if _, err := p.meta.GetObjectMeta(ctx, bucket, key); err == nil {
+			return nil, model.NewProviderError("PreconditionFailed",
+				"At least one of the pre-conditions you specified did not hold", 412)
+		}
+	}
+
 	// P2-2: Determine blob storage key before writing so versioned blobs land at
 	// the right path and GetObject can find them via blobKeyForVersion.
 	vStatus, _ := p.meta.GetBucketVersioning(ctx, bucket)

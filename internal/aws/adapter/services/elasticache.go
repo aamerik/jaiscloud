@@ -99,6 +99,9 @@ func buildElastiCacheXML(action string, data map[string]any, reqID string) strin
 	}
 	if list, ok := data["CacheClusters"]; ok {
 		var sb strings.Builder
+		if marker, ok := data["Marker"].(string); ok && marker != "" {
+			sb.WriteString(`<Marker>` + xmlEscape(marker) + `</Marker>`)
+		}
 		sb.WriteString(`<CacheClusters>`)
 		if items, ok := list.([]map[string]any); ok {
 			for _, item := range items {
