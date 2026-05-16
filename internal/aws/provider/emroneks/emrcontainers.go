@@ -854,9 +854,9 @@ func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context
 		"id": sessionID,
 		"credentials": map[string]any{
 			"token":          token,
-			"expirationTime": expiresAt.Unix(),
+			"expirationTime": float64(expiresAt.UnixNano()) / 1e9,
 		},
-		"expiresAt": expiresAt.Unix(),
+		"expiresAt": float64(expiresAt.UnixNano()) / 1e9,
 	}), nil
 }
 

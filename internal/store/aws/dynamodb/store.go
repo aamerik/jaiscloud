@@ -106,13 +106,17 @@ type CancellationReason struct {
 
 // Cancellation reason code constants.
 const (
-	CancelCodeNone                         = "None"
-	CancelCodeConditionalCheckFailed       = "ConditionalCheckFailed"
-	CancelCodeTransactionConflict          = "TransactionConflict"
-	CancelCodeThrottlingError              = "ThrottlingError"
-	CancelCodeValidationError              = "ValidationError"
-	CancelCodeResourceNotFound             = "ResourceNotFound"
+	CancelCodeNone                          = "None"
+	CancelCodeConditionalCheckFailed        = "ConditionalCheckFailed"
+	CancelCodeTransactionConflict           = "TransactionConflict"
+	CancelCodeThrottlingError               = "ThrottlingError"
+	CancelCodeValidationError               = "ValidationError"
+	CancelCodeResourceNotFound              = "ResourceNotFound"
 	CancelCodeItemCollectionSizeLimitExceed = "ItemCollectionSizeLimitExceeded"
+	CancelCodeDuplicateItem                 = "DuplicateItem"
+	CancelCodeProvisionedThroughput         = "ProvisionedThroughputExceeded"
+	CancelCodeRequestLimitExceeded          = "RequestLimitExceeded"
+	CancelCodeInternalServerError           = "InternalServerError"
 )
 
 // DynamoDBItemStore manages the DynamoDB item data plane.

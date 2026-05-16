@@ -939,8 +939,14 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 
 		ik := itemKey{op.Table, op.PKHash}
 		if seen[ik] {
-			return nil, model.NewProviderError("ValidationException",
-				"Transaction request cannot include multiple operations on one item", 400)
+			// AWS returns TransactionCanceledException with DuplicateItem for all ops.
+			dupReasons := make([]map[string]any, len(ops)+1)
+			for j := range dupReasons {
+				dupReasons[j] = map[string]any{"Code": dynamostore.CancelCodeDuplicateItem, "Message": "Transaction request cannot include multiple operations on one item"}
+			}
+			return nil, model.NewProviderError("TransactionCanceledException",
+				"Transaction cancelled, please refer cancellation reasons for specific reasons [DuplicateItem]", 400).
+				WithData(map[string]any{"CancellationReasons": dupReasons})
 		}
 		seen[ik] = true
 		ops = append(ops, op)

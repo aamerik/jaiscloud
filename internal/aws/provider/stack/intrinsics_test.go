@@ -293,3 +293,60 @@ func TestSubReplace_Multiple(t *testing.T) {
 	got := subReplace("${A}-${B}", func(k string) string { return vars[k] })
 	assert.Equal(t, "foo-bar", got)
 }
+
+func TestImportValue(t *testing.T) {
+	rc := baseCtx()
+	rc.exports = NewExportTable()
+	rc.exports.Register("SharedVpcId", "vpc-abc123", "arn:aws:cloudformation:us-east-1:123456789012:stack/base/xxx")
+	got := rc.Resolve(map[string]any{"Fn::ImportValue": "SharedVpcId"})
+	assert.Equal(t, "vpc-abc123", got)
+}
+
+func TestImportValue_Missing(t *testing.T) {
+	rc := baseCtx()
+	rc.exports = NewExportTable()
+	got := rc.Resolve(map[string]any{"Fn::ImportValue": "NoSuchExport"})
+	assert.Equal(t, "${NoSuchExport}", got)
+}
+
+func TestCidr(t *testing.T) {
+	rc := baseCtx()
+	got := rc.Resolve(map[string]any{
+		"Fn::Cidr": []any{"10.0.0.0/16", float64(2), float64(8)},
+	})
+	subnets, ok := got.([]any)
+	assert.True(t, ok)
+	assert.Len(t, subnets, 2)
+	assert.Equal(t, "10.0.0.0/24", subnets[0])
+	assert.Equal(t, "10.0.1.0/24", subnets[1])
+}
+
+func TestGetAZs(t *testing.T) {
+	rc := baseCtx()
+	got := rc.Resolve(map[string]any{"Fn::GetAZs": ""})
+	assert.Equal(t, []any{"us-east-1a", "us-east-1b", "us-east-1c"}, got)
+}
+
+func TestGetAZs_ExplicitRegion(t *testing.T) {
+	rc := baseCtx()
+	got := rc.Resolve(map[string]any{"Fn::GetAZs": "eu-west-1"})
+	assert.Equal(t, []any{"eu-west-1a", "eu-west-1b", "eu-west-1c"}, got)
+}
+
+func TestToJsonString(t *testing.T) {
+	rc := baseCtx()
+	got := rc.Resolve(map[string]any{
+		"Fn::ToJsonString": map[string]any{"k": "v"},
+	})
+	assert.Equal(t, `{"k":"v"}`, got)
+}
+
+func TestSubDottedGetAtt(t *testing.T) {
+	rc := baseCtx()
+	rc.resources["MyRole"] = &cfResource{
+		PhysicalResourceId: "arn:aws:iam::123456789012:role/MyRole",
+		Attributes:         map[string]any{"Arn": "arn:aws:iam::123456789012:role/MyRole"},
+	}
+	got := rc.Resolve(map[string]any{"Fn::Sub": "hello-${MyRole.Arn}"})
+	assert.Equal(t, "hello-arn:aws:iam::123456789012:role/MyRole", got)
+}

@@ -23,17 +23,68 @@ type ComputeProvider struct {
 }
 
 func New(resources store.ResourceStore) *ComputeProvider {
-	return &ComputeProvider{resources: resources}
+	p := &ComputeProvider{resources: resources}
+	p.seedDefaultVPC(context.Background())
+	return p
+}
+
+func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
+	// Return if a default VPC already exists (e.g. restarted with full mode).
+	entries, _ := p.resources.List(ctx, rtVpc, "")
+	for _, e := range entries {
+		var vpc ec2Vpc
+		json.Unmarshal(e.Data, &vpc)
+		if vpc.IsDefault {
+			return
+		}
+	}
+	vpcId := "vpc-default0001"
+	vpc := ec2Vpc{
+		VpcId:              vpcId,
+		State:              "available",
+		CidrBlock:          "172.31.0.0/16",
+		IsDefault:          true,
+		EnableDnsSupport:   true,
+		EnableDnsHostnames: true,
+	}
+	data, _ := json.Marshal(vpc)
+	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
+
+	// Seed three default subnets in different AZs.
+	azCidrs := [][2]string{
+		{"us-east-1a", "172.31.0.0/20"},
+		{"us-east-1b", "172.31.16.0/20"},
+		{"us-east-1c", "172.31.32.0/20"},
+	}
+	for i, azCidr := range azCidrs {
+		subnetId := fmt.Sprintf("subnet-default%04d", i+1)
+		subnet := ec2Subnet{
+			SubnetId:                subnetId,
+			VpcId:                   vpcId,
+			CidrBlock:               azCidr[1],
+			AvailabilityZone:        azCidr[0],
+			AvailableIpAddressCount: 4091,
+			State:                   "available",
+			IsDefault:               true,
+			MapPublicIpOnLaunch:     true,
+		}
+		sdata, _ := json.Marshal(subnet)
+		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
+	}
 }
 
 func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Instances
-		"Compute.RunInstances":       p.RunInstances,
-		"Compute.DescribeInstances":  p.DescribeInstances,
-		"Compute.TerminateInstances": p.TerminateInstances,
-		"Compute.StartInstances":     p.StartInstances,
-		"Compute.StopInstances":      p.StopInstances,
+		"Compute.RunInstances":              p.RunInstances,
+		"Compute.DescribeInstances":         p.DescribeInstances,
+		"Compute.TerminateInstances":        p.TerminateInstances,
+		"Compute.StartInstances":            p.StartInstances,
+		"Compute.StopInstances":             p.StopInstances,
+		"Compute.RebootInstances":           p.RebootInstances,
+		"Compute.ModifyInstanceAttribute":   p.ModifyInstanceAttribute,
+		"Compute.DescribeInstanceAttribute": p.DescribeInstanceAttribute,
+		"Compute.DescribeInstanceStatus":    p.DescribeInstanceStatus,
 		// AMIs
 		"Compute.DescribeImages": p.DescribeImages,
 		// Security Groups
@@ -109,18 +160,21 @@ func newID(prefix string) string {
 // ─── Instance metadata ────────────────────────────────────────────────────────
 
 type ec2Instance struct {
-	InstanceId       string            `json:"InstanceId"`
-	ImageId          string            `json:"ImageId"`
-	InstanceType     string            `json:"InstanceType"`
-	KeyName          string            `json:"KeyName"`
-	SubnetId         string            `json:"SubnetId"`
-	VpcId            string            `json:"VpcId"`
-	SecurityGroupIds []string          `json:"SecurityGroupIds"`
-	PrivateIpAddress string            `json:"PrivateIpAddress"`
-	PrivateDnsName   string            `json:"PrivateDnsName"`
-	State            string            `json:"State"` // pending, running, stopping, stopped, terminated
-	Tags             map[string]string `json:"Tags"`
-	LaunchTime       time.Time         `json:"LaunchTime"`
+	InstanceId              string            `json:"InstanceId"`
+	ImageId                 string            `json:"ImageId"`
+	InstanceType            string            `json:"InstanceType"`
+	KeyName                 string            `json:"KeyName"`
+	SubnetId                string            `json:"SubnetId"`
+	VpcId                   string            `json:"VpcId"`
+	SecurityGroupIds        []string          `json:"SecurityGroupIds"`
+	PrivateIpAddress        string            `json:"PrivateIpAddress"`
+	PrivateDnsName          string            `json:"PrivateDnsName"`
+	State                   string            `json:"State"` // pending, running, stopping, stopped, terminated
+	Tags                    map[string]string `json:"Tags"`
+	LaunchTime              time.Time         `json:"LaunchTime"`
+	UserData                string            `json:"UserData,omitempty"`
+	IamInstanceProfileArn   string            `json:"IamInstanceProfileArn,omitempty"`
+	IamInstanceProfileName  string            `json:"IamInstanceProfileName,omitempty"`
 }
 
 func (p *ComputeProvider) saveInstance(ctx context.Context, inst ec2Instance) error {
@@ -147,7 +201,15 @@ func (p *ComputeProvider) loadInstance(ctx context.Context, id string) (ec2Insta
 }
 
 func instanceToWire(inst ec2Instance) map[string]any {
-	return map[string]any{
+	sgList := make([]map[string]any, len(inst.SecurityGroupIds))
+	for i, id := range inst.SecurityGroupIds {
+		sgList[i] = map[string]any{"GroupId": id}
+	}
+	tagList := make([]map[string]any, 0, len(inst.Tags))
+	for k, v := range inst.Tags {
+		tagList = append(tagList, map[string]any{"Key": k, "Value": v})
+	}
+	w := map[string]any{
 		"InstanceId":       inst.InstanceId,
 		"ImageId":          inst.ImageId,
 		"InstanceType":     inst.InstanceType,
@@ -158,7 +220,16 @@ func instanceToWire(inst ec2Instance) map[string]any {
 		"PrivateDnsName":   inst.PrivateDnsName,
 		"State":            map[string]any{"Code": stateCode(inst.State), "Name": inst.State},
 		"LaunchTime":       inst.LaunchTime.UTC().Format(time.RFC3339),
+		"SecurityGroups":   sgList,
+		"Tags":             tagList,
 	}
+	if inst.UserData != "" {
+		w["UserData"] = inst.UserData
+	}
+	if inst.IamInstanceProfileArn != "" {
+		w["IamInstanceProfile"] = map[string]any{"Arn": inst.IamInstanceProfileArn, "Id": newID("aipa")}
+	}
+	return w
 }
 
 func stateCode(state string) string {
@@ -186,21 +257,47 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 		instanceType = "t3.micro"
 	}
 	minCount := intParam(nr.Params, "MinCount", 1)
+	maxCount := intParam(nr.Params, "MaxCount", minCount)
+	if maxCount < minCount {
+		maxCount = minCount
+	}
 	keyName := strParam(nr.Params, "KeyName")
 	subnetId := strParam(nr.Params, "SubnetId")
+	userData := strParam(nr.Params, "UserData")
 
-	instances := make([]map[string]any, 0, minCount)
+	// SecurityGroupIds.N
+	sgIds := extractIndexedParam(nr.Params, "SecurityGroupId")
+
+	// IamInstanceProfile
+	var iamArn, iamName string
+	if iap, ok := nr.Params["IamInstanceProfile"].(map[string]any); ok {
+		iamArn, _ = iap["Arn"].(string)
+		iamName, _ = iap["Name"].(string)
+	} else {
+		iamArn = strParam(nr.Params, "IamInstanceProfile.Arn")
+		iamName = strParam(nr.Params, "IamInstanceProfile.Name")
+	}
+
+	// TagSpecifications — collect tags destined for instance resources
+	tags := extractTagSpecTags(nr.Params, "instance")
+
+	instances := make([]map[string]any, 0, maxCount)
 	reservationId := newID("r")
-	for i := 0; i < minCount; i++ {
+	for i := 0; i < maxCount; i++ {
 		inst := ec2Instance{
-			InstanceId:       newID("i"),
-			ImageId:          imageId,
-			InstanceType:     instanceType,
-			KeyName:          keyName,
-			SubnetId:         subnetId,
-			PrivateIpAddress: fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
-			State:            "running",
-			LaunchTime:       time.Now(),
+			InstanceId:             newID("i"),
+			ImageId:                imageId,
+			InstanceType:           instanceType,
+			KeyName:                keyName,
+			SubnetId:               subnetId,
+			SecurityGroupIds:       sgIds,
+			PrivateIpAddress:       fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
+			State:                  "running",
+			LaunchTime:             time.Now(),
+			UserData:               userData,
+			IamInstanceProfileArn:  iamArn,
+			IamInstanceProfileName: iamName,
+			Tags:                   tags,
 		}
 		inst.PrivateDnsName = fmt.Sprintf("ip-%s.ec2.internal", strings.ReplaceAll(inst.PrivateIpAddress, ".", "-"))
 		if err := p.saveInstance(ctx, inst); err != nil {
@@ -215,8 +312,97 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 	}), nil
 }
 
+// extractTagSpecTags collects tags from TagSpecification.N.Tag.M for resources of the given type.
+func extractTagSpecTags(params map[string]any, resourceType string) map[string]string {
+	tags := map[string]string{}
+	for ts := 1; ; ts++ {
+		rt := strParam(params, fmt.Sprintf("TagSpecification.%d.ResourceType", ts))
+		if rt == "" {
+			break
+		}
+		if rt != resourceType {
+			continue
+		}
+		for t := 1; ; t++ {
+			k := strParam(params, fmt.Sprintf("TagSpecification.%d.Tag.%d.Key", ts, t))
+			if k == "" {
+				break
+			}
+			v := strParam(params, fmt.Sprintf("TagSpecification.%d.Tag.%d.Value", ts, t))
+			tags[k] = v
+		}
+	}
+	return tags
+}
+
+// parseEC2Filters returns a map of filter-name → accepted values from Filter.N.Name/Value.M params.
+func parseEC2Filters(params map[string]any) map[string][]string {
+	filters := map[string][]string{}
+	for i := 1; ; i++ {
+		name := strParam(params, fmt.Sprintf("Filter.%d.Name", i))
+		if name == "" {
+			break
+		}
+		var vals []string
+		for j := 1; ; j++ {
+			v := strParam(params, fmt.Sprintf("Filter.%d.Value.%d", i, j))
+			if v == "" {
+				break
+			}
+			vals = append(vals, v)
+		}
+		filters[name] = vals
+	}
+	return filters
+}
+
+// matchInstance returns true if inst matches all provided filters (AND across names, OR across values).
+func matchInstance(inst ec2Instance, filters map[string][]string) bool {
+	for name, vals := range filters {
+		switch name {
+		case "instance-state-name":
+			if !containsStr(vals, inst.State) {
+				return false
+			}
+		case "instance-type":
+			if !containsStr(vals, inst.InstanceType) {
+				return false
+			}
+		case "vpc-id":
+			if !containsStr(vals, inst.VpcId) {
+				return false
+			}
+		case "subnet-id":
+			if !containsStr(vals, inst.SubnetId) {
+				return false
+			}
+		case "tag-key":
+			found := false
+			for k := range inst.Tags {
+				if containsStr(vals, k) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		default:
+			if strings.HasPrefix(name, "tag:") {
+				tagKey := name[4:]
+				tagVal, ok := inst.Tags[tagKey]
+				if !ok || !containsStr(vals, tagVal) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "InstanceId")
+	filters := parseEC2Filters(nr.Params)
 	entries, err := p.resources.List(ctx, rtInstance, "")
 	if err != nil {
 		return nil, err
@@ -229,6 +415,9 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 			continue
 		}
 		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {
+			continue
+		}
+		if !matchInstance(inst, filters) {
 			continue
 		}
 		reservations = append(reservations, map[string]any{
@@ -311,6 +500,84 @@ func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.Normalize
 		})
 	}
 	return provider.OK(map[string]any{"TerminatingInstances": result}), nil
+}
+
+func (p *ComputeProvider) RebootInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	ids := extractIndexedParam(nr.Params, "InstanceId")
+	for _, id := range ids {
+		inst, err := p.loadInstance(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		inst.Tags["_last_reboot"] = time.Now().UTC().Format(time.RFC3339)
+		p.saveInstance(ctx, inst)
+	}
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) ModifyInstanceAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "InstanceId")
+	inst, err := p.loadInstance(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if v := strParam(nr.Params, "InstanceType.Value"); v != "" {
+		inst.InstanceType = v
+	}
+	if v := strParam(nr.Params, "UserData.Value"); v != "" {
+		inst.UserData = v
+	}
+	p.saveInstance(ctx, inst)
+	return provider.OK(nil), nil
+}
+
+func (p *ComputeProvider) DescribeInstanceAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "InstanceId")
+	attr := strParam(nr.Params, "Attribute")
+	inst, err := p.loadInstance(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	resp := map[string]any{"InstanceId": id}
+	switch attr {
+	case "instanceType":
+		resp["InstanceType"] = map[string]any{"Value": inst.InstanceType}
+	case "userData":
+		resp["UserData"] = map[string]any{"Value": inst.UserData}
+	case "disableApiTermination":
+		resp["DisableApiTermination"] = map[string]any{"Value": false}
+	default:
+		resp[attr] = nil
+	}
+	return provider.OK(resp), nil
+}
+
+func (p *ComputeProvider) DescribeInstanceStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterIds := extractIndexedParam(nr.Params, "InstanceId")
+	entries, err := p.resources.List(ctx, rtInstance, "")
+	if err != nil {
+		return nil, err
+	}
+	statuses := []map[string]any{}
+	for _, e := range entries {
+		var inst ec2Instance
+		json.Unmarshal(e.Data, &inst)
+		if inst.State == "terminated" {
+			continue
+		}
+		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {
+			continue
+		}
+		statuses = append(statuses, map[string]any{
+			"InstanceId":       inst.InstanceId,
+			"AvailabilityZone": "us-east-1a",
+			"InstanceState":    map[string]any{"Code": stateCode(inst.State), "Name": inst.State},
+			"InstanceStatus":   map[string]any{"Status": "ok", "Details": []any{}},
+			"SystemStatus":     map[string]any{"Status": "ok", "Details": []any{}},
+			"Events":           []any{},
+		})
+	}
+	return provider.OK(map[string]any{"InstanceStatuses": statuses}), nil
 }
 
 func (p *ComputeProvider) DescribeImages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -751,6 +1018,8 @@ type ec2Subnet struct {
 	CidrBlock               string            `json:"CidrBlock"`
 	AvailabilityZone        string            `json:"AvailabilityZone"`
 	AvailableIpAddressCount int               `json:"AvailableIpAddressCount"`
+	IsDefault               bool              `json:"IsDefault"`
+	MapPublicIpOnLaunch     bool              `json:"MapPublicIpOnLaunch"`
 	Tags                    map[string]string `json:"Tags"`
 }
 
@@ -835,6 +1104,8 @@ func subnetToWire(sn ec2Subnet) map[string]any {
 		"CidrBlock":               sn.CidrBlock,
 		"AvailabilityZone":        sn.AvailabilityZone,
 		"AvailableIpAddressCount": strconv.Itoa(sn.AvailableIpAddressCount),
+		"DefaultForAz":            sn.IsDefault,
+		"MapPublicIpOnLaunch":     sn.MapPublicIpOnLaunch,
 	}
 }
 

@@ -238,7 +238,7 @@ func (p *EMRProvider) CreateSecurityConfiguration(ctx context.Context, nr *model
 		}
 		return nil, err
 	}
-	return provider.OK(map[string]any{"Name": name, "CreationDateTime": sc.CreationDateTime.Unix()}), nil
+	return provider.OK(map[string]any{"Name": name, "CreationDateTime": float64(sc.CreationDateTime.UnixNano()) / 1e9}), nil
 }
 
 func (p *EMRProvider) DescribeSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -252,7 +252,7 @@ func (p *EMRProvider) DescribeSecurityConfiguration(ctx context.Context, nr *mod
 	return provider.OK(map[string]any{
 		"Name":                  sc.Name,
 		"SecurityConfiguration": sc.SecurityConfiguration,
-		"CreationDateTime":      sc.CreationDateTime.Unix(),
+		"CreationDateTime":      float64(sc.CreationDateTime.UnixNano()) / 1e9,
 	}), nil
 }
 
@@ -287,7 +287,7 @@ func (p *EMRProvider) ListSecurityConfigurations(ctx context.Context, nr *model.
 		json.Unmarshal(e.Data, &sc)
 		items = append(items, map[string]any{
 			"Name":             sc.Name,
-			"CreationDateTime": sc.CreationDateTime.Unix(),
+			"CreationDateTime": float64(sc.CreationDateTime.UnixNano()) / 1e9,
 		})
 	}
 	return provider.OK(map[string]any{"SecurityConfigurations": items}), nil
@@ -1361,7 +1361,7 @@ func (p *EMRProvider) saveCluster(ctx context.Context, c emrCluster) {
 
 // ─── Build helpers ────────────────────────────────────────────────────────────
 
-func buildInstanceCollections(instances map[string]any, now int64) (fleets, groups []map[string]any, collectionType string) {
+func buildInstanceCollections(instances map[string]any, now float64) (fleets, groups []map[string]any, collectionType string) {
 	if rawFleets, ok := instances["InstanceFleets"].([]any); ok && len(rawFleets) > 0 {
 		for _, f := range rawFleets {
 			m, ok := f.(map[string]any)
@@ -1613,11 +1613,11 @@ func stepID() string    { return randID("s-", 13) }
 func groupID() string   { return randID("ig-", 13) }
 func fleetID() string   { return randID("if-", 13) }
 
-func nowUnix() int64 {
-	return time.Now().UTC().Unix()
+func nowUnix() float64 {
+	return float64(time.Now().UTC().UnixNano()) / 1e9
 }
 
-func awsTimestamp() int64 { return time.Now().UTC().Unix() }
+func awsTimestamp() float64 { return float64(time.Now().UTC().UnixNano()) / 1e9 }
 
 // rewriteYARNToK8s substitutes "--master yarn" with "--master k8s://kubernetes.default.svc"
 // in EMR-on-EC2 step args. This is an emulation lie — EMR classic uses YARN but JaisCloud

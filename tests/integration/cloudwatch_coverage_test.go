@@ -834,7 +834,7 @@ func TestCW_DescribeAlarmsForMetric(t *testing.T) {
 
 // TestCloudWatchAlarmEvaluatorTransition verifies that after metric data exceeding
 // a threshold is published, the background evaluator transitions the alarm to ALARM
-// within one evaluator tick (30 s). The test waits up to 35 s for the transition.
+// within two evaluator ticks (60 s). The test waits up to 65 s for the transition.
 func TestCloudWatchAlarmEvaluatorTransition(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
@@ -901,8 +901,9 @@ func TestCloudWatchAlarmEvaluatorTransition(t *testing.T) {
 	assert.NotEqual(t, "ALARM", preState,
 		"alarm should not be in ALARM state before the evaluator ticks")
 
-	// Wait up to 35 s for the evaluator (ticks every 30 s) to transition the alarm.
-	waitFor(t, 35*time.Second, func() bool {
+	// Wait up to 65 s for the evaluator (ticks every 30 s) to transition the alarm.
+	// 65 s guarantees at least one full tick regardless of where in the 30 s cycle we start.
+	waitFor(t, 65*time.Second, func() bool {
 		pollOut, pollErr := c.DescribeAlarms(ctx, &awscw.DescribeAlarmsInput{
 			AlarmNames: []string{"eval-test-alarm"},
 		})

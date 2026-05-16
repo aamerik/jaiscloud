@@ -733,7 +733,7 @@ func dbToWire(db glueDatabase) map[string]any {
 		"Description": db.Description,
 		"LocationUri": db.LocationUri,
 		"Parameters":  db.Parameters,
-		"CreateTime":  db.CreateTime.Unix(),
+		"CreateTime":  float64(db.CreateTime.UnixNano()) / 1e9,
 	}
 }
 
@@ -747,8 +747,8 @@ func tableToWire(t glueTable) map[string]any {
 		"Parameters":        t.Parameters,
 		"StorageDescriptor": t.StorageDescriptor,
 		"PartitionKeys":     t.PartitionKeys,
-		"CreateTime":        t.CreateTime.Unix(),
-		"UpdateTime":        t.UpdateTime.Unix(),
+		"CreateTime":        float64(t.CreateTime.UnixNano()) / 1e9,
+		"UpdateTime":        float64(t.UpdateTime.UnixNano()) / 1e9,
 	}
 }
 
@@ -759,8 +759,8 @@ func partitionToWire(part gluePartition) map[string]any {
 		"Values":            part.Values,
 		"Parameters":        part.Parameters,
 		"StorageDescriptor": part.StorageDescriptor,
-		"CreationTime":      part.CreationTime.Unix(),
-		"LastAccessTime":    part.LastAccessTime.Unix(),
+		"CreationTime":      float64(part.CreationTime.UnixNano()) / 1e9,
+		"LastAccessTime":    float64(part.LastAccessTime.UnixNano()) / 1e9,
 	}
 }
 

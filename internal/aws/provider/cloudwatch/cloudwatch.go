@@ -304,6 +304,11 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 				"alarm", name, "err", err)
 		}
 	}
+	now := time.Now().UTC()
+	p.writeAlarmHistory(ctx, name, "MetricAlarm", "ConfigurationUpdate",
+		"Alarm created or updated",
+		map[string]any{"version": "1.0", "updatedAlarm": nr.Params},
+		now)
 	return provider.OK(map[string]any{"__action__": "PutMetricAlarm"}), nil
 }
 
@@ -679,8 +684,70 @@ func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRe
 	return provider.OK(map[string]any{}), nil
 }
 
-func (p *Provider) DescribeAlarmHistory(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"__action__": "DescribeAlarmHistory", "AlarmHistoryItems": []any{}}), nil
+func (p *Provider) DescribeAlarmHistory(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	alarmName, _ := nr.Params["AlarmName"].(string)
+	histItemType, _ := nr.Params["HistoryItemType"].(string)
+
+	entries, err := p.resources.List(ctx, "cloudwatch_alarm_history", "")
+	if err != nil {
+		return nil, err
+	}
+
+	type historyItem struct {
+		AlarmName       string `json:"AlarmName"`
+		AlarmType       string `json:"AlarmType"`
+		HistoryItemType string `json:"HistoryItemType"`
+		HistorySummary  string `json:"HistorySummary"`
+		HistoryData     string `json:"HistoryData"`
+		Timestamp       string `json:"Timestamp"`
+	}
+
+	items := make([]historyItem, 0, len(entries))
+	for _, e := range entries {
+		var h historyItem
+		if err := json.Unmarshal(e.Data, &h); err != nil {
+			continue
+		}
+		if alarmName != "" && h.AlarmName != alarmName {
+			continue
+		}
+		if histItemType != "" && h.HistoryItemType != histItemType {
+			continue
+		}
+		items = append(items, h)
+	}
+
+	// Sort descending by Timestamp.
+	sort.Slice(items, func(i, j int) bool { return items[i].Timestamp > items[j].Timestamp })
+
+	out := make([]any, len(items))
+	for i, h := range items {
+		out[i] = map[string]any{
+			"AlarmName":       h.AlarmName,
+			"AlarmType":       h.AlarmType,
+			"HistoryItemType": h.HistoryItemType,
+			"HistorySummary":  h.HistorySummary,
+			"HistoryData":     h.HistoryData,
+			"Timestamp":       h.Timestamp,
+		}
+	}
+	return provider.OK(map[string]any{"AlarmHistoryItems": out}), nil
+}
+
+// writeAlarmHistory persists a single alarm history record.
+func (p *Provider) writeAlarmHistory(ctx context.Context, alarmName, alarmType, itemType, summary string, dataObj map[string]any, ts time.Time) {
+	histData, _ := json.Marshal(dataObj)
+	record := map[string]any{
+		"AlarmName":       alarmName,
+		"AlarmType":       alarmType,
+		"HistoryItemType": itemType,
+		"HistorySummary":  summary,
+		"HistoryData":     string(histData),
+		"Timestamp":       ts.Format(time.RFC3339Nano),
+	}
+	data, _ := json.Marshal(record)
+	id := fmt.Sprintf("%s::%d", alarmName, ts.UnixNano())
+	_ = p.resources.Create(ctx, store.ResourceEntry{Type: "cloudwatch_alarm_history", ID: id, Data: data})
 }
 
 func (p *Provider) Reset() {

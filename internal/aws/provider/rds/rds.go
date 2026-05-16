@@ -51,6 +51,12 @@ func (p *RelationalProvider) Routes() map[string]provider.HandlerFunc {
 		"RDS.DeleteDBParameterGroup":   p.DeleteDBParameterGroup,
 		// Restore
 		"RDS.RestoreDBInstanceFromDBSnapshot": p.RestoreDBInstanceFromDBSnapshot,
+		// Lifecycle
+		"RDS.RebootDBInstance":              p.RebootDBInstance,
+		"RDS.StartDBInstance":               p.StartDBInstance,
+		"RDS.StopDBInstance":                p.StopDBInstance,
+		"RDS.PromoteReadReplica":            p.PromoteReadReplica,
+		"RDS.CreateDBInstanceReadReplica":   p.CreateDBInstanceReadReplica,
 	}
 }
 
@@ -70,18 +76,22 @@ func newID() string {
 // ─── DB Instances ─────────────────────────────────────────────────────────────
 
 type dbInstance struct {
-	DBInstanceIdentifier string `json:"DBInstanceIdentifier"`
-	DBInstanceClass      string `json:"DBInstanceClass"`
-	Engine               string `json:"Engine"`
-	DBInstanceStatus     string `json:"DBInstanceStatus"`
-	MasterUsername       string `json:"MasterUsername"`
-	DBName               string `json:"DBName"`
-	AllocatedStorage     int    `json:"AllocatedStorage"`
-	MultiAZ              bool   `json:"MultiAZ"`
-	EngineVersion        string `json:"EngineVersion"`
-	PubliclyAccessible   bool   `json:"PubliclyAccessible"`
-	Port                 int    `json:"Port"`
-	DBInstanceArn        string `json:"DBInstanceArn"`
+	DBInstanceIdentifier              string `json:"DBInstanceIdentifier"`
+	DBInstanceClass                   string `json:"DBInstanceClass"`
+	Engine                            string `json:"Engine"`
+	DBInstanceStatus                  string `json:"DBInstanceStatus"`
+	MasterUsername                    string `json:"MasterUsername"`
+	DBName                            string `json:"DBName"`
+	AllocatedStorage                  int    `json:"AllocatedStorage"`
+	MultiAZ                           bool   `json:"MultiAZ"`
+	EngineVersion                     string `json:"EngineVersion"`
+	PubliclyAccessible                bool   `json:"PubliclyAccessible"`
+	Port                              int    `json:"Port"`
+	DBInstanceArn                     string `json:"DBInstanceArn"`
+	BackupRetentionPeriod             int    `json:"BackupRetentionPeriod"`
+	DBSubnetGroupName                 string `json:"DBSubnetGroupName"`
+	DBParameterGroupName              string `json:"DBParameterGroupName"`
+	ReadReplicaSourceDBInstanceIdentifier string `json:"ReadReplicaSourceDBInstanceIdentifier,omitempty"`
 }
 
 func (d dbInstance) toWire() map[string]any {
@@ -122,24 +132,48 @@ func defaultPort(engine string) int {
 	return 3306
 }
 
+func defaultEngineVersion(engine string) string {
+	switch strings.ToLower(engine) {
+	case "mysql":
+		return "8.0"
+	case "mariadb":
+		return "10.11"
+	case "postgres", "aurora-postgresql":
+		return "15"
+	case "oracle-ee", "oracle-se2":
+		return "19c"
+	case "sqlserver-se", "sqlserver-ee", "sqlserver-ex", "sqlserver-web":
+		return "15.0"
+	default:
+		return "8.0"
+	}
+}
+
 func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
 	if id == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "DBInstanceIdentifier is required", HTTPStatus: http.StatusBadRequest}
 	}
+	engine := strParam(nr.Params, "Engine")
+	allocStorage := intParam(nr.Params, "AllocatedStorage", 20)
+	ev := strParam(nr.Params, "EngineVersion")
+	if ev == "" {
+		ev = defaultEngineVersion(engine)
+	}
 	inst := dbInstance{
 		DBInstanceIdentifier: id,
 		DBInstanceClass:      strParam(nr.Params, "DBInstanceClass"),
-		Engine:               strParam(nr.Params, "Engine"),
+		Engine:               engine,
 		DBInstanceStatus:     "available",
 		MasterUsername:       strParam(nr.Params, "MasterUsername"),
 		DBName:               strParam(nr.Params, "DBName"),
-		AllocatedStorage:     20,
-		EngineVersion:        strParam(nr.Params, "EngineVersion"),
+		AllocatedStorage:     allocStorage,
+		EngineVersion:        ev,
 		DBInstanceArn:        nr.ResourceID("rds-instance", id),
-	}
-	if inst.EngineVersion == "" {
-		inst.EngineVersion = "8.0"
+		DBSubnetGroupName:    strParam(nr.Params, "DBSubnetGroupName"),
+		DBParameterGroupName: strParam(nr.Params, "DBParameterGroupName"),
+		BackupRetentionPeriod: intParam(nr.Params, "BackupRetentionPeriod", 1),
+		MultiAZ:              boolParam(nr.Params, "MultiAZ"),
 	}
 	data, _ := json.Marshal(inst)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
@@ -195,6 +229,26 @@ func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.Nor
 	if cls := strParam(nr.Params, "DBInstanceClass"); cls != "" {
 		inst.DBInstanceClass = cls
 	}
+	if ev := strParam(nr.Params, "EngineVersion"); ev != "" {
+		inst.EngineVersion = ev
+	}
+	if s := intParam(nr.Params, "AllocatedStorage", 0); s > 0 {
+		inst.AllocatedStorage = s
+	}
+	if v, ok := nr.Params["MultiAZ"]; ok {
+		switch b := v.(type) {
+		case bool:
+			inst.MultiAZ = b
+		case string:
+			inst.MultiAZ = strings.EqualFold(b, "true")
+		}
+	}
+	if v := intParam(nr.Params, "BackupRetentionPeriod", -1); v >= 0 {
+		inst.BackupRetentionPeriod = v
+	}
+	if pg := strParam(nr.Params, "DBParameterGroupName"); pg != "" {
+		inst.DBParameterGroupName = pg
+	}
 	data, _ := json.Marshal(inst)
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBInstanceModified": inst.toWire()}), nil
@@ -214,6 +268,120 @@ func (p *RelationalProvider) DeleteDBInstance(ctx context.Context, nr *model.Nor
 	inst.DBInstanceStatus = "deleting"
 	p.resources.Delete(ctx, rtDBInstance, id)
 	return provider.OK(map[string]any{"DBInstanceDeleted": inst.toWire()}), nil
+}
+
+func (p *RelationalProvider) RebootDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "DBInstanceIdentifier")
+	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var inst dbInstance
+	json.Unmarshal(e.Data, &inst)
+	inst.DBInstanceStatus = "rebooting"
+	data, _ := json.Marshal(inst)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	inst.DBInstanceStatus = "available"
+	data, _ = json.Marshal(inst)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	return provider.OK(map[string]any{"DBInstanceRebooted": inst.toWire()}), nil
+}
+
+func (p *RelationalProvider) StartDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "DBInstanceIdentifier")
+	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var inst dbInstance
+	json.Unmarshal(e.Data, &inst)
+	inst.DBInstanceStatus = "available"
+	data, _ := json.Marshal(inst)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	return provider.OK(map[string]any{"DBInstanceStarted": inst.toWire()}), nil
+}
+
+func (p *RelationalProvider) StopDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "DBInstanceIdentifier")
+	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var inst dbInstance
+	json.Unmarshal(e.Data, &inst)
+	inst.DBInstanceStatus = "stopped"
+	data, _ := json.Marshal(inst)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	return provider.OK(map[string]any{"DBInstanceStopped": inst.toWire()}), nil
+}
+
+func (p *RelationalProvider) PromoteReadReplica(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "DBInstanceIdentifier")
+	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var inst dbInstance
+	json.Unmarshal(e.Data, &inst)
+	inst.ReadReplicaSourceDBInstanceIdentifier = ""
+	data, _ := json.Marshal(inst)
+	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	return provider.OK(map[string]any{"DBInstancePromoted": inst.toWire()}), nil
+}
+
+func (p *RelationalProvider) CreateDBInstanceReadReplica(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr.Params, "DBInstanceIdentifier")
+	sourceId := strParam(nr.Params, "SourceDBInstanceIdentifier")
+	srcEntry, err := p.resources.Get(ctx, rtDBInstance, sourceId)
+	if err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "Source DB instance not found", HTTPStatus: http.StatusNotFound}
+	}
+	if err != nil {
+		return nil, err
+	}
+	var src dbInstance
+	json.Unmarshal(srcEntry.Data, &src)
+	replica := dbInstance{
+		DBInstanceIdentifier:                  id,
+		DBInstanceClass:                       firstNonEmpty(strParam(nr.Params, "DBInstanceClass"), src.DBInstanceClass),
+		Engine:                                src.Engine,
+		DBInstanceStatus:                      "available",
+		MasterUsername:                        src.MasterUsername,
+		DBName:                                src.DBName,
+		AllocatedStorage:                      src.AllocatedStorage,
+		EngineVersion:                         src.EngineVersion,
+		DBInstanceArn:                         nr.ResourceID("rds-instance", id),
+		ReadReplicaSourceDBInstanceIdentifier: sourceId,
+	}
+	data, _ := json.Marshal(replica)
+	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
+		if err == store.ErrAlreadyExists {
+			return nil, &model.ProviderError{Code: "DBInstanceAlreadyExists", Message: "DB instance already exists", HTTPStatus: http.StatusBadRequest}
+		}
+		return nil, err
+	}
+	return provider.OK(map[string]any{"DBInstanceReadReplica": replica.toWire()}), nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ─── DB Clusters ──────────────────────────────────────────────────────────────
@@ -424,6 +592,32 @@ func strParam(params map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func intParam(params map[string]any, key string, def int) int {
+	if v, ok := params[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case string:
+			var i int
+			fmt.Sscanf(n, "%d", &i)
+			return i
+		}
+	}
+	return def
+}
+
+func boolParam(params map[string]any, key string) bool {
+	if v, ok := params[key]; ok {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			return strings.EqualFold(b, "true")
+		}
+	}
+	return false
 }
 
 var _ = newID // suppress unused warning

@@ -3,6 +3,7 @@ package cloudwatch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -121,8 +122,9 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 	}
 
 	slog.Debug("cloudwatch: alarm state transition", "alarm", name, "old", current, "new", newState)
+	now := time.Now().UTC()
 	alarm["StateValue"] = newState
-	alarm["StateUpdatedTimestamp"] = time.Now().UTC().Format(time.RFC3339)
+	alarm["StateUpdatedTimestamp"] = now.Format(time.RFC3339)
 
 	var reason string
 	switch newState {
@@ -143,6 +145,13 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 		slog.Warn("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 		return
 	}
+
+	// Record alarm history entry for this state transition.
+	e.p.writeAlarmHistory(ctx, name, "MetricAlarm", "StateUpdate",
+		fmt.Sprintf("Alarm updated from %s to %s", current, newState),
+		map[string]any{"version": "1.0", "oldState": map[string]any{"stateValue": current}, "newState": map[string]any{"stateValue": newState, "stateReason": reason}},
+		now)
+
 	go e.p.fireAlarmActions(context.Background(), alarm, newState)
 }
 

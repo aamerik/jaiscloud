@@ -668,6 +668,9 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Encrypt"); err != nil {
+		return nil, err
+	}
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, p.keyErr(err)
@@ -757,6 +760,9 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid ciphertext blob", 400)
 	}
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Decrypt"); err != nil {
+		return nil, err
+	}
 	// If the caller supplied a KeyId, verify it matches the key embedded in the blob.
 	if callerKeyID, _ := nr.Params["KeyId"].(string); callerKeyID != "" {
 		resolvedCallerKeyID, resolveErr := p.resolveKeyIDStr(ctx, callerKeyID)
@@ -828,6 +834,9 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	keyID, err := p.resolveKeyID(ctx, nr)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:GenerateDataKey"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)
@@ -946,6 +955,25 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 // ─── Key policy ───────────────────────────────────────────────────────────────
 
 const defaultKeyPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"kms:*","Resource":"*"}]}`
+
+// checkKeyPolicy returns an AccessDeniedException if the caller is not permitted to perform action on keyID.
+// callerPrincipal defaults to arn:aws:iam::<accountID>:root.
+func (p *KeyProvider) checkKeyPolicy(ctx context.Context, keyID, accountID, action string) error {
+	e, err := p.store.GetKey(ctx, keyID)
+	if err != nil {
+		return nil // key not found is handled by the caller
+	}
+	policy := e.Policy
+	if policy == "" {
+		policy = defaultKeyPolicy
+	}
+	caller := "arn:aws:iam::" + accountID + ":root"
+	if !evalKeyPolicy(policy, caller, action) {
+		return model.NewProviderError("AccessDeniedException",
+			"User: "+caller+" is not authorized to perform: "+action+" on resource: arn:aws:kms:us-east-1:"+accountID+":key/"+keyID, 400)
+	}
+	return nil
+}
 
 func (p *KeyProvider) GetKeyPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	keyID, err := p.resolveKeyID(ctx, nr)

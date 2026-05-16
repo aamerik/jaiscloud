@@ -72,14 +72,20 @@ func buildRDSXML(action string, data map[string]any) string {
 			`</` + action + `Response>`
 	}
 
-	if v, ok := data["DBInstance"]; ok {
-		return wrap("CreateDBInstance", encodeDBInstance(v))
-	}
-	if v, ok := data["DBInstanceModified"]; ok {
-		return wrap("ModifyDBInstance", encodeDBInstance(v))
-	}
-	if v, ok := data["DBInstanceDeleted"]; ok {
-		return wrap("DeleteDBInstance", encodeDBInstance(v))
+	// Lifecycle ops all use their own result wrapper.
+	for _, op := range []struct{ key, action string }{
+		{"DBInstance", "CreateDBInstance"},
+		{"DBInstanceModified", "ModifyDBInstance"},
+		{"DBInstanceDeleted", "DeleteDBInstance"},
+		{"DBInstanceRebooted", "RebootDBInstance"},
+		{"DBInstanceStarted", "StartDBInstance"},
+		{"DBInstanceStopped", "StopDBInstance"},
+		{"DBInstancePromoted", "PromoteReadReplica"},
+		{"DBInstanceReadReplica", "CreateDBInstanceReadReplica"},
+	} {
+		if v, ok := data[op.key]; ok {
+			return wrap(op.action, encodeDBInstance(v))
+		}
 	}
 	if list, ok := data["DBInstances"]; ok {
 		var sb strings.Builder
