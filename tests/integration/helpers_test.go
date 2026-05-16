@@ -35,6 +35,10 @@ import (
 	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	awsredshift "github.com/aws/aws-sdk-go-v2/service/redshift"
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
+	awsconfigservice "github.com/aws/aws-sdk-go-v2/service/configservice"
+	awselbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	awsresourcegroups "github.com/aws/aws-sdk-go-v2/service/resourcegroups"
+	awstagging "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	awsroute53 "github.com/aws/aws-sdk-go-v2/service/route53"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awss3control "github.com/aws/aws-sdk-go-v2/service/s3control"
@@ -530,5 +534,61 @@ func newS3ControlClient(t *testing.T) *awss3control.Client {
 	}
 	return awss3control.NewFromConfig(cfg, func(o *awss3control.Options) {
 		o.EndpointResolverV2 = &s3ControlFlatEndpoint{base: jaiscloudEndpoint}
+	})
+}
+
+func newELBv2Client(t *testing.T) *awselbv2.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awselbv2.NewFromConfig(cfg, func(o *awselbv2.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newConfigServiceClient(t *testing.T) *awsconfigservice.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsconfigservice.NewFromConfig(cfg, func(o *awsconfigservice.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newResourceGroupsClient(t *testing.T) *awsresourcegroups.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awsresourcegroups.NewFromConfig(cfg, func(o *awsresourcegroups.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
+	})
+}
+
+func newTaggingClient(t *testing.T) *awstagging.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return awstagging.NewFromConfig(cfg, func(o *awstagging.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
 }

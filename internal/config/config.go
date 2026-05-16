@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -12,6 +13,13 @@ import (
 	"github.com/spf13/viper"
 	"jaiscloud/internal/clock"
 )
+
+// hashName produces a short deterministic hash for use in ARN suffixes.
+func hashName(name string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	return h.Sum32()
+}
 
 type Mode string
 
@@ -226,6 +234,25 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 			return fmt.Sprintf("arn:aws:states:%s:%s:express:%s:%s", r, a, sm, exec)
 		}
 		return fmt.Sprintf("arn:aws:states:%s:%s:express:%s", r, a, n)
+	},
+	// ELBv2 — n encodes the resource name; a unique hex suffix is expected to follow the name.
+	"elb-loadbalancer": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%x", r, a, n, hashName(n))
+	},
+	"elb-targetgroup": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:targetgroup/%s/%x", r, a, n, hashName(n))
+	},
+	"elb-listener": func(r, a, n string) string {
+		// n may be "lbArn-port" composite; embed a hash suffix.
+		return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/app/%s/%x", r, a, n, hashName(n))
+	},
+	// AWS Config
+	"config-rule": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:config:%s:%s:config-rule/config-rule-%s", r, a, n)
+	},
+	// Resource Groups
+	"resourcegroup": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:resource-groups:%s:%s:group/%s", r, a, n)
 	},
 }
 

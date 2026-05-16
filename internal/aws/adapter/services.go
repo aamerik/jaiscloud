@@ -235,6 +235,41 @@ var awsServices = []ServiceDescriptor{
 			"CreateTags", "DeleteTags", "DescribeTags",
 		},
 	},
+	// ── G-PENDING new services ───────────────────────────────────────────────
+	{
+		SigV4Name:      "elasticloadbalancing",
+		ProviderPrefix: "ELBv2",
+		Codec:          func() adapter.Codec { return &services.ELBv2Codec{} },
+		QueryActions: []string{
+			"CreateLoadBalancer", "DeleteLoadBalancer", "DescribeLoadBalancers",
+			"ModifyLoadBalancerAttributes", "DescribeLoadBalancerAttributes",
+			"CreateTargetGroup", "DeleteTargetGroup", "DescribeTargetGroups",
+			"RegisterTargets", "DeregisterTargets", "DescribeTargetHealth",
+			"CreateListener", "DeleteListener", "DescribeListeners",
+			"AddTags", "RemoveTags", "DescribeTags",
+		},
+	},
+	{
+		SigV4Name:      "config",
+		TargetPrefix:   "StarlingDoveService.",
+		ProviderPrefix: "Config",
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "config", TargetPrefix: "StarlingDoveService."}
+		},
+	},
+	{
+		SigV4Name:      "resource-groups",
+		ProviderPrefix: "ResourceGroups",
+		Codec:          func() adapter.Codec { return &services.ResourceGroupsCodec{} },
+	},
+	{
+		SigV4Name:      "tagging",
+		TargetPrefix:   "ResourceGroupsTaggingAPI_20170126.",
+		ProviderPrefix: "Tagging",
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "tagging", TargetPrefix: "ResourceGroupsTaggingAPI_20170126."}
+		},
+	},
 }
 
 // ─── Derived lookup tables ────────────────────────────────────────────────────

@@ -53,6 +53,11 @@ import (
 	cloudfrontprovider "jaiscloud/internal/aws/provider/cloudfront"
 	athenaprovider "jaiscloud/internal/aws/provider/athena"
 	redshiftprovider "jaiscloud/internal/aws/provider/redshift"
+	// G-PENDING new providers
+	elbv2provider "jaiscloud/internal/aws/provider/elbv2"
+	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
+	resourcegroupsprovider "jaiscloud/internal/aws/provider/resourcegroups"
+	taggingprovider "jaiscloud/internal/aws/provider/tagging"
 	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/aws/provider/table"
 	secretprovider "jaiscloud/internal/aws/secret"
@@ -615,6 +620,11 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registry.RegisterAll(cloudfrontprovider.New(s.resources).Routes())
 	registry.RegisterAll(athenaprovider.New(s.resources).Routes())
 	registry.RegisterAll(redshiftprovider.New(s.resources).Routes())
+	// G-PENDING new providers
+	registry.RegisterAll(elbv2provider.New(s.resources).Routes())
+	registry.RegisterAll(awsconfigprovider.New(s.resources).Routes())
+	registry.RegisterAll(resourcegroupsprovider.New(s.resources).Routes())
+	registry.RegisterAll(taggingprovider.New(s.resources).Routes())
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
@@ -789,6 +799,11 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"ecr":             &services.ECRCodec{},
 		"states":          &services.StepFunctionsCodec{},
 		"kinesis":         &services.KinesisCodec{},
+		// G-PENDING new codecs
+		"elasticloadbalancing": &services.ELBv2Codec{},
+		"config":               &services.GenericJSONTargetCodec{Service: "config", TargetPrefix: "StarlingDoveService."},
+		"resource-groups":      &services.ResourceGroupsCodec{},
+		"tagging":              &services.GenericJSONTargetCodec{Service: "tagging", TargetPrefix: "ResourceGroupsTaggingAPI_20170126."},
 	})
 }
 
