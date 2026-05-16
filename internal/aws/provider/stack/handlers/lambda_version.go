@@ -22,11 +22,20 @@ func NewLambdaVersionHandler(funcP *functionprovider.FunctionProvider) stackprov
 				return "", nil, err
 			}
 			versionedArn, _ := resp.Data["FunctionArn"].(string)
-			return versionedArn, map[string]any{"FunctionArn": versionedArn}, nil
+			version, _ := resp.Data["Version"].(string)
+			return versionedArn, map[string]any{"FunctionArn": versionedArn, "Version": version}, nil
+		},
+		// Lambda versions are immutable — any change requires replacement.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
 		},
 		// Lambda versions cannot be deleted directly via CloudFormation; no-op.
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			return nil
+		},
+		GetAttAttrs: []string{"Version"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"FunctionName"},
 		},
 	}
 }

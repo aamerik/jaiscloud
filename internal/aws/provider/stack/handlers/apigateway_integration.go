@@ -29,6 +29,10 @@ func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stac
 			physicalID := restAPIID + "/" + resourceID + "/" + httpMethod + "/integration"
 			return physicalID, map[string]any{}, nil
 		},
+		// Integrations are immutable on key fields — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			restAPIID := propStr(props, "RestApiId", "")
 			resourceID := propStr(props, "ResourceId", "")
@@ -41,6 +45,9 @@ func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stac
 				},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"RestApiId", "ResourceId", "HttpMethod"},
 		},
 	}
 }

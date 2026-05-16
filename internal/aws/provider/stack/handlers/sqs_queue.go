@@ -19,11 +19,50 @@ func NewSQSQueueHandler(queueP *queue.QueueProvider) stackprovider.ResourceHandl
 			}
 			url := resp.Data["QueueUrl"].(string)
 			arn := nr.ResourceID("sqs-queue", name)
-			return url, map[string]any{"QueueUrl": url, "Arn": arn}, nil
+			queueName := name
+			return url, map[string]any{"QueueUrl": url, "Arn": arn, "QueueName": queueName}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "QueueName", logicalID) != propStr(newProps, "QueueName", logicalID) {
+				return "", nil, true, nil
+			}
+			if propStr(oldProps, "FifoQueue", "") != propStr(newProps, "FifoQueue", "") {
+				return "", nil, true, nil
+			}
+			// In-place update via SetQueueAttributes
+			attrs := map[string]string{}
+			if v := propStr(newProps, "VisibilityTimeout", ""); v != "" {
+				attrs["VisibilityTimeout"] = v
+			}
+			if v := propStr(newProps, "MessageRetentionPeriod", ""); v != "" {
+				attrs["MessageRetentionPeriod"] = v
+			}
+			if v := propStr(newProps, "ReceiveMessageWaitTimeSeconds", ""); v != "" {
+				attrs["ReceiveMessageWaitTimeSeconds"] = v
+			}
+			if v, ok := newProps["RedrivePolicy"]; ok {
+				attrs["RedrivePolicy"] = propStr(map[string]any{"RedrivePolicy": v}, "RedrivePolicy", "")
+			}
+			if len(attrs) > 0 {
+				if _, err := queueP.SetQueueAttributes(ctx, child(nr, map[string]any{
+					"QueueUrl":   physicalID,
+					"Attributes": attrs,
+				})); err != nil {
+					return "", nil, false, err
+				}
+			}
+			name := propStr(newProps, "QueueName", logicalID)
+			arn := nr.ResourceID("sqs-queue", name)
+			return physicalID, map[string]any{"QueueUrl": physicalID, "Arn": arn, "QueueName": name}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := queueP.DeleteQueue(ctx, &model.NormalizedRequest{Params: map[string]any{"QueueUrl": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"Arn", "QueueName", "QueueUrl"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"QueueName", "FifoQueue"},
+			RequireUpdate:      []string{"VisibilityTimeout", "MessageRetentionPeriod", "ReceiveMessageWaitTimeSeconds", "RedrivePolicy"},
 		},
 	}
 }

@@ -23,9 +23,17 @@ func NewECSTaskDefinitionHandler(ecsP *containerprovider.ContainerProvider) stac
 			}
 			return taskDefArn, map[string]any{"TaskDefinitionArn": taskDefArn}, nil
 		},
+		// Task definitions are immutable — create a new revision on update.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := ecsP.DeregisterTaskDefinition(ctx, &model.NormalizedRequest{Params: map[string]any{"taskDefinition": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"TaskDefinitionArn"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"Family"},
 		},
 	}
 }

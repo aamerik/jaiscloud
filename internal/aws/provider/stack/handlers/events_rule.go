@@ -22,6 +22,17 @@ func NewEventsRuleHandler(eventsP *eventsprovider.EventBridgeProvider) stackprov
 			ruleArn, _ := resp.Data["RuleArn"].(string)
 			return name, map[string]any{"Arn": ruleArn}, nil
 		},
+		// PutRule is idempotent — re-apply with new params for in-place update.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			params := copyProps(newProps)
+			params["Name"] = physicalID
+			resp, err := eventsP.PutRule(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, false, err
+			}
+			ruleArn, _ := resp.Data["RuleArn"].(string)
+			return physicalID, map[string]any{"Arn": ruleArn}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			busName := propStr(props, "EventBusName", "default")
 			_, err := eventsP.DeleteRule(ctx, &model.NormalizedRequest{
@@ -29,5 +40,7 @@ func NewEventsRuleHandler(eventsP *eventsprovider.EventBridgeProvider) stackprov
 			})
 			return err
 		},
+		RefAttr:     "Arn",
+		GetAttAttrs: []string{"Arn"},
 	}
 }

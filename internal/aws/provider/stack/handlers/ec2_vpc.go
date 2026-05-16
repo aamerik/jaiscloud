@@ -23,11 +23,21 @@ func NewEC2VPCHandler(computeP *compute.ComputeProvider) stackprovider.ResourceH
 			if vm, ok := resp.Data["Vpc"].(map[string]any); ok {
 				vpcID, _ = vm["VpcId"].(string)
 			}
-			return vpcID, map[string]any{"VpcId": vpcID, "CidrBlock": cidr, "DefaultSecurityGroup": ""}, nil
+			return vpcID, map[string]any{"VpcId": vpcID, "CidrBlock": cidr, "DefaultSecurityGroup": "", "DefaultNetworkAcl": ""}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "CidrBlock", "") != propStr(newProps, "CidrBlock", "") {
+				return "", nil, true, nil
+			}
+			return physicalID, map[string]any{"VpcId": physicalID, "CidrBlock": propStr(newProps, "CidrBlock", ""), "DefaultSecurityGroup": "", "DefaultNetworkAcl": ""}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := computeP.DeleteVpc(ctx, &model.NormalizedRequest{Params: map[string]any{"VpcId": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"VpcId", "CidrBlock", "DefaultNetworkAcl", "DefaultSecurityGroup"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"CidrBlock"},
 		},
 	}
 }

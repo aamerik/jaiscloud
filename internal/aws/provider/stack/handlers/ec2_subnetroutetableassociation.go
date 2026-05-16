@@ -27,9 +27,16 @@ func NewEC2SubnetRouteTableAssociationHandler(computeP *compute.ComputeProvider)
 			}
 			return assocID, map[string]any{"AssociationId": assocID}, nil
 		},
+		// Associations are immutable — always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		// AssociateRouteTable has no corresponding Disassociate in compute.go; no-op on delete.
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			return nil
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"SubnetId", "RouteTableId"},
 		},
 	}
 }

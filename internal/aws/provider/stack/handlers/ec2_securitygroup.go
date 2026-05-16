@@ -24,9 +24,22 @@ func NewEC2SecurityGroupHandler(computeP *compute.ComputeProvider) stackprovider
 			groupID, _ := resp.Data["GroupId"].(string)
 			return groupID, map[string]any{"GroupId": groupID}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "GroupName", logicalID) != propStr(newProps, "GroupName", logicalID) {
+				return "", nil, true, nil
+			}
+			if propStr(oldProps, "VpcId", "") != propStr(newProps, "VpcId", "") {
+				return "", nil, true, nil
+			}
+			return physicalID, map[string]any{"GroupId": physicalID}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := computeP.DeleteSecurityGroup(ctx, &model.NormalizedRequest{Params: map[string]any{"GroupId": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"GroupId"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"GroupName", "VpcId"},
 		},
 	}
 }

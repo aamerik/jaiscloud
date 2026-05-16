@@ -15,8 +15,8 @@ func NewDynamoDBGlobalTableHandler(tableP *table.TableProvider) stackprovider.Re
 			name := propStr(props, "TableName", logicalID)
 			replicas := props["Replicas"]
 			resp, err := tableP.CreateGlobalTable(ctx, child(nr, map[string]any{
-				"GlobalTableName":   name,
-				"ReplicationGroup":  replicas,
+				"GlobalTableName":  name,
+				"ReplicationGroup": replicas,
 			}))
 			if err != nil {
 				return "", nil, err
@@ -25,11 +25,17 @@ func NewDynamoDBGlobalTableHandler(tableP *table.TableProvider) stackprovider.Re
 			if gtd, ok := resp.Data["GlobalTableDescription"].(map[string]any); ok {
 				globalTableName, _ = gtd["GlobalTableName"].(string)
 			}
-			return globalTableName, map[string]any{"TableName": globalTableName}, nil
+			arn := nr.ResourceID("dynamodb-table", globalTableName)
+			return globalTableName, map[string]any{"TableName": globalTableName, "Arn": arn, "StreamArn": ""}, nil
 		},
 		// GlobalTable cannot be deleted directly in real AWS; no-op.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			arn := nr.ResourceID("dynamodb-table", physicalID)
+			return physicalID, map[string]any{"TableName": physicalID, "Arn": arn, "StreamArn": ""}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			return nil
 		},
+		GetAttAttrs: []string{"Arn", "StreamArn"},
 	}
 }

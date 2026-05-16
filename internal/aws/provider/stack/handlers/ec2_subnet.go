@@ -21,14 +21,34 @@ func NewEC2SubnetHandler(computeP *compute.ComputeProvider) stackprovider.Resour
 				return "", nil, err
 			}
 			subnetID := ""
+			vpcID := propStr(props, "VpcId", "")
+			cidr := propStr(props, "CidrBlock", "")
+			az := propStr(props, "AvailabilityZone", "")
 			if sm, ok := resp.Data["Subnet"].(map[string]any); ok {
 				subnetID, _ = sm["SubnetId"].(string)
 			}
-			return subnetID, map[string]any{"SubnetId": subnetID}, nil
+			return subnetID, map[string]any{"SubnetId": subnetID, "VpcId": vpcID, "AvailabilityZone": az, "CidrBlock": cidr}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			for _, p := range []string{"VpcId", "CidrBlock", "AvailabilityZone"} {
+				if propStr(oldProps, p, "") != propStr(newProps, p, "") {
+					return "", nil, true, nil
+				}
+			}
+			return physicalID, map[string]any{
+				"SubnetId":         physicalID,
+				"VpcId":            propStr(newProps, "VpcId", ""),
+				"AvailabilityZone": propStr(newProps, "AvailabilityZone", ""),
+				"CidrBlock":        propStr(newProps, "CidrBlock", ""),
+			}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := computeP.DeleteSubnet(ctx, &model.NormalizedRequest{Params: map[string]any{"SubnetId": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"SubnetId", "VpcId", "AvailabilityZone", "CidrBlock"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"VpcId", "CidrBlock", "AvailabilityZone"},
 		},
 	}
 }

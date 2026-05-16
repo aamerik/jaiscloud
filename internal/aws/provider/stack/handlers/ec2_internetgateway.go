@@ -22,9 +22,14 @@ func NewEC2InternetGatewayHandler(computeP *compute.ComputeProvider) stackprovid
 			}
 			return igwID, map[string]any{"InternetGatewayId": igwID}, nil
 		},
+		// InternetGateways have no mutable properties; any tag change is in-place.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return physicalID, map[string]any{"InternetGatewayId": physicalID}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := computeP.DeleteInternetGateway(ctx, &model.NormalizedRequest{Params: map[string]any{"InternetGatewayId": physicalID}})
 			return err
 		},
+		GetAttAttrs: []string{"InternetGatewayId"},
 	}
 }

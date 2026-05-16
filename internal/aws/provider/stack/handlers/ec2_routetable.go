@@ -24,9 +24,19 @@ func NewEC2RouteTableHandler(computeP *compute.ComputeProvider) stackprovider.Re
 			}
 			return rtID, map[string]any{"RouteTableId": rtID}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			if propStr(oldProps, "VpcId", "") != propStr(newProps, "VpcId", "") {
+				return "", nil, true, nil
+			}
+			return physicalID, map[string]any{"RouteTableId": physicalID}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := computeP.DeleteRouteTable(ctx, &model.NormalizedRequest{Params: map[string]any{"RouteTableId": physicalID}})
 			return err
+		},
+		GetAttAttrs: []string{"RouteTableId"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"VpcId"},
 		},
 	}
 }

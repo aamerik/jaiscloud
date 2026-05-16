@@ -26,7 +26,25 @@ func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider
 				return "", nil, err
 			}
 			funcURL, _ := resp.Data["FunctionUrl"].(string)
-			return funcURL, map[string]any{"FunctionUrl": funcURL}, nil
+			funcArn, _ := resp.Data["FunctionArn"].(string)
+			return funcURL, map[string]any{"FunctionUrl": funcURL, "FunctionArn": funcArn}, nil
+		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			targetFunc := propStr(newProps, "TargetFunctionArn", "")
+			params := map[string]any{
+				"_function_name": targetFunc,
+				"AuthType":       propStr(newProps, "AuthType", "NONE"),
+			}
+			if cors, ok := newProps["Cors"]; ok {
+				params["Cors"] = cors
+			}
+			resp, err := funcP.UpdateFunctionUrlConfig(ctx, child(nr, params))
+			if err != nil {
+				return "", nil, false, err
+			}
+			funcURL, _ := resp.Data["FunctionUrl"].(string)
+			funcArn, _ := resp.Data["FunctionArn"].(string)
+			return physicalID, map[string]any{"FunctionUrl": funcURL, "FunctionArn": funcArn}, false, nil
 		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			targetFunc := propStr(props, "TargetFunctionArn", "")
@@ -34,6 +52,10 @@ func NewLambdaUrlHandler(funcP *functionprovider.FunctionProvider) stackprovider
 				Params: map[string]any{"_function_name": targetFunc},
 			})
 			return err
+		},
+		GetAttAttrs: []string{"FunctionUrl", "FunctionArn"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireUpdate: []string{"AuthType", "Cors"},
 		},
 	}
 }

@@ -26,6 +26,10 @@ func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.Resourc
 			physicalID := rtID + "/" + dest
 			return physicalID, map[string]any{}, nil
 		},
+		// Routes are immutable on key fields; always replace.
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			return "", nil, true, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, props map[string]any) error {
 			rtID := propStr(props, "RouteTableId", "")
 			dest := propStr(props, "DestinationCidrBlock", "")
@@ -36,6 +40,9 @@ func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.Resourc
 				},
 			})
 			return err
+		},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"RouteTableId", "DestinationCidrBlock"},
 		},
 	}
 }
