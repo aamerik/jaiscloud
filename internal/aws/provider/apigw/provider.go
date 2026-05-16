@@ -112,6 +112,13 @@ func (p *GatewayProvider) Routes() map[string]provider.HandlerFunc {
 		"Gateway.DeleteApiKey":       p.DeleteApiKey,
 		"Gateway.CreateUsagePlanKey": p.CreateUsagePlanKey,
 		"Gateway.GetUsagePlanKeys":   p.GetUsagePlanKeys,
+		"Gateway.DeleteUsagePlanKey": p.DeleteUsagePlanKey,
+		// Tags
+		"Gateway.GetTags":      p.GetTags,
+		"Gateway.TagResource":  p.TagResource,
+		"Gateway.UntagResource": p.UntagResource,
+		// Export
+		"Gateway.GetExport": p.GetExport,
 		// Execute-API (invoke plane)
 		"Gateway.Invoke": p.Invoke,
 	}
@@ -1181,7 +1188,11 @@ func (p *GatewayProvider) GetApiKey(ctx context.Context, nr *model.NormalizedReq
 	if err := p.load(ctx, rtApiKey, id, &k); err != nil {
 		return nil, p.notFound(err, "API key not found: "+id)
 	}
-	return provider.OK(keyToWire(k)), nil
+	includeValue := false
+	if v, ok := nr.Params["includeValue"].(string); ok {
+		includeValue = v == "true"
+	}
+	return provider.OK(keyToWireMasked(k, includeValue)), nil
 }
 
 func (p *GatewayProvider) GetApiKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1293,6 +1304,129 @@ func keyToWire(k apiKey) map[string]any {
 		"enabled":     k.Enabled,
 		"value":       k.Value,
 	}
+}
+
+func keyToWireMasked(k apiKey, includeValue bool) map[string]any {
+	m := map[string]any{
+		"id":          k.ID,
+		"name":        k.Name,
+		"description": k.Description,
+		"enabled":     k.Enabled,
+	}
+	if includeValue {
+		m["value"] = k.Value
+	}
+	return m
+}
+
+// ─── DeleteUsagePlanKey ───────────────────────────────────────────────────────
+
+func (p *GatewayProvider) DeleteUsagePlanKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	planID, _ := nr.Params["usagePlanId"].(string)
+	keyID, _ := nr.Params["keyId"].(string)
+	_ = p.resources.Delete(ctx, rtUsagePlanKey, planID+"/"+keyID)
+	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
+}
+
+// ─── Tags ────────────────────────────────────────────────────────────────────
+
+const rtTag = "apigw_tag"
+
+type tagSet struct {
+	ResourceARN string            `json:"resourceArn"`
+	Tags        map[string]string `json:"tags"`
+}
+
+func (p *GatewayProvider) GetTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	var ts tagSet
+	if err := p.load(ctx, rtTag, arn, &ts); err != nil {
+		// No tags stored yet — return empty map (not a 404 in APIGW).
+		return provider.OK(map[string]any{"tags": map[string]string{}}), nil
+	}
+	if ts.Tags == nil {
+		ts.Tags = map[string]string{}
+	}
+	return provider.OK(map[string]any{"tags": ts.Tags}), nil
+}
+
+func (p *GatewayProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	var ts tagSet
+	_ = p.load(ctx, rtTag, arn, &ts)
+	if ts.Tags == nil {
+		ts.Tags = map[string]string{}
+	}
+	ts.ResourceARN = arn
+	if tags, ok := nr.Params["tags"].(map[string]any); ok {
+		for k, v := range tags {
+			if sv, ok := v.(string); ok {
+				ts.Tags[k] = sv
+			}
+		}
+	}
+	_ = p.save(ctx, rtTag, arn, ts)
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+func (p *GatewayProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	arn, _ := nr.Params["resourceArn"].(string)
+	var ts tagSet
+	if err := p.load(ctx, rtTag, arn, &ts); err != nil {
+		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	}
+	if tagKeys, ok := nr.Params["tagKeys"].([]any); ok {
+		for _, k := range tagKeys {
+			if sk, ok := k.(string); ok {
+				delete(ts.Tags, sk)
+			}
+		}
+	}
+	_ = p.save(ctx, rtTag, arn, ts)
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── GetExport ────────────────────────────────────────────────────────────────
+
+func (p *GatewayProvider) GetExport(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apiID, _ := nr.Params["restApiId"].(string)
+	stageName, _ := nr.Params["stageName"].(string)
+	exportType, _ := nr.Params["exportType"].(string)
+
+	// Verify the API exists.
+	var api restAPI
+	if err := p.load(ctx, rtAPI, apiID, &api); err != nil {
+		return nil, p.notFound(err, "Rest API not found: "+apiID)
+	}
+
+	// Return a minimal stub export document.
+	var doc map[string]any
+	switch strings.ToLower(exportType) {
+	case "oas30", "swagger":
+		doc = map[string]any{
+			"openapi": "3.0.1",
+			"info": map[string]any{
+				"title":   api.Name,
+				"version": stageName,
+			},
+			"paths": map[string]any{},
+		}
+	default:
+		doc = map[string]any{
+			"swagger": "2.0",
+			"info":    map[string]any{"title": api.Name, "version": stageName},
+			"paths":   map[string]any{},
+		}
+	}
+	body, _ := json.Marshal(doc)
+	return &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"_raw":         body,
+			"_status":      200,
+			"_contentType": "application/json",
+		},
+	}, nil
 }
 
 // randAlphanumKey generates a random alphanumeric string of length n.
