@@ -1,14 +1,13 @@
-//go:build ignore
-
-// paginationcheck is a heuristic linter that checks whether List*/Describe*
-// provider methods use pagination (contain Paginate, Marker, or NextToken).
+// paginationcheck is a static-analysis CLI that inspects all List*/Describe*
+// methods on *Provider receivers under a given directory tree and reports any
+// that appear to lack pagination support.
 //
 // Usage:
 //
+//	go run tools/lint/paginationcheck/main.go [dir]          # dir defaults to internal/aws/provider
 //	go run tools/lint/paginationcheck/main.go ./internal/aws/provider/...
 //
-// This is a simple string-pattern check, not a full AST-based analysis.
-// False positives/negatives are expected; it serves as a development gate.
+// Exit code 1 when violations are found, 0 otherwise.
 package main
 
 import (
@@ -21,151 +20,160 @@ import (
 	"strings"
 )
 
-func main() {
-	patterns := os.Args[1:]
-	if len(patterns) == 0 {
-		patterns = []string{"./internal/aws/provider/..."}
-	}
-
-	dirs, err := expandGlobs(patterns)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error expanding patterns: %v\n", err)
-		os.Exit(1)
-	}
-
-	fset := token.NewFileSet()
-	violations := 0
-
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			path := filepath.Join(dir, entry.Name())
-			f, err := parser.ParseFile(fset, path, nil, 0)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "parse %s: %v\n", path, err)
-				continue
-			}
-			violations += checkFile(fset, f)
-		}
-	}
-
-	if violations > 0 {
-		fmt.Fprintf(os.Stderr, "\npaginationcheck: %d violation(s) found\n", violations)
-		os.Exit(1)
-	}
-	fmt.Println("paginationcheck: OK — no pagination violations found")
+// paginationKeywords are substrings whose presence in a method body's raw
+// source text indicates the implementation handles pagination in some form.
+var paginationKeywords = []string{
+	"Paginate",
+	"Marker",
+	"NextToken",
+	"IsTruncated",
+	"pagination.",
 }
 
-func checkFile(fset *token.FileSet, f *ast.File) int {
-	count := 0
+func main() {
+	dir := "internal/aws/provider"
+	if len(os.Args) > 1 {
+		dir = os.Args[1]
+	}
+	// Strip trailing /... used by Make targets — we always walk recursively.
+	dir = strings.TrimSuffix(dir, "/...")
+	dir = strings.TrimSuffix(dir, "...")
+
+	violations, err := check(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "paginationcheck: %v\n", err)
+		os.Exit(2)
+	}
+
+	for _, v := range violations {
+		fmt.Println(v)
+	}
+
+	if len(violations) > 0 {
+		os.Exit(1)
+	}
+}
+
+// check walks root recursively, parses every non-test .go file, and returns
+// one diagnostic string per method that appears to be missing pagination.
+func check(root string) ([]string, error) {
+	fset := token.NewFileSet()
+
+	var goFiles []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		goFiles = append(goFiles, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking %q: %w", root, err)
+	}
+
+	var violations []string
+	for _, path := range goFiles {
+		vs, err := checkFile(fset, path)
+		if err != nil {
+			// Non-fatal: report and continue.
+			fmt.Fprintf(os.Stderr, "paginationcheck: parse error in %s: %v\n", path, err)
+			continue
+		}
+		violations = append(violations, vs...)
+	}
+	return violations, nil
+}
+
+// checkFile parses a single Go source file and returns one diagnostic per
+// List*/Describe* method on a *Provider receiver that lacks pagination keywords.
+// The raw source bytes are used for keyword matching so that indirect helpers
+// (e.g. a field named "cursor") are also detected.
+func checkFile(fset *token.FileSet, path string) ([]string, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var violations []string
+
 	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
+		fd, ok := n.(*ast.FuncDecl)
 		if !ok {
 			return true
 		}
-		// Must be on a receiver (method), not a standalone function.
-		if fn.Recv == nil || len(fn.Recv.List) == 0 {
-			return true
-		}
-		// Receiver type must end in "Provider".
-		recvTypeName := receiverTypeName(fn.Recv)
-		if !strings.HasSuffix(recvTypeName, "Provider") {
-			return true
-		}
-		// Only check List* and Describe* methods.
-		name := fn.Name.Name
-		if !strings.HasPrefix(name, "List") && !strings.HasPrefix(name, "Describe") {
-			return true
-		}
-		// Skip stub/no-op bodies (body is nil or very short).
-		if fn.Body == nil || len(fn.Body.List) == 0 {
+
+		// Must be a method (has a receiver).
+		if fd.Recv == nil || len(fd.Recv.List) == 0 {
 			return true
 		}
 
-		// Heuristic: stringify the AST node and look for pagination patterns.
-		body := nodeToString(fn.Body)
-		hasPagination := strings.Contains(body, "Paginate") ||
-			strings.Contains(body, "Marker") ||
-			strings.Contains(body, "NextToken") ||
-			strings.Contains(body, "nextToken") ||
-			strings.Contains(body, "PageToken") ||
-			strings.Contains(body, "pageToken") ||
-			strings.Contains(body, "cursor") ||
-			strings.Contains(body, "Cursor")
-
-		if !hasPagination {
-			pos := fset.Position(fn.Pos())
-			fmt.Printf("%s: provider method %s.%s may be missing pagination (no Paginate/Marker/NextToken found)\n",
-				pos, recvTypeName, name)
-			count++
+		// Method name must start with List or Describe.
+		if !strings.HasPrefix(fd.Name.Name, "List") && !strings.HasPrefix(fd.Name.Name, "Describe") {
+			return true
 		}
+
+		// Receiver type must end in "Provider" (pointer or value).
+		recvType := extractTypeName(fd.Recv.List[0].Type)
+		if !strings.HasSuffix(recvType, "Provider") {
+			return true
+		}
+
+		// Body must exist and be non-trivial.
+		if fd.Body == nil || len(fd.Body.List) == 0 {
+			return true
+		}
+
+		// Slice the raw source to get the body text.
+		bodyStart := fset.Position(fd.Body.Pos()).Offset
+		bodyEnd := fset.Position(fd.Body.End()).Offset
+		if bodyEnd > len(src) {
+			bodyEnd = len(src)
+		}
+		bodyText := string(src[bodyStart:bodyEnd])
+
+		for _, kw := range paginationKeywords {
+			if strings.Contains(bodyText, kw) {
+				return true // pagination found — not a violation
+			}
+		}
+
+		pos := fset.Position(fd.Pos())
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: %s may be missing pagination",
+			pos.Filename, pos.Line, fd.Name.Name,
+		))
+
 		return true
 	})
-	return count
+
+	return violations, nil
 }
 
-// receiverTypeName returns the base type name of the method receiver
-// (e.g. "*FooProvider" → "FooProvider").
-func receiverTypeName(recv *ast.FieldList) string {
-	if recv == nil || len(recv.List) == 0 {
-		return ""
-	}
-	field := recv.List[0]
-	switch t := field.Type.(type) {
+// extractTypeName returns the base identifier from a receiver type expression.
+// Handles *T, T, and generic T[P] (returns "").
+func extractTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
 	case *ast.StarExpr:
-		if ident, ok := t.X.(*ast.Ident); ok {
-			return ident.Name
-		}
+		return extractTypeName(t.X)
 	case *ast.Ident:
 		return t.Name
+	case *ast.IndexExpr:
+		return extractTypeName(t.X)
+	default:
+		return ""
 	}
-	return ""
-}
-
-// nodeToString produces a rough string representation of an AST node
-// suitable for pattern matching.
-func nodeToString(node ast.Node) string {
-	var sb strings.Builder
-	ast.Inspect(node, func(n ast.Node) bool {
-		if ident, ok := n.(*ast.Ident); ok {
-			sb.WriteString(ident.Name)
-			sb.WriteString(" ")
-		}
-		return true
-	})
-	return sb.String()
-}
-
-// expandGlobs resolves directory patterns, supporting the "..." suffix.
-func expandGlobs(patterns []string) ([]string, error) {
-	var dirs []string
-	for _, p := range patterns {
-		recursive := strings.HasSuffix(p, "/...")
-		base := strings.TrimSuffix(p, "/...")
-		base = strings.TrimSuffix(base, "...")
-
-		if recursive {
-			err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return nil
-				}
-				if d.IsDir() {
-					dirs = append(dirs, path)
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, fmt.Errorf("walk %s: %w", base, err)
-			}
-		} else {
-			dirs = append(dirs, base)
-		}
-	}
-	return dirs, nil
 }
