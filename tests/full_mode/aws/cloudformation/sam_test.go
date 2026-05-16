@@ -32,6 +32,13 @@ Resources:
             Method: GET
 `
 
+// TestCFNSAMTransformFunction deploys a SAM template with Transform:
+// AWS::Serverless-2016-10-31 and verifies the Lambda function is created and
+// accessible via the Lambda API, then deletes the stack.
+func TestCFNSAMTransformFunction(t *testing.T) {
+	TestCFN_SAMTransform(t)
+}
+
 // TestCFN_SAMTransform deploys a SAM template containing an AWS::Serverless::Function
 // and verifies it transforms correctly into a Lambda function resource.
 func TestCFN_SAMTransform(t *testing.T) {

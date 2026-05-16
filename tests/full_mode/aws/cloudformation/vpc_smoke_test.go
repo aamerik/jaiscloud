@@ -58,6 +58,15 @@ Outputs:
     Value: !Ref PublicSubnet1
 `
 
+// TestCFNVPCSmokeTest deploys a VPC stack with 2 public subnets (172.31.0.0/24,
+// 172.31.1.0/24), an InternetGateway, RouteTable, Route, and
+// SubnetRouteTableAssociation. Polls until CREATE_COMPLETE, asserts VPC and
+// subnet outputs are present, then deletes the stack and polls until
+// DELETE_COMPLETE.
+func TestCFNVPCSmokeTest(t *testing.T) {
+	TestCFN_VPCSmoke(t)
+}
+
 // TestCFN_VPCSmoke deploys a VPC with subnets, IGW, route table and route via
 // CloudFormation and verifies the stack reaches CREATE_COMPLETE and exposes the
 // expected outputs. Then it deletes the stack and polls until DELETE_COMPLETE.

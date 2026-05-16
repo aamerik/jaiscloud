@@ -56,6 +56,70 @@ func waitForStreamReady(t *testing.T, client *awskinesis.Client, name string) {
 
 // ─── Persistence tests ────────────────────────────────────────────────────────
 
+// TestKinesisGetRecordsPersistence verifies that a record put to a stream is
+// readable via GetShardIterator at TRIM_HORIZON + GetRecords, and that the
+// data content matches what was put.
+func TestKinesisGetRecordsPersistence(t *testing.T) {
+	ctx := context.Background()
+	client := newFullModeKinesisClient(t)
+
+	name := "test-persistence-stream"
+
+	// CreateStream
+	_, err := client.CreateStream(ctx, &awskinesis.CreateStreamInput{
+		StreamName: aws.String(name),
+		ShardCount: aws.Int32(1),
+	})
+	require.NoError(t, err)
+	waitForStreamReady(t, client, name)
+
+	// Describe to get shard ID
+	desc, err := client.DescribeStream(ctx, &awskinesis.DescribeStreamInput{
+		StreamName: aws.String(name),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, desc.StreamDescription.Shards)
+	shardID := aws.ToString(desc.StreamDescription.Shards[0].ShardId)
+
+	// PutRecord
+	payload := []byte("kinesis-persistence-test-data")
+	putOut, err := client.PutRecord(ctx, &awskinesis.PutRecordInput{
+		StreamName:   aws.String(name),
+		PartitionKey: aws.String("persistence-pk"),
+		Data:         payload,
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, aws.ToString(putOut.SequenceNumber))
+
+	// GetShardIterator at TRIM_HORIZON
+	iterOut, err := client.GetShardIterator(ctx, &awskinesis.GetShardIteratorInput{
+		StreamName:        aws.String(name),
+		ShardId:           aws.String(shardID),
+		ShardIteratorType: types.ShardIteratorTypeTrimHorizon,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, iterOut.ShardIterator)
+
+	// GetRecords — assert the record is there
+	recOut, err := client.GetRecords(ctx, &awskinesis.GetRecordsInput{
+		ShardIterator: iterOut.ShardIterator,
+		Limit:         aws.Int32(10),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, recOut.Records, "expected at least one record after PutRecord")
+
+	// Verify data content matches
+	found := false
+	for _, r := range recOut.Records {
+		if string(r.Data) == string(payload) {
+			found = true
+			assert.Equal(t, "persistence-pk", aws.ToString(r.PartitionKey))
+			break
+		}
+	}
+	assert.True(t, found, "expected record data %q in GetRecords response", string(payload))
+}
+
 // TestKinesisPersistence verifies that records written to a stream are
 // readable via GetRecords after being put. This exercises the full read-back
 // path and serves as a persistence smoke test.

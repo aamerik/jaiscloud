@@ -13,10 +13,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awscf "github.com/aws/aws-sdk-go-v2/service/cloudformation"
-	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
-	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
 	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
 	awssm "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
+	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 func jaiscloudHost() string {
@@ -69,6 +70,13 @@ func newKMSClient(t *testing.T) *awskms.Client {
 func newSMClient(t *testing.T) *awssm.Client {
 	t.Helper()
 	return awssm.NewFromConfig(awsCfg(t), func(o *awssm.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudHost())
+	})
+}
+
+func newSNSClient(t *testing.T) *awssns.Client {
+	t.Helper()
+	return awssns.NewFromConfig(awsCfg(t), func(o *awssns.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudHost())
 	})
 }
