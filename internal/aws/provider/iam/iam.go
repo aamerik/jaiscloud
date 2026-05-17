@@ -271,6 +271,15 @@ func (p *IAMProvider) ListRoles(ctx context.Context, nr *model.NormalizedRequest
 	sort.Slice(roles, func(i, j int) bool {
 		return fmt.Sprint(roles[i]["RoleName"]) < fmt.Sprint(roles[j]["RoleName"])
 	})
+	if pathPrefix, _ := nr.Params["PathPrefix"].(string); pathPrefix != "" {
+		filtered := roles[:0]
+		for _, r := range roles {
+			if path, _ := r["Path"].(string); strings.HasPrefix(path, pathPrefix) {
+				filtered = append(filtered, r)
+			}
+		}
+		roles = filtered
+	}
 	maxItems := 100
 	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
 		maxItems = int(v)
@@ -393,6 +402,15 @@ func (p *IAMProvider) ListPolicies(ctx context.Context, nr *model.NormalizedRequ
 	}
 	if policies == nil {
 		policies = []map[string]any{}
+	}
+	if pathPrefix, _ := nr.Params["PathPrefix"].(string); pathPrefix != "" {
+		filtered := policies[:0]
+		for _, pol := range policies {
+			if path, _ := pol["Path"].(string); strings.HasPrefix(path, pathPrefix) {
+				filtered = append(filtered, pol)
+			}
+		}
+		policies = filtered
 	}
 	maxItems := 100
 	if v, ok := nr.Params["MaxItems"].(float64); ok && v > 0 {
