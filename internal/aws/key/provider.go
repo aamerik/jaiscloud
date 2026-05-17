@@ -903,6 +903,9 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid source ciphertext", 400)
 	}
 
+	if err := p.checkKeyPolicy(ctx, srcKeyID, nr.AccountID, "kms:ReEncryptFrom"); err != nil {
+		return nil, err
+	}
 	srcKey, err := p.store.GetKey(ctx, srcKeyID)
 	if err != nil {
 		return nil, p.keyErr(err)
@@ -924,6 +927,9 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	dstKeyIDParam, _ := nr.Params["DestinationKeyId"].(string)
 	dstKeyID, err := p.resolveKeyIDStr(ctx, dstKeyIDParam)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.checkKeyPolicy(ctx, dstKeyID, nr.AccountID, "kms:ReEncryptTo"); err != nil {
 		return nil, err
 	}
 	dstKey, err := p.store.GetKey(ctx, dstKeyID)
@@ -1102,6 +1108,9 @@ func (p *KeyProvider) Sign(ctx context.Context, nr *model.NormalizedRequest) (*m
 	if err != nil {
 		return nil, err
 	}
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Sign"); err != nil {
+		return nil, err
+	}
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil, p.keyErr(err)
@@ -1146,6 +1155,9 @@ func (p *KeyProvider) Sign(ctx context.Context, nr *model.NormalizedRequest) (*m
 func (p *KeyProvider) Verify(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	keyID, err := p.resolveKeyID(ctx, nr)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Verify"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)
