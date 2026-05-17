@@ -214,12 +214,15 @@ func (p *Provider) VerifyDomainIdentity(ctx context.Context, nr *model.Normalize
 }
 
 func (p *Provider) ListIdentities(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	filterType := str(nr.Params, "IdentityType") // "EmailAddress" | "Domain" | ""
 	entries, _ := p.resources.List(ctx, rtSESIdentity, "")
 	identities := make([]string, 0, len(entries))
 	for _, e := range entries {
 		var id sesIdentity
 		if json.Unmarshal(e.Data, &id) == nil {
-			identities = append(identities, id.Identity)
+			if filterType == "" || filterType == id.IdentityType {
+				identities = append(identities, id.Identity)
+			}
 		}
 	}
 	return provider.OK(map[string]any{"Identities": identities}), nil
