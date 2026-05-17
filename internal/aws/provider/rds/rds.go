@@ -77,22 +77,24 @@ func newID() string {
 // ─── DB Instances ─────────────────────────────────────────────────────────────
 
 type dbInstance struct {
-	DBInstanceIdentifier              string `json:"DBInstanceIdentifier"`
-	DBInstanceClass                   string `json:"DBInstanceClass"`
-	Engine                            string `json:"Engine"`
-	DBInstanceStatus                  string `json:"DBInstanceStatus"`
-	MasterUsername                    string `json:"MasterUsername"`
-	DBName                            string `json:"DBName"`
-	AllocatedStorage                  int    `json:"AllocatedStorage"`
-	MultiAZ                           bool   `json:"MultiAZ"`
-	EngineVersion                     string `json:"EngineVersion"`
-	PubliclyAccessible                bool   `json:"PubliclyAccessible"`
-	Port                              int    `json:"Port"`
-	DBInstanceArn                     string `json:"DBInstanceArn"`
-	BackupRetentionPeriod             int    `json:"BackupRetentionPeriod"`
-	DBSubnetGroupName                 string `json:"DBSubnetGroupName"`
-	DBParameterGroupName              string `json:"DBParameterGroupName"`
-	ReadReplicaSourceDBInstanceIdentifier string `json:"ReadReplicaSourceDBInstanceIdentifier,omitempty"`
+	DBInstanceIdentifier                  string   `json:"DBInstanceIdentifier"`
+	DBInstanceClass                       string   `json:"DBInstanceClass"`
+	Engine                                string   `json:"Engine"`
+	DBInstanceStatus                      string   `json:"DBInstanceStatus"`
+	MasterUsername                        string   `json:"MasterUsername"`
+	MasterUserPassword                    string   `json:"MasterUserPassword,omitempty"`
+	DBName                                string   `json:"DBName"`
+	AllocatedStorage                      int      `json:"AllocatedStorage"`
+	MultiAZ                               bool     `json:"MultiAZ"`
+	EngineVersion                         string   `json:"EngineVersion"`
+	PubliclyAccessible                    bool     `json:"PubliclyAccessible"`
+	Port                                  int      `json:"Port"`
+	DBInstanceArn                         string   `json:"DBInstanceArn"`
+	BackupRetentionPeriod                 int      `json:"BackupRetentionPeriod"`
+	DBSubnetGroupName                     string   `json:"DBSubnetGroupName"`
+	DBParameterGroupName                  string   `json:"DBParameterGroupName"`
+	VpcSecurityGroupIds                   []string `json:"VpcSecurityGroupIds,omitempty"`
+	ReadReplicaSourceDBInstanceIdentifier string   `json:"ReadReplicaSourceDBInstanceIdentifier,omitempty"`
 }
 
 func (d dbInstance) toWire() map[string]any {
@@ -100,7 +102,7 @@ func (d dbInstance) toWire() map[string]any {
 	if port == 0 {
 		port = defaultPort(d.Engine)
 	}
-	return map[string]any{
+	w := map[string]any{
 		"DBInstanceIdentifier": d.DBInstanceIdentifier,
 		"DBInstanceClass":      d.DBInstanceClass,
 		"Engine":               d.Engine,
@@ -112,11 +114,34 @@ func (d dbInstance) toWire() map[string]any {
 		"EngineVersion":        d.EngineVersion,
 		"PubliclyAccessible":   fmt.Sprintf("%v", d.PubliclyAccessible),
 		"DBInstanceArn":        d.DBInstanceArn,
+		"DBSubnetGroupName":    d.DBSubnetGroupName,
+		"DBParameterGroupName": d.DBParameterGroupName,
+		"BackupRetentionPeriod": fmt.Sprintf("%d", d.BackupRetentionPeriod),
 		"Endpoint": map[string]any{
-			"Address": d.DBInstanceIdentifier + ".jaiscloud.local",
+			"Address": d.endpointAddress(),
 			"Port":    fmt.Sprintf("%d", port),
 		},
 	}
+	if d.ReadReplicaSourceDBInstanceIdentifier != "" {
+		w["ReadReplicaSourceDBInstanceIdentifier"] = d.ReadReplicaSourceDBInstanceIdentifier
+	}
+	return w
+}
+
+// endpointAddress returns the DNS address for this DB instance.
+// Format: <id>.<region>.rds.localhost
+// The region is embedded via the dbInstance.DBInstanceArn field; however since
+// we don't store region directly we fall back to parsing it, or use a sensible default.
+func (d dbInstance) endpointAddress() string {
+	// Extract region from ARN: arn:aws:rds:<region>:<acct>:db:<id>
+	region := "us-east-1"
+	if d.DBInstanceArn != "" {
+		parts := strings.Split(d.DBInstanceArn, ":")
+		if len(parts) >= 4 {
+			region = parts[3]
+		}
+	}
+	return d.DBInstanceIdentifier + "." + region + ".rds.localhost"
 }
 
 func defaultPort(engine string) int {
@@ -161,20 +186,27 @@ func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.Nor
 	if ev == "" {
 		ev = defaultEngineVersion(engine)
 	}
+	port := intParam(nr.Params, "Port", 0)
+	if port == 0 {
+		port = defaultPort(engine)
+	}
 	inst := dbInstance{
-		DBInstanceIdentifier: id,
-		DBInstanceClass:      strParam(nr.Params, "DBInstanceClass"),
-		Engine:               engine,
-		DBInstanceStatus:     "available",
-		MasterUsername:       strParam(nr.Params, "MasterUsername"),
-		DBName:               strParam(nr.Params, "DBName"),
-		AllocatedStorage:     allocStorage,
-		EngineVersion:        ev,
-		DBInstanceArn:        nr.ResourceID("rds-instance", id),
-		DBSubnetGroupName:    strParam(nr.Params, "DBSubnetGroupName"),
-		DBParameterGroupName: strParam(nr.Params, "DBParameterGroupName"),
+		DBInstanceIdentifier:  id,
+		DBInstanceClass:       strParam(nr.Params, "DBInstanceClass"),
+		Engine:                engine,
+		DBInstanceStatus:      "available",
+		MasterUsername:        strParam(nr.Params, "MasterUsername"),
+		MasterUserPassword:    strParam(nr.Params, "MasterUserPassword"),
+		DBName:                strParam(nr.Params, "DBName"),
+		AllocatedStorage:      allocStorage,
+		EngineVersion:         ev,
+		Port:                  port,
+		DBInstanceArn:         nr.ResourceID("rds-instance", id),
+		DBSubnetGroupName:     strParam(nr.Params, "DBSubnetGroupName"),
+		DBParameterGroupName:  strParam(nr.Params, "DBParameterGroupName"),
 		BackupRetentionPeriod: intParam(nr.Params, "BackupRetentionPeriod", 1),
-		MultiAZ:              boolParam(nr.Params, "MultiAZ"),
+		MultiAZ:               boolParam(nr.Params, "MultiAZ"),
+		VpcSecurityGroupIds:   parseVpcSecurityGroupIds(nr.Params),
 	}
 	data, _ := json.Marshal(inst)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
@@ -287,32 +319,77 @@ func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.Nor
 	}
 	var inst dbInstance
 	json.Unmarshal(e.Data, &inst)
+
+	applyImmediately := boolParam(nr.Params, "ApplyImmediately")
+	// Default ApplyImmediately to true if not explicitly set to "false"
+	if _, ok := nr.Params["ApplyImmediately"]; !ok {
+		applyImmediately = true
+	}
+
+	// Collect the requested changes
+	pending := map[string]any{}
 	if cls := strParam(nr.Params, "DBInstanceClass"); cls != "" {
-		inst.DBInstanceClass = cls
+		pending["DBInstanceClass"] = cls
 	}
 	if ev := strParam(nr.Params, "EngineVersion"); ev != "" {
-		inst.EngineVersion = ev
+		pending["EngineVersion"] = ev
 	}
 	if s := intParam(nr.Params, "AllocatedStorage", 0); s > 0 {
-		inst.AllocatedStorage = s
+		pending["AllocatedStorage"] = s
 	}
-	if v, ok := nr.Params["MultiAZ"]; ok {
-		switch b := v.(type) {
-		case bool:
-			inst.MultiAZ = b
-		case string:
-			inst.MultiAZ = strings.EqualFold(b, "true")
-		}
+	if _, ok := nr.Params["MultiAZ"]; ok {
+		pending["MultiAZ"] = boolParam(nr.Params, "MultiAZ")
 	}
 	if v := intParam(nr.Params, "BackupRetentionPeriod", -1); v >= 0 {
-		inst.BackupRetentionPeriod = v
+		pending["BackupRetentionPeriod"] = v
 	}
 	if pg := strParam(nr.Params, "DBParameterGroupName"); pg != "" {
-		inst.DBParameterGroupName = pg
+		pending["DBParameterGroupName"] = pg
 	}
+	if pw := strParam(nr.Params, "MasterUserPassword"); pw != "" {
+		pending["MasterUserPassword"] = pw
+	}
+
+	var pendingWire map[string]any
+	if applyImmediately {
+		// Apply all changes immediately
+		if v, ok := pending["DBInstanceClass"]; ok {
+			inst.DBInstanceClass = v.(string)
+		}
+		if v, ok := pending["EngineVersion"]; ok {
+			inst.EngineVersion = v.(string)
+		}
+		if v, ok := pending["AllocatedStorage"]; ok {
+			inst.AllocatedStorage = v.(int)
+		}
+		if v, ok := pending["MultiAZ"]; ok {
+			inst.MultiAZ = v.(bool)
+		}
+		if v, ok := pending["BackupRetentionPeriod"]; ok {
+			inst.BackupRetentionPeriod = v.(int)
+		}
+		if v, ok := pending["DBParameterGroupName"]; ok {
+			inst.DBParameterGroupName = v.(string)
+		}
+		if v, ok := pending["MasterUserPassword"]; ok {
+			inst.MasterUserPassword = v.(string)
+		}
+	} else {
+		// Defer changes — build PendingModifiedValues wire map
+		pendingWire = make(map[string]any, len(pending))
+		for k, v := range pending {
+			pendingWire[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
 	data, _ := json.Marshal(inst)
 	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
-	return provider.OK(map[string]any{"DBInstanceModified": inst.toWire()}), nil
+
+	wireInst := inst.toWire()
+	if pendingWire != nil {
+		wireInst["PendingModifiedValues"] = pendingWire
+	}
+	return provider.OK(map[string]any{"DBInstanceModified": wireInst}), nil
 }
 
 func (p *RelationalProvider) DeleteDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -598,6 +675,7 @@ type dbSubnetGroup struct {
 	DBSubnetGroupDescription string `json:"DBSubnetGroupDescription"`
 	VpcId                    string `json:"VpcId"`
 	SubnetGroupStatus        string `json:"SubnetGroupStatus"`
+	DBSubnetGroupArn         string `json:"DBSubnetGroupArn,omitempty"`
 }
 
 func (s dbSubnetGroup) toWire() map[string]any {
@@ -606,6 +684,7 @@ func (s dbSubnetGroup) toWire() map[string]any {
 		"DBSubnetGroupDescription": s.DBSubnetGroupDescription,
 		"VpcId":                    s.VpcId,
 		"SubnetGroupStatus":        s.SubnetGroupStatus,
+		"DBSubnetGroupArn":         s.DBSubnetGroupArn,
 	}
 }
 
@@ -619,6 +698,7 @@ func (p *RelationalProvider) CreateDBSubnetGroup(ctx context.Context, nr *model.
 		DBSubnetGroupDescription: strParam(nr.Params, "DBSubnetGroupDescription"),
 		VpcId:                    strParam(nr.Params, "VpcId"),
 		SubnetGroupStatus:        "Complete",
+		DBSubnetGroupArn:         nr.ResourceID("rds-subnetgroup", name),
 	}
 	data, _ := json.Marshal(sg)
 	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBSubnetGroup, ID: name, Data: data}); err != nil {
@@ -703,6 +783,20 @@ func boolParam(params map[string]any, key string) bool {
 		}
 	}
 	return false
+}
+
+// parseVpcSecurityGroupIds parses VpcSecurityGroupIds.member.N from Query-protocol params.
+func parseVpcSecurityGroupIds(params map[string]any) []string {
+	var ids []string
+	for i := 1; ; i++ {
+		key := fmt.Sprintf("VpcSecurityGroupIds.member.%d", i)
+		v, ok := params[key].(string)
+		if !ok || v == "" {
+			break
+		}
+		ids = append(ids, v)
+	}
+	return ids
 }
 
 var _ = newID // suppress unused warning

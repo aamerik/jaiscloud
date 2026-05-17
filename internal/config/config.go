@@ -184,8 +184,9 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"ecs-service":            func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:service/%s", r, a, n) },
 	"ecs-container-instance": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:container-instance/%s", r, a, n) },
 	// RDS
-	"rds-cluster":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:cluster:%s", r, a, n) },
-	"rds-instance": func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:db:%s", r, a, n) },
+	"rds-cluster":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:cluster:%s", r, a, n) },
+	"rds-instance":    func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:db:%s", r, a, n) },
+	"rds-subnetgroup": func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:subgrp:%s", r, a, n) },
 	// STS / IAM additional types
 	"sts-assumed-role":     func(_, a, n string) string { return fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s", a, n) },
 	"sts-federated-user":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", a, n) },

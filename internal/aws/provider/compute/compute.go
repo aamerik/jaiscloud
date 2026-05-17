@@ -177,6 +177,8 @@ type ec2Instance struct {
 	UserData                string            `json:"UserData,omitempty"`
 	IamInstanceProfileArn   string            `json:"IamInstanceProfileArn,omitempty"`
 	IamInstanceProfileName  string            `json:"IamInstanceProfileName,omitempty"`
+	DisableApiTermination   bool              `json:"DisableApiTermination,omitempty"`
+	LastRebootTime          string            `json:"LastRebootTime,omitempty"`
 }
 
 func (p *ComputeProvider) saveInstance(ctx context.Context, inst ec2Instance) error {
@@ -549,7 +551,7 @@ func (p *ComputeProvider) RebootInstances(ctx context.Context, nr *model.Normali
 		if err != nil {
 			return nil, err
 		}
-		inst.Tags["_last_reboot"] = time.Now().UTC().Format(time.RFC3339)
+		inst.LastRebootTime = time.Now().UTC().Format(time.RFC3339)
 		p.saveInstance(ctx, inst)
 	}
 	return provider.OK(nil), nil
@@ -566,6 +568,14 @@ func (p *ComputeProvider) ModifyInstanceAttribute(ctx context.Context, nr *model
 	}
 	if v := strParam(nr.Params, "UserData.Value"); v != "" {
 		inst.UserData = v
+	}
+	if v, ok := nr.Params["DisableApiTermination.Value"]; ok {
+		switch val := v.(type) {
+		case bool:
+			inst.DisableApiTermination = val
+		case string:
+			inst.DisableApiTermination = val == "true"
+		}
 	}
 	p.saveInstance(ctx, inst)
 	return provider.OK(nil), nil
@@ -585,7 +595,9 @@ func (p *ComputeProvider) DescribeInstanceAttribute(ctx context.Context, nr *mod
 	case "userData":
 		resp["UserData"] = map[string]any{"Value": inst.UserData}
 	case "disableApiTermination":
-		resp["DisableApiTermination"] = map[string]any{"Value": false}
+		resp["DisableApiTermination"] = map[string]any{"Value": inst.DisableApiTermination}
+	case "sriovNetSupport":
+		resp["SriovNetSupport"] = map[string]any{"Value": "simple"}
 	default:
 		resp[attr] = nil
 	}

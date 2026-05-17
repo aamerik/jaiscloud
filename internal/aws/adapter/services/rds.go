@@ -243,10 +243,31 @@ func encodeDBInstance(v any) string {
 	sb.WriteString(xmlTag("EngineVersion", str(m["EngineVersion"])))
 	sb.WriteString(xmlTag("PubliclyAccessible", str(m["PubliclyAccessible"])))
 	sb.WriteString(xmlTag("DBInstanceArn", str(m["DBInstanceArn"])))
+	sb.WriteString(xmlTag("BackupRetentionPeriod", str(m["BackupRetentionPeriod"])))
+	sb.WriteString(xmlTag("DBParameterGroupName", str(m["DBParameterGroupName"])))
+	sb.WriteString(xmlTag("DBSubnetGroupName", str(m["DBSubnetGroupName"])))
+	if rr, ok := m["ReadReplicaSourceDBInstanceIdentifier"]; ok {
+		sb.WriteString(xmlTag("ReadReplicaSourceDBInstanceIdentifier", str(rr)))
+	}
 	if sg, ok := m["DBSubnetGroup"]; ok {
 		sb.WriteString(xmlTag("DBSubnetGroup", encodeDBSubnetGroup(sg)))
 	}
+	if pmv, ok := m["PendingModifiedValues"]; ok {
+		sb.WriteString(xmlTag("PendingModifiedValues", encodePendingModifiedValues(pmv)))
+	}
 	sb.WriteString(`</DBInstance>`)
+	return sb.String()
+}
+
+func encodePendingModifiedValues(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var sb strings.Builder
+	for k, val := range m {
+		sb.WriteString(xmlTag(k, str(val)))
+	}
 	return sb.String()
 }
 
@@ -293,6 +314,9 @@ func encodeDBSubnetGroup(v any) string {
 	sb.WriteString(xmlTag("DBSubnetGroupDescription", str(m["DBSubnetGroupDescription"])))
 	sb.WriteString(xmlTag("VpcId", str(m["VpcId"])))
 	sb.WriteString(xmlTag("SubnetGroupStatus", str(m["SubnetGroupStatus"])))
+	if arn := str(m["DBSubnetGroupArn"]); arn != "" {
+		sb.WriteString(xmlTag("DBSubnetGroupArn", arn))
+	}
 	sb.WriteString(`</DBSubnetGroup>`)
 	return sb.String()
 }

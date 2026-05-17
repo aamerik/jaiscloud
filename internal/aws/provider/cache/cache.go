@@ -59,14 +59,18 @@ const (
 // ─── Cache Clusters ───────────────────────────────────────────────────────────
 
 type cacheCluster struct {
-	CacheClusterId     string   `json:"CacheClusterId"`
-	CacheClusterStatus string   `json:"CacheClusterStatus"`
-	CacheNodeType      string   `json:"CacheNodeType"`
-	Engine             string   `json:"Engine"`
-	EngineVersion      string   `json:"EngineVersion"`
-	NumCacheNodes      int      `json:"NumCacheNodes"`
-	SubnetGroupName    string   `json:"SubnetGroupName,omitempty"`
-	SecurityGroupIds   []string `json:"SecurityGroupIds,omitempty"`
+	CacheClusterId               string   `json:"CacheClusterId"`
+	CacheClusterStatus           string   `json:"CacheClusterStatus"`
+	CacheNodeType                string   `json:"CacheNodeType"`
+	Engine                       string   `json:"Engine"`
+	EngineVersion                string   `json:"EngineVersion"`
+	NumCacheNodes                int      `json:"NumCacheNodes"`
+	Port                         int      `json:"Port,omitempty"`
+	SubnetGroupName              string   `json:"SubnetGroupName,omitempty"`
+	SecurityGroupIds             []string `json:"SecurityGroupIds,omitempty"`
+	SnapshotRetentionLimit       int      `json:"SnapshotRetentionLimit,omitempty"`
+	PreferredMaintenanceWindow   string   `json:"PreferredMaintenanceWindow,omitempty"`
+	AutoMinorVersionUpgrade      bool     `json:"AutoMinorVersionUpgrade"`
 }
 
 func defaultEngineVersion(engine string) string {
@@ -87,14 +91,18 @@ func defaultPort(engine string) int {
 }
 
 func (c cacheCluster) toWire() map[string]any {
-	port := defaultPort(c.Engine)
+	port := c.Port
+	if port == 0 {
+		port = defaultPort(c.Engine)
+	}
 	w := map[string]any{
-		"CacheClusterId":     c.CacheClusterId,
-		"CacheClusterStatus": c.CacheClusterStatus,
-		"CacheNodeType":      c.CacheNodeType,
-		"Engine":             c.Engine,
-		"EngineVersion":      c.EngineVersion,
-		"NumCacheNodes":      fmt.Sprintf("%d", c.NumCacheNodes),
+		"CacheClusterId":          c.CacheClusterId,
+		"CacheClusterStatus":      c.CacheClusterStatus,
+		"CacheNodeType":           c.CacheNodeType,
+		"Engine":                  c.Engine,
+		"EngineVersion":           c.EngineVersion,
+		"NumCacheNodes":           fmt.Sprintf("%d", c.NumCacheNodes),
+		"AutoMinorVersionUpgrade": fmt.Sprintf("%t", c.AutoMinorVersionUpgrade),
 		"ConfigurationEndpoint": map[string]any{
 			"Address": c.CacheClusterId + ".jaiscloud.cache.amazonaws.com",
 			"Port":    fmt.Sprintf("%d", port),
@@ -109,6 +117,12 @@ func (c cacheCluster) toWire() map[string]any {
 			sgList = append(sgList, map[string]any{"SecurityGroupId": id, "Status": "active"})
 		}
 		w["SecurityGroups"] = sgList
+	}
+	if c.SnapshotRetentionLimit > 0 {
+		w["SnapshotRetentionLimit"] = fmt.Sprintf("%d", c.SnapshotRetentionLimit)
+	}
+	if c.PreferredMaintenanceWindow != "" {
+		w["PreferredMaintenanceWindow"] = c.PreferredMaintenanceWindow
 	}
 	return w
 }
@@ -148,15 +162,41 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 	if cacheNodeType == "" {
 		cacheNodeType = "cache.t3.micro"
 	}
+	// Parse Port; default based on engine if not specified.
+	port := 0
+	if s := strParam(nr.Params, "Port"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			port = n
+		}
+	}
+	if port == 0 {
+		port = defaultPort(engine)
+	}
+	// Parse SnapshotRetentionLimit.
+	snapshotRetentionLimit := 0
+	if s := strParam(nr.Params, "SnapshotRetentionLimit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			snapshotRetentionLimit = n
+		}
+	}
+	// AutoMinorVersionUpgrade defaults to true.
+	autoMinorVersionUpgrade := true
+	if s := strParam(nr.Params, "AutoMinorVersionUpgrade"); s == "false" {
+		autoMinorVersionUpgrade = false
+	}
 	c := cacheCluster{
-		CacheClusterId:     id,
-		CacheClusterStatus: "available",
-		CacheNodeType:      cacheNodeType,
-		Engine:             engine,
-		EngineVersion:      strParam(nr.Params, "EngineVersion"),
-		NumCacheNodes:      numNodes,
-		SubnetGroupName:    strParam(nr.Params, "CacheSubnetGroupName"),
-		SecurityGroupIds:   extractSecurityGroupIds(nr.Params),
+		CacheClusterId:             id,
+		CacheClusterStatus:         "available",
+		CacheNodeType:              cacheNodeType,
+		Engine:                     engine,
+		EngineVersion:              strParam(nr.Params, "EngineVersion"),
+		NumCacheNodes:              numNodes,
+		Port:                       port,
+		SubnetGroupName:            strParam(nr.Params, "CacheSubnetGroupName"),
+		SecurityGroupIds:           extractSecurityGroupIds(nr.Params),
+		SnapshotRetentionLimit:     snapshotRetentionLimit,
+		PreferredMaintenanceWindow: strParam(nr.Params, "PreferredMaintenanceWindow"),
+		AutoMinorVersionUpgrade:    autoMinorVersionUpgrade,
 	}
 	if c.EngineVersion == "" {
 		c.EngineVersion = defaultEngineVersion(engine)
@@ -167,6 +207,11 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 			return nil, &model.ProviderError{Code: "CacheClusterAlreadyExists", Message: "Cache cluster already exists", HTTPStatus: http.StatusBadRequest}
 		}
 		return nil, err
+	}
+	// Persist any tags provided at creation time.
+	if tags := extractCacheTags(nr.Params); len(tags) > 0 {
+		arn := nr.ResourceID("elasticache-cluster", id)
+		saveCacheTags(ctx, p.resources, arn, tags)
 	}
 	return &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: map[string]any{"CacheCluster": c.toWire()}}, nil
 }
