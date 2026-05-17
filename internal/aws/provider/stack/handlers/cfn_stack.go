@@ -25,5 +25,11 @@ func NewCFNStackHandler(stackP *stackprovider.StackProvider) stackprovider.Resou
 			_, err := stackP.DeleteStack(ctx, &model.NormalizedRequest{Params: map[string]any{"StackName": physicalID}})
 			return err
 		},
+		// Nested stack outputs are resolved dynamically via Fn::GetAtt Outputs.Key — no static list.
+		GetAttAttrs: []string{},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"StackName"},
+			RequireUpdate:      []string{"TemplateURL", "Parameters", "TimeoutInMinutes", "NotificationARNs", "Tags"},
+		},
 	}
 }
