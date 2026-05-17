@@ -44,8 +44,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		// Config Rules
 		"Config.PutConfigRule":                         p.PutConfigRule,
 		"Config.DescribeConfigRules":                   p.DescribeConfigRules,
+		"Config.DeleteConfigRule":                      p.DeleteConfigRule,
 		"Config.GetComplianceDetailsByConfigRule":       p.GetComplianceDetailsByConfigRule,
 		"Config.DescribeConfigRuleEvaluationStatus":    p.DescribeConfigRuleEvaluationStatus,
+		// Delivery Channel status
+		"Config.DescribeDeliveryChannelStatus":         p.DescribeDeliveryChannelStatus,
 	}
 }
 
@@ -287,6 +290,40 @@ func (p *Provider) DescribeConfigRules(ctx context.Context, nr *model.Normalized
 		rules = []any{}
 	}
 	return provider.OK(map[string]any{"ConfigRules": rules}), nil
+}
+
+func (p *Provider) DeleteConfigRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr.Params, "ConfigRuleName")
+	if name == "" {
+		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "ConfigRuleName is required", HTTPStatus: http.StatusBadRequest}
+	}
+	if _, err := p.resources.Get(ctx, rtConfigRule, name); err == store.ErrNotFound {
+		return nil, &model.ProviderError{Code: "NoSuchConfigRuleException", Message: "Config rule not found", HTTPStatus: http.StatusBadRequest}
+	}
+	p.resources.Delete(ctx, rtConfigRule, name)
+	return provider.OK(map[string]any{}), nil
+}
+
+func (p *Provider) DescribeDeliveryChannelStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, err := p.resources.List(ctx, rtDeliveryChannel, "")
+	if err != nil {
+		return nil, err
+	}
+
+	var statuses []any
+	for _, e := range entries {
+		var ch deliveryChannel
+		json.Unmarshal(e.Data, &ch)
+		statuses = append(statuses, map[string]any{
+			"name":                      ch.Name,
+			"configHistoryDeliveryInfo": map[string]any{"lastStatus": "SUCCESS"},
+			"configSnapshotDeliveryInfo": map[string]any{"lastStatus": "SUCCESS"},
+		})
+	}
+	if statuses == nil {
+		statuses = []any{}
+	}
+	return provider.OK(map[string]any{"DeliveryChannelsStatus": statuses}), nil
 }
 
 func (p *Provider) GetComplianceDetailsByConfigRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

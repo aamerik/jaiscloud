@@ -194,3 +194,65 @@ func TestELBv2CreateListener(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, descAfter.Listeners, 0)
 }
+
+func TestELBv2TagsRoundtrip(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newELBv2Client(t)
+
+	// Create a load balancer
+	lbOut, err := client.CreateLoadBalancer(ctx, &awselbv2.CreateLoadBalancerInput{
+		Name:   aws.String("tags-test-alb"),
+		Scheme: elbv2types.LoadBalancerSchemeEnumInternetFacing,
+		Type:   elbv2types.LoadBalancerTypeEnumApplication,
+	})
+	require.NoError(t, err)
+	lbArn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	// Add tags
+	_, err = client.AddTags(ctx, &awselbv2.AddTagsInput{
+		ResourceArns: []string{aws.ToString(lbArn)},
+		Tags: []elbv2types.Tag{
+			{Key: aws.String("env"), Value: aws.String("prod")},
+			{Key: aws.String("team"), Value: aws.String("platform")},
+		},
+	})
+	require.NoError(t, err)
+
+	// Describe tags
+	tagsOut, err := client.DescribeTags(ctx, &awselbv2.DescribeTagsInput{
+		ResourceArns: []string{aws.ToString(lbArn)},
+	})
+	require.NoError(t, err)
+	require.Len(t, tagsOut.TagDescriptions, 1)
+	tagDesc := tagsOut.TagDescriptions[0]
+	assert.Equal(t, aws.ToString(lbArn), aws.ToString(tagDesc.ResourceArn))
+
+	tagMap := make(map[string]string)
+	for _, tag := range tagDesc.Tags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	assert.Equal(t, "prod", tagMap["env"])
+	assert.Equal(t, "platform", tagMap["team"])
+
+	// Remove one tag
+	_, err = client.RemoveTags(ctx, &awselbv2.RemoveTagsInput{
+		ResourceArns: []string{aws.ToString(lbArn)},
+		TagKeys:      []string{"team"},
+	})
+	require.NoError(t, err)
+
+	// Confirm only "env" remains
+	tagsOut2, err := client.DescribeTags(ctx, &awselbv2.DescribeTagsInput{
+		ResourceArns: []string{aws.ToString(lbArn)},
+	})
+	require.NoError(t, err)
+	require.Len(t, tagsOut2.TagDescriptions, 1)
+	tagMap2 := make(map[string]string)
+	for _, tag := range tagsOut2.TagDescriptions[0].Tags {
+		tagMap2[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	assert.Equal(t, "prod", tagMap2["env"])
+	_, hasTeam := tagMap2["team"]
+	assert.False(t, hasTeam)
+}
