@@ -6,8 +6,8 @@ import "context"
 // Used in lite mode and as the default when no executor mode is configured.
 type MockExecutor struct{}
 
-func (e *MockExecutor) Invoke(_ context.Context, req InvokeRequest) ([]byte, error) {
-	return req.Payload, nil
+func (e *MockExecutor) Invoke(_ context.Context, req InvokeRequest) (InvokeResult, error) {
+	return InvokeResult{Payload: req.Payload}, nil
 }
 
 func (e *MockExecutor) DeleteFunction(_ context.Context, _ string) {}

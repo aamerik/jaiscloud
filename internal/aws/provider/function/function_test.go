@@ -47,9 +47,9 @@ func createFn(t *testing.T, p *function.FunctionProvider, name string, timeout i
 // blockingExecutor blocks until the context is cancelled, then returns the ctx error.
 type blockingExecutor struct{}
 
-func (b *blockingExecutor) Invoke(ctx context.Context, _ lambdaexec.InvokeRequest) ([]byte, error) {
+func (b *blockingExecutor) Invoke(ctx context.Context, _ lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return lambdaexec.InvokeResult{}, ctx.Err()
 }
 func (b *blockingExecutor) DeleteFunction(_ context.Context, _ string) {}
 func (b *blockingExecutor) Reset()                                      {}

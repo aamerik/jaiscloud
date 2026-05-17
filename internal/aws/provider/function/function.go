@@ -616,7 +616,8 @@ func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName stri
 	}
 	invCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return p.executor.Invoke(invCtx, req)
+	result, err := p.executor.Invoke(invCtx, req)
+	return result.Payload, err
 }
 
 // resolveLayerInfos maps layer version ARNs to LayerInfo structs by extracting
@@ -715,6 +716,8 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 	invCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	logType := strParam(nr.Params, "_log_type")
+
 	req := lambdaexec.InvokeRequest{
 		FunctionName: cfg.FunctionName,
 		Runtime:      cfg.Runtime,
@@ -724,6 +727,8 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		EnvVars:      cfg.Environment,
 		Payload:      payload,
 		AccountID:    nr.AccountID,
+		Layers:       p.resolveLayerInfos(cfg.Layers),
+		LogType:      logType,
 	}
 	result, err := p.executor.Invoke(invCtx, req)
 	if err != nil {
@@ -748,10 +753,10 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("ServiceException", "invocation failed: "+err.Error(), 500)
 	}
 
-	if p.responsePayloadMax > 0 && int64(len(result)) > p.responsePayloadMax {
+	if p.responsePayloadMax > 0 && int64(len(result.Payload)) > p.responsePayloadMax {
 		body := map[string]any{
 			"errorMessage": fmt.Sprintf("Response payload size (%d bytes) exceeded maximum allowed payload size (%d bytes).",
-				len(result), p.responsePayloadMax),
+				len(result.Payload), p.responsePayloadMax),
 			"errorType": "Function.ResponseSizeTooLarge",
 		}
 		oversizePayload, _ := json.Marshal(body)
@@ -761,9 +766,14 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 		}, nil
 	}
 
+	respData := map[string]any{"_payload": result.Payload}
+	if strings.EqualFold(logType, "Tail") && len(result.LogTail) > 0 {
+		respData["LogResult"] = base64.StdEncoding.EncodeToString(result.LogTail)
+	}
+
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
-		Data:       map[string]any{"_payload": result},
+		Data:       respData,
 	}, nil
 }
 

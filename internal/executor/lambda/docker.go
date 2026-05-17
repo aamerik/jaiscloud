@@ -93,17 +93,17 @@ func NewDockerExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *DockerE
 }
 
 // Invoke obtains a warm container for the function (starting one if needed),
-// then POSTs the payload and returns the response body.
-func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, error) {
+// then POSTs the payload and returns the result (including log tail when LogType="Tail").
+func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error) {
 	c, err := e.getOrStart(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("lambda docker: start container: %w", err)
+		return InvokeResult{}, fmt.Errorf("lambda docker: start container: %w", err)
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/2015-03-31/functions/function/invocations", c.hostPort)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Payload))
 	if err != nil {
-		return nil, fmt.Errorf("lambda docker: build request: %w", err)
+		return InvokeResult{}, fmt.Errorf("lambda docker: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -112,19 +112,19 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte,
 		switch {
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
 			e.removeContainer(req.FunctionName)
-			return nil, ctx.Err()
+			return InvokeResult{}, ctx.Err()
 		default:
-			return nil, fmt.Errorf("lambda docker: invoke: %w", err)
+			return InvokeResult{}, fmt.Errorf("lambda docker: invoke: %w", err)
 		}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("lambda docker: read response: %w", err)
+		return InvokeResult{}, fmt.Errorf("lambda docker: read response: %w", err)
 	}
 	if resp.StatusCode >= 500 {
 		e.removeContainer(req.FunctionName)
-		return nil, fmt.Errorf("lambda docker: RIE returned HTTP %d", resp.StatusCode)
+		return InvokeResult{}, fmt.Errorf("lambda docker: RIE returned HTTP %d", resp.StatusCode)
 	}
 
 	e.mu.Lock()
@@ -133,7 +133,47 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte,
 	}
 	e.mu.Unlock()
 
-	return body, nil
+	result := InvokeResult{Payload: body}
+
+	// When LogType=Tail, fetch the last 4 KiB of container stdout+stderr.
+	if strings.EqualFold(req.LogType, "Tail") {
+		e.mu.Lock()
+		ctr, ok := e.containers[req.FunctionName]
+		e.mu.Unlock()
+		if ok && ctr.id != "" {
+			logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			logURL := fmt.Sprintf("http://localhost/v1.41/containers/%s/logs?stdout=true&stderr=true&tail=50", ctr.id)
+			logBody, logStatus, logErr := e.dockerCall(logCtx, http.MethodGet, logURL, nil)
+			if logErr == nil && logStatus < 300 {
+				result.LogTail = stripDockerMux(logBody)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// stripDockerMux removes Docker multiplexed stream headers (8 bytes per frame)
+// to produce plain log text. See Docker API: POST /containers/{id}/attach.
+// Each frame: [stream_type(1), 0,0,0(3), size(4 big-endian), payload(size bytes)].
+func stripDockerMux(raw []byte) []byte {
+	const hdrLen = 8
+	var out []byte
+	for len(raw) >= hdrLen {
+		size := int(raw[4])<<24 | int(raw[5])<<16 | int(raw[6])<<8 | int(raw[7])
+		raw = raw[hdrLen:]
+		if size > len(raw) {
+			size = len(raw)
+		}
+		out = append(out, raw[:size]...)
+		raw = raw[size:]
+	}
+	// If output is empty the logs may not be multiplexed (TTY mode); return raw.
+	if len(out) == 0 {
+		return raw
+	}
+	return out
 }
 
 // Close stops all warm containers and the GC goroutine.

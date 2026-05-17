@@ -54,6 +54,9 @@ func (c *LambdaCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReq
 		if it := r.Header.Get("X-Amz-Invocation-Type"); it != "" {
 			params["_invocation_type"] = it
 		}
+		if lt := r.Header.Get("X-Amz-Log-Type"); lt != "" {
+			params["_log_type"] = lt
+		}
 	}
 
 	return &model.NormalizedRequest{
@@ -275,6 +278,9 @@ func (c *LambdaCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRe
 		h.Set("X-Amz-Executed-Version", "$LATEST")
 		if ferr, ok := resp.Data["_function_error"].(string); ok && ferr != "" {
 			h.Set("X-Amz-Function-Error", ferr)
+		}
+		if logResult, ok := resp.Data["LogResult"].(string); ok && logResult != "" {
+			h.Set("X-Amz-Log-Result", logResult)
 		}
 		payload, _ := resp.Data["_payload"].([]byte)
 		if len(payload) > 0 {

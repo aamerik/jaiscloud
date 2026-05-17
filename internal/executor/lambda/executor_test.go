@@ -20,14 +20,14 @@ func TestMockExecutor_EchoesPayload(t *testing.T) {
 		Payload:      payload,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, payload, got)
+	assert.Equal(t, payload, got.Payload)
 }
 
 func TestMockExecutor_NilPayload(t *testing.T) {
 	exec := &lambdaexec.MockExecutor{}
 	got, err := exec.Invoke(context.Background(), lambdaexec.InvokeRequest{FunctionName: "fn"})
 	require.NoError(t, err)
-	assert.Nil(t, got)
+	assert.Nil(t, got.Payload)
 }
 
 func TestMockExecutor_Close(t *testing.T) {
@@ -91,7 +91,7 @@ func TestNewExecutor_DefaultIsMock(t *testing.T) {
 	payload := []byte(`"hello"`)
 	got, err := exec.Invoke(context.Background(), lambdaexec.InvokeRequest{Payload: payload})
 	require.NoError(t, err)
-	assert.Equal(t, payload, got)
+	assert.Equal(t, payload, got.Payload)
 	exec.Close()
 }
 

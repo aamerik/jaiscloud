@@ -143,14 +143,14 @@ func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *K8sExecuto
 
 // Invoke obtains a warm pod for the function (creating one if needed) and
 // POSTs the payload via the Lambda RIE HTTP protocol.
-func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, error) {
+func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error) {
 	pod, err := e.getOrCreate(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("lambda k8s: get/create pod: %w", err)
+		return InvokeResult{}, fmt.Errorf("lambda k8s: get/create pod: %w", err)
 	}
 
 	url := pod.endpoint + riePath
-	var result []byte
+	var payload []byte
 	backoff := time.Second
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
@@ -159,7 +159,7 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					go e.removePod(context.Background(), req.FunctionName)
 				}
-				return nil, ctx.Err()
+				return InvokeResult{}, ctx.Err()
 			case <-time.After(backoff):
 				if backoff < 4*time.Second {
 					backoff += time.Second
@@ -169,7 +169,7 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Payload))
 		if err != nil {
-			return nil, fmt.Errorf("lambda k8s: build request: %w", err)
+			return InvokeResult{}, fmt.Errorf("lambda k8s: build request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 
@@ -177,12 +177,12 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				go e.removePod(context.Background(), req.FunctionName)
-				return nil, ctx.Err()
+				return InvokeResult{}, ctx.Err()
 			}
 			slog.Warn("lambda k8s: invoke attempt failed", "attempt", attempt+1, "err", err)
 			continue
 		}
-		result, err = io.ReadAll(resp.Body)
+		payload, err = io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			slog.Warn("lambda k8s: read response failed", "attempt", attempt+1, "err", err)
@@ -194,11 +194,11 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) ([]byte, er
 			p.lastUsed = time.Now()
 		}
 		e.mu.Unlock()
-		return result, nil
+		return InvokeResult{Payload: payload}, nil
 	}
 
 	e.removePod(ctx, req.FunctionName)
-	return nil, fmt.Errorf("lambda k8s: all invoke attempts failed for %s", req.FunctionName)
+	return InvokeResult{}, fmt.Errorf("lambda k8s: all invoke attempts failed for %s", req.FunctionName)
 }
 
 // DeleteFunction tears down the warm pod for the named function.

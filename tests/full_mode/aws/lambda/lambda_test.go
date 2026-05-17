@@ -4,8 +4,10 @@ package lambda_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,4 +252,51 @@ func TestLambdaDocker_EnvironmentVariables_PassedToContainer(t *testing.T) {
 	// If the test image echoes env vars, response should include "hello-from-env".
 	// With a pure echo handler this verifies the env was accepted at create time.
 	t.Logf("response: %s", string(out.Payload))
+}
+
+// TestLambdaDocker_LogResult_Tail creates a Python 3.11 function that prints
+// a sentinel string to stdout, invokes it with LogType=Tail, and asserts
+// that LogResult (base64-decoded) contains the sentinel.
+func TestLambdaDocker_LogResult_Tail(t *testing.T) {
+	requireLambdaDockerEnv(t)
+	resetState(t)
+
+	ctx := context.Background()
+	c := newLambdaClient(t)
+
+	// Build function zip: lambda_function.py that prints to stdout
+	fnZip := buildZip(t, map[string]string{
+		"lambda_function.py": `def handler(event, context):
+    print("HELLO_FROM_LAMBDA")
+    return {"ok": True}
+`,
+	})
+	fnB64 := base64.StdEncoding.EncodeToString(fnZip)
+
+	_, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("log-result-tail-test"),
+		Runtime:      types.RuntimePython311,
+		Handler:      aws.String("lambda_function.handler"),
+		Role:         aws.String("arn:aws:iam::000000000000:role/lambda-role"),
+		Code: &types.FunctionCode{
+			ZipFile: []byte(fnB64),
+		},
+	})
+	require.NoError(t, err, "CreateFunction")
+
+	out, err := c.Invoke(ctx, &awslambda.InvokeInput{
+		FunctionName: aws.String("log-result-tail-test"),
+		Payload:      []byte(`{}`),
+		LogType:      types.LogTypeTail,
+	})
+	require.NoError(t, err, "Invoke")
+	assert.EqualValues(t, 200, out.StatusCode)
+	assert.Empty(t, aws.ToString(out.FunctionError), "expected no function error")
+
+	// LogResult is base64-encoded in the response header; SDK exposes it decoded.
+	require.NotEmpty(t, aws.ToString(out.LogResult), "expected non-empty LogResult")
+	logBytes, err := base64.StdEncoding.DecodeString(aws.ToString(out.LogResult))
+	require.NoError(t, err, "base64-decode LogResult")
+	assert.True(t, strings.Contains(string(logBytes), "HELLO_FROM_LAMBDA"),
+		"expected LogResult to contain HELLO_FROM_LAMBDA, got: %s", string(logBytes))
 }

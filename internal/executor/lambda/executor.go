@@ -23,13 +23,20 @@ type InvokeRequest struct {
 	Payload      []byte
 	AccountID    string
 	Layers       []LayerInfo // resolved layer zip blobs to mount at /opt
+	LogType      string      // "Tail" → executor captures last 4 KiB of stdout into LogTail
+}
+
+// InvokeResult holds the function response payload and optional log tail.
+type InvokeResult struct {
+	Payload []byte
+	LogTail []byte // populated when InvokeRequest.LogType == "Tail"
 }
 
 // LambdaExecutor is the interface satisfied by MockExecutor, DockerExecutor,
 // and K8sExecutor.
 type LambdaExecutor interface {
-	// Invoke executes a Lambda function synchronously and returns the response payload.
-	Invoke(ctx context.Context, req InvokeRequest) ([]byte, error)
+	// Invoke executes a Lambda function synchronously and returns the result.
+	Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error)
 	// DeleteFunction tears down any warm container or pod for the named function.
 	DeleteFunction(ctx context.Context, functionName string)
 	// Reset tears down all warm containers or pods (called on /_jaiscloud/reset).
