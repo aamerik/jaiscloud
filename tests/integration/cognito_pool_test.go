@@ -1,6 +1,4 @@
 // Package integration provides Cognito User Pool round-trip integration tests.
-// NOTE: Cognito is not yet implemented in JaisCloud; these tests are skipped
-// until the provider is added.
 package integration_test
 
 import (
@@ -14,7 +12,6 @@ import (
 )
 
 func TestCognito_CreateUserPool(t *testing.T) {
-	t.Skip("Cognito not yet implemented")
 	resetState(t)
 	ctx := context.Background()
 	c := newCognitoIDPClient(t)
@@ -29,7 +26,6 @@ func TestCognito_CreateUserPool(t *testing.T) {
 }
 
 func TestCognito_CreateUserPoolClient(t *testing.T) {
-	t.Skip("Cognito not yet implemented")
 	resetState(t)
 	ctx := context.Background()
 	c := newCognitoIDPClient(t)
@@ -51,7 +47,6 @@ func TestCognito_CreateUserPoolClient(t *testing.T) {
 }
 
 func TestCognito_AdminCreateUser(t *testing.T) {
-	t.Skip("Cognito not yet implemented")
 	resetState(t)
 	ctx := context.Background()
 	c := newCognitoIDPClient(t)

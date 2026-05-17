@@ -30,7 +30,6 @@ import (
 // ─── Cognito User Pools ───────────────────────────────────────────────────────
 
 func TestCognito_UserPool_CRUD(t *testing.T) {
-	t.Skip("Cognito not yet implemented")
 	resetState(t)
 	ctx := context.Background()
 	c := newCognitoIDPClient(t)
@@ -79,7 +78,6 @@ func TestCognito_UserPool_CRUD(t *testing.T) {
 }
 
 func TestCognito_UserPool_ClientAndUser(t *testing.T) {
-	t.Skip("Cognito not yet implemented")
 	resetState(t)
 	ctx := context.Background()
 	c := newCognitoIDPClient(t)
