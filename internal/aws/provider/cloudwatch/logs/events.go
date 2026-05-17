@@ -340,11 +340,12 @@ func (p *Provider) FilterLogEvents(_ context.Context, nr *model.NormalizedReques
 		return allEvents[i].LogStreamName < allEvents[j].LogStreamName
 	})
 
-	// Apply filterPattern (simple substring match; empty = all pass)
+	// Apply filterPattern (supports JSON field filters and substring match; empty = all pass)
 	if filterPattern != "" {
+		matcher := compileLogFilter(filterPattern)
 		var matched []annotatedEvent
 		for _, e := range allEvents {
-			if strings.Contains(e.Message, filterPattern) {
+			if matcher(e.Message) {
 				matched = append(matched, e)
 			}
 		}

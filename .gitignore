@@ -5,9 +5,13 @@ plan_docs/
 
 # Ignore built binary not folder
 jaiscloud-aws
+!jaiscloud-aws/
 jaiscloud-azure
+!jaiscloud-azure/
 jaiscloud-gcp
+!jaiscloud-gcp/
 jaiscloud-linux
+!jaiscloud-linux/
 !jaiscloud/
 
 # Lint tool binary (built by go build ./tools/lint/paginationcheck/)

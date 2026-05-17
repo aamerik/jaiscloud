@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	awssfn "github.com/aws/aws-sdk-go-v2/service/sfn"
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	middleware "github.com/aws/smithy-go/middleware"
@@ -16,6 +18,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// sfnCreateLambdaFn creates a minimal Lambda function for use in SFN Task state tests.
+// The mock executor echoes the payload, so the SFN execution will SUCCEED.
+func sfnCreateLambdaFn(t *testing.T, name string) {
+	t.Helper()
+	cfg := newAWSConfig(t)
+	c := awslambda.NewFromConfig(cfg, func(o *awslambda.Options) {
+		o.BaseEndpoint = aws.String(jaiscloudEndpoint())
+	})
+	_, err := c.CreateFunction(context.Background(), &awslambda.CreateFunctionInput{
+		FunctionName: aws.String(name),
+		Runtime:      lambdatypes.RuntimeNodejs18x,
+		Role:         aws.String("arn:aws:iam::000000000000:role/lambda-role"),
+		Handler:      aws.String("index.handler"),
+		Code:         &lambdatypes.FunctionCode{ZipFile: []byte("fake-zip-payload")},
+	})
+	require.NoError(t, err, "create Lambda function %q for SFN test", name)
+}
 
 const testDefinition = `{"StartAt":"S1","States":{"S1":{"Type":"Pass","End":true}}}`
 const testRoleARN = "arn:aws:iam::000000000000:role/sfn-test"
@@ -874,6 +894,9 @@ func TestSFN_TaskState_Lambda(t *testing.T) {
 	ctx := context.Background()
 	name := sfnName(t)
 
+	// Create the Lambda function so the SFN engine can invoke it via the dispatcher.
+	sfnCreateLambdaFn(t, "echo-fn")
+
 	// Use legacy Lambda ARN format (arn:aws:lambda:...:function:Name).
 	// parseTaskResource recognises this as "lambda:invoke".
 	definition := `{
@@ -915,6 +938,8 @@ func TestSFN_ErrorHandling_Retry(t *testing.T) {
 	client := sfnClient(t)
 	ctx := context.Background()
 	name := sfnName(t)
+
+	sfnCreateLambdaFn(t, "retry-fn")
 
 	definition := `{
 		"StartAt": "RetryTask",

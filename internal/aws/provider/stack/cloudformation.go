@@ -389,8 +389,26 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 		return nil, &model.ProviderError{Code: "ValidationError", Message: err.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
-	// Compute diff between old and new templates.
-	changes := BuildChangeSet(oldDoc, newDoc, p.handlers)
+	// Build old resolve context to compute resolved old properties.
+	oldRc := newResolveCtx(nr.Region, nr.AccountID, nr.Port)
+	oldRc.pseudoParams["AWS::StackName"] = name
+	oldRc.pseudoParams["AWS::StackId"] = s.StackId
+	oldParamMap := make(map[string]string, len(s.Parameters))
+	for _, param := range s.Parameters {
+		oldParamMap[param.ParameterKey] = param.ParameterValue
+	}
+	if tplParams, ok := oldDoc["Parameters"].(map[string]any); ok {
+		oldRc.resolveParameters(tplParams, oldParamMap)
+	}
+	for i := range s.Resources {
+		oldRc.resources[s.Resources[i].LogicalResourceId] = &s.Resources[i]
+	}
+
+	// Compute diff between resolved old and resolved new properties so that
+	// parameter-driven changes (e.g. QueueName: {Ref: Param}) are detected.
+	resolvedOldDoc := buildResolvedDoc(oldDoc, oldRc)
+	resolvedNewDoc := buildResolvedDoc(newDoc, rc)
+	changes := BuildChangeSet(resolvedOldDoc, resolvedNewDoc, p.handlers)
 
 	// Build lookup maps for the diff.
 	oldByLogical := make(map[string]cfResource, len(s.Resources))

@@ -69,7 +69,7 @@ func (c *LambdaCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReq
 
 func lambdaDetectAction(method, path string) (action string, params map[string]string) {
 	params = map[string]string{}
-	for _, prefix := range []string{"/2015-03-31/", "/2016-08-19/", "/2017-03-31/", "/2017-10-31/", "/2018-10-31/", "/2019-09-30/"} {
+	for _, prefix := range []string{"/2015-03-31/", "/2016-08-19/", "/2017-03-31/", "/2017-10-31/", "/2018-10-31/", "/2019-09-25/", "/2019-09-30/"} {
 		if strings.HasPrefix(path, prefix) {
 			path = path[len(prefix):]
 			break
@@ -234,6 +234,19 @@ func lambdaFunctionDetect(method string, segs []string, params map[string]string
 			return "GetFunctionConcurrency", params
 		case http.MethodDelete:
 			return "DeleteFunctionConcurrency", params
+		}
+	case "event-invoke-config":
+		if len(rest) == 0 {
+			switch method {
+			case http.MethodPut:
+				return "PutFunctionEventInvokeConfig", params
+			case http.MethodPost:
+				return "UpdateFunctionEventInvokeConfig", params
+			case http.MethodGet:
+				return "GetFunctionEventInvokeConfig", params
+			case http.MethodDelete:
+				return "DeleteFunctionEventInvokeConfig", params
+			}
 		}
 	}
 	return "Unknown", params

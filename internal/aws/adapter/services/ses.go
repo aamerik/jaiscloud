@@ -93,13 +93,42 @@ func buildSESXML(action string, data map[string]any, reqID string) string {
 	)
 }
 
+// isValidXMLName returns true if s can be used as an XML element name.
+func isValidXMLName(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c == '@' || c == '.' || c == '#' || c == '/' {
+			return false
+		}
+	}
+	return true
+}
+
 func sesXMLValue(key string, val any) string {
 	switch v := val.(type) {
 	case map[string]any:
 		var sb strings.Builder
 		sb.WriteString("<" + key + ">")
 		for k2, v2 := range v {
-			sb.WriteString(sesXMLValue(k2, v2))
+			if !isValidXMLName(k2) {
+				// Use entry/key/value encoding for maps with non-XML keys (e.g. email addresses).
+				sb.WriteString("<entry>")
+				sb.WriteString("<key>" + xmlEscape(k2) + "</key>")
+				sb.WriteString("<value>")
+				if vm, ok := v2.(map[string]any); ok {
+					for k3, v3 := range vm {
+						sb.WriteString(sesXMLValue(k3, v3))
+					}
+				} else {
+					sb.WriteString(xmlEscape(fmt.Sprint(v2)))
+				}
+				sb.WriteString("</value>")
+				sb.WriteString("</entry>")
+			} else {
+				sb.WriteString(sesXMLValue(k2, v2))
+			}
 		}
 		sb.WriteString("</" + key + ">")
 		return sb.String()

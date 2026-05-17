@@ -328,6 +328,58 @@ func encodeEC2Result(action string, data map[string]any) string {
 			}
 		}
 		sb.WriteString("</natGatewaySet>")
+	case "DescribeInstanceAttribute":
+		sb.WriteString(xmlTag("instanceId", str(data["InstanceId"])))
+		if v, ok := data["InstanceType"].(map[string]any); ok {
+			sb.WriteString("<instanceType>")
+			sb.WriteString(xmlTag("value", str(v["Value"])))
+			sb.WriteString("</instanceType>")
+		}
+		if v, ok := data["UserData"].(map[string]any); ok {
+			sb.WriteString("<userData>")
+			sb.WriteString(xmlTag("value", str(v["Value"])))
+			sb.WriteString("</userData>")
+		}
+		if v, ok := data["DisableApiTermination"].(map[string]any); ok {
+			sb.WriteString("<disableApiTermination>")
+			sb.WriteString(xmlTag("value", str(v["Value"])))
+			sb.WriteString("</disableApiTermination>")
+		}
+		if v, ok := data["SriovNetSupport"].(map[string]any); ok {
+			sb.WriteString("<sriovNetSupport>")
+			sb.WriteString(xmlTag("value", str(v["Value"])))
+			sb.WriteString("</sriovNetSupport>")
+		}
+	case "DescribeInstanceStatus":
+		sb.WriteString("<instanceStatusSet>")
+		if items, ok := data["InstanceStatuses"].([]map[string]any); ok {
+			for _, s := range items {
+				sb.WriteString("<item>")
+				sb.WriteString(xmlTag("instanceId", str(s["InstanceId"])))
+				sb.WriteString(xmlTag("availabilityZone", str(s["AvailabilityZone"])))
+				if state, ok := s["InstanceState"].(map[string]any); ok {
+					sb.WriteString("<instanceState>")
+					sb.WriteString(xmlTag("code", str(state["Code"])))
+					sb.WriteString(xmlTag("name", str(state["Name"])))
+					sb.WriteString("</instanceState>")
+				}
+				if is, ok := s["InstanceStatus"].(map[string]any); ok {
+					sb.WriteString("<instanceStatus>")
+					sb.WriteString(xmlTag("status", str(is["Status"])))
+					sb.WriteString("<details/>")
+					sb.WriteString("</instanceStatus>")
+				}
+				if ss, ok := s["SystemStatus"].(map[string]any); ok {
+					sb.WriteString("<systemStatus>")
+					sb.WriteString(xmlTag("status", str(ss["Status"])))
+					sb.WriteString("<details/>")
+					sb.WriteString("</systemStatus>")
+				}
+				sb.WriteString("<eventsSet/>")
+				sb.WriteString("</item>")
+			}
+		}
+		sb.WriteString("</instanceStatusSet>")
 	default:
 		sb.WriteString("<return>true</return>")
 	}
@@ -357,6 +409,30 @@ func encodeInstance(inst map[string]any) string {
 		sb.WriteString(xmlTag("id", str(iap["Id"])))
 		sb.WriteString("</iamInstanceProfile>")
 	}
+	if sgs, ok := inst["SecurityGroups"].([]map[string]any); ok && len(sgs) > 0 {
+		sb.WriteString("<groupSet>")
+		for _, sg := range sgs {
+			sb.WriteString("<item>")
+			sb.WriteString(xmlTag("groupId", str(sg["GroupId"])))
+			sb.WriteString(xmlTag("groupName", str(sg["GroupName"])))
+			sb.WriteString("</item>")
+		}
+		sb.WriteString("</groupSet>")
+	} else {
+		sb.WriteString("<groupSet/>")
+	}
+	if tags, ok := inst["Tags"].([]map[string]any); ok && len(tags) > 0 {
+		sb.WriteString("<tagSet>")
+		for _, tag := range tags {
+			sb.WriteString("<item>")
+			sb.WriteString(xmlTag("key", str(tag["Key"])))
+			sb.WriteString(xmlTag("value", str(tag["Value"])))
+			sb.WriteString("</item>")
+		}
+		sb.WriteString("</tagSet>")
+	} else {
+		sb.WriteString("<tagSet/>")
+	}
 	return sb.String()
 }
 
@@ -378,6 +454,8 @@ func encodeSubnet(sn map[string]any) string {
 	sb.WriteString(xmlTag("cidrBlock", str(sn["CidrBlock"])))
 	sb.WriteString(xmlTag("availableIpAddressCount", str(sn["AvailableIpAddressCount"])))
 	sb.WriteString(xmlTag("availabilityZone", str(sn["AvailabilityZone"])))
+	sb.WriteString(xmlTag("defaultForAz", str(sn["DefaultForAz"])))
+	sb.WriteString(xmlTag("mapPublicIpOnLaunch", str(sn["MapPublicIpOnLaunch"])))
 	return sb.String()
 }
 

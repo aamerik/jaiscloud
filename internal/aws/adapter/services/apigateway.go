@@ -84,10 +84,12 @@ func (c *APIGatewayCodec) Decode(r *http.Request, body []byte) (*model.Normalize
 		json.Unmarshal(body, &params)
 	}
 
-	// Propagate query params.
+	// Propagate query params. For multi-value params (e.g. tagKeys), keep all values.
 	for k, vs := range r.URL.Query() {
-		if len(vs) > 0 {
+		if len(vs) == 1 {
 			params[k] = vs[0]
+		} else if len(vs) > 1 {
+			params[k] = vs
 		}
 	}
 

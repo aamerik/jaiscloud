@@ -116,12 +116,13 @@ func (p *DNSProvider) CreateHostedZone(ctx context.Context, nr *model.Normalized
 		name += "."
 	}
 	id := newShortID()
+	privateZone := strParam(nr.Params, "PrivateZone") == "true"
 	hz := hostedZone{
-		Id:          id,
-		Name:        name,
-		Comment:     strParam(nr.Params, "Comment"),
-		PrivateZone: false,
-		CreatedAt:   time.Now(),
+		Id:                     id,
+		Name:                   name,
+		Comment:                strParam(nr.Params, "Comment"),
+		PrivateZone:            privateZone,
+		CreatedAt:              time.Now(),
 		ResourceRecordSetCount: 2, // default SOA + NS
 	}
 	data, _ := json.Marshal(hz)

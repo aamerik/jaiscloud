@@ -1375,12 +1375,21 @@ func (p *GatewayProvider) UntagResource(ctx context.Context, nr *model.Normalize
 	if err := p.load(ctx, rtTag, arn, &ts); err != nil {
 		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 	}
-	if tagKeys, ok := nr.Params["tagKeys"].([]any); ok {
-		for _, k := range tagKeys {
+	// tagKeys may arrive as []any (JSON body) or as a string (single query param)
+	// or as []string. Handle all forms.
+	switch v := nr.Params["tagKeys"].(type) {
+	case []any:
+		for _, k := range v {
 			if sk, ok := k.(string); ok {
 				delete(ts.Tags, sk)
 			}
 		}
+	case []string:
+		for _, sk := range v {
+			delete(ts.Tags, sk)
+		}
+	case string:
+		delete(ts.Tags, v)
 	}
 	_ = p.save(ctx, rtTag, arn, ts)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil

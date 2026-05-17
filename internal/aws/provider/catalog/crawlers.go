@@ -399,16 +399,21 @@ func crawlerToWire(c crawlerEntry) map[string]any {
 		"Role":         c.Role,
 		"Targets":      c.Targets,
 		"DatabaseName": c.DatabaseName,
-		"Schedule":     c.Schedule,
 		"State":        c.State,
-		"CreatedOn":    c.CreatedOn.Format(time.RFC3339),
-		"LastUpdated":  c.LastUpdated.Format(time.RFC3339),
+		"CreatedOn":    float64(c.CreatedOn.UnixMilli()) / 1000.0,
+		"LastUpdated":  float64(c.LastUpdated.UnixMilli()) / 1000.0,
+	}
+	if c.Schedule != "" {
+		m["Schedule"] = map[string]any{
+			"ScheduleExpression": c.Schedule,
+			"State":              "SCHEDULED",
+		}
 	}
 	if c.LastCrawl != nil {
 		lc := map[string]any{
 			"Status":    c.LastCrawl.Status,
-			"StartTime": c.LastCrawl.StartTime.Format(time.RFC3339),
-			"EndTime":   c.LastCrawl.EndTime.Format(time.RFC3339),
+			"StartTime": float64(c.LastCrawl.StartTime.UnixMilli()) / 1000.0,
+			"EndTime":   float64(c.LastCrawl.EndTime.UnixMilli()) / 1000.0,
 		}
 		if c.LastCrawl.ErrorMessage != "" {
 			lc["ErrorMessage"] = c.LastCrawl.ErrorMessage

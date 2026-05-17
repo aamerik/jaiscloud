@@ -14,12 +14,12 @@ import (
 const resTypeEventInvoke = "lambda_event_invoke_cfg"
 
 type eventInvokeConfig struct {
-	FunctionName                string         `json:"FunctionName"`
-	Qualifier                   string         `json:"Qualifier"`
-	MaximumRetryAttempts        int            `json:"MaximumRetryAttempts"`
-	MaximumEventAgeInSeconds    int            `json:"MaximumEventAgeInSeconds"`
-	DestinationConfig           map[string]any `json:"DestinationConfig,omitempty"`
-	LastModified                string         `json:"LastModified"`
+	FunctionName             string         `json:"FunctionName"`
+	Qualifier                string         `json:"Qualifier"`
+	MaximumRetryAttempts     int            `json:"MaximumRetryAttempts"`
+	MaximumEventAgeInSeconds int            `json:"MaximumEventAgeInSeconds"`
+	DestinationConfig        map[string]any `json:"DestinationConfig,omitempty"`
+	LastModified             time.Time      `json:"LastModified"`
 }
 
 func eiKey(funcName, qualifier string) string {
@@ -40,7 +40,7 @@ func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr 
 	cfg := eventInvokeConfig{
 		FunctionName: funcName,
 		Qualifier:    qualifier,
-		LastModified: time.Now().UTC().Format(time.RFC3339),
+		LastModified: time.Now().UTC(),
 	}
 	if v, ok := nr.Params["MaximumRetryAttempts"].(float64); ok {
 		cfg.MaximumRetryAttempts = int(v)
@@ -104,6 +104,6 @@ func eiToWire(cfg eventInvokeConfig) map[string]any {
 		"MaximumRetryAttempts":     cfg.MaximumRetryAttempts,
 		"MaximumEventAgeInSeconds": cfg.MaximumEventAgeInSeconds,
 		"DestinationConfig":        cfg.DestinationConfig,
-		"LastModified":             cfg.LastModified,
+		"LastModified":             float64(cfg.LastModified.UnixMilli()) / 1000.0,
 	}
 }

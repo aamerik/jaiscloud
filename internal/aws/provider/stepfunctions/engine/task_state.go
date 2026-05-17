@@ -135,11 +135,18 @@ func (e *ExecutionEngine) dispatchTask(ctx context.Context, execARN, resource st
 		paramsMap = make(map[string]any)
 	}
 
+	// For Lambda invocations, inject _function_name and _payload so that
+	// FunctionProvider.InvokeFunction can locate and call the right function.
+	if svcKey == "lambda:invoke" {
+		if fnName := extractLambdaFunctionName(resource, paramsMap); fnName != "" {
+			paramsMap["_function_name"] = fnName
+		}
+		payload, _ := json.Marshal(input)
+		paramsMap["_payload"] = payload
+	}
+
 	if modifier == "waitForTaskToken" {
 		token := generateToken()
-		if paramsMap == nil {
-			paramsMap = make(map[string]any)
-		}
 		// Inject token — the TaskToken field path is determined by the FunctionName/etc.
 		paramsMap["TaskToken"] = token
 
@@ -155,6 +162,26 @@ func (e *ExecutionEngine) dispatchTask(ctx context.Context, execARN, resource st
 	return e.dispatcher.Dispatch(ctx, entry.Service, entry.Action, paramsMap)
 }
 
+// extractLambdaFunctionName extracts the function name from a Lambda ARN or
+// from a FunctionName field in the params (set via Parameters in the state def).
+func extractLambdaFunctionName(arn string, params map[string]any) string {
+	// Check params first (set via Parameters field in the state definition).
+	if fn, ok := params["FunctionName"].(string); ok && fn != "" {
+		return fn
+	}
+	// Legacy Lambda ARN: arn:aws:lambda:region:account:function:FunctionName
+	const fnMarker = ":function:"
+	if idx := strings.LastIndex(arn, fnMarker); idx >= 0 {
+		name := arn[idx+len(fnMarker):]
+		// Strip any qualifier suffix (e.g. :QUALIFIER or :version-number)
+		if col := strings.IndexByte(name, ':'); col >= 0 {
+			name = name[:col]
+		}
+		return name
+	}
+	return ""
+}
+
 // taskResourceEntry maps a parsed resource key to a provider service+action.
 type taskResourceEntry struct {
 	Service string
@@ -162,7 +189,7 @@ type taskResourceEntry struct {
 }
 
 var taskResourceMap = map[string]taskResourceEntry{
-	"lambda:invoke":          {"Function", "Invoke"},
+	"lambda:invoke":          {"Function", "InvokeFunction"},
 	"dynamodb:putItem":       {"Table", "PutItem"},
 	"dynamodb:getItem":       {"Table", "GetItem"},
 	"dynamodb:updateItem":    {"Table", "UpdateItem"},

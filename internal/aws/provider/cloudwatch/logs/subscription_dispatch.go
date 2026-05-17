@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 )
 
 // LambdaRawInvoker is the interface logs uses to invoke Lambda subscription destinations.
@@ -97,6 +99,58 @@ func logEventMatches(msg, pattern string) bool {
 	}
 	// Simple substring
 	return containsIgnoreCase(msg, pattern)
+}
+
+// jsonFieldRe matches CWL JSON field filter patterns: { $.fieldPath OP "value" }
+// e.g. { $.level = "error" } or { $.code != "0" }
+var jsonFieldRe = regexp.MustCompile(`^\s*\{\s*\$\.([A-Za-z0-9_.]+)\s*(=|!=|>|>=|<|<=)\s*"([^"]*)"\s*\}\s*$`)
+
+// compileLogFilter returns a function that tests whether a log message matches
+// the given filter pattern. Supports JSON field filters ({ $.field = "v" })
+// and falls back to simple substring matching.
+func compileLogFilter(pattern string) func(msg string) bool {
+	if pattern == "" {
+		return func(string) bool { return true }
+	}
+	// JSON field filter: { $.fieldPath = "value" }
+	if m := jsonFieldRe.FindStringSubmatch(pattern); m != nil {
+		field, op, want := m[1], m[2], m[3]
+		return func(msg string) bool {
+			var obj map[string]any
+			if json.Unmarshal([]byte(msg), &obj) != nil {
+				return false
+			}
+			// Resolve potentially dotted field path
+			var v any = obj
+			for _, part := range strings.Split(field, ".") {
+				if mv, ok := v.(map[string]any); ok {
+					v = mv[part]
+				} else {
+					return false
+				}
+			}
+			got := fmt.Sprintf("%v", v)
+			switch op {
+			case "=":
+				return got == want
+			case "!=":
+				return got != want
+			case ">":
+				return got > want
+			case ">=":
+				return got >= want
+			case "<":
+				return got < want
+			case "<=":
+				return got <= want
+			}
+			return false
+		}
+	}
+	// Fallback: substring match
+	return func(msg string) bool {
+		return strings.Contains(msg, pattern)
+	}
 }
 
 func containsIgnoreCase(s, sub string) bool {

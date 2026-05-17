@@ -368,7 +368,12 @@ func buildRoute53XML(data map[string]any) string {
 			}
 		}
 		sb.WriteString(`</HostedZones>`)
-		sb.WriteString(`<IsTruncated>false</IsTruncated>`)
+		if nextMarker, ok := data["NextMarker"].(string); ok && nextMarker != "" {
+			sb.WriteString(`<IsTruncated>true</IsTruncated>`)
+			sb.WriteString(xmlTag("NextMarker", nextMarker))
+		} else {
+			sb.WriteString(`<IsTruncated>false</IsTruncated>`)
+		}
 		sb.WriteString(`<MaxItems>100</MaxItems>`)
 		sb.WriteString(`</ListHostedZonesResponse>`)
 		return sb.String()

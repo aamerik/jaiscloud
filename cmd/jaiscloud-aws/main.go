@@ -149,7 +149,7 @@ func startCmd() *cobra.Command {
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP, cwResetter, funcP, firehoseP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP, cwResetter, funcP, firehoseP, computeP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
 			defer cleanup()
 
 			// Wire Step Functions execution engine — provides real ASL execution.
@@ -165,7 +165,7 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
-			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter)
+			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter, computeP)
 			adminHandler.SetLambdaCodeFetcher(funcP)
 			adminHandler.SetCWAlarmEvaluator(cwResetter.Evaluator())
 			adminHandler.SetFirehoseFlusher(firehoseP)
@@ -378,7 +378,7 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 }
 
 // buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider, *cloudwatchprovider.Provider, *functionprovider.FunctionProvider, *firehoseprovider.Provider) {
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider, *cloudwatchprovider.Provider, *functionprovider.FunctionProvider, *firehoseprovider.Provider, *compute.ComputeProvider) {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -673,7 +673,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv,
 		logsProvider, cwP, eventsP, ecsP, sfnP, esmProvider, apigwP, computeP)
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP, funcP, firehoseP
+	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP, funcP, firehoseP, computeP
 }
 
 // cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
@@ -820,6 +820,10 @@ func buildAWSAdapter(s3VirtualHostBases []string) *awsadapter.AWSAdapter {
 		"resource-groups":      &services.ResourceGroupsCodec{},
 		"tagging":              &services.GenericJSONTargetCodec{Service: "tagging", TargetPrefix: "ResourceGroupsTaggingAPI_20170126."},
 		"email":                &services.SESCodec{},
+		"acm":                  &services.GenericJSONTargetCodec{Service: "acm", TargetPrefix: "CertificateManager."},
+		"cognito-idp":          &services.GenericJSONTargetCodec{Service: "cognito-idp", TargetPrefix: "AWSCognitoIdentityProviderService."},
+		"cognito-identity":     &services.GenericJSONTargetCodec{Service: "cognito-identity", TargetPrefix: "AWSCognitoIdentityService."},
+		"firehose":             &services.GenericJSONTargetCodec{Service: "firehose", TargetPrefix: "Firehose_20150804."},
 	})
 }
 

@@ -122,6 +122,12 @@ func (d dbInstance) toWire() map[string]any {
 			"Port":    fmt.Sprintf("%d", port),
 		},
 	}
+	if d.DBSubnetGroupName != "" {
+		w["DBSubnetGroup"] = map[string]any{
+			"DBSubnetGroupName":        d.DBSubnetGroupName,
+			"DBSubnetGroupDescription": "",
+		}
+	}
 	if d.ReadReplicaSourceDBInstanceIdentifier != "" {
 		w["ReadReplicaSourceDBInstanceIdentifier"] = d.ReadReplicaSourceDBInstanceIdentifier
 	}

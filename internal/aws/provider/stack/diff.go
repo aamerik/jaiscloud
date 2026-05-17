@@ -1,6 +1,42 @@
 package stack
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
+
+// buildResolvedDoc returns a shallow copy of a CloudFormation template document
+// where each resource's Properties map has been fully resolved using rc.
+// This allows BuildChangeSet to compare resolved (parameter-substituted) values
+// rather than raw template expressions like {"Ref": "Param"}.
+func buildResolvedDoc(doc map[string]any, rc *resolveCtx) map[string]any {
+	resources, _ := doc["Resources"].(map[string]any)
+	if resources == nil {
+		return doc
+	}
+	resolvedResources := make(map[string]any, len(resources))
+	for logicalID, raw := range resources {
+		res, _ := raw.(map[string]any)
+		if res == nil {
+			resolvedResources[logicalID] = raw
+			continue
+		}
+		props, _ := res["Properties"].(map[string]any)
+		resolvedProps := rc.resolvePropsMap(props)
+		// Build a copy of the resource def with resolved props.
+		resCopy := make(map[string]any, len(res))
+		for k, v := range res {
+			resCopy[k] = v
+		}
+		resCopy["Properties"] = resolvedProps
+		resolvedResources[logicalID] = resCopy
+	}
+	docCopy := make(map[string]any, len(doc))
+	for k, v := range doc {
+		docCopy[k] = v
+	}
+	docCopy["Resources"] = resolvedResources
+	return docCopy
+}
 
 // ResourceChange describes a single resource change in a ChangeSet.
 type ResourceChange struct {

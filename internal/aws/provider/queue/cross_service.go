@@ -55,6 +55,9 @@ func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, 
 // resolveQueueURLFromARNorURL returns a queue URL given either an ARN or URL.
 func (p *QueueProvider) resolveQueueURLFromARNorURL(ctx context.Context, arnOrURL string) (string, error) {
 	if strings.HasPrefix(arnOrURL, "http://") || strings.HasPrefix(arnOrURL, "https://") {
+		if _, err := p.resources.Get(ctx, "sqs_queues", arnOrURL); err != nil {
+			return "", fmt.Errorf("queue: URL not found: %s", arnOrURL)
+		}
 		return arnOrURL, nil
 	}
 	// ARN: arn:aws:sqs:{region}:{account}:{name}

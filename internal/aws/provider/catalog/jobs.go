@@ -333,8 +333,8 @@ func jobToWire(j jobEntry) map[string]any {
 		"DefaultArguments": j.DefaultArguments,
 		"MaxCapacity":      j.MaxCapacity,
 		"Timeout":          j.Timeout,
-		"CreatedOn":        j.CreatedOn.Format(time.RFC3339),
-		"LastModifiedOn":   j.LastModifiedOn.Format(time.RFC3339),
+		"CreatedOn":        float64(j.CreatedOn.UnixMilli()) / 1000.0,
+		"LastModifiedOn":   float64(j.LastModifiedOn.UnixMilli()) / 1000.0,
 	}
 }
 
@@ -343,10 +343,10 @@ func jobRunToWire(run jobRunEntry) map[string]any {
 		"Id":          run.Id,
 		"JobName":     run.JobName,
 		"JobRunState": run.JobRunState,
-		"StartedOn":   run.StartedOn.Format(time.RFC3339),
+		"StartedOn":   float64(run.StartedOn.UnixMilli()) / 1000.0,
 	}
 	if run.CompletedOn != nil {
-		m["CompletedOn"] = run.CompletedOn.Format(time.RFC3339)
+		m["CompletedOn"] = float64(run.CompletedOn.UnixMilli()) / 1000.0
 	}
 	if run.ErrorMessage != "" {
 		m["ErrorMessage"] = run.ErrorMessage

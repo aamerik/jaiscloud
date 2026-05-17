@@ -599,6 +599,7 @@ func TestSFN_FailState(t *testing.T) {
 // task passthrough always succeeds, so we confirm SUCCEEDED without errors).
 func TestSFN_ErrorHandling_MultipleRetryRules(t *testing.T) {
 	resetState(t)
+	sfnCreateLambdaFn(t, "retry-fn")
 	client := sfnClient(t)
 	name := sfnName(t)
 

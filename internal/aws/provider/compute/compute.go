@@ -73,6 +73,11 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 	}
 }
 
+// Reset implements admin.Resetter — reseeds the default VPC after a store wipe.
+func (p *ComputeProvider) Reset() {
+	p.seedDefaultVPC(context.Background())
+}
+
 func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Instances
@@ -324,11 +329,15 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 		if err := p.saveInstance(ctx, inst); err != nil {
 			return nil, err
 		}
-		// Transition pending → running after 2s.
+		// Transition pending → running after 2s; skip if instance was deleted (reset).
 		instCopy := inst
 		time.AfterFunc(2*time.Second, func() {
-			instCopy.State = "running"
-			p.saveInstance(context.Background(), instCopy)
+			loaded, err := p.loadInstance(context.Background(), instCopy.InstanceId)
+			if err != nil || loaded.State != "pending" {
+				return
+			}
+			loaded.State = "running"
+			p.saveInstance(context.Background(), loaded)
 		})
 		instances = append(instances, instanceToWire(inst))
 	}
@@ -483,11 +492,15 @@ func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.Norm
 		prev := inst.State
 		inst.State = "shutting-down"
 		p.saveInstance(ctx, inst)
-		// Transition shutting-down → terminated after 2s.
+		// Transition shutting-down → terminated after 2s; skip if instance was deleted (reset).
 		instCopy := inst
 		time.AfterFunc(2*time.Second, func() {
-			instCopy.State = "terminated"
-			p.saveInstance(context.Background(), instCopy)
+			loaded, err := p.loadInstance(context.Background(), instCopy.InstanceId)
+			if err != nil || loaded.State != "shutting-down" {
+				return
+			}
+			loaded.State = "terminated"
+			p.saveInstance(context.Background(), loaded)
 		})
 		result = append(result, map[string]any{
 			"InstanceId":    id,
