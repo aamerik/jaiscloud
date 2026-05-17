@@ -82,21 +82,22 @@ s3.create_bucket(Bucket="my-bucket")
 | Amazon DynamoDB | CRUD, condition/update/filter expressions, batch ops, parallel scan, composite keys, cursor pagination, TTL |
 | Amazon DynamoDB Streams | Stream creation, shard iterators, record delivery to Lambda via ESM |
 | Amazon SNS | Topics, subscriptions, publish, SQS fan-out with MessageAttributes and filter policies |
-| Amazon EventBridge | Rules, targets, event pattern matching, SQS / Lambda delivery |
+| Amazon EventBridge | Rules, targets, event pattern matching, SQS / Lambda delivery; paginated ListRules / ListTargetsByRule |
 | AWS IAM | Roles, policies, users, groups, access keys, instance profiles, policy attachments |
 | AWS STS | AssumeRole, GetCallerIdentity, GetSessionToken, federation tokens |
-| AWS Lambda | Echo (mock) / Docker warm pool / K8s warm pod per function; event source mappings (SQS, DynamoDB Streams, Kinesis); aliases, versions, layers, concurrency, function URLs |
+| AWS Lambda | Echo (mock) / Docker warm pool / K8s warm pod per function; event source mappings (SQS, DynamoDB Streams, Kinesis); aliases, versions, layers (Docker /opt mount), concurrency, function URLs; X-Amz-Log-Result tail |
 | AWS Glue Data Catalog | Databases, tables, partitions, table versions, Iceberg metadata CAS, crawlers |
 | Amazon Kinesis | Streams, shards, records (PutRecord / PutRecords / GetRecords), shard iterators, shard split/merge, consumers, retention, tags |
 | Amazon EMR (on EC2) | Clusters, steps, instance fleets/groups; bootstrap actions as K8s init containers; mock or real Docker/K8s Spark |
 | Amazon EMR on EKS | Virtual clusters, job runs, managed endpoints; mock or real Docker/K8s Spark |
 | AWS KMS | Keys, aliases, grants, Encrypt/Decrypt/GenerateDataKey, envelope crypto (AES-256-GCM), key rotation |
 | AWS Secrets Manager | Secrets, versions, binary secrets, rotation, KMS-encrypted at rest |
-| AWS SSM Parameter Store | String / StringList / SecureString, versioning, labels, history, path queries, tags |
-| AWS API Gateway (REST) | Resources, methods, integrations, deployments, stages; MOCK / AWS_PROXY / HTTP_PROXY invocation |
-| AWS CloudFormation | Intrinsics (Ref, Fn::Sub, Fn::Join, Fn::Select, Fn::If, Fn::GetAtt, Fn::ImportValue), topological sort, real resource dispatch for 9 resource types |
+| AWS SSM Parameter Store | String / StringList / SecureString, versioning, labels, history, path queries, tags; paginated Describe/GetByPath |
+| AWS API Gateway (REST) | Resources, methods, integrations, deployments, stages, request validators, domain names, usage plans, API keys, base path mappings; MOCK / AWS_PROXY / HTTP_PROXY invocation |
+| AWS CloudFormation | Intrinsics (Ref, Fn::Sub, Fn::Join, Fn::Select, Fn::If, Fn::GetAtt, Fn::ImportValue), topological sort, real resource dispatch, change sets, SAM Transform |
 | Amazon CloudWatch | PutMetricData, GetMetricData, GetMetricStatistics, PutMetricAlarm, DescribeAlarms; in-memory metric ring |
-| Amazon CloudWatch Logs | Log groups, log streams, PutLogEvents, GetLogEvents, filter patterns |
+| Amazon CloudWatch Logs | Log groups, log streams, PutLogEvents, GetLogEvents, FilterLogEvents, metric filters, subscription filters, retention policy, export tasks |
+| AWS Step Functions | Real ASL engine — all 8 state types (Pass, Task, Choice, Wait, Map, Parallel, Succeed, Fail); retry with backoff; catch; input/output processing (InputPath, OutputPath, ResultPath, Parameters) |
 
 ### Metadata-only implementations
 
@@ -108,16 +109,25 @@ These services implement the full wire protocol and resource CRUD (create, descr
 | Amazon Route 53 | Hosted zones, record sets, health checks, tags |
 | Amazon RDS | DB instances, DB clusters, parameter groups, subnet groups, snapshots |
 | Amazon ElastiCache | Clusters, replication groups, subnet groups, parameter groups |
-| Amazon ECS | Clusters, task definitions, services, tasks |
+| Amazon ECS | Clusters, task definitions (with validation), services (RunningCount reconciliation), tasks |
 | Amazon EKS | Clusters, node groups, Fargate profiles, add-ons |
+| AWS ELBv2 | Application and Network Load Balancers, target groups, listeners, rules, tags |
+| Amazon ECR | Repositories, images, lifecycle policies, registry scanning, image tags |
+| AWS ACM | Certificates, certificate details, tags; request/import/describe/delete |
+| Amazon Kinesis Data Firehose | Delivery streams, S3/Redshift/Elasticsearch destinations, tags |
+| AWS Config | Configuration recorders, delivery channels, config rules, compliance evaluation status |
+| AWS Resource Groups | Groups, group queries, group resources, tags |
+| Amazon Redshift | Clusters, parameter groups, subnet groups, snapshots |
+| Amazon Athena | Workgroups, named queries, query executions |
 
 ### Stub implementations
 
-These services accept requests and return plausible responses but have very limited operation coverage.
+These services accept requests and return plausible responses but have limited operation coverage.
 
 | Service | Notes |
 |---|---|
-| AWS Step Functions | CreateStateMachine, StartExecution, DescribeExecution; no actual state machine evaluation |
+| Amazon SES | SendEmail, SendRawEmail, verified identities, templates; messages are logged, not delivered |
+| Amazon Cognito | User pools, users, app clients, identity pools; auth flows return mock tokens |
 
 For per-operation coverage, executor modes, fidelity notes, and full-mode persistence details see the [Service Reference](#service-reference) section below.
 
@@ -490,10 +500,13 @@ See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for the full test matrix and how to
 | CloudFormation | In-memory | PostgreSQL |
 | EventBridge | In-memory | PostgreSQL |
 | Glue Data Catalog | In-memory | PostgreSQL |
-| Kinesis | In-memory | In-memory (no postgres backend yet) |
+| Kinesis | In-memory | In-memory |
 | CloudWatch metrics | In-memory ring | In-memory ring + PostgreSQL alarms |
 | CloudWatch Logs | In-memory | In-memory |
+| Step Functions | In-memory | In-memory |
 | EC2 / Route53 / RDS / ElastiCache / ECS / EKS | In-memory | In-memory |
+| ELBv2 / ECR / ACM / Config / Resource Groups | In-memory | In-memory |
+| Firehose / Redshift / Athena / SES / Cognito | In-memory | In-memory |
 
 ### Lambda execution modes
 

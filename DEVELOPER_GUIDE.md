@@ -54,6 +54,8 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
     - [Lambda Kubernetes mode](#lambda-kubernetes-mode)
   - [KMS · SecretsManager · SSM e2e tests](#kms--secretsmanager--ssm-e2e-tests-kms_fullmode-build-tag)
   - [CloudFormation e2e tests](#cloudformation-e2e-tests-cfn_fullmode-build-tag)
+  - [Kinesis e2e tests](#kinesis-e2e-tests-kinesis_fullmode-build-tag)
+  - [Step Functions e2e tests](#step-functions-e2e-tests-sfn_e2e-build-tag)
   - [Apache Iceberg e2e tests](#apache-iceberg-e2e-tests-iceberg_e2e-build-tag)
 - [Platform Runtime Layer](#platform-runtime-layer)
   - [TLS CA injection](#tls-ca-injection)
@@ -105,7 +107,7 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
 | AWS STS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sts_test.go` |
 | AWS Lambda | ✅ Full | In-memory | PostgreSQL | `tests/integration/lambda_*.go`, `tests/full_mode/aws/lambda/` |
 | AWS Glue Data Catalog | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/iceberg/` |
-| Amazon Kinesis | ✅ Full | In-memory | In-memory | `tests/integration/kinesis_*.go` |
+| Amazon Kinesis | ✅ Full | In-memory | In-memory | `tests/integration/kinesis_*.go`, `tests/full_mode/aws/kinesis/` |
 | Amazon EMR (on EC2) | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emr/` |
 | Amazon EMR on EKS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emrcontainers/` |
 | AWS KMS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/kms/` |
@@ -113,15 +115,42 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
 | AWS SSM Parameter Store | ✅ Full | In-memory | PostgreSQL (labels: in-memory only) | `tests/integration/ssm_*.go` |
 | AWS API Gateway (REST) | ✅ Full | In-memory | PostgreSQL | `tests/integration/apigw_test.go` |
 | AWS CloudFormation | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/cloudformation/` |
-| Amazon CloudWatch | ✅ Full | In-memory ring | In-memory ring + PostgreSQL alarms | — |
-| Amazon CloudWatch Logs | ✅ Full | In-memory | In-memory | — |
+| Amazon CloudWatch | ✅ Full | In-memory ring | In-memory ring + PostgreSQL alarms | `tests/integration/cloudwatch_test.go` |
+| Amazon CloudWatch Logs | ✅ Full | In-memory | In-memory | `tests/integration/cloudwatchlogs_test.go` |
+| AWS Step Functions | ✅ Full | In-memory | In-memory | `tests/integration/stepfunctions_test.go` |
 | Amazon EC2 | ⚙️ Metadata-only | In-memory | In-memory | — |
 | Amazon Route 53 | ⚙️ Metadata-only | In-memory | In-memory | — |
 | Amazon RDS | ⚙️ Metadata-only | In-memory | In-memory | — |
 | Amazon ElastiCache | ⚙️ Metadata-only | In-memory | In-memory | — |
 | Amazon ECS | ⚙️ Metadata-only | In-memory | In-memory | — |
 | Amazon EKS | ⚙️ Metadata-only | In-memory | In-memory | — |
-| AWS Step Functions | 🔌 Stub | In-memory | In-memory | `tests/integration/stepfunctions_*.go` |
+| AWS ELBv2 | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon ECR | ⚙️ Metadata-only | In-memory | In-memory | — |
+| AWS ACM | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon Kinesis Firehose | ⚙️ Metadata-only | In-memory | In-memory | — |
+| AWS Config | ⚙️ Metadata-only | In-memory | In-memory | — |
+| AWS Resource Groups | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon Redshift | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon Athena | ⚙️ Metadata-only | In-memory | In-memory | — |
+| Amazon SES | 🔌 Stub | In-memory | In-memory | — |
+| Amazon Cognito | 🔌 Stub | In-memory | In-memory | — |
+
+### Step Functions (real ASL engine)
+
+JaisCloud runs a goroutine-per-execution ASL interpreter — not a stub. All 8 state types are supported:
+
+| State type | Behavior |
+|---|---|
+| `Pass` | Passes input to output; supports InputPath, OutputPath, ResultPath, Parameters, Result |
+| `Task` | Invokes a Lambda function (ARN resolved from the JaisCloud registry) |
+| `Choice` | Evaluates comparison rules (StringEquals, NumericLessThan, IsNull, And, Or, Not, etc.) |
+| `Wait` | Waits Seconds, SecondsPath, Timestamp, or TimestampPath |
+| `Map` | Iterates ItemsPath with MaxConcurrency |
+| `Parallel` | Runs branches in parallel goroutines, merges output |
+| `Succeed` | Terminates successfully |
+| `Fail` | Terminates with error + cause |
+
+Retry and Catch blocks are fully evaluated with exponential backoff. The execution runs in-process — no Lambda warm-up cost for Task states, but requires a real Lambda function to exist in the registry.
 
 ### Lambda execution modes
 
@@ -130,6 +159,34 @@ If you are developing JaisCloud itself or need to iterate quickly on code change
 | _(empty)_ / `mock` | Echo handler — returns the invocation payload unchanged; instant response |
 | `docker` | Warm Docker container pool per function; containers are reused across invocations |
 | `k8s` | Warm K8s Pod + ClusterIP Service per function; survives JaisCloud restarts |
+
+### Lambda layer support (Docker mode)
+
+When `JAISCLOUD_EXECUTOR_MODE=docker`, published Lambda layers are mounted at `/opt` inside the container. A layer's zip is extracted to `/opt` via a Docker bind-mount before invocation. Python code can import from `/opt/python`, Node.js from `/opt/nodejs/node_modules`, etc. — the standard AWS layout.
+
+```python
+# In the function code:
+import foo  # resolved from /opt/python/foo.py published in a layer
+```
+
+To use layers:
+
+1. `PublishLayerVersion` with a zip that follows the AWS runtime path convention
+2. Pass the layer ARN in `CreateFunction` / `UpdateFunctionConfiguration` `Layers` list
+3. Invoke — JaisCloud mounts the layer before the container starts
+
+### Lambda log tail (X-Amz-Log-Result)
+
+Invoke with `LogType: "Tail"` to receive the last 4 KB of function stdout/stderr as a base64-encoded `X-Amz-Log-Result` response header, matching the AWS SDK behavior:
+
+```go
+out, err := lambdaClient.Invoke(ctx, &lambda.InvokeInput{
+    FunctionName: aws.String("my-fn"),
+    Payload:      payload,
+    LogType:      types.LogTypeTail,
+})
+// out.LogResult contains base64(last 4KB of logs)
+```
 
 ### EMR / Spark execution modes
 
@@ -1598,6 +1655,10 @@ make down-docker
 | `TestCFN_UpdateStack_ChangesResources` | `AWS::SQS::Queue` (parameterized name) | Stack reaches `UPDATE_COMPLETE`; parameter value persisted in stack metadata |
 | `TestCFN_DeleteStack_CascadesChildren` | `AWS::SQS::Queue` + `AWS::Lambda::Function` | After `DeleteStack`, both child resources return not-found from their service APIs |
 | `TestCFN_StackParameters_DefaultsApplied` | Same as above, no explicit parameters | Template default values are applied; Lambda function created under the default name |
+| `TestCFNVPCSmokeTest` | VPC + Subnets + IGW + RouteTable + Route | VPC stack reaches `CREATE_COMPLETE`; outputs contain VpcId; DescribeStackResources lists all resource types |
+| `TestCFNSAMTransformFunction` | `AWS::Serverless::Function` (SAM Transform) | SAM template with `Transform: AWS::Serverless-2016-10-31` creates a real Lambda function |
+| `TestCFNChangeSetAddResource` | SQS → SQS + SNS via changeset | Changeset `CREATE_COMPLETE`; execute adds SNS; both resources visible |
+| `TestCFNChangeSetDeleteResource` | SQS + SNS → SQS via changeset | Changeset removes SNS; after execute only SQS remains |
 
 No environment variables beyond `JAISCLOUD_HOST` are required for this group.
 
@@ -1610,6 +1671,43 @@ The tests use inline templates. Key patterns covered:
 | `Ref` to a parameter | `{"Ref": "FunctionName"}` | `TestCFN_StackParameters_DefaultsApplied` |
 | `Fn::GetAtt` for output | `{"Fn::GetAtt": ["ProcessorFunction", "Arn"]}` | `TestCFN_StackProvisionsSQSAndLambda` |
 | Cross-resource `Ref` | `"KmsKeyId": {"Ref": "AppKey"}` | `TestCFN_StackWithKMSKey_SecretRef` |
+
+---
+
+### Kinesis e2e tests (`kinesis_fullmode` build tag)
+
+These tests live under `tests/full_mode/aws/kinesis/` and verify record persistence across shard iterators. No Docker required.
+
+```bash
+./jaiscloud-aws start &
+go test -v -tags kinesis_fullmode ./tests/full_mode/aws/kinesis/
+```
+
+| Test | What it verifies |
+|---|---|
+| `TestKinesisGetRecordsPersistence` | PutRecord → GetShardIterator (TRIM_HORIZON) → GetRecords; asserts payload round-trips correctly |
+
+---
+
+### Step Functions e2e tests (`sfn_e2e` build tag)
+
+Integration tests for the real ASL engine live in `tests/integration/stepfunctions_test.go` and run against a standard lite-mode server (no docker-compose needed).
+
+```bash
+./jaiscloud-aws start &
+go test -v -run TestSFN ./tests/integration/
+```
+
+| Test | State type exercised |
+|---|---|
+| `TestSFN_PassState_InputOutput` | Pass — InputPath, OutputPath, Result |
+| `TestSFN_ChoiceState_StringEquals` | Choice — StringEquals comparison |
+| `TestSFN_MapState_Items` | Map — parallel item iteration |
+| `TestSFN_WaitState_Seconds` | Wait — Seconds |
+| `TestSFN_ParallelState` | Parallel — branch merge |
+| `TestSFN_TaskState_Lambda` | Task — Lambda invocation |
+| `TestSFN_ErrorHandling_Retry` | Retry with MaxAttempts + IntervalSeconds |
+| `TestSFN_ErrorHandling_Catch` | Catch fallback on Lambda error |
 
 ---
 
