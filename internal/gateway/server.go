@@ -97,6 +97,17 @@ func (s *Server) buildRouter() {
 		r.Get("/lambda/code/{account}/{function}/{qualifier}", s.adminHandler.LambdaCodeHandler)
 		r.Get("/lambda/layer/{account}/{layer}/{version}", s.adminHandler.LambdaLayerHandler)
 		r.Post("/firehose/flush", s.adminHandler.FirehoseFlushHandler)
+		r.Post("/cw-evaluate", s.adminHandler.CWEvaluateHandler)
+		// SNS dummy signing certificate — returned in SNS notification envelopes so
+		// SDK-level certificate validation does not fail in integration tests.
+		r.Get("/sns/SimpleNotificationService.pem", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/x-pem-file")
+			w.WriteHeader(http.StatusOK)
+			// Static self-signed dummy PEM — NOT a real SNS signing certificate.
+			// JaisCloud does not sign SNS notifications; this endpoint exists solely
+			// to satisfy SDK clients that fetch the cert URL before verifying.
+			_, _ = io.WriteString(w, snsDummyCert)
+		})
 	})
 
 	if s.cfg.Metrics {
@@ -556,3 +567,19 @@ func encodeBase64Lines(data []byte) string {
 	out = append(out, encoded...)
 	return string(out)
 }
+
+// snsDummyCert is a static, self-signed dummy PEM certificate returned by the
+// /_jaiscloud/sns/SimpleNotificationService.pem endpoint. JaisCloud does not
+// actually sign SNS notifications; this placeholder satisfies SDK clients that
+// fetch the SigningCertURL before attempting (optional) signature verification.
+const snsDummyCert = `-----BEGIN CERTIFICATE-----
+MIIBpDCCAQmgAwIBAgIUYWlzY2xvdWQtc25zLWR1bW15LTAxMAsGCSqGSIb3DQEB
+CwUAMCAxHjAcBgNVBAMTFWphaXNjbG91ZC1zbnMtZHVtbXkwHhcNMjUwMTAxMDAw
+MDAwWhcNMzUwMTAxMDAwMDAwWjAgMR4wHAYDVQQDExVqYWlzY2xvdWQtc25zLWR1
+bW15MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC7o4qne60TB3wolFja5sS5
+S5bpgADhEFnPY5Q0w/CJtLhZfNkQ0Sf/E7IdbNL6Xe9HCp5hmqOz+HCBQ1KPYF1
+nQq7qYI+6E6dFDL0qWcN3Rj3gVkJT9ZoQ+uNQGj5JRtP3r0hGkfQrBs0FuBGrRz
+6UUhF+D4v8KlAM3bgQIDAQABMA0GCSqGSIb3DQEBCwUAA4GBAAAAAAAAAAAAAAAa
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAjaiscloudSNSdummyCertNotReal==
+-----END CERTIFICATE-----
+`

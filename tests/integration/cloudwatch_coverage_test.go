@@ -696,12 +696,7 @@ func TestCW_SetAlarmState_NonExistent_Error(t *testing.T) {
 
 // TestCW_DescribeAlarmHistory_AfterStateChange verifies that SetAlarmState produces
 // a history item retrievable via DescribeAlarmHistory.
-//
-// Parity gap: alarm-history recording is not implemented; DescribeAlarmHistory
-// returns a hardcoded empty list. Closing this gap requires a per-alarm ring of
-// history items appended on PutMetricAlarm/SetAlarmState/state transitions.
 func TestCW_DescribeAlarmHistory_AfterStateChange(t *testing.T) {
-	t.Skip("alarm-history recording not implemented; see docs/parity/_cloudwatch.md")
 	resetState(t)
 	ctx := context.Background()
 	c := newCWClient(t)

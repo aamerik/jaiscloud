@@ -35,6 +35,12 @@ func (e *alarmEvaluator) Run(ctx context.Context) {
 	}
 }
 
+// EvaluateAll is the exported entry point for tests that want to trigger
+// alarm evaluation synchronously without waiting for the ticker.
+func (e *alarmEvaluator) EvaluateAll(ctx context.Context) {
+	e.evaluateAll(ctx)
+}
+
 func (e *alarmEvaluator) evaluateAll(ctx context.Context) {
 	entries, err := e.p.resources.List(ctx, "cloudwatch_alarm", "")
 	if err != nil {

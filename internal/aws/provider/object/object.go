@@ -152,11 +152,30 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.PutBucketReplication":  p.PutBucketReplication,
 		"Object.GetBucketReplication":  p.GetBucketReplication,
 		"Object.DeleteBucketReplication": p.DeleteBucketReplication,
+		// S3 Batch Operations — not yet implemented
+		"Object.CreateJob":         p.notImplemented("CreateJob (S3 Batch Operations)"),
+		"Object.ListJobs":          p.notImplemented("ListJobs (S3 Batch Operations)"),
+		"Object.DescribeJob":       p.notImplemented("DescribeJob (S3 Batch Operations)"),
+		"Object.UpdateJobPriority": p.notImplemented("UpdateJobPriority (S3 Batch Operations)"),
+		"Object.UpdateJobStatus":   p.notImplemented("UpdateJobStatus (S3 Batch Operations)"),
 	}
 }
 
 func (p *ObjectProvider) stub(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{}), nil
+}
+
+// notImplemented returns a HandlerFunc that always responds with HTTP 501 and a
+// clear "planned for future release" message.
+func (p *ObjectProvider) notImplemented(op string) provider.HandlerFunc {
+	return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return nil, model.NewProviderError(
+			"UnsupportedOperation",
+			op+" is not yet implemented in JaisCloud. This feature is planned for a future release. "+
+				"Please open an issue at https://github.com/jaisrajms/jaiscloud/issues to track progress or request prioritization.",
+			501,
+		)
+	}
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

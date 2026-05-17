@@ -404,8 +404,11 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	if err := json.Unmarshal(e.Data, &params); err != nil {
 		return nil, err
 	}
+	oldState, _ := params["StateValue"].(string)
 	params["StateValue"] = stateValue
 	params["StateReason"] = stateReason
+	now := time.Now().UTC()
+	params["StateUpdatedTimestamp"] = now.Format(time.RFC3339)
 	data, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -413,6 +416,15 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	if err := p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}); err != nil {
 		slog.Error("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 	}
+	// Record history for explicit state changes via SetAlarmState.
+	p.writeAlarmHistory(ctx, name, "MetricAlarm", "StateUpdate",
+		fmt.Sprintf("Alarm updated from %s to %s", oldState, stateValue),
+		map[string]any{
+			"version":  "1.0",
+			"oldState": map[string]any{"stateValue": oldState},
+			"newState": map[string]any{"stateValue": stateValue, "stateReason": stateReason},
+		},
+		now)
 	go p.fireAlarmActions(ctx, params, stateValue)
 	return provider.OK(map[string]any{"__action__": "SetAlarmState"}), nil
 }

@@ -269,6 +269,20 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 	subnetId := strParam(nr.Params, "SubnetId")
 	userData := strParam(nr.Params, "UserData")
 
+	// If no subnet specified, place in the first default subnet (seeded at startup).
+	defaultVpcId := ""
+	if subnetId == "" {
+		snEntries, _ := p.resources.List(ctx, rtSubnet, "")
+		for _, se := range snEntries {
+			var sn ec2Subnet
+			if json.Unmarshal(se.Data, &sn) == nil && sn.IsDefault {
+				subnetId = sn.SubnetId
+				defaultVpcId = sn.VpcId
+				break
+			}
+		}
+	}
+
 	// SecurityGroupIds.N
 	sgIds := extractIndexedParam(nr.Params, "SecurityGroupId")
 
@@ -294,6 +308,7 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 			InstanceType:           instanceType,
 			KeyName:                keyName,
 			SubnetId:               subnetId,
+			VpcId:                  defaultVpcId,
 			SecurityGroupIds:       sgIds,
 			PrivateIpAddress:       fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
 			State:                  "pending",
@@ -413,6 +428,9 @@ func matchInstance(inst ec2Instance, filters map[string][]string) bool {
 func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "InstanceId")
 	filters := parseEC2Filters(nr.Params)
+	// Only suppress terminated/shutting-down instances when the caller has not
+	// explicitly asked for those states via an instance-state-name filter.
+	_, hasStateFilter := filters["instance-state-name"]
 	entries, err := p.resources.List(ctx, rtInstance, "")
 	if err != nil {
 		return nil, err
@@ -421,7 +439,7 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 	for _, e := range entries {
 		var inst ec2Instance
 		json.Unmarshal(e.Data, &inst)
-		if inst.State == "terminated" || inst.State == "shutting-down" {
+		if !hasStateFilter && (inst.State == "terminated" || inst.State == "shutting-down") {
 			continue
 		}
 		if len(filterIds) > 0 && !containsStr(filterIds, inst.InstanceId) {

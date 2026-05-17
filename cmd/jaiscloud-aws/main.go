@@ -167,6 +167,7 @@ func startCmd() *cobra.Command {
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
 			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter)
 			adminHandler.SetLambdaCodeFetcher(funcP)
+			adminHandler.SetCWAlarmEvaluator(cwResetter.Evaluator())
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      "aws",

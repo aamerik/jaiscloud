@@ -120,10 +120,10 @@ func certToWire(c certificate) map[string]any {
 		"Type":                    c.Type,
 		"KeyAlgorithm":            c.KeyAlgorithm,
 		"InUseBy":                 c.InUseBy,
-		"CreatedAt":               c.CreatedAt.Unix(),
-		"IssuedAt":                c.IssuedAt.Unix(),
-		"NotBefore":               c.NotBefore.Unix(),
-		"NotAfter":                c.NotAfter.Unix(),
+		"CreatedAt":               float64(c.CreatedAt.UnixNano()) / 1e9,
+		"IssuedAt":                float64(c.IssuedAt.UnixNano()) / 1e9,
+		"NotBefore":               float64(c.NotBefore.UnixNano()) / 1e9,
+		"NotAfter":                float64(c.NotAfter.UnixNano()) / 1e9,
 		"DomainValidationOptions": dvo,
 		"RenewalEligibility":      c.RenewalEligibility,
 		"KeyUsages":               keyUsages,
@@ -169,6 +169,23 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 	}
 	now := time.Now().UTC()
 	arn := nr.ResourceID("acm-certificate", randUUID())
+
+	// Build DomainValidationOptions for main domain + all SANs.
+	allDomains := append([]string{domain}, sans...)
+	dvos := make([]domainValidationOption, 0, len(allDomains))
+	for _, d := range allDomains {
+		dvos = append(dvos, domainValidationOption{
+			DomainName:       d,
+			ValidationMethod: method,
+			ValidationStatus: "SUCCESS",
+			ResourceRecord: map[string]any{
+				"Name":  "_" + randHex(8) + "." + d,
+				"Type":  "CNAME",
+				"Value": randHex(16) + ".acm-validations.aws.",
+			},
+		})
+	}
+
 	c := certificate{
 		CertificateARN:          arn,
 		DomainName:              domain,
@@ -184,22 +201,11 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 		NotBefore:               now,
 		NotAfter:                now.Add(365 * 24 * time.Hour),
 		ValidationMethod:        method,
-		DomainValidationOptions: []domainValidationOption{
-			{
-				DomainName:       domain,
-				ValidationMethod: method,
-				ValidationStatus: "SUCCESS",
-				ResourceRecord: map[string]any{
-					"Name":  "_acme-challenge." + domain,
-					"Type":  "CNAME",
-					"Value": "mock-validation-value",
-				},
-			},
-		},
-		RenewalEligibility: "INELIGIBLE",
-		KeyUsages:          []map[string]any{{"Name": "DIGITAL_SIGNATURE"}},
-		ExtendedKeyUsages:  []map[string]any{{"Name": "TLS_WEB_SERVER_AUTHENTICATION"}},
-		Options:            map[string]any{"CertificateTransparencyLoggingPreference": "ENABLED"},
+		DomainValidationOptions: dvos,
+		RenewalEligibility:      "INELIGIBLE",
+		KeyUsages:               []map[string]any{{"Name": "DIGITAL_SIGNATURE"}},
+		ExtendedKeyUsages:       []map[string]any{{"Name": "TLS_WEB_SERVER_AUTHENTICATION"}},
+		Options:                 map[string]any{"CertificateTransparencyLoggingPreference": "ENABLED"},
 	}
 	p.saveCert(ctx, c)
 	return provider.OK(map[string]any{"CertificateArn": arn}), nil

@@ -43,12 +43,13 @@ type HandlerMeta struct {
 
 // Handler serves the /_jaiscloud/* admin endpoints.
 type Handler struct {
-	mu              sync.Mutex
-	meta            HandlerMeta
-	resetters       []Resetter
-	snapshotters    map[string]Snapshotter
-	lambdaCode      LambdaCodeFetcher
-	firehoseFlusher FirehoseFlusher
+	mu               sync.Mutex
+	meta             HandlerMeta
+	resetters        []Resetter
+	snapshotters     map[string]Snapshotter
+	lambdaCode       LambdaCodeFetcher
+	firehoseFlusher  FirehoseFlusher
+	cwAlarmEvaluator CWAlarmEvaluator
 }
 
 func NewHandler() *Handler {

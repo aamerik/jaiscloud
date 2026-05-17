@@ -388,6 +388,155 @@ func TestEC2InstanceLifecycleTransitions(t *testing.T) {
 		"instance should be running after 3s")
 }
 
+// ─── H-PENDING-3: Default VPC at startup ─────────────────────────────────────
+
+// TestEC2DefaultVPCAtStartup verifies that a default VPC and subnets are seeded
+// automatically so that RunInstances without a SubnetId succeeds.
+func TestEC2DefaultVPCAtStartup(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	// There must be at least one default VPC.
+	vpcsOut, err := client.DescribeVpcs(ctx, &awsec2.DescribeVpcsInput{})
+	require.NoError(t, err)
+	foundDefault := false
+	for _, v := range vpcsOut.Vpcs {
+		if v.IsDefault != nil && *v.IsDefault {
+			foundDefault = true
+			break
+		}
+	}
+	assert.True(t, foundDefault, "at least one default VPC must exist after startup")
+
+	// There must be at least one default subnet.
+	subnetsOut, err := client.DescribeSubnets(ctx, &awsec2.DescribeSubnetsInput{})
+	require.NoError(t, err)
+	foundDefaultSubnet := false
+	for _, s := range subnetsOut.Subnets {
+		if s.DefaultForAz != nil && *s.DefaultForAz {
+			foundDefaultSubnet = true
+			break
+		}
+	}
+	assert.True(t, foundDefaultSubnet, "at least one default subnet must exist after startup")
+
+	// RunInstances without SubnetId must succeed and be placed in the default subnet.
+	runOut, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT3Micro,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	require.Len(t, runOut.Instances, 1)
+	assert.NotEmpty(t, aws.ToString(runOut.Instances[0].SubnetId),
+		"instance launched without explicit SubnetId must be placed in the default subnet")
+}
+
+// ─── H-PENDING-2: DescribeInstances filter support ───────────────────────────
+
+// TestEC2DescribeInstancesFilters verifies that the instance-type filter returns
+// only instances matching the requested type.
+func TestEC2DescribeInstancesFilters(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	// Launch a t2.micro instance.
+	run1, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT2Micro,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	require.Len(t, run1.Instances, 1)
+
+	// Launch a t3.nano instance.
+	run2, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT3Nano,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	require.Len(t, run2.Instances, 1)
+
+	// Filter by instance-type=t2.micro — must return exactly 1 instance.
+	descOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		Filters: []types.Filter{
+			{Name: aws.String("instance-type"), Values: []string{"t2.micro"}},
+		},
+	})
+	require.NoError(t, err)
+	total := 0
+	for _, r := range descOut.Reservations {
+		total += len(r.Instances)
+	}
+	assert.Equal(t, 1, total, "only the t2.micro instance should be returned")
+	if total == 1 {
+		assert.Equal(t, types.InstanceTypeT2Micro, descOut.Reservations[0].Instances[0].InstanceType)
+	}
+}
+
+// TestEC2DescribeInstancesStateFilter verifies that filtering by
+// instance-state-name=terminated returns terminated instances and that
+// filtering by instance-state-name=running excludes them.
+func TestEC2DescribeInstancesStateFilter(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	client := newEC2Client(t)
+
+	// Launch and immediately terminate one instance.
+	runOut, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0abcdef1234567890"),
+		InstanceType: types.InstanceTypeT3Micro,
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+	})
+	require.NoError(t, err)
+	require.Len(t, runOut.Instances, 1)
+	instanceId := aws.ToString(runOut.Instances[0].InstanceId)
+
+	// Wait for pending → running before terminating.
+	time.Sleep(3 * time.Second)
+
+	_, err = client.TerminateInstances(ctx, &awsec2.TerminateInstancesInput{
+		InstanceIds: []string{instanceId},
+	})
+	require.NoError(t, err)
+
+	// Wait for shutting-down → terminated transition.
+	time.Sleep(3 * time.Second)
+
+	// Filter running — the terminated instance must not appear.
+	runningOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		Filters: []types.Filter{
+			{Name: aws.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	require.NoError(t, err)
+	runningCount := 0
+	for _, r := range runningOut.Reservations {
+		runningCount += len(r.Instances)
+	}
+	assert.Equal(t, 0, runningCount, "no running instances expected after termination")
+
+	// Filter terminated — the terminated instance must appear.
+	termOut, err := client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+		Filters: []types.Filter{
+			{Name: aws.String("instance-state-name"), Values: []string{"terminated"}},
+		},
+	})
+	require.NoError(t, err)
+	termCount := 0
+	for _, r := range termOut.Reservations {
+		termCount += len(r.Instances)
+	}
+	assert.Equal(t, 1, termCount, "terminated instance must be visible when filtering by terminated state")
+}
+
 // ─── IAM Instance Profile ─────────────────────────────────────────────────────
 
 func TestEC2AssociateIamInstanceProfile(t *testing.T) {

@@ -112,6 +112,28 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.DescribeLimits":              p.DescribeLimits,
 		"Table.DescribeContributorInsights": p.DescribeContributorInsights,
 		"Table.ListContributorInsights":     p.ListContributorInsights,
+		// Not-implemented stubs — import/export and auto-scaling
+		"Table.ExportTableToPointInTime":        p.notImplemented("ExportTableToPointInTime"),
+		"Table.DescribeExport":                  p.notImplemented("DescribeExport"),
+		"Table.ListExports":                     p.notImplemented("ListExports"),
+		"Table.ImportTable":                     p.notImplemented("ImportTable"),
+		"Table.DescribeImport":                  p.notImplemented("DescribeImport"),
+		"Table.ListImports":                     p.notImplemented("ListImports"),
+		"Table.DescribeTableReplicaAutoScaling": p.notImplemented("DescribeTableReplicaAutoScaling"),
+		"Table.UpdateTableReplicaAutoScaling":   p.notImplemented("UpdateTableReplicaAutoScaling"),
+	}
+}
+
+// notImplemented returns a HandlerFunc that always responds with HTTP 501 and a
+// clear "planned for future release" message.
+func (p *TableProvider) notImplemented(op string) provider.HandlerFunc {
+	return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return nil, model.NewProviderError(
+			"UnsupportedOperation",
+			op+" is not yet implemented in JaisCloud. This feature is planned for a future release. "+
+				"Please open an issue at https://github.com/jaisrajms/jaiscloud/issues to track progress or request prioritization.",
+			501,
+		)
 	}
 }
 

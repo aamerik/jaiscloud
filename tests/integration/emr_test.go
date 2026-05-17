@@ -426,3 +426,43 @@ func TestEMR_ManagedScalingPolicy(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+// TestEMRTimestampsAreFloat verifies that EMR cluster timestamps (CreationDateTime etc.)
+// are correctly decoded by the AWS SDK as non-nil *time.Time values.
+// If the wire format emits int64 instead of float64 epoch, the SDK leaves them nil.
+func TestEMRTimestampsAreFloat(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	c := newEMRClient(t)
+
+	clusterID := createWaitingCluster(t, c, "timestamp-cluster")
+
+	desc, err := c.DescribeCluster(ctx, &awsemr.DescribeClusterInput{
+		ClusterId: aws.String(clusterID),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, desc.Cluster)
+
+	timeline := desc.Cluster.Status.Timeline
+	require.NotNil(t, timeline, "Status.Timeline must be non-nil")
+	assert.NotNil(t, timeline.CreationDateTime,
+		"CreationDateTime must be non-nil — nil means the SDK failed to decode a float64 timestamp")
+	// CreationDateTime should be recent (within the last minute).
+	if timeline.CreationDateTime != nil {
+		elapsed := timeline.CreationDateTime.Unix()
+		assert.Greater(t, elapsed, int64(0), "CreationDateTime epoch should be positive")
+	}
+
+	// Also check instance group timelines.
+	igOut, err := c.ListInstanceGroups(ctx, &awsemr.ListInstanceGroupsInput{
+		ClusterId: aws.String(clusterID),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, igOut.InstanceGroups)
+	for _, ig := range igOut.InstanceGroups {
+		require.NotNil(t, ig.Status, "instance group Status must not be nil")
+		require.NotNil(t, ig.Status.Timeline, "instance group Timeline must not be nil")
+		assert.NotNil(t, ig.Status.Timeline.CreationDateTime,
+			"instance group CreationDateTime must be non-nil")
+	}
+}
