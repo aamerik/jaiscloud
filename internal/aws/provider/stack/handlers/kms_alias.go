@@ -30,6 +30,7 @@ func NewKMSAliasHandler(keyP *keyprovider.KeyProvider) stackprovider.ResourceHan
 			_, err := keyP.DeleteAlias(ctx, &model.NormalizedRequest{Params: map[string]any{"AliasName": physicalID}})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"AliasName"},
 		},

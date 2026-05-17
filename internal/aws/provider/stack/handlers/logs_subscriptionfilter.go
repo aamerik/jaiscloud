@@ -42,6 +42,7 @@ func NewLogsSubscriptionFilterHandler(logsP *cwlogs.Provider) stackprovider.Reso
 			})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"LogGroupName", "FilterName"},
 		},

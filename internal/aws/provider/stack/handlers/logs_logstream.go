@@ -33,6 +33,7 @@ func NewLogsLogStreamHandler(logsP *cwlogs.Provider) stackprovider.ResourceHandl
 			})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"LogGroupName", "LogStreamName"},
 		},

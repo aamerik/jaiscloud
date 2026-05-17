@@ -37,5 +37,9 @@ func NewDynamoDBGlobalTableHandler(tableP *table.TableProvider) stackprovider.Re
 			return nil
 		},
 		GetAttAttrs: []string{"Arn", "StreamArn"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"TableName"},
+			RequireUpdate:      []string{"Replicas", "SSESpecification", "Tags"},
+		},
 	}
 }

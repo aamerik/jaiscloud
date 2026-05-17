@@ -46,6 +46,7 @@ func NewAPIGatewayIntegrationHandler(apigwP *apigwprovider.GatewayProvider) stac
 			})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"RestApiId", "ResourceId", "HttpMethod"},
 		},

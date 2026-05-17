@@ -35,6 +35,7 @@ func NewEC2SubnetRouteTableAssociationHandler(computeP *compute.ComputeProvider)
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			return nil
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"SubnetId", "RouteTableId"},
 		},

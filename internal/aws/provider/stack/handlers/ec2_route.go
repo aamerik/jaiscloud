@@ -41,6 +41,7 @@ func NewEC2RouteHandler(computeP *compute.ComputeProvider) stackprovider.Resourc
 			})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"RouteTableId", "DestinationCidrBlock"},
 		},

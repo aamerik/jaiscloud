@@ -31,5 +31,9 @@ func NewEventsEventBusHandler(eventsP *eventsprovider.EventBridgeProvider) stack
 		},
 		RefAttr:     "Arn",
 		GetAttAttrs: []string{"Arn", "Name"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"Name"},
+			RequireUpdate:      []string{"Policy", "Tags"},
+		},
 	}
 }

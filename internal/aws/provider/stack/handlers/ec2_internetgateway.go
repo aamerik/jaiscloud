@@ -31,5 +31,9 @@ func NewEC2InternetGatewayHandler(computeP *compute.ComputeProvider) stackprovid
 			return err
 		},
 		GetAttAttrs: []string{"InternetGatewayId"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{},
+			RequireUpdate:      []string{"Tags"},
+		},
 	}
 }

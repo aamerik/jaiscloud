@@ -37,6 +37,7 @@ func NewAPIGatewayResourceHandler(apigwP *apigwprovider.GatewayProvider) stackpr
 			})
 			return err
 		},
+		GetAttAttrs: []string{"ResourceId"},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"RestApiId", "ParentId", "PathPart"},
 		},

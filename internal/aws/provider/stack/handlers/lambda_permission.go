@@ -34,6 +34,7 @@ func NewLambdaPermissionHandler(funcP *functionprovider.FunctionProvider) stackp
 			})
 			return err
 		},
+		GetAttAttrs: []string{},
 		ReplacementRules: stackprovider.ReplacementRules{
 			RequireReplacement: []string{"FunctionName", "StatementId"},
 		},

@@ -22,9 +22,24 @@ func NewStepFunctionsStateMachineHandler(sfnP *sfnprovider.Provider) stackprovid
 			smArn, _ := resp.Data["stateMachineArn"].(string)
 			return smArn, map[string]any{"Arn": smArn, "Name": name}, nil
 		},
+		Update: func(ctx context.Context, logicalID, physicalID string, oldProps, newProps map[string]any, nr *model.NormalizedRequest) (string, map[string]any, bool, error) {
+			params := copyProps(newProps)
+			params["stateMachineArn"] = physicalID
+			if _, err := sfnP.UpdateStateMachine(ctx, child(nr, params)); err != nil {
+				return "", nil, false, err
+			}
+			name := propStr(newProps, "StateMachineName", logicalID)
+			return physicalID, map[string]any{"Arn": physicalID, "Name": name}, false, nil
+		},
 		Delete: func(ctx context.Context, physicalID string, _ map[string]any) error {
 			_, err := sfnP.DeleteStateMachine(ctx, &model.NormalizedRequest{Params: map[string]any{"stateMachineArn": physicalID}})
 			return err
+		},
+		RefAttr:     "Arn",
+		GetAttAttrs: []string{"Arn", "Name"},
+		ReplacementRules: stackprovider.ReplacementRules{
+			RequireReplacement: []string{"StateMachineName", "StateMachineType"},
+			RequireUpdate:      []string{"Definition", "DefinitionString", "RoleArn", "LoggingConfiguration", "TracingConfiguration", "Tags"},
 		},
 	}
 }
