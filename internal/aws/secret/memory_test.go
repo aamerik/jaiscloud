@@ -24,7 +24,7 @@ func TestMemorySecretStore_CreateGet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my/secret", got.Name)
 
-	got, err = s.GetSecretByName(ctx, "my/secret")
+	got, err = s.GetSecretByName(ctx, "", "my/secret")
 	require.NoError(t, err)
 	assert.Equal(t, "s1", got.SecretID)
 
@@ -50,7 +50,7 @@ func TestMemorySecretStore_Delete(t *testing.T) {
 	require.NoError(t, s.DeleteSecret(ctx, "s1"))
 	_, err := s.GetSecret(ctx, "s1")
 	assert.ErrorIs(t, err, secret.ErrSecretNotFound)
-	_, err = s.GetSecretByName(ctx, "n1")
+	_, err = s.GetSecretByName(ctx, "", "n1")
 	assert.ErrorIs(t, err, secret.ErrSecretNotFound)
 }
 
@@ -154,6 +154,6 @@ func TestMemorySecretStore_Reset(t *testing.T) {
 	s := newSecretStore()
 	s.CreateSecret(ctx, secret.SecretEntry{SecretID: "s1", Name: "n1"})
 	s.Reset()
-	secrets, _ := s.ListSecrets(ctx)
+	secrets, _ := s.ListSecrets(ctx, "")
 	assert.Empty(t, secrets)
 }
