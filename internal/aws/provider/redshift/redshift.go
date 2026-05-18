@@ -135,9 +135,7 @@ func (p *Provider) loadCluster(ctx context.Context, account, region, id string) 
 func (p *Provider) saveCluster(ctx context.Context, account, region string, c redshiftCluster) {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCluster, ID: c.ClusterIdentifier, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -418,9 +416,7 @@ func loadRSTags(ctx context.Context, res store.ResourceStore, account, region, a
 func saveRSTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtRSTags, ID: arn, Data: data}
-	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, account, region, entry)
-	}
+	_ = res.Upsert(ctx, account, region, entry)
 }
 
 // Silence unused import

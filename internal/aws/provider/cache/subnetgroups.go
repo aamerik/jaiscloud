@@ -184,9 +184,7 @@ func loadCacheTags(ctx context.Context, res store.ResourceStore, account, region
 func saveCacheTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtCacheTags, ID: arn, Data: data}
-	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, account, region, entry)
-	}
+	_ = res.Upsert(ctx, account, region, entry)
 }
 
 func (p *CacheProvider) AddTagsToResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

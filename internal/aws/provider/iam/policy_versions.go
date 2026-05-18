@@ -79,7 +79,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 			}
 			v.IsDefaultVersion = false
 			data, _ := json.Marshal(v)
-			_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
+			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
 		}
 	}
 
@@ -91,7 +91,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 		CreateDate:       now,
 	}
 	data, _ := json.Marshal(v)
-	_ = p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: policyVersionKey(arn, versionId), Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtPolicyVersion, ID: policyVersionKey(arn, versionId), Data: data})
 
 	return provider.OK(map[string]any{"PolicyVersion": policyVersionMap(v)}), nil
 }
@@ -117,7 +117,7 @@ func (p *IAMProvider) DeletePolicyVersion(ctx context.Context, nr *model.Normali
 	if v.IsDefaultVersion {
 		return nil, model.NewProviderError("DeleteConflict", "Cannot delete the default version of a policy", http.StatusConflict)
 	}
-	_ = p.resources.Delete(ctx, nr.AccountID, "", rtPolicyVersion, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtPolicyVersion, key)
 	return provider.OK(nil), nil
 }
 
@@ -161,7 +161,7 @@ func (p *IAMProvider) SetDefaultPolicyVersion(ctx context.Context, nr *model.Nor
 		if v.IsDefaultVersion != shouldBeDefault {
 			v.IsDefaultVersion = shouldBeDefault
 			data, _ := json.Marshal(v)
-			_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
+			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
 		}
 	}
 	if !found {

@@ -199,11 +199,7 @@ type ec2Instance struct {
 func (p *ComputeProvider) saveInstance(ctx context.Context, account, region string, inst ec2Instance) error {
 	data, _ := json.Marshal(inst)
 	entry := store.ResourceEntry{Type: rtInstance, ID: inst.InstanceId, Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *ComputeProvider) loadInstance(ctx context.Context, account, region, id string) (ec2Instance, error) {

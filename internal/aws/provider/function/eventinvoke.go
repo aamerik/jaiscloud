@@ -53,11 +53,7 @@ func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr 
 	}
 	data, _ := json.Marshal(cfg)
 	entry := store.ResourceEntry{Type: resTypeEventInvoke, ID: eiKey(funcName, qualifier), Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(eiToWire(cfg)), nil
 }
 

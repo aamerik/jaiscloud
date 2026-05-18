@@ -43,11 +43,7 @@ func (p *FunctionProvider) PutProvisionedConcurrencyConfig(ctx context.Context, 
 	}
 	data, _ := json.Marshal(pe)
 	entry := store.ResourceEntry{Type: resTypeProvisioned, ID: key, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: provisionedToWire(pe)}, nil
 }
 

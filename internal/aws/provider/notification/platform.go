@@ -114,12 +114,8 @@ func (p *SNSProvider) CreatePlatformEndpoint(ctx context.Context, nr *model.Norm
 	entry := store.ResourceEntry{Type: rtPlatformEndpoint, ID: endpointArn}
 	data, _ := json.Marshal(ep)
 	entry.Data = data
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		} else {
-			return nil, err
-		}
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry); err != nil {
+		return nil, err
 	}
 	return provider.OK(map[string]any{"EndpointArn": endpointArn}), nil
 }

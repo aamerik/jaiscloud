@@ -45,11 +45,7 @@ func applyJobTemplateDefaults(requestParams map[string]any, templateData map[str
 func (p *EMRContainersProvider) saveJobTemplate(ctx context.Context, account, region string, jt jobTemplate) error {
 	data, _ := json.Marshal(jt)
 	entry := store.ResourceEntry{Type: rtJobTemplate, ID: jobTemplateStoreID(jt.Id), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *EMRContainersProvider) loadJobTemplate(ctx context.Context, account, region, id string) (jobTemplate, error) {

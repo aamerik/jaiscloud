@@ -44,6 +44,11 @@ func (m *memStore) Update(_ context.Context, _, _ string, e store.ResourceEntry)
 	return nil
 }
 
+func (m *memStore) Upsert(_ context.Context, _, _ string, e store.ResourceEntry) error {
+	m.entries[m.key(e.Type, e.ID)] = e
+	return nil
+}
+
 func (m *memStore) Delete(_ context.Context, _, _, t, id string) error {
 	delete(m.entries, m.key(t, id))
 	return nil
@@ -210,6 +215,9 @@ func (s *errStore) Get(_ context.Context, _, _, _, _ string) (store.ResourceEntr
 	return store.ResourceEntry{}, s.err
 }
 func (s *errStore) Update(_ context.Context, _, _ string, _ store.ResourceEntry) error {
+	return s.err
+}
+func (s *errStore) Upsert(_ context.Context, _, _ string, _ store.ResourceEntry) error {
 	return s.err
 }
 func (s *errStore) Delete(_ context.Context, _, _, _, _ string) error { return s.err }

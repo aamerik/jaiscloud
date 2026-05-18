@@ -251,12 +251,8 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 	}
 	raw, _ := json.Marshal(rule)
 	entry := store.ResourceEntry{Type: resTypeRule, ID: ruleKey(busName, name), Data: raw}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		} else {
-			return nil, err
-		}
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry); err != nil {
+		return nil, err
 	}
 
 	// Wire scheduler if ScheduleExpression is set and scheduler is available.
@@ -449,11 +445,7 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		raw, _ := json.Marshal(td)
 		storeID := targetKey(busName, ruleName, id)
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
-		if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-			if err == store.ErrAlreadyExists {
-				_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-			}
-		}
+		_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	}
 	return provider.OK(map[string]any{
 		"FailedEntryCount": len(failed),
@@ -1071,11 +1063,7 @@ func (p *EventBridgeProvider) loadTags(ctx context.Context, account, region, arn
 func (p *EventBridgeProvider) saveTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: resTypeEBTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, account, region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 // ─── Archive + Replay (13.6) ──────────────────────────────────────────────────
@@ -1253,12 +1241,8 @@ func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.Normali
 	}
 	data, _ := json.Marshal(replay)
 	entry := store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		} else {
-			return nil, err
-		}
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry); err != nil {
+		return nil, err
 	}
 
 	// Look up archive name from ARN suffix, replay stored events.

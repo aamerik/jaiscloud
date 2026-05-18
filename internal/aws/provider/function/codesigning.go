@@ -107,11 +107,7 @@ func (p *FunctionProvider) PutFunctionCodeSigningConfig(ctx context.Context, nr 
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
 	data, _ := json.Marshal(map[string]string{"CodeSigningConfigArn": arn})
 	entry := store.ResourceEntry{Type: resTypeFuncCSC, ID: funcName, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{"CodeSigningConfigArn": arn, "FunctionName": funcName}), nil
 }
 

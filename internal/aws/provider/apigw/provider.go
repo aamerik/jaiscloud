@@ -21,16 +21,16 @@ import (
 )
 
 const (
-	rtAPI              = "apigw_api"
-	rtResource         = "apigw_resource"
-	rtStage            = "apigw_stage"
-	rtDeployment       = "apigw_deployment"
-	rtValidator        = "apigw_validator"
-	rtDomainName       = "apigw_domain_name"
-	rtBasePathMapping  = "apigw_base_path_mapping"
-	rtUsagePlan        = "apigw_usage_plan"
-	rtApiKey           = "apigw_api_key"
-	rtUsagePlanKey     = "apigw_usage_plan_key"
+	rtAPI             = "apigw_api"
+	rtResource        = "apigw_resource"
+	rtStage           = "apigw_stage"
+	rtDeployment      = "apigw_deployment"
+	rtValidator       = "apigw_validator"
+	rtDomainName      = "apigw_domain_name"
+	rtBasePathMapping = "apigw_base_path_mapping"
+	rtUsagePlan       = "apigw_usage_plan"
+	rtApiKey          = "apigw_api_key"
+	rtUsagePlanKey    = "apigw_usage_plan_key"
 )
 
 // GatewayProvider handles API Gateway management operations and execute-api dispatch.
@@ -52,20 +52,20 @@ func New(resources store.ResourceStore) *GatewayProvider {
 func (p *GatewayProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// REST APIs
-		"Gateway.CreateRestApi":    p.CreateRestApi,
-		"Gateway.GetRestApi":       p.GetRestApi,
-		"Gateway.GetRestApis":      p.GetRestApis,
-		"Gateway.UpdateRestApi":    p.UpdateRestApi,
-		"Gateway.DeleteRestApi":    p.DeleteRestApi,
+		"Gateway.CreateRestApi": p.CreateRestApi,
+		"Gateway.GetRestApi":    p.GetRestApi,
+		"Gateway.GetRestApis":   p.GetRestApis,
+		"Gateway.UpdateRestApi": p.UpdateRestApi,
+		"Gateway.DeleteRestApi": p.DeleteRestApi,
 		// Resources
-		"Gateway.GetResources":     p.GetResources,
-		"Gateway.GetResource":      p.GetResource,
-		"Gateway.CreateResource":   p.CreateResource,
-		"Gateway.DeleteResource":   p.DeleteResource,
+		"Gateway.GetResources":   p.GetResources,
+		"Gateway.GetResource":    p.GetResource,
+		"Gateway.CreateResource": p.CreateResource,
+		"Gateway.DeleteResource": p.DeleteResource,
 		// Methods
-		"Gateway.PutMethod":        p.PutMethod,
-		"Gateway.GetMethod":        p.GetMethod,
-		"Gateway.DeleteMethod":     p.DeleteMethod,
+		"Gateway.PutMethod":    p.PutMethod,
+		"Gateway.GetMethod":    p.GetMethod,
+		"Gateway.DeleteMethod": p.DeleteMethod,
 		// Integrations
 		"Gateway.PutIntegration":    p.PutIntegration,
 		"Gateway.GetIntegration":    p.GetIntegration,
@@ -90,15 +90,15 @@ func (p *GatewayProvider) Routes() map[string]provider.HandlerFunc {
 		"Gateway.UpdateRequestValidator": p.UpdateRequestValidator,
 		"Gateway.DeleteRequestValidator": p.DeleteRequestValidator,
 		// Custom domain names (H-PENDING-28)
-		"Gateway.CreateDomainName":       p.CreateDomainName,
-		"Gateway.GetDomainName":          p.GetDomainName,
-		"Gateway.GetDomainNames":         p.GetDomainNames,
-		"Gateway.UpdateDomainName":       p.UpdateDomainName,
-		"Gateway.DeleteDomainName":       p.DeleteDomainName,
-		"Gateway.CreateBasePathMapping":  p.CreateBasePathMapping,
-		"Gateway.GetBasePathMapping":     p.GetBasePathMapping,
-		"Gateway.GetBasePathMappings":    p.GetBasePathMappings,
-		"Gateway.DeleteBasePathMapping":  p.DeleteBasePathMapping,
+		"Gateway.CreateDomainName":      p.CreateDomainName,
+		"Gateway.GetDomainName":         p.GetDomainName,
+		"Gateway.GetDomainNames":        p.GetDomainNames,
+		"Gateway.UpdateDomainName":      p.UpdateDomainName,
+		"Gateway.DeleteDomainName":      p.DeleteDomainName,
+		"Gateway.CreateBasePathMapping": p.CreateBasePathMapping,
+		"Gateway.GetBasePathMapping":    p.GetBasePathMapping,
+		"Gateway.GetBasePathMappings":   p.GetBasePathMappings,
+		"Gateway.DeleteBasePathMapping": p.DeleteBasePathMapping,
 		// Usage plans + API keys (H-PENDING-29)
 		"Gateway.CreateUsagePlan":    p.CreateUsagePlan,
 		"Gateway.GetUsagePlan":       p.GetUsagePlan,
@@ -114,8 +114,8 @@ func (p *GatewayProvider) Routes() map[string]provider.HandlerFunc {
 		"Gateway.GetUsagePlanKeys":   p.GetUsagePlanKeys,
 		"Gateway.DeleteUsagePlanKey": p.DeleteUsagePlanKey,
 		// Tags
-		"Gateway.GetTags":      p.GetTags,
-		"Gateway.TagResource":  p.TagResource,
+		"Gateway.GetTags":       p.GetTags,
+		"Gateway.TagResource":   p.TagResource,
 		"Gateway.UntagResource": p.UntagResource,
 		// Export
 		"Gateway.GetExport": p.GetExport,
@@ -152,7 +152,9 @@ func (p *GatewayProvider) CreateRestApi(ctx context.Context, nr *model.Normalize
 	// Create root resource "/" automatically.
 	rootID := shortID()
 	root := apiResource{ID: rootID, APIID: apiID, Path: "/", PathPart: ""}
-	p.save(ctx, nr.AccountID, nr.Region, rtResource, rootID, root)
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtResource, rootID, root); err != nil {
+		return nil, fmt.Errorf("apigw: create root resource: %w", err)
+	}
 
 	return &model.ProviderResponse{HTTPStatus: 201, Data: apiToWire(api)}, nil
 }
@@ -214,27 +216,27 @@ func (p *GatewayProvider) DeleteRestApi(ctx context.Context, nr *model.Normalize
 // ─── Resources ────────────────────────────────────────────────────────────────
 
 type apiResource struct {
-	ID              string                     `json:"id"`
-	APIID           string                     `json:"apiId"`
-	ParentID        string                     `json:"parentId"`
-	Path            string                     `json:"path"`
-	PathPart        string                     `json:"pathPart"`
-	ResourceMethods map[string]resourceMethod  `json:"resourceMethods,omitempty"`
+	ID              string                    `json:"id"`
+	APIID           string                    `json:"apiId"`
+	ParentID        string                    `json:"parentId"`
+	Path            string                    `json:"path"`
+	PathPart        string                    `json:"pathPart"`
+	ResourceMethods map[string]resourceMethod `json:"resourceMethods,omitempty"`
 }
 
 type resourceMethod struct {
-	HTTPMethod          string                 `json:"httpMethod"`
-	AuthorizationType   string                 `json:"authorizationType"`
-	Integration         *methodIntegration     `json:"methodIntegration,omitempty"`
-	MethodResponses     map[string]any         `json:"methodResponses,omitempty"`
+	HTTPMethod        string             `json:"httpMethod"`
+	AuthorizationType string             `json:"authorizationType"`
+	Integration       *methodIntegration `json:"methodIntegration,omitempty"`
+	MethodResponses   map[string]any     `json:"methodResponses,omitempty"`
 }
 
 type methodIntegration struct {
-	Type            string            `json:"type"`
-	URI             string            `json:"uri"`
-	HTTPMethod      string            `json:"httpMethod"`
-	PassthroughBehavior string        `json:"passthroughBehavior"`
-	Responses       map[string]any    `json:"integrationResponses,omitempty"`
+	Type                string         `json:"type"`
+	URI                 string         `json:"uri"`
+	HTTPMethod          string         `json:"httpMethod"`
+	PassthroughBehavior string         `json:"passthroughBehavior"`
+	Responses           map[string]any `json:"integrationResponses,omitempty"`
 }
 
 func (p *GatewayProvider) GetResources(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -687,13 +689,7 @@ func (p *GatewayProvider) save(ctx context.Context, account, region, rtype, id s
 		return err
 	}
 	e := store.ResourceEntry{Type: rtype, ID: id, Data: data}
-	if err := p.resources.Create(ctx, account, region, e); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return p.resources.Update(ctx, account, region, e)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, e)
 }
 
 func (p *GatewayProvider) load(ctx context.Context, account, region, rtype, id string, v any) error {
@@ -803,11 +799,11 @@ func shortID() string {
 // ─── Request Validators (H-PENDING-27) ────────────────────────────────────────
 
 type requestValidator struct {
-	ID                      string `json:"id"`
-	APIID                   string `json:"restApiId"`
-	Name                    string `json:"name"`
-	ValidateRequestBody     bool   `json:"validateRequestBody"`
-	ValidateRequestParameters bool `json:"validateRequestParameters"`
+	ID                        string `json:"id"`
+	APIID                     string `json:"restApiId"`
+	Name                      string `json:"name"`
+	ValidateRequestBody       bool   `json:"validateRequestBody"`
+	ValidateRequestParameters bool   `json:"validateRequestParameters"`
 }
 
 func (p *GatewayProvider) CreateRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -818,10 +814,10 @@ func (p *GatewayProvider) CreateRequestValidator(ctx context.Context, nr *model.
 
 	id := shortID()
 	v := requestValidator{
-		ID:                      id,
-		APIID:                   apiID,
-		Name:                    name,
-		ValidateRequestBody:     validateBody,
+		ID:                        id,
+		APIID:                     apiID,
+		Name:                      name,
+		ValidateRequestBody:       validateBody,
 		ValidateRequestParameters: validateParams,
 	}
 	key := apiID + "/" + id
@@ -1058,12 +1054,12 @@ func bpmToWire(b basePathMapping) map[string]any {
 // ─── Usage plans + API keys (H-PENDING-29) ────────────────────────────────────
 
 type usagePlan struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
 	APIStages   []map[string]any `json:"apiStages,omitempty"`
-	Throttle    map[string]any `json:"throttle,omitempty"`
-	Quota       map[string]any `json:"quota,omitempty"`
+	Throttle    map[string]any   `json:"throttle,omitempty"`
+	Quota       map[string]any   `json:"quota,omitempty"`
 }
 
 type apiKey struct {
@@ -1075,8 +1071,8 @@ type apiKey struct {
 }
 
 type usagePlanKey struct {
-	PlanID string `json:"usagePlanId"`
-	KeyID  string `json:"id"`
+	PlanID  string `json:"usagePlanId"`
+	KeyID   string `json:"id"`
 	KeyType string `json:"type"`
 }
 

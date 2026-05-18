@@ -126,7 +126,7 @@ func (p *DNSProvider) CreateHostedZone(ctx context.Context, nr *model.Normalized
 		ResourceRecordSetCount: 2, // default SOA + NS
 	}
 	data, _ := json.Marshal(hz)
-	if err := p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtHostedZone, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtHostedZone, ID: id, Data: data}); err != nil {
 		return nil, err
 	}
 	loc := fmt.Sprintf("https://route53.amazonaws.com/2013-04-01/hostedzone/%s", id)
@@ -143,7 +143,7 @@ func (p *DNSProvider) CreateHostedZone(ctx context.Context, nr *model.Normalized
 
 func (p *DNSProvider) GetHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := cleanZoneID(strParam(nr.Params, "Id"))
-	e, err := p.resources.Get(ctx, nr.AccountID, "", rtHostedZone, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtHostedZone, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: fmt.Sprintf("No hosted zone found with ID: %s", id), HTTPStatus: http.StatusNotFound}
 	}
@@ -156,7 +156,7 @@ func (p *DNSProvider) GetHostedZone(ctx context.Context, nr *model.NormalizedReq
 }
 
 func (p *DNSProvider) ListHostedZones(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, nr.AccountID, "", rtHostedZone, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtHostedZone, "")
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (p *DNSProvider) ListHostedZones(ctx context.Context, nr *model.NormalizedR
 
 func (p *DNSProvider) DeleteHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := cleanZoneID(strParam(nr.Params, "Id"))
-	if err := p.resources.Delete(ctx, nr.AccountID, "", rtHostedZone, id); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtHostedZone, id); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{
@@ -282,20 +282,18 @@ func (p *DNSProvider) applyRRSetChange(ctx context.Context, account, zoneId stri
 	}
 	id := rrID(zoneId, name, rrtype)
 	if action == "DELETE" {
-		p.resources.Delete(ctx, account, "", rtRRSet, id)
+		p.resources.Delete(ctx, account, store.GlobalRegion, rtRRSet, id)
 		return
 	}
 	rr := rrSet{ZoneId: zoneId, Name: name, Type: rrtype, TTL: ttl, Records: records}
 	data, _ := json.Marshal(rr)
 	entry := store.ResourceEntry{Type: rtRRSet, ID: id, Data: data}
-	if err := p.resources.Create(ctx, account, "", entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, "", entry)
-	}
+	_ = p.resources.Upsert(ctx, account, store.GlobalRegion, entry)
 }
 
 func (p *DNSProvider) ListResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	zoneId := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
-	entries, err := p.resources.List(ctx, nr.AccountID, "", rtRRSet, zoneId)
+	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtRRSet, zoneId)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +342,7 @@ func (p *DNSProvider) CreateHealthCheck(ctx context.Context, nr *model.Normalize
 		Port:                     80,
 	}
 	data, _ := json.Marshal(hc)
-	if err := p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtHealthCheck, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtHealthCheck, ID: id, Data: data}); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{
@@ -355,7 +353,7 @@ func (p *DNSProvider) CreateHealthCheck(ctx context.Context, nr *model.Normalize
 
 func (p *DNSProvider) GetHealthCheck(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "Id")
-	e, err := p.resources.Get(ctx, nr.AccountID, "", rtHealthCheck, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtHealthCheck, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHealthCheck", Message: "Health check not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -368,7 +366,7 @@ func (p *DNSProvider) GetHealthCheck(ctx context.Context, nr *model.NormalizedRe
 }
 
 func (p *DNSProvider) ListHealthChecks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, nr.AccountID, "", rtHealthCheck, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtHealthCheck, "")
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +381,7 @@ func (p *DNSProvider) ListHealthChecks(ctx context.Context, nr *model.Normalized
 
 func (p *DNSProvider) DeleteHealthCheck(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "Id")
-	if err := p.resources.Delete(ctx, nr.AccountID, "", rtHealthCheck, id); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtHealthCheck, id); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHealthCheck", Message: "Health check not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(nil), nil
@@ -395,7 +393,7 @@ func (p *DNSProvider) GetChange(ctx context.Context, nr *model.NormalizedRequest
 
 // updateZoneRRSetCount recounts RRSets for a zone and persists the updated count.
 func (p *DNSProvider) updateZoneRRSetCount(ctx context.Context, account, zoneId string) {
-	entries, err := p.resources.List(ctx, account, "", rtRRSet, zoneId)
+	entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtRRSet, zoneId)
 	if err != nil {
 		return
 	}
@@ -406,7 +404,7 @@ func (p *DNSProvider) updateZoneRRSetCount(ctx context.Context, account, zoneId 
 			count++
 		}
 	}
-	e, err := p.resources.Get(ctx, account, "", rtHostedZone, zoneId)
+	e, err := p.resources.Get(ctx, account, store.GlobalRegion, rtHostedZone, zoneId)
 	if err != nil {
 		return
 	}
@@ -416,7 +414,7 @@ func (p *DNSProvider) updateZoneRRSetCount(ctx context.Context, account, zoneId 
 	}
 	hz.ResourceRecordSetCount = count
 	data, _ := json.Marshal(hz)
-	_ = p.resources.Update(ctx, account, "", store.ResourceEntry{Type: rtHostedZone, ID: zoneId, Data: data})
+	_ = p.resources.Update(ctx, account, store.GlobalRegion, store.ResourceEntry{Type: rtHostedZone, ID: zoneId, Data: data})
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -447,7 +445,7 @@ func r53TagKey(resourceType, resourceID string) string {
 
 func (p *DNSProvider) loadR53Tags(ctx context.Context, account, resourceType, resourceID string) map[string]string {
 	tags := map[string]string{}
-	if e, err := p.resources.Get(ctx, account, "", rtR53Tags, r53TagKey(resourceType, resourceID)); err == nil {
+	if e, err := p.resources.Get(ctx, account, store.GlobalRegion, rtR53Tags, r53TagKey(resourceType, resourceID)); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	return tags
@@ -457,11 +455,7 @@ func (p *DNSProvider) saveR53Tags(ctx context.Context, account, resourceType, re
 	data, _ := json.Marshal(tags)
 	key := r53TagKey(resourceType, resourceID)
 	entry := store.ResourceEntry{Type: rtR53Tags, ID: key, Data: data}
-	if err := p.resources.Create(ctx, account, "", entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, account, "", entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, account, store.GlobalRegion, entry)
 }
 
 func (p *DNSProvider) ChangeTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -473,11 +467,11 @@ func (p *DNSProvider) ChangeTagsForResource(ctx context.Context, nr *model.Norma
 	// Validate resource exists
 	switch resourceType {
 	case "hostedzone":
-		if _, err := p.resources.Get(ctx, nr.AccountID, "", rtHostedZone, resourceID); err != nil {
+		if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtHostedZone, resourceID); err != nil {
 			return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: fmt.Sprintf("No hosted zone found with ID: %s", resourceID), HTTPStatus: http.StatusNotFound}
 		}
 	case "healthcheck":
-		if _, err := p.resources.Get(ctx, nr.AccountID, "", rtHealthCheck, resourceID); err != nil {
+		if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtHealthCheck, resourceID); err != nil {
 			return nil, &model.ProviderError{Code: "NoSuchHealthCheck", Message: "Health check not found", HTTPStatus: http.StatusNotFound}
 		}
 	}

@@ -185,9 +185,7 @@ func loadRDSTags(ctx context.Context, res store.ResourceStore, account, region, 
 func saveRDSTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtRDSTags, ID: arn, Data: data}
-	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, account, region, entry)
-	}
+	_ = res.Upsert(ctx, account, region, entry)
 }
 
 func (p *RelationalProvider) AddTagsToResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

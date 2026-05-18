@@ -205,9 +205,7 @@ func (p *Provider) loadStream(ctx context.Context, account, region, name string)
 func (p *Provider) saveStream(ctx context.Context, account, region string, s deliveryStream) {
 	data, _ := json.Marshal(s)
 	entry := store.ResourceEntry{Type: rtDeliveryStream, ID: s.Name, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func extractDestinations(params map[string]any) []map[string]any {

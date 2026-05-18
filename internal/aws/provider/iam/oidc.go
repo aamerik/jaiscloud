@@ -58,7 +58,7 @@ func (p *IAMProvider) CreateOpenIDConnectProvider(ctx context.Context, nr *model
 		CreateDate:  time.Now().UTC(),
 	}
 	data, _ := json.Marshal(op)
-	if err := p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtOIDCProvider, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtOIDCProvider, ID: arn, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, model.NewProviderError("EntityAlreadyExists", "OIDC provider "+arn+" already exists", http.StatusConflict)
 		}
@@ -77,7 +77,7 @@ func (p *IAMProvider) GetOpenIDConnectProvider(ctx context.Context, nr *model.No
 }
 
 func (p *IAMProvider) ListOpenIDConnectProviders(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, nr.AccountID, "", rtOIDCProvider, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtOIDCProvider, "")
 	var list []map[string]any
 	for _, e := range entries {
 		var op oidcProviderData
@@ -93,7 +93,7 @@ func (p *IAMProvider) ListOpenIDConnectProviders(ctx context.Context, nr *model.
 
 func (p *IAMProvider) DeleteOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
-	if err := p.resources.Delete(ctx, nr.AccountID, "", rtOIDCProvider, arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtOIDCProvider, arn); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	return provider.OK(nil), nil

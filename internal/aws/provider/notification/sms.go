@@ -26,11 +26,7 @@ func (p *SNSProvider) SetSMSAttributes(ctx context.Context, nr *model.Normalized
 	}
 	raw, _ := json.Marshal(attrs)
 	entry := store.ResourceEntry{Type: rtSMSAttrs, ID: smsAttrKey, Data: raw}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 

@@ -114,9 +114,7 @@ func (p *Provider) verifyIdentity(ctx context.Context, account, region, identity
 	}
 	data, _ := json.Marshal(id)
 	entry := store.ResourceEntry{Type: rtSESIdentity, ID: identity, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 // isVerified checks whether the given email address (or its domain) is

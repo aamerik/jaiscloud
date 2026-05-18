@@ -3,13 +3,14 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
 
 // MemoryResourceStore is an in-memory ResourceStore backed by a sync.RWMutex map.
-// Key: "account:region:type:id" — global resource types use region="" naturally.
+// Key: "account:region:type:id" — global resource types (IAM, Route53) use region=GlobalRegion.
 type MemoryResourceStore struct {
 	mu      sync.RWMutex
 	entries map[string]ResourceEntry
@@ -26,6 +27,9 @@ func key(account, region, resourceType, id string) string {
 }
 
 func (s *MemoryResourceStore) Create(ctx context.Context, account, region string, entry ResourceEntry) error {
+	if region == "" {
+		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := key(account, region, entry.Type, entry.ID)
@@ -34,6 +38,24 @@ func (s *MemoryResourceStore) Create(ctx context.Context, account, region string
 	}
 	now := time.Now()
 	entry.CreatedAt = now
+	entry.UpdatedAt = now
+	s.entries[k] = entry
+	return nil
+}
+
+func (s *MemoryResourceStore) Upsert(ctx context.Context, account, region string, entry ResourceEntry) error {
+	if region == "" {
+		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := key(account, region, entry.Type, entry.ID)
+	now := time.Now()
+	if existing, exists := s.entries[k]; exists {
+		entry.CreatedAt = existing.CreatedAt
+	} else {
+		entry.CreatedAt = now
+	}
 	entry.UpdatedAt = now
 	s.entries[k] = entry
 	return nil

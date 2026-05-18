@@ -145,9 +145,7 @@ func (p *Provider) loadCert(ctx context.Context, account, region, arn string) (c
 func (p *Provider) saveCert(ctx context.Context, account, region string, c certificate) {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCert, ID: c.CertificateARN, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

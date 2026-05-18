@@ -116,11 +116,7 @@ func (p *GlueProvider) loadGlueTags(ctx context.Context, account, region, arn st
 func (p *GlueProvider) saveGlueTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtGlueTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, account, region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -188,11 +184,7 @@ type glueDatabase struct {
 func (p *GlueProvider) saveDB(ctx context.Context, account, region string, db glueDatabase) error {
 	data, _ := json.Marshal(db)
 	entry := store.ResourceEntry{Type: rtDatabase, ID: dbID(db.Name), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadDB(ctx context.Context, account, region, name string) (glueDatabase, error) {
@@ -229,11 +221,7 @@ type glueTable struct {
 func (p *GlueProvider) saveTable(ctx context.Context, account, region string, t glueTable) error {
 	data, _ := json.Marshal(t)
 	entry := store.ResourceEntry{Type: rtTable, ID: tableID(t.DatabaseName, t.Name), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadTable(ctx context.Context, account, region, db, name string) (glueTable, error) {
@@ -265,11 +253,7 @@ func (p *GlueProvider) savePartition(ctx context.Context, account, region string
 	data, _ := json.Marshal(part)
 	id := partitionID(part.DatabaseName, part.TableName, part.Values)
 	entry := store.ResourceEntry{Type: rtPartition, ID: id, Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadPartition(ctx context.Context, account, region, db, table string, values []string) (gluePartition, error) {

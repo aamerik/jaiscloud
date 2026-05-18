@@ -60,11 +60,7 @@ func jobRunID(jobName, runID string) string { return "run/" + jobName + "/" + ru
 func (p *GlueProvider) saveJob(ctx context.Context, account, region string, j jobEntry) error {
 	data, _ := json.Marshal(j)
 	entry := store.ResourceEntry{Type: rtJob, ID: jobID(j.Name), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadJob(ctx context.Context, account, region, name string) (jobEntry, error) {
@@ -87,11 +83,7 @@ func (p *GlueProvider) loadJob(ctx context.Context, account, region, name string
 func (p *GlueProvider) saveJobRun(ctx context.Context, account, region string, run jobRunEntry) error {
 	data, _ := json.Marshal(run)
 	entry := store.ResourceEntry{Type: rtJobRun, ID: jobRunID(run.JobName, run.Id), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadJobRun(ctx context.Context, account, region, jobName, runID string) (jobRunEntry, error) {

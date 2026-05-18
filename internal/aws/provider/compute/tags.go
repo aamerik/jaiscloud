@@ -55,9 +55,7 @@ func loadResourceTags(ctx context.Context, res store.ResourceStore, account, reg
 func saveResourceTags(ctx context.Context, res store.ResourceStore, account, region, resourceID string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtEC2Tags, ID: resourceID, Data: data}
-	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, account, region, entry)
-	}
+	_ = res.Upsert(ctx, account, region, entry)
 }
 
 // resourceTypeFromID guesses the EC2 resource type from the ID prefix.

@@ -1110,11 +1110,7 @@ func (p *ContainerProvider) loadECSTags(ctx context.Context, account, region, ar
 func (p *ContainerProvider) saveECSTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtECSTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, account, region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *ContainerProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

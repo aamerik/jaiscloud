@@ -16,11 +16,7 @@ func (p *SNSProvider) PutDataProtectionPolicy(ctx context.Context, nr *model.Nor
 	policy := strParam(nr.Params, "DataProtectionPolicy")
 	raw, _ := json.Marshal(map[string]string{"policy": policy})
 	entry := store.ResourceEntry{Type: rtDataProtection, ID: arn, Data: raw}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 

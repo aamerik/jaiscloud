@@ -354,9 +354,7 @@ func loadAthenaTags(ctx context.Context, res store.ResourceStore, account, regio
 func saveAthenaTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtAthenaTags, ID: arn, Data: data}
-	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, account, region, entry)
-	}
+	_ = res.Upsert(ctx, account, region, entry)
 }
 
 // Silence unused import warning

@@ -46,11 +46,7 @@ func tableVersionPrefix(db, table string) string {
 func (p *GlueProvider) saveTableVersion(ctx context.Context, account, region string, v tableVersionEntry) error {
 	data, _ := json.Marshal(v)
 	entry := store.ResourceEntry{Type: rtTableVersion, ID: tableVersionID(v.DatabaseName, v.TableName, v.VersionId), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadTableVersion(ctx context.Context, account, region, db, table, versionID string) (tableVersionEntry, error) {

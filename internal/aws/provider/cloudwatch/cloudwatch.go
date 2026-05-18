@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -306,16 +305,9 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	entry := store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			if err := p.resources.Update(ctx, nr.AccountID, nr.Region, entry); err != nil {
-				slog.Error("cloudwatch: failed to update alarm",
-					"alarm", name, "err", err)
-			}
-		} else {
-			slog.Error("cloudwatch: failed to persist alarm",
-				"alarm", name, "err", err)
-		}
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry); err != nil {
+		slog.Error("cloudwatch: failed to persist alarm",
+			"alarm", name, "err", err)
 	}
 	now := time.Now().UTC()
 	p.writeAlarmHistory(ctx, nr.AccountID, nr.Region, name, "MetricAlarm", "ConfigurationUpdate",
@@ -493,11 +485,7 @@ func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest
 	}
 	data, _ := json.Marshal(d)
 	entry := store.ResourceEntry{Type: "cloudwatch_dashboard", ID: name, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{"DashboardValidationMessages": []any{}}), nil
 }
 
@@ -563,11 +551,7 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -701,11 +685,7 @@ func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRe
 	alarm.InsufficientDataActions = strSlice(nr.Params, "InsufficientDataActions")
 	data, _ := json.Marshal(alarm)
 	entry := store.ResourceEntry{Type: "cloudwatch_composite_alarm", ID: name, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -813,11 +793,7 @@ func (p *Provider) PutAnomalyDetector(ctx context.Context, nr *model.NormalizedR
 	data, _ := json.Marshal(det)
 	id := anomalyKey(ns, metric, dims)
 	entry := store.ResourceEntry{Type: "cloudwatch_anomaly_detector", ID: id, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -910,12 +886,7 @@ func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequ
 	}
 	data, _ := json.Marshal(ms)
 	entry := store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			ms.CreationDate = now // preserve original on upsert via reload
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{"Arn": ms.ARN}), nil
 }
 

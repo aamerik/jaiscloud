@@ -44,11 +44,7 @@ func (p *EventBridgeProvider) PutPermission(ctx context.Context, nr *model.Norma
 	doc["Statement"] = append(filtered, stmt)
 	raw, _ := json.Marshal(doc)
 	entry := store.ResourceEntry{Type: rtBusPolicy, ID: busName, Data: raw}
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-		}
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry)
 	return provider.OK(map[string]any{}), nil
 }
 

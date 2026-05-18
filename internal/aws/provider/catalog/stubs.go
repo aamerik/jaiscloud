@@ -109,11 +109,7 @@ func (p *GlueProvider) PutResourcePolicy(ctx context.Context, nr *model.Normaliz
 	policyJSON := strParam(nr.Params, "PolicyInJson")
 	data, _ := json.Marshal(map[string]any{"PolicyInJson": policyJSON})
 	entry := store.ResourceEntry{Type: rtResourcePolicy, ID: resourcePolicyID, Data: data}
-	err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry)
-	if err == store.ErrAlreadyExists {
-		err = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
-	}
-	if err != nil {
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

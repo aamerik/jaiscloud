@@ -99,12 +99,29 @@ func (s *PostgresResourceStore) Pool() *pgxpool.Pool { return s.pool }
 func (s *PostgresResourceStore) Close() { s.pool.Close() }
 
 func (s *PostgresResourceStore) Create(ctx context.Context, account, region string, entry ResourceEntry) error {
+	if region == "" {
+		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
+	}
 	now := time.Now()
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
 	return wrapPgError("Create", err)
+}
+
+func (s *PostgresResourceStore) Upsert(ctx context.Context, account, region string, entry ResourceEntry) error {
+	if region == "" {
+		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
+	}
+	now := time.Now()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id, region, resource_type, id)
+		DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at
+	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
+	return wrapPgError("Upsert", err)
 }
 
 func (s *PostgresResourceStore) Get(ctx context.Context, account, region, resourceType, id string) (ResourceEntry, error) {

@@ -113,9 +113,7 @@ func (p *Provider) loadDist(ctx context.Context, account, region, id string) (di
 func (p *Provider) saveDist(ctx context.Context, account, region string, d distribution) {
 	data, _ := json.Marshal(d)
 	entry := store.ResourceEntry{Type: rtDistribution, ID: d.ID, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 // findByCallerRef checks for duplicate CallerReference.

@@ -13,6 +13,11 @@ var (
 	ErrStorageUnavailable = errors.New("storage unavailable")
 )
 
+// GlobalRegion is the sentinel region value for services that are not
+// region-scoped (IAM, Route53). Use this instead of "" so that accidental
+// empty-region writes are caught by Create/Upsert validation.
+const GlobalRegion = "global"
+
 // ResourceEntry is a single control-plane resource in the store.
 type ResourceEntry struct {
 	Type      string          // e.g. "sqs_queues"
@@ -31,6 +36,7 @@ type ResourceEntry struct {
 // Phase 0: MemoryResourceStore. Phase 1: PostgresResourceStore.
 type ResourceStore interface {
 	Create(ctx context.Context, account, region string, entry ResourceEntry) error
+	Upsert(ctx context.Context, account, region string, entry ResourceEntry) error
 	Get(ctx context.Context, account, region, resourceType, id string) (ResourceEntry, error)
 	Update(ctx context.Context, account, region string, entry ResourceEntry) error
 	Delete(ctx context.Context, account, region, resourceType, id string) error

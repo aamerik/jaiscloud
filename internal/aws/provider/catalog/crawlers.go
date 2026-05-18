@@ -78,11 +78,7 @@ func crawlerID(name string) string { return "crawler/" + name }
 func (p *GlueProvider) saveCrawler(ctx context.Context, account, region string, c crawlerEntry) error {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCrawler, ID: crawlerID(c.Name), Data: data}
-	err := p.resources.Create(ctx, account, region, entry)
-	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return err
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *GlueProvider) loadCrawler(ctx context.Context, account, region, name string) (crawlerEntry, error) {

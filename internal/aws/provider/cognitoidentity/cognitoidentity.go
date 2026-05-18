@@ -96,9 +96,7 @@ func (p *Provider) loadPool(ctx context.Context, account, region, poolID string)
 func (p *Provider) savePool(ctx context.Context, account, region string, pool identityPool) {
 	data, _ := json.Marshal(pool)
 	entry := store.ResourceEntry{Type: rtIdentityPool, ID: pool.IdentityPoolID, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, account, region, entry)
-	}
+	_ = p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *Provider) CreateIdentityPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

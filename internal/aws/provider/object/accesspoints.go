@@ -61,10 +61,7 @@ func (p *ObjectProvider) loadAP(ctx context.Context, account, region, name strin
 func (p *ObjectProvider) saveAP(ctx context.Context, account, region string, ap accessPoint) error {
 	data, _ := json.Marshal(ap)
 	entry := store.ResourceEntry{Type: rtAccessPoint, ID: ap.Name, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *ObjectProvider) CreateAccessPoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

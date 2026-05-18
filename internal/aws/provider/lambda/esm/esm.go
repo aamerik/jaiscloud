@@ -405,13 +405,7 @@ func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error
 		Data:      data,
 		UpdatedAt: time.Now(),
 	}
-	if err := p.resources.Create(ctx, esm.AccountID, esm.Region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, esm.AccountID, esm.Region, entry)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, esm.AccountID, esm.Region, entry)
 }
 
 func (p *Provider) esmDuplicateExists(ctx context.Context, functionName, eventSourceArn string) bool {

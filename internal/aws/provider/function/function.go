@@ -309,13 +309,7 @@ func (p *FunctionProvider) saveConfig(ctx context.Context, account, region strin
 		return err
 	}
 	entry := store.ResourceEntry{Type: resTypeFunction, ID: cfg.FunctionName, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, account, region, entry)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *FunctionProvider) loadConfig(ctx context.Context, account, region, name string) (functionConfig, error) {
@@ -804,11 +798,8 @@ func (p *FunctionProvider) PublishVersion(ctx context.Context, nr *model.Normali
 
 	ve := versionEntry{functionConfig: cfg, Version: versionStr}
 	data, _ := json.Marshal(ve)
-	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data}); err != nil {
-		if err != store.ErrAlreadyExists {
-			return nil, fmt.Errorf("lambda: publish version: %w", err)
-		}
-		p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data})
+	if err := p.resources.Upsert(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data}); err != nil {
+		return nil, fmt.Errorf("lambda: publish version: %w", err)
 	}
 
 	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
@@ -884,13 +875,7 @@ func (p *FunctionProvider) loadAlias(ctx context.Context, account, region, funct
 func (p *FunctionProvider) saveAlias(ctx context.Context, account, region string, a aliasEntry) error {
 	data, _ := json.Marshal(a)
 	entry := store.ResourceEntry{Type: resTypeAliases, ID: aliasKey(a.FunctionName, a.Name), Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, account, region, entry)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *FunctionProvider) CreateAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1246,13 +1231,7 @@ func (p *FunctionProvider) loadPolicy(ctx context.Context, account, region, name
 func (p *FunctionProvider) savePolicy(ctx context.Context, account, region, name string, doc policyDocument) error {
 	data, _ := json.Marshal(doc)
 	entry := store.ResourceEntry{Type: resTypePolicies, ID: name, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, account, region, entry)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *FunctionProvider) AddPermission(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1360,13 +1339,7 @@ func (p *FunctionProvider) loadURLConfig(ctx context.Context, account, region, n
 func (p *FunctionProvider) saveURLConfig(ctx context.Context, account, region, name string, uc urlConfig) error {
 	data, _ := json.Marshal(uc)
 	entry := store.ResourceEntry{Type: resTypeURLs, ID: name, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, account, region, entry)
-		}
-		return err
-	}
-	return nil
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

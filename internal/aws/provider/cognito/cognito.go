@@ -155,11 +155,7 @@ func (p *Provider) loadPool(ctx context.Context, account, region, poolID string)
 func (p *Provider) savePool(ctx context.Context, account, region string, pool cognitoUserPool) error {
 	data, _ := json.Marshal(pool)
 	entry := store.ResourceEntry{Type: rtUserPool, ID: pool.ID, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	} else {
-		return err
-	}
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func poolToWire(pool cognitoUserPool) map[string]any {
@@ -543,11 +539,7 @@ func (p *Provider) saveUser(ctx context.Context, account, region string, u cogni
 	key := poolUserKey(u.UserPoolID, u.Username)
 	data, _ := json.Marshal(u)
 	entry := store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}
-	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, account, region, entry)
-	} else {
-		return err
-	}
+	return p.resources.Upsert(ctx, account, region, entry)
 }
 
 func maskEmail(email string) string {
@@ -775,9 +767,7 @@ func (p *Provider) ForgotPassword(ctx context.Context, nr *model.NormalizedReque
 	slog.Info("cognito: password reset code", "user", username, "code", code)
 	key := poolUserKey(u.UserPoolID, username)
 	codeData, _ := json.Marshal(resetCodeRecord{Code: code})
-	if cerr := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
-		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData})
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData})
 
 	email := findAttr(u.Attributes, "email")
 	if email == "" {
@@ -833,9 +823,7 @@ func (p *Provider) ResendConfirmationCode(ctx context.Context, nr *model.Normali
 	slog.Info("cognito: confirmation code", "user", username, "code", code)
 	key := poolUserKey(u.UserPoolID, username)
 	codeData, _ := json.Marshal(confirmCodeRecord{Code: code})
-	if cerr := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
-		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
-	}
+	_ = p.resources.Upsert(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
 
 	email := findAttr(u.Attributes, "email")
 	if email == "" {

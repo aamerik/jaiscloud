@@ -22,8 +22,10 @@ import (
 
 func newRequest(params map[string]any) *model.NormalizedRequest {
 	return &model.NormalizedRequest{
-		Params: params,
-		Clock:  clock.RealClock{},
+		AccountID: "000000000000",
+		Region:    "us-east-1",
+		Params:    params,
+		Clock:     clock.RealClock{},
 		ResourceID: func(_, name string) string {
 			return "arn:aws:lambda:us-east-1:000000000000:function:" + name
 		},

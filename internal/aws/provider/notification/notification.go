@@ -138,13 +138,7 @@ func subArn(nr *model.NormalizedRequest, topicName string) string {
 func saveEntry(ctx context.Context, rs store.ResourceStore, account, region, resType, id string, data any) error {
 	raw, _ := json.Marshal(data)
 	entry := store.ResourceEntry{Type: resType, ID: id, Data: json.RawMessage(raw)}
-	if err := rs.Create(ctx, account, region, entry); err != nil {
-		if err == store.ErrAlreadyExists {
-			return rs.Update(ctx, account, region, entry)
-		}
-		return err
-	}
-	return nil
+	return rs.Upsert(ctx, account, region, entry)
 }
 
 func loadEntry(ctx context.Context, rs store.ResourceStore, account, region, resType, id string, out any) error {
