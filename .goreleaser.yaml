@@ -1,0 +1,153 @@
+version: 2
+
+project_name: jaiscloud
+
+before:
+  hooks:
+    - go mod tidy
+
+# ── ACTIVE BUILDS ──────────────────────────────────────────────────────────
+# Only jaiscloud-aws is released. Azure and GCP are future; add a build entry
+# for each once those clouds have implementations beyond the 501 stub.
+
+builds:
+  - id: jaiscloud-aws
+    main: ./cmd/jaiscloud-aws/
+    binary: jaiscloud-aws
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+# ── FUTURE BUILDS (not active) ─────────────────────────────────────────────
+# Uncomment and add the matching archives/nfpms/brews/scoops entries when
+# jaiscloud-azure and jaiscloud-gcp move past the 501-stub phase.
+#
+#  - id: jaiscloud-azure
+#    main: ./cmd/jaiscloud-azure/
+#    binary: jaiscloud-azure
+#    env:
+#      - CGO_ENABLED=0
+#    goos: [linux, darwin, windows]
+#    goarch: [amd64, arm64]
+#    ldflags:
+#      - -s -w
+#      - -X main.version={{.Version}}
+#      - -X main.commit={{.Commit}}
+#      - -X main.date={{.Date}}
+#
+#  - id: jaiscloud-gcp
+#    main: ./cmd/jaiscloud-gcp/
+#    binary: jaiscloud-gcp
+#    env:
+#      - CGO_ENABLED=0
+#    goos: [linux, darwin, windows]
+#    goarch: [amd64, arm64]
+#    ldflags:
+#      - -s -w
+#      - -X main.version={{.Version}}
+#      - -X main.commit={{.Commit}}
+#      - -X main.date={{.Date}}
+
+archives:
+  - id: aws
+    ids: [jaiscloud-aws]
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "jaiscloud-aws_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # Future: uncomment when Azure/GCP builds are active
+  # - id: azure
+  #   ids: [jaiscloud-azure]
+  #   formats: [tar.gz]
+  #   format_overrides:
+  #     - goos: windows
+  #       formats: [zip]
+  #   name_template: "jaiscloud-azure_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  #
+  # - id: gcp
+  #   ids: [jaiscloud-gcp]
+  #   formats: [tar.gz]
+  #   format_overrides:
+  #     - goos: windows
+  #       formats: [zip]
+  #   name_template: "jaiscloud-gcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - id: aws-packages
+    ids: [jaiscloud-aws]
+    package_name: jaiscloud-aws
+    vendor: JaisCloud
+    homepage: https://github.com/<OWNER>/jaiscloud
+    maintainer: "Raj Jaiswal <UPDATE_EMAIL>"
+    description: "Local AWS cloud emulator — AWS wire-protocol compatible"
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/local/bin
+
+  # Future: jaiscloud-azure and jaiscloud-gcp nfpm entries go here
+
+brews:
+  - ids: [jaiscloud-aws]
+    name: jaiscloud-aws
+    repository:
+      owner: <OWNER>
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/<OWNER>/jaiscloud
+    description: "Local AWS cloud emulator — AWS wire-protocol compatible"
+    license: Apache-2.0
+    install: |
+      bin.install "jaiscloud-aws"
+    test: |
+      system "#{bin}/jaiscloud-aws", "version"
+
+  # Future: add brews entries for jaiscloud-azure and jaiscloud-gcp
+
+scoops:
+  - ids: [jaiscloud-aws]
+    name: jaiscloud-aws
+    repository:
+      owner: <OWNER>
+      name: scoop-jaiscloud
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: https://github.com/<OWNER>/jaiscloud
+    description: "Local AWS cloud emulator — AWS wire-protocol compatible"
+    license: Apache-2.0
+
+  # Future: add scoops entries for jaiscloud-azure and jaiscloud-gcp
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  github:
+    owner: <OWNER>
+    name: jaiscloud
+  draft: false
+  prerelease: auto

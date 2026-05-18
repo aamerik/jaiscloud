@@ -93,7 +93,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const version = "0.2.0"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
 	root := &cobra.Command{
@@ -918,7 +922,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("jaiscloud-aws %s\n", version)
+			fmt.Printf("jaiscloud-aws %s (commit: %s, built: %s)\n", version, commit, date)
 		},
 	}
 }
