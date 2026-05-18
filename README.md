@@ -135,7 +135,51 @@ For per-operation coverage, executor modes, fidelity notes, and full-mode persis
 
 ## Quick Start
 
-### Binary
+### Homebrew (macOS)
+
+```bash
+brew tap raj-jaiswal/tap
+brew install jaiscloud-aws
+jaiscloud-aws start
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add jaiscloud https://github.com/raj-jaiswal/scoop-jaiscloud
+scoop install jaiscloud-aws
+jaiscloud-aws start
+```
+
+### Download binary (all platforms — no Go required)
+
+Pre-built binaries for every platform are published on the [GitHub Releases page](https://github.com/raj-jaiswal/jaiscloud/releases).
+
+| Platform | File |
+|----------|------|
+| macOS arm64 (Apple Silicon) | `jaiscloud-aws_<version>_darwin_arm64.tar.gz` |
+| macOS amd64 (Intel) | `jaiscloud-aws_<version>_darwin_amd64.tar.gz` |
+| Linux amd64 | `jaiscloud-aws_<version>_linux_amd64.tar.gz` / `.deb` / `.rpm` |
+| Linux arm64 | `jaiscloud-aws_<version>_linux_arm64.tar.gz` / `.deb` / `.rpm` |
+| Windows amd64 | `jaiscloud-aws_<version>_windows_amd64.zip` |
+| Windows arm64 | `jaiscloud-aws_<version>_windows_arm64.zip` |
+
+```bash
+# Example: macOS arm64
+curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
+tar -xzf jaiscloud-aws_darwin_arm64.tar.gz
+sudo mv jaiscloud-aws /usr/local/bin/
+jaiscloud-aws start
+
+# Example: Linux amd64 (Debian/Ubuntu)
+curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
+sudo dpkg -i jaiscloud-aws_linux_amd64.deb
+jaiscloud-aws start
+```
+
+A `checksums.txt` file is published alongside every release for verification.
+
+### Build from source (requires Go 1.26+)
 
 ```bash
 go build -o jaiscloud-aws ./cmd/jaiscloud-aws/

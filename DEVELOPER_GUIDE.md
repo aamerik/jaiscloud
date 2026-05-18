@@ -10,20 +10,58 @@ This guide covers the AWS binary. It walks you from a fresh clone to a running s
 
 Read this table first. Pick the row that matches your goal, then jump to that section.
 
-You can run JaisCloud two ways:
+You can run JaisCloud three ways — pick the one that fits your situation:
 
-- **From source** — build the Go binary yourself (`go build -o jaiscloud-aws ./cmd/jaiscloud-aws/`). Good for development and debugging.
-- **Via Docker / Kubernetes** — use the pre-built image. No Go required at all.
+| How | When to use |
+|-----|-------------|
+| **Pre-built binary** (Homebrew / Scoop / GitHub Releases) | You just want to run JaisCloud locally. No Go, no Docker required. |
+| **Docker / Kubernetes** | CI pipelines, or full-mode with Postgres persistence. |
+| **Build from source** | You are developing JaisCloud itself or need to iterate on code changes. |
 
-| Goal | Mode | Run from source | Run via Docker / K8s |
-|---|---|---|---|
-| Run unit tests / CI pipelines | **Lite** (in-memory) | Go | Docker only |
-| Build and test AWS integrations locally | **Lite** or **Full** | Go + Docker (Postgres) | Docker only |
-| State survives server restarts | **Full** (PostgreSQL) | Go + Docker | Docker only |
-| Run EMR/Spark API calls that return mock results instantly | **Full + Mock executor** | Go + Docker | Docker only |
-| Actually run a Spark job end-to-end | **Full + K8s executor** | Go + Docker + K8s | Docker + K8s |
+### Installing the pre-built binary (no Go required)
 
-If you are new to JaisCloud and want the fastest start, pull the public image and run it:
+**macOS (Homebrew)**
+```bash
+brew tap raj-jaiswal/tap
+brew install jaiscloud-aws
+jaiscloud-aws start
+```
+
+**Windows (Scoop)**
+```powershell
+scoop bucket add jaiscloud https://github.com/raj-jaiswal/scoop-jaiscloud
+scoop install jaiscloud-aws
+jaiscloud-aws start
+```
+
+**All platforms — manual download**
+
+Download the binary for your platform from the [GitHub Releases page](https://github.com/raj-jaiswal/jaiscloud/releases), extract it, and put it on your `PATH`.
+
+```bash
+# macOS arm64 (Apple Silicon)
+curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
+tar -xzf jaiscloud-aws_darwin_arm64.tar.gz
+sudo mv jaiscloud-aws /usr/local/bin/
+
+# Linux amd64
+curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.tar.gz
+tar -xzf jaiscloud-aws_linux_amd64.tar.gz
+sudo mv jaiscloud-aws /usr/local/bin/
+
+# Linux amd64 — Debian/Ubuntu package
+curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
+sudo dpkg -i jaiscloud-aws_linux_amd64.deb
+```
+
+Once installed, start the emulator in lite mode (in-memory, no dependencies):
+
+```bash
+jaiscloud-aws start
+curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
+```
+
+### Running via Docker (no Go required)
 
 ```bash
 docker pull ghcr.io/jaisrajms/jaiscloud-aws:latest
@@ -31,12 +69,35 @@ docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud-aws:latest
 curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
 ```
 
-If you are developing JaisCloud itself or need to iterate quickly on code changes, build from source with `go build -o jaiscloud-aws ./cmd/jaiscloud-aws/`.
+### Building from source (requires Go 1.26+)
+
+```bash
+go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
+./jaiscloud-aws start
+```
+
+Use this path if you are developing JaisCloud itself or need to iterate quickly on code changes.
+
+---
+
+### Setup matrix
+
+| Goal | Mode | Pre-built binary | Docker / K8s | From source |
+|---|---|---|---|---|
+| Run unit tests / CI pipelines | **Lite** (in-memory) | ✅ | ✅ | ✅ |
+| Build and test AWS integrations locally | **Lite** or **Full** | ✅ (lite only) | ✅ | ✅ |
+| State survives server restarts | **Full** (PostgreSQL) | Needs Postgres separately | ✅ | ✅ |
+| Run EMR/Spark API calls that return mock results instantly | **Full + Mock executor** | Needs Postgres separately | ✅ | ✅ |
+| Actually run a Spark job end-to-end | **Full + K8s executor** | — | ✅ | ✅ |
 
 ---
 
 ## Contents
 
+- [Which setup do I need?](#which-setup-do-i-need)
+  - [Installing the pre-built binary](#installing-the-pre-built-binary-no-go-required)
+  - [Running via Docker](#running-via-docker-no-go-required)
+  - [Building from source](#building-from-source-requires-go-126)
 - [Service Reference](#service-reference)
 - [Prerequisites](#prerequisites)
 - [Mode 1 — Lite (in-memory, no dependencies)](#mode-1--lite-in-memory-no-dependencies)
