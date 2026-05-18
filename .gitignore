@@ -20,6 +20,7 @@ jaiscloud-linux
 # Go build outputs
 bin/
 build/
+dist/
 *.exe
 *.test
 coverage.out
