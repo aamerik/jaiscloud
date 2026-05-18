@@ -103,8 +103,8 @@ nfpms:
 
   # Future: jaiscloud-azure and jaiscloud-gcp nfpm entries go here
 
-brews:
-  - ids: [jaiscloud-aws]
+homebrew_casks:
+  - ids: [aws]
     name: jaiscloud-aws
     repository:
       owner: raj-jaiswal
@@ -114,15 +114,11 @@ brews:
     homepage: https://github.com/jaislocal/jaiscloud
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
-    install: |
-      bin.install "jaiscloud-aws"
-    test: |
-      system "#{bin}/jaiscloud-aws", "version"
 
-  # Future: add brews entries for jaiscloud-azure and jaiscloud-gcp
+  # Future: add homebrew_casks entries for jaiscloud-azure and jaiscloud-gcp
 
 scoops:
-  - ids: [jaiscloud-aws]
+  - ids: [aws]
     name: jaiscloud-aws
     repository:
       owner: raj-jaiswal
