@@ -299,7 +299,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
 	@go clean -testcache
 	@JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ \
+	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ ./tests/integration/multiaccount/ \
 	  > /tmp/integration-results.txt 2>&1; \
 	echo $$? > /tmp/integration-exit.txt; \
 	awk '\
