@@ -228,8 +228,8 @@ jaiscloud-aws version                    # print version, commit, build date
 jaiscloud-aws env                        # print effective config as env vars
 jaiscloud-aws doctor                     # verify the emulator is reachable
 jaiscloud-aws reset                      # wipe all state
-jaiscloud-aws export -o snapshot.json    # save state to file
-jaiscloud-aws import -i snapshot.json    # restore state from file
+jaiscloud-aws export -o snapshot.json    # save state to file (not yet supported — in development)
+jaiscloud-aws import -i snapshot.json    # restore state from file (not yet supported — in development)
 ```
 
 ---
