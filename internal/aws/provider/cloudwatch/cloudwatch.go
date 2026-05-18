@@ -38,6 +38,7 @@ type Provider struct {
 const ringSize = 256
 
 type metricRing struct {
+	account   string
 	namespace string
 	name      string
 	points    []datapoint
@@ -117,10 +118,10 @@ func (p *Provider) PutMetricData(_ context.Context, nr *model.NormalizedRequest)
 		ts := parseTimestamp(nr.Params[prefix+"Timestamp"])
 		dims := extractDimensions(nr.Params, prefix)
 
-		key := ringKey(ns, name, dims)
+		key := nr.AccountID + "\x00" + ringKey(ns, name, dims)
 		ring, exists := p.metrics[key]
 		if !exists {
-			ring = &metricRing{namespace: ns, name: name, points: make([]datapoint, ringSize)}
+			ring = &metricRing{account: nr.AccountID, namespace: ns, name: name, points: make([]datapoint, ringSize)}
 			p.metrics[key] = ring
 		}
 		ring.points[ring.idx] = datapoint{Timestamp: ts, Value: value, Unit: unit, Dims: dims}
@@ -143,7 +144,7 @@ func (p *Provider) GetMetricStatistics(_ context.Context, nr *model.NormalizedRe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	key := ringKey(ns, metricName, dims)
+	key := nr.AccountID + "\x00" + ringKey(ns, metricName, dims)
 	ring, ok := p.metrics[key]
 	if !ok {
 		return provider.OK(map[string]any{"Label": metricName, "Datapoints": []any{}}), nil
@@ -228,7 +229,7 @@ func (p *Provider) GetMetricData(_ context.Context, nr *model.NormalizedRequest)
 		var timestamps []string
 		if ns != "" && metricName != "" {
 			dims := extractDimensions(nr.Params, prefix+"MetricStat.Metric.")
-			key := ringKey(ns, metricName, dims)
+			key := nr.AccountID + "\x00" + ringKey(ns, metricName, dims)
 			if ring, ok := p.metrics[key]; ok {
 				for _, dp := range ring.points {
 					if !dp.Timestamp.IsZero() {
@@ -262,6 +263,9 @@ func (p *Provider) ListMetrics(_ context.Context, nr *model.NormalizedRequest) (
 	nameFilter, _ := nr.Params["MetricName"].(string)
 	all := make([]any, 0, len(p.metrics))
 	for _, r := range p.metrics {
+		if r.account != nr.AccountID {
+			continue
+		}
 		if nsFilter != "" && r.namespace != nsFilter {
 			continue
 		}
@@ -288,7 +292,16 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "AlarmName is required", HTTPStatus: 400}
 	}
-	data, err := json.Marshal(nr.Params)
+	// Inject AlarmArn and default StateValue before persisting.
+	alarmData := make(map[string]any, len(nr.Params)+2)
+	for k, v := range nr.Params {
+		alarmData[k] = v
+	}
+	alarmData["AlarmArn"] = nr.ResourceID("cloudwatch-alarm", name)
+	if _, hasState := alarmData["StateValue"]; !hasState {
+		alarmData["StateValue"] = "INSUFFICIENT_DATA"
+	}
+	data, err := json.Marshal(alarmData)
 	if err != nil {
 		return nil, err
 	}

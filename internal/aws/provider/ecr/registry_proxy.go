@@ -112,7 +112,7 @@ func (p *RegistryProxy) Healthy() bool {
 // ResetAllImages deletes all manifests from the real registry for all repos
 // in the lite-mode metadata store. Called during /_jaiscloud/reset.
 func (p *RegistryProxy) ResetAllImages(ctx context.Context) {
-	repos := p.store.ListRepositories("")
+	repos := p.store.ListRepositories("", "")
 	for _, repo := range repos {
 		for digest := range repo.Images {
 			url := fmt.Sprintf("http://%s/v2/%s/manifests/%s", p.serviceDNS, repo.Name, digest)

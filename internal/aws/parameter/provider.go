@@ -23,7 +23,7 @@ type ParameterEventPublisher interface {
 // SecretValueGetter is the narrow interface used to resolve
 // /aws/reference/secretsmanager/ references without creating an import cycle.
 type SecretValueGetter interface {
-	InternalGetSecretValue(ctx context.Context, secretID string) (string, error)
+	InternalGetSecretValue(ctx context.Context, accountID, secretID string) (string, error)
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ func (p *ParameterProvider) PutParameter(ctx context.Context, nr *model.Normaliz
 	}
 
 	// Determine if this is a create or update (for event emission).
-	_, existsErr := p.store.GetParameter(ctx, name)
+	_, existsErr := p.store.GetParameter(ctx, nr.AccountID, name)
 	isCreate := errors.Is(existsErr, ErrParameterNotFound)
 
 	e := ParameterEntry{
@@ -152,7 +152,7 @@ func (p *ParameterProvider) GetParameter(ctx context.Context, nr *model.Normaliz
 	const smPrefix = "/aws/reference/secretsmanager/"
 	if strings.HasPrefix(normalized, smPrefix) && p.secretGetter != nil {
 		secretName := strings.TrimPrefix(normalized, smPrefix)
-		val, err := p.secretGetter.InternalGetSecretValue(ctx, secretName)
+		val, err := p.secretGetter.InternalGetSecretValue(ctx, nr.AccountID, secretName)
 		if err != nil {
 			return nil, model.NewProviderError("ParameterNotFound", "secret reference not found: "+secretName, 400)
 		}
@@ -169,7 +169,7 @@ func (p *ParameterProvider) GetParameter(ctx context.Context, nr *model.Normaliz
 
 	base, version, label := ParseSelector(normalized)
 
-	e, err := p.resolveParameterWithSelector(ctx, base, version, label)
+	e, err := p.resolveParameterWithSelector(ctx, nr.AccountID, base, version, label)
 	if err != nil {
 		if errors.Is(err, ErrParameterNotFound) || errors.Is(err, ErrVersionNotFound) {
 			return nil, model.NewProviderError("ParameterNotFound", "parameter not found: "+rawName, 400)
@@ -200,7 +200,7 @@ func (p *ParameterProvider) GetParameters(ctx context.Context, nr *model.Normali
 		// /aws/reference/secretsmanager/ bridge.
 		if strings.HasPrefix(normalized, smPrefix) && p.secretGetter != nil {
 			secretName := strings.TrimPrefix(normalized, smPrefix)
-			val, err := p.secretGetter.InternalGetSecretValue(ctx, secretName)
+			val, err := p.secretGetter.InternalGetSecretValue(ctx, nr.AccountID, secretName)
 			if err != nil {
 				invalid = append(invalid, rawName)
 				continue
@@ -216,7 +216,7 @@ func (p *ParameterProvider) GetParameters(ctx context.Context, nr *model.Normali
 		}
 
 		base, version, label := ParseSelector(normalized)
-		e, err := p.resolveParameterWithSelector(ctx, base, version, label)
+		e, err := p.resolveParameterWithSelector(ctx, nr.AccountID, base, version, label)
 		if errors.Is(err, ErrParameterNotFound) || errors.Is(err, ErrVersionNotFound) {
 			invalid = append(invalid, rawName)
 			continue
@@ -253,7 +253,7 @@ func (p *ParameterProvider) GetParametersByPath(ctx context.Context, nr *model.N
 	}
 	nextToken, _ := nr.Params["NextToken"].(string)
 
-	entries, err := p.store.ListParameters(ctx, path, recursive)
+	entries, err := p.store.ListParameters(ctx, nr.AccountID, path, recursive)
 	if err != nil {
 		return nil, fmt.Errorf("ssm: get parameters by path: %w", err)
 	}
@@ -281,7 +281,7 @@ func (p *ParameterProvider) GetParametersByPath(ctx context.Context, nr *model.N
 func (p *ParameterProvider) DeleteParameter(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["Name"].(string)
 	name = Normalize(name)
-	if err := p.store.DeleteParameter(ctx, name); err != nil {
+	if err := p.store.DeleteParameter(ctx, nr.AccountID, name); err != nil {
 		if errors.Is(err, ErrParameterNotFound) {
 			return nil, model.NewProviderError("ParameterNotFound", "parameter not found: "+name, 400)
 		}
@@ -308,7 +308,7 @@ func (p *ParameterProvider) DeleteParameters(ctx context.Context, nr *model.Norm
 	var deleted, invalid []string
 	for _, name := range names {
 		name = Normalize(name)
-		if err := p.store.DeleteParameter(ctx, name); err != nil {
+		if err := p.store.DeleteParameter(ctx, nr.AccountID, name); err != nil {
 			invalid = append(invalid, name)
 		} else {
 			deleted = append(deleted, name)
@@ -332,7 +332,7 @@ func (p *ParameterProvider) DeleteParameters(ctx context.Context, nr *model.Norm
 }
 
 func (p *ParameterProvider) DescribeParameters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.store.ListParameters(ctx, "", true)
+	entries, err := p.store.ListParameters(ctx, nr.AccountID, "", true)
 	if err != nil {
 		return nil, fmt.Errorf("ssm: describe parameters: %w", err)
 	}
@@ -377,7 +377,7 @@ func (p *ParameterProvider) DescribeParameters(ctx context.Context, nr *model.No
 func (p *ParameterProvider) GetParameterHistory(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["Name"].(string)
 	name = Normalize(name)
-	history, err := p.store.GetParameterHistory(ctx, name)
+	history, err := p.store.GetParameterHistory(ctx, nr.AccountID, name)
 	if errors.Is(err, ErrParameterNotFound) {
 		return nil, model.NewProviderError("ParameterNotFound", "parameter not found: "+name, 400)
 	}
@@ -407,7 +407,7 @@ func (p *ParameterProvider) GetParameterHistory(ctx context.Context, nr *model.N
 func (p *ParameterProvider) AddTagsToResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["ResourceId"].(string)
 	name = Normalize(name)
-	e, err := p.store.GetParameter(ctx, name)
+	e, err := p.store.GetParameter(ctx, nr.AccountID, name)
 	if errors.Is(err, ErrParameterNotFound) {
 		return nil, model.NewProviderError("InvalidResourceId", "parameter not found: "+name, 400)
 	}
@@ -430,7 +430,7 @@ func (p *ParameterProvider) AddTagsToResource(ctx context.Context, nr *model.Nor
 func (p *ParameterProvider) RemoveTagsFromResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["ResourceId"].(string)
 	name = Normalize(name)
-	e, err := p.store.GetParameter(ctx, name)
+	e, err := p.store.GetParameter(ctx, nr.AccountID, name)
 	if errors.Is(err, ErrParameterNotFound) {
 		return nil, model.NewProviderError("InvalidResourceId", "parameter not found: "+name, 400)
 	}
@@ -449,7 +449,7 @@ func (p *ParameterProvider) RemoveTagsFromResource(ctx context.Context, nr *mode
 func (p *ParameterProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["ResourceId"].(string)
 	name = Normalize(name)
-	e, err := p.store.GetParameter(ctx, name)
+	e, err := p.store.GetParameter(ctx, nr.AccountID, name)
 	if errors.Is(err, ErrParameterNotFound) {
 		return nil, model.NewProviderError("InvalidResourceId", "parameter not found: "+name, 400)
 	}
@@ -479,7 +479,7 @@ func (p *ParameterProvider) LabelParameterVersion(ctx context.Context, nr *model
 		version = v
 	}
 	labels := extractStringList(nr.Params, "Labels")
-	invalid, err := p.store.LabelParameterVersion(ctx, name, version, labels)
+	invalid, err := p.store.LabelParameterVersion(ctx, nr.AccountID, name, version, labels)
 	if errors.Is(err, ErrParameterNotFound) {
 		return nil, model.NewProviderError("ParameterNotFound", "parameter not found: "+name, 400)
 	}
@@ -519,7 +519,7 @@ func (p *ParameterProvider) UnlabelParameterVersion(ctx context.Context, nr *mod
 		version = v
 	}
 	labels := extractStringList(nr.Params, "Labels")
-	if err := p.store.UnlabelParameterVersion(ctx, name, version, labels); err != nil {
+	if err := p.store.UnlabelParameterVersion(ctx, nr.AccountID, name, version, labels); err != nil {
 		return nil, fmt.Errorf("ssm: unlabel parameter version: %w", err)
 	}
 	return provider.OK(map[string]any{
@@ -540,13 +540,13 @@ func inferTier(valueLen int, hasPolicies, hasLabels bool) string {
 
 // resolveParameterWithSelector fetches a parameter, optionally by version or label.
 // When both version==0 and label=="", it returns the current version.
-func (p *ParameterProvider) resolveParameterWithSelector(ctx context.Context, name string, version int64, label string) (ParameterEntry, error) {
+func (p *ParameterProvider) resolveParameterWithSelector(ctx context.Context, accountID, name string, version int64, label string) (ParameterEntry, error) {
 	if version == 0 && label == "" {
-		return p.store.GetParameter(ctx, name)
+		return p.store.GetParameter(ctx, accountID, name)
 	}
 
 	// Fetch current first.
-	current, err := p.store.GetParameter(ctx, name)
+	current, err := p.store.GetParameter(ctx, accountID, name)
 	if errors.Is(err, ErrParameterNotFound) {
 		return ParameterEntry{}, ErrParameterNotFound
 	}
@@ -558,7 +558,7 @@ func (p *ParameterProvider) resolveParameterWithSelector(ctx context.Context, na
 		if current.Version == version {
 			return current, nil
 		}
-		history, err := p.store.GetParameterHistory(ctx, name)
+		history, err := p.store.GetParameterHistory(ctx, accountID, name)
 		if err != nil {
 			return ParameterEntry{}, err
 		}
@@ -577,7 +577,7 @@ func (p *ParameterProvider) resolveParameterWithSelector(ctx context.Context, na
 	}
 
 	// Resolve by label — check current version's labels first.
-	currentLabels, err := p.store.GetLabelsByVersion(ctx, name, current.Version)
+	currentLabels, err := p.store.GetLabelsByVersion(ctx, accountID, name, current.Version)
 	if err == nil {
 		for _, lbl := range currentLabels {
 			if lbl == label {
@@ -586,13 +586,13 @@ func (p *ParameterProvider) resolveParameterWithSelector(ctx context.Context, na
 		}
 	}
 	// Check history versions (newest first).
-	history, err := p.store.GetParameterHistory(ctx, name)
+	history, err := p.store.GetParameterHistory(ctx, accountID, name)
 	if err != nil {
 		return ParameterEntry{}, err
 	}
 	for i := len(history) - 1; i >= 0; i-- {
 		h := history[i]
-		lbls, err := p.store.GetLabelsByVersion(ctx, name, h.Version)
+		lbls, err := p.store.GetLabelsByVersion(ctx, accountID, name, h.Version)
 		if err != nil {
 			continue
 		}

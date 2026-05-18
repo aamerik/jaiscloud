@@ -201,6 +201,12 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"cfn-changeset": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:changeSet/%s", r, a, n)
 	},
+	"elasticache-cluster": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticache:%s:%s:cluster:%s", r, a, n)
+	},
+	"elasticache-replication-group": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:elasticache:%s:%s:replicationgroup:%s", r, a, n)
+	},
 	"elasticache-subnetgroup": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:elasticache:%s:%s:subnetgroup:%s", r, a, n)
 	},

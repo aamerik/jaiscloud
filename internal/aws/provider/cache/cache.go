@@ -71,6 +71,7 @@ type cacheCluster struct {
 	SnapshotRetentionLimit       int      `json:"SnapshotRetentionLimit,omitempty"`
 	PreferredMaintenanceWindow   string   `json:"PreferredMaintenanceWindow,omitempty"`
 	AutoMinorVersionUpgrade      bool     `json:"AutoMinorVersionUpgrade"`
+	ARN                          string   `json:"ARN,omitempty"`
 }
 
 func defaultEngineVersion(engine string) string {
@@ -107,6 +108,7 @@ func (c cacheCluster) toWire() map[string]any {
 			"Address": c.CacheClusterId + ".jaiscloud.cache.amazonaws.com",
 			"Port":    fmt.Sprintf("%d", port),
 		},
+		"ARN": c.ARN,
 	}
 	if c.SubnetGroupName != "" {
 		w["CacheSubnetGroupName"] = c.SubnetGroupName
@@ -197,6 +199,7 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 		SnapshotRetentionLimit:     snapshotRetentionLimit,
 		PreferredMaintenanceWindow: strParam(nr.Params, "PreferredMaintenanceWindow"),
 		AutoMinorVersionUpgrade:    autoMinorVersionUpgrade,
+		ARN:                        nr.ResourceID("elasticache-cluster", id),
 	}
 	if c.EngineVersion == "" {
 		c.EngineVersion = defaultEngineVersion(engine)

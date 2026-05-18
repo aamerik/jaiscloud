@@ -195,12 +195,12 @@ func (p *Provider) DeleteRepository(ctx context.Context, nr *model.NormalizedReq
 	name, _ := nr.Params["repositoryName"].(string)
 	force, _ := nr.Params["force"].(bool)
 
-	repo, err := p.store.GetRepository(name)
+	repo, err := p.store.GetRepository(nr.AccountID, name)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
-	if err := p.store.DeleteRepository(name, force); err != nil {
+	if err := p.store.DeleteRepository(nr.AccountID, name, force); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -228,14 +228,14 @@ func (p *Provider) DescribeRepositories(ctx context.Context, nr *model.Normalize
 	var repos []*ecrstore.Repository
 	if len(names) > 0 {
 		for _, name := range names {
-			r, err := p.store.GetRepository(name)
+			r, err := p.store.GetRepository(nr.AccountID, name)
 			if err != nil {
 				return nil, storeErrToProvider(err)
 			}
 			repos = append(repos, r)
 		}
 	} else {
-		repos = p.store.ListRepositories("")
+		repos = p.store.ListRepositories(nr.AccountID, "")
 	}
 
 	// Pagination
@@ -328,7 +328,7 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 		Layers:            layers,
 	}
 
-	if err := p.store.PutImage(repoName, img); err != nil {
+	if err := p.store.PutImage(nr.AccountID, repoName, img); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -352,7 +352,7 @@ func (p *Provider) BatchGetImage(ctx context.Context, nr *model.NormalizedReques
 	repoName, _ := nr.Params["repositoryName"].(string)
 	ids := parseImageIDs(nr.Params["imageIds"])
 
-	found, notFound := p.store.BatchGetImages(repoName, ids)
+	found, notFound := p.store.BatchGetImages(nr.AccountID, repoName, ids)
 
 	images := make([]any, len(found))
 	for i, img := range found {
@@ -388,7 +388,7 @@ func (p *Provider) BatchDeleteImage(ctx context.Context, nr *model.NormalizedReq
 	repoName, _ := nr.Params["repositoryName"].(string)
 	ids := parseImageIDs(nr.Params["imageIds"])
 
-	deleted, failed := p.store.BatchDeleteImages(repoName, ids)
+	deleted, failed := p.store.BatchDeleteImages(nr.AccountID, repoName, ids)
 
 	deletedMaps := make([]any, len(deleted))
 	for i, id := range deleted {
@@ -418,10 +418,10 @@ func (p *Provider) BatchCheckLayerAvailability(ctx context.Context, nr *model.No
 
 	// Collect all layer digests stored in the repository by scanning all images.
 	availableDigests := make(map[string]bool)
-	allImages := p.store.ListImages(repoName, "ANY")
+	allImages := p.store.ListImages(nr.AccountID, repoName, "ANY")
 	for _, id := range allImages {
 		ids := []ecrstore.ImageIdentifier{id}
-		found, _ := p.store.BatchGetImages(repoName, ids)
+		found, _ := p.store.BatchGetImages(nr.AccountID, repoName, ids)
 		for _, img := range found {
 			for _, layer := range img.Layers {
 				if layer.Digest != "" {
@@ -474,7 +474,7 @@ func (p *Provider) ListImages(ctx context.Context, nr *model.NormalizedRequest) 
 		maxResults = int(mr)
 	}
 
-	ids := p.store.ListImages(repoName, tagStatus)
+	ids := p.store.ListImages(nr.AccountID, repoName, tagStatus)
 
 	// Simple token-based pagination using index
 	nextToken, _ := nr.Params["nextToken"].(string)
@@ -514,7 +514,7 @@ func (p *Provider) DescribeImages(ctx context.Context, nr *model.NormalizedReque
 	repoName, _ := nr.Params["repositoryName"].(string)
 	ids := parseImageIDs(nr.Params["imageIds"])
 
-	images := p.store.DescribeImages(repoName, ids)
+	images := p.store.DescribeImages(nr.AccountID, repoName, ids)
 
 	details := make([]any, len(images))
 	for i, img := range images {
@@ -579,7 +579,7 @@ func (p *Provider) PutLifecyclePolicy(ctx context.Context, nr *model.NormalizedR
 	repoName, _ := nr.Params["repositoryName"].(string)
 	policyText, _ := nr.Params["lifecyclePolicyText"].(string)
 
-	if err := p.store.PutLifecyclePolicy(repoName, policyText); err != nil {
+	if err := p.store.PutLifecyclePolicy(nr.AccountID, repoName, policyText); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -594,7 +594,7 @@ func (p *Provider) PutLifecyclePolicy(ctx context.Context, nr *model.NormalizedR
 func (p *Provider) GetLifecyclePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	repoName, _ := nr.Params["repositoryName"].(string)
 
-	policy, err := p.store.GetLifecyclePolicy(repoName)
+	policy, err := p.store.GetLifecyclePolicy(nr.AccountID, repoName)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
@@ -610,12 +610,12 @@ func (p *Provider) GetLifecyclePolicy(ctx context.Context, nr *model.NormalizedR
 func (p *Provider) DeleteLifecyclePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	repoName, _ := nr.Params["repositoryName"].(string)
 
-	policy, err := p.store.GetLifecyclePolicy(repoName)
+	policy, err := p.store.GetLifecyclePolicy(nr.AccountID, repoName)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
-	if err := p.store.DeleteLifecyclePolicy(repoName); err != nil {
+	if err := p.store.DeleteLifecyclePolicy(nr.AccountID, repoName); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -653,7 +653,7 @@ func (p *Provider) PutRepositoryPolicy(ctx context.Context, nr *model.Normalized
 	repoName, _ := nr.Params["repositoryName"].(string)
 	policyText, _ := nr.Params["policyText"].(string)
 
-	if err := p.store.PutRepositoryPolicy(repoName, policyText); err != nil {
+	if err := p.store.PutRepositoryPolicy(nr.AccountID, repoName, policyText); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -667,7 +667,7 @@ func (p *Provider) PutRepositoryPolicy(ctx context.Context, nr *model.Normalized
 func (p *Provider) GetRepositoryPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	repoName, _ := nr.Params["repositoryName"].(string)
 
-	policy, err := p.store.GetRepositoryPolicy(repoName)
+	policy, err := p.store.GetRepositoryPolicy(nr.AccountID, repoName)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
@@ -682,12 +682,12 @@ func (p *Provider) GetRepositoryPolicy(ctx context.Context, nr *model.Normalized
 func (p *Provider) DeleteRepositoryPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	repoName, _ := nr.Params["repositoryName"].(string)
 
-	policy, err := p.store.GetRepositoryPolicy(repoName)
+	policy, err := p.store.GetRepositoryPolicy(nr.AccountID, repoName)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
-	if err := p.store.DeleteRepositoryPolicy(repoName); err != nil {
+	if err := p.store.DeleteRepositoryPolicy(nr.AccountID, repoName); err != nil {
 		return nil, storeErrToProvider(err)
 	}
 
@@ -744,7 +744,7 @@ func (p *Provider) StartImageScan(ctx context.Context, nr *model.NormalizedReque
 	repoName, _ := nr.Params["repositoryName"].(string)
 	imageIDParam := parseImageID(nr.Params["imageId"])
 
-	img, err := p.store.GetImage(repoName, imageIDParam)
+	img, err := p.store.GetImage(nr.AccountID, repoName, imageIDParam)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
@@ -767,7 +767,7 @@ func (p *Provider) DescribeImageScanFindings(ctx context.Context, nr *model.Norm
 	repoName, _ := nr.Params["repositoryName"].(string)
 	imageIDParam := parseImageID(nr.Params["imageId"])
 
-	img, err := p.store.GetImage(repoName, imageIDParam)
+	img, err := p.store.GetImage(nr.AccountID, repoName, imageIDParam)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}

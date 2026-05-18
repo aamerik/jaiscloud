@@ -9,11 +9,11 @@ import (
 // InternalGetSecretValue retrieves the plaintext secret value by name or ARN.
 // It returns the SecretString (or base64 for binary) of the AWSCURRENT version.
 // Used by SSM Parameter Store for the /aws/reference/secretsmanager/ bridge.
-func (p *SecretProvider) InternalGetSecretValue(ctx context.Context, secretID string) (string, error) {
-	// Try by ARN/ID first, then by name.
+func (p *SecretProvider) InternalGetSecretValue(ctx context.Context, accountID, secretID string) (string, error) {
+	// Try by ARN/ID first, then by name (scoped to accountID).
 	e, err := p.store.GetSecret(ctx, secretID)
 	if errors.Is(err, ErrSecretNotFound) {
-		e, err = p.store.GetSecretByName(ctx, secretID)
+		e, err = p.store.GetSecretByName(ctx, accountID, secretID)
 	}
 	if errors.Is(err, ErrSecretNotFound) {
 		return "", fmt.Errorf("secret not found: %s", secretID)

@@ -87,12 +87,12 @@ func (s *PostgresParameterStore) PutParameter(ctx context.Context, e *ParameterE
 	return tx.Commit(ctx)
 }
 
-func (s *PostgresParameterStore) GetParameter(ctx context.Context, name string) (ParameterEntry, error) {
+func (s *PostgresParameterStore) GetParameter(ctx context.Context, accountID, name string) (ParameterEntry, error) {
 	var e ParameterEntry
 	var data []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at
-		FROM jc_ssm_parameters WHERE name=$1`, name,
+		FROM jc_ssm_parameters WHERE account_id=$1 AND name=$2`, accountID, name,
 	).Scan(&e.AccountID, &e.Region, &e.Name, &data, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ParameterEntry{}, ErrParameterNotFound
@@ -104,8 +104,8 @@ func (s *PostgresParameterStore) GetParameter(ctx context.Context, name string) 
 	return e, nil
 }
 
-func (s *PostgresParameterStore) DeleteParameter(ctx context.Context, name string) error {
-	ct, err := s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters WHERE name=$1`, name)
+func (s *PostgresParameterStore) DeleteParameter(ctx context.Context, accountID, name string) error {
+	ct, err := s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters WHERE account_id=$1 AND name=$2`, accountID, name)
 	if err != nil {
 		return fmt.Errorf("ssm postgres: delete parameter: %w", err)
 	}
@@ -115,21 +115,21 @@ func (s *PostgresParameterStore) DeleteParameter(ctx context.Context, name strin
 	return nil
 }
 
-func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string, recursive bool) ([]ParameterEntry, error) {
+func (s *PostgresParameterStore) ListParameters(ctx context.Context, accountID, path string, recursive bool) ([]ParameterEntry, error) {
 	var rows pgx.Rows
 	var err error
-	// Normalise prefix to always end with "/" to avoid "/app" matching "/apple/x".
 	prefix := path
 	if path != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 	if path == "" {
 		rows, err = s.pool.Query(ctx,
-			`SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at FROM jc_ssm_parameters`)
+			`SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at
+			 FROM jc_ssm_parameters WHERE ($1='' OR account_id=$1)`, accountID)
 	} else {
 		rows, err = s.pool.Query(ctx,
 			`SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at
-			 FROM jc_ssm_parameters WHERE name LIKE $1`, prefix+"%")
+			 FROM jc_ssm_parameters WHERE ($1='' OR account_id=$1) AND name LIKE $2`, accountID, prefix+"%")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ssm postgres: list parameters: %w", err)
@@ -154,13 +154,13 @@ func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string
 	return out, rows.Err()
 }
 
-func (s *PostgresParameterStore) GetParameterHistory(ctx context.Context, name string) ([]HistoryEntry, error) {
-	if _, err := s.GetParameter(ctx, name); err != nil {
+func (s *PostgresParameterStore) GetParameterHistory(ctx context.Context, accountID, name string) ([]HistoryEntry, error) {
+	if _, err := s.GetParameter(ctx, accountID, name); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT name, version, param_data, param_value, created_at
-		FROM jc_ssm_param_history WHERE name=$1 ORDER BY version ASC`, name)
+		FROM jc_ssm_param_history WHERE account_id=$1 AND name=$2 ORDER BY version ASC`, accountID, name)
 	if err != nil {
 		return nil, fmt.Errorf("ssm postgres: get history: %w", err)
 	}
@@ -219,9 +219,8 @@ func isPgUnique(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error) {
-	// Resolve account/region from the parameter record.
-	e, err := s.GetParameter(ctx, name)
+func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) ([]string, error) {
+	e, err := s.GetParameter(ctx, accountID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +246,7 @@ func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, name
 	return invalid, nil
 }
 
-func (s *PostgresParameterStore) UnlabelParameterVersion(ctx context.Context, name string, version int64, labels []string) error {
+func (s *PostgresParameterStore) UnlabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) error {
 	if len(labels) == 0 {
 		return nil
 	}
@@ -259,7 +258,7 @@ func (s *PostgresParameterStore) UnlabelParameterVersion(ctx context.Context, na
 	return err
 }
 
-func (s *PostgresParameterStore) GetLabelsByVersion(ctx context.Context, name string, version int64) ([]string, error) {
+func (s *PostgresParameterStore) GetLabelsByVersion(ctx context.Context, accountID, name string, version int64) ([]string, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT label FROM jc_ssm_parameter_labels
 		 WHERE parameter_name=$1 AND version=$2

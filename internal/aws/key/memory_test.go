@@ -45,7 +45,7 @@ func TestMemoryKeyStore_ListKeys(t *testing.T) {
 	for _, id := range []string{"k1", "k2", "k3"} {
 		s.CreateKey(ctx, key.KeyEntry{KeyID: id, Enabled: true})
 	}
-	keys, err := s.ListKeys(ctx)
+	keys, err := s.ListKeys(ctx, "")
 	require.NoError(t, err)
 	assert.Len(t, keys, 3)
 }
@@ -113,7 +113,7 @@ func TestMemoryKeyStore_Reset(t *testing.T) {
 
 	s.Reset()
 
-	keys, _ := s.ListKeys(ctx)
+	keys, _ := s.ListKeys(ctx, "")
 	assert.Empty(t, keys)
 	// DEK is wiped on Reset.
 	_, err := s.LoadDEK(ctx)

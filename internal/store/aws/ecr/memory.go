@@ -12,8 +12,8 @@ import (
 // MemoryECRStore is the default in-memory ECR store.
 type MemoryECRStore struct {
 	mu           sync.RWMutex
-	repos        map[string]*Repository // name → repo
-	arnToName    map[string]string      // ARN → name
+	repos        map[string]*Repository           // repoKey(registryID, name) → repo
+	arnToKey     map[string]string                // ARN → repoKey
 	ptcRules     map[string]*PullThroughCacheRule // prefix → rule
 	registryPolicy    string
 	replicationConfig string
@@ -21,10 +21,15 @@ type MemoryECRStore struct {
 
 func NewMemoryECRStore() *MemoryECRStore {
 	return &MemoryECRStore{
-		repos:     make(map[string]*Repository),
-		arnToName: make(map[string]string),
-		ptcRules:  make(map[string]*PullThroughCacheRule),
+		repos:    make(map[string]*Repository),
+		arnToKey: make(map[string]string),
+		ptcRules: make(map[string]*PullThroughCacheRule),
 	}
+}
+
+// repoKey returns the unique key for (registryID, name).
+func repoKey(registryID, name string) string {
+	return registryID + ":" + name
 }
 
 // ─── Repository CRUD ─────────────────────────────────────────────────────────
@@ -32,48 +37,54 @@ func NewMemoryECRStore() *MemoryECRStore {
 func (s *MemoryECRStore) CreateRepository(repo *Repository) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.repos[repo.Name]; exists {
+	key := repoKey(repo.RegistryID, repo.Name)
+	if _, exists := s.repos[key]; exists {
 		return &ECRError{Code: "RepositoryAlreadyExistsException", Message: fmt.Sprintf("The repository with name '%s' already exists in the registry with id '%s'", repo.Name, repo.RegistryID), Status: 400}
 	}
 	if len(s.repos) >= 10000 {
 		return &ECRError{Code: "LimitExceededException", Message: "The number of repositories in this registry exceeds the limit", Status: 400}
 	}
 	clone := cloneRepo(repo)
-	s.repos[clone.Name] = clone
-	s.arnToName[clone.ARN] = clone.Name
+	s.repos[key] = clone
+	s.arnToKey[clone.ARN] = key
 	return nil
 }
 
-func (s *MemoryECRStore) GetRepository(name string) (*Repository, error) {
+func (s *MemoryECRStore) GetRepository(registryID, name string) (*Repository, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[name]
+	r, ok := s.repos[repoKey(registryID, name)]
 	if !ok {
 		return nil, &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", name), Status: 400}
 	}
 	return cloneRepo(r), nil
 }
 
-func (s *MemoryECRStore) DeleteRepository(name string, force bool) error {
+func (s *MemoryECRStore) DeleteRepository(registryID, name string, force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[name]
+	key := repoKey(registryID, name)
+	r, ok := s.repos[key]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", name), Status: 400}
 	}
 	if !force && len(r.Images) > 0 {
 		return &ECRError{Code: "RepositoryNotEmptyException", Message: fmt.Sprintf("The repository with name '%s' is not empty", name), Status: 400}
 	}
-	delete(s.arnToName, r.ARN)
-	delete(s.repos, name)
+	delete(s.arnToKey, r.ARN)
+	delete(s.repos, key)
 	return nil
 }
 
-func (s *MemoryECRStore) ListRepositories(prefix string) []*Repository {
+// ListRepositories returns repos for registryID (when non-empty) or all repos (when empty).
+func (s *MemoryECRStore) ListRepositories(registryID, prefix string) []*Repository {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []*Repository
 	for _, r := range s.repos {
+		if registryID != "" && r.RegistryID != registryID {
+			continue
+		}
 		if prefix == "" || strings.HasPrefix(r.Name, prefix) {
 			out = append(out, cloneRepo(r))
 		}
@@ -84,10 +95,10 @@ func (s *MemoryECRStore) ListRepositories(prefix string) []*Repository {
 
 // ─── Image Operations ─────────────────────────────────────────────────────────
 
-func (s *MemoryECRStore) PutImage(repoName string, image *Image) error {
+func (s *MemoryECRStore) PutImage(registryID, repoName string, image *Image) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -133,10 +144,10 @@ func (s *MemoryECRStore) PutImage(repoName string, image *Image) error {
 	return nil
 }
 
-func (s *MemoryECRStore) GetImage(repoName string, id ImageIdentifier) (*Image, error) {
+func (s *MemoryECRStore) GetImage(registryID, repoName string, id ImageIdentifier) (*Image, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return nil, &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -147,10 +158,10 @@ func (s *MemoryECRStore) GetImage(repoName string, id ImageIdentifier) (*Image, 
 	return cloneImage(img), nil
 }
 
-func (s *MemoryECRStore) BatchGetImages(repoName string, ids []ImageIdentifier) (found []*Image, notFound []ImageIdentifier) {
+func (s *MemoryECRStore) BatchGetImages(registryID, repoName string, ids []ImageIdentifier) (found []*Image, notFound []ImageIdentifier) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return nil, ids
 	}
@@ -164,10 +175,10 @@ func (s *MemoryECRStore) BatchGetImages(repoName string, ids []ImageIdentifier) 
 	return
 }
 
-func (s *MemoryECRStore) BatchDeleteImages(repoName string, ids []ImageIdentifier) (deleted []ImageIdentifier, failed []FailedImage) {
+func (s *MemoryECRStore) BatchDeleteImages(registryID, repoName string, ids []ImageIdentifier) (deleted []ImageIdentifier, failed []FailedImage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		for _, id := range ids {
 			failed = append(failed, FailedImage{ImageID: id, FailureCode: "RepositoryNotFoundException", FailureReason: "repository not found"})
@@ -215,10 +226,10 @@ func (s *MemoryECRStore) BatchDeleteImages(repoName string, ids []ImageIdentifie
 	return
 }
 
-func (s *MemoryECRStore) ListImages(repoName string, tagStatus string) []ImageIdentifier {
+func (s *MemoryECRStore) ListImages(registryID, repoName string, tagStatus string) []ImageIdentifier {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return nil
 	}
@@ -247,10 +258,10 @@ func (s *MemoryECRStore) ListImages(repoName string, tagStatus string) []ImageId
 	return out
 }
 
-func (s *MemoryECRStore) DescribeImages(repoName string, ids []ImageIdentifier) []*Image {
+func (s *MemoryECRStore) DescribeImages(registryID, repoName string, ids []ImageIdentifier) []*Image {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return nil
 	}
@@ -276,10 +287,10 @@ func (s *MemoryECRStore) DescribeImages(repoName string, ids []ImageIdentifier) 
 
 // ─── Policies ─────────────────────────────────────────────────────────────────
 
-func (s *MemoryECRStore) PutLifecyclePolicy(repoName, policyText string) error {
+func (s *MemoryECRStore) PutLifecyclePolicy(registryID, repoName, policyText string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -287,10 +298,10 @@ func (s *MemoryECRStore) PutLifecyclePolicy(repoName, policyText string) error {
 	return nil
 }
 
-func (s *MemoryECRStore) GetLifecyclePolicy(repoName string) (string, error) {
+func (s *MemoryECRStore) GetLifecyclePolicy(registryID, repoName string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return "", &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -300,10 +311,10 @@ func (s *MemoryECRStore) GetLifecyclePolicy(repoName string) (string, error) {
 	return r.LifecyclePolicy, nil
 }
 
-func (s *MemoryECRStore) DeleteLifecyclePolicy(repoName string) error {
+func (s *MemoryECRStore) DeleteLifecyclePolicy(registryID, repoName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -314,10 +325,10 @@ func (s *MemoryECRStore) DeleteLifecyclePolicy(repoName string) error {
 	return nil
 }
 
-func (s *MemoryECRStore) PutRepositoryPolicy(repoName, policyText string) error {
+func (s *MemoryECRStore) PutRepositoryPolicy(registryID, repoName, policyText string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -325,10 +336,10 @@ func (s *MemoryECRStore) PutRepositoryPolicy(repoName, policyText string) error 
 	return nil
 }
 
-func (s *MemoryECRStore) GetRepositoryPolicy(repoName string) (string, error) {
+func (s *MemoryECRStore) GetRepositoryPolicy(registryID, repoName string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return "", &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -338,10 +349,10 @@ func (s *MemoryECRStore) GetRepositoryPolicy(repoName string) (string, error) {
 	return r.RepositoryPolicy, nil
 }
 
-func (s *MemoryECRStore) DeleteRepositoryPolicy(repoName string) error {
+func (s *MemoryECRStore) DeleteRepositoryPolicy(registryID, repoName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.repos[repoName]
+	r, ok := s.repos[repoKey(registryID, repoName)]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: fmt.Sprintf("The repository with name '%s' does not exist in the registry", repoName), Status: 400}
 	}
@@ -357,11 +368,11 @@ func (s *MemoryECRStore) DeleteRepositoryPolicy(repoName string) error {
 func (s *MemoryECRStore) AddTags(arn string, tags map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.arnToName[arn]
+	key, ok := s.arnToKey[arn]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: "The repository was not found", Status: 400}
 	}
-	r := s.repos[name]
+	r := s.repos[key]
 	if r.Tags == nil {
 		r.Tags = make(map[string]string)
 	}
@@ -374,11 +385,11 @@ func (s *MemoryECRStore) AddTags(arn string, tags map[string]string) error {
 func (s *MemoryECRStore) RemoveTags(arn string, keys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.arnToName[arn]
+	key, ok := s.arnToKey[arn]
 	if !ok {
 		return &ECRError{Code: "RepositoryNotFoundException", Message: "The repository was not found", Status: 400}
 	}
-	r := s.repos[name]
+	r := s.repos[key]
 	for _, k := range keys {
 		delete(r.Tags, k)
 	}
@@ -388,12 +399,12 @@ func (s *MemoryECRStore) RemoveTags(arn string, keys []string) error {
 func (s *MemoryECRStore) GetTags(arn string) map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	name, ok := s.arnToName[arn]
+	key, ok := s.arnToKey[arn]
 	if !ok {
 		return nil
 	}
-	out := make(map[string]string, len(s.repos[name].Tags))
-	for k, v := range s.repos[name].Tags {
+	out := make(map[string]string, len(s.repos[key].Tags))
+	for k, v := range s.repos[key].Tags {
 		out[k] = v
 	}
 	return out
@@ -473,7 +484,7 @@ func (s *MemoryECRStore) GetReplicationConfiguration() string {
 func (s *MemoryECRStore) Reset() {
 	s.mu.Lock()
 	s.repos = make(map[string]*Repository)
-	s.arnToName = make(map[string]string)
+	s.arnToKey = make(map[string]string)
 	s.ptcRules = make(map[string]*PullThroughCacheRule)
 	s.registryPolicy = ""
 	s.replicationConfig = ""
@@ -510,10 +521,10 @@ func (s *MemoryECRStore) Restore(data json.RawMessage) error {
 	if s.repos == nil {
 		s.repos = make(map[string]*Repository)
 	}
-	// Rebuild arnToName
-	s.arnToName = make(map[string]string, len(s.repos))
-	for name, r := range s.repos {
-		s.arnToName[r.ARN] = name
+	// Rebuild arnToKey
+	s.arnToKey = make(map[string]string, len(s.repos))
+	for key, r := range s.repos {
+		s.arnToKey[r.ARN] = key
 		if r.Images == nil {
 			r.Images = make(map[string]*Image)
 		}

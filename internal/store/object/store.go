@@ -75,7 +75,7 @@ type ObjectMetaStore interface {
 	GetBucket(ctx context.Context, bucket string) (map[string]any, error)
 	UpdateBucketMeta(ctx context.Context, bucket string, meta map[string]any) error
 	DeleteBucket(ctx context.Context, bucket string) error
-	ListBuckets(ctx context.Context) ([]map[string]any, error)
+	ListBuckets(ctx context.Context, accountID string) ([]map[string]any, error)
 
 	// Objects
 	PutObjectMeta(ctx context.Context, bucket, key string, meta ObjectMeta) error

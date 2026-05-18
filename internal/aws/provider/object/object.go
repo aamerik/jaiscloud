@@ -485,7 +485,7 @@ func (p *ObjectProvider) DeleteBucket(ctx context.Context, nr *model.NormalizedR
 }
 
 func (p *ObjectProvider) ListBuckets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	buckets, err := p.meta.ListBuckets(ctx)
+	buckets, err := p.meta.ListBuckets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, err
 	}

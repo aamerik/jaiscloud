@@ -45,10 +45,11 @@ func (s *PostgresSecretStore) GetSecret(ctx context.Context, secretID string) (S
 		FROM jc_sm_secrets WHERE secret_id=$1`, secretID)
 }
 
-func (s *PostgresSecretStore) GetSecretByName(ctx context.Context, name string) (SecretEntry, error) {
-	return s.scanSecret(ctx, `
+func (s *PostgresSecretStore) GetSecretByName(ctx context.Context, accountID, name string) (SecretEntry, error) {
+	row := s.pool.QueryRow(ctx, `
 		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
-		FROM jc_sm_secrets WHERE name=$1`, name)
+		FROM jc_sm_secrets WHERE account_id=$1 AND name=$2`, accountID, name)
+	return scanSecretRow(row)
 }
 
 func (s *PostgresSecretStore) UpdateSecret(ctx context.Context, e SecretEntry) error {
@@ -79,10 +80,10 @@ func (s *PostgresSecretStore) DeleteSecret(ctx context.Context, secretID string)
 	return nil
 }
 
-func (s *PostgresSecretStore) ListSecrets(ctx context.Context) ([]SecretEntry, error) {
+func (s *PostgresSecretStore) ListSecrets(ctx context.Context, accountID string) ([]SecretEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
-		FROM jc_sm_secrets`)
+		FROM jc_sm_secrets WHERE ($1='' OR account_id=$1)`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("sm postgres: list secrets: %w", err)
 	}

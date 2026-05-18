@@ -214,11 +214,17 @@ func (s *MemoryS3ObjectMetaStore) DeleteBucket(_ context.Context, bucket string)
 	return nil
 }
 
-func (s *MemoryS3ObjectMetaStore) ListBuckets(_ context.Context) ([]map[string]any, error) {
+func (s *MemoryS3ObjectMetaStore) ListBuckets(_ context.Context, accountID string) ([]map[string]any, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var result []map[string]any
 	for _, meta := range s.buckets {
+		if accountID != "" {
+			owner, _ := meta["AccountID"].(string)
+			if owner != accountID {
+				continue
+			}
+		}
 		result = append(result, meta)
 	}
 	return result, nil

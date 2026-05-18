@@ -75,11 +75,14 @@ func (s *MemoryKeyStore) DeleteKey(_ context.Context, keyID string) error {
 	return nil
 }
 
-func (s *MemoryKeyStore) ListKeys(_ context.Context) ([]KeyEntry, error) {
+func (s *MemoryKeyStore) ListKeys(_ context.Context, accountID string) ([]KeyEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]KeyEntry, 0, len(s.keys))
 	for _, e := range s.keys {
+		if accountID != "" && e.AccountID != accountID {
+			continue
+		}
 		out = append(out, e)
 	}
 	return out, nil

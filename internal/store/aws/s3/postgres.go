@@ -88,8 +88,14 @@ func (s *PostgresS3ObjectMetaStore) DeleteBucket(ctx context.Context, bucket str
 	return nil
 }
 
-func (s *PostgresS3ObjectMetaStore) ListBuckets(ctx context.Context) ([]map[string]any, error) {
-	rows, err := s.pool.Query(ctx, `SELECT meta FROM jc_s3_buckets ORDER BY created_at`)
+func (s *PostgresS3ObjectMetaStore) ListBuckets(ctx context.Context, accountID string) ([]map[string]any, error) {
+	var rows pgx.Rows
+	var err error
+	if accountID != "" {
+		rows, err = s.pool.Query(ctx, `SELECT meta FROM jc_s3_buckets WHERE meta->>'AccountID'=$1 ORDER BY created_at`, accountID)
+	} else {
+		rows, err = s.pool.Query(ctx, `SELECT meta FROM jc_s3_buckets ORDER BY created_at`)
+	}
 	if err != nil {
 		return nil, err
 	}

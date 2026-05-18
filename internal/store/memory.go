@@ -138,6 +138,30 @@ func (s *MemoryResourceStore) Reset() {
 	s.entries = make(map[string]ResourceEntry)
 }
 
+// ResetScope deletes all entries for the given (account, region).
+func (s *MemoryResourceStore) ResetScope(account, region string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := account + ":" + region + ":"
+	for k := range s.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.entries, k)
+		}
+	}
+}
+
+// ResetAccount deletes all entries for the given account across all regions.
+func (s *MemoryResourceStore) ResetAccount(account string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := account + ":"
+	for k := range s.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.entries, k)
+		}
+	}
+}
+
 func (s *MemoryResourceStore) Snapshot() (json.RawMessage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

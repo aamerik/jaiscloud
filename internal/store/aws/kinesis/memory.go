@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,8 +31,8 @@ type streamState struct {
 // MemoryKinesisStore is a thread-safe in-memory Kinesis store.
 type MemoryKinesisStore struct {
 	mu        sync.RWMutex
-	streams   map[string]*streamState   // key = stream name
-	streamARN map[string]string         // ARN → name
+	streams   map[string]*streamState   // key = stream ARN
+	nameScope map[string]string         // key = "account:region:name" → ARN
 	iterators map[string]*IteratorEntry // key = opaque UUID token
 }
 
@@ -39,7 +40,7 @@ type MemoryKinesisStore struct {
 func NewMemoryKinesisStore() *MemoryKinesisStore {
 	return &MemoryKinesisStore{
 		streams:   make(map[string]*streamState),
-		streamARN: make(map[string]string),
+		nameScope: make(map[string]string),
 		iterators: make(map[string]*IteratorEntry),
 	}
 }
@@ -103,13 +104,30 @@ func routeToShard(shards []*shardState, partitionKey, explicitHashKey string) *s
 	return nil
 }
 
+// scopeKey returns the nameScope key for (account, region, name).
+func scopeKey(account, region, name string) string {
+	return account + ":" + region + ":" + name
+}
+
+// arnScope parses account and region out of a Kinesis ARN.
+// ARN format: arn:aws:kinesis:region:account:stream/name
+func arnScope(arn string) (account, region string) {
+	parts := strings.SplitN(arn, ":", 7)
+	if len(parts) >= 6 {
+		return parts[4], parts[3]
+	}
+	return "", ""
+}
+
 // ─── KinesisStore implementation ──────────────────────────────────────────────
 
 // CreateStream creates a stream with the given shard count.
 func (s *MemoryKinesisStore) CreateStream(stream Stream, shardCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.streams[stream.Name]; ok {
+	account, region := arnScope(stream.ARN)
+	sk := scopeKey(account, region, stream.Name)
+	if _, ok := s.nameScope[sk]; ok {
 		return &KinesisError{Code: "ResourceInUseException", Message: "Stream " + stream.Name + " already exists", Status: 400}
 	}
 	ranges := calculateHashRanges(shardCount)
@@ -139,66 +157,87 @@ func (s *MemoryKinesisStore) CreateStream(stream Stream, shardCount int) error {
 	}
 	stream.Status = StreamStatusActive
 	st := &streamState{Stream: stream, Shards: shards, Consumers: make(map[string]*Consumer)}
-	s.streams[stream.Name] = st
-	s.streamARN[stream.ARN] = stream.Name
+	s.streams[stream.ARN] = st
+	s.nameScope[sk] = stream.ARN
 	return nil
-}
-
-// GetStream returns the Stream metadata for the given name.
-func (s *MemoryKinesisStore) GetStream(name string) (*Stream, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	st, ok := s.streams[name]
-	if !ok {
-		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
-	}
-	cp := st.Stream
-	return &cp, nil
 }
 
 // GetStreamByARN resolves a stream by its ARN.
 func (s *MemoryKinesisStore) GetStreamByARN(arn string) (*Stream, error) {
 	s.mu.RLock()
-	name, ok := s.streamARN[arn]
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
+	st, ok := s.streams[arn]
 	if !ok {
 		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + arn, Status: 400}
 	}
-	return s.GetStream(name)
+	cp := st.Stream
+	return &cp, nil
 }
 
-// DeleteStream marks a stream for deletion then removes it.
-func (s *MemoryKinesisStore) DeleteStream(name string) error {
+// GetStreamInScope returns stream metadata scoped by account+region+name.
+func (s *MemoryKinesisStore) GetStreamInScope(account, region, name string) (*Stream, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	cp := st.Stream
+	return &cp, nil
+}
+
+// DeleteStreamByARN deletes a stream by ARN.
+func (s *MemoryKinesisStore) DeleteStreamByARN(arn string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.streams[name]
+	st, ok := s.streams[arn]
 	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + arn, Status: 400}
 	}
-	delete(s.streamARN, st.Stream.ARN)
-	delete(s.streams, name)
+	account, region := arnScope(arn)
+	delete(s.nameScope, scopeKey(account, region, st.Stream.Name))
+	delete(s.streams, arn)
 	return nil
 }
 
-// ListStreams returns all stream names, sorted by creation time.
-func (s *MemoryKinesisStore) ListStreams() []Stream {
+// DeleteStreamInScope deletes a stream by account+region+name.
+func (s *MemoryKinesisStore) DeleteStreamInScope(account, region, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sk := scopeKey(account, region, name)
+	arn, ok := s.nameScope[sk]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	delete(s.nameScope, sk)
+	delete(s.streams, arn)
+	return nil
+}
+
+// ListStreamsInScope returns all streams for the given account+region.
+func (s *MemoryKinesisStore) ListStreamsInScope(account, region string) []Stream {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Stream, 0, len(s.streams))
-	for _, st := range s.streams {
-		out = append(out, st.Stream)
+	prefix := account + ":" + region + ":"
+	var out []Stream
+	for sk, arn := range s.nameScope {
+		if strings.HasPrefix(sk, prefix) {
+			out = append(out, s.streams[arn].Stream)
+		}
 	}
 	return out
 }
 
-// ListShards returns the shards for a stream.
-func (s *MemoryKinesisStore) ListShards(streamName string) ([]Shard, error) {
+// ListShardsInScope returns shards for a stream by account+region+name.
+func (s *MemoryKinesisStore) ListShardsInScope(account, region, name string) ([]Shard, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	st, ok := s.streams[streamName]
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
 	if !ok {
-		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
+		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
 	}
+	st := s.streams[arn]
 	out := make([]Shard, len(st.Shards))
 	for i, sh := range st.Shards {
 		out[i] = sh.Shard
@@ -206,8 +245,8 @@ func (s *MemoryKinesisStore) ListShards(streamName string) ([]Shard, error) {
 	return out, nil
 }
 
-// PutRecord appends a record to the correct shard.
-func (s *MemoryKinesisStore) PutRecord(streamName string, data []byte, partitionKey, explicitHashKey string) (shardID, sequenceNumber string, err error) {
+// PutRecordInScope appends a record to the correct shard, scoped by account+region+name.
+func (s *MemoryKinesisStore) PutRecordInScope(account, region, name string, data []byte, partitionKey, explicitHashKey string) (shardID, sequenceNumber string, err error) {
 	if len(data) > 1024*1024 {
 		return "", "", &KinesisError{Code: "InvalidArgumentException", Message: "Data must be less than or equal to 1 MB in size", Status: 400}
 	}
@@ -217,10 +256,11 @@ func (s *MemoryKinesisStore) PutRecord(streamName string, data []byte, partition
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
 	if !ok {
-		return "", "", &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
+		return "", "", &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
 	}
+	st := s.streams[arn]
 	shard := routeToShard(st.Shards, partitionKey, explicitHashKey)
 	if shard == nil {
 		return "", "", &KinesisError{Code: "InvalidArgumentException", Message: "Could not route to shard", Status: 400}
@@ -238,14 +278,15 @@ func (s *MemoryKinesisStore) PutRecord(streamName string, data []byte, partition
 	return shard.Shard.ShardID, seq, nil
 }
 
-// CreateIterator creates an opaque iterator token for the given shard + type.
-func (s *MemoryKinesisStore) CreateIterator(streamName, shardID string, iterType ShardIteratorType, seqNumParam string, timestamp *time.Time) (string, error) {
+// CreateIteratorInScope creates an opaque iterator token for a stream identified by account+region+name.
+func (s *MemoryKinesisStore) CreateIteratorInScope(account, region, streamName, shardID string, iterType ShardIteratorType, seqNumParam string, timestamp *time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
+	arn, ok := s.nameScope[scopeKey(account, region, streamName)]
 	if !ok {
 		return "", &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
 	}
+	st := s.streams[arn]
 	var ss *shardState
 	for _, sh := range st.Shards {
 		if sh.Shard.ShardID == shardID {
@@ -285,12 +326,227 @@ func (s *MemoryKinesisStore) CreateIterator(streamName, shardID string, iterType
 
 	id := uuid()
 	s.iterators[id] = &IteratorEntry{
-		StreamName: streamName,
-		ShardID:    shardID,
-		Position:   pos,
-		CreatedAt:  time.Now(),
+		StreamARN: arn,
+		ShardID:   shardID,
+		Position:  pos,
+		CreatedAt: time.Now(),
 	}
 	return id, nil
+}
+
+// SplitShardInScope closes a parent shard and creates two child shards, scoped by account+region+name.
+func (s *MemoryKinesisStore) SplitShardInScope(account, region, name, shardID, newStartingHashKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	var parent *shardState
+	for _, sh := range st.Shards {
+		if sh.Shard.ShardID == shardID {
+			parent = sh
+			break
+		}
+	}
+	if parent == nil {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Shard " + shardID + " not found", Status: 400}
+	}
+	if !parent.Shard.IsOpen {
+		return &KinesisError{Code: "ResourceInUseException", Message: "Shard " + shardID + " is already closed", Status: 400}
+	}
+
+	splitKey, ok2 := new(big.Int).SetString(newStartingHashKey, 10)
+	if !ok2 {
+		return &KinesisError{Code: "InvalidArgumentException", Message: "Invalid NewStartingHashKey", Status: 400}
+	}
+	startKey, _ := new(big.Int).SetString(parent.Shard.HashKeyRange.StartingHashKey, 10)
+	endKey, _ := new(big.Int).SetString(parent.Shard.HashKeyRange.EndingHashKey, 10)
+	if splitKey.Cmp(startKey) <= 0 || splitKey.Cmp(endKey) >= 0 {
+		return &KinesisError{Code: "InvalidArgumentException", Message: "NewStartingHashKey must be strictly within parent shard range", Status: 400}
+	}
+
+	parent.Shard.IsOpen = false
+	endSeq := seqNum(parent.NextSeq)
+	parent.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
+
+	nextIdx := len(st.Shards)
+	child1ID := fmt.Sprintf("shardId-%012d", nextIdx)
+	child2ID := fmt.Sprintf("shardId-%012d", nextIdx+1)
+	splitMinus1 := new(big.Int).Sub(splitKey, big.NewInt(1))
+	c1 := &shardState{
+		Shard: Shard{
+			ShardID:       child1ID,
+			ParentShardID: shardID,
+			HashKeyRange: HashKeyRange{
+				StartingHashKey: parent.Shard.HashKeyRange.StartingHashKey,
+				EndingHashKey:   splitMinus1.String(),
+			},
+			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
+			IsOpen:              true,
+		},
+		NextSeq: 1,
+	}
+	c2 := &shardState{
+		Shard: Shard{
+			ShardID:       child2ID,
+			ParentShardID: shardID,
+			HashKeyRange: HashKeyRange{
+				StartingHashKey: splitKey.String(),
+				EndingHashKey:   parent.Shard.HashKeyRange.EndingHashKey,
+			},
+			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
+			IsOpen:              true,
+		},
+		NextSeq: 1,
+	}
+	st.Shards = append(st.Shards, c1, c2)
+	return nil
+}
+
+// MergeShardsInScope closes two adjacent shards and creates one combined child, scoped by account+region+name.
+func (s *MemoryKinesisStore) MergeShardsInScope(account, region, name, shardToMerge, adjacentShard string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	var p1, p2 *shardState
+	for _, sh := range st.Shards {
+		if sh.Shard.ShardID == shardToMerge {
+			p1 = sh
+		}
+		if sh.Shard.ShardID == adjacentShard {
+			p2 = sh
+		}
+	}
+	if p1 == nil || p2 == nil {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "One or both shards not found", Status: 400}
+	}
+	if !p1.Shard.IsOpen || !p2.Shard.IsOpen {
+		return &KinesisError{Code: "ResourceInUseException", Message: "Both shards must be open to merge", Status: 400}
+	}
+	p1End, _ := new(big.Int).SetString(p1.Shard.HashKeyRange.EndingHashKey, 10)
+	p2Start, _ := new(big.Int).SetString(p2.Shard.HashKeyRange.StartingHashKey, 10)
+	p2End, _ := new(big.Int).SetString(p2.Shard.HashKeyRange.EndingHashKey, 10)
+	p1Start, _ := new(big.Int).SetString(p1.Shard.HashKeyRange.StartingHashKey, 10)
+	p1EndPlus1 := new(big.Int).Add(p1End, big.NewInt(1))
+	p2EndPlus1 := new(big.Int).Add(p2End, big.NewInt(1))
+
+	var lower, upper *shardState
+	if p1EndPlus1.Cmp(p2Start) == 0 {
+		lower, upper = p1, p2
+	} else if p2EndPlus1.Cmp(p1Start) == 0 {
+		lower, upper = p2, p1
+	} else {
+		return &KinesisError{Code: "InvalidArgumentException", Message: "Shards are not adjacent", Status: 400}
+	}
+
+	endSeq := seqNum(max64(lower.NextSeq, upper.NextSeq))
+	lower.Shard.IsOpen = false
+	lower.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
+	upper.Shard.IsOpen = false
+	upper.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
+
+	nextIdx := len(st.Shards)
+	merged := &shardState{
+		Shard: Shard{
+			ShardID:               fmt.Sprintf("shardId-%012d", nextIdx),
+			ParentShardID:         lower.Shard.ShardID,
+			AdjacentParentShardID: upper.Shard.ShardID,
+			HashKeyRange: HashKeyRange{
+				StartingHashKey: lower.Shard.HashKeyRange.StartingHashKey,
+				EndingHashKey:   upper.Shard.HashKeyRange.EndingHashKey,
+			},
+			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
+			IsOpen:              true,
+		},
+		NextSeq: 1,
+	}
+	st.Shards = append(st.Shards, merged)
+	return nil
+}
+
+// UpdateStreamModeInScope changes the stream mode, scoped by account+region+name.
+func (s *MemoryKinesisStore) UpdateStreamModeInScope(account, region, name string, mode StreamMode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	s.streams[arn].Stream.Mode = mode
+	return nil
+}
+
+// SetRetentionPeriodInScope updates retention, scoped by account+region+name.
+func (s *MemoryKinesisStore) SetRetentionPeriodInScope(account, region, name string, hours int) error {
+	if hours < 24 || hours > 8760 {
+		return &KinesisError{Code: "InvalidArgumentException", Message: "RetentionPeriodHours must be between 24 and 8760", Status: 400}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	s.streams[arn].Stream.RetentionPeriodHours = hours
+	return nil
+}
+
+// AddTagsInScope merges tags onto the stream, scoped by account+region+name.
+func (s *MemoryKinesisStore) AddTagsInScope(account, region, name string, tags map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	if st.Stream.Tags == nil {
+		st.Stream.Tags = make(map[string]string)
+	}
+	for k, v := range tags {
+		st.Stream.Tags[k] = v
+	}
+	if len(st.Stream.Tags) > 50 {
+		return &KinesisError{Code: "InvalidArgumentException", Message: "A stream can have at most 50 tags", Status: 400}
+	}
+	return nil
+}
+
+// RemoveTagsInScope removes tag keys, scoped by account+region+name.
+func (s *MemoryKinesisStore) RemoveTagsInScope(account, region, name string, keys []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	for _, k := range keys {
+		delete(st.Stream.Tags, k)
+	}
+	return nil
+}
+
+// GetTagsInScope returns tags, scoped by account+region+name.
+func (s *MemoryKinesisStore) GetTagsInScope(account, region, name string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	arn, ok := s.nameScope[scopeKey(account, region, name)]
+	if !ok {
+		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + name + " not found", Status: 400}
+	}
+	st := s.streams[arn]
+	out := make(map[string]string, len(st.Stream.Tags))
+	for k, v := range st.Stream.Tags {
+		out[k] = v
+	}
+	return out, nil
 }
 
 // findSeqPosition finds the index of the record with the given sequence number.
@@ -337,7 +593,7 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 		return nil, "", 0, &KinesisError{Code: "ExpiredIteratorException", Message: "Shard iterator has expired", Status: 400}
 	}
 
-	st, ok := s.streams[iter.StreamName]
+	st, ok := s.streams[iter.StreamARN]
 	if !ok {
 		delete(s.iterators, iteratorID)
 		return nil, "", 0, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found", Status: 400}
@@ -400,170 +656,26 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 	if ss.Shard.IsOpen || newPos < len(ss.Records) {
 		nextID = uuid()
 		s.iterators[nextID] = &IteratorEntry{
-			StreamName: iter.StreamName,
-			ShardID:    iter.ShardID,
-			Position:   newPos,
-			CreatedAt:  time.Now(),
+			StreamARN: iter.StreamARN,
+			ShardID:   iter.ShardID,
+			Position:  newPos,
+			CreatedAt: time.Now(),
 		}
 	}
 
 	return records, nextID, millisBehind, nil
 }
 
-// SplitShard closes the parent and creates two child shards.
-func (s *MemoryKinesisStore) SplitShard(streamName, shardID, newStartingHashKey string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	var parent *shardState
-	for _, sh := range st.Shards {
-		if sh.Shard.ShardID == shardID {
-			parent = sh
-			break
-		}
-	}
-	if parent == nil {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Shard " + shardID + " not found", Status: 400}
-	}
-	if !parent.Shard.IsOpen {
-		return &KinesisError{Code: "ResourceInUseException", Message: "Shard " + shardID + " is already closed", Status: 400}
-	}
-
-	splitKey, ok2 := new(big.Int).SetString(newStartingHashKey, 10)
-	if !ok2 {
-		return &KinesisError{Code: "InvalidArgumentException", Message: "Invalid NewStartingHashKey", Status: 400}
-	}
-	startKey, _ := new(big.Int).SetString(parent.Shard.HashKeyRange.StartingHashKey, 10)
-	endKey, _ := new(big.Int).SetString(parent.Shard.HashKeyRange.EndingHashKey, 10)
-	if splitKey.Cmp(startKey) <= 0 || splitKey.Cmp(endKey) >= 0 {
-		return &KinesisError{Code: "InvalidArgumentException", Message: "NewStartingHashKey must be strictly within parent shard range", Status: 400}
-	}
-
-	// close parent
-	parent.Shard.IsOpen = false
-	endSeq := seqNum(parent.NextSeq)
-	parent.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
-
-	// create two children
-	nextIdx := len(st.Shards)
-	child1ID := fmt.Sprintf("shardId-%012d", nextIdx)
-	child2ID := fmt.Sprintf("shardId-%012d", nextIdx+1)
-	splitMinus1 := new(big.Int).Sub(splitKey, big.NewInt(1))
-	c1 := &shardState{
-		Shard: Shard{
-			ShardID:       child1ID,
-			ParentShardID: shardID,
-			HashKeyRange: HashKeyRange{
-				StartingHashKey: parent.Shard.HashKeyRange.StartingHashKey,
-				EndingHashKey:   splitMinus1.String(),
-			},
-			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
-			IsOpen:              true,
-		},
-		NextSeq: 1,
-	}
-	c2 := &shardState{
-		Shard: Shard{
-			ShardID:       child2ID,
-			ParentShardID: shardID,
-			HashKeyRange: HashKeyRange{
-				StartingHashKey: splitKey.String(),
-				EndingHashKey:   parent.Shard.HashKeyRange.EndingHashKey,
-			},
-			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
-			IsOpen:              true,
-		},
-		NextSeq: 1,
-	}
-	st.Shards = append(st.Shards, c1, c2)
-	return nil
-}
-
-// MergeShards closes two adjacent shards and creates one combined child.
-func (s *MemoryKinesisStore) MergeShards(streamName, shardToMerge, adjacentShard string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	var p1, p2 *shardState
-	for _, sh := range st.Shards {
-		if sh.Shard.ShardID == shardToMerge {
-			p1 = sh
-		}
-		if sh.Shard.ShardID == adjacentShard {
-			p2 = sh
-		}
-	}
-	if p1 == nil || p2 == nil {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "One or both shards not found", Status: 400}
-	}
-	if !p1.Shard.IsOpen || !p2.Shard.IsOpen {
-		return &KinesisError{Code: "ResourceInUseException", Message: "Both shards must be open to merge", Status: 400}
-	}
-	// verify adjacency: p1.end+1 == p2.start OR p2.end+1 == p1.start
-	p1End, _ := new(big.Int).SetString(p1.Shard.HashKeyRange.EndingHashKey, 10)
-	p2Start, _ := new(big.Int).SetString(p2.Shard.HashKeyRange.StartingHashKey, 10)
-	p2End, _ := new(big.Int).SetString(p2.Shard.HashKeyRange.EndingHashKey, 10)
-	p1Start, _ := new(big.Int).SetString(p1.Shard.HashKeyRange.StartingHashKey, 10)
-	p1EndPlus1 := new(big.Int).Add(p1End, big.NewInt(1))
-	p2EndPlus1 := new(big.Int).Add(p2End, big.NewInt(1))
-
-	var lower, upper *shardState
-	if p1EndPlus1.Cmp(p2Start) == 0 {
-		lower, upper = p1, p2
-	} else if p2EndPlus1.Cmp(p1Start) == 0 {
-		lower, upper = p2, p1
-	} else {
-		return &KinesisError{Code: "InvalidArgumentException", Message: "Shards are not adjacent", Status: 400}
-	}
-
-	endSeq := seqNum(max64(lower.NextSeq, upper.NextSeq))
-	lower.Shard.IsOpen = false
-	lower.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
-	upper.Shard.IsOpen = false
-	upper.Shard.SequenceNumberRange.EndingSequenceNumber = endSeq
-
-	nextIdx := len(st.Shards)
-	merged := &shardState{
-		Shard: Shard{
-			ShardID:               fmt.Sprintf("shardId-%012d", nextIdx),
-			ParentShardID:         lower.Shard.ShardID,
-			AdjacentParentShardID: upper.Shard.ShardID,
-			HashKeyRange: HashKeyRange{
-				StartingHashKey: lower.Shard.HashKeyRange.StartingHashKey,
-				EndingHashKey:   upper.Shard.HashKeyRange.EndingHashKey,
-			},
-			SequenceNumberRange: SequenceNumberRange{StartingSequenceNumber: seqNum(1)},
-			IsOpen:              true,
-		},
-		NextSeq: 1,
-	}
-	st.Shards = append(st.Shards, merged)
-	return nil
-}
-
-func max64(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-	return b
-}
+// ─── Consumers (ARN-based — already unique) ───────────────────────────────────
 
 // RegisterConsumer creates an Enhanced Fan-Out consumer.
 func (s *MemoryKinesisStore) RegisterConsumer(streamARN, consumerName, consumerARN string) (*Consumer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.streamARN[streamARN]
+	st, ok := s.streams[streamARN]
 	if !ok {
 		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + streamARN, Status: 400}
 	}
-	st := s.streams[name]
-	// check for duplicate
 	for _, c := range st.Consumers {
 		if c.Name == consumerName {
 			return nil, &KinesisError{Code: "ResourceInUseException", Message: "Consumer " + consumerName + " already exists", Status: 400}
@@ -600,11 +712,10 @@ func (s *MemoryKinesisStore) DeregisterConsumer(consumerARN string) error {
 func (s *MemoryKinesisStore) ListConsumers(streamARN string) ([]*Consumer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	name, ok := s.streamARN[streamARN]
+	st, ok := s.streams[streamARN]
 	if !ok {
 		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + streamARN, Status: 400}
 	}
-	st := s.streams[name]
 	out := make([]*Consumer, 0, len(st.Consumers))
 	for _, c := range st.Consumers {
 		cp := *c
@@ -626,79 +737,17 @@ func (s *MemoryKinesisStore) GetConsumer(consumerARN string) (*Consumer, error) 
 	return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Consumer not found: " + consumerARN, Status: 400}
 }
 
-// AddTags merges tags onto the stream (max 50 total).
-func (s *MemoryKinesisStore) AddTags(streamName string, tags map[string]string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	if st.Stream.Tags == nil {
-		st.Stream.Tags = make(map[string]string)
-	}
-	for k, v := range tags {
-		st.Stream.Tags[k] = v
-	}
-	if len(st.Stream.Tags) > 50 {
-		return &KinesisError{Code: "InvalidArgumentException", Message: "A stream can have at most 50 tags", Status: 400}
-	}
-	return nil
-}
-
-// RemoveTags removes tag keys from the stream.
-func (s *MemoryKinesisStore) RemoveTags(streamName string, keys []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	for _, k := range keys {
-		delete(st.Stream.Tags, k)
-	}
-	return nil
-}
-
-// GetTags returns the tags for a stream.
-func (s *MemoryKinesisStore) GetTags(streamName string) (map[string]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return nil, &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	out := make(map[string]string, len(st.Stream.Tags))
-	for k, v := range st.Stream.Tags {
-		out[k] = v
-	}
-	return out, nil
-}
-
-// SetRetentionPeriod updates the retention period in hours.
-func (s *MemoryKinesisStore) SetRetentionPeriod(streamName string, hours int) error {
-	if hours < 24 || hours > 8760 {
-		return &KinesisError{Code: "InvalidArgumentException", Message: "RetentionPeriodHours must be between 24 and 8760", Status: 400}
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
-	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
-	}
-	st.Stream.RetentionPeriodHours = hours
-	return nil
-}
+// ─── Resource Policy (ARN-based) ──────────────────────────────────────────────
 
 // SetResourcePolicy stores a resource policy by stream ARN.
 func (s *MemoryKinesisStore) SetResourcePolicy(streamARN, policy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.streamARN[streamARN]
+	st, ok := s.streams[streamARN]
 	if !ok {
 		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + streamARN, Status: 400}
 	}
-	s.streams[name].Stream.ResourcePolicy = policy
+	st.Stream.ResourcePolicy = policy
 	return nil
 }
 
@@ -706,35 +755,44 @@ func (s *MemoryKinesisStore) SetResourcePolicy(streamARN, policy string) error {
 func (s *MemoryKinesisStore) GetResourcePolicy(streamARN string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	name, ok := s.streamARN[streamARN]
+	st, ok := s.streams[streamARN]
 	if !ok {
 		return "", &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + streamARN, Status: 400}
 	}
-	return s.streams[name].Stream.ResourcePolicy, nil
+	return st.Stream.ResourcePolicy, nil
 }
 
 // DeleteResourcePolicy removes the resource policy for a stream ARN.
 func (s *MemoryKinesisStore) DeleteResourcePolicy(streamARN string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.streamARN[streamARN]
+	st, ok := s.streams[streamARN]
 	if !ok {
 		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + streamARN, Status: 400}
 	}
-	s.streams[name].Stream.ResourcePolicy = ""
+	st.Stream.ResourcePolicy = ""
 	return nil
 }
 
-// UpdateStreamMode changes the stream mode.
-func (s *MemoryKinesisStore) UpdateStreamMode(streamName string, mode StreamMode) error {
+// ─── UpdateStreamMode (ARN-based) ────────────────────────────────────────────
+
+// UpdateStreamModeByARN changes the stream mode by ARN.
+func (s *MemoryKinesisStore) UpdateStreamModeByARN(arn string, mode StreamMode) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.streams[streamName]
+	st, ok := s.streams[arn]
 	if !ok {
-		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream " + streamName + " not found", Status: 400}
+		return &KinesisError{Code: "ResourceNotFoundException", Message: "Stream not found for ARN " + arn, Status: 400}
 	}
 	st.Stream.Mode = mode
 	return nil
+}
+
+func max64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // ─── admin ────────────────────────────────────────────────────────────────────
@@ -743,7 +801,7 @@ func (s *MemoryKinesisStore) UpdateStreamMode(streamName string, mode StreamMode
 func (s *MemoryKinesisStore) Reset() {
 	s.mu.Lock()
 	s.streams = make(map[string]*streamState)
-	s.streamARN = make(map[string]string)
+	s.nameScope = make(map[string]string)
 	s.iterators = make(map[string]*IteratorEntry)
 	s.mu.Unlock()
 }
@@ -752,7 +810,7 @@ func (s *MemoryKinesisStore) Reset() {
 
 type snapshotData struct {
 	Streams   map[string]*streamState   `json:"streams"`
-	StreamARN map[string]string         `json:"stream_arn"`
+	NameScope map[string]string         `json:"name_scope"`
 	Iterators map[string]*IteratorEntry `json:"iterators"`
 }
 
@@ -761,7 +819,7 @@ func (s *MemoryKinesisStore) Snapshot() (json.RawMessage, error) {
 	defer s.mu.RUnlock()
 	return json.Marshal(snapshotData{
 		Streams:   s.streams,
-		StreamARN: s.streamARN,
+		NameScope: s.nameScope,
 		Iterators: s.iterators,
 	})
 }
@@ -773,8 +831,17 @@ func (s *MemoryKinesisStore) Restore(data json.RawMessage) error {
 	}
 	s.mu.Lock()
 	s.streams = snap.Streams
-	s.streamARN = snap.StreamARN
+	if s.streams == nil {
+		s.streams = make(map[string]*streamState)
+	}
+	s.nameScope = snap.NameScope
+	if s.nameScope == nil {
+		s.nameScope = make(map[string]string)
+	}
 	s.iterators = snap.Iterators
+	if s.iterators == nil {
+		s.iterators = make(map[string]*IteratorEntry)
+	}
 	s.mu.Unlock()
 	return nil
 }

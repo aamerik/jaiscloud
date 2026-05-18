@@ -196,33 +196,37 @@ func (p *Provider) CreateStream(_ context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) DeleteStream(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, arn := streamIdentifiers(nr)
-	if name == "" && arn != "" {
-		st, err := p.store.GetStreamByARN(arn)
-		if err != nil {
+	if name != "" {
+		if err := p.store.DeleteStreamInScope(nr.AccountID, nr.Region, name); err != nil {
 			return nil, providerErr(err)
 		}
-		name = st.Name
-	}
-	if err := p.store.DeleteStream(name); err != nil {
-		return nil, providerErr(err)
+	} else if arn != "" {
+		if err := p.store.DeleteStreamByARN(arn); err != nil {
+			return nil, providerErr(err)
+		}
+	} else {
+		return nil, kErr("ValidationException", "StreamName or StreamARN required", 400)
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeStream(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, arn := streamIdentifiers(nr)
-	if name == "" && arn != "" {
-		st, err := p.store.GetStreamByARN(arn)
+	var stream *kinesisstore.Stream
+	var err error
+	if arn != "" && name == "" {
+		stream, err = p.store.GetStreamByARN(arn)
 		if err != nil {
 			return nil, providerErr(err)
 		}
-		name = st.Name
+		name = stream.Name
+	} else {
+		stream, err = p.store.GetStreamInScope(nr.AccountID, nr.Region, name)
+		if err != nil {
+			return nil, providerErr(err)
+		}
 	}
-	stream, err := p.store.GetStream(name)
-	if err != nil {
-		return nil, providerErr(err)
-	}
-	shards, err := p.store.ListShards(name)
+	shards, err := p.store.ListShardsInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -233,18 +237,21 @@ func (p *Provider) DescribeStream(_ context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) DescribeStreamSummary(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, arn := streamIdentifiers(nr)
-	if name == "" && arn != "" {
-		st, err := p.store.GetStreamByARN(arn)
+	var stream *kinesisstore.Stream
+	var err error
+	if arn != "" && name == "" {
+		stream, err = p.store.GetStreamByARN(arn)
 		if err != nil {
 			return nil, providerErr(err)
 		}
-		name = st.Name
+		name = stream.Name
+	} else {
+		stream, err = p.store.GetStreamInScope(nr.AccountID, nr.Region, name)
+		if err != nil {
+			return nil, providerErr(err)
+		}
 	}
-	stream, err := p.store.GetStream(name)
-	if err != nil {
-		return nil, providerErr(err)
-	}
-	shards, err := p.store.ListShards(name)
+	shards, err := p.store.ListShardsInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -258,7 +265,7 @@ func (p *Provider) ListStreams(_ context.Context, nr *model.NormalizedRequest) (
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	all := p.store.ListStreams()
+	all := p.store.ListStreamsInScope(nr.AccountID, nr.Region)
 	// sort by name for determinism
 	sortStreamsByName(all)
 
@@ -310,10 +317,6 @@ func (p *Provider) ListStreams(_ context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) UpdateStreamMode(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "StreamARN")
-	st, err := p.store.GetStreamByARN(arn)
-	if err != nil {
-		return nil, providerErr(err)
-	}
 	mode := nestedStr(nr.Params, "StreamModeDetails", "StreamMode")
 	var sm kinesisstore.StreamMode
 	switch mode {
@@ -322,7 +325,7 @@ func (p *Provider) UpdateStreamMode(_ context.Context, nr *model.NormalizedReque
 	default:
 		sm = kinesisstore.StreamModeProvisioned
 	}
-	if err := p.store.UpdateStreamMode(st.Name, sm); err != nil {
+	if err := p.store.UpdateStreamModeByARN(arn, sm); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -341,7 +344,7 @@ func (p *Provider) PutRecord(_ context.Context, nr *model.NormalizedRequest) (*m
 		return nil, kErr("InvalidArgumentException", "Data must be valid base64", 400)
 	}
 
-	shardID, seq, err := p.store.PutRecord(name, data, pk, explicitHash)
+	shardID, seq, err := p.store.PutRecordInScope(nr.AccountID, nr.Region, name, data, pk, explicitHash)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -373,7 +376,7 @@ func (p *Provider) PutRecords(_ context.Context, nr *model.NormalizedRequest) (*
 			failCount++
 			continue
 		}
-		shardID, seq, putErr := p.store.PutRecord(name, data, pk, explicitHash)
+		shardID, seq, putErr := p.store.PutRecordInScope(nr.AccountID, nr.Region, name, data, pk, explicitHash)
 		if putErr != nil {
 			ke, _ := putErr.(*kinesisstore.KinesisError)
 			errCode := "InternalFailure"
@@ -416,7 +419,7 @@ func (p *Provider) GetShardIterator(_ context.Context, nr *model.NormalizedReque
 	}
 
 	iterType := kinesisstore.ShardIteratorType(iterTypeStr)
-	id, err := p.store.CreateIterator(name, shardID, iterType, seqNum, ts)
+	id, err := p.store.CreateIteratorInScope(nr.AccountID, nr.Region, name, shardID, iterType, seqNum, ts)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -467,7 +470,7 @@ func (p *Provider) ListShards(_ context.Context, nr *model.NormalizedRequest) (*
 		}
 		name = st.Name
 	}
-	shards, err := p.store.ListShards(name)
+	shards, err := p.store.ListShardsInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -480,7 +483,7 @@ func (p *Provider) SplitShard(_ context.Context, nr *model.NormalizedRequest) (*
 	name := strParam(nr.Params, "StreamName")
 	shardID := strParam(nr.Params, "ShardToSplit")
 	newKey := strParam(nr.Params, "NewStartingHashKey")
-	if err := p.store.SplitShard(name, shardID, newKey); err != nil {
+	if err := p.store.SplitShardInScope(nr.AccountID, nr.Region, name, shardID, newKey); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -490,7 +493,7 @@ func (p *Provider) MergeShards(_ context.Context, nr *model.NormalizedRequest) (
 	name := strParam(nr.Params, "StreamName")
 	shard := strParam(nr.Params, "ShardToMerge")
 	adjacent := strParam(nr.Params, "AdjacentShardToMerge")
-	if err := p.store.MergeShards(name, shard, adjacent); err != nil {
+	if err := p.store.MergeShardsInScope(nr.AccountID, nr.Region, name, shard, adjacent); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -499,11 +502,11 @@ func (p *Provider) MergeShards(_ context.Context, nr *model.NormalizedRequest) (
 func (p *Provider) UpdateShardCount(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
 	target := intParam(nr.Params, "TargetShardCount", 0)
-	stream, err := p.store.GetStream(name)
+	stream, err := p.store.GetStreamInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
-	shards, err := p.store.ListShards(name)
+	shards, err := p.store.ListShardsInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -588,7 +591,7 @@ func (p *Provider) SubscribeToShard(_ context.Context, _ *model.NormalizedReques
 func (p *Provider) IncreaseStreamRetentionPeriod(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
 	hours := intParam(nr.Params, "RetentionPeriodHours", 0)
-	if err := p.store.SetRetentionPeriod(name, hours); err != nil {
+	if err := p.store.SetRetentionPeriodInScope(nr.AccountID, nr.Region, name, hours); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -597,7 +600,7 @@ func (p *Provider) IncreaseStreamRetentionPeriod(_ context.Context, nr *model.No
 func (p *Provider) DecreaseStreamRetentionPeriod(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
 	hours := intParam(nr.Params, "RetentionPeriodHours", 0)
-	if err := p.store.SetRetentionPeriod(name, hours); err != nil {
+	if err := p.store.SetRetentionPeriodInScope(nr.AccountID, nr.Region, name, hours); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -608,7 +611,7 @@ func (p *Provider) DecreaseStreamRetentionPeriod(_ context.Context, nr *model.No
 func (p *Provider) AddTagsToStream(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
 	tags := parseTagMap(nr.Params, "Tags")
-	if err := p.store.AddTags(name, tags); err != nil {
+	if err := p.store.AddTagsInScope(nr.AccountID, nr.Region, name, tags); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -617,7 +620,7 @@ func (p *Provider) AddTagsToStream(_ context.Context, nr *model.NormalizedReques
 func (p *Provider) RemoveTagsFromStream(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
 	keys := parseStringList(nr.Params, "TagKeys")
-	if err := p.store.RemoveTags(name, keys); err != nil {
+	if err := p.store.RemoveTagsInScope(nr.AccountID, nr.Region, name, keys); err != nil {
 		return nil, providerErr(err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -625,7 +628,7 @@ func (p *Provider) RemoveTagsFromStream(_ context.Context, nr *model.NormalizedR
 
 func (p *Provider) ListTagsForStream(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
-	tags, err := p.store.GetTags(name)
+	tags, err := p.store.GetTagsInScope(nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, providerErr(err)
 	}
@@ -640,21 +643,29 @@ func (p *Provider) ListTagsForStream(_ context.Context, nr *model.NormalizedRequ
 
 func (p *Provider) EnableEnhancedMonitoring(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
+	streamARN := ""
+	if st, err := p.store.GetStreamInScope(nr.AccountID, nr.Region, name); err == nil {
+		streamARN = st.ARN
+	}
 	return provider.OK(map[string]any{
-		"StreamName":                    name,
-		"CurrentShardLevelMetrics":      []string{},
-		"DesiredShardLevelMetrics":      []string{},
-		"StreamARN":                     "",
+		"StreamName":               name,
+		"CurrentShardLevelMetrics": []string{},
+		"DesiredShardLevelMetrics": []string{},
+		"StreamARN":                streamARN,
 	}), nil
 }
 
 func (p *Provider) DisableEnhancedMonitoring(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StreamName")
+	streamARN := ""
+	if st, err := p.store.GetStreamInScope(nr.AccountID, nr.Region, name); err == nil {
+		streamARN = st.ARN
+	}
 	return provider.OK(map[string]any{
-		"StreamName":                    name,
-		"CurrentShardLevelMetrics":      []string{},
-		"DesiredShardLevelMetrics":      []string{},
-		"StreamARN":                     "",
+		"StreamName":               name,
+		"CurrentShardLevelMetrics": []string{},
+		"DesiredShardLevelMetrics": []string{},
+		"StreamARN":                streamARN,
 	}), nil
 }
 

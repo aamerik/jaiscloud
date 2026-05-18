@@ -429,7 +429,7 @@ type testSecretGetter struct {
 	secrets map[string]string
 }
 
-func (s *testSecretGetter) InternalGetSecretValue(_ context.Context, secretID string) (string, error) {
+func (s *testSecretGetter) InternalGetSecretValue(_ context.Context, _, secretID string) (string, error) {
 	v, ok := s.secrets[secretID]
 	if !ok {
 		return "", context.DeadlineExceeded // any non-nil error

@@ -24,17 +24,20 @@ func NewMemorySecretStore() *MemorySecretStore {
 	}
 }
 
+func secretNameKey(accountID, name string) string { return accountID + ":" + name }
+
 func (s *MemorySecretStore) CreateSecret(_ context.Context, e SecretEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.byName[e.Name]; ok {
+	key := secretNameKey(e.AccountID, e.Name)
+	if _, ok := s.byName[key]; ok {
 		return ErrAlreadyExists
 	}
 	now := time.Now()
 	e.CreatedAt = now
 	e.UpdatedAt = now
 	s.secrets[e.SecretID] = e
-	s.byName[e.Name] = e.SecretID
+	s.byName[key] = e.SecretID
 	return nil
 }
 
@@ -48,10 +51,10 @@ func (s *MemorySecretStore) GetSecret(_ context.Context, secretID string) (Secre
 	return e, nil
 }
 
-func (s *MemorySecretStore) GetSecretByName(_ context.Context, name string) (SecretEntry, error) {
+func (s *MemorySecretStore) GetSecretByName(_ context.Context, accountID, name string) (SecretEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id, ok := s.byName[name]
+	id, ok := s.byName[secretNameKey(accountID, name)]
 	if !ok {
 		return SecretEntry{}, ErrSecretNotFound
 	}
@@ -76,17 +79,20 @@ func (s *MemorySecretStore) DeleteSecret(_ context.Context, secretID string) err
 	if !ok {
 		return ErrSecretNotFound
 	}
-	delete(s.byName, e.Name)
+	delete(s.byName, secretNameKey(e.AccountID, e.Name))
 	delete(s.secrets, secretID)
 	delete(s.versions, secretID)
 	return nil
 }
 
-func (s *MemorySecretStore) ListSecrets(_ context.Context) ([]SecretEntry, error) {
+func (s *MemorySecretStore) ListSecrets(_ context.Context, accountID string) ([]SecretEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]SecretEntry, 0, len(s.secrets))
 	for _, e := range s.secrets {
+		if accountID != "" && e.AccountID != accountID {
+			continue
+		}
 		out = append(out, e)
 	}
 	return out, nil
@@ -248,7 +254,6 @@ func (s *MemorySecretStore) Snapshot() (json.RawMessage, error) {
 func (s *MemorySecretStore) Restore(raw json.RawMessage) error {
 	var snap struct {
 		Secrets  map[string]SecretEntry    `json:"secrets"`
-		ByName   map[string]string         `json:"by_name"`
 		Versions map[string][]VersionEntry `json:"versions"`
 	}
 	if err := json.Unmarshal(raw, &snap); err != nil {
@@ -258,9 +263,11 @@ func (s *MemorySecretStore) Restore(raw json.RawMessage) error {
 	defer s.mu.Unlock()
 	if snap.Secrets != nil {
 		s.secrets = snap.Secrets
-	}
-	if snap.ByName != nil {
-		s.byName = snap.ByName
+		// Rebuild byName index with account-scoped keys.
+		s.byName = make(map[string]string, len(snap.Secrets))
+		for _, e := range snap.Secrets {
+			s.byName[secretNameKey(e.AccountID, e.Name)] = e.SecretID
+		}
 	}
 	if snap.Versions != nil {
 		s.versions = snap.Versions

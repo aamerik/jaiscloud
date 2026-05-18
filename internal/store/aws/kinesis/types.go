@@ -88,8 +88,8 @@ type Consumer struct {
 
 // IteratorEntry holds server-side state for an opaque shard iterator token.
 type IteratorEntry struct {
-	StreamName string
-	ShardID    string
+	StreamARN string
+	ShardID   string
 	// Position is the index into the shard's Records slice for the next read.
 	Position  int
 	CreatedAt time.Time

@@ -42,15 +42,15 @@ type HistoryEntry struct {
 // ParameterStore is the persistence interface for SSM Parameter Store.
 type ParameterStore interface {
 	PutParameter(ctx context.Context, e *ParameterEntry, overwrite bool) error
-	GetParameter(ctx context.Context, name string) (ParameterEntry, error)
-	DeleteParameter(ctx context.Context, name string) error
-	ListParameters(ctx context.Context, path string, recursive bool) ([]ParameterEntry, error)
-	GetParameterHistory(ctx context.Context, name string) ([]HistoryEntry, error)
+	GetParameter(ctx context.Context, accountID, name string) (ParameterEntry, error)
+	DeleteParameter(ctx context.Context, accountID, name string) error
+	ListParameters(ctx context.Context, accountID, path string, recursive bool) ([]ParameterEntry, error)
+	GetParameterHistory(ctx context.Context, accountID, name string) ([]HistoryEntry, error)
 
 	// Label operations
-	LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error)
-	UnlabelParameterVersion(ctx context.Context, name string, version int64, labels []string) error
-	GetLabelsByVersion(ctx context.Context, name string, version int64) ([]string, error)
+	LabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) ([]string, error)
+	UnlabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) error
+	GetLabelsByVersion(ctx context.Context, accountID, name string, version int64) ([]string, error)
 
 	Reset()
 }

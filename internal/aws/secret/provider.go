@@ -254,7 +254,7 @@ func (p *SecretProvider) RestoreSecret(ctx context.Context, nr *model.Normalized
 }
 
 func (p *SecretProvider) ListSecrets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	secrets, err := p.store.ListSecrets(ctx)
+	secrets, err := p.store.ListSecrets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, fmt.Errorf("sm: list secrets: %w", err)
 	}
@@ -606,7 +606,7 @@ func (p *SecretProvider) resolveSecret(ctx context.Context, nr *model.Normalized
 	// Try by ID first, then by name (AWS accepts both).
 	e, err := p.store.GetSecret(ctx, id)
 	if errors.Is(err, ErrSecretNotFound) {
-		e, err = p.store.GetSecretByName(ctx, id)
+		e, err = p.store.GetSecretByName(ctx, nr.AccountID, id)
 	}
 	if errors.Is(err, ErrSecretNotFound) {
 		return SecretEntry{}, model.NewProviderError("ResourceNotFoundException", "secret not found: "+id, 400)

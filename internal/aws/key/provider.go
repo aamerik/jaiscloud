@@ -272,7 +272,7 @@ func (p *KeyProvider) CancelKeyDeletion(ctx context.Context, nr *model.Normalize
 }
 
 func (p *KeyProvider) ListKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	keys, err := p.store.ListKeys(ctx)
+	keys, err := p.store.ListKeys(ctx, nr.AccountID)
 	if err != nil {
 		return nil, fmt.Errorf("kms: list keys: %w", err)
 	}

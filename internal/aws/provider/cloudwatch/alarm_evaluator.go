@@ -82,7 +82,7 @@ func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any
 
 	e.p.mu.Lock()
 	dims := extractDimensionsFromAlarm(alarm)
-	key := ringKey(ns, metricName, dims)
+	key := account + "\x00" + ringKey(ns, metricName, dims)
 	ring, ok := e.p.metrics[key]
 	if !ok {
 		e.p.mu.Unlock()

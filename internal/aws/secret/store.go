@@ -55,10 +55,10 @@ type SecretStore interface {
 	// Secret CRUD
 	CreateSecret(ctx context.Context, e SecretEntry) error
 	GetSecret(ctx context.Context, secretID string) (SecretEntry, error)
-	GetSecretByName(ctx context.Context, name string) (SecretEntry, error)
+	GetSecretByName(ctx context.Context, accountID, name string) (SecretEntry, error)
 	UpdateSecret(ctx context.Context, e SecretEntry) error
 	DeleteSecret(ctx context.Context, secretID string) error // hard delete
-	ListSecrets(ctx context.Context) ([]SecretEntry, error)
+	ListSecrets(ctx context.Context, accountID string) ([]SecretEntry, error)
 
 	// Version operations
 	PutVersion(ctx context.Context, v VersionEntry) error

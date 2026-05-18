@@ -81,7 +81,7 @@ type KeyStore interface {
 	GetKey(ctx context.Context, keyID string) (KeyEntry, error)
 	UpdateKey(ctx context.Context, e KeyEntry) error
 	DeleteKey(ctx context.Context, keyID string) error
-	ListKeys(ctx context.Context) ([]KeyEntry, error)
+	ListKeys(ctx context.Context, accountID string) ([]KeyEntry, error)
 
 	// Alias operations
 	CreateAlias(ctx context.Context, e AliasEntry) error

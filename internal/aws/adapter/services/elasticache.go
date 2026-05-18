@@ -284,6 +284,7 @@ func encodeCacheCluster(v any) string {
 	sb.WriteString(xmlTag("Engine", str(m["Engine"])))
 	sb.WriteString(xmlTag("EngineVersion", str(m["EngineVersion"])))
 	sb.WriteString(xmlTag("NumCacheNodes", str(m["NumCacheNodes"])))
+	sb.WriteString(xmlTag("ARN", str(m["ARN"])))
 	if ep, ok := m["ConfigurationEndpoint"]; ok {
 		sb.WriteString(`<ConfigurationEndpoint>`)
 		if epm, ok := ep.(map[string]any); ok {

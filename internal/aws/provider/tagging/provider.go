@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	awsarn "jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -320,21 +322,37 @@ func strParam(params map[string]any, key string) string {
 	return ""
 }
 
+// accountRegionFromARN extracts (account, region) from an ARN string.
+// Returns ("","") for malformed or global-service ARNs.
+func accountRegionFromARN(arnStr string) (account, region string) {
+	parsed, err := awsarn.Parse(arnStr)
+	if err != nil {
+		// Fallback: split on ":" manually for robustness.
+		parts := strings.SplitN(arnStr, ":", 6)
+		if len(parts) >= 5 {
+			return parts[4], parts[3]
+		}
+		return "", ""
+	}
+	return parsed.AccountID, parsed.Region
+}
+
 // InternalTagResource allows other providers to tag their resources in the tagging store.
 func (p *Provider) InternalTagResource(ctx context.Context, arn string, tags map[string]string) error {
 	if arn == "" || len(tags) == 0 {
 		return nil
 	}
+	account, region := accountRegionFromARN(arn)
 	res := taggedResource{ARN: arn, Tags: map[string]string{}}
-	if e, err := p.resources.Get(ctx, "", "", rtTaggingResource, arn); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtTaggingResource, arn); err == nil {
 		json.Unmarshal(e.Data, &res)
 	}
 	for k, v := range tags {
 		res.Tags[k] = v
 	}
 	data, _ := json.Marshal(res)
-	_ = p.resources.Delete(ctx, "", "", rtTaggingResource, arn)
-	return p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, account, region, rtTaggingResource, arn)
+	return p.resources.Create(ctx, account, region, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
 }
 
 // InternalUntagResource allows other providers to remove tags from their resources.
@@ -342,16 +360,17 @@ func (p *Provider) InternalUntagResource(ctx context.Context, arn string, keys [
 	if arn == "" || len(keys) == 0 {
 		return nil
 	}
+	account, region := accountRegionFromARN(arn)
 	res := taggedResource{ARN: arn, Tags: map[string]string{}}
-	if e, err := p.resources.Get(ctx, "", "", rtTaggingResource, arn); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtTaggingResource, arn); err == nil {
 		json.Unmarshal(e.Data, &res)
 	}
 	for _, k := range keys {
 		delete(res.Tags, k)
 	}
 	data, _ := json.Marshal(res)
-	_ = p.resources.Delete(ctx, "", "", rtTaggingResource, arn)
-	return p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, account, region, rtTaggingResource, arn)
+	return p.resources.Create(ctx, account, region, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
 }
 
 // ErrorFailedResource represents a resource that couldn't be tagged.

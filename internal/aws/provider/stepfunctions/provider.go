@@ -211,7 +211,7 @@ func (p *Provider) ListStateMachines(ctx context.Context, nr *model.NormalizedRe
 	}
 	nextToken, _ := nr.Params["nextToken"].(string)
 
-	all := p.store.ListStateMachines()
+	all := p.store.ListStateMachines(nr.AccountID)
 
 	start := 0
 	if nextToken != "" {

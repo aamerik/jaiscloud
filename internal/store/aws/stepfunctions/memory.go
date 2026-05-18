@@ -13,11 +13,21 @@ import (
 type MemoryStepFunctionsStore struct {
 	mu           sync.RWMutex
 	machines     map[string]*StateMachine // ARN → machine
-	nameToARN    map[string]string        // name → ARN
+	nameToARN    map[string]string        // "account:name" → ARN (scoped to prevent cross-account collisions)
 	executions   map[string]*Execution   // ARN → execution
 	activities   map[string]*Activity    // ARN → activity
 	// ARN-keyed tags for any resource type (machines, activities, aliases)
 	tags         map[string]map[string]string
+}
+
+// sfnNameKey returns the scoped nameToARN key for a state machine.
+// ARN format: arn:aws:states:region:account:stateMachine:name
+func sfnNameKey(arn, name string) string {
+	parts := strings.SplitN(arn, ":", 7)
+	if len(parts) >= 5 {
+		return parts[4] + ":" + name
+	}
+	return name
 }
 
 func NewMemoryStepFunctionsStore() *MemoryStepFunctionsStore {
@@ -41,7 +51,7 @@ func (s *MemoryStepFunctionsStore) CreateStateMachine(sm *StateMachine) error {
 		}
 		return &SFNError{Code: "StateMachineAlreadyExists", Message: fmt.Sprintf("State machine already exists: '%s'", sm.ARN), Status: 400}
 	}
-	if _, exists := s.nameToARN[sm.Name]; exists {
+	if _, exists := s.nameToARN[sfnNameKey(sm.ARN, sm.Name)]; exists {
 		return &SFNError{Code: "StateMachineAlreadyExists", Message: fmt.Sprintf("State machine already exists: '%s'", sm.Name), Status: 400}
 	}
 	if len(s.machines) >= 10000 {
@@ -55,7 +65,7 @@ func (s *MemoryStepFunctionsStore) CreateStateMachine(sm *StateMachine) error {
 		clone.Aliases = make(map[string]*StateMachineAlias)
 	}
 	s.machines[clone.ARN] = clone
-	s.nameToARN[clone.Name] = clone.ARN
+	s.nameToARN[sfnNameKey(clone.ARN, clone.Name)] = clone.ARN
 	if clone.Tags != nil {
 		s.tags[clone.ARN] = cloneStringMap(clone.Tags)
 	}
@@ -114,17 +124,21 @@ func (s *MemoryStepFunctionsStore) DeleteStateMachine(arn string) error {
 	if !ok {
 		return &SFNError{Code: "StateMachineDoesNotExist", Message: fmt.Sprintf("State machine does not exist: '%s'", arn), Status: 400}
 	}
-	delete(s.nameToARN, sm.Name)
+	delete(s.nameToARN, sfnNameKey(arn, sm.Name))
 	delete(s.machines, arn)
 	delete(s.tags, arn)
 	return nil
 }
 
-func (s *MemoryStepFunctionsStore) ListStateMachines() []*StateMachine {
+// ListStateMachines returns machines for accountID (when non-empty) or all machines (when empty).
+func (s *MemoryStepFunctionsStore) ListStateMachines(accountID string) []*StateMachine {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*StateMachine, 0, len(s.machines))
 	for _, sm := range s.machines {
+		if accountID != "" && !strings.Contains(sm.ARN, ":"+accountID+":") {
+			continue
+		}
 		out = append(out, cloneSM(sm))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -589,7 +603,7 @@ func (s *MemoryStepFunctionsStore) Restore(data json.RawMessage) error {
 	}
 	s.nameToARN = make(map[string]string, len(s.machines))
 	for _, sm := range s.machines {
-		s.nameToARN[sm.Name] = sm.ARN
+		s.nameToARN[sfnNameKey(sm.ARN, sm.Name)] = sm.ARN
 		if sm.Versions == nil {
 			sm.Versions = make(map[int64]*StateMachineVersion)
 		}

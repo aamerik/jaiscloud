@@ -96,8 +96,8 @@ func (s *PostgresKeyStore) DeleteKey(ctx context.Context, keyID string) error {
 	return nil
 }
 
-func (s *PostgresKeyStore) ListKeys(ctx context.Context) ([]KeyEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT account_id, region, key_id, key_data, key_material, enabled FROM jc_kms_keys`)
+func (s *PostgresKeyStore) ListKeys(ctx context.Context, accountID string) ([]KeyEntry, error) {
+	rows, err := s.pool.Query(ctx, `SELECT account_id, region, key_id, key_data, key_material, enabled FROM jc_kms_keys WHERE ($1='' OR account_id=$1)`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("kms postgres: list keys: %w", err)
 	}
