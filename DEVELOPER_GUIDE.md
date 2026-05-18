@@ -105,9 +105,19 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 - [Mode 3 — JaisCloud on Kubernetes](#mode-3--jaiscloud-on-kubernetes)
 - [EMR Spark — Mock Mode (instant results)](#emr-spark--mock-mode-instant-results)
 - [EMR Spark — Kubernetes Executor (real Spark jobs)](#emr-spark--kubernetes-executor-real-spark-jobs)
+- [Multi-Account Support](#multi-account-support)
+  - [How account identity is derived](#how-account-identity-is-derived)
+  - [LSIA key encoding](#lsia-key-encoding)
+  - [Using multiple accounts in tests](#using-multiple-accounts-in-tests)
+  - [Cross-account dispatch](#cross-account-dispatch)
+  - [KMS cross-account protection](#kms-cross-account-protection)
+  - [Scoped state reset](#scoped-state-reset)
+  - [Snapshot export and import](#snapshot-export-and-import)
+  - [Spark driver pod credentials](#spark-driver-pod-credentials)
 - [Running Tests](#running-tests)
   - [Unit tests](#unit-tests-no-server-needed)
   - [Integration tests (lite mode)](#integration-tests)
+  - [Multi-account integration tests](#multi-account-integration-tests)
   - [Full mode integration tests](#full-mode-integration-tests)
   - [Spark e2e tests](#spark-e2e-tests-spark_e2e-build-tag)
   - [Lambda e2e tests](#lambda-e2e-tests-lambda_e2e-build-tag)
@@ -1315,6 +1325,137 @@ Real AWS virtual-hosted URLs match `*.s3.<region>.amazonaws.com`. JaisCloud chec
 
 ---
 
+## Multi-Account Support
+
+JaisCloud emulates real AWS multi-account behaviour. Every resource — queues, tables, buckets, keys, secrets, Lambda functions — is scoped to an `(account, region)` pair. Two clients with different access keys see completely isolated state, even if they hit the same port.
+
+### How account identity is derived
+
+JaisCloud parses the SigV4 `Authorization` header on every request and extracts the **access key**. The account ID is resolved from the key using this priority order:
+
+| Access key format | Resolved account |
+|---|---|
+| `ASIA<base32-encoded-account>` | Decoded 12-digit account ID (LSIA encoding) |
+| Any 12-digit numeric string | Taken as account ID literally |
+| Anything else (`test`, `AKIA…`) | `JAISCLOUD_ACCOUNT_ID` (server default, `000000000000`) |
+
+No server configuration or restart is needed to use additional accounts. Any client that presents an LSIA-encoded access key (or a 12-digit literal) automatically routes to an isolated store scope.
+
+### LSIA key encoding
+
+The LSIA scheme is compatible with LocalStack. The encoding is:
+
+```
+account_int = int(account_id_string)      // e.g. 111111111111
+value       = account_int + 549755813888  // constant offset
+key         = "ASIA" + base32(value)      // 20-char access key
+```
+
+The helper is in `internal/aws/identity/`:
+
+```go
+import "jaiscloud/internal/aws/identity"
+
+key, err := identity.EncodeLSIA("111111111111")   // → "ASIAxxx..."
+account, err := identity.DecodeLSIA(key)           // → "111111111111"
+```
+
+### Using multiple accounts in tests
+
+The multi-account integration tests in `tests/integration/multiaccount/` show the canonical pattern. The fixture helper `accessKeyFor(account)` mints LSIA keys:
+
+```go
+// fixtures.go pattern
+func clientFor(t *testing.T, account string) *sqs.Client {
+    key, _ := identity.EncodeLSIA(account)
+    cfg, _ := config.LoadDefaultConfig(ctx,
+        config.WithRegion("us-east-1"),
+        config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(key, "test", "")),
+    )
+    return sqs.NewFromConfig(cfg, func(o *sqs.Options) {
+        o.BaseEndpoint = aws.String("http://localhost:4566")
+    })
+}
+
+sqsA := clientFor(t, "111111111111")
+sqsB := clientFor(t, "222222222222")
+// sqsA and sqsB see completely separate queues, messages, etc.
+```
+
+### Cross-account dispatch
+
+Resources that reference other resources by ARN are routed to the correct account store automatically:
+
+| Cross-account operation | How it works |
+|---|---|
+| SNS topic (A) → SQS queue (B) | `InternalSend` parses the SQS ARN and routes to B's queue store |
+| EventBridge rule (A) → Lambda (B) | Target ARN parsed; invocation dispatched to B's function store |
+| STS AssumeRole for role in B | Returns LSIA-encoded credentials; calls resolve to B thereafter |
+| Lambda `InvokeFunction` with full ARN | `nameAccountRegionFromARN` extracts account/region; routes to function owner |
+| ESM (event source mapping) | Source ARN parsed; poller reads from source account's queue/stream |
+
+### KMS cross-account protection
+
+KMS ciphertext blobs carry a v2 format that embeds the encrypting account ID:
+
+```
+[0x02][keyUUID(36)][account_len(2)][account][region_len(2)][region][ciphertext]
+```
+
+A `Decrypt` call from a different account returns `IncorrectKeyException` — matching real AWS behaviour. The v1 format (no version byte) is read transparently for backward compatibility.
+
+### Scoped state reset
+
+The admin reset endpoint accepts optional query params to narrow the scope:
+
+```bash
+# Wipe all state (standard behaviour)
+curl -X POST http://localhost:4566/_jaiscloud/reset
+
+# Wipe one account across all regions
+curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111"
+
+# Wipe one (account, region) pair — leave other accounts and regions untouched
+curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111&region=us-east-1"
+```
+
+Stores that implement `ScopedResetter` (all bundled stores) honour the narrow scope. Non-scoped stores (e.g. stream stores without per-account state) fall back to a global reset.
+
+### Snapshot export and import
+
+The snapshot envelope (schema v3) stores each resource collection under its `(account, region)` key. Exporting a two-account emulator and re-importing it restores both accounts' state intact:
+
+```bash
+# Export
+curl http://localhost:4566/_jaiscloud/export -o snapshot.json
+
+# Wipe everything
+curl -X POST http://localhost:4566/_jaiscloud/reset
+
+# Restore
+curl -X POST http://localhost:4566/_jaiscloud/import \
+     -H "Content-Type: application/json" \
+     --data-binary @snapshot.json
+```
+
+The `DefaultRegion` field in the v3 envelope is informational — each store carries its own (account, region) scope. Importing a v2 snapshot is supported transparently.
+
+### Spark driver pod credentials
+
+When an EMR step or EMR on EKS job run is submitted by account B, JaisCloud injects account B's credentials into the Spark driver pod environment. The driver and executor pods SigV4-sign as account B, so all S3, STS, and IAM calls from within the Spark job land in B's resource stores:
+
+```
+EMR RunJobFlow (account B)
+  → Spark driver pod env:
+      AWS_ACCESS_KEY_ID  = "222222222222"   ← account B's 12-digit ID
+      AWS_REGION         = "us-east-1"      ← step's region
+      AWS_ENDPOINT_URL   = "http://jaiscloud:4566"
+```
+
+This is handled automatically by the EMR provider — no manual credential injection is needed.
+
+---
+
 ## Running Tests
 
 ### Unit tests (no server needed)
@@ -1340,6 +1481,30 @@ go test -race -run TestEventBridge ./tests/integration/
 Integration tests automatically call `POST /_jaiscloud/reset` between each test case via `resetState(t)`. You do not need to restart the server between runs.
 
 Current integration test coverage: SQS, IAM/STS, SNS, DynamoDB, S3, Lambda, EC2, Route53, RDS, ElastiCache, ECS, Glue, CloudFormation, DynamoDB Streams, EMR, EMR Containers, EventBridge.
+
+### Multi-account integration tests
+
+Multi-account tests live in `tests/integration/multiaccount/` and require the same running server as the standard integration tests. They use LSIA-encoded access keys to simulate multiple accounts hitting the same emulator concurrently.
+
+```bash
+./jaiscloud-aws start &
+go test -race -count=1 ./tests/integration/multiaccount/
+
+# Run a specific surface
+go test -race -run TestGetCallerIdentity ./tests/integration/multiaccount/
+go test -race -run TestSQS_AccountIsolation ./tests/integration/multiaccount/
+go test -race -run TestKMS ./tests/integration/multiaccount/
+go test -race -run TestResetScope ./tests/integration/multiaccount/
+go test -race -run TestExport ./tests/integration/multiaccount/
+```
+
+| Test file | Coverage |
+|---|---|
+| `sts_test.go` | `GetCallerIdentity` per-account, `AssumeRole` cross-account, assumed-role ARN shape |
+| `isolation_test.go` | SQS queue/message isolation, DynamoDB table/item isolation, KMS cross-account blob rejection |
+| `reset_scope_test.go` | Scoped reset by account+region, by account, global reset |
+| `cross_service_test.go` | SNS→SQS cross-account fan-out, SecretsManager isolation |
+| `export_round_trip_test.go` | Schema v3 verification, export→reset→import round-trip |
 
 ---
 
@@ -2544,3 +2709,6 @@ When adding a new EMR-style state-change event:
 | Creating a ConfigMap without ownerReferences | Patch ownerReferences to the Job after `SubmitJob` succeeds |
 | Skipping `wg.Add` for background goroutines | Every goroutine that does work must pair with `wg.Add(1)` + `defer wg.Done()` |
 | A new service missing from the `buildAWSAdapter()` codec map | Add `"sigv4name": &services.MyCodec{}` — detection and routing silently fail without it |
+| Calling `p.resources.Get/List/Create` without account+region | Always pass `nr.AccountID, nr.Region` — omitting them routes to the wrong scope or panics |
+| Using `p.awsEmulator.AccountID` / `p.awsEmulator.Region` directly in a step goroutine | Copy the config with the step's `h.accountID`/`h.region` before passing to `sparkaws.DriverEnv` |
+| Cross-service call (SQS, Lambda) with a bare name instead of full ARN | Pass the full ARN so the dispatcher can extract the target account and region |

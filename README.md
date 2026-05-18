@@ -30,11 +30,12 @@ JaisCloud is a free, open-source multi-cloud emulator that lets AI agents and de
 | **Postgres persistence (full mode)** | ✅ | 💰 Pro | ❌ |
 | **Exact AWS wire protocol** | ✅ | ✅ | Partial |
 | **Kubernetes-native** | ✅ | Partial | ❌ |
-| **State export / import** | &#x231B; | ❌ | ❌ |
+| **State export / import** | ✅ | ❌ | ❌ |
 | **Prometheus metrics** | ✅ | 💰 Pro | ❌ |
 | **Spark / EMR real execution** | ✅ | ❌ | ❌ |
 | **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ |
 | **Written in Go** | ✅ | ❌ | ❌ |
+| **Multi-account isolation** | ✅ | Partial | ❌ |
 | **Multi Cloud** | &#x231B; | Partial | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
 
@@ -78,6 +79,128 @@ EC2 · Route 53 · RDS · ElastiCache · ECS · EKS · ELBv2 · ECR · ACM · Ki
 SES · Cognito (User Pools + Identity Pools)
 
 For per-operation coverage, persistence details, and execution modes see the [Developer Guide](DEVELOPER_GUIDE.md).
+
+---
+
+## Architecture
+
+JaisCloud follows a **one binary per cloud** model. Each binary speaks that cloud's exact wire protocol and contains all adapter, provider, and store logic for that cloud. Nothing is shared across clouds except infrastructure utilities.
+
+```
+HTTP request
+  → gateway.Server          (Chi router, middleware)
+      → CloudAdapter         (detects service + action, decodes wire format)
+          → Registry.Dispatch ("Service.Action", NormalizedRequest)
+              → Provider     (business logic, in-memory or PostgreSQL store)
+          → Codec.Encode     (serialises response to wire format)
+  → HTTP response
+```
+
+### Identity and multi-account
+
+Every incoming request carries a SigV4 `Authorization` header. JaisCloud parses the **access key** out of that header and derives the calling account from it — no config change needed.
+
+```
+Access key  →  account ID  →  per-account store scope
+──────────────────────────────────────────────────────
+AKIAIOSFODNN7EXAMPLE  →  (default account, e.g. 000000000000)
+ASIA<base32(acct_int)>  →  12-digit account ID embedded in the key
+000000000000            →  account ID taken literally
+```
+
+This is the **LSIA encoding** (LocalStack-compatible). `EncodeLSIA("123456789012")` produces the `ASIA…` key; `DecodeLSIA(key)` recovers the account ID. Every provider stores resources under `(account, region, type, id)` — two requests with different access keys see completely separate state.
+
+### Request flow with multi-account
+
+```
+Authorization: AWS4-HMAC-SHA256 Credential=ASIA<acct_encoded>/…
+  → identity.FromRequest  → nr.AccountID = "123456789012"
+  → Registry.Dispatch
+      → provider.resources.Get(ctx, "123456789012", "us-east-1", ...)
+```
+
+### Per-cloud binary layout
+
+```
+jaiscloud-aws  =  internal/aws/adapter  +  internal/aws/provider/*  +  shared infra
+jaiscloud-azure  =  internal/azure/adapter (stub)  +  shared infra
+jaiscloud-gcp    =  internal/gcp/adapter (stub)    +  shared infra
+```
+
+Shared infrastructure (`store`, `gateway`, `admin`, `blobfs`, `events`, `executor`) is cloud-neutral and never imports cloud-specific code.
+
+---
+
+## Multi-Account Support
+
+JaisCloud emulates real AWS multi-account behaviour. Each account gets fully isolated state — queues, tables, buckets, keys, secrets — with no cross-contamination.
+
+### How it works
+
+Account identity is derived from the **access key** you pass to the SDK, using the same LSIA encoding as LocalStack. No server restart or config change is needed to use multiple accounts simultaneously.
+
+| Access key format | Resolved account |
+|---|---|
+| `ASIA<base32-encoded-account>` | Decoded 12-digit account ID |
+| Any 12-digit numeric string | Taken as account ID literally |
+| Anything else (`test`, `AKIA…`) | Server default (`JAISCLOUD_ACCOUNT_ID`) |
+
+### Quick start — two accounts
+
+```go
+import (
+    "github.com/aws/aws-sdk-go-v2/credentials"
+    "jaiscloud/internal/aws/identity"
+)
+
+// Mint LSIA-encoded access keys (or use the 12-digit literal shortcut).
+keyA, _ := identity.EncodeLSIA("111111111111")
+keyB, _ := identity.EncodeLSIA("222222222222")
+
+// Build two SDK configs pointing at the same emulator.
+cfgA, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(keyA, "test", "")),
+)
+cfgB, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(keyB, "test", "")),
+)
+
+sqsA := sqs.NewFromConfig(cfgA, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
+sqsB := sqs.NewFromConfig(cfgB, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
+
+// Account A and B each get isolated state.
+sqsA.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
+sqsB.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
+// Each account sees only its own queue.
+```
+
+### Cross-account dispatch
+
+Resources that reference other resources by ARN route correctly across accounts:
+
+- **SNS → SQS**: subscribe a queue in account B to a topic in account A — messages land in B's queue.
+- **EventBridge → Lambda / SQS**: rule targets in a different account are dispatched to that account's store.
+- **STS AssumeRole**: returns LSIA-encoded credentials for the target account; subsequent calls resolve to that account.
+- **Lambda cross-account invoke**: `InvokeFunction` with a full ARN routes to the function owner's account.
+
+### KMS cross-account protection
+
+Ciphertext produced by account A embeds A's account ID in the blob (v2 format). A `Decrypt` call from account B returns `IncorrectKeyException` — exactly matching real AWS behaviour.
+
+### Scoped state reset
+
+```bash
+# Wipe all state (original behaviour)
+curl -X POST http://localhost:4566/_jaiscloud/reset
+
+# Wipe one account across all regions
+curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111"
+
+# Wipe one (account, region) pair
+curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111&region=us-east-1"
+```
 
 ---
 
@@ -228,8 +351,8 @@ jaiscloud-aws version                    # print version, commit, build date
 jaiscloud-aws env                        # print effective config as env vars
 jaiscloud-aws doctor                     # verify the emulator is reachable
 jaiscloud-aws reset                      # wipe all state
-jaiscloud-aws export -o snapshot.json    # save state to file (not yet supported — in development)
-jaiscloud-aws import -i snapshot.json    # restore state from file (not yet supported — in development)
+jaiscloud-aws export -o snapshot.json    # save full state snapshot to file
+jaiscloud-aws import -i snapshot.json    # restore state from snapshot file
 ```
 
 ---
@@ -240,7 +363,9 @@ jaiscloud-aws import -i snapshot.json    # restore state from file (not yet supp
 |---|---|---|
 | `/_jaiscloud/health` | GET | `{"status":"ok"}` liveness check |
 | `/_jaiscloud/reset` | POST | Wipe all state |
-| `/_jaiscloud/export` | GET | JSON snapshot of all state |
+| `/_jaiscloud/reset?account=X` | POST | Wipe all regions for account X |
+| `/_jaiscloud/reset?account=X&region=Y` | POST | Wipe one (account, region) scope |
+| `/_jaiscloud/export` | GET | JSON snapshot of all state (schema v3) |
 | `/_jaiscloud/import` | POST | Restore state from JSON snapshot |
 | `/metrics` | GET | Prometheus metrics (requires `--metrics`) |
 
@@ -251,6 +376,12 @@ jaiscloud-aws import -i snapshot.json    # restore state from file (not yet supp
 Contributions welcome. Please open an issue before starting large changes.
 
 See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for build setup, test matrix, and architecture details.
+
+---
+
+## Author
+
+**Raj Jaiswal** — [jaisraj@gmail.com](mailto:jaisraj@gmail.com)
 
 ---
 
