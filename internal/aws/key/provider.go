@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	awsarn "jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/resourcemgr"
@@ -715,7 +717,7 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 		if err != nil {
 			return nil, fmt.Errorf("kms: rsa encrypt: %w", err)
 		}
-		blob := buildCiphertextBlob(keyID, ct)
+		blob := buildCiphertextBlob(keyID, nr.AccountID, nr.Region, ct)
 		return provider.OK(map[string]any{
 			"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
 			"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
@@ -742,7 +744,7 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, fmt.Errorf("kms: encrypt: %w", err)
 	}
 	// Prepend key ID so Decrypt can identify the key without caller providing it.
-	blob := buildCiphertextBlob(keyID, ct)
+	blob := buildCiphertextBlob(keyID, nr.AccountID, nr.Region, ct)
 	return provider.OK(map[string]any{
 		"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
 		"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
@@ -756,9 +758,14 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, model.NewProviderError("ValidationException", "CiphertextBlob must be base64-encoded", 400)
 	}
-	keyID, ct, err := parseCiphertextBlob(blob)
+	keyID, blobAccount, _, ct, err := parseCiphertextBlob(blob)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid ciphertext blob", 400)
+	}
+	// Reject cross-account decryption: the blob was encrypted in a different account.
+	if blobAccount != "" && blobAccount != nr.AccountID {
+		return nil, model.NewProviderError("IncorrectKeyException",
+			"The key ID in the request does not identify a CMK that can perform this operation.", 400)
 	}
 	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:Decrypt"); err != nil {
 		return nil, err
@@ -872,7 +879,7 @@ func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedR
 	if err != nil {
 		return nil, fmt.Errorf("kms: encrypt data key: %w", err)
 	}
-	blob := buildCiphertextBlob(keyID, ct)
+	blob := buildCiphertextBlob(keyID, nr.AccountID, nr.Region, ct)
 	return provider.OK(map[string]any{
 		"KeyId":                 nr.ResourceID(model.RTKMSKey, keyID),
 		"Plaintext":             base64.StdEncoding.EncodeToString(dataKey),
@@ -898,7 +905,7 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, model.NewProviderError("ValidationException", "CiphertextBlob must be base64-encoded", 400)
 	}
-	srcKeyID, ct, err := parseCiphertextBlob(blob)
+	srcKeyID, _, _, ct, err := parseCiphertextBlob(blob)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid source ciphertext", 400)
 	}
@@ -949,7 +956,7 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, fmt.Errorf("kms: reencrypt: %w", err)
 	}
-	newBlob := buildCiphertextBlob(dstKeyID, newCT)
+	newBlob := buildCiphertextBlob(dstKeyID, nr.AccountID, nr.Region, newCT)
 	return provider.OK(map[string]any{
 		"KeyId":               nr.ResourceID(model.RTKMSKey, dstKeyID),
 		"SourceKeyId":         nr.ResourceID(model.RTKMSKey, srcKeyID),
@@ -1280,7 +1287,7 @@ func (p *KeyProvider) GenerateDataKeyPair(ctx context.Context, nr *model.Normali
 	if encErr != nil {
 		return nil, fmt.Errorf("kms: encrypt private key: %w", encErr)
 	}
-	blob := buildCiphertextBlob(keyID, encPriv)
+	blob := buildCiphertextBlob(keyID, nr.AccountID, nr.Region, encPriv)
 
 	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	return provider.OK(map[string]any{
@@ -1461,12 +1468,17 @@ func (p *KeyProvider) Encrypt2(ctx context.Context, keyID string, pt []byte, enc
 	if err != nil {
 		return nil, fmt.Errorf("kms: encrypt: %w", err)
 	}
-	return buildCiphertextBlob(keyID, ct), nil
+	// Extract account+region from keyID ARN if available (internal cross-service calls).
+	encAccount, encRegion := "", ""
+	if parsed, aErr := awsarn.Parse(keyID); aErr == nil {
+		encAccount, encRegion = parsed.AccountID, parsed.Region
+	}
+	return buildCiphertextBlob(keyID, encAccount, encRegion, ct), nil
 }
 
 // Decrypt2 implements model.KeyEncryptor.
 func (p *KeyProvider) Decrypt2(ctx context.Context, _ string, ctBlob []byte, encCtx map[string]string) ([]byte, error) {
-	keyID, ct, err := parseCiphertextBlob(ctBlob)
+	keyID, _, _, ct, err := parseCiphertextBlob(ctBlob)
 	if err != nil {
 		return nil, fmt.Errorf("kms: invalid ciphertext blob")
 	}
@@ -1586,21 +1598,70 @@ func newID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-func buildCiphertextBlob(keyID string, ct []byte) []byte {
-	// Format: keyID(36 ASCII bytes) | ciphertext
-	blob := make([]byte, ciphertextKeyIDLen+len(ct))
-	copy(blob[:ciphertextKeyIDLen], keyID)
-	copy(blob[ciphertextKeyIDLen:], ct)
+// buildCiphertextBlob encodes a v2 blob:
+// [0x02][keyUUID(36)][account_len(2)][account][region_len(2)][region][ciphertext]
+// account and region may be empty strings (for internal/cross-service paths).
+func buildCiphertextBlob(keyID, account, region string, ct []byte) []byte {
+	accountB := []byte(account)
+	regionB := []byte(region)
+	size := 1 + ciphertextKeyIDLen + 2 + len(accountB) + 2 + len(regionB) + len(ct)
+	blob := make([]byte, size)
+	pos := 0
+	blob[pos] = 0x02
+	pos++
+	copy(blob[pos:], keyID)
+	pos += ciphertextKeyIDLen
+	binary.BigEndian.PutUint16(blob[pos:], uint16(len(accountB)))
+	pos += 2
+	copy(blob[pos:], accountB)
+	pos += len(accountB)
+	binary.BigEndian.PutUint16(blob[pos:], uint16(len(regionB)))
+	pos += 2
+	copy(blob[pos:], regionB)
+	pos += len(regionB)
+	copy(blob[pos:], ct)
 	return blob
 }
 
-func parseCiphertextBlob(blob []byte) (keyID string, ct []byte, err error) {
+// parseCiphertextBlob decodes a ciphertext blob, supporting v1 (no version byte) and v2 (version 0x02).
+// Returns keyID, account, region, ciphertext. For v1 blobs, account and region are "".
+func parseCiphertextBlob(blob []byte) (keyID, account, region string, ct []byte, err error) {
+	if len(blob) == 0 {
+		return "", "", "", nil, fmt.Errorf("ciphertext blob too short")
+	}
+	// v2 blob: first byte is 0x02 (not a valid hex char for UUID).
+	if blob[0] == 0x02 {
+		minLen := 1 + ciphertextKeyIDLen + 2 + 2 // version + uuid + account_len + region_len
+		if len(blob) < minLen {
+			return "", "", "", nil, fmt.Errorf("ciphertext blob too short")
+		}
+		pos := 1
+		keyID = string(blob[pos : pos+ciphertextKeyIDLen])
+		pos += ciphertextKeyIDLen
+		aLen := int(binary.BigEndian.Uint16(blob[pos:]))
+		pos += 2
+		if len(blob) < pos+aLen+2 {
+			return "", "", "", nil, fmt.Errorf("ciphertext blob truncated in account field")
+		}
+		account = string(blob[pos : pos+aLen])
+		pos += aLen
+		rLen := int(binary.BigEndian.Uint16(blob[pos:]))
+		pos += 2
+		if len(blob) < pos+rLen {
+			return "", "", "", nil, fmt.Errorf("ciphertext blob truncated in region field")
+		}
+		region = string(blob[pos : pos+rLen])
+		pos += rLen
+		ct = blob[pos:]
+		return keyID, account, region, ct, nil
+	}
+	// v1 legacy blob: [keyUUID(36)][ciphertext]
 	if len(blob) < ciphertextKeyIDLen+ivLen+tagLen {
-		return "", nil, fmt.Errorf("ciphertext blob too short")
+		return "", "", "", nil, fmt.Errorf("ciphertext blob too short")
 	}
 	keyID = string(blob[:ciphertextKeyIDLen])
 	ct = blob[ciphertextKeyIDLen:]
-	return keyID, ct, nil
+	return keyID, "", "", ct, nil
 }
 
 // marshalEncCtx serialises an encryption context map deterministically (sorted keys).
