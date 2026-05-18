@@ -16,18 +16,26 @@ type Resetter interface {
 	Reset()
 }
 
+// ScopedResetter is implemented by stores that support per-account/region wipes.
+type ScopedResetter interface {
+	Resetter
+	ResetScope(account, region string)
+	ResetAccount(account string)
+}
+
 // Snapshotter is implemented by stores that support export/import.
 type Snapshotter interface {
 	Snapshot() (json.RawMessage, error)
 	Restore(data json.RawMessage) error
 }
 
-// SnapshotEnvelope is the top-level container for exported state (schema v2).
+// SnapshotEnvelope is the top-level container for exported state (schema v3).
+// DefaultRegion is informational — stores are account+region-keyed internally.
 type SnapshotEnvelope struct {
 	SchemaVersion int                        `json:"schema_version"`
 	InstanceID    string                     `json:"instance_id,omitempty"`
 	Cloud         string                     `json:"cloud,omitempty"`
-	Region        string                     `json:"region,omitempty"`
+	DefaultRegion string                     `json:"default_region,omitempty"`
 	AccountID     string                     `json:"account_id,omitempty"`
 	Stores        map[string]json.RawMessage `json:"stores"`
 }
@@ -85,15 +93,37 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// Reset handles POST /_jaiscloud/reset — wipes all in-memory state.
+// Reset handles POST /_jaiscloud/reset — wipes state.
+// Optional query params narrow the scope:
+//
+//	?account=111111111111              — wipes one account across all regions
+//	?account=111111111111&region=us-east-1 — wipes one (account, region)
+//
+// Without params, all state is wiped (original behaviour).
 func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
+	account := r.URL.Query().Get("account")
+	region := r.URL.Query().Get("region")
+
 	h.mu.Lock()
 	resetters := make([]Resetter, len(h.resetters))
 	copy(resetters, h.resetters)
 	h.mu.Unlock()
 
 	for _, rs := range resetters {
-		rs.Reset()
+		if account == "" {
+			rs.Reset()
+			continue
+		}
+		if sr, ok := rs.(ScopedResetter); ok {
+			if region != "" {
+				sr.ResetScope(account, region)
+			} else {
+				sr.ResetAccount(account)
+			}
+		} else {
+			// Non-scoped resetter: over-wipe (acceptable — no per-account state).
+			rs.Reset()
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "reset"}); err != nil {
@@ -121,10 +151,10 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 		stores[name] = data
 	}
 	env := SnapshotEnvelope{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		InstanceID:    meta.InstanceID,
 		Cloud:         meta.Cloud,
-		Region:        meta.Region,
+		DefaultRegion: meta.Region,
 		AccountID:     meta.AccountID,
 		Stores:        stores,
 	}
@@ -226,23 +256,17 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// snapshotHasKMSMaterial returns true if the stores map contains non-empty
-// KMS key rows in the "resources" snapshot.
+// snapshotHasKMSMaterial returns true if the stores map contains a non-empty
+// KMS key store snapshot. The KMS store is registered under "kms-keys".
 func snapshotHasKMSMaterial(stores map[string]json.RawMessage) bool {
-	resourcesData, ok := stores["resources"]
+	data, ok := stores["kms-keys"]
 	if !ok {
 		return false
 	}
-	var entries map[string]struct {
-		Type string `json:"Type"`
+	// An empty JSON object "{}" or null/empty means no keys.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return true // fail-safe: unparseable → treat as having material
 	}
-	if err := json.Unmarshal(resourcesData, &entries); err != nil {
-		return true // fail-safe: treat unparseable snapshot as having KMS material
-	}
-	for _, e := range entries {
-		if e.Type == "kms_key" {
-			return true
-		}
-	}
-	return false
+	return len(raw) > 0
 }

@@ -95,7 +95,17 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		labels["jaiscloud.io/instance-id"] = p.instanceID
 	}
 
-	driverEnv := sparkaws.DriverEnv(p.awsEmulator)
+	// Build a per-step emulator config that carries the caller's account and
+	// region so Spark driver pods SigV4-sign as the submitting account, not
+	// the server-global default (§18.1).
+	stepEmulator := p.awsEmulator
+	if stepEmulator != nil {
+		copy := *stepEmulator
+		copy.AccountID = h.accountID
+		copy.Region = h.region
+		stepEmulator = &copy
+	}
+	driverEnv := sparkaws.DriverEnv(stepEmulator)
 	job := sparkhelpers.ClientModeJob{
 		JobID:              stepID,
 		Namespace:          ns,
@@ -106,7 +116,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		PlatformOverlay:    p.platformCfg,
 		ServiceAccountName: p.serviceAccountName,
 		ExtraDriverEnv:     driverEnv,
-		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(p.awsEmulator, driverEnv),
+		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(stepEmulator, driverEnv),
 		Labels:             labels,
 	}
 

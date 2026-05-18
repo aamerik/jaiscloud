@@ -74,7 +74,16 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 		labels["jaiscloud.io/instance-id"] = p.instanceID
 	}
 
-	driverEnv := sparkaws.DriverEnv(p.awsEmulator)
+	// Per-job emulator config: use caller's account+region so driver pods
+	// SigV4-sign as the submitting account (§18.1).
+	jobEmulator := p.awsEmulator
+	if jobEmulator != nil {
+		copy := *jobEmulator
+		copy.AccountID = h.accountID
+		copy.Region = h.region
+		jobEmulator = &copy
+	}
+	driverEnv := sparkaws.DriverEnv(jobEmulator)
 	job := sparkhelpers.ClientModeJob{
 		JobID:              jrID,
 		Namespace:          ns,
@@ -86,7 +95,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 		IdentityMutator:    identityMutator,
 		ServiceAccountName: p.serviceAccountName,
 		ExtraDriverEnv:     driverEnv,
-		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(p.awsEmulator, driverEnv),
+		ExtraSparkConfs:    sparkaws.DriverSparkConfsFromEnv(jobEmulator, driverEnv),
 		Labels:             labels,
 	}
 
