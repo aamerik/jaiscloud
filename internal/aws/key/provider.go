@@ -668,7 +668,7 @@ func (p *KeyProvider) Encrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Encrypt"); err != nil {
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:Encrypt"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)
@@ -760,7 +760,7 @@ func (p *KeyProvider) Decrypt(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid ciphertext blob", 400)
 	}
-	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Decrypt"); err != nil {
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:Decrypt"); err != nil {
 		return nil, err
 	}
 	// If the caller supplied a KeyId, verify it matches the key embedded in the blob.
@@ -836,7 +836,7 @@ func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedR
 	if err != nil {
 		return nil, err
 	}
-	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:GenerateDataKey"); err != nil {
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:GenerateDataKey"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)
@@ -903,7 +903,7 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 		return nil, model.NewProviderError("InvalidCiphertextException", "invalid source ciphertext", 400)
 	}
 
-	if err := p.checkKeyPolicy(ctx, srcKeyID, nr.AccountID, "kms:ReEncryptFrom"); err != nil {
+	if err := p.checkKeyPolicy(ctx, srcKeyID, nr.AccountID, nr.Region, "kms:ReEncryptFrom"); err != nil {
 		return nil, err
 	}
 	srcKey, err := p.store.GetKey(ctx, srcKeyID)
@@ -929,7 +929,7 @@ func (p *KeyProvider) ReEncrypt(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	if err := p.checkKeyPolicy(ctx, dstKeyID, nr.AccountID, "kms:ReEncryptTo"); err != nil {
+	if err := p.checkKeyPolicy(ctx, dstKeyID, nr.AccountID, nr.Region, "kms:ReEncryptTo"); err != nil {
 		return nil, err
 	}
 	dstKey, err := p.store.GetKey(ctx, dstKeyID)
@@ -964,7 +964,7 @@ const defaultKeyPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow"
 
 // checkKeyPolicy returns an AccessDeniedException if the caller is not permitted to perform action on keyID.
 // callerPrincipal defaults to arn:aws:iam::<accountID>:root.
-func (p *KeyProvider) checkKeyPolicy(ctx context.Context, keyID, accountID, action string) error {
+func (p *KeyProvider) checkKeyPolicy(ctx context.Context, keyID, accountID, region, action string) error {
 	e, err := p.store.GetKey(ctx, keyID)
 	if err != nil {
 		return nil // key not found is handled by the caller
@@ -973,10 +973,11 @@ func (p *KeyProvider) checkKeyPolicy(ctx context.Context, keyID, accountID, acti
 	if policy == "" {
 		policy = defaultKeyPolicy
 	}
-	caller := "arn:aws:iam::" + accountID + ":root"
+	caller := fmt.Sprintf("arn:aws:iam::%s:root", accountID)         //nolint:hardcoded-arn dynamic account
 	if !evalKeyPolicy(policy, caller, action) {
+		resource := fmt.Sprintf("arn:aws:kms:%s:%s:key/%s", region, accountID, keyID) //nolint:hardcoded-arn dynamic account+region
 		return model.NewProviderError("AccessDeniedException",
-			"User: "+caller+" is not authorized to perform: "+action+" on resource: arn:aws:kms:us-east-1:"+accountID+":key/"+keyID, 400)
+			"User: "+caller+" is not authorized to perform: "+action+" on resource: "+resource, 400)
 	}
 	return nil
 }
@@ -1108,7 +1109,7 @@ func (p *KeyProvider) Sign(ctx context.Context, nr *model.NormalizedRequest) (*m
 	if err != nil {
 		return nil, err
 	}
-	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Sign"); err != nil {
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:Sign"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)
@@ -1157,7 +1158,7 @@ func (p *KeyProvider) Verify(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, "kms:Verify"); err != nil {
+	if err := p.checkKeyPolicy(ctx, keyID, nr.AccountID, nr.Region, "kms:Verify"); err != nil {
 		return nil, err
 	}
 	e, err := p.store.GetKey(ctx, keyID)

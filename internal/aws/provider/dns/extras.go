@@ -54,7 +54,7 @@ func (p *DNSProvider) CreateReusableDelegationSet(ctx context.Context, nr *model
 		NameServers: defaultNameServers(),
 	}
 	data, _ := json.Marshal(ds)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDelegationSet, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtDelegationSet, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DelegationSetAlreadyReusable", Message: "Delegation set already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -68,7 +68,7 @@ func (p *DNSProvider) CreateReusableDelegationSet(ctx context.Context, nr *model
 
 func (p *DNSProvider) GetReusableDelegationSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := cleanDelegationSetID(strParam(nr.Params, "Id"))
-	e, err := p.resources.Get(ctx, rtDelegationSet, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, "", rtDelegationSet, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchDelegationSet", Message: "No delegation set found with ID: " + id, HTTPStatus: http.StatusNotFound}
 	}
@@ -81,7 +81,7 @@ func (p *DNSProvider) GetReusableDelegationSet(ctx context.Context, nr *model.No
 }
 
 func (p *DNSProvider) ListReusableDelegationSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtDelegationSet, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, "", rtDelegationSet, "")
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (p *DNSProvider) ListReusableDelegationSets(ctx context.Context, nr *model.
 
 func (p *DNSProvider) DeleteReusableDelegationSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := cleanDelegationSetID(strParam(nr.Params, "Id"))
-	if err := p.resources.Delete(ctx, rtDelegationSet, id); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, "", rtDelegationSet, id); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchDelegationSet", Message: "No delegation set found with ID: " + id, HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(nil), nil
@@ -108,7 +108,7 @@ func (p *DNSProvider) DeleteReusableDelegationSet(ctx context.Context, nr *model
 func (p *DNSProvider) UpdateHealthCheck(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "Id")
 	id = strings.TrimPrefix(id, "/healthcheck/")
-	e, err := p.resources.Get(ctx, rtHealthCheck, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, "", rtHealthCheck, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHealthCheck", Message: "Health check not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -128,7 +128,7 @@ func (p *DNSProvider) UpdateHealthCheck(ctx context.Context, nr *model.Normalize
 		hc.Type = v
 	}
 	data, _ := json.Marshal(hc)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtHealthCheck, ID: id, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtHealthCheck, ID: id, Data: data})
 	return provider.OK(map[string]any{"HealthCheck": hcToWire(hc)}), nil
 }
 
@@ -136,7 +136,7 @@ func (p *DNSProvider) UpdateHealthCheck(ctx context.Context, nr *model.Normalize
 
 func (p *DNSProvider) AssociateVPCWithHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	zoneID := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
-	if _, err := p.resources.Get(ctx, rtHostedZone, zoneID); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, "", rtHostedZone, zoneID); err != nil {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{
@@ -146,7 +146,7 @@ func (p *DNSProvider) AssociateVPCWithHostedZone(ctx context.Context, nr *model.
 
 func (p *DNSProvider) DisassociateVPCFromHostedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	zoneID := cleanZoneID(strParam(nr.Params, "HostedZoneId"))
-	if _, err := p.resources.Get(ctx, rtHostedZone, zoneID); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, "", rtHostedZone, zoneID); err != nil {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{
@@ -166,7 +166,7 @@ func changeInfo() map[string]any {
 
 func (p *DNSProvider) UpdateHostedZoneComment(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := cleanZoneID(strParam(nr.Params, "Id"))
-	e, err := p.resources.Get(ctx, rtHostedZone, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, "", rtHostedZone, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchHostedZone", Message: "Hosted zone not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -179,7 +179,7 @@ func (p *DNSProvider) UpdateHostedZoneComment(ctx context.Context, nr *model.Nor
 		hz.Comment = v
 	}
 	data, _ := json.Marshal(hz)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtHostedZone, ID: id, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtHostedZone, ID: id, Data: data})
 	return provider.OK(map[string]any{"HostedZone": zoneToWire(hz)}), nil
 }
 
@@ -187,7 +187,7 @@ func (p *DNSProvider) UpdateHostedZoneComment(ctx context.Context, nr *model.Nor
 
 func (p *DNSProvider) ListHostedZonesByName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	dnsName := strParam(nr.Params, "DNSName")
-	entries, err := p.resources.List(ctx, rtHostedZone, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, "", rtHostedZone, "")
 	if err != nil {
 		return nil, err
 	}

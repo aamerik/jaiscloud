@@ -53,12 +53,16 @@ func (s *PostgresSQSMessageStore) retentionWorker(ctx context.Context) {
 			// Resolve retention via the control-plane resource entry, falling
 			// back to AWS's 4-day default for queues without a row (e.g. if the
 			// resource entry was deleted out-of-band).
+			// The retention worker doesn't know the account/region context — it
+			// does a global sweep across all accounts. This is acceptable for
+			// background eviction.
 			if _, err := s.pool.Exec(ctx, `
 				DELETE FROM jc_sqs_messages m
 				WHERE m.sent_at < now() - make_interval(secs => COALESCE(
 				    (SELECT (data->>'MessageRetentionPeriod')::int
 				     FROM jc_resources
-				     WHERE resource_type = 'sqs_queues' AND id = m.queue_url),
+				     WHERE resource_type = 'sqs_queues' AND id = m.queue_url
+				       AND account_id = m.account_id AND region = m.region),
 				    345600
 				))
 			`); err != nil && !errors.Is(err, context.Canceled) {
@@ -68,15 +72,15 @@ func (s *PostgresSQSMessageStore) retentionWorker(ctx context.Context) {
 	}
 }
 
-func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
+func (s *PostgresSQSMessageStore) Send(ctx context.Context, account, region string, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
 	// FIFO deduplication.
 	if msg.DeduplicationID != "" {
-		dedupKey := msg.QueueURL + ":" + msg.DeduplicationID
+		dedupKey := account + ":" + region + ":" + msg.QueueURL + ":" + msg.GroupID + ":" + msg.DeduplicationID
 		var origID string
 		scanErr := s.pool.QueryRow(ctx, `
 			SELECT message_id FROM jc_sqs_dedup
-			WHERE dedup_key=$1 AND expires_at > now()
-		`, dedupKey).Scan(&origID)
+			WHERE account_id=$1 AND region=$2 AND dedup_key=$3 AND expires_at > now()
+		`, account, region, dedupKey).Scan(&origID)
 		if scanErr == nil {
 			return origID, "", nil // duplicate
 		}
@@ -85,11 +89,11 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (ded
 		}
 		// Record dedup entry (upsert).
 		_, err = s.pool.Exec(ctx, `
-			INSERT INTO jc_sqs_dedup (dedup_key, message_id, expires_at)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (dedup_key) DO UPDATE
-				SET message_id=$2, expires_at=$3
-		`, dedupKey, msg.MessageID, time.Now().Add(5*time.Minute))
+			INSERT INTO jc_sqs_dedup (account_id, region, dedup_key, message_id, expires_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (account_id, region, dedup_key) DO UPDATE
+				SET message_id=$4, expires_at=$5
+		`, account, region, dedupKey, msg.MessageID, time.Now().Add(5*time.Minute))
 		if err != nil {
 			return "", "", fmt.Errorf("dedup upsert: %w", err)
 		}
@@ -130,11 +134,11 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (ded
 
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO jc_sqs_messages
-			(id, queue_url, receipt_handle, body, md5_of_body, group_id, dedup_id,
+			(account_id, region, id, queue_url, receipt_handle, body, md5_of_body, group_id, dedup_id,
 			 sequence_number, sent_at, delay_until, receive_count, msg_attributes)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-		ON CONFLICT (id, queue_url) DO NOTHING
-	`, msg.MessageID, msg.QueueURL, msg.ReceiptHandle, msg.Body, msg.MD5OfBody,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (account_id, region, queue_url, id) DO NOTHING
+	`, account, region, msg.MessageID, msg.QueueURL, msg.ReceiptHandle, msg.Body, msg.MD5OfBody,
 		msg.GroupID, msg.DeduplicationID, msg.SequenceNumber,
 		msg.SentAt, delayUntil, 0, attrsJSON)
 	if err != nil {
@@ -143,7 +147,7 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, msg SQSMessage) (ded
 	return "", msg.SequenceNumber, nil
 }
 
-func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {
+func (s *PostgresSQSMessageStore) Receive(ctx context.Context, account, region, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {
 	// SELECT ... FOR UPDATE SKIP LOCKED — safe for concurrent consumers.
 	//
 	// Lazy retention filter: exclude messages older than the queue's
@@ -155,19 +159,22 @@ func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, 
 		       sequence_number, sent_at, delay_until, visible_at,
 		       receive_count, first_received_at, msg_attributes
 		FROM jc_sqs_messages
-		WHERE queue_url = $1
-		  AND (delay_until IS NULL OR delay_until <= $2)
-		  AND (visible_at IS NULL OR visible_at <= $2)
-		  AND sent_at > $2 - make_interval(secs => COALESCE(
+		WHERE account_id = $1
+		  AND region = $2
+		  AND queue_url = $3
+		  AND (delay_until IS NULL OR delay_until <= $4)
+		  AND (visible_at IS NULL OR visible_at <= $4)
+		  AND sent_at > $4 - make_interval(secs => COALESCE(
 		      (SELECT (data->>'MessageRetentionPeriod')::int
 		       FROM jc_resources
-		       WHERE resource_type = 'sqs_queues' AND id = $1),
+		       WHERE resource_type = 'sqs_queues' AND id = $3
+		         AND account_id = $1 AND region = $2),
 		      345600
 		  ))
 		ORDER BY sent_at
-		LIMIT $3
+		LIMIT $5
 		FOR UPDATE SKIP LOCKED
-	`, queueURL, now, maxMessages)
+	`, account, region, queueURL, now, maxMessages)
 	if err != nil {
 		return nil, fmt.Errorf("receive query: %w", err)
 	}
@@ -221,8 +228,8 @@ func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, 
 			UPDATE jc_sqs_messages
 			SET receipt_handle=$1, receive_count=receive_count+1, visible_at=$2,
 			    first_received_at=COALESCE(first_received_at,$3)
-			WHERE id=$4 AND queue_url=$5
-		`, handle, visibleAt, now, msgs[i].MessageID, msgs[i].QueueURL)
+			WHERE account_id=$4 AND region=$5 AND id=$6 AND queue_url=$7
+		`, handle, visibleAt, now, account, region, msgs[i].MessageID, msgs[i].QueueURL)
 		if err != nil {
 			return nil, fmt.Errorf("update receive state: %w", err)
 		}
@@ -230,11 +237,11 @@ func (s *PostgresSQSMessageStore) Receive(ctx context.Context, queueURL string, 
 	return msgs, nil
 }
 
-func (s *PostgresSQSMessageStore) Delete(ctx context.Context, queueURL, receiptHandle string) error {
+func (s *PostgresSQSMessageStore) Delete(ctx context.Context, account, region, queueURL, receiptHandle string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM jc_sqs_messages
-		WHERE queue_url=$1 AND receipt_handle=$2
-	`, queueURL, receiptHandle)
+		WHERE account_id=$1 AND region=$2 AND queue_url=$3 AND receipt_handle=$4
+	`, account, region, queueURL, receiptHandle)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
@@ -244,7 +251,7 @@ func (s *PostgresSQSMessageStore) Delete(ctx context.Context, queueURL, receiptH
 	return nil
 }
 
-func (s *PostgresSQSMessageStore) ChangeVisibility(ctx context.Context, queueURL, receiptHandle string, timeoutSec int, now time.Time) error {
+func (s *PostgresSQSMessageStore) ChangeVisibility(ctx context.Context, account, region, queueURL, receiptHandle string, timeoutSec int, now time.Time) error {
 	var visibleAt *time.Time
 	if timeoutSec > 0 {
 		t := now.Add(time.Duration(timeoutSec) * time.Second)
@@ -253,35 +260,36 @@ func (s *PostgresSQSMessageStore) ChangeVisibility(ctx context.Context, queueURL
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jc_sqs_messages
 		SET visible_at=$1
-		WHERE queue_url=$2 AND receipt_handle=$3
-	`, visibleAt, queueURL, receiptHandle)
+		WHERE account_id=$2 AND region=$3 AND queue_url=$4 AND receipt_handle=$5
+	`, visibleAt, account, region, queueURL, receiptHandle)
 	return err
 }
 
-func (s *PostgresSQSMessageStore) Purge(ctx context.Context, queueURL string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages WHERE queue_url=$1`, queueURL)
+func (s *PostgresSQSMessageStore) Purge(ctx context.Context, account, region, queueURL string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages WHERE account_id=$1 AND region=$2 AND queue_url=$3`, account, region, queueURL)
 	return err
 }
 
-func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, queueURL string, now time.Time) (visible, notVisible, delayed int, err error) {
+func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, account, region, queueURL string, now time.Time) (visible, notVisible, delayed int, err error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			CASE
-				WHEN delay_until IS NOT NULL AND delay_until > $2 THEN 'delayed'
-				WHEN visible_at IS NOT NULL AND visible_at > $2 THEN 'not_visible'
+				WHEN delay_until IS NOT NULL AND delay_until > $4 THEN 'delayed'
+				WHEN visible_at IS NOT NULL AND visible_at > $4 THEN 'not_visible'
 				ELSE 'visible'
 			END AS state,
 			count(*) AS cnt
 		FROM jc_sqs_messages
-		WHERE queue_url=$1
-		  AND sent_at > $2 - make_interval(secs => COALESCE(
+		WHERE account_id=$1 AND region=$2 AND queue_url=$3
+		  AND sent_at > $4 - make_interval(secs => COALESCE(
 		      (SELECT (data->>'MessageRetentionPeriod')::int
 		       FROM jc_resources
-		       WHERE resource_type = 'sqs_queues' AND id = $1),
+		       WHERE resource_type = 'sqs_queues' AND id = $3
+		         AND account_id = $1 AND region = $2),
 		      345600
 		  ))
 		GROUP BY state
-	`, queueURL, now)
+	`, account, region, queueURL, now)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -307,7 +315,7 @@ func (s *PostgresSQSMessageStore) GetApproximateCounts(ctx context.Context, queu
 // SetQueueRetention is a no-op for the postgres store: MessageRetentionPeriod
 // is read directly from jc_resources, where QueueProvider persists it on
 // CreateQueue / SetQueueAttributes. The single source of truth lives there.
-func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _ string, _ int) error {
+func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _, _, _ string, _ int) error {
 	return nil
 }
 

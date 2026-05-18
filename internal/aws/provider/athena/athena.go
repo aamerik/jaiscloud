@@ -136,13 +136,13 @@ func (p *Provider) StartQueryExecution(ctx context.Context, nr *model.Normalized
 		CompletionTime:   now,
 	}
 	data, _ := json.Marshal(q)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtQueryExec, ID: qid, Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtQueryExec, ID: qid, Data: data})
 	return provider.OK(map[string]any{"QueryExecutionId": qid}), nil
 }
 
 func (p *Provider) GetQueryExecution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	qid := str(nr.Params, "QueryExecutionId")
-	e, err := p.resources.Get(ctx, rtQueryExec, qid)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtQueryExec, qid)
 	if err != nil {
 		return nil, athErr("InvalidRequestException", "Query execution not found: "+qid)
 	}
@@ -153,7 +153,7 @@ func (p *Provider) GetQueryExecution(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	qid := str(nr.Params, "QueryExecutionId")
-	if _, err := p.resources.Get(ctx, rtQueryExec, qid); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtQueryExec, qid); err != nil {
 		return nil, athErr("InvalidRequestException", "Query execution not found: "+qid)
 	}
 	return provider.OK(map[string]any{
@@ -166,7 +166,7 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *Provider) StopQueryExecution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	qid := str(nr.Params, "QueryExecutionId")
-	e, err := p.resources.Get(ctx, rtQueryExec, qid)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtQueryExec, qid)
 	if err != nil {
 		return nil, athErr("InvalidRequestException", "Query execution not found: "+qid)
 	}
@@ -175,14 +175,14 @@ func (p *Provider) StopQueryExecution(ctx context.Context, nr *model.NormalizedR
 	if q.State != "SUCCEEDED" && q.State != "FAILED" && q.State != "CANCELLED" {
 		q.State = "CANCELLED"
 		data, _ := json.Marshal(q)
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtQueryExec, ID: qid, Data: data})
+		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtQueryExec, ID: qid, Data: data})
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListQueryExecutions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	wg := str(nr.Params, "WorkGroup")
-	entries, _ := p.resources.List(ctx, rtQueryExec, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtQueryExec, "")
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		var q queryExecution
@@ -204,7 +204,7 @@ func (p *Provider) BatchGetQueryExecution(ctx context.Context, nr *model.Normali
 		if !ok {
 			continue
 		}
-		e, err := p.resources.Get(ctx, rtQueryExec, qid)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtQueryExec, qid)
 		if err != nil {
 			unprocessed = append(unprocessed, qid)
 			continue
@@ -231,7 +231,7 @@ func (p *Provider) CreateWorkGroup(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, athErr("InvalidRequestException", "Name is required")
 	}
-	if _, err := p.resources.Get(ctx, rtWorkGroup, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtWorkGroup, name); err == nil {
 		return nil, athErr("InvalidRequestException", "WorkGroup "+name+" already exists")
 	}
 	wg := workGroup{
@@ -241,13 +241,13 @@ func (p *Provider) CreateWorkGroup(ctx context.Context, nr *model.NormalizedRequ
 		CreationTime: time.Now().UTC(),
 	}
 	data, _ := json.Marshal(wg)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtWorkGroup, ID: name, Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtWorkGroup, ID: name, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) GetWorkGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "WorkGroup")
-	e, err := p.resources.Get(ctx, rtWorkGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtWorkGroup, name)
 	if err != nil {
 		return nil, athErr("InvalidRequestException", "WorkGroup not found: "+name)
 	}
@@ -258,7 +258,7 @@ func (p *Provider) GetWorkGroup(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) UpdateWorkGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "WorkGroup")
-	e, err := p.resources.Get(ctx, rtWorkGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtWorkGroup, name)
 	if err != nil {
 		return nil, athErr("InvalidRequestException", "WorkGroup not found: "+name)
 	}
@@ -271,7 +271,7 @@ func (p *Provider) UpdateWorkGroup(ctx context.Context, nr *model.NormalizedRequ
 		wg.State = v
 	}
 	data, _ := json.Marshal(wg)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtWorkGroup, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtWorkGroup, ID: name, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -280,15 +280,15 @@ func (p *Provider) DeleteWorkGroup(ctx context.Context, nr *model.NormalizedRequ
 	if name == "primary" {
 		return nil, athErr("InvalidRequestException", "Cannot delete the primary workgroup")
 	}
-	if _, err := p.resources.Get(ctx, rtWorkGroup, name); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtWorkGroup, name); err != nil {
 		return nil, athErr("InvalidRequestException", "WorkGroup not found: "+name)
 	}
-	_ = p.resources.Delete(ctx, rtWorkGroup, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtWorkGroup, name)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListWorkGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtWorkGroup, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtWorkGroup, "")
 	wgs := make([]map[string]any, 0, len(entries)+1)
 	// Always include primary
 	wgs = append(wgs, map[string]any{"Name": "primary", "State": "ENABLED"})
@@ -303,7 +303,7 @@ func (p *Provider) ListWorkGroups(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceARN")
-	tags := loadAthenaTags(ctx, p.resources, arn)
+	tags := loadAthenaTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	if raw, ok := nr.Params["Tags"].([]any); ok {
 		for _, item := range raw {
 			if m, ok := item.(map[string]any); ok {
@@ -313,13 +313,13 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 			}
 		}
 	}
-	saveAthenaTags(ctx, p.resources, arn, tags)
+	saveAthenaTags(ctx, p.resources, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceARN")
-	tags := loadAthenaTags(ctx, p.resources, arn)
+	tags := loadAthenaTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
 			if s, ok := k.(string); ok {
@@ -327,13 +327,13 @@ func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedReques
 			}
 		}
 	}
-	saveAthenaTags(ctx, p.resources, arn, tags)
+	saveAthenaTags(ctx, p.resources, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceARN")
-	tags := loadAthenaTags(ctx, p.resources, arn)
+	tags := loadAthenaTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	list := make([]map[string]any, 0, len(tags))
 	for k, v := range tags {
 		list = append(list, map[string]any{"Key": k, "Value": v})
@@ -341,8 +341,8 @@ func (p *Provider) ListTagsForResource(ctx context.Context, nr *model.Normalized
 	return provider.OK(map[string]any{"Tags": list}), nil
 }
 
-func loadAthenaTags(ctx context.Context, res store.ResourceStore, arn string) map[string]string {
-	e, err := res.Get(ctx, rtAthenaTags, arn)
+func loadAthenaTags(ctx context.Context, res store.ResourceStore, account, region, arn string) map[string]string {
+	e, err := res.Get(ctx, account, region, rtAthenaTags, arn)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -351,11 +351,11 @@ func loadAthenaTags(ctx context.Context, res store.ResourceStore, arn string) ma
 	return m
 }
 
-func saveAthenaTags(ctx context.Context, res store.ResourceStore, arn string, tags map[string]string) {
+func saveAthenaTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtAthenaTags, ID: arn, Data: data}
-	if err := res.Create(ctx, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, entry)
+	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		res.Update(ctx, account, region, entry)
 	}
 }
 

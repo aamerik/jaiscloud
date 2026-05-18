@@ -129,7 +129,7 @@ func (p *ELBv2Provider) CreateLoadBalancer(ctx context.Context, nr *model.Normal
 	}
 
 	data, _ := json.Marshal(lb)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtLoadBalancer, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtLoadBalancer, ID: arn, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DuplicateLoadBalancerName", Message: "Load balancer name already in use", HTTPStatus: http.StatusBadRequest}
 		}
@@ -144,7 +144,7 @@ func (p *ELBv2Provider) DeleteLoadBalancer(ctx context.Context, nr *model.Normal
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "LoadBalancerArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if err := p.resources.Delete(ctx, rtLoadBalancer, arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtLoadBalancer, arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "LoadBalancerNotFound", Message: "Load balancer not found", HTTPStatus: http.StatusBadRequest}
 		}
@@ -157,7 +157,7 @@ func (p *ELBv2Provider) DescribeLoadBalancers(ctx context.Context, nr *model.Nor
 	arnFilter := extractMemberList(nr.Params, "LoadBalancerArns.member")
 	nameFilter := extractMemberList(nr.Params, "Names.member")
 
-	entries, err := p.resources.List(ctx, rtLoadBalancer, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtLoadBalancer, "")
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +192,8 @@ func (p *ELBv2Provider) ModifyLoadBalancerAttributes(ctx context.Context, nr *mo
 
 	attrData, _ := json.Marshal(attrs)
 	attrID := "attrs:" + arn
-	_ = p.resources.Delete(ctx, rtLBAttributes, attrID) // nolint: errcheck
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtLBAttributes, ID: attrID, Data: attrData})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtLBAttributes, attrID) // nolint: errcheck
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtLBAttributes, ID: attrID, Data: attrData})
 
 	return provider.OK(map[string]any{"Attributes": attrsToWire(attrs)}), nil
 }
@@ -205,7 +205,7 @@ func (p *ELBv2Provider) DescribeLoadBalancerAttributes(ctx context.Context, nr *
 	}
 
 	attrID := "attrs:" + arn
-	e, err := p.resources.Get(ctx, rtLBAttributes, attrID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtLBAttributes, attrID)
 	if err != nil {
 		// Return empty attributes if not set
 		return provider.OK(map[string]any{"Attributes": []any{}}), nil
@@ -234,7 +234,7 @@ func (p *ELBv2Provider) CreateTargetGroup(ctx context.Context, nr *model.Normali
 	}
 
 	data, _ := json.Marshal(tg)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtTargetGroup, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTargetGroup, ID: arn, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DuplicateTargetGroupName", Message: "Target group name already in use", HTTPStatus: http.StatusBadRequest}
 		}
@@ -249,7 +249,7 @@ func (p *ELBv2Provider) DeleteTargetGroup(ctx context.Context, nr *model.Normali
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "TargetGroupArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if err := p.resources.Delete(ctx, rtTargetGroup, arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTargetGroup, arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "TargetGroupNotFound", Message: "Target group not found", HTTPStatus: http.StatusBadRequest}
 		}
@@ -262,7 +262,7 @@ func (p *ELBv2Provider) DescribeTargetGroups(ctx context.Context, nr *model.Norm
 	arnFilter := extractMemberList(nr.Params, "TargetGroupArns.member")
 	lbArnFilter := strParam(nr.Params, "LoadBalancerArn")
 
-	entries, err := p.resources.List(ctx, rtTargetGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTargetGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +298,7 @@ func (p *ELBv2Provider) RegisterTargets(ctx context.Context, nr *model.Normalize
 
 	// Load existing
 	existing := &targetEntry{TargetGroupArn: tgArn}
-	if e, err := p.resources.Get(ctx, rtTargets, tgArn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTargets, tgArn); err == nil {
 		json.Unmarshal(e.Data, existing)
 	}
 
@@ -306,8 +306,8 @@ func (p *ELBv2Provider) RegisterTargets(ctx context.Context, nr *model.Normalize
 	existing.TargetIDs = mergeUnique(existing.TargetIDs, newIDs)
 	data, _ := json.Marshal(existing)
 
-	_ = p.resources.Delete(ctx, rtTargets, tgArn)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtTargets, ID: tgArn, Data: data})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTargets, tgArn)
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTargets, ID: tgArn, Data: data})
 
 	return provider.OK(map[string]any{}), nil
 }
@@ -321,7 +321,7 @@ func (p *ELBv2Provider) DeregisterTargets(ctx context.Context, nr *model.Normali
 	removeIDs := extractTargetIDs(nr.Params, "Targets.member")
 
 	existing := &targetEntry{TargetGroupArn: tgArn}
-	if e, err := p.resources.Get(ctx, rtTargets, tgArn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTargets, tgArn); err == nil {
 		json.Unmarshal(e.Data, existing)
 	}
 
@@ -335,8 +335,8 @@ func (p *ELBv2Provider) DeregisterTargets(ctx context.Context, nr *model.Normali
 	existing.TargetIDs = remaining
 
 	data, _ := json.Marshal(existing)
-	_ = p.resources.Delete(ctx, rtTargets, tgArn)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtTargets, ID: tgArn, Data: data})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTargets, tgArn)
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTargets, ID: tgArn, Data: data})
 
 	return provider.OK(map[string]any{}), nil
 }
@@ -348,7 +348,7 @@ func (p *ELBv2Provider) DescribeTargetHealth(ctx context.Context, nr *model.Norm
 	}
 
 	existing := &targetEntry{TargetGroupArn: tgArn}
-	if e, err := p.resources.Get(ctx, rtTargets, tgArn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTargets, tgArn); err == nil {
 		json.Unmarshal(e.Data, existing)
 	}
 
@@ -388,7 +388,7 @@ func (p *ELBv2Provider) CreateListener(ctx context.Context, nr *model.Normalized
 	}
 
 	data, _ := json.Marshal(l)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtListener, ID: listenerArn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtListener, ID: listenerArn, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DuplicateListener", Message: "Listener already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -403,7 +403,7 @@ func (p *ELBv2Provider) DeleteListener(ctx context.Context, nr *model.Normalized
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "ListenerArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if err := p.resources.Delete(ctx, rtListener, arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtListener, arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "ListenerNotFound", Message: "Listener not found", HTTPStatus: http.StatusBadRequest}
 		}
@@ -416,7 +416,7 @@ func (p *ELBv2Provider) DescribeListeners(ctx context.Context, nr *model.Normali
 	lbArn := strParam(nr.Params, "LoadBalancerArn")
 	listenerArns := extractMemberList(nr.Params, "ListenerArns.member")
 
-	entries, err := p.resources.List(ctx, rtListener, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtListener, "")
 	if err != nil {
 		return nil, err
 	}
@@ -449,15 +449,15 @@ func (p *ELBv2Provider) AddTags(ctx context.Context, nr *model.NormalizedRequest
 	for _, arn := range resourceArns {
 		tagID := "tags:" + arn
 		existing := map[string]string{}
-		if e, err := p.resources.Get(ctx, rtTags, tagID); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTags, tagID); err == nil {
 			json.Unmarshal(e.Data, &existing)
 		}
 		for k, v := range tags {
 			existing[k] = v
 		}
 		data, _ := json.Marshal(existing)
-		_ = p.resources.Delete(ctx, rtTags, tagID)
-		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtTags, ID: tagID, Data: data})
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTags, tagID)
+		_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTags, ID: tagID, Data: data})
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -469,15 +469,15 @@ func (p *ELBv2Provider) RemoveTags(ctx context.Context, nr *model.NormalizedRequ
 	for _, arn := range resourceArns {
 		tagID := "tags:" + arn
 		existing := map[string]string{}
-		if e, err := p.resources.Get(ctx, rtTags, tagID); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTags, tagID); err == nil {
 			json.Unmarshal(e.Data, &existing)
 		}
 		for _, k := range tagKeys {
 			delete(existing, k)
 		}
 		data, _ := json.Marshal(existing)
-		_ = p.resources.Delete(ctx, rtTags, tagID)
-		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtTags, ID: tagID, Data: data})
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTags, tagID)
+		_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTags, ID: tagID, Data: data})
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -489,7 +489,7 @@ func (p *ELBv2Provider) DescribeTags(ctx context.Context, nr *model.NormalizedRe
 	for _, arn := range resourceArns {
 		tagID := "tags:" + arn
 		existing := map[string]string{}
-		if e, err := p.resources.Get(ctx, rtTags, tagID); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTags, tagID); err == nil {
 			json.Unmarshal(e.Data, &existing)
 		}
 		var tags []any

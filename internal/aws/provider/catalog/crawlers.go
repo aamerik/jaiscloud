@@ -75,18 +75,18 @@ func crawlerID(name string) string { return "crawler/" + name }
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
-func (p *GlueProvider) saveCrawler(ctx context.Context, c crawlerEntry) error {
+func (p *GlueProvider) saveCrawler(ctx context.Context, account, region string, c crawlerEntry) error {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCrawler, ID: crawlerID(c.Name), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadCrawler(ctx context.Context, name string) (crawlerEntry, error) {
-	e, err := p.resources.Get(ctx, rtCrawler, crawlerID(name))
+func (p *GlueProvider) loadCrawler(ctx context.Context, account, region, name string) (crawlerEntry, error) {
+	e, err := p.resources.Get(ctx, account, region, rtCrawler, crawlerID(name))
 	if err == store.ErrNotFound {
 		return crawlerEntry{}, &model.ProviderError{
 			Code:       "NotFound",
@@ -109,7 +109,7 @@ func (p *GlueProvider) CreateCrawler(ctx context.Context, nr *model.NormalizedRe
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtCrawler, crawlerID(name)); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCrawler, crawlerID(name)); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Crawler %s already exists", name), HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -124,7 +124,7 @@ func (p *GlueProvider) CreateCrawler(ctx context.Context, nr *model.NormalizedRe
 		CreatedOn:    now,
 		LastUpdated:  now,
 	}
-	if err := p.saveCrawler(ctx, c); err != nil {
+	if err := p.saveCrawler(ctx, nr.AccountID, nr.Region, c); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -132,7 +132,7 @@ func (p *GlueProvider) CreateCrawler(ctx context.Context, nr *model.NormalizedRe
 
 func (p *GlueProvider) UpdateCrawler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	c, err := p.loadCrawler(ctx, name)
+	c, err := p.loadCrawler(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (p *GlueProvider) UpdateCrawler(ctx context.Context, nr *model.NormalizedRe
 		c.Schedule = v
 	}
 	c.LastUpdated = time.Now()
-	if err := p.saveCrawler(ctx, c); err != nil {
+	if err := p.saveCrawler(ctx, nr.AccountID, nr.Region, c); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -157,10 +157,10 @@ func (p *GlueProvider) UpdateCrawler(ctx context.Context, nr *model.NormalizedRe
 
 func (p *GlueProvider) DeleteCrawler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if _, err := p.loadCrawler(ctx, name); err != nil {
+	if _, err := p.loadCrawler(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, rtCrawler, crawlerID(name)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCrawler, crawlerID(name)); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -168,7 +168,7 @@ func (p *GlueProvider) DeleteCrawler(ctx context.Context, nr *model.NormalizedRe
 
 func (p *GlueProvider) GetCrawler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	c, err := p.loadCrawler(ctx, name)
+	c, err := p.loadCrawler(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (p *GlueProvider) GetCrawler(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *GlueProvider) GetCrawlers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtCrawler, "crawler/")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCrawler, "crawler/")
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func (p *GlueProvider) GetCrawlers(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *GlueProvider) StartCrawler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	c, err := p.loadCrawler(ctx, name)
+	c, err := p.loadCrawler(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -214,19 +214,19 @@ func (p *GlueProvider) StartCrawler(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	c.State = "RUNNING"
-	if err := p.saveCrawler(ctx, c); err != nil {
+	if err := p.saveCrawler(ctx, nr.AccountID, nr.Region, c); err != nil {
 		return nil, err
 	}
 
 	// Run async crawl in mock mode
-	go p.runCrawlAsync(c.Name)
+	go p.runCrawlAsync(nr.AccountID, nr.Region, c.Name)
 
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *GlueProvider) StopCrawler(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	c, err := p.loadCrawler(ctx, name)
+	c, err := p.loadCrawler(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +234,7 @@ func (p *GlueProvider) StopCrawler(ctx context.Context, nr *model.NormalizedRequ
 		return nil, &model.ProviderError{Code: "CrawlerNotRunningException", Message: "Crawler is not running", HTTPStatus: http.StatusBadRequest}
 	}
 	c.State = "STOPPING"
-	p.saveCrawler(ctx, c)
+	p.saveCrawler(ctx, nr.AccountID, nr.Region, c) //nolint:errcheck
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -245,11 +245,11 @@ func (p *GlueProvider) GetCrawlerMetrics(ctx context.Context, nr *model.Normaliz
 
 // ─── Async crawl ──────────────────────────────────────────────────────────────
 
-func (p *GlueProvider) runCrawlAsync(crawlerName string) {
+func (p *GlueProvider) runCrawlAsync(account, region, crawlerName string) {
 	time.Sleep(100 * time.Millisecond)
 
 	ctx := context.Background()
-	c, err := p.loadCrawler(ctx, crawlerName)
+	c, err := p.loadCrawler(ctx, account, region, crawlerName)
 	if err != nil {
 		return
 	}
@@ -264,7 +264,7 @@ func (p *GlueProvider) runCrawlAsync(crawlerName string) {
 			StartTime: startTime,
 			EndTime:   time.Now(),
 		}
-		p.saveCrawler(ctx, c)
+		p.saveCrawler(ctx, account, region, c) //nolint:errcheck
 		return
 	}
 
@@ -281,7 +281,7 @@ func (p *GlueProvider) runCrawlAsync(crawlerName string) {
 				if path == "" {
 					continue
 				}
-				p.crawlS3Path(ctx, c, path, op)
+				p.crawlS3Path(ctx, account, region, c, path, op)
 			}
 		}
 	}
@@ -292,12 +292,12 @@ func (p *GlueProvider) runCrawlAsync(crawlerName string) {
 		StartTime: startTime,
 		EndTime:   time.Now(),
 	}
-	p.saveCrawler(ctx, c)
+	p.saveCrawler(ctx, account, region, c) //nolint:errcheck
 }
 
 // crawlS3Path walks one S3 path, infers CSV schema from the first .csv file found,
 // and upserts a catalog table.
-func (p *GlueProvider) crawlS3Path(ctx context.Context, c crawlerEntry, s3Path string, op ObjectProviderAPI) {
+func (p *GlueProvider) crawlS3Path(ctx context.Context, account, region string, c crawlerEntry, s3Path string, op ObjectProviderAPI) {
 	// Parse s3://bucket/prefix
 	path := strings.TrimPrefix(s3Path, "s3://")
 	idx := strings.Index(path, "/")
@@ -351,7 +351,7 @@ func (p *GlueProvider) crawlS3Path(ctx context.Context, c crawlerEntry, s3Path s
 		UpdateTime: now,
 	}
 	// saveTable uses upsert semantics
-	p.saveTable(ctx, t)
+	p.saveTable(ctx, account, region, t) //nolint:errcheck
 }
 
 func inferCSVColumns(data []byte) []map[string]any {

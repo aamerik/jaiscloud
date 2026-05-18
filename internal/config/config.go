@@ -116,7 +116,12 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	// S3 — no region or account in ARN
 	"s3-bucket": func(_, _, n string) string { return fmt.Sprintf("arn:aws:s3:::%s", n) },
 	// EventBridge
-	"events-rule": func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", r, a, n) },
+	"events-rule":            func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", r, a, n) },
+	"events-bus":             func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:event-bus/%s", r, a, n) },
+	"events-archive":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:archive/%s", r, a, n) },
+	"events-replay":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:replay/%s", r, a, n) },
+	"events-connection":      func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:connection/%s", r, a, n) },
+	"events-api-destination": func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:api-destination/%s", r, a, n) },
 	// EMR
 	"emr-cluster":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", r, a, n) },
 	// EMR Containers — name encodes composite IDs as "vcID/resourceID" where needed.
@@ -227,8 +232,17 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	// CloudWatch
 	"cloudwatch-alarm":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch:%s:%s:alarm:%s", r, a, n) },
 	"cloudwatch-dashboard": func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch::%s:dashboard/%s", a, n) },
-	// IAM OIDC
-	"iam-oidc-provider": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },
+	// IAM OIDC + additional IAM types
+	"iam-oidc-provider":    func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },
+	"iam-managed-policy":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:policy/%s", a, n) },
+	// SES
+	"ses-identity": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ses:%s:%s:identity/%s", r, a, n) },
+	// Redshift additional
+	"redshift-subnetgroup": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:redshift:%s:%s:subnetgroup:%s", r, a, n)
+	},
+	// Athena
+	"athena-query-execution": func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
 	// Step Functions executions — n encodes "sm-name/exec-name"
 	"sfn-execution": func(r, a, n string) string {
 		if sm, exec, ok := strings.Cut(n, "/"); ok {

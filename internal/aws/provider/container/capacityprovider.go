@@ -43,7 +43,7 @@ func (p *ContainerProvider) CreateCapacityProvider(ctx context.Context, nr *mode
 		cp.Extra = extra
 	}
 	data, _ := json.Marshal(cp)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCapacityProvider, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCapacityProvider, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, model.NewProviderError("InvalidParameterException", "Capacity provider already exists: "+name, 400)
 		}
@@ -57,7 +57,7 @@ func (p *ContainerProvider) DescribeCapacityProviders(ctx context.Context, nr *m
 	cps := []map[string]any{}
 	failures := []map[string]any{}
 	if len(names) == 0 {
-		entries, _ := p.resources.List(ctx, rtCapacityProvider, "")
+		entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCapacityProvider, "")
 		for _, e := range entries {
 			var cp capacityProvider
 			if json.Unmarshal(e.Data, &cp) == nil {
@@ -66,7 +66,7 @@ func (p *ContainerProvider) DescribeCapacityProviders(ctx context.Context, nr *m
 		}
 	} else {
 		for _, name := range names {
-			e, err := p.resources.Get(ctx, rtCapacityProvider, name)
+			e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCapacityProvider, name)
 			if err != nil {
 				failures = append(failures, map[string]any{"reason": "MISSING", "detail": name})
 				continue
@@ -83,34 +83,34 @@ func (p *ContainerProvider) DescribeCapacityProviders(ctx context.Context, nr *m
 func (p *ContainerProvider) DeleteCapacityProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["capacityProvider"].(string)
 	name = splitARN(name)
-	e, err := p.resources.Get(ctx, rtCapacityProvider, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCapacityProvider, name)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidParameterException", "Capacity provider not found: "+name, 400)
 	}
 	var cp capacityProvider
 	json.Unmarshal(e.Data, &cp)
 	cp.Status = "INACTIVE"
-	_ = p.resources.Delete(ctx, rtCapacityProvider, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCapacityProvider, name)
 	return provider.OK(map[string]any{"capacityProvider": cp.toWire()}), nil
 }
 
 func (p *ContainerProvider) PutClusterCapacityProviders(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName, _ := nr.Params["cluster"].(string)
 	clusterName = splitARN(clusterName)
-	e, err := p.resources.Get(ctx, rtCluster, clusterName)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, clusterName)
 	if err != nil {
 		return nil, model.NewProviderError("ClusterNotFoundException", "Cluster not found", 400)
 	}
 	var c cluster
 	json.Unmarshal(e.Data, &c)
 	data, _ := json.Marshal(c)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtCluster, ID: clusterName, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: clusterName, Data: data})
 	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
 }
 
 func (p *ContainerProvider) UpdateCapacityProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["name"].(string)
-	e, err := p.resources.Get(ctx, rtCapacityProvider, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCapacityProvider, name)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidParameterException", "Capacity provider not found: "+name, 400)
 	}
@@ -120,6 +120,6 @@ func (p *ContainerProvider) UpdateCapacityProvider(ctx context.Context, nr *mode
 		cp.Extra = extra
 	}
 	data, _ := json.Marshal(cp)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtCapacityProvider, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCapacityProvider, ID: name, Data: data})
 	return provider.OK(map[string]any{"capacityProvider": cp.toWire()}), nil
 }

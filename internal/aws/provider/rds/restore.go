@@ -18,7 +18,7 @@ func (p *RelationalProvider) RestoreDBInstanceFromDBSnapshot(ctx context.Context
 	}
 
 	// Load snapshot
-	e, err := p.resources.Get(ctx, rtDBSnapshot, snapID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBSnapshot, snapID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "DBSnapshotNotFound", Message: "Snapshot not found: " + snapID, HTTPStatus: http.StatusNotFound}
 	}
@@ -40,7 +40,7 @@ func (p *RelationalProvider) RestoreDBInstanceFromDBSnapshot(ctx context.Context
 	}
 
 	data, _ := json.Marshal(inst)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: newID, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: newID, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBInstanceAlreadyExists", Message: "DB instance " + newID + " already exists", HTTPStatus: http.StatusBadRequest}
 		}

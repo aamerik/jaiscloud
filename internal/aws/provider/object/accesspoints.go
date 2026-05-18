@@ -48,8 +48,8 @@ func apErr(code, msg string, status int) error {
 	return model.NewProviderError(code, msg, status)
 }
 
-func (p *ObjectProvider) loadAP(ctx context.Context, name string) (accessPoint, error) {
-	e, err := p.resources.Get(ctx, rtAccessPoint, name)
+func (p *ObjectProvider) loadAP(ctx context.Context, account, region, name string) (accessPoint, error) {
+	e, err := p.resources.Get(ctx, account, region, rtAccessPoint, name)
 	if err != nil {
 		return accessPoint{}, apErr("NoSuchAccessPoint", "The specified access point does not exist: "+name, http.StatusNotFound)
 	}
@@ -58,11 +58,11 @@ func (p *ObjectProvider) loadAP(ctx context.Context, name string) (accessPoint, 
 	return ap, nil
 }
 
-func (p *ObjectProvider) saveAP(ctx context.Context, ap accessPoint) error {
+func (p *ObjectProvider) saveAP(ctx context.Context, account, region string, ap accessPoint) error {
 	data, _ := json.Marshal(ap)
 	entry := store.ResourceEntry{Type: rtAccessPoint, ID: ap.Name, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return nil
 }
@@ -73,7 +73,7 @@ func (p *ObjectProvider) CreateAccessPoint(ctx context.Context, nr *model.Normal
 	if name == "" || !validAPName.MatchString(name) {
 		return nil, apErr("InvalidRequest", "Invalid access point name: "+name, http.StatusBadRequest)
 	}
-	if _, err := p.resources.Get(ctx, rtAccessPoint, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtAccessPoint, name); err == nil {
 		return nil, apErr("AccessPointAlreadyOwnedByYou", "An access point with the name "+name+" already exists", http.StatusConflict)
 	}
 
@@ -108,7 +108,7 @@ func (p *ObjectProvider) CreateAccessPoint(ctx context.Context, nr *model.Normal
 		NetworkOrigin: "Internet",
 		CreationDate:  time.Now().UTC(),
 	}
-	_ = p.saveAP(ctx, ap)
+	_ = p.saveAP(ctx, nr.AccountID, nr.Region, ap)
 	return provider.OK(map[string]any{
 		"AccessPointArn": ap.ARN,
 		"Alias":          ap.Alias,
@@ -117,7 +117,7 @@ func (p *ObjectProvider) CreateAccessPoint(ctx context.Context, nr *model.Normal
 
 func (p *ObjectProvider) GetAccessPoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := apNameFromKey(strParam(nr.Params, "_key"))
-	ap, err := p.loadAP(ctx, name)
+	ap, err := p.loadAP(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (p *ObjectProvider) GetAccessPoint(ctx context.Context, nr *model.Normalize
 
 func (p *ObjectProvider) ListAccessPoints(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket := strParam(nr.Params, "bucket")
-	entries, _ := p.resources.List(ctx, rtAccessPoint, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtAccessPoint, "")
 	var items []map[string]any
 	for _, e := range entries {
 		var ap accessPoint
@@ -167,10 +167,10 @@ func (p *ObjectProvider) ListAccessPoints(ctx context.Context, nr *model.Normali
 
 func (p *ObjectProvider) DeleteAccessPoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := apNameFromKey(strParam(nr.Params, "_key"))
-	if _, err := p.loadAP(ctx, name); err != nil {
+	if _, err := p.loadAP(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtAccessPoint, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtAccessPoint, name)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -181,13 +181,13 @@ func (p *ObjectProvider) PutAccessPointPolicy(ctx context.Context, nr *model.Nor
 		return nil, apErr("InvalidRequest", "Invalid path", http.StatusBadRequest)
 	}
 	name := parts[1]
-	ap, err := p.loadAP(ctx, name)
+	ap, err := p.loadAP(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	body, _ := nr.Params["_body"].([]byte)
 	ap.Policy = string(body)
-	_ = p.saveAP(ctx, ap)
+	_ = p.saveAP(ctx, nr.AccountID, nr.Region, ap)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -197,7 +197,7 @@ func (p *ObjectProvider) GetAccessPointPolicy(ctx context.Context, nr *model.Nor
 		return nil, apErr("InvalidRequest", "Invalid path", http.StatusBadRequest)
 	}
 	name := parts[1]
-	ap, err := p.loadAP(ctx, name)
+	ap, err := p.loadAP(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -213,12 +213,12 @@ func (p *ObjectProvider) DeleteAccessPointPolicy(ctx context.Context, nr *model.
 		return nil, apErr("InvalidRequest", "Invalid path", http.StatusBadRequest)
 	}
 	name := parts[1]
-	ap, err := p.loadAP(ctx, name)
+	ap, err := p.loadAP(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	ap.Policy = ""
-	_ = p.saveAP(ctx, ap)
+	_ = p.saveAP(ctx, nr.AccountID, nr.Region, ap)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -228,7 +228,7 @@ func (p *ObjectProvider) GetAccessPointPolicyStatus(ctx context.Context, nr *mod
 		return nil, apErr("InvalidRequest", "Invalid path", http.StatusBadRequest)
 	}
 	name := parts[1]
-	if _, err := p.loadAP(ctx, name); err != nil {
+	if _, err := p.loadAP(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{

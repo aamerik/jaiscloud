@@ -9,7 +9,7 @@ import (
 )
 
 // MemoryResourceStore is an in-memory ResourceStore backed by a sync.RWMutex map.
-// Key: "type:id"
+// Key: "account:region:type:id" — global resource types use region="" naturally.
 type MemoryResourceStore struct {
 	mu      sync.RWMutex
 	entries map[string]ResourceEntry
@@ -21,14 +21,14 @@ func NewMemoryResourceStore() *MemoryResourceStore {
 	}
 }
 
-func key(resourceType, id string) string {
-	return resourceType + ":" + id
+func key(account, region, resourceType, id string) string {
+	return account + ":" + region + ":" + resourceType + ":" + id
 }
 
-func (s *MemoryResourceStore) Create(ctx context.Context, entry ResourceEntry) error {
+func (s *MemoryResourceStore) Create(ctx context.Context, account, region string, entry ResourceEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := key(entry.Type, entry.ID)
+	k := key(account, region, entry.Type, entry.ID)
 	if _, exists := s.entries[k]; exists {
 		return ErrAlreadyExists
 	}
@@ -39,20 +39,20 @@ func (s *MemoryResourceStore) Create(ctx context.Context, entry ResourceEntry) e
 	return nil
 }
 
-func (s *MemoryResourceStore) Get(ctx context.Context, resourceType, id string) (ResourceEntry, error) {
+func (s *MemoryResourceStore) Get(ctx context.Context, account, region, resourceType, id string) (ResourceEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e, ok := s.entries[key(resourceType, id)]
+	e, ok := s.entries[key(account, region, resourceType, id)]
 	if !ok {
 		return ResourceEntry{}, ErrNotFound
 	}
 	return e, nil
 }
 
-func (s *MemoryResourceStore) Update(ctx context.Context, entry ResourceEntry) error {
+func (s *MemoryResourceStore) Update(ctx context.Context, account, region string, entry ResourceEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := key(entry.Type, entry.ID)
+	k := key(account, region, entry.Type, entry.ID)
 	existing, ok := s.entries[k]
 	if !ok {
 		return ErrNotFound
@@ -63,10 +63,10 @@ func (s *MemoryResourceStore) Update(ctx context.Context, entry ResourceEntry) e
 	return nil
 }
 
-func (s *MemoryResourceStore) Delete(ctx context.Context, resourceType, id string) error {
+func (s *MemoryResourceStore) Delete(ctx context.Context, account, region, resourceType, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := key(resourceType, id)
+	k := key(account, region, resourceType, id)
 	if _, ok := s.entries[k]; !ok {
 		return ErrNotFound
 	}
@@ -74,13 +74,24 @@ func (s *MemoryResourceStore) Delete(ctx context.Context, resourceType, id strin
 	return nil
 }
 
-func (s *MemoryResourceStore) List(ctx context.Context, resourceType, prefix string) ([]ResourceEntry, error) {
+func (s *MemoryResourceStore) List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var results []ResourceEntry
-	typePrefix := resourceType + ":"
+	// When both account and region are "", scan across all scopes for this type.
+	// Used by internal helpers (ESM poller, cross-service dispatchers) that don't
+	// know the target account ahead of time.
+	crossScope := account == "" && region == ""
+	scopePrefix := account + ":" + region + ":" + resourceType + ":"
 	for k, e := range s.entries {
-		if !strings.HasPrefix(k, typePrefix) {
+		if crossScope {
+			// Match any "account:region:type:" prefix — find the type segment.
+			// Key is "account:region:type:id"; third colon-delimited segment is type.
+			parts := strings.SplitN(k, ":", 4)
+			if len(parts) < 4 || parts[2] != resourceType {
+				continue
+			}
+		} else if !strings.HasPrefix(k, scopePrefix) {
 			continue
 		}
 		if prefix != "" && !strings.Contains(e.ID, prefix) {
@@ -91,12 +102,18 @@ func (s *MemoryResourceStore) List(ctx context.Context, resourceType, prefix str
 	return results, nil
 }
 
-func (s *MemoryResourceStore) Purge(ctx context.Context, resourceType string) error {
+func (s *MemoryResourceStore) Purge(ctx context.Context, account, region, resourceType string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	typePrefix := resourceType + ":"
+	crossScope := account == "" && region == ""
+	scopePrefix := account + ":" + region + ":" + resourceType + ":"
 	for k := range s.entries {
-		if strings.HasPrefix(k, typePrefix) {
+		if crossScope {
+			parts := strings.SplitN(k, ":", 4)
+			if len(parts) >= 4 && parts[2] == resourceType {
+				delete(s.entries, k)
+			}
+		} else if strings.HasPrefix(k, scopePrefix) {
 			delete(s.entries, k)
 		}
 	}

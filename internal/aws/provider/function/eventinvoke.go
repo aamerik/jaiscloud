@@ -53,9 +53,9 @@ func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr 
 	}
 	data, _ := json.Marshal(cfg)
 	entry := store.ResourceEntry{Type: resTypeEventInvoke, ID: eiKey(funcName, qualifier), Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(eiToWire(cfg)), nil
@@ -64,7 +64,7 @@ func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr 
 func (p *FunctionProvider) GetFunctionEventInvokeConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
 	qualifier := strParam(nr.Params, "Qualifier")
-	e, err := p.resources.Get(ctx, resTypeEventInvoke, eiKey(funcName, qualifier))
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeEventInvoke, eiKey(funcName, qualifier))
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event invoke config not found")
 	}
@@ -81,13 +81,13 @@ func (p *FunctionProvider) UpdateFunctionEventInvokeConfig(ctx context.Context, 
 func (p *FunctionProvider) DeleteFunctionEventInvokeConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
 	qualifier := strParam(nr.Params, "Qualifier")
-	_ = p.resources.Delete(ctx, resTypeEventInvoke, eiKey(funcName, qualifier))
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeEventInvoke, eiKey(funcName, qualifier))
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *FunctionProvider) ListFunctionEventInvokeConfigs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
-	entries, _ := p.resources.List(ctx, resTypeEventInvoke, funcName+":")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeEventInvoke, funcName+":")
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var cfg eventInvokeConfig

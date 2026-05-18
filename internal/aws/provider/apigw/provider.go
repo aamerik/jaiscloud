@@ -146,13 +146,13 @@ func (p *GatewayProvider) CreateRestApi(ctx context.Context, nr *model.Normalize
 		Description: strParam(nr.Params, "description"),
 		CreatedDate: time.Now().UTC(),
 	}
-	if err := p.save(ctx, rtAPI, apiID, api); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtAPI, apiID, api); err != nil {
 		return nil, fmt.Errorf("apigw: create api: %w", err)
 	}
 	// Create root resource "/" automatically.
 	rootID := shortID()
 	root := apiResource{ID: rootID, APIID: apiID, Path: "/", PathPart: ""}
-	p.save(ctx, rtResource, rootID, root)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, rootID, root)
 
 	return &model.ProviderResponse{HTTPStatus: 201, Data: apiToWire(api)}, nil
 }
@@ -160,14 +160,14 @@ func (p *GatewayProvider) CreateRestApi(ctx context.Context, nr *model.Normalize
 func (p *GatewayProvider) GetRestApi(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
 	var api restAPI
-	if err := p.load(ctx, rtAPI, apiID, &api); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtAPI, apiID, &api); err != nil {
 		return nil, p.notFound(err, "Rest API not found: "+apiID)
 	}
 	return provider.OK(apiToWire(api)), nil
 }
 
 func (p *GatewayProvider) GetRestApis(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtAPI, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtAPI, "")
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var api restAPI
@@ -181,11 +181,11 @@ func (p *GatewayProvider) GetRestApis(ctx context.Context, nr *model.NormalizedR
 func (p *GatewayProvider) UpdateRestApi(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
 	var api restAPI
-	if err := p.load(ctx, rtAPI, apiID, &api); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtAPI, apiID, &api); err != nil {
 		return nil, p.notFound(err, "Rest API not found: "+apiID)
 	}
 	applyPatchOps(&api, nr.Params)
-	if err := p.save(ctx, rtAPI, apiID, api); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtAPI, apiID, api); err != nil {
 		return nil, fmt.Errorf("apigw: update api: %w", err)
 	}
 	return provider.OK(apiToWire(api)), nil
@@ -193,17 +193,17 @@ func (p *GatewayProvider) UpdateRestApi(ctx context.Context, nr *model.Normalize
 
 func (p *GatewayProvider) DeleteRestApi(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
-	if err := p.resources.Delete(ctx, rtAPI, apiID); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtAPI, apiID); err != nil {
 		return nil, p.notFound(err, "Rest API not found: "+apiID)
 	}
 	// Cascade-delete all child entities associated with this API.
 	for _, rt := range []string{rtResource, rtStage, rtDeployment} {
-		entries, _ := p.resources.List(ctx, rt, "")
+		entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rt, "")
 		for _, e := range entries {
 			var m map[string]any
 			if json.Unmarshal(e.Data, &m) == nil {
 				if aid, _ := m["apiId"].(string); aid == apiID {
-					p.resources.Delete(ctx, rt, e.ID) //nolint:errcheck
+					p.resources.Delete(ctx, nr.AccountID, nr.Region, rt, e.ID) //nolint:errcheck
 				}
 			}
 		}
@@ -239,7 +239,7 @@ type methodIntegration struct {
 
 func (p *GatewayProvider) GetResources(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
-	entries, _ := p.resources.List(ctx, rtResource, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtResource, "")
 	items := []map[string]any{}
 	for _, e := range entries {
 		var r apiResource
@@ -253,7 +253,7 @@ func (p *GatewayProvider) GetResources(ctx context.Context, nr *model.Normalized
 func (p *GatewayProvider) GetResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	resourceID, _ := nr.Params["resourceId"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found: "+resourceID)
 	}
 	return provider.OK(resourceToWire(r)), nil
@@ -265,7 +265,7 @@ func (p *GatewayProvider) CreateResource(ctx context.Context, nr *model.Normaliz
 	pathPart, _ := nr.Params["pathPart"].(string)
 
 	var parent apiResource
-	if err := p.load(ctx, rtResource, parentID, &parent); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, parentID, &parent); err != nil {
 		return nil, p.notFound(err, "Parent resource not found: "+parentID)
 	}
 	path := strings.TrimRight(parent.Path, "/") + "/" + pathPart
@@ -275,7 +275,7 @@ func (p *GatewayProvider) CreateResource(ctx context.Context, nr *model.Normaliz
 		Path: path, PathPart: pathPart,
 		ResourceMethods: make(map[string]resourceMethod),
 	}
-	if err := p.save(ctx, rtResource, r.ID, r); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtResource, r.ID, r); err != nil {
 		return nil, fmt.Errorf("apigw: create resource: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: resourceToWire(r)}, nil
@@ -283,7 +283,7 @@ func (p *GatewayProvider) CreateResource(ctx context.Context, nr *model.Normaliz
 
 func (p *GatewayProvider) DeleteResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	resourceID, _ := nr.Params["resourceId"].(string)
-	if err := p.resources.Delete(ctx, rtResource, resourceID); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtResource, resourceID); err != nil {
 		return nil, p.notFound(err, "Resource not found: "+resourceID)
 	}
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
@@ -297,7 +297,7 @@ func (p *GatewayProvider) PutMethod(ctx context.Context, nr *model.NormalizedReq
 	authType, _ := nr.Params["authorizationType"].(string)
 
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found: "+resourceID)
 	}
 	if r.ResourceMethods == nil {
@@ -306,7 +306,7 @@ func (p *GatewayProvider) PutMethod(ctx context.Context, nr *model.NormalizedReq
 	r.ResourceMethods[httpMethod] = resourceMethod{
 		HTTPMethod: httpMethod, AuthorizationType: authType,
 	}
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
 		"httpMethod": httpMethod, "authorizationType": authType,
 	}}, nil
@@ -316,7 +316,7 @@ func (p *GatewayProvider) GetMethod(ctx context.Context, nr *model.NormalizedReq
 	resourceID, _ := nr.Params["resourceId"].(string)
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m, ok := r.ResourceMethods[httpMethod]
@@ -330,11 +330,11 @@ func (p *GatewayProvider) DeleteMethod(ctx context.Context, nr *model.Normalized
 	resourceID, _ := nr.Params["resourceId"].(string)
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	delete(r.ResourceMethods, httpMethod)
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -348,7 +348,7 @@ func (p *GatewayProvider) PutIntegration(ctx context.Context, nr *model.Normaliz
 	intHTTPMethod, _ := nr.Params["integrationHttpMethod"].(string)
 
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m := r.ResourceMethods[httpMethod]
@@ -357,7 +357,7 @@ func (p *GatewayProvider) PutIntegration(ctx context.Context, nr *model.Normaliz
 		PassthroughBehavior: "WHEN_NO_MATCH",
 	}
 	r.ResourceMethods[httpMethod] = m
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 201, Data: integrationToWire(m.Integration)}, nil
 }
 
@@ -365,7 +365,7 @@ func (p *GatewayProvider) GetIntegration(ctx context.Context, nr *model.Normaliz
 	resourceID, _ := nr.Params["resourceId"].(string)
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m, ok := r.ResourceMethods[httpMethod]
@@ -379,13 +379,13 @@ func (p *GatewayProvider) DeleteIntegration(ctx context.Context, nr *model.Norma
 	resourceID, _ := nr.Params["resourceId"].(string)
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m := r.ResourceMethods[httpMethod]
 	m.Integration = nil
 	r.ResourceMethods[httpMethod] = m
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -396,7 +396,7 @@ func (p *GatewayProvider) PutMethodResponse(ctx context.Context, nr *model.Norma
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	statusCode, _ := nr.Params["statusCode"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m := r.ResourceMethods[httpMethod]
@@ -405,7 +405,7 @@ func (p *GatewayProvider) PutMethodResponse(ctx context.Context, nr *model.Norma
 	}
 	m.MethodResponses[statusCode] = map[string]any{"statusCode": statusCode}
 	r.ResourceMethods[httpMethod] = m
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{"statusCode": statusCode}}, nil
 }
 
@@ -414,7 +414,7 @@ func (p *GatewayProvider) PutIntegrationResponse(ctx context.Context, nr *model.
 	httpMethod, _ := nr.Params["httpMethod"].(string)
 	statusCode, _ := nr.Params["statusCode"].(string)
 	var r apiResource
-	if err := p.load(ctx, rtResource, resourceID, &r); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtResource, resourceID, &r); err != nil {
 		return nil, p.notFound(err, "Resource not found")
 	}
 	m := r.ResourceMethods[httpMethod]
@@ -426,7 +426,7 @@ func (p *GatewayProvider) PutIntegrationResponse(ctx context.Context, nr *model.
 	}
 	m.Integration.Responses[statusCode] = map[string]any{"statusCode": statusCode}
 	r.ResourceMethods[httpMethod] = m
-	p.save(ctx, rtResource, resourceID, r)
+	p.save(ctx, nr.AccountID, nr.Region, rtResource, resourceID, r)
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{"statusCode": statusCode}}, nil
 }
 
@@ -448,13 +448,13 @@ func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.Normal
 		ID: shortID(), APIID: apiID, Description: desc,
 		CreatedDate: time.Now().UTC(),
 	}
-	p.save(ctx, rtDeployment, d.ID, d)
+	p.save(ctx, nr.AccountID, nr.Region, rtDeployment, d.ID, d)
 
 	// Auto-create or update the stage if stageName is provided.
 	if stageName != "" {
 		stageKey := apiID + "/" + stageName
 		st := apiStage{Name: stageName, APIID: apiID, DeploymentID: d.ID, CreatedDate: time.Now().UTC()}
-		p.save(ctx, rtStage, stageKey, st)
+		p.save(ctx, nr.AccountID, nr.Region, rtStage, stageKey, st)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
 		"id": d.ID, "createdDate": d.CreatedDate.Unix(), "description": d.Description,
@@ -463,7 +463,7 @@ func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.Normal
 
 func (p *GatewayProvider) GetDeployments(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
-	entries, _ := p.resources.List(ctx, rtDeployment, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtDeployment, "")
 	var items []map[string]any
 	for _, e := range entries {
 		var d deployment
@@ -476,7 +476,7 @@ func (p *GatewayProvider) GetDeployments(ctx context.Context, nr *model.Normaliz
 
 func (p *GatewayProvider) DeleteDeployment(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	deploymentID, _ := nr.Params["deploymentId"].(string)
-	p.resources.Delete(ctx, rtDeployment, deploymentID)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDeployment, deploymentID)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -501,7 +501,7 @@ func (p *GatewayProvider) CreateStage(ctx context.Context, nr *model.NormalizedR
 		CreatedDate: time.Now().UTC(),
 	}
 	stageKey := apiID + "/" + stageName
-	p.save(ctx, rtStage, stageKey, st)
+	p.save(ctx, nr.AccountID, nr.Region, rtStage, stageKey, st)
 	return &model.ProviderResponse{HTTPStatus: 201, Data: stageToWire(st)}, nil
 }
 
@@ -509,7 +509,7 @@ func (p *GatewayProvider) GetStage(ctx context.Context, nr *model.NormalizedRequ
 	apiID, _ := nr.Params["restApiId"].(string)
 	stageName, _ := nr.Params["stageName"].(string)
 	var st apiStage
-	if err := p.load(ctx, rtStage, apiID+"/"+stageName, &st); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtStage, apiID+"/"+stageName, &st); err != nil {
 		return nil, p.notFound(err, "Stage not found: "+stageName)
 	}
 	return provider.OK(stageToWire(st)), nil
@@ -517,7 +517,7 @@ func (p *GatewayProvider) GetStage(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *GatewayProvider) GetStages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
-	entries, _ := p.resources.List(ctx, rtStage, apiID+"/")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtStage, apiID+"/")
 	var items []map[string]any
 	for _, e := range entries {
 		var st apiStage
@@ -533,18 +533,18 @@ func (p *GatewayProvider) UpdateStage(ctx context.Context, nr *model.NormalizedR
 	stageName, _ := nr.Params["stageName"].(string)
 	var st apiStage
 	stageKey := apiID + "/" + stageName
-	if err := p.load(ctx, rtStage, stageKey, &st); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtStage, stageKey, &st); err != nil {
 		return nil, p.notFound(err, "Stage not found: "+stageName)
 	}
 	applyPatchOpsStage(&st, nr.Params)
-	p.save(ctx, rtStage, stageKey, st)
+	p.save(ctx, nr.AccountID, nr.Region, rtStage, stageKey, st)
 	return provider.OK(stageToWire(st)), nil
 }
 
 func (p *GatewayProvider) DeleteStage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
 	stageName, _ := nr.Params["stageName"].(string)
-	p.resources.Delete(ctx, rtStage, apiID+"/"+stageName)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtStage, apiID+"/"+stageName)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -559,7 +559,7 @@ func (p *GatewayProvider) Invoke(ctx context.Context, nr *model.NormalizedReques
 	httpMethod, _ := nr.Params["_httpMethod"].(string)
 	body, _ := nr.Params["_body"].([]byte)
 
-	r, err := p.findResource(ctx, apiID, resourcePath)
+	r, err := p.findResource(ctx, nr.AccountID, nr.Region, apiID, resourcePath)
 	if err != nil {
 		return nil, model.NewProviderError("NotFoundException", "no matching resource for "+resourcePath, 404)
 	}
@@ -578,7 +578,7 @@ func (p *GatewayProvider) Invoke(ctx context.Context, nr *model.NormalizedReques
 	// Stage variable interpolation.
 	stageKey := apiID + "/" + stageName
 	var st apiStage
-	p.load(ctx, rtStage, stageKey, &st)
+	p.load(ctx, nr.AccountID, nr.Region, rtStage, stageKey, &st)
 	uri := interpolateStageVars(m.Integration.URI, st.Variables)
 
 	switch strings.ToUpper(m.Integration.Type) {
@@ -627,8 +627,8 @@ func (p *GatewayProvider) invokeHTTP(ctx context.Context, method, uri string, bo
 
 // findResource matches a request path against stored resources for an API,
 // supporting path parameters ({param}) and greedy {proxy+} variables.
-func (p *GatewayProvider) findResource(ctx context.Context, apiID, requestPath string) (apiResource, error) {
-	entries, _ := p.resources.List(ctx, rtResource, "")
+func (p *GatewayProvider) findResource(ctx context.Context, account, region, apiID, requestPath string) (apiResource, error) {
+	entries, _ := p.resources.List(ctx, account, region, rtResource, "")
 	// First pass: exact match.
 	for _, e := range entries {
 		var r apiResource
@@ -681,23 +681,23 @@ func interpolateStageVars(uri string, vars map[string]string) string {
 
 // ─── persistence helpers ──────────────────────────────────────────────────────
 
-func (p *GatewayProvider) save(ctx context.Context, rtype, id string, v any) error {
+func (p *GatewayProvider) save(ctx context.Context, account, region, rtype, id string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	e := store.ResourceEntry{Type: rtype, ID: id, Data: data}
-	if err := p.resources.Create(ctx, e); err != nil {
+	if err := p.resources.Create(ctx, account, region, e); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return p.resources.Update(ctx, e)
+			return p.resources.Update(ctx, account, region, e)
 		}
 		return err
 	}
 	return nil
 }
 
-func (p *GatewayProvider) load(ctx context.Context, rtype, id string, v any) error {
-	e, err := p.resources.Get(ctx, rtype, id)
+func (p *GatewayProvider) load(ctx context.Context, account, region, rtype, id string, v any) error {
+	e, err := p.resources.Get(ctx, account, region, rtype, id)
 	if err != nil {
 		return err
 	}
@@ -825,7 +825,7 @@ func (p *GatewayProvider) CreateRequestValidator(ctx context.Context, nr *model.
 		ValidateRequestParameters: validateParams,
 	}
 	key := apiID + "/" + id
-	if err := p.save(ctx, rtValidator, key, v); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtValidator, key, v); err != nil {
 		return nil, fmt.Errorf("apigw: create validator: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: validatorToWire(v)}, nil
@@ -835,7 +835,7 @@ func (p *GatewayProvider) GetRequestValidator(ctx context.Context, nr *model.Nor
 	apiID, _ := nr.Params["restApiId"].(string)
 	validatorID, _ := nr.Params["requestValidatorId"].(string)
 	var v requestValidator
-	if err := p.load(ctx, rtValidator, apiID+"/"+validatorID, &v); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtValidator, apiID+"/"+validatorID, &v); err != nil {
 		return nil, p.notFound(err, "Request validator not found: "+validatorID)
 	}
 	return provider.OK(validatorToWire(v)), nil
@@ -843,7 +843,7 @@ func (p *GatewayProvider) GetRequestValidator(ctx context.Context, nr *model.Nor
 
 func (p *GatewayProvider) GetRequestValidators(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
-	entries, _ := p.resources.List(ctx, rtValidator, apiID+"/")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtValidator, apiID+"/")
 	var items []map[string]any
 	for _, e := range entries {
 		var v requestValidator
@@ -859,7 +859,7 @@ func (p *GatewayProvider) UpdateRequestValidator(ctx context.Context, nr *model.
 	validatorID, _ := nr.Params["requestValidatorId"].(string)
 	key := apiID + "/" + validatorID
 	var v requestValidator
-	if err := p.load(ctx, rtValidator, key, &v); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtValidator, key, &v); err != nil {
 		return nil, p.notFound(err, "Request validator not found: "+validatorID)
 	}
 	if ops, ok := nr.Params["patchOperations"].([]any); ok {
@@ -878,14 +878,14 @@ func (p *GatewayProvider) UpdateRequestValidator(ctx context.Context, nr *model.
 			}
 		}
 	}
-	_ = p.save(ctx, rtValidator, key, v)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtValidator, key, v)
 	return provider.OK(validatorToWire(v)), nil
 }
 
 func (p *GatewayProvider) DeleteRequestValidator(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	apiID, _ := nr.Params["restApiId"].(string)
 	validatorID, _ := nr.Params["requestValidatorId"].(string)
-	_ = p.resources.Delete(ctx, rtValidator, apiID+"/"+validatorID)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtValidator, apiID+"/"+validatorID)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -932,7 +932,7 @@ func (p *GatewayProvider) CreateDomainName(ctx context.Context, nr *model.Normal
 		DistributionDomainName: randLower(16) + ".cloudfront.net",
 		EndpointType:           endpointType,
 	}
-	if err := p.save(ctx, rtDomainName, name, d); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtDomainName, name, d); err != nil {
 		return nil, fmt.Errorf("apigw: create domain: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: domainToWire(d)}, nil
@@ -941,14 +941,14 @@ func (p *GatewayProvider) CreateDomainName(ctx context.Context, nr *model.Normal
 func (p *GatewayProvider) GetDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["domainName"].(string)
 	var d domainName
-	if err := p.load(ctx, rtDomainName, name, &d); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtDomainName, name, &d); err != nil {
 		return nil, p.notFound(err, "Domain name not found: "+name)
 	}
 	return provider.OK(domainToWire(d)), nil
 }
 
 func (p *GatewayProvider) GetDomainNames(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtDomainName, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtDomainName, "")
 	var items []map[string]any
 	for _, e := range entries {
 		var d domainName
@@ -962,7 +962,7 @@ func (p *GatewayProvider) GetDomainNames(ctx context.Context, nr *model.Normaliz
 func (p *GatewayProvider) UpdateDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["domainName"].(string)
 	var d domainName
-	if err := p.load(ctx, rtDomainName, name, &d); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtDomainName, name, &d); err != nil {
 		return nil, p.notFound(err, "Domain name not found: "+name)
 	}
 	if ops, ok := nr.Params["patchOperations"].([]any); ok {
@@ -976,13 +976,13 @@ func (p *GatewayProvider) UpdateDomainName(ctx context.Context, nr *model.Normal
 			}
 		}
 	}
-	_ = p.save(ctx, rtDomainName, name, d)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtDomainName, name, d)
 	return provider.OK(domainToWire(d)), nil
 }
 
 func (p *GatewayProvider) DeleteDomainName(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["domainName"].(string)
-	_ = p.resources.Delete(ctx, rtDomainName, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDomainName, name)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -1002,7 +1002,7 @@ func (p *GatewayProvider) CreateBasePathMapping(ctx context.Context, nr *model.N
 		Stage:      stage,
 	}
 	key := domName + "/" + basePath
-	if err := p.save(ctx, rtBasePathMapping, key, bpm); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtBasePathMapping, key, bpm); err != nil {
 		return nil, fmt.Errorf("apigw: create base path mapping: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: bpmToWire(bpm)}, nil
@@ -1012,7 +1012,7 @@ func (p *GatewayProvider) GetBasePathMapping(ctx context.Context, nr *model.Norm
 	domName, _ := nr.Params["domainName"].(string)
 	basePath, _ := nr.Params["basePath"].(string)
 	var bpm basePathMapping
-	if err := p.load(ctx, rtBasePathMapping, domName+"/"+basePath, &bpm); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtBasePathMapping, domName+"/"+basePath, &bpm); err != nil {
 		return nil, p.notFound(err, "Base path mapping not found")
 	}
 	return provider.OK(bpmToWire(bpm)), nil
@@ -1020,7 +1020,7 @@ func (p *GatewayProvider) GetBasePathMapping(ctx context.Context, nr *model.Norm
 
 func (p *GatewayProvider) GetBasePathMappings(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	domName, _ := nr.Params["domainName"].(string)
-	entries, _ := p.resources.List(ctx, rtBasePathMapping, domName+"/")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtBasePathMapping, domName+"/")
 	var items []map[string]any
 	for _, e := range entries {
 		var bpm basePathMapping
@@ -1034,7 +1034,7 @@ func (p *GatewayProvider) GetBasePathMappings(ctx context.Context, nr *model.Nor
 func (p *GatewayProvider) DeleteBasePathMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	domName, _ := nr.Params["domainName"].(string)
 	basePath, _ := nr.Params["basePath"].(string)
-	_ = p.resources.Delete(ctx, rtBasePathMapping, domName+"/"+basePath)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtBasePathMapping, domName+"/"+basePath)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -1104,7 +1104,7 @@ func (p *GatewayProvider) CreateUsagePlan(ctx context.Context, nr *model.Normali
 	if q, ok := nr.Params["quota"].(map[string]any); ok {
 		plan.Quota = q
 	}
-	if err := p.save(ctx, rtUsagePlan, id, plan); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtUsagePlan, id, plan); err != nil {
 		return nil, fmt.Errorf("apigw: create usage plan: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: planToWire(plan)}, nil
@@ -1113,14 +1113,14 @@ func (p *GatewayProvider) CreateUsagePlan(ctx context.Context, nr *model.Normali
 func (p *GatewayProvider) GetUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["usagePlanId"].(string)
 	var plan usagePlan
-	if err := p.load(ctx, rtUsagePlan, id, &plan); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtUsagePlan, id, &plan); err != nil {
 		return nil, p.notFound(err, "Usage plan not found: "+id)
 	}
 	return provider.OK(planToWire(plan)), nil
 }
 
 func (p *GatewayProvider) GetUsagePlans(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtUsagePlan, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtUsagePlan, "")
 	var items []map[string]any
 	for _, e := range entries {
 		var plan usagePlan
@@ -1134,7 +1134,7 @@ func (p *GatewayProvider) GetUsagePlans(ctx context.Context, nr *model.Normalize
 func (p *GatewayProvider) UpdateUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["usagePlanId"].(string)
 	var plan usagePlan
-	if err := p.load(ctx, rtUsagePlan, id, &plan); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtUsagePlan, id, &plan); err != nil {
 		return nil, p.notFound(err, "Usage plan not found: "+id)
 	}
 	if ops, ok := nr.Params["patchOperations"].([]any); ok {
@@ -1150,13 +1150,13 @@ func (p *GatewayProvider) UpdateUsagePlan(ctx context.Context, nr *model.Normali
 			}
 		}
 	}
-	_ = p.save(ctx, rtUsagePlan, id, plan)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtUsagePlan, id, plan)
 	return provider.OK(planToWire(plan)), nil
 }
 
 func (p *GatewayProvider) DeleteUsagePlan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["usagePlanId"].(string)
-	_ = p.resources.Delete(ctx, rtUsagePlan, id)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtUsagePlan, id)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -1176,7 +1176,7 @@ func (p *GatewayProvider) CreateApiKey(ctx context.Context, nr *model.Normalized
 	if enabled, ok := nr.Params["enabled"].(bool); ok {
 		k.Enabled = enabled
 	}
-	if err := p.save(ctx, rtApiKey, id, k); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtApiKey, id, k); err != nil {
 		return nil, fmt.Errorf("apigw: create api key: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: keyToWire(k)}, nil
@@ -1185,7 +1185,7 @@ func (p *GatewayProvider) CreateApiKey(ctx context.Context, nr *model.Normalized
 func (p *GatewayProvider) GetApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["apiKey"].(string)
 	var k apiKey
-	if err := p.load(ctx, rtApiKey, id, &k); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtApiKey, id, &k); err != nil {
 		return nil, p.notFound(err, "API key not found: "+id)
 	}
 	includeValue := false
@@ -1196,7 +1196,7 @@ func (p *GatewayProvider) GetApiKey(ctx context.Context, nr *model.NormalizedReq
 }
 
 func (p *GatewayProvider) GetApiKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtApiKey, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtApiKey, "")
 	var items []map[string]any
 	for _, e := range entries {
 		var k apiKey
@@ -1210,7 +1210,7 @@ func (p *GatewayProvider) GetApiKeys(ctx context.Context, nr *model.NormalizedRe
 func (p *GatewayProvider) UpdateApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["apiKey"].(string)
 	var k apiKey
-	if err := p.load(ctx, rtApiKey, id, &k); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtApiKey, id, &k); err != nil {
 		return nil, p.notFound(err, "API key not found: "+id)
 	}
 	if ops, ok := nr.Params["patchOperations"].([]any); ok {
@@ -1229,13 +1229,13 @@ func (p *GatewayProvider) UpdateApiKey(ctx context.Context, nr *model.Normalized
 			}
 		}
 	}
-	_ = p.save(ctx, rtApiKey, id, k)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtApiKey, id, k)
 	return provider.OK(keyToWire(k)), nil
 }
 
 func (p *GatewayProvider) DeleteApiKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id, _ := nr.Params["apiKey"].(string)
-	_ = p.resources.Delete(ctx, rtApiKey, id)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtApiKey, id)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -1253,7 +1253,7 @@ func (p *GatewayProvider) CreateUsagePlanKey(ctx context.Context, nr *model.Norm
 		KeyType: keyType,
 	}
 	key := planID + "/" + keyID
-	if err := p.save(ctx, rtUsagePlanKey, key, upk); err != nil {
+	if err := p.save(ctx, nr.AccountID, nr.Region, rtUsagePlanKey, key, upk); err != nil {
 		return nil, fmt.Errorf("apigw: create usage plan key: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
@@ -1264,7 +1264,7 @@ func (p *GatewayProvider) CreateUsagePlanKey(ctx context.Context, nr *model.Norm
 
 func (p *GatewayProvider) GetUsagePlanKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	planID, _ := nr.Params["usagePlanId"].(string)
-	entries, _ := p.resources.List(ctx, rtUsagePlanKey, planID+"/")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtUsagePlanKey, planID+"/")
 	var items []map[string]any
 	for _, e := range entries {
 		var upk usagePlanKey
@@ -1324,7 +1324,7 @@ func keyToWireMasked(k apiKey, includeValue bool) map[string]any {
 func (p *GatewayProvider) DeleteUsagePlanKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	planID, _ := nr.Params["usagePlanId"].(string)
 	keyID, _ := nr.Params["keyId"].(string)
-	_ = p.resources.Delete(ctx, rtUsagePlanKey, planID+"/"+keyID)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtUsagePlanKey, planID+"/"+keyID)
 	return &model.ProviderResponse{HTTPStatus: 202, Data: map[string]any{}}, nil
 }
 
@@ -1340,7 +1340,7 @@ type tagSet struct {
 func (p *GatewayProvider) GetTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["resourceArn"].(string)
 	var ts tagSet
-	if err := p.load(ctx, rtTag, arn, &ts); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtTag, arn, &ts); err != nil {
 		// No tags stored yet — return empty map (not a 404 in APIGW).
 		return provider.OK(map[string]any{"tags": map[string]string{}}), nil
 	}
@@ -1353,7 +1353,7 @@ func (p *GatewayProvider) GetTags(ctx context.Context, nr *model.NormalizedReque
 func (p *GatewayProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["resourceArn"].(string)
 	var ts tagSet
-	_ = p.load(ctx, rtTag, arn, &ts)
+	_ = p.load(ctx, nr.AccountID, nr.Region, rtTag, arn, &ts)
 	if ts.Tags == nil {
 		ts.Tags = map[string]string{}
 	}
@@ -1365,14 +1365,14 @@ func (p *GatewayProvider) TagResource(ctx context.Context, nr *model.NormalizedR
 			}
 		}
 	}
-	_ = p.save(ctx, rtTag, arn, ts)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtTag, arn, ts)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *GatewayProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["resourceArn"].(string)
 	var ts tagSet
-	if err := p.load(ctx, rtTag, arn, &ts); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtTag, arn, &ts); err != nil {
 		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 	}
 	// tagKeys may arrive as []any (JSON body) or as a string (single query param)
@@ -1391,7 +1391,7 @@ func (p *GatewayProvider) UntagResource(ctx context.Context, nr *model.Normalize
 	case string:
 		delete(ts.Tags, v)
 	}
-	_ = p.save(ctx, rtTag, arn, ts)
+	_ = p.save(ctx, nr.AccountID, nr.Region, rtTag, arn, ts)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
@@ -1404,7 +1404,7 @@ func (p *GatewayProvider) GetExport(ctx context.Context, nr *model.NormalizedReq
 
 	// Verify the API exists.
 	var api restAPI
-	if err := p.load(ctx, rtAPI, apiID, &api); err != nil {
+	if err := p.load(ctx, nr.AccountID, nr.Region, rtAPI, apiID, &api); err != nil {
 		return nil, p.notFound(err, "Rest API not found: "+apiID)
 	}
 

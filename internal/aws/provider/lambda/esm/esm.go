@@ -107,7 +107,7 @@ func (p *Provider) DeleteEventSourceMapping(ctx context.Context, nr *model.Norma
 
 // RehydratePollers starts pollers for all enabled ESMs on startup.
 func (p *Provider) RehydratePollers(ctx context.Context) {
-	entries, err := p.resources.List(ctx, esmResourceType, "")
+	entries, err := p.resources.List(ctx, "", "", esmResourceType, "")
 	if err != nil {
 		p.logger.Warn("esm: failed to list ESMs for rehydration", "err", err)
 		return
@@ -138,7 +138,7 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 	}
 
 	// Detect source type and resolve names from ARN
-	sourceType, queueName, tableName, err := resolveEventSource(eventSourceArn)
+	sourceType, queueName, tableName, sourceAccount, sourceRegion, err := resolveEventSource(eventSourceArn)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidParameterValueException", err.Error(), 400)
 	}
@@ -149,7 +149,7 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		parts := strings.Split(lookupName, ":")
 		lookupName = parts[len(parts)-1]
 	}
-	if _, err := p.resources.Get(ctx, "lambda_functions", lookupName); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "lambda_functions", lookupName); err != nil {
 		return nil, model.NewProviderError("ResourceNotFoundException",
 			"Function not found: "+functionName, 404)
 	}
@@ -217,6 +217,8 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		Cloud:                          cloud,
 		QueueName:                      queueName,
 		TableName:                      tableName,
+		SourceAccountID:                sourceAccount,
+		SourceRegion:                   sourceRegion,
 	}
 
 	if err := p.persistESM(ctx, esm); err != nil {
@@ -243,7 +245,7 @@ func (p *Provider) handleGetESM(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) handleListESMs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, esmResourceType, "")
+	entries, err := p.resources.List(ctx, "", "", esmResourceType, "")
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +369,7 @@ func (p *Provider) handleDeleteESM(ctx context.Context, nr *model.NormalizedRequ
 	// Stop poller before deletion
 	p.stopPollerForMapping(id)
 
-	if err := p.resources.Delete(ctx, esmResourceType, id); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, esmResourceType, id); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "event source mapping not found: "+id)
 	}
 
@@ -378,7 +380,7 @@ func (p *Provider) handleDeleteESM(ctx context.Context, nr *model.NormalizedRequ
 // ─── Helper methods ───────────────────────────────────────────────────────────
 
 func (p *Provider) loadESM(ctx context.Context, id string) (EventSourceMapping, error) {
-	entry, err := p.resources.Get(ctx, esmResourceType, id)
+	entry, err := p.resources.Get(ctx, "", "", esmResourceType, id)
 	if err != nil {
 		return EventSourceMapping{}, err
 	}
@@ -400,9 +402,9 @@ func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error
 		Data:      data,
 		UpdatedAt: time.Now(),
 	}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, "", "", entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, entry)
+			return p.resources.Update(ctx, "", "", entry)
 		}
 		return err
 	}
@@ -410,7 +412,7 @@ func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error
 }
 
 func (p *Provider) esmDuplicateExists(ctx context.Context, functionName, eventSourceArn string) bool {
-	entries, err := p.resources.List(ctx, esmResourceType, "")
+	entries, err := p.resources.List(ctx, "", "", esmResourceType, "")
 	if err != nil {
 		return false
 	}
@@ -462,11 +464,13 @@ func (p *Provider) esmToWireJSON(esm EventSourceMapping) map[string]any {
 // from the serialized EventSourceArn and SourceType.
 func (p *Provider) restoreTransientFields(esm EventSourceMapping) EventSourceMapping {
 	if esm.SourceType == "" {
-		sourceType, queueName, tableName, err := resolveEventSource(esm.EventSourceArn)
+		sourceType, queueName, tableName, sourceAccount, sourceRegion, err := resolveEventSource(esm.EventSourceArn)
 		if err == nil {
 			esm.SourceType = sourceType
 			esm.QueueName = queueName
 			esm.TableName = tableName
+			esm.SourceAccountID = sourceAccount
+			esm.SourceRegion = sourceRegion
 		}
 	} else {
 		switch esm.SourceType {
@@ -534,31 +538,33 @@ func generateUUID() string {
 	return uuid.New().String()
 }
 
-func resolveEventSource(eventSourceArn string) (sourceType, queueName, tableName string, err error) {
+func resolveEventSource(eventSourceArn string) (sourceType, queueName, tableName, account, region string, err error) {
 	// arn:aws:sqs:region:account:queue-name
 	// arn:aws:dynamodb:region:account:table/TableName/stream/timestamp
 	parts := strings.Split(eventSourceArn, ":")
 	if len(parts) < 6 {
-		return "", "", "", model.NewProviderError("InvalidParameterValueException",
+		return "", "", "", "", "", model.NewProviderError("InvalidParameterValueException",
 			"invalid EventSourceArn: "+eventSourceArn, 400)
 	}
 
 	service := parts[2] // "sqs" or "dynamodb"
+	region = parts[3]
+	account = parts[4]
 
 	switch service {
 	case "sqs":
-		return ESMSourceSQS, parts[5], "", nil
+		return ESMSourceSQS, parts[5], "", account, region, nil
 	case "dynamodb":
 		// parts[5] = "table/MyTable/stream/2021-01-01T00:00:00.000"
 		resourcePath := parts[5]
 		tableName = tableNameFromResourcePath(resourcePath)
 		if tableName == "" {
-			return "", "", "", model.NewProviderError("InvalidParameterValueException",
+			return "", "", "", "", "", model.NewProviderError("InvalidParameterValueException",
 				"cannot parse table name from DynamoDB stream ARN: "+eventSourceArn, 400)
 		}
-		return ESMSourceDynamoDBStreams, "", tableName, nil
+		return ESMSourceDynamoDBStreams, "", tableName, account, region, nil
 	default:
-		return "", "", "", model.NewProviderError("InvalidParameterValueException",
+		return "", "", "", "", "", model.NewProviderError("InvalidParameterValueException",
 			"unsupported event source service: "+service, 400)
 	}
 }

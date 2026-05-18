@@ -106,7 +106,7 @@ func (p *Provider) addSent(email sentEmail) {
 	}
 }
 
-func (p *Provider) verifyIdentity(ctx context.Context, identity, idType string) {
+func (p *Provider) verifyIdentity(ctx context.Context, account, region, identity, idType string) {
 	id := sesIdentity{
 		Identity:           identity,
 		IdentityType:       idType,
@@ -114,16 +114,16 @@ func (p *Provider) verifyIdentity(ctx context.Context, identity, idType string) 
 	}
 	data, _ := json.Marshal(id)
 	entry := store.ResourceEntry{Type: rtSESIdentity, ID: identity, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
 // isVerified checks whether the given email address (or its domain) is
 // verified in the store. Returns true if verified, false otherwise.
-func (p *Provider) isVerified(ctx context.Context, email string) bool {
+func (p *Provider) isVerified(ctx context.Context, account, region, email string) bool {
 	// Check the exact email address.
-	if e, err := p.resources.Get(ctx, rtSESIdentity, email); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtSESIdentity, email); err == nil {
 		var id sesIdentity
 		if json.Unmarshal(e.Data, &id) == nil && id.VerificationStatus == "Success" {
 			return true
@@ -132,7 +132,7 @@ func (p *Provider) isVerified(ctx context.Context, email string) bool {
 	// Check the domain part.
 	if atIdx := strings.LastIndex(email, "@"); atIdx >= 0 {
 		domain := email[atIdx+1:]
-		if e, err := p.resources.Get(ctx, rtSESIdentity, domain); err == nil {
+		if e, err := p.resources.Get(ctx, account, region, rtSESIdentity, domain); err == nil {
 			var id sesIdentity
 			if json.Unmarshal(e.Data, &id) == nil && id.VerificationStatus == "Success" {
 				return true
@@ -146,7 +146,7 @@ func (p *Provider) SendEmail(ctx context.Context, nr *model.NormalizedRequest) (
 	source := str(nr.Params, "Source")
 
 	// Enforce sender verification.
-	if source != "" && !p.isVerified(ctx, source) {
+	if source != "" && !p.isVerified(ctx, nr.AccountID, nr.Region, source) {
 		return nil, sesErr("MessageRejected",
 			fmt.Sprintf("Email address not verified. The following identities failed the check in region US-EAST-1: %s", source),
 			http.StatusBadRequest)
@@ -199,7 +199,7 @@ func (p *Provider) VerifyEmailIdentity(ctx context.Context, nr *model.Normalized
 	if email == "" {
 		return nil, sesErr("InvalidParameterValue", "EmailAddress is required", http.StatusBadRequest)
 	}
-	p.verifyIdentity(ctx, email, "EmailAddress")
+	p.verifyIdentity(ctx, nr.AccountID, nr.Region, email, "EmailAddress")
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -208,14 +208,14 @@ func (p *Provider) VerifyDomainIdentity(ctx context.Context, nr *model.Normalize
 	if domain == "" {
 		return nil, sesErr("InvalidParameterValue", "Domain is required", http.StatusBadRequest)
 	}
-	p.verifyIdentity(ctx, domain, "Domain")
+	p.verifyIdentity(ctx, nr.AccountID, nr.Region, domain, "Domain")
 	token := randHex(32)
 	return provider.OK(map[string]any{"VerificationToken": token}), nil
 }
 
 func (p *Provider) ListIdentities(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterType := str(nr.Params, "IdentityType") // "EmailAddress" | "Domain" | ""
-	entries, _ := p.resources.List(ctx, rtSESIdentity, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtSESIdentity, "")
 	identities := make([]string, 0, len(entries))
 	for _, e := range entries {
 		var id sesIdentity
@@ -230,7 +230,7 @@ func (p *Provider) ListIdentities(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) DeleteIdentity(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	identity := str(nr.Params, "Identity")
-	_ = p.resources.Delete(ctx, rtSESIdentity, identity)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtSESIdentity, identity)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -247,7 +247,7 @@ func (p *Provider) GetIdentityVerificationAttributes(ctx context.Context, nr *mo
 	attrs := map[string]any{}
 	for _, identity := range identities {
 		status := "NotStarted"
-		if e, err := p.resources.Get(ctx, rtSESIdentity, identity); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSESIdentity, identity); err == nil {
 			var id sesIdentity
 			if json.Unmarshal(e.Data, &id) == nil {
 				status = id.VerificationStatus

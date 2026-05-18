@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,10 +26,12 @@ func NewPostgresDynamoDBItemStore(pool *pgxpool.Pool) *PostgresDynamoDBItemStore
 	return &PostgresDynamoDBItemStore{pool: pool}
 }
 
-// pgSuffix returns a short stable hex suffix derived from the table name.
-func pgSuffix(tableName string) string {
-	h := sha256.Sum256([]byte(tableName))
-	return fmt.Sprintf("%x", h[:8])
+// pgSuffix builds the per-DDB-table physical-table suffix.
+// The hash includes account+region+tableName so two accounts using
+// the same DDB table name get distinct physical tables.
+func pgSuffix(account, region, tableName string) string {
+	h := sha256.Sum256([]byte(account + ":" + region + ":" + tableName))
+	return hex.EncodeToString(h[:])[:12]
 }
 
 func hashKey(table string, item map[string]any) string {
@@ -38,14 +41,14 @@ func hashKey(table string, item map[string]any) string {
 
 // ─── Data-plane methods ───────────────────────────────────────────────────────
 
-func (s *PostgresDynamoDBItemStore) PutItem(ctx context.Context, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
+func (s *PostgresDynamoDBItemStore) PutItem(ctx context.Context, account, region, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
 	h := pkHash
 	if h == "" {
 		h = hashKey(table, item)
 	}
 	var oldItem map[string]any
 	if cond.ConditionExpression != "" || cond.ReturnValues == "ALL_OLD" {
-		oldItem, _ = s.GetItem(ctx, table, h)
+		oldItem, _ = s.GetItem(ctx, account, region, table, h)
 		if cond.ConditionExpression != "" {
 			existing := oldItem
 			if existing == nil {
@@ -62,17 +65,17 @@ func (s *PostgresDynamoDBItemStore) PutItem(ctx context.Context, table, pkHash s
 	}
 	raw, _ := json.Marshal(item)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (table_name, pk_hash) DO UPDATE
-			SET item=$3, updated_at=now()
-	`, table, h, json.RawMessage(raw))
+		INSERT INTO jc_dynamodb_items (account_id, region, table_name, pk_hash, item)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (account_id, region, table_name, pk_hash) DO UPDATE
+			SET item=$5, updated_at=now()
+	`, account, region, table, h, json.RawMessage(raw))
 	if err != nil {
 		return nil, err
 	}
 	// Maintain GSI/LSI index rows when schema is available.
 	if cond.Schema != nil {
-		if upsertErr := s.upsertIndexRows(ctx, table, h, item, cond.Schema); upsertErr != nil {
+		if upsertErr := s.upsertIndexRows(ctx, account, region, table, h, item, cond.Schema); upsertErr != nil {
 			return nil, fmt.Errorf("index maintenance failed for table %s: %w", table, upsertErr)
 		}
 	}
@@ -82,11 +85,11 @@ func (s *PostgresDynamoDBItemStore) PutItem(ctx context.Context, table, pkHash s
 	return nil, nil
 }
 
-func (s *PostgresDynamoDBItemStore) GetItem(ctx context.Context, table, pkHash string) (map[string]any, error) {
+func (s *PostgresDynamoDBItemStore) GetItem(ctx context.Context, account, region, table, pkHash string) (map[string]any, error) {
 	var raw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
-	`, table, pkHash).Scan(&raw)
+		SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash=$4
+	`, account, region, table, pkHash).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -97,10 +100,10 @@ func (s *PostgresDynamoDBItemStore) GetItem(ctx context.Context, table, pkHash s
 	return item, json.Unmarshal(raw, &item)
 }
 
-func (s *PostgresDynamoDBItemStore) DeleteItem(ctx context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
+func (s *PostgresDynamoDBItemStore) DeleteItem(ctx context.Context, account, region, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
 	var oldItem map[string]any
 	if cond.ConditionExpression != "" || cond.ReturnValues == "ALL_OLD" || cond.Schema != nil {
-		oldItem, _ = s.GetItem(ctx, table, pkHash)
+		oldItem, _ = s.GetItem(ctx, account, region, table, pkHash)
 		if cond.ConditionExpression != "" {
 			existing := oldItem
 			if existing == nil {
@@ -116,11 +119,11 @@ func (s *PostgresDynamoDBItemStore) DeleteItem(ctx context.Context, table, pkHas
 		}
 	}
 	if cond.Schema != nil {
-		s.deleteIndexRows(ctx, table, pkHash)
+		s.deleteIndexRows(ctx, account, region, table, pkHash)
 	}
 	_, err := s.pool.Exec(ctx, `
-		DELETE FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
-	`, table, pkHash)
+		DELETE FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash=$4
+	`, account, region, table, pkHash)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +133,8 @@ func (s *PostgresDynamoDBItemStore) DeleteItem(ctx context.Context, table, pkHas
 	return nil, nil
 }
 
-func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
-	existing, err := s.GetItem(ctx, table, pkHash)
+func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, account, region, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
+	existing, err := s.GetItem(ctx, account, region, table, pkHash)
 	if err != nil {
 		return nil, err
 	}
@@ -162,19 +165,19 @@ func (s *PostgresDynamoDBItemStore) UpdateItem(ctx context.Context, table, pkHas
 	}
 	// PutItem will maintain indexes via cond.Schema.
 	putCond := ConditionSpec{Schema: spec.Schema}
-	if _, err := s.PutItem(ctx, table, pkHash, existing, putCond); err != nil {
+	if _, err := s.PutItem(ctx, account, region, table, pkHash, existing, putCond); err != nil {
 		return nil, err
 	}
 	return existing, nil
 }
 
-func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
+func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, account, region, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	if q.IndexSchema != nil {
-		return s.queryIndex(ctx, table, q)
+		return s.queryIndex(ctx, account, region, table, q)
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT item FROM jc_dynamodb_items WHERE table_name=$1 ORDER BY pk_hash
-	`, table)
+		SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 ORDER BY pk_hash
+	`, account, region, table)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -182,13 +185,13 @@ func (s *PostgresDynamoDBItemStore) Query(ctx context.Context, table string, q Q
 	return s.filterRows(rows, q.KeyConditionExpression, q.FilterExpression, q.ExpressionAttributeNames, q.ExpressionAttributeValues, q.ExclusiveStartKey, q.Limit)
 }
 
-func (s *PostgresDynamoDBItemStore) Scan(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
+func (s *PostgresDynamoDBItemStore) Scan(ctx context.Context, account, region, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	if sc.IndexSchema != nil {
-		return s.scanIndex(ctx, table, sc)
+		return s.scanIndex(ctx, account, region, table, sc)
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT item FROM jc_dynamodb_items WHERE table_name=$1 ORDER BY pk_hash
-	`, table)
+		SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 ORDER BY pk_hash
+	`, account, region, table)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -252,11 +255,11 @@ func (s *PostgresDynamoDBItemStore) filterRows(rows pgx.Rows, keyExpr, filterExp
 	return result, scannedCount, lastKey, nil
 }
 
-func (s *PostgresDynamoDBItemStore) BatchWriteItems(ctx context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
+func (s *PostgresDynamoDBItemStore) BatchWriteItems(ctx context.Context, account, region string, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
 	for _, req := range reqs {
 		if req.PutItem != nil {
 			cond := ConditionSpec{Schema: req.Schema}
-			if _, err := s.PutItem(ctx, req.Table, req.PutHash, req.PutItem, cond); err != nil {
+			if _, err := s.PutItem(ctx, account, region, req.Table, req.PutHash, req.PutItem, cond); err != nil {
 				return nil, err
 			}
 		} else if req.DeleteKey != nil {
@@ -265,7 +268,7 @@ func (s *PostgresDynamoDBItemStore) BatchWriteItems(ctx context.Context, reqs []
 				h = hashKey(req.Table, req.DeleteKey)
 			}
 			deleteCond := ConditionSpec{Schema: req.Schema}
-			if _, err := s.DeleteItem(ctx, req.Table, h, deleteCond); err != nil {
+			if _, err := s.DeleteItem(ctx, account, region, req.Table, h, deleteCond); err != nil {
 				return nil, err
 			}
 		}
@@ -273,12 +276,12 @@ func (s *PostgresDynamoDBItemStore) BatchWriteItems(ctx context.Context, reqs []
 	return nil, nil
 }
 
-func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
+func (s *PostgresDynamoDBItemStore) BatchGetItems(ctx context.Context, account, region string, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
 	result := make(map[string][]map[string]any)
 	for _, req := range reqs {
 		for _, key := range req.Keys {
 			h := itemPKHash(key)
-			item, err := s.GetItem(ctx, req.Table, h)
+			item, err := s.GetItem(ctx, account, region, req.Table, h)
 			if err != nil {
 				return nil, err
 			}
@@ -303,7 +306,7 @@ func isSerializationFailure(err error) bool {
 // TransactWriteItems runs all condition checks and writes in a single Serializable transaction.
 // SELECT ... FOR UPDATE locks each row during condition evaluation to prevent TOCTOU races.
 // A PostgreSQL serialization failure (40001) is surfaced as TransactionConflict.
-func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
+func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, account, region string, ops []TransactWriteOp) ([]CancellationReason, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		if isSerializationFailure(err) {
@@ -323,8 +326,8 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 	for i, op := range ops {
 		var raw []byte
 		err := tx.QueryRow(ctx,
-			`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2 FOR UPDATE`,
-			op.Table, op.PKHash,
+			`SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash=$4 FOR UPDATE`,
+			account, region, op.Table, op.PKHash,
 		).Scan(&raw)
 		var item map[string]any
 		if err == nil {
@@ -374,11 +377,11 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 		case "Put":
 			raw, _ := json.Marshal(op.Item)
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
-				VALUES ($1, $2, $3)
-				ON CONFLICT (table_name, pk_hash) DO UPDATE
-					SET item=$3, updated_at=now()
-			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				INSERT INTO jc_dynamodb_items (account_id, region, table_name, pk_hash, item)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (account_id, region, table_name, pk_hash) DO UPDATE
+					SET item=$5, updated_at=now()
+			`, account, region, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
 				if isSerializationFailure(err) {
 					for j := range reasons {
 						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
@@ -389,8 +392,8 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 			}
 		case "Delete":
 			if _, err := tx.Exec(ctx, `
-				DELETE FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2
-			`, op.Table, op.PKHash); err != nil {
+				DELETE FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash=$4
+			`, account, region, op.Table, op.PKHash); err != nil {
 				if isSerializationFailure(err) {
 					for j := range reasons {
 						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
@@ -402,8 +405,8 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 		case "Update":
 			var existingRaw []byte
 			err := tx.QueryRow(ctx,
-				`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash=$2`,
-				op.Table, op.PKHash,
+				`SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash=$4`,
+				account, region, op.Table, op.PKHash,
 			).Scan(&existingRaw)
 			var existing map[string]any
 			if err == nil {
@@ -431,11 +434,11 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, ops 
 			}
 			raw, _ := json.Marshal(existing)
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO jc_dynamodb_items (table_name, pk_hash, item)
-				VALUES ($1, $2, $3)
-				ON CONFLICT (table_name, pk_hash) DO UPDATE
-					SET item=$3, updated_at=now()
-			`, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
+				INSERT INTO jc_dynamodb_items (account_id, region, table_name, pk_hash, item)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (account_id, region, table_name, pk_hash) DO UPDATE
+					SET item=$5, updated_at=now()
+			`, account, region, op.Table, op.PKHash, json.RawMessage(raw)); err != nil {
 				if isSerializationFailure(err) {
 					for j := range reasons {
 						reasons[j] = CancellationReason{Code: CancelCodeTransactionConflict, Message: "Transaction conflict"}
@@ -485,8 +488,8 @@ func (s *PostgresDynamoDBItemStore) Reset() {
 // ─── Table-lifecycle methods ──────────────────────────────────────────────────
 
 // CreateTableSchema creates GSI and LSI index tables for a DynamoDB table.
-func (s *PostgresDynamoDBItemStore) CreateTableSchema(ctx context.Context, schema TableSchema) error {
-	suffix := pgSuffix(schema.TableName)
+func (s *PostgresDynamoDBItemStore) CreateTableSchema(ctx context.Context, account, region string, schema TableSchema) error {
+	suffix := pgSuffix(account, region, schema.TableName)
 	main := "jc_dt_" + suffix
 
 	ddl := fmt.Sprintf(`
@@ -515,8 +518,8 @@ CREATE INDEX IF NOT EXISTS %s_lsi_q ON %s_lsi (index_name, pk_val, lsi_sk_val);
 }
 
 // DropTableSchema drops per-table index tables and removes items from jc_dynamodb_items.
-func (s *PostgresDynamoDBItemStore) DropTableSchema(ctx context.Context, tableName string) error {
-	suffix := pgSuffix(tableName)
+func (s *PostgresDynamoDBItemStore) DropTableSchema(ctx context.Context, account, region, tableName string) error {
+	suffix := pgSuffix(account, region, tableName)
 	main := "jc_dt_" + suffix
 	ddl := fmt.Sprintf(`
 DROP TABLE IF EXISTS %s_lsi;
@@ -525,16 +528,16 @@ DROP TABLE IF EXISTS %s_gsi;
 	if _, err := s.pool.Exec(ctx, ddl); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items WHERE table_name=$1`, tableName)
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3`, account, region, tableName)
 	return err
 }
 
 // AddGSI backfills GSI index rows from existing items in jc_dynamodb_items.
-func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, tableName string, schema TableSchema, idx IndexDef) error {
-	suffix := pgSuffix(tableName)
+func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, account, region, tableName string, schema TableSchema, idx IndexDef) error {
+	suffix := pgSuffix(account, region, tableName)
 	gsiTable := "jc_dt_" + suffix + "_gsi"
 
-	rows, err := s.pool.Query(ctx, `SELECT pk_hash, item FROM jc_dynamodb_items WHERE table_name=$1`, tableName)
+	rows, err := s.pool.Query(ctx, `SELECT pk_hash, item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3`, account, region, tableName)
 	if err != nil {
 		return err
 	}
@@ -609,8 +612,8 @@ func (s *PostgresDynamoDBItemStore) AddGSI(ctx context.Context, tableName string
 }
 
 // DeleteGSI removes all rows for the named GSI.
-func (s *PostgresDynamoDBItemStore) DeleteGSI(ctx context.Context, tableName string, schema TableSchema, indexName string) error {
-	suffix := pgSuffix(tableName)
+func (s *PostgresDynamoDBItemStore) DeleteGSI(ctx context.Context, account, region, tableName string, schema TableSchema, indexName string) error {
+	suffix := pgSuffix(account, region, tableName)
 	gsiTable := "jc_dt_" + suffix + "_gsi"
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE index_name=$1`, gsiTable), indexName)
 	return err
@@ -618,11 +621,11 @@ func (s *PostgresDynamoDBItemStore) DeleteGSI(ctx context.Context, tableName str
 
 // ─── Index write helpers ──────────────────────────────────────────────────────
 
-func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, pkHash string, item map[string]any, schema *TableSchema) error {
+func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, account, region, table, pkHash string, item map[string]any, schema *TableSchema) error {
 	if schema == nil {
 		return nil
 	}
-	suffix := pgSuffix(table)
+	suffix := pgSuffix(account, region, table)
 	main := "jc_dt_" + suffix
 
 	s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s_gsi WHERE pk_hash=$1`, main), pkHash)
@@ -679,8 +682,8 @@ func (s *PostgresDynamoDBItemStore) upsertIndexRows(ctx context.Context, table, 
 	return nil
 }
 
-func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, table, pkHash string) {
-	suffix := pgSuffix(table)
+func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, account, region, table, pkHash string) {
+	suffix := pgSuffix(account, region, table)
 	main := "jc_dt_" + suffix
 	s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s_gsi WHERE pk_hash=$1`, main), pkHash)
 	s.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s_lsi WHERE pk_hash=$1`, main), pkHash)
@@ -688,9 +691,9 @@ func (s *PostgresDynamoDBItemStore) deleteIndexRows(ctx context.Context, table, 
 
 // ─── Index query helpers ──────────────────────────────────────────────────────
 
-func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
+func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, account, region, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	idx := q.IndexSchema
-	suffix := pgSuffix(table)
+	suffix := pgSuffix(account, region, table)
 	main := "jc_dt_" + suffix
 
 	var pkHashes []string
@@ -726,7 +729,7 @@ func (s *PostgresDynamoDBItemStore) queryIndex(ctx context.Context, table string
 		return nil, 0, "", err
 	}
 
-	items, err := s.fetchByPKHashes(ctx, table, pkHashes)
+	items, err := s.fetchByPKHashes(ctx, account, region, table, pkHashes)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -773,9 +776,9 @@ func sortByIndexSK(items []map[string]any, idx *IndexKeyRef, scanFwd bool) []map
 	return items
 }
 
-func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
+func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, account, region, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	idx := sc.IndexSchema
-	suffix := pgSuffix(table)
+	suffix := pgSuffix(account, region, table)
 	main := "jc_dt_" + suffix
 
 	var pkHashes []string
@@ -793,7 +796,7 @@ func (s *PostgresDynamoDBItemStore) scanIndex(ctx context.Context, table string,
 		return nil, 0, "", err
 	}
 
-	items, err := s.fetchByPKHashes(ctx, table, pkHashes)
+	items, err := s.fetchByPKHashes(ctx, account, region, table, pkHashes)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -817,18 +820,18 @@ func (s *PostgresDynamoDBItemStore) collectPKHashes(ctx context.Context, query s
 	return hashes, rows.Err()
 }
 
-func (s *PostgresDynamoDBItemStore) fetchByPKHashes(ctx context.Context, table string, hashes []string) ([]map[string]any, error) {
+func (s *PostgresDynamoDBItemStore) fetchByPKHashes(ctx context.Context, account, region, table string, hashes []string) ([]map[string]any, error) {
 	if len(hashes) == 0 {
 		return nil, nil
 	}
-	args := make([]any, 0, len(hashes)+1)
-	args = append(args, table)
+	args := make([]any, 0, len(hashes)+3)
+	args = append(args, account, region, table)
 	placeholders := make([]string, len(hashes))
 	for i, h := range hashes {
 		args = append(args, h)
-		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		placeholders[i] = fmt.Sprintf("$%d", i+4)
 	}
-	query := fmt.Sprintf(`SELECT item FROM jc_dynamodb_items WHERE table_name=$1 AND pk_hash IN (%s)`,
+	query := fmt.Sprintf(`SELECT item FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2 AND table_name=$3 AND pk_hash IN (%s)`,
 		strings.Join(placeholders, ","))
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {

@@ -89,12 +89,12 @@ func newMemTerminalStore() *memTerminalStore {
 	return &memTerminalStore{inner: store.NewMemoryResourceStore()}
 }
 
-func (m *memTerminalStore) Create(ctx context.Context, entry store.ResourceEntry) error {
-	return m.inner.Create(ctx, entry)
+func (m *memTerminalStore) Create(ctx context.Context, account, region string, entry store.ResourceEntry) error {
+	return m.inner.Create(ctx, account, region, entry)
 }
 
-func (m *memTerminalStore) Get(ctx context.Context, resourceType, id string) (store.ResourceEntry, error) {
-	return m.inner.Get(ctx, resourceType, id)
+func (m *memTerminalStore) Get(ctx context.Context, account, region, resourceType, id string) (store.ResourceEntry, error) {
+	return m.inner.Get(ctx, account, region, resourceType, id)
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -234,11 +234,11 @@ func TestDescribeStepAfterTTL(t *testing.T) {
 	const prefix = "emr/steps"
 	const jobID = "step-ttl-001"
 
-	if err := k8shelpers.PersistTerminalSnapshot(ctx, s, prefix, jobID, snap); err != nil {
+	if err := k8shelpers.PersistTerminalSnapshot(ctx, s, "000000000000", "us-east-1", prefix, jobID, snap); err != nil {
 		t.Fatalf("PersistTerminalSnapshot: %v", err)
 	}
 
-	loaded, found, err := k8shelpers.LoadTerminalSnapshot(ctx, s, prefix, jobID)
+	loaded, found, err := k8shelpers.LoadTerminalSnapshot(ctx, s, "000000000000", "us-east-1", prefix, jobID)
 	if err != nil {
 		t.Fatalf("LoadTerminalSnapshot: %v", err)
 	}

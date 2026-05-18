@@ -293,9 +293,9 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	entry := store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			if err := p.resources.Update(ctx, entry); err != nil {
+			if err := p.resources.Update(ctx, nr.AccountID, nr.Region, entry); err != nil {
 				slog.Error("cloudwatch: failed to update alarm",
 					"alarm", name, "err", err)
 			}
@@ -305,7 +305,7 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 		}
 	}
 	now := time.Now().UTC()
-	p.writeAlarmHistory(ctx, name, "MetricAlarm", "ConfigurationUpdate",
+	p.writeAlarmHistory(ctx, nr.AccountID, nr.Region, name, "MetricAlarm", "ConfigurationUpdate",
 		"Alarm created or updated",
 		map[string]any{"version": "1.0", "updatedAlarm": nr.Params},
 		now)
@@ -313,7 +313,7 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *Provider) DescribeAlarms(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, "cloudwatch_alarm", "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, "cloudwatch_alarm", "")
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +381,7 @@ func (p *Provider) DeleteAlarms(ctx context.Context, nr *model.NormalizedRequest
 		if !ok || name == "" {
 			break
 		}
-		if err := p.resources.Delete(ctx, "cloudwatch_alarm", name); err != nil {
+		if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, "cloudwatch_alarm", name); err != nil {
 			slog.Error("cloudwatch: failed to delete alarm",
 				"pkg", "cloudwatch", "op", "DeleteAlarms", "alarm", name, "err", err)
 		}
@@ -396,7 +396,7 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	if name == "" || stateValue == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "AlarmName and StateValue are required", HTTPStatus: 400}
 	}
-	e, err := p.resources.Get(ctx, "cloudwatch_alarm", name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_alarm", name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Alarm not found: " + name, HTTPStatus: 404}
 	}
@@ -413,11 +413,11 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}); err != nil {
+	if err := p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data}); err != nil {
 		slog.Error("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 	}
 	// Record history for explicit state changes via SetAlarmState.
-	p.writeAlarmHistory(ctx, name, "MetricAlarm", "StateUpdate",
+	p.writeAlarmHistory(ctx, nr.AccountID, nr.Region, name, "MetricAlarm", "StateUpdate",
 		fmt.Sprintf("Alarm updated from %s to %s", oldState, stateValue),
 		map[string]any{
 			"version":  "1.0",
@@ -445,7 +445,7 @@ func (p *Provider) setAlarmActionsEnabled(ctx context.Context, nr *model.Normali
 		if !ok || name == "" {
 			break
 		}
-		e, err := p.resources.Get(ctx, "cloudwatch_alarm", name)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_alarm", name)
 		if err != nil {
 			continue
 		}
@@ -455,7 +455,7 @@ func (p *Provider) setAlarmActionsEnabled(ctx context.Context, nr *model.Normali
 		}
 		params["ActionsEnabled"] = enabled
 		data, _ := json.Marshal(params)
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data})
+		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: "cloudwatch_alarm", ID: name, Data: data})
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -480,9 +480,9 @@ func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest
 	}
 	data, _ := json.Marshal(d)
 	entry := store.ResourceEntry{Type: "cloudwatch_dashboard", ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{"DashboardValidationMessages": []any{}}), nil
@@ -490,7 +490,7 @@ func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) GetDashboard(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["DashboardName"].(string)
-	e, err := p.resources.Get(ctx, "cloudwatch_dashboard", name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_dashboard", name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Dashboard not found: " + name, HTTPStatus: 404}
 	}
@@ -505,8 +505,8 @@ func (p *Provider) GetDashboard(ctx context.Context, nr *model.NormalizedRequest
 	}), nil
 }
 
-func (p *Provider) ListDashboards(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "cloudwatch_dashboard", "")
+func (p *Provider) ListDashboards(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "cloudwatch_dashboard", "")
 	out := make([]any, 0, len(entries))
 	for _, e := range entries {
 		var d dashboardEntry
@@ -527,7 +527,7 @@ func (p *Provider) DeleteDashboards(ctx context.Context, nr *model.NormalizedReq
 		if !ok || name == "" {
 			break
 		}
-		_ = p.resources.Delete(ctx, "cloudwatch_dashboard", name)
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "cloudwatch_dashboard", name)
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -537,7 +537,7 @@ func (p *Provider) DeleteDashboards(ctx context.Context, nr *model.NormalizedReq
 func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["ResourceARN"].(string)
 	tags := make(map[string]string)
-	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_tags", arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	for i := 1; ; i++ {
@@ -550,9 +550,9 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -561,7 +561,7 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["ResourceARN"].(string)
 	tags := make(map[string]string)
-	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_tags", arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	for i := 1; ; i++ {
@@ -572,14 +572,14 @@ func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedReques
 		delete(tags, k)
 	}
 	data, _ := json.Marshal(tags)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: "cloudwatch_tags", ID: arn, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["ResourceARN"].(string)
 	tags := make(map[string]string)
-	if e, err := p.resources.Get(ctx, "cloudwatch_tags", arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_tags", arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	out := make([]any, 0, len(tags))
@@ -688,9 +688,9 @@ func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRe
 	alarm.InsufficientDataActions = strSlice(nr.Params, "InsufficientDataActions")
 	data, _ := json.Marshal(alarm)
 	entry := store.ResourceEntry{Type: "cloudwatch_composite_alarm", ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -700,7 +700,7 @@ func (p *Provider) DescribeAlarmHistory(ctx context.Context, nr *model.Normalize
 	alarmName, _ := nr.Params["AlarmName"].(string)
 	histItemType, _ := nr.Params["HistoryItemType"].(string)
 
-	entries, err := p.resources.List(ctx, "cloudwatch_alarm_history", "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, "cloudwatch_alarm_history", "")
 	if err != nil {
 		return nil, err
 	}
@@ -747,7 +747,7 @@ func (p *Provider) DescribeAlarmHistory(ctx context.Context, nr *model.Normalize
 }
 
 // writeAlarmHistory persists a single alarm history record.
-func (p *Provider) writeAlarmHistory(ctx context.Context, alarmName, alarmType, itemType, summary string, dataObj map[string]any, ts time.Time) {
+func (p *Provider) writeAlarmHistory(ctx context.Context, account, region, alarmName, alarmType, itemType, summary string, dataObj map[string]any, ts time.Time) {
 	histData, _ := json.Marshal(dataObj)
 	record := map[string]any{
 		"AlarmName":       alarmName,
@@ -759,7 +759,7 @@ func (p *Provider) writeAlarmHistory(ctx context.Context, alarmName, alarmType, 
 	}
 	data, _ := json.Marshal(record)
 	id := fmt.Sprintf("%s::%d", alarmName, ts.UnixNano())
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: "cloudwatch_alarm_history", ID: id, Data: data})
+	_ = p.resources.Create(ctx, account, region, store.ResourceEntry{Type: "cloudwatch_alarm_history", ID: id, Data: data})
 }
 
 func (p *Provider) Reset() {
@@ -800,16 +800,16 @@ func (p *Provider) PutAnomalyDetector(ctx context.Context, nr *model.NormalizedR
 	data, _ := json.Marshal(det)
 	id := anomalyKey(ns, metric, dims)
 	entry := store.ResourceEntry{Type: "cloudwatch_anomaly_detector", ID: id, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeAnomalyDetectors(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "cloudwatch_anomaly_detector", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "cloudwatch_anomaly_detector", "")
 	nsFilter, _ := nr.Params["Namespace"].(string)
 	metricFilter, _ := nr.Params["MetricName"].(string)
 	out := []map[string]any{}
@@ -843,10 +843,10 @@ func (p *Provider) DeleteAnomalyDetector(ctx context.Context, nr *model.Normaliz
 	metric, _ := nr.Params["MetricName"].(string)
 	dims := extractDimensions(nr.Params, "")
 	id := anomalyKey(ns, metric, dims)
-	if _, err := p.resources.Get(ctx, "cloudwatch_anomaly_detector", id); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_anomaly_detector", id); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Anomaly detector not found", HTTPStatus: 400}
 	}
-	_ = p.resources.Delete(ctx, "cloudwatch_anomaly_detector", id)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "cloudwatch_anomaly_detector", id)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -897,10 +897,10 @@ func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequ
 	}
 	data, _ := json.Marshal(ms)
 	entry := store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			ms.CreationDate = now // preserve original on upsert via reload
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{"Arn": ms.ARN}), nil
@@ -908,7 +908,7 @@ func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *Provider) GetMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["Name"].(string)
-	e, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_metric_stream", name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
 	}
@@ -930,15 +930,15 @@ func (p *Provider) GetMetricStream(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *Provider) DeleteMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["Name"].(string)
-	if _, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "cloudwatch_metric_stream", name); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
 	}
-	_ = p.resources.Delete(ctx, "cloudwatch_metric_stream", name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "cloudwatch_metric_stream", name)
 	return provider.OK(map[string]any{}), nil
 }
 
-func (p *Provider) ListMetricStreams(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "cloudwatch_metric_stream", "")
+func (p *Provider) ListMetricStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "cloudwatch_metric_stream", "")
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var ms metricStream
@@ -956,9 +956,9 @@ func (p *Provider) ListMetricStreams(ctx context.Context, _ *model.NormalizedReq
 	return provider.OK(map[string]any{"Entries": out}), nil
 }
 
-func (p *Provider) setMetricStreamState(ctx context.Context, names []string, state string) error {
+func (p *Provider) setMetricStreamState(ctx context.Context, account, region string, names []string, state string) error {
 	for _, name := range names {
-		e, err := p.resources.Get(ctx, "cloudwatch_metric_stream", name)
+		e, err := p.resources.Get(ctx, account, region, "cloudwatch_metric_stream", name)
 		if err != nil {
 			return &model.ProviderError{Code: "ResourceNotFound", Message: "Metric stream not found: " + name, HTTPStatus: 400}
 		}
@@ -967,14 +967,14 @@ func (p *Provider) setMetricStreamState(ctx context.Context, names []string, sta
 		ms.State = state
 		ms.LastUpdateDate = time.Now().UTC()
 		data, _ := json.Marshal(ms)
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data})
+		_ = p.resources.Update(ctx, account, region, store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data})
 	}
 	return nil
 }
 
 func (p *Provider) StartMetricStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	names := strSlice(nr.Params, "Names")
-	if err := p.setMetricStreamState(ctx, names, "running"); err != nil {
+	if err := p.setMetricStreamState(ctx, nr.AccountID, nr.Region, names, "running"); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -982,7 +982,7 @@ func (p *Provider) StartMetricStreams(ctx context.Context, nr *model.NormalizedR
 
 func (p *Provider) StopMetricStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	names := strSlice(nr.Params, "Names")
-	if err := p.setMetricStreamState(ctx, names, "stopped"); err != nil {
+	if err := p.setMetricStreamState(ctx, nr.AccountID, nr.Region, names, "stopped"); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

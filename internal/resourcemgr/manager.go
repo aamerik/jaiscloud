@@ -91,6 +91,7 @@ func (m *Manager) RegisterRules(rules []DeleteGuardRule) {
 // Returns *OperationError on failure; caller converts to cloud-specific error.
 func (m *Manager) CheckParent(
 	ctx context.Context,
+	account, region string,
 	parentType, parentID string,
 	notFoundCode, notFoundMsg string,
 	httpStatus int,
@@ -98,7 +99,7 @@ func (m *Manager) CheckParent(
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	exists, err := m.resources.Exists(ctx, parentType, parentID)
+	exists, err := m.resources.Exists(ctx, account, region, parentType, parentID)
 	if err != nil {
 		return err
 	}
@@ -134,7 +135,7 @@ func (m *Manager) CheckParent(
 //	if err != nil { return nil, toHTTPError(err) }
 //	defer handle.Release()
 //	// ... perform the actual delete ...
-func (m *Manager) AcquireDelete(ctx context.Context, resourceType, resourceID string) (*DeletionHandle, error) {
+func (m *Manager) AcquireDelete(ctx context.Context, account, region, resourceType, resourceID string) (*DeletionHandle, error) {
 	// Step 1: acquire deletion lock under write-lock (briefly).
 	m.mu.Lock()
 	if !m.lock.Acquire(resourceType, resourceID) {
@@ -159,7 +160,7 @@ func (m *Manager) AcquireDelete(ctx context.Context, resourceType, resourceID st
 	var results []ruleResult
 	for _, i := range m.ruleIdx[resourceType] {
 		rule := m.rules[i]
-		children, err := rule.FindChildren(ctx, m.resources, resourceID)
+		children, err := rule.FindChildren(ctx, m.resources, account, region, resourceID)
 		if err != nil {
 			handle.Release()
 			return nil, err
@@ -200,7 +201,7 @@ func (m *Manager) AcquireDelete(ctx context.Context, resourceType, resourceID st
 				return nil, fmt.Errorf("resourcemgr: ForceTerminate is nil for rule on %s", resourceType)
 			}
 			for _, child := range r.children {
-				if err := rule.ForceTerminate(ctx, m.resources, child); err != nil {
+				if err := rule.ForceTerminate(ctx, m.resources, account, region, child); err != nil {
 					handle.Release()
 					return nil, err
 				}
@@ -209,12 +210,12 @@ func (m *Manager) AcquireDelete(ctx context.Context, resourceType, resourceID st
 		case PolicyCascade:
 			deleteFn := rule.CascadeDelete
 			if deleteFn == nil {
-				deleteFn = func(ctx context.Context, resources ResourceStore, child ChildRef) error {
-					return resources.Delete(ctx, child.Type, child.ID)
+				deleteFn = func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error {
+					return resources.Delete(ctx, account, region, child.Type, child.ID)
 				}
 			}
 			for _, child := range r.children {
-				if err := deleteFn(ctx, m.resources, child); err != nil {
+				if err := deleteFn(ctx, m.resources, account, region, child); err != nil {
 					handle.Release()
 					return nil, err
 				}

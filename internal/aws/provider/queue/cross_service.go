@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	awsarn "jaiscloud/internal/aws/arn"
 	sqsstore "jaiscloud/internal/store/aws/sqs"
 )
 
@@ -27,8 +28,10 @@ type InternalSendAPI interface {
 
 // InternalSend delivers a message to an SQS queue identified by ARN or URL.
 // It resolves the target queue and writes directly to the message store.
+// The account and region are extracted from the target ARN/URL so that
+// cross-account deliveries land in the correct per-(account,region) store.
 func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, body string, attrs map[string]MessageAttribute, src SourceContext) error {
-	queueURL, err := p.resolveQueueURLFromARNorURL(ctx, queueARNorURL)
+	queueURL, account, region, err := p.resolveQueueURLWithScope(ctx, queueARNorURL)
 	if err != nil {
 		return err
 	}
@@ -44,7 +47,7 @@ func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, 
 		Attributes:        map[string]string{},
 		MessageAttributes: msgAttrs,
 	}
-	_, _, err = p.messages.Send(ctx, msg)
+	_, _, err = p.messages.Send(ctx, account, region, msg)
 	if err != nil {
 		return err
 	}
@@ -52,23 +55,72 @@ func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, 
 	return nil
 }
 
-// resolveQueueURLFromARNorURL returns a queue URL given either an ARN or URL.
-func (p *QueueProvider) resolveQueueURLFromARNorURL(ctx context.Context, arnOrURL string) (string, error) {
+// resolveQueueURLWithScope returns the queue URL plus the account and region
+// derived from the target ARN or URL. The account/region are used to route
+// the message to the correct per-scope store (multi-account fix §11.1.1).
+func (p *QueueProvider) resolveQueueURLWithScope(ctx context.Context, arnOrURL string) (url, account, region string, err error) {
 	if strings.HasPrefix(arnOrURL, "http://") || strings.HasPrefix(arnOrURL, "https://") {
-		if _, err := p.resources.Get(ctx, "sqs_queues", arnOrURL); err != nil {
-			return "", fmt.Errorf("queue: URL not found: %s", arnOrURL)
+		// Parse account+region from URL path: http://host/{account}/{name}
+		account, region = accountRegionFromQueueURL(arnOrURL)
+		if _, e := p.resources.Get(ctx, account, region, "sqs_queues", arnOrURL); e != nil {
+			return "", "", "", fmt.Errorf("queue: URL not found: %s", arnOrURL)
 		}
-		return arnOrURL, nil
+		return arnOrURL, account, region, nil
 	}
-	// ARN: arn:aws:sqs:{region}:{account}:{name}
 	if strings.HasPrefix(arnOrURL, "arn:") {
-		parts := strings.Split(arnOrURL, ":")
-		if len(parts) >= 6 {
-			name := parts[len(parts)-1]
-			return p.resolveQueueURLByName(ctx, name)
+		parsed, e := awsarn.Parse(arnOrURL)
+		if e != nil {
+			return "", "", "", fmt.Errorf("queue: invalid ARN: %s", arnOrURL)
 		}
-		return "", fmt.Errorf("queue: invalid ARN: %s", arnOrURL)
+		account = parsed.AccountID
+		region = parsed.Region
+		name := parsed.Resource
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		queueURL, e := p.resolveQueueURLByNameInScope(ctx, account, region, name)
+		if e != nil {
+			return "", "", "", e
+		}
+		return queueURL, account, region, nil
 	}
-	// Treat as name
-	return p.resolveQueueURLByName(ctx, arnOrURL)
+	// Bare name — fall back to scanning without account/region scope.
+	queueURL, e := p.resolveQueueURLByName(ctx, arnOrURL)
+	return queueURL, "", "", e
+}
+
+// accountRegionFromQueueURL parses account and region from a JaisCloud SQS URL.
+// Format: http[s]://host/{account}/{name} — region is not in the URL, use "".
+func accountRegionFromQueueURL(u string) (account, region string) {
+	// Strip scheme+host: keep /{account}/{name}
+	idx := strings.Index(u, "://")
+	if idx < 0 {
+		return "", ""
+	}
+	rest := u[idx+3:]
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		rest = rest[slash+1:] // strip host
+	}
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) >= 1 {
+		account = parts[0]
+	}
+	return account, ""
+}
+
+// resolveQueueURLByNameInScope lists queues in the given account+region scope
+// and finds the one whose URL ends with the given queue name.
+func (p *QueueProvider) resolveQueueURLByNameInScope(ctx context.Context, account, region, queueName string) (string, error) {
+	entries, err := p.resources.List(ctx, account, region, "sqs_queues", "")
+	if err != nil {
+		return "", fmt.Errorf("queue: failed to list queues: %w", err)
+	}
+	for _, e := range entries {
+		url := e.ID
+		idx := strings.LastIndex(url, "/")
+		if idx >= 0 && url[idx+1:] == queueName {
+			return url, nil
+		}
+	}
+	return "", fmt.Errorf("queue: queue not found: %s", queueName)
 }

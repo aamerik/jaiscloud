@@ -48,7 +48,7 @@ func (p *FunctionProvider) CreateCodeSigningConfig(ctx context.Context, nr *mode
 		csc.CodeSigningPolicies = cp
 	}
 	data, _ := json.Marshal(csc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeCodeSigning, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeCodeSigning, ID: arn, Data: data}); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{"CodeSigningConfig": cscToWire(csc)}}, nil
@@ -57,7 +57,7 @@ func (p *FunctionProvider) CreateCodeSigningConfig(ctx context.Context, nr *mode
 func (p *FunctionProvider) GetCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
 	var csc codeSigningConfig
-	if err := p.loadCSC(ctx, arn, &csc); err != nil {
+	if err := p.loadCSC(ctx, nr.AccountID, nr.Region, arn, &csc); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Code signing config not found: "+arn)
 	}
 	return provider.OK(map[string]any{"CodeSigningConfig": cscToWire(csc)}), nil
@@ -66,7 +66,7 @@ func (p *FunctionProvider) GetCodeSigningConfig(ctx context.Context, nr *model.N
 func (p *FunctionProvider) UpdateCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
 	var csc codeSigningConfig
-	if err := p.loadCSC(ctx, arn, &csc); err != nil {
+	if err := p.loadCSC(ctx, nr.AccountID, nr.Region, arn, &csc); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Code signing config not found: "+arn)
 	}
 	if d := strParam(nr.Params, "Description"); d != "" {
@@ -80,18 +80,18 @@ func (p *FunctionProvider) UpdateCodeSigningConfig(ctx context.Context, nr *mode
 	}
 	csc.LastModified = time.Now().UTC().Format(time.RFC3339)
 	data, _ := json.Marshal(csc)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeCodeSigning, ID: arn, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeCodeSigning, ID: arn, Data: data})
 	return provider.OK(map[string]any{"CodeSigningConfig": cscToWire(csc)}), nil
 }
 
 func (p *FunctionProvider) DeleteCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
-	_ = p.resources.Delete(ctx, resTypeCodeSigning, arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeCodeSigning, arn)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *FunctionProvider) ListCodeSigningConfigs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, resTypeCodeSigning, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeCodeSigning, "")
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var csc codeSigningConfig
@@ -107,9 +107,9 @@ func (p *FunctionProvider) PutFunctionCodeSigningConfig(ctx context.Context, nr 
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
 	data, _ := json.Marshal(map[string]string{"CodeSigningConfigArn": arn})
 	entry := store.ResourceEntry{Type: resTypeFuncCSC, ID: funcName, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{"CodeSigningConfigArn": arn, "FunctionName": funcName}), nil
@@ -117,7 +117,7 @@ func (p *FunctionProvider) PutFunctionCodeSigningConfig(ctx context.Context, nr 
 
 func (p *FunctionProvider) GetFunctionCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
-	e, err := p.resources.Get(ctx, resTypeFuncCSC, funcName)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeFuncCSC, funcName)
 	if err != nil {
 		return provider.OK(map[string]any{"FunctionName": funcName}), nil
 	}
@@ -128,13 +128,13 @@ func (p *FunctionProvider) GetFunctionCodeSigningConfig(ctx context.Context, nr 
 
 func (p *FunctionProvider) DeleteFunctionCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
-	_ = p.resources.Delete(ctx, resTypeFuncCSC, funcName)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeFuncCSC, funcName)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *FunctionProvider) ListFunctionsByCodeSigningConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "CodeSigningConfigArn")
-	entries, _ := p.resources.List(ctx, resTypeFuncCSC, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeFuncCSC, "")
 	funcs := make([]string, 0)
 	for _, e := range entries {
 		var m map[string]string
@@ -145,8 +145,8 @@ func (p *FunctionProvider) ListFunctionsByCodeSigningConfig(ctx context.Context,
 	return provider.OK(map[string]any{"FunctionArns": funcs}), nil
 }
 
-func (p *FunctionProvider) loadCSC(ctx context.Context, arn string, out *codeSigningConfig) error {
-	e, err := p.resources.Get(ctx, resTypeCodeSigning, arn)
+func (p *FunctionProvider) loadCSC(ctx context.Context, account, region, arn string, out *codeSigningConfig) error {
+	e, err := p.resources.Get(ctx, account, region, resTypeCodeSigning, arn)
 	if err != nil {
 		return err
 	}

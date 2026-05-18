@@ -83,8 +83,8 @@ func poolToWire(pool identityPool) map[string]any {
 	}
 }
 
-func (p *Provider) loadPool(ctx context.Context, poolID string) (identityPool, error) {
-	e, err := p.resources.Get(ctx, rtIdentityPool, poolID)
+func (p *Provider) loadPool(ctx context.Context, account, region, poolID string) (identityPool, error) {
+	e, err := p.resources.Get(ctx, account, region, rtIdentityPool, poolID)
 	if err != nil {
 		return identityPool{}, ciErr("ResourceNotFoundException", "Identity pool not found: "+poolID)
 	}
@@ -93,11 +93,11 @@ func (p *Provider) loadPool(ctx context.Context, poolID string) (identityPool, e
 	return pool, nil
 }
 
-func (p *Provider) savePool(ctx context.Context, pool identityPool) {
+func (p *Provider) savePool(ctx context.Context, account, region string, pool identityPool) {
 	data, _ := json.Marshal(pool)
 	entry := store.ResourceEntry{Type: rtIdentityPool, ID: pool.IdentityPoolID, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
@@ -120,13 +120,13 @@ func (p *Provider) CreateIdentityPool(ctx context.Context, nr *model.NormalizedR
 		AllowUnauthenticatedIdentities: allowUnauth,
 		Tags:                           map[string]string{},
 	}
-	p.savePool(ctx, pool)
+	p.savePool(ctx, nr.AccountID, nr.Region, pool)
 	return provider.OK(poolToWire(pool)), nil
 }
 
 func (p *Provider) DescribeIdentityPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "IdentityPoolId")
-	pool, err := p.loadPool(ctx, poolID)
+	pool, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID)
 	if err != nil {
 		return nil, err
 	}
@@ -135,15 +135,15 @@ func (p *Provider) DescribeIdentityPool(ctx context.Context, nr *model.Normalize
 
 func (p *Provider) DeleteIdentityPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "IdentityPoolId")
-	if _, err := p.loadPool(ctx, poolID); err != nil {
+	if _, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtIdentityPool, poolID)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtIdentityPool, poolID)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListIdentityPools(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtIdentityPool, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtIdentityPool, "")
 	pools := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var pool identityPool
@@ -156,20 +156,20 @@ func (p *Provider) ListIdentityPools(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) UpdateIdentityPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "IdentityPoolId")
-	pool, err := p.loadPool(ctx, poolID)
+	pool, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID)
 	if err != nil {
 		return nil, err
 	}
 	if v := str(nr.Params, "IdentityPoolName"); v != "" {
 		pool.IdentityPoolName = v
 	}
-	p.savePool(ctx, pool)
+	p.savePool(ctx, nr.AccountID, nr.Region, pool)
 	return provider.OK(poolToWire(pool)), nil
 }
 
 func (p *Provider) GetId(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "IdentityPoolId")
-	if _, err := p.loadPool(ctx, poolID); err != nil {
+	if _, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID); err != nil {
 		return nil, err
 	}
 	region := nr.Region
@@ -184,7 +184,7 @@ func (p *Provider) GetId(ctx context.Context, nr *model.NormalizedRequest) (*mod
 		CreationDate:   time.Now().UTC(),
 	}
 	data, _ := json.Marshal(ident)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtIdentity, ID: identityID, Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtIdentity, ID: identityID, Data: data})
 	return provider.OK(map[string]any{"IdentityId": identityID}), nil
 }
 

@@ -310,7 +310,7 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	data, _ := json.Marshal(s)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtStack, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtStack, ID: name, Data: data}); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, &model.ProviderError{Code: "AlreadyExistsException", Message: "Stack already exists: " + name, HTTPStatus: http.StatusBadRequest}
 		}
@@ -329,7 +329,7 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 
 func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
-	s, err := p.loadStack(ctx, name)
+	s, err := p.loadStack(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -569,7 +569,7 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 			p.deprovisionResource(ctx, updatedSoFar[i])
 		}
 		s.StackStatus = "UPDATE_ROLLBACK_COMPLETE"
-		p.saveStack(ctx, s)
+		p.saveStack(ctx, nr.AccountID, nr.Region, s)
 		return nil, &model.ProviderError{Code: "UpdateStack_ROLLBACK_COMPLETE", Message: updateErr.Error(), HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -580,7 +580,7 @@ func (p *StackProvider) UpdateStack(ctx context.Context, nr *model.NormalizedReq
 	s.StackStatus = "UPDATE_COMPLETE"
 	s.Parameters = paramsToSlice(rc.params)
 	s.Template = newTemplateBody
-	p.saveStack(ctx, s)
+	p.saveStack(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{"StackId": s.StackId}), nil
 }
 
@@ -607,7 +607,7 @@ func (p *StackProvider) DeleteStack(ctx context.Context, nr *model.NormalizedReq
 		}
 	}
 
-	s, err := p.loadStack(ctx, name)
+	s, err := p.loadStack(ctx, nr.AccountID, nr.Region, name)
 	if err == nil {
 		// Guard: reject if any exported value is imported by another stack.
 		if exportErr := p.exports.DeleteStack(s.StackId); exportErr != nil {
@@ -617,7 +617,7 @@ func (p *StackProvider) DeleteStack(ctx context.Context, nr *model.NormalizedReq
 		p.rollback(ctx, s.Resources)
 	}
 
-	if err := p.resources.Delete(ctx, rtStack, name); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtStack, name); err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
@@ -634,7 +634,7 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 				name = parts[1]
 			}
 		}
-		s, err := p.loadStack(ctx, name)
+		s, err := p.loadStack(ctx, nr.AccountID, nr.Region, name)
 		if err != nil {
 			return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 		}
@@ -642,7 +642,7 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 		conds := p.stackConditions(doc, s)
 		return provider.OK(map[string]any{"Stacks": []map[string]any{s.toWireWithDoc(doc, conds)}}), nil
 	}
-	entries, _ := p.resources.List(ctx, rtStack, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtStack, "")
 	stacks := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var s cfStack
@@ -655,7 +655,7 @@ func (p *StackProvider) DescribeStacks(ctx context.Context, nr *model.Normalized
 }
 
 func (p *StackProvider) ListStacks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtStack, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtStack, "")
 	summaries := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var s cfStack
@@ -667,7 +667,7 @@ func (p *StackProvider) ListStacks(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *StackProvider) DescribeStackResources(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
-	s, err := p.loadStack(ctx, name)
+	s, err := p.loadStack(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -696,7 +696,7 @@ func (p *StackProvider) ValidateTemplate(_ context.Context, nr *model.Normalized
 
 func (p *StackProvider) GetTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "StackName")
-	s, err := p.loadStack(ctx, name)
+	s, err := p.loadStack(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "Stack not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -779,8 +779,8 @@ func parseTemplate(body string) (map[string]any, error) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func (p *StackProvider) loadStack(ctx context.Context, name string) (cfStack, error) {
-	e, err := p.resources.Get(ctx, rtStack, name)
+func (p *StackProvider) loadStack(ctx context.Context, account, region, name string) (cfStack, error) {
+	e, err := p.resources.Get(ctx, account, region, rtStack, name)
 	if err != nil {
 		return cfStack{}, err
 	}
@@ -788,9 +788,9 @@ func (p *StackProvider) loadStack(ctx context.Context, name string) (cfStack, er
 	return s, json.Unmarshal(e.Data, &s)
 }
 
-func (p *StackProvider) saveStack(ctx context.Context, s cfStack) {
+func (p *StackProvider) saveStack(ctx context.Context, account, region string, s cfStack) {
 	data, _ := json.Marshal(s)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtStack, ID: s.StackName, Data: data})
+	p.resources.Update(ctx, account, region, store.ResourceEntry{Type: rtStack, ID: s.StackName, Data: data})
 }
 
 func (rc *resolveCtx) resolvePropsMap(props map[string]any) map[string]any {

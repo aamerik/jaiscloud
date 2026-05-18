@@ -20,7 +20,7 @@ func TestDDBProvisionedThroughputExceeded(t *testing.T) {
 		BillingMode: "PROVISIONED",
 		WCU:         1,
 	}
-	if err := store.CreateTableSchema(ctx, schema); err != nil {
+	if err := store.CreateTableSchema(ctx, "000000000000", "us-east-1", schema); err != nil {
 		t.Fatalf("CreateTableSchema: %v", err)
 	}
 
@@ -31,7 +31,7 @@ func TestDDBProvisionedThroughputExceeded(t *testing.T) {
 		item := map[string]any{
 			"id": map[string]any{"S": "key"},
 		}
-		_, err := store.PutItem(ctx, "ThrottleTest", "id=key", item, ConditionSpec{})
+		_, err := store.PutItem(ctx, "000000000000", "us-east-1", "ThrottleTest", "id=key", item, ConditionSpec{})
 		if err != nil {
 			if strings.Contains(err.Error(), "ProvisionedThroughput") {
 				throttledCount++
@@ -74,14 +74,14 @@ func TestTokenBucket_PayPerRequest(t *testing.T) {
 		PKType:      "S",
 		BillingMode: "PAY_PER_REQUEST",
 	}
-	if err := store.CreateTableSchema(ctx, schema); err != nil {
+	if err := store.CreateTableSchema(ctx, "000000000000", "us-east-1", schema); err != nil {
 		t.Fatalf("CreateTableSchema: %v", err)
 	}
 
 	// All writes should succeed — PAY_PER_REQUEST has 40000 capacity.
 	for i := 0; i < 100; i++ {
 		item := map[string]any{"id": map[string]any{"S": "k"}}
-		if _, err := store.PutItem(ctx, "PPRTable", "id=k", item, ConditionSpec{}); err != nil {
+		if _, err := store.PutItem(ctx, "000000000000", "us-east-1", "PPRTable", "id=k", item, ConditionSpec{}); err != nil {
 			t.Fatalf("PutItem %d failed unexpectedly: %v", i, err)
 		}
 	}
@@ -99,13 +99,13 @@ func TestDropTableSchema_CleansThrottle(t *testing.T) {
 		BillingMode: "PROVISIONED",
 		WCU:         5,
 	}
-	if err := store.CreateTableSchema(ctx, schema); err != nil {
+	if err := store.CreateTableSchema(ctx, "000000000000", "us-east-1", schema); err != nil {
 		t.Fatalf("CreateTableSchema: %v", err)
 	}
 	if store.throttles["DropTest"] == nil {
 		t.Error("expected throttle bucket after CreateTableSchema")
 	}
-	if err := store.DropTableSchema(ctx, "DropTest"); err != nil {
+	if err := store.DropTableSchema(ctx, "000000000000", "us-east-1", "DropTest"); err != nil {
 		t.Fatalf("DropTableSchema: %v", err)
 	}
 	if store.throttles["DropTest"] != nil {

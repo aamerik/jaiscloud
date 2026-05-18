@@ -32,7 +32,7 @@ func seedVC(t *testing.T, p *EMRContainersProvider) virtualCluster {
 		CreatedAt: time.Now().UTC(),
 	}
 	data, _ := json.Marshal(vc)
-	require.NoError(t, p.resources.Create(context.Background(),
+	require.NoError(t, p.resources.Create(context.Background(), "000000000000", "us-east-1",
 		store.ResourceEntry{Type: rtVirtualCluster, ID: vc.ID, Data: data}))
 	return vc
 }
@@ -44,7 +44,7 @@ func seedJobRun(t *testing.T, p *EMRContainersProvider, vcID, state string) jobR
 		State: state, CreatedAt: time.Now().UTC(),
 	}
 	data, _ := json.Marshal(jr)
-	require.NoError(t, p.resources.Create(context.Background(),
+	require.NoError(t, p.resources.Create(context.Background(), "000000000000", "us-east-1",
 		store.ResourceEntry{Type: rtJobRun, ID: vcID + "/" + jr.ID, Data: data}))
 	return jr
 }
@@ -96,7 +96,7 @@ func TestCancelJobRun_FromRunning_DirectTransition(t *testing.T) {
 	default:
 	}
 
-	loaded, err := p.loadJobRun(context.Background(), "vc-test", jr.ID)
+	loaded, err := p.loadJobRun(context.Background(), "000000000000", "us-east-1", "vc-test", jr.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "CANCELLED", loaded.State)
 }
@@ -124,7 +124,7 @@ func TestCancelJobRun_FromPending_TwoPhase(t *testing.T) {
 	}
 	assert.Equal(t, []string{"CANCEL_PENDING", "CANCELLED"}, states)
 
-	loaded, err := p.loadJobRun(context.Background(), "vc-test", jr.ID)
+	loaded, err := p.loadJobRun(context.Background(), "000000000000", "us-east-1", "vc-test", jr.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "CANCELLED", loaded.State)
 }

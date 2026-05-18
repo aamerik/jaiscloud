@@ -232,7 +232,7 @@ func (p *EMRProvider) CreateSecurityConfiguration(ctx context.Context, nr *model
 	}
 	sc := securityConfiguration{Name: name, SecurityConfiguration: cfgJSON, CreationDateTime: time.Now().UTC()}
 	data, _ := json.Marshal(sc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSecurityConfig, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSecurityConfig, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' already exists.", name), HTTPStatus: http.StatusBadRequest}
 		}
@@ -243,7 +243,7 @@ func (p *EMRProvider) CreateSecurityConfiguration(ctx context.Context, nr *model
 
 func (p *EMRProvider) DescribeSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, rtSecurityConfig, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSecurityConfig, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' does not exist.", name), HTTPStatus: http.StatusBadRequest}
 	}
@@ -258,11 +258,11 @@ func (p *EMRProvider) DescribeSecurityConfiguration(ctx context.Context, nr *mod
 
 func (p *EMRProvider) DeleteSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if _, err := p.resources.Get(ctx, rtSecurityConfig, name); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSecurityConfig, name); err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Security configuration '%s' does not exist.", name), HTTPStatus: http.StatusBadRequest}
 	}
 	// Check if any active cluster references this security configuration.
-	clusters, _ := p.resources.List(ctx, rtCluster, "")
+	clusters, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 	for _, e := range clusters {
 		var c emrCluster
 		json.Unmarshal(e.Data, &c)
@@ -272,12 +272,12 @@ func (p *EMRProvider) DeleteSecurityConfiguration(ctx context.Context, nr *model
 			}
 		}
 	}
-	_ = p.resources.Delete(ctx, rtSecurityConfig, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtSecurityConfig, name)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRProvider) ListSecurityConfigurations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtSecurityConfig, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtSecurityConfig, "")
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,7 @@ func (p *EMRProvider) PutAutoScalingPolicy(ctx context.Context, nr *model.Normal
 	if policy == nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "AutoScalingPolicy is required", HTTPStatus: http.StatusBadRequest}
 	}
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -317,7 +317,7 @@ func (p *EMRProvider) PutAutoScalingPolicy(ctx context.Context, nr *model.Normal
 	if !found {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Instance group id '%s' is not valid.", instanceGroupID), HTTPStatus: http.StatusBadRequest}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{
 		"ClusterId":       clusterID,
 		"InstanceGroupId": instanceGroupID,
@@ -332,7 +332,7 @@ func (p *EMRProvider) PutAutoScalingPolicy(ctx context.Context, nr *model.Normal
 func (p *EMRProvider) RemoveAutoScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
 	instanceGroupID := strParam(nr.Params, "InstanceGroupId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -342,7 +342,7 @@ func (p *EMRProvider) RemoveAutoScalingPolicy(ctx context.Context, nr *model.Nor
 			break
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -552,7 +552,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 	}
 
 	data, _ := json.Marshal(c)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCluster, ID: clusterID, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: clusterID, Data: data}); err != nil {
 		return nil, err
 	}
 
@@ -574,7 +574,7 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 
 func (p *EMRProvider) DescribeCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -582,7 +582,7 @@ func (p *EMRProvider) DescribeCluster(ctx context.Context, nr *model.NormalizedR
 }
 
 func (p *EMRProvider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtCluster, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +618,7 @@ func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.Normalize
 	h := newHandlerCtx(nr)
 	ids := strSliceParam(nr.Params, "JobFlowIds")
 	for _, id := range ids {
-		c, err := p.loadCluster(ctx, id)
+		c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 		if err != nil {
 			continue
 		}
@@ -632,7 +632,7 @@ func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.Normalize
 		p.emitClusterStateChange(h, id, c.Name, "TERMINATING", "User requested termination")
 		c.Status.State = "TERMINATED"
 		c.Status.StateChangeReason = map[string]any{"Code": "USER_REQUEST", "Message": "User request"}
-		p.saveCluster(ctx, c)
+		p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 		p.emitClusterStateChange(h, id, c.Name, "TERMINATED", "User requested termination")
 	}
 	return provider.OK(map[string]any{}), nil
@@ -640,14 +640,14 @@ func (p *EMRProvider) TerminateJobFlows(ctx context.Context, nr *model.Normalize
 
 func (p *EMRProvider) ModifyCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
 	if v, ok := nr.Params["StepConcurrencyLevel"].(float64); ok {
 		c.StepConcurrencyLevel = int(v)
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"StepConcurrencyLevel": c.StepConcurrencyLevel}), nil
 }
 
@@ -658,12 +658,12 @@ func (p *EMRProvider) SetTerminationProtection(ctx context.Context, nr *model.No
 		protect = v
 	}
 	for _, id := range ids {
-		c, err := p.loadCluster(ctx, id)
+		c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 		if err != nil {
 			continue
 		}
 		c.TerminationProtected = protect
-		p.saveCluster(ctx, c)
+		p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -675,12 +675,12 @@ func (p *EMRProvider) SetVisibleToAllUsers(ctx context.Context, nr *model.Normal
 		visible = v
 	}
 	for _, id := range ids {
-		c, err := p.loadCluster(ctx, id)
+		c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 		if err != nil {
 			continue
 		}
 		c.VisibleToAllUsers = visible
-		p.saveCluster(ctx, c)
+		p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	}
 	return provider.OK(map[string]any{}), nil
 }
@@ -690,7 +690,7 @@ func (p *EMRProvider) SetVisibleToAllUsers(ctx context.Context, nr *model.Normal
 func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	h := newHandlerCtx(nr)
 	id := strParam(nr.Params, "JobFlowId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -728,7 +728,7 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 	// launching goroutines. This guarantees updateStepRecord (called inside
 	// emitStepStateChange) can find the steps, and that PENDING is published
 	// before any goroutine can publish RUNNING.
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 
 	// Phase 3: emit initial state for every newly added step.
 	newIDs := make(map[string]bool, len(stepIDs))
@@ -764,7 +764,7 @@ func (p *EMRProvider) AddJobFlowSteps(ctx context.Context, nr *model.NormalizedR
 func (p *EMRProvider) DescribeStep(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
 	stepID := strParam(nr.Params, "StepId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -778,7 +778,7 @@ func (p *EMRProvider) DescribeStep(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *EMRProvider) ListSteps(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -815,7 +815,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 	h := newHandlerCtx(nr)
 	clusterID := strParam(nr.Params, "ClusterId")
 	stepIDs := strSliceParam(nr.Params, "StepIds")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -844,7 +844,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 			})
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"CancelStepsInfoList": cancelInfo}), nil
 }
 
@@ -852,7 +852,7 @@ func (p *EMRProvider) CancelSteps(ctx context.Context, nr *model.NormalizedReque
 
 func (p *EMRProvider) AddInstanceFleet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -886,13 +886,13 @@ func (p *EMRProvider) AddInstanceFleet(ctx context.Context, nr *model.Normalized
 		"InstanceTypeSpecifications":  fleet["InstanceTypeConfigs"],
 	}
 	c.InstanceFleets = append(c.InstanceFleets, record)
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"ClusterArn": c.ClusterArn, "InstanceFleetId": fid}), nil
 }
 
 func (p *EMRProvider) ListInstanceFleets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -905,7 +905,7 @@ func (p *EMRProvider) ListInstanceFleets(ctx context.Context, nr *model.Normaliz
 
 func (p *EMRProvider) ModifyInstanceFleet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -926,7 +926,7 @@ func (p *EMRProvider) ModifyInstanceFleet(ctx context.Context, nr *model.Normali
 			}
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -934,7 +934,7 @@ func (p *EMRProvider) ModifyInstanceFleet(ctx context.Context, nr *model.Normali
 
 func (p *EMRProvider) AddInstanceGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "JobFlowId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -965,13 +965,13 @@ func (p *EMRProvider) AddInstanceGroups(ctx context.Context, nr *model.Normalize
 			groupIDs = append(groupIDs, gid)
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"JobFlowId": id, "InstanceGroupIds": groupIDs}), nil
 }
 
 func (p *EMRProvider) ListInstanceGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -994,7 +994,7 @@ func (p *EMRProvider) ListInstanceGroups(ctx context.Context, nr *model.Normaliz
 
 func (p *EMRProvider) ModifyInstanceGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1017,7 +1017,7 @@ func (p *EMRProvider) ModifyInstanceGroups(ctx context.Context, nr *model.Normal
 			}
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1025,7 +1025,7 @@ func (p *EMRProvider) ModifyInstanceGroups(ctx context.Context, nr *model.Normal
 
 func (p *EMRProvider) ListBootstrapActions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterID := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, clusterID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", clusterID), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1052,7 +1052,7 @@ func (p *EMRProvider) ListBootstrapActions(ctx context.Context, nr *model.Normal
 
 func (p *EMRProvider) AddTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ResourceId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Resource id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1076,13 +1076,13 @@ func (p *EMRProvider) AddTags(ctx context.Context, nr *model.NormalizedRequest) 
 			}
 		}
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRProvider) RemoveTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ResourceId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Resource id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1098,14 +1098,14 @@ func (p *EMRProvider) RemoveTags(ctx context.Context, nr *model.NormalizedReques
 		}
 	}
 	c.Tags = filtered
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
 // ─── Block public access ──────────────────────────────────────────────────────
 
 func (p *EMRProvider) GetBlockPublicAccessConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	cfg := p.loadBPA(ctx)
+	cfg := p.loadBPA(ctx, nr.AccountID, nr.Region)
 	return provider.OK(map[string]any{
 		"BlockPublicAccessConfiguration": cfg,
 		"BlockPublicAccessConfigurationMetadata": map[string]any{
@@ -1129,20 +1129,20 @@ func (p *EMRProvider) PutBlockPublicAccessConfiguration(ctx context.Context, nr 
 	}
 	data, _ := json.Marshal(cfg)
 	e := store.ResourceEntry{Type: rtBlockPublicAccess, ID: bpaID, Data: data}
-	if _, err := p.resources.Get(ctx, rtBlockPublicAccess, bpaID); err != nil {
-		if err := p.resources.Create(ctx, e); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtBlockPublicAccess, bpaID); err != nil {
+		if err := p.resources.Create(ctx, nr.AccountID, nr.Region, e); err != nil {
 			slog.Warn("emr: failed to persist block public access config", "err", err)
 		}
 	} else {
-		if err := p.resources.Update(ctx, e); err != nil {
+		if err := p.resources.Update(ctx, nr.AccountID, nr.Region, e); err != nil {
 			slog.Warn("emr: failed to update block public access config", "err", err)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
-func (p *EMRProvider) loadBPA(ctx context.Context) map[string]any {
-	e, err := p.resources.Get(ctx, rtBlockPublicAccess, bpaID)
+func (p *EMRProvider) loadBPA(ctx context.Context, account, region string) map[string]any {
+	e, err := p.resources.Get(ctx, account, region, rtBlockPublicAccess, bpaID)
 	if err != nil {
 		return map[string]any{
 			"BlockPublicSecurityGroupRules":          false,
@@ -1158,20 +1158,20 @@ func (p *EMRProvider) loadBPA(ctx context.Context) map[string]any {
 
 func (p *EMRProvider) PutManagedScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
 	if policy, ok := nr.Params["ManagedScalingPolicy"].(map[string]any); ok {
 		c.ManagedScalingPolicy = policy
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRProvider) GetManagedScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1184,12 +1184,12 @@ func (p *EMRProvider) GetManagedScalingPolicy(ctx context.Context, nr *model.Nor
 
 func (p *EMRProvider) RemoveManagedScalingPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ClusterId")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: fmt.Sprintf("Cluster id '%s' is not valid.", id), HTTPStatus: http.StatusBadRequest}
 	}
 	c.ManagedScalingPolicy = nil
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1199,8 +1199,8 @@ func (p *EMRProvider) RemoveManagedScalingPolicy(ctx context.Context, nr *model.
 // and saves back. It does NOT publish bus events — callers do that separately.
 // Returns (stepName, true) on success. Returns ("", false) on cluster load failure.
 // A step with an empty Name field returns ("", true) — that is valid.
-func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, newState, message string) (string, bool) {
-	c, err := p.loadCluster(ctx, clusterID)
+func (p *EMRProvider) updateStepRecord(ctx context.Context, account, region, clusterID, stepID, newState, message string) (string, bool) {
+	c, err := p.loadCluster(ctx, account, region, clusterID)
 	if err != nil {
 		return "", false
 	}
@@ -1230,7 +1230,7 @@ func (p *EMRProvider) updateStepRecord(ctx context.Context, clusterID, stepID, n
 		c.Steps[i] = s
 		break
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, account, region, c)
 	return stepName, true
 }
 
@@ -1255,7 +1255,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 	switch actionOnFailure {
 	case "TERMINATE_CLUSTER", "TERMINATE_JOB_FLOW":
 		// Snapshot the step list before the loop; emit loops mutate the store.
-		snapshot, err := p.loadCluster(ctx, clusterID)
+		snapshot, err := p.loadCluster(ctx, h.accountID, h.region, clusterID)
 		if err != nil {
 			slog.Error("emr: cascadeOnStepFailure — failed to load cluster",
 				"clusterId", clusterID, "stepId", failedStepID, "err", err)
@@ -1278,7 +1278,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 
 		// Reload fresh before writing cluster status so we don't clobber the
 		// INTERRUPTED step states written by the emit loop above.
-		c, err := p.loadCluster(ctx, clusterID)
+		c, err := p.loadCluster(ctx, h.accountID, h.region, clusterID)
 		if err != nil {
 			slog.Error("emr: cascadeOnStepFailure — reload after step emits failed",
 				"clusterId", clusterID, "err", err)
@@ -1288,7 +1288,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 
 		// Reload again before writing terminal cluster state — emitClusterStateChange
 		// currently only publishes on the bus, but reload anyway for defensive consistency.
-		c, err = p.loadCluster(ctx, clusterID)
+		c, err = p.loadCluster(ctx, h.accountID, h.region, clusterID)
 		if err != nil {
 			slog.Error("emr: cascadeOnStepFailure — reload before terminal write failed",
 				"clusterId", clusterID, "err", err)
@@ -1299,7 +1299,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 			"Code":    "STEP_FAILURE",
 			"Message": reason,
 		}
-		p.saveCluster(ctx, c)
+		p.saveCluster(ctx, h.accountID, h.region, c)
 		p.emitClusterStateChange(h, clusterID, c.Name, "TERMINATED_WITH_ERRORS", reason)
 
 	case "CANCEL_AND_WAIT":
@@ -1307,7 +1307,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 		// step's state atomically (load→check→save) to guard against concurrent
 		// runStep goroutines that may have promoted a step from PENDING→RUNNING
 		// between the snapshot read and the per-step cancel write.
-		snapshot, err := p.loadCluster(ctx, clusterID)
+		snapshot, err := p.loadCluster(ctx, h.accountID, h.region, clusterID)
 		if err != nil {
 			slog.Error("emr: cascadeOnStepFailure — failed to load cluster",
 				"clusterId", clusterID, "stepId", failedStepID, "err", err)
@@ -1343,8 +1343,8 @@ func (p *EMRProvider) Shutdown(_ context.Context) {
 
 // ─── Store helpers ────────────────────────────────────────────────────────────
 
-func (p *EMRProvider) loadCluster(ctx context.Context, id string) (emrCluster, error) {
-	e, err := p.resources.Get(ctx, rtCluster, id)
+func (p *EMRProvider) loadCluster(ctx context.Context, account, region, id string) (emrCluster, error) {
+	e, err := p.resources.Get(ctx, account, region, rtCluster, id)
 	if err != nil {
 		return emrCluster{}, err
 	}
@@ -1352,9 +1352,9 @@ func (p *EMRProvider) loadCluster(ctx context.Context, id string) (emrCluster, e
 	return c, json.Unmarshal(e.Data, &c)
 }
 
-func (p *EMRProvider) saveCluster(ctx context.Context, c emrCluster) {
+func (p *EMRProvider) saveCluster(ctx context.Context, account, region string, c emrCluster) {
 	data, _ := json.Marshal(c)
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtCluster, ID: c.Id, Data: data}); err != nil {
+	if err := p.resources.Update(ctx, account, region, store.ResourceEntry{Type: rtCluster, ID: c.Id, Data: data}); err != nil {
 		slog.Warn("emr: failed to persist cluster state", "cluster", c.Id, "state", c.Status.State, "err", err)
 	}
 }

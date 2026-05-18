@@ -43,18 +43,18 @@ func tableVersionPrefix(db, table string) string {
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
-func (p *GlueProvider) saveTableVersion(ctx context.Context, v tableVersionEntry) error {
+func (p *GlueProvider) saveTableVersion(ctx context.Context, account, region string, v tableVersionEntry) error {
 	data, _ := json.Marshal(v)
 	entry := store.ResourceEntry{Type: rtTableVersion, ID: tableVersionID(v.DatabaseName, v.TableName, v.VersionId), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadTableVersion(ctx context.Context, db, table, versionID string) (tableVersionEntry, error) {
-	e, err := p.resources.Get(ctx, rtTableVersion, tableVersionID(db, table, versionID))
+func (p *GlueProvider) loadTableVersion(ctx context.Context, account, region, db, table, versionID string) (tableVersionEntry, error) {
+	e, err := p.resources.Get(ctx, account, region, rtTableVersion, tableVersionID(db, table, versionID))
 	if err == store.ErrNotFound {
 		return tableVersionEntry{}, &model.ProviderError{
 			Code:       "NotFound",
@@ -71,8 +71,8 @@ func (p *GlueProvider) loadTableVersion(ctx context.Context, db, table, versionI
 }
 
 // nextVersionID computes the next sequential version number for a table.
-func (p *GlueProvider) nextVersionID(ctx context.Context, db, table string) string {
-	entries, err := p.resources.List(ctx, rtTableVersion, tableVersionPrefix(db, table))
+func (p *GlueProvider) nextVersionID(ctx context.Context, account, region, db, table string) string {
+	entries, err := p.resources.List(ctx, account, region, rtTableVersion, tableVersionPrefix(db, table))
 	if err != nil || len(entries) == 0 {
 		return "1"
 	}
@@ -91,7 +91,9 @@ func (p *GlueProvider) nextVersionID(ctx context.Context, db, table string) stri
 // WriteTableVersion persists a snapshot of t as the next version.
 // Called by UpdateTable before applying changes.
 func (p *GlueProvider) WriteTableVersion(ctx context.Context, t glueTable) {
-	versionID := p.nextVersionID(ctx, t.DatabaseName, t.Name)
+	// WriteTableVersion is called without account/region context — use empty strings
+	// (global Glue catalog behavior; multi-account support can thread these later).
+	versionID := p.nextVersionID(ctx, "", "", t.DatabaseName, t.Name)
 	v := tableVersionEntry{
 		DatabaseName: t.DatabaseName,
 		TableName:    t.Name,
@@ -99,7 +101,20 @@ func (p *GlueProvider) WriteTableVersion(ctx context.Context, t glueTable) {
 		Table:        tableToWire(t),
 		CreatedOn:    time.Now(),
 	}
-	p.saveTableVersion(ctx, v)
+	p.saveTableVersion(ctx, "", "", v) //nolint:errcheck
+}
+
+// WriteTableVersionWithAccount persists a snapshot using explicit account/region.
+func (p *GlueProvider) WriteTableVersionWithAccount(ctx context.Context, account, region string, t glueTable) {
+	versionID := p.nextVersionID(ctx, account, region, t.DatabaseName, t.Name)
+	v := tableVersionEntry{
+		DatabaseName: t.DatabaseName,
+		TableName:    t.Name,
+		VersionId:    versionID,
+		Table:        tableToWire(t),
+		CreatedOn:    time.Now(),
+	}
+	p.saveTableVersion(ctx, account, region, v) //nolint:errcheck
 }
 
 // ─── Table Version operations ─────────────────────────────────────────────────
@@ -108,7 +123,7 @@ func (p *GlueProvider) GetTableVersion(ctx context.Context, nr *model.Normalized
 	db := strParam(nr.Params, "DatabaseName")
 	table := strParam(nr.Params, "TableName")
 	versionID := strParam(nr.Params, "VersionId")
-	v, err := p.loadTableVersion(ctx, db, table, versionID)
+	v, err := p.loadTableVersion(ctx, nr.AccountID, nr.Region, db, table, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +133,7 @@ func (p *GlueProvider) GetTableVersion(ctx context.Context, nr *model.Normalized
 func (p *GlueProvider) GetTableVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	db := strParam(nr.Params, "DatabaseName")
 	table := strParam(nr.Params, "TableName")
-	entries, err := p.resources.List(ctx, rtTableVersion, tableVersionPrefix(db, table))
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTableVersion, tableVersionPrefix(db, table))
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +175,7 @@ func (p *GlueProvider) DeleteTableVersions(ctx context.Context, nr *model.Normal
 
 	errors := []map[string]any{}
 	for _, vid := range versionIDs {
-		if err := p.resources.Delete(ctx, rtTableVersion, tableVersionID(db, table, vid)); err != nil {
+		if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTableVersion, tableVersionID(db, table, vid)); err != nil {
 			errors = append(errors, map[string]any{
 				"TableName": table,
 				"VersionId": vid,

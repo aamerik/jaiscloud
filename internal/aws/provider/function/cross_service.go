@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	awsarn "jaiscloud/internal/aws/arn"
 )
 
 // InvokeResult holds the result of an internal Lambda invocation.
@@ -25,9 +27,11 @@ type RawInvoker interface {
 
 // InternalInvoke invokes a Lambda function synchronously or asynchronously.
 // invocationType is "RequestResponse" or "Event".
+// When funcARNorName is a full ARN, the account and region are extracted so the
+// invocation routes to the correct per-account store (cross-account dispatch fix §11.1.5).
 func (p *FunctionProvider) InternalInvoke(ctx context.Context, funcARNorName string, payload []byte, invocationType string) (*InvokeResult, error) {
-	name := extractFunctionName(funcARNorName)
-	cfg, err := p.loadConfig(ctx, name)
+	name, account, region := nameAccountRegionFromARN(funcARNorName)
+	cfg, err := p.loadConfig(ctx, account, region, name)
 	if err != nil {
 		return nil, fmt.Errorf("lambda: function %q not found: %w", name, err)
 	}
@@ -36,7 +40,7 @@ func (p *FunctionProvider) InternalInvoke(ctx context.Context, funcARNorName str
 		maxAttempts := defaultMaxAttempts
 		var dlqARN string
 		var maxAge int64
-		if eiEntry, eiErr := p.resources.Get(ctx, resTypeEventInvoke, eiKey(name, "")); eiErr == nil {
+		if eiEntry, eiErr := p.resources.Get(ctx, account, region, resTypeEventInvoke, eiKey(name, "")); eiErr == nil {
 			var eiCfg eventInvokeConfig
 			if jsonErr := eiCfg.unmarshal(eiEntry.Data); jsonErr == nil {
 				if eiCfg.MaximumRetryAttempts > 0 {
@@ -67,12 +71,37 @@ func (p *FunctionProvider) InternalInvoke(ctx context.Context, funcARNorName str
 
 // InternalGetFunction retrieves function configuration by name or ARN.
 func (p *FunctionProvider) InternalGetFunction(ctx context.Context, nameOrARN string) (*functionConfig, error) {
-	name := extractFunctionName(nameOrARN)
-	cfg, err := p.loadConfig(ctx, name)
+	name, account, region := nameAccountRegionFromARN(nameOrARN)
+	cfg, err := p.loadConfig(ctx, account, region, name)
 	if err != nil {
 		return nil, fmt.Errorf("lambda: function %q not found: %w", name, err)
 	}
 	return &cfg, nil
+}
+
+// nameAccountRegionFromARN extracts (functionName, account, region) from a Lambda
+// ARN or bare function name. For bare names, account and region are "".
+func nameAccountRegionFromARN(nameOrARN string) (name, account, region string) {
+	if parsed, err := awsarn.Parse(nameOrARN); err == nil {
+		account = parsed.AccountID
+		region = parsed.Region
+		name = parsed.Resource
+		// Resource is "function:name" or "function:name:qualifier"
+		if i := len("function:"); len(name) > i && name[:i] == "function:" {
+			name = name[i:]
+		}
+		// Strip qualifier (:version or :alias)
+		if j := len(name) - 1; j > 0 {
+			for j > 0 && name[j] != ':' {
+				j--
+			}
+			if j > 0 {
+				name = name[:j]
+			}
+		}
+		return
+	}
+	return nameOrARN, "", ""
 }
 
 // InternalInvokeRaw invokes a Lambda function asynchronously (fire-and-forget).

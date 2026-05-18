@@ -132,8 +132,8 @@ func certToWire(c certificate) map[string]any {
 	}
 }
 
-func (p *Provider) loadCert(ctx context.Context, arn string) (certificate, error) {
-	e, err := p.resources.Get(ctx, rtCert, arn)
+func (p *Provider) loadCert(ctx context.Context, account, region, arn string) (certificate, error) {
+	e, err := p.resources.Get(ctx, account, region, rtCert, arn)
 	if err != nil {
 		return certificate{}, acmErr("ResourceNotFoundException", "Certificate not found: "+arn, http.StatusBadRequest)
 	}
@@ -142,11 +142,11 @@ func (p *Provider) loadCert(ctx context.Context, arn string) (certificate, error
 	return c, nil
 }
 
-func (p *Provider) saveCert(ctx context.Context, c certificate) {
+func (p *Provider) saveCert(ctx context.Context, account, region string, c certificate) {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCert, ID: c.CertificateARN, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
@@ -207,13 +207,13 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 		ExtendedKeyUsages:       []map[string]any{{"Name": "TLS_WEB_SERVER_AUTHENTICATION"}},
 		Options:                 map[string]any{"CertificateTransparencyLoggingPreference": "ENABLED"},
 	}
-	p.saveCert(ctx, c)
+	p.saveCert(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"CertificateArn": arn}), nil
 }
 
 func (p *Provider) DescribeCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	c, err := p.loadCert(ctx, arn)
+	c, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (p *Provider) DescribeCertificate(ctx context.Context, nr *model.Normalized
 }
 
 func (p *Provider) ListCertificates(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtCert, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCert, "")
 	var certs []map[string]any
 	for _, e := range entries {
 		var c certificate
@@ -240,14 +240,14 @@ func (p *Provider) ListCertificates(ctx context.Context, nr *model.NormalizedReq
 
 func (p *Provider) DeleteCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	c, err := p.loadCert(ctx, arn)
+	c, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn)
 	if err != nil {
 		return nil, err
 	}
 	if len(c.InUseBy) > 0 {
 		return nil, acmErr("ResourceInUseException", "Certificate is in use by: "+c.InUseBy[0], http.StatusBadRequest)
 	}
-	_ = p.resources.Delete(ctx, rtCert, arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCert, arn)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -279,13 +279,13 @@ func (p *Provider) ImportCertificate(ctx context.Context, nr *model.NormalizedRe
 		NotBefore:               now,
 		NotAfter:                now.Add(365 * 24 * time.Hour),
 	}
-	p.saveCert(ctx, c)
+	p.saveCert(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"CertificateArn": arn}), nil
 }
 
 func (p *Provider) AddTagsToCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	c, err := p.loadCert(ctx, arn)
+	c, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn)
 	if err != nil {
 		return nil, err
 	}
@@ -300,13 +300,13 @@ func (p *Provider) AddTagsToCertificate(ctx context.Context, nr *model.Normalize
 			}
 		}
 	}
-	p.saveCert(ctx, c)
+	p.saveCert(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) RemoveTagsFromCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	c, err := p.loadCert(ctx, arn)
+	c, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn)
 	if err != nil {
 		return nil, err
 	}
@@ -318,13 +318,13 @@ func (p *Provider) RemoveTagsFromCertificate(ctx context.Context, nr *model.Norm
 			}
 		}
 	}
-	p.saveCert(ctx, c)
+	p.saveCert(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListTagsForCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	c, err := p.loadCert(ctx, arn)
+	c, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +337,7 @@ func (p *Provider) ListTagsForCertificate(ctx context.Context, nr *model.Normali
 
 func (p *Provider) RenewCertificate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "CertificateArn")
-	if _, err := p.loadCert(ctx, arn); err != nil {
+	if _, err := p.loadCert(ctx, nr.AccountID, nr.Region, arn); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

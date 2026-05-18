@@ -50,7 +50,7 @@ func (p *RelationalProvider) CreateDBSnapshot(ctx context.Context, nr *model.Nor
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "DBSnapshotIdentifier and DBInstanceIdentifier are required", HTTPStatus: http.StatusBadRequest}
 	}
 	// Source instance must exist
-	e, err := p.resources.Get(ctx, rtDBInstance, instanceID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, instanceID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance " + instanceID + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -69,7 +69,7 @@ func (p *RelationalProvider) CreateDBSnapshot(ctx context.Context, nr *model.Nor
 		SnapshotCreateTime:   time.Now().UTC(),
 	}
 	data, _ := json.Marshal(snap)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBSnapshot, ID: snapID, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBSnapshot, ID: snapID, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBSnapshotAlreadyExists", Message: "snapshot " + snapID + " already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -81,7 +81,7 @@ func (p *RelationalProvider) CreateDBSnapshot(ctx context.Context, nr *model.Nor
 func (p *RelationalProvider) DescribeDBSnapshots(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	snapID := strParam(nr.Params, "DBSnapshotIdentifier")
 	instanceID := strParam(nr.Params, "DBInstanceIdentifier")
-	entries, _ := p.resources.List(ctx, rtDBSnapshot, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtDBSnapshot, "")
 	var snaps []map[string]any
 	for _, e := range entries {
 		var s dbSnapshot
@@ -104,13 +104,13 @@ func (p *RelationalProvider) DescribeDBSnapshots(ctx context.Context, nr *model.
 
 func (p *RelationalProvider) DeleteDBSnapshot(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	snapID := strParam(nr.Params, "DBSnapshotIdentifier")
-	e, err := p.resources.Get(ctx, rtDBSnapshot, snapID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBSnapshot, snapID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "DBSnapshotNotFound", Message: "snapshot " + snapID + " not found", HTTPStatus: http.StatusNotFound}
 	}
 	var s dbSnapshot
 	_ = json.Unmarshal(e.Data, &s)
-	_ = p.resources.Delete(ctx, rtDBSnapshot, snapID)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDBSnapshot, snapID)
 	return provider.OK(map[string]any{"DBSnapshot": s.toWire()}), nil
 }
 
@@ -120,7 +120,7 @@ func (p *RelationalProvider) CopyDBSnapshot(ctx context.Context, nr *model.Norma
 	if srcID == "" || tgtID == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "SourceDBSnapshotIdentifier and TargetDBSnapshotIdentifier are required", HTTPStatus: http.StatusBadRequest}
 	}
-	e, err := p.resources.Get(ctx, rtDBSnapshot, srcID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBSnapshot, srcID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "DBSnapshotNotFound", Message: "source snapshot " + srcID + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -139,7 +139,7 @@ func (p *RelationalProvider) CopyDBSnapshot(ctx context.Context, nr *model.Norma
 		SnapshotCreateTime:   time.Now().UTC(),
 	}
 	data, _ := json.Marshal(snap)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBSnapshot, ID: tgtID, Data: data}); err == store.ErrAlreadyExists {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBSnapshot, ID: tgtID, Data: data}); err == store.ErrAlreadyExists {
 		return nil, &model.ProviderError{Code: "DBSnapshotAlreadyExists", Message: "snapshot " + tgtID + " already exists", HTTPStatus: http.StatusBadRequest}
 	}
 	return provider.OK(map[string]any{"DBSnapshot": snap.toWire()}), nil
@@ -172,8 +172,8 @@ func extractRDSTagKeys(params map[string]any) []string {
 	return keys
 }
 
-func loadRDSTags(ctx context.Context, res store.ResourceStore, arn string) map[string]string {
-	e, err := res.Get(ctx, rtRDSTags, arn)
+func loadRDSTags(ctx context.Context, res store.ResourceStore, account, region, arn string) map[string]string {
+	e, err := res.Get(ctx, account, region, rtRDSTags, arn)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -182,39 +182,39 @@ func loadRDSTags(ctx context.Context, res store.ResourceStore, arn string) map[s
 	return m
 }
 
-func saveRDSTags(ctx context.Context, res store.ResourceStore, arn string, tags map[string]string) {
+func saveRDSTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtRDSTags, ID: arn, Data: data}
-	if err := res.Create(ctx, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, entry)
+	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		res.Update(ctx, account, region, entry)
 	}
 }
 
 func (p *RelationalProvider) AddTagsToResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
 	newTags := extractRDSTags(nr.Params)
-	existing := loadRDSTags(ctx, p.resources, arn)
+	existing := loadRDSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for k, v := range newTags {
 		existing[k] = v
 	}
-	saveRDSTags(ctx, p.resources, arn, existing)
+	saveRDSTags(ctx, p.resources, nr.AccountID, nr.Region, arn, existing)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *RelationalProvider) RemoveTagsFromResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
 	keys := extractRDSTagKeys(nr.Params)
-	existing := loadRDSTags(ctx, p.resources, arn)
+	existing := loadRDSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for _, k := range keys {
 		delete(existing, k)
 	}
-	saveRDSTags(ctx, p.resources, arn, existing)
+	saveRDSTags(ctx, p.resources, nr.AccountID, nr.Region, arn, existing)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *RelationalProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
-	tags := loadRDSTags(ctx, p.resources, arn)
+	tags := loadRDSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	list := make([]map[string]any, 0, len(tags))
 	for k, v := range tags {
 		list = append(list, map[string]any{"Key": k, "Value": v})
@@ -252,7 +252,7 @@ func (p *RelationalProvider) CreateDBParameterGroup(ctx context.Context, nr *mod
 		DBParameterGroupArn:    nr.ResourceID("rds-pg", name),
 	}
 	data, _ := json.Marshal(grp)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBParameterGroup, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBParameterGroup, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBParameterGroupAlreadyExists", Message: "DB parameter group already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -264,7 +264,7 @@ func (p *RelationalProvider) CreateDBParameterGroup(ctx context.Context, nr *mod
 func (p *RelationalProvider) DescribeDBParameterGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "DBParameterGroupName")
 	if name != "" {
-		e, err := p.resources.Get(ctx, rtDBParameterGroup, name)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBParameterGroup, name)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "DBParameterGroupNotFound", Message: "DB parameter group not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -275,7 +275,7 @@ func (p *RelationalProvider) DescribeDBParameterGroups(ctx context.Context, nr *
 		json.Unmarshal(e.Data, &grp)
 		return provider.OK(map[string]any{"DBParameterGroups": []any{grp.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtDBParameterGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDBParameterGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func (p *RelationalProvider) DescribeDBParameterGroups(ctx context.Context, nr *
 
 func (p *RelationalProvider) DeleteDBParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "DBParameterGroupName")
-	if err := p.resources.Delete(ctx, rtDBParameterGroup, name); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDBParameterGroup, name); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBParameterGroupNotFound", Message: "DB parameter group not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{}), nil

@@ -10,6 +10,9 @@ import (
 	memstore "jaiscloud/internal/store"
 )
 
+const testAccount = "000000000000"
+const testRegion = "us-east-1"
+
 // memTerminalStore wraps MemoryResourceStore to satisfy TerminalStore.
 type memTerminalStore struct {
 	inner *memstore.MemoryResourceStore
@@ -19,12 +22,12 @@ func newMemStore() *memTerminalStore {
 	return &memTerminalStore{inner: memstore.NewMemoryResourceStore()}
 }
 
-func (m *memTerminalStore) Create(ctx context.Context, entry store.ResourceEntry) error {
-	return m.inner.Create(ctx, entry)
+func (m *memTerminalStore) Create(ctx context.Context, account, region string, entry store.ResourceEntry) error {
+	return m.inner.Create(ctx, account, region, entry)
 }
 
-func (m *memTerminalStore) Get(ctx context.Context, resourceType, id string) (store.ResourceEntry, error) {
-	return m.inner.Get(ctx, resourceType, id)
+func (m *memTerminalStore) Get(ctx context.Context, account, region, resourceType, id string) (store.ResourceEntry, error) {
+	return m.inner.Get(ctx, account, region, resourceType, id)
 }
 
 func TestPersistTerminalSnapshot_RoundTrip(t *testing.T) {
@@ -41,11 +44,11 @@ func TestPersistTerminalSnapshot_RoundTrip(t *testing.T) {
 		CallerMeta: map[string]string{"cluster": "c-123"},
 	}
 
-	if err := PersistTerminalSnapshot(ctx, s, "emr/steps", "step-001", snap); err != nil {
+	if err := PersistTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "step-001", snap); err != nil {
 		t.Fatalf("PersistTerminalSnapshot: %v", err)
 	}
 
-	loaded, found, err := LoadTerminalSnapshot(ctx, s, "emr/steps", "step-001")
+	loaded, found, err := LoadTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "step-001")
 	if err != nil {
 		t.Fatalf("LoadTerminalSnapshot: %v", err)
 	}
@@ -66,17 +69,17 @@ func TestPersistTerminalSnapshot_DoubleSave_NoError(t *testing.T) {
 
 	snap := Snapshot{State: "COMPLETED", Reason: "first"}
 
-	if err := PersistTerminalSnapshot(ctx, s, "emr/steps", "step-002", snap); err != nil {
+	if err := PersistTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "step-002", snap); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
 
 	snap2 := Snapshot{State: "FAILED", Reason: "second"}
-	if err := PersistTerminalSnapshot(ctx, s, "emr/steps", "step-002", snap2); err != nil {
+	if err := PersistTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "step-002", snap2); err != nil {
 		t.Fatalf("second save should not error: %v", err)
 	}
 
 	// First write wins.
-	loaded, _, _ := LoadTerminalSnapshot(ctx, s, "emr/steps", "step-002")
+	loaded, _, _ := LoadTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "step-002")
 	if loaded.State != "COMPLETED" {
 		t.Errorf("expected first-write State=COMPLETED to win, got %s", loaded.State)
 	}
@@ -86,7 +89,7 @@ func TestLoadTerminalSnapshot_NotFound(t *testing.T) {
 	s := newMemStore()
 	ctx := context.Background()
 
-	snap, found, err := LoadTerminalSnapshot(ctx, s, "emr/steps", "nonexistent")
+	snap, found, err := LoadTerminalSnapshot(ctx, s, testAccount, testRegion, "emr/steps", "nonexistent")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

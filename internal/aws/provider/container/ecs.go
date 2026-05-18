@@ -157,10 +157,10 @@ func (p *ContainerProvider) CreateCluster(ctx context.Context, nr *model.Normali
 		Status:      "ACTIVE",
 	}
 	data, _ := json.Marshal(c)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCluster, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			// Return existing cluster (idempotent)
-			e, _ := p.resources.Get(ctx, rtCluster, name)
+			e, _ := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 			var existing cluster
 			json.Unmarshal(e.Data, &existing)
 			return provider.OK(map[string]any{"cluster": existing.toWire()}), nil
@@ -168,7 +168,7 @@ func (p *ContainerProvider) CreateCluster(ctx context.Context, nr *model.Normali
 		return nil, err
 	}
 	if rawTags, ok := nr.Params["tags"].([]any); ok && len(rawTags) > 0 {
-		tags := p.loadECSTags(ctx, c.ClusterArn)
+		tags := p.loadECSTags(ctx, nr.AccountID, nr.Region, c.ClusterArn)
 		for _, t := range rawTags {
 			if m, ok := t.(map[string]any); ok {
 				if k, ok := m["key"].(string); ok {
@@ -178,7 +178,7 @@ func (p *ContainerProvider) CreateCluster(ctx context.Context, nr *model.Normali
 				}
 			}
 		}
-		p.saveECSTags(ctx, c.ClusterArn, tags)
+		p.saveECSTags(ctx, nr.AccountID, nr.Region, c.ClusterArn, tags)
 	}
 	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
 }
@@ -190,7 +190,7 @@ func (p *ContainerProvider) DescribeClusters(ctx context.Context, nr *model.Norm
 	names := extractStringList(nr.Params, "clusters")
 	if len(names) == 0 {
 		// List all
-		entries, err := p.resources.List(ctx, rtCluster, "")
+		entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +206,7 @@ func (p *ContainerProvider) DescribeClusters(ctx context.Context, nr *model.Norm
 				parts := splitARN(name)
 				name = parts
 			}
-			e, err := p.resources.Get(ctx, rtCluster, name)
+			e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 			if err == store.ErrNotFound {
 				failures = append(failures, map[string]any{"arn": name, "reason": "MISSING"})
 				continue
@@ -222,19 +222,19 @@ func (p *ContainerProvider) DescribeClusters(ctx context.Context, nr *model.Norm
 func (p *ContainerProvider) DeleteCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["cluster"].(string)
 	name = splitARN(name)
-	e, err := p.resources.Get(ctx, rtCluster, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ClusterNotFoundException", Message: "Cluster not found", HTTPStatus: http.StatusBadRequest}
 	}
 	var c cluster
 	json.Unmarshal(e.Data, &c)
 	c.Status = "INACTIVE"
-	p.resources.Delete(ctx, rtCluster, name)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
 }
 
 func (p *ContainerProvider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtCluster, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +329,7 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 	}
 
 	// Count existing revisions
-	entries, _ := p.resources.List(ctx, rtTaskDefinition, family)
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaskDefinition, family)
 	revision := len(entries) + 1
 
 	containers := []map[string]any{}
@@ -396,7 +396,7 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 	}
 	data, _ := json.Marshal(td)
 	id := fmt.Sprintf("%s:%d", family, revision)
-	p.resources.Create(ctx, store.ResourceEntry{Type: rtTaskDefinition, ID: id, Data: data})
+	p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaskDefinition, ID: id, Data: data})
 	return provider.OK(map[string]any{"taskDefinition": td.toWire()}), nil
 }
 
@@ -406,7 +406,7 @@ func (p *ContainerProvider) DescribeTaskDefinition(ctx context.Context, nr *mode
 	if id == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "taskDefinition is required", HTTPStatus: http.StatusBadRequest}
 	}
-	e, err := p.resources.Get(ctx, rtTaskDefinition, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskDefinition, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ClientException", Message: "Unable to describe task definition", HTTPStatus: http.StatusBadRequest}
 	}
@@ -421,7 +421,7 @@ func (p *ContainerProvider) DescribeTaskDefinition(ctx context.Context, nr *mode
 func (p *ContainerProvider) DeregisterTaskDefinition(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tdParam, _ := nr.Params["taskDefinition"].(string)
 	id := resolveTaskDefID(tdParam)
-	e, err := p.resources.Get(ctx, rtTaskDefinition, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskDefinition, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ClientException", Message: "Task definition not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -429,13 +429,13 @@ func (p *ContainerProvider) DeregisterTaskDefinition(ctx context.Context, nr *mo
 	json.Unmarshal(e.Data, &td)
 	td.Status = "INACTIVE"
 	data, _ := json.Marshal(td)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtTaskDefinition, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaskDefinition, ID: id, Data: data})
 	return provider.OK(map[string]any{"taskDefinition": td.toWire()}), nil
 }
 
 func (p *ContainerProvider) ListTaskDefinitions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	familyPrefix, _ := nr.Params["familyPrefix"].(string)
-	entries, err := p.resources.List(ctx, rtTaskDefinition, familyPrefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaskDefinition, familyPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 	}
 	id := clusterName + "/" + svcName
 	data, _ := json.Marshal(svc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtService, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtService, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "Service already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -530,7 +530,7 @@ func (p *ContainerProvider) DescribeServices(ctx context.Context, nr *model.Norm
 	for _, name := range names {
 		name = splitARN(name)
 		id := clusterName + "/" + name
-		e, err := p.resources.Get(ctx, rtService, id)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtService, id)
 		if err == store.ErrNotFound {
 			failures = append(failures, map[string]any{"arn": name, "reason": "MISSING"})
 			continue
@@ -547,7 +547,7 @@ func (p *ContainerProvider) UpdateService(ctx context.Context, nr *model.Normali
 	svcName, _ := nr.Params["service"].(string)
 	svcName = splitARN(svcName)
 	id := clusterName + "/" + svcName
-	e, err := p.resources.Get(ctx, rtService, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtService, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ServiceNotFoundException", Message: "Service not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -568,7 +568,7 @@ func (p *ContainerProvider) UpdateService(ctx context.Context, nr *model.Normali
 		svc.TaskDefinition = td
 	}
 	data, _ := json.Marshal(svc)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtService, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtService, ID: id, Data: data})
 	if needsRamp {
 		p.wg.Add(1)
 		go p.reconcileService(id)
@@ -588,7 +588,7 @@ func (p *ContainerProvider) reconcileService(id string) {
 		case <-time.After(2 * time.Second):
 		}
 
-		e, err := p.resources.Get(p.ctx, rtService, id)
+		e, err := p.resources.Get(p.ctx, "", "", rtService, id)
 		if err != nil {
 			// Service deleted — stop.
 			return
@@ -602,7 +602,7 @@ func (p *ContainerProvider) reconcileService(id string) {
 
 		svc.RunningCount++
 		data, _ := json.Marshal(svc)
-		p.resources.Update(p.ctx, store.ResourceEntry{Type: rtService, ID: id, Data: data})
+		p.resources.Update(p.ctx, "", "", store.ResourceEntry{Type: rtService, ID: id, Data: data})
 
 		slog.Debug("ecs: service reconciliation tick", "service", id,
 			"running", svc.RunningCount, "desired", svc.DesiredCount)
@@ -614,7 +614,7 @@ func (p *ContainerProvider) DeleteService(ctx context.Context, nr *model.Normali
 	svcName, _ := nr.Params["service"].(string)
 	svcName = splitARN(svcName)
 	id := clusterName + "/" + svcName
-	e, err := p.resources.Get(ctx, rtService, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtService, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ServiceNotFoundException", Message: "Service not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -623,13 +623,13 @@ func (p *ContainerProvider) DeleteService(ctx context.Context, nr *model.Normali
 	svc.Status = "INACTIVE"
 	svc.DesiredCount = 0
 	svc.RunningCount = 0
-	p.resources.Delete(ctx, rtService, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtService, id)
 	return provider.OK(map[string]any{"service": svc.toWire()}), nil
 }
 
 func (p *ContainerProvider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName := clusterParam(nr.Params)
-	entries, err := p.resources.List(ctx, rtService, clusterName)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtService, clusterName)
 	if err != nil {
 		return nil, err
 	}
@@ -709,7 +709,7 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 	// Resolve task definition.
 	tdID := resolveTaskDefID(tdParam)
 	var td taskDefinition
-	if e, err := p.resources.Get(ctx, rtTaskDefinition, tdID); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskDefinition, tdID); err == nil {
 		json.Unmarshal(e.Data, &td)
 	}
 
@@ -733,7 +733,7 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 			Containers:     containers,
 		}
 		data, _ := json.Marshal(t)
-		p.resources.Create(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+		p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
 
 		spec := p.buildTaskSpec(nr, clusterName, taskARN, td)
 		handle, err := p.executor.Run(ctx, spec)
@@ -741,7 +741,7 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 			t.LastStatus = "STOPPED"
 			t.DesiredStatus = "STOPPED"
 			data, _ = json.Marshal(t)
-			p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+			p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
 			slog.Warn("ecs: run task failed", "task", id, "err", err)
 		} else {
 			// Mock handles advance immediately to RUNNING so callers see a stable
@@ -753,7 +753,7 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 					t.Containers[i].LastStatus = "RUNNING"
 				}
 				data, _ = json.Marshal(t)
-				p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
+				p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
 			}
 			p.mu.Lock()
 			p.handles[id] = handle
@@ -870,7 +870,7 @@ func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.Ta
 			continue
 		}
 
-		e, getErr := p.resources.Get(p.ctx, rtTask, shortID)
+		e, getErr := p.resources.Get(p.ctx, "", "", rtTask, shortID)
 		if getErr != nil {
 			return
 		}
@@ -890,7 +890,7 @@ func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.Ta
 		}
 
 		data, _ := json.Marshal(t)
-		p.resources.Update(p.ctx, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
+		p.resources.Update(p.ctx, "", "", store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
 
 		if st.LastStatus == "STOPPED" {
 			p.mu.Lock()
@@ -907,7 +907,7 @@ func (p *ContainerProvider) DescribeTasks(ctx context.Context, nr *model.Normali
 	failures := []map[string]any{}
 	for _, tid := range taskIDs {
 		shortID := splitARN(tid)
-		e, err := p.resources.Get(ctx, rtTask, shortID)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTask, shortID)
 		if err == store.ErrNotFound {
 			failures = append(failures, map[string]any{"arn": tid, "reason": "MISSING"})
 			continue
@@ -922,7 +922,7 @@ func (p *ContainerProvider) DescribeTasks(ctx context.Context, nr *model.Normali
 func (p *ContainerProvider) StopTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	taskID, _ := nr.Params["task"].(string)
 	shortID := splitARN(taskID)
-	e, err := p.resources.Get(ctx, rtTask, shortID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTask, shortID)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "Task not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -939,7 +939,7 @@ func (p *ContainerProvider) StopTask(ctx context.Context, nr *model.NormalizedRe
 	t.LastStatus = "STOPPED"
 	t.DesiredStatus = "STOPPED"
 	data, _ := json.Marshal(t)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
 	return provider.OK(map[string]any{"task": t.toWire()}), nil
 }
 
@@ -971,7 +971,7 @@ func stringOrDefault(v any, def string) string {
 
 func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName := clusterParam(nr.Params)
-	entries, err := p.resources.List(ctx, rtTask, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTask, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1004,7 +1004,7 @@ func (p *ContainerProvider) ListTasks(ctx context.Context, nr *model.NormalizedR
 func (p *ContainerProvider) UpdateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["cluster"].(string)
 	name = splitARN(name)
-	e, err := p.resources.Get(ctx, rtCluster, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ClusterNotFoundException", Message: "Cluster not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1012,7 +1012,7 @@ func (p *ContainerProvider) UpdateCluster(ctx context.Context, nr *model.Normali
 	json.Unmarshal(e.Data, &c)
 	// Apply any settings updates (stub — persist unchanged).
 	data, _ := json.Marshal(c)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtCluster, ID: name, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: name, Data: data})
 	return provider.OK(map[string]any{"cluster": c.toWire()}), nil
 }
 
@@ -1091,20 +1091,20 @@ func resolveTaskDefID(s string) string {
 
 // ─── Tagging (14.1) ───────────────────────────────────────────────────────────
 
-func (p *ContainerProvider) loadECSTags(ctx context.Context, arn string) map[string]string {
+func (p *ContainerProvider) loadECSTags(ctx context.Context, account, region, arn string) map[string]string {
 	tags := map[string]string{}
-	if e, err := p.resources.Get(ctx, rtECSTags, arn); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtECSTags, arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	return tags
 }
 
-func (p *ContainerProvider) saveECSTags(ctx context.Context, arn string, tags map[string]string) {
+func (p *ContainerProvider) saveECSTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtECSTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, account, region, entry)
 		}
 	}
 }
@@ -1114,7 +1114,7 @@ func (p *ContainerProvider) TagResource(ctx context.Context, nr *model.Normalize
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadECSTags(ctx, arn)
+	tags := p.loadECSTags(ctx, nr.AccountID, nr.Region, arn)
 	if rawTags, ok := nr.Params["tags"].([]any); ok {
 		for _, t := range rawTags {
 			if m, ok := t.(map[string]any); ok {
@@ -1126,7 +1126,7 @@ func (p *ContainerProvider) TagResource(ctx context.Context, nr *model.Normalize
 			}
 		}
 	}
-	p.saveECSTags(ctx, arn, tags)
+	p.saveECSTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1135,7 +1135,7 @@ func (p *ContainerProvider) UntagResource(ctx context.Context, nr *model.Normali
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadECSTags(ctx, arn)
+	tags := p.loadECSTags(ctx, nr.AccountID, nr.Region, arn)
 	if keys, ok := nr.Params["tagKeys"].([]any); ok {
 		for _, k := range keys {
 			if s, ok := k.(string); ok {
@@ -1143,7 +1143,7 @@ func (p *ContainerProvider) UntagResource(ctx context.Context, nr *model.Normali
 			}
 		}
 	}
-	p.saveECSTags(ctx, arn, tags)
+	p.saveECSTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1152,7 +1152,7 @@ func (p *ContainerProvider) ListTagsForResource(ctx context.Context, nr *model.N
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterException", Message: "resourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadECSTags(ctx, arn)
+	tags := p.loadECSTags(ctx, nr.AccountID, nr.Region, arn)
 	tagList := make([]map[string]any, 0, len(tags))
 	for k, v := range tags {
 		tagList = append(tagList, map[string]any{"key": k, "value": v})

@@ -51,7 +51,7 @@ func (p *EMRProvider) flushStepLogs(ctx context.Context, clusterID, stepID strin
 		return
 	}
 	// Load cluster to get LogUri.
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, "", "", clusterID)
 	if err != nil || c.LogUri == "" {
 		return
 	}

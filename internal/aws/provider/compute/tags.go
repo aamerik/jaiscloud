@@ -40,8 +40,8 @@ func extractTagKeys(params map[string]any) []string {
 	return keys
 }
 
-func loadResourceTags(ctx context.Context, res store.ResourceStore, resourceID string) map[string]string {
-	e, err := res.Get(ctx, rtEC2Tags, resourceID)
+func loadResourceTags(ctx context.Context, res store.ResourceStore, account, region, resourceID string) map[string]string {
+	e, err := res.Get(ctx, account, region, rtEC2Tags, resourceID)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -52,11 +52,11 @@ func loadResourceTags(ctx context.Context, res store.ResourceStore, resourceID s
 	return m
 }
 
-func saveResourceTags(ctx context.Context, res store.ResourceStore, resourceID string, tags map[string]string) {
+func saveResourceTags(ctx context.Context, res store.ResourceStore, account, region, resourceID string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtEC2Tags, ID: resourceID, Data: data}
-	if err := res.Create(ctx, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, entry)
+	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		res.Update(ctx, account, region, entry)
 	}
 }
 
@@ -90,11 +90,11 @@ func (p *ComputeProvider) CreateTags(ctx context.Context, nr *model.NormalizedRe
 	resourceIDs := extractIndexedParam(nr.Params, "ResourceId")
 	newTags := extractTags(nr.Params)
 	for _, rid := range resourceIDs {
-		existing := loadResourceTags(ctx, p.resources, rid)
+		existing := loadResourceTags(ctx, p.resources, nr.AccountID, nr.Region, rid)
 		for k, v := range newTags {
 			existing[k] = v
 		}
-		saveResourceTags(ctx, p.resources, rid, existing)
+		saveResourceTags(ctx, p.resources, nr.AccountID, nr.Region, rid, existing)
 	}
 	return provider.OK(map[string]any{"return": "true"}), nil
 }
@@ -103,11 +103,11 @@ func (p *ComputeProvider) DeleteTags(ctx context.Context, nr *model.NormalizedRe
 	resourceIDs := extractIndexedParam(nr.Params, "ResourceId")
 	tagKeys := extractTagKeys(nr.Params)
 	for _, rid := range resourceIDs {
-		existing := loadResourceTags(ctx, p.resources, rid)
+		existing := loadResourceTags(ctx, p.resources, nr.AccountID, nr.Region, rid)
 		for _, k := range tagKeys {
 			delete(existing, k)
 		}
-		saveResourceTags(ctx, p.resources, rid, existing)
+		saveResourceTags(ctx, p.resources, nr.AccountID, nr.Region, rid, existing)
 	}
 	return provider.OK(map[string]any{"return": "true"}), nil
 }
@@ -131,7 +131,7 @@ func (p *ComputeProvider) DescribeTags(ctx context.Context, nr *model.Normalized
 		filters = append(filters, tagFilter{name: name, values: vals})
 	}
 
-	entries, _ := p.resources.List(ctx, rtEC2Tags, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtEC2Tags, "")
 	var tagItems []map[string]any
 	for _, e := range entries {
 		var tags map[string]string

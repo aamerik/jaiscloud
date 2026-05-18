@@ -105,20 +105,20 @@ const (
 
 // ─── Tagging (13.12) ──────────────────────────────────────────────────────────
 
-func (p *GlueProvider) loadGlueTags(ctx context.Context, arn string) map[string]string {
+func (p *GlueProvider) loadGlueTags(ctx context.Context, account, region, arn string) map[string]string {
 	tags := map[string]string{}
-	if e, err := p.resources.Get(ctx, rtGlueTags, arn); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtGlueTags, arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	return tags
 }
 
-func (p *GlueProvider) saveGlueTags(ctx context.Context, arn string, tags map[string]string) {
+func (p *GlueProvider) saveGlueTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtGlueTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, account, region, entry)
 		}
 	}
 }
@@ -128,7 +128,7 @@ func (p *GlueProvider) TagResource(ctx context.Context, nr *model.NormalizedRequ
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadGlueTags(ctx, arn)
+	tags := p.loadGlueTags(ctx, nr.AccountID, nr.Region, arn)
 	if rawTags, ok := nr.Params["TagsToAdd"].(map[string]any); ok {
 		for k, v := range rawTags {
 			if s, ok := v.(string); ok {
@@ -136,7 +136,7 @@ func (p *GlueProvider) TagResource(ctx context.Context, nr *model.NormalizedRequ
 			}
 		}
 	}
-	p.saveGlueTags(ctx, arn, tags)
+	p.saveGlueTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -145,7 +145,7 @@ func (p *GlueProvider) UntagResource(ctx context.Context, nr *model.NormalizedRe
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadGlueTags(ctx, arn)
+	tags := p.loadGlueTags(ctx, nr.AccountID, nr.Region, arn)
 	if keys, ok := nr.Params["TagsToRemove"].([]any); ok {
 		for _, k := range keys {
 			if s, ok := k.(string); ok {
@@ -153,7 +153,7 @@ func (p *GlueProvider) UntagResource(ctx context.Context, nr *model.NormalizedRe
 			}
 		}
 	}
-	p.saveGlueTags(ctx, arn, tags)
+	p.saveGlueTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -162,7 +162,7 @@ func (p *GlueProvider) GetTags(ctx context.Context, nr *model.NormalizedRequest)
 	if arn == "" {
 		return nil, &model.ProviderError{Code: "InvalidInputException", Message: "ResourceArn is required", HTTPStatus: http.StatusBadRequest}
 	}
-	tags := p.loadGlueTags(ctx, arn)
+	tags := p.loadGlueTags(ctx, nr.AccountID, nr.Region, arn)
 	return provider.OK(map[string]any{"Tags": tags}), nil
 }
 
@@ -185,18 +185,18 @@ type glueDatabase struct {
 	CreateTime   time.Time         `json:"CreateTime"`
 }
 
-func (p *GlueProvider) saveDB(ctx context.Context, db glueDatabase) error {
+func (p *GlueProvider) saveDB(ctx context.Context, account, region string, db glueDatabase) error {
 	data, _ := json.Marshal(db)
 	entry := store.ResourceEntry{Type: rtDatabase, ID: dbID(db.Name), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadDB(ctx context.Context, name string) (glueDatabase, error) {
-	e, err := p.resources.Get(ctx, rtDatabase, dbID(name))
+func (p *GlueProvider) loadDB(ctx context.Context, account, region, name string) (glueDatabase, error) {
+	e, err := p.resources.Get(ctx, account, region, rtDatabase, dbID(name))
 	if err == store.ErrNotFound {
 		return glueDatabase{}, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Database %s not found", name), HTTPStatus: http.StatusBadRequest}
 	}
@@ -226,18 +226,18 @@ type glueTable struct {
 	IsRegisteredWithLakeFormation  bool              `json:"IsRegisteredWithLakeFormation,omitempty"`
 }
 
-func (p *GlueProvider) saveTable(ctx context.Context, t glueTable) error {
+func (p *GlueProvider) saveTable(ctx context.Context, account, region string, t glueTable) error {
 	data, _ := json.Marshal(t)
 	entry := store.ResourceEntry{Type: rtTable, ID: tableID(t.DatabaseName, t.Name), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadTable(ctx context.Context, db, name string) (glueTable, error) {
-	e, err := p.resources.Get(ctx, rtTable, tableID(db, name))
+func (p *GlueProvider) loadTable(ctx context.Context, account, region, db, name string) (glueTable, error) {
+	e, err := p.resources.Get(ctx, account, region, rtTable, tableID(db, name))
 	if err == store.ErrNotFound {
 		return glueTable{}, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Table %s not found in database %s", name, db), HTTPStatus: http.StatusBadRequest}
 	}
@@ -261,20 +261,20 @@ type gluePartition struct {
 	LastAccessTime    time.Time         `json:"LastAccessTime,omitempty"`
 }
 
-func (p *GlueProvider) savePartition(ctx context.Context, part gluePartition) error {
+func (p *GlueProvider) savePartition(ctx context.Context, account, region string, part gluePartition) error {
 	data, _ := json.Marshal(part)
 	id := partitionID(part.DatabaseName, part.TableName, part.Values)
 	entry := store.ResourceEntry{Type: rtPartition, ID: id, Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadPartition(ctx context.Context, db, table string, values []string) (gluePartition, error) {
+func (p *GlueProvider) loadPartition(ctx context.Context, account, region, db, table string, values []string) (gluePartition, error) {
 	id := partitionID(db, table, values)
-	e, err := p.resources.Get(ctx, rtPartition, id)
+	e, err := p.resources.Get(ctx, account, region, rtPartition, id)
 	if err == store.ErrNotFound {
 		return gluePartition{}, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Partition not found"), HTTPStatus: http.StatusBadRequest}
 	}
@@ -299,7 +299,7 @@ func (p *GlueProvider) CreateDatabase(ctx context.Context, nr *model.NormalizedR
 	}
 
 	// Check duplicate
-	if _, err := p.resources.Get(ctx, rtDatabase, dbID(name)); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDatabase, dbID(name)); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Database %s already exists", name), HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -311,7 +311,7 @@ func (p *GlueProvider) CreateDatabase(ctx context.Context, nr *model.NormalizedR
 		Parameters:   strMapParam(inp, "Parameters"),
 		CreateTime:   time.Now(),
 	}
-	if err := p.saveDB(ctx, db); err != nil {
+	if err := p.saveDB(ctx, nr.AccountID, nr.Region, db); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -319,7 +319,7 @@ func (p *GlueProvider) CreateDatabase(ctx context.Context, nr *model.NormalizedR
 
 func (p *GlueProvider) GetDatabase(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	db, err := p.loadDB(ctx, name)
+	db, err := p.loadDB(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +327,7 @@ func (p *GlueProvider) GetDatabase(ctx context.Context, nr *model.NormalizedRequ
 }
 
 func (p *GlueProvider) GetDatabases(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtDatabase, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDatabase, "")
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +359,7 @@ func (p *GlueProvider) UpdateDatabase(ctx context.Context, nr *model.NormalizedR
 	if inp == nil {
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "DatabaseInput is required", HTTPStatus: http.StatusBadRequest}
 	}
-	db, err := p.loadDB(ctx, name)
+	db, err := p.loadDB(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +379,7 @@ func (p *GlueProvider) UpdateDatabase(ctx context.Context, nr *model.NormalizedR
 			}
 		}
 	}
-	if err := p.saveDB(ctx, db); err != nil {
+	if err := p.saveDB(ctx, nr.AccountID, nr.Region, db); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -387,27 +387,27 @@ func (p *GlueProvider) UpdateDatabase(ctx context.Context, nr *model.NormalizedR
 
 func (p *GlueProvider) DeleteDatabase(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if _, err := p.loadDB(ctx, name); err != nil {
+	if _, err := p.loadDB(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
 	// Cascade: delete all partitions then tables belonging to this database
 	// Partitions use MD5 IDs — must full-scan and filter by DatabaseName
-	partEntries, _ := p.resources.List(ctx, rtPartition, "")
+	partEntries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtPartition, "")
 	for _, pe := range partEntries {
 		var part gluePartition
 		if json.Unmarshal(pe.Data, &part) == nil && strings.EqualFold(part.DatabaseName, name) {
-			_ = p.resources.Delete(ctx, rtPartition, pe.ID)
+			_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPartition, pe.ID)
 		}
 	}
 	tablePrefix := tableID(name, "")
-	tableEntries, _ := p.resources.List(ctx, rtTable, tablePrefix)
+	tableEntries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtTable, tablePrefix)
 	for _, te := range tableEntries {
 		var t glueTable
 		if json.Unmarshal(te.Data, &t) == nil && strings.EqualFold(t.DatabaseName, name) {
-			_ = p.resources.Delete(ctx, rtTable, te.ID)
+			_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTable, te.ID)
 		}
 	}
-	if err := p.resources.Delete(ctx, rtDatabase, dbID(name)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDatabase, dbID(name)); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -426,11 +426,11 @@ func (p *GlueProvider) CreateTable(ctx context.Context, nr *model.NormalizedRequ
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "TableInput.Name is required", HTTPStatus: http.StatusBadRequest}
 	}
 	// Database must exist
-	if _, err := p.loadDB(ctx, dbName); err != nil {
+	if _, err := p.loadDB(ctx, nr.AccountID, nr.Region, dbName); err != nil {
 		return nil, err
 	}
 	// Check duplicate
-	if _, err := p.resources.Get(ctx, rtTable, tableID(dbName, name)); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTable, tableID(dbName, name)); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Table %s already exists in %s", name, dbName), HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -449,7 +449,7 @@ func (p *GlueProvider) CreateTable(ctx context.Context, nr *model.NormalizedRequ
 		CreateTime:           now,
 		UpdateTime:           now,
 	}
-	if err := p.saveTable(ctx, t); err != nil {
+	if err := p.saveTable(ctx, nr.AccountID, nr.Region, t); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -458,7 +458,7 @@ func (p *GlueProvider) CreateTable(ctx context.Context, nr *model.NormalizedRequ
 func (p *GlueProvider) GetTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	dbName := strParam(nr.Params, "DatabaseName")
 	name := strParam(nr.Params, "Name")
-	t, err := p.loadTable(ctx, dbName, name)
+	t, err := p.loadTable(ctx, nr.AccountID, nr.Region, dbName, name)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +468,7 @@ func (p *GlueProvider) GetTable(ctx context.Context, nr *model.NormalizedRequest
 func (p *GlueProvider) GetTables(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	dbName := strParam(nr.Params, "DatabaseName")
 	prefix := tableID(dbName, "")
-	entries, err := p.resources.List(ctx, rtTable, prefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTable, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -506,13 +506,13 @@ func (p *GlueProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequ
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "TableInput is required", HTTPStatus: http.StatusBadRequest}
 	}
 	name, _ := inp["Name"].(string)
-	t, err := p.loadTable(ctx, dbName, name)
+	t, err := p.loadTable(ctx, nr.AccountID, nr.Region, dbName, name)
 	if err != nil {
 		return nil, err
 	}
 
 	// Write a version snapshot before applying changes
-	p.WriteTableVersion(ctx, t)
+	p.WriteTableVersionWithAccount(ctx, nr.AccountID, nr.Region, t)
 
 	// Iceberg CAS: check ExpectedMetadataLocation if provided
 	if expected, ok := nr.Params["VersionId"].(string); ok && expected != "" {
@@ -554,7 +554,7 @@ func (p *GlueProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequ
 	}
 	t.UpdateTime = time.Now()
 
-	if err := p.saveTable(ctx, t); err != nil {
+	if err := p.saveTable(ctx, nr.AccountID, nr.Region, t); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -563,10 +563,10 @@ func (p *GlueProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequ
 func (p *GlueProvider) DeleteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	dbName := strParam(nr.Params, "DatabaseName")
 	name := strParam(nr.Params, "Name")
-	if _, err := p.loadTable(ctx, dbName, name); err != nil {
+	if _, err := p.loadTable(ctx, nr.AccountID, nr.Region, dbName, name); err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, rtTable, tableID(dbName, name)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTable, tableID(dbName, name)); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -582,7 +582,7 @@ func (p *GlueProvider) CreatePartition(ctx context.Context, nr *model.Normalized
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "PartitionInput is required", HTTPStatus: http.StatusBadRequest}
 	}
 	// Validate parent table exists
-	if _, err := p.resources.Get(ctx, rtTable, tableID(dbName, tableName)); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTable, tableID(dbName, tableName)); err != nil {
 		return nil, &model.ProviderError{Code: "EntityNotFoundException", Message: fmt.Sprintf("Table %s not found in database %s", tableName, dbName), HTTPStatus: http.StatusBadRequest}
 	}
 	values := strSliceParam(inp, "Values")
@@ -597,7 +597,7 @@ func (p *GlueProvider) CreatePartition(ctx context.Context, nr *model.Normalized
 		CreationTime:      now,
 		LastAccessTime:    now,
 	}
-	if err := p.savePartition(ctx, part); err != nil {
+	if err := p.savePartition(ctx, nr.AccountID, nr.Region, part); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -607,7 +607,7 @@ func (p *GlueProvider) GetPartition(ctx context.Context, nr *model.NormalizedReq
 	dbName := strParam(nr.Params, "DatabaseName")
 	tableName := strParam(nr.Params, "TableName")
 	values := strSliceParam(nr.Params, "PartitionValues")
-	part, err := p.loadPartition(ctx, dbName, tableName, values)
+	part, err := p.loadPartition(ctx, nr.AccountID, nr.Region, dbName, tableName, values)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +617,7 @@ func (p *GlueProvider) GetPartition(ctx context.Context, nr *model.NormalizedReq
 func (p *GlueProvider) GetPartitions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	dbName := strParam(nr.Params, "DatabaseName")
 	tableName := strParam(nr.Params, "TableName")
-	entries, err := p.resources.List(ctx, rtPartition, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtPartition, "")
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +660,7 @@ func (p *GlueProvider) BatchCreatePartition(ctx context.Context, nr *model.Norma
 			CreationTime:      now,
 			LastAccessTime:    now,
 		}
-		if err := p.savePartition(ctx, part); err != nil {
+		if err := p.savePartition(ctx, nr.AccountID, nr.Region, part); err != nil {
 			errors = append(errors, map[string]any{
 				"PartitionValues": values,
 				"ErrorDetail":     map[string]any{"ErrorCode": "AlreadyExistsException", "ErrorMessage": err.Error()},
@@ -683,7 +683,7 @@ func (p *GlueProvider) BatchDeletePartition(ctx context.Context, nr *model.Norma
 		}
 		values := strSliceParam(inp, "Values")
 		id := partitionID(dbName, tableName, values)
-		if err := p.resources.Delete(ctx, rtPartition, id); err != nil {
+		if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPartition, id); err != nil {
 			errors = append(errors, map[string]any{
 				"PartitionValues": values,
 				"ErrorDetail":     map[string]any{"ErrorCode": "EntityNotFoundException", "ErrorMessage": "Partition not found"},
@@ -702,14 +702,14 @@ func (p *GlueProvider) UpdatePartition(ctx context.Context, nr *model.Normalized
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "PartitionInput is required", HTTPStatus: http.StatusBadRequest}
 	}
 	// Load existing
-	part, err := p.loadPartition(ctx, dbName, tableName, oldValues)
+	part, err := p.loadPartition(ctx, nr.AccountID, nr.Region, dbName, tableName, oldValues)
 	if err != nil {
 		return nil, err
 	}
 	// Apply updates
 	if vals := strSliceParam(inp, "Values"); len(vals) > 0 {
 		// Delete old and re-create with new values
-		p.resources.Delete(ctx, rtPartition, partitionID(dbName, tableName, oldValues))
+		p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPartition, partitionID(dbName, tableName, oldValues))
 		part.Values = vals
 	}
 	if params, ok := inp["Parameters"].(map[string]any); ok {
@@ -725,7 +725,7 @@ func (p *GlueProvider) UpdatePartition(ctx context.Context, nr *model.Normalized
 	if sd, ok := inp["StorageDescriptor"].(map[string]any); ok {
 		part.StorageDescriptor = sd
 	}
-	if err := p.savePartition(ctx, part); err != nil {
+	if err := p.savePartition(ctx, nr.AccountID, nr.Region, part); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

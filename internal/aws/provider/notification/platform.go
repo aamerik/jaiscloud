@@ -74,12 +74,12 @@ func (p *SNSProvider) SetPlatformApplicationAttributes(ctx context.Context, nr *
 
 func (p *SNSProvider) DeletePlatformApplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PlatformApplicationArn")
-	_ = p.resources.Delete(ctx, rtPlatformApp, arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPlatformApp, arn)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *SNSProvider) ListPlatformApplications(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtPlatformApp, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtPlatformApp, "")
 	apps := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var app platformApp
@@ -114,9 +114,9 @@ func (p *SNSProvider) CreatePlatformEndpoint(ctx context.Context, nr *model.Norm
 	entry := store.ResourceEntry{Type: rtPlatformEndpoint, ID: endpointArn}
 	data, _ := json.Marshal(ep)
 	entry.Data = data
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		} else {
 			return nil, err
 		}
@@ -151,13 +151,13 @@ func (p *SNSProvider) SetEndpointAttributes(ctx context.Context, nr *model.Norma
 
 func (p *SNSProvider) DeleteEndpoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "EndpointArn")
-	_ = p.resources.Delete(ctx, rtPlatformEndpoint, arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPlatformEndpoint, arn)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *SNSProvider) ListEndpointsByPlatformApplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	appArn := strParam(nr.Params, "PlatformApplicationArn")
-	entries, _ := p.resources.List(ctx, rtPlatformEndpoint, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtPlatformEndpoint, "")
 	eps := make([]map[string]any, 0)
 	for _, e := range entries {
 		var ep platformEndpoint

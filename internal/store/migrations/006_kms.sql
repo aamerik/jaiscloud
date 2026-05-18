@@ -1,41 +1,48 @@
 -- 006_kms.sql
 -- KMS key metadata, aliases, grants, and the DEK bootstrap table.
--- All tables live in the cloud schema (set as search_path at pool creation time).
-
--- jc_kms_keys stores KMS key metadata and the wrapped key material.
 CREATE TABLE IF NOT EXISTS jc_kms_keys (
-    key_id         TEXT        NOT NULL PRIMARY KEY,
+    account_id     TEXT        NOT NULL,
+    region         TEXT        NOT NULL,
+    key_id         TEXT        NOT NULL,
     key_data       JSONB       NOT NULL DEFAULT '{}',
-    key_material   BYTEA,                          -- AES-GCM ciphertext (nil for external keys)
+    key_material   BYTEA,
     enabled        BOOLEAN     NOT NULL DEFAULT TRUE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_id, region, key_id)
 );
 
--- jc_kms_aliases maps alias names to key IDs.
 CREATE TABLE IF NOT EXISTS jc_kms_aliases (
-    alias_name     TEXT        NOT NULL PRIMARY KEY,
-    target_key_id  TEXT        NOT NULL REFERENCES jc_kms_keys(key_id) ON DELETE CASCADE,
+    account_id     TEXT        NOT NULL,
+    region         TEXT        NOT NULL,
+    alias_name     TEXT        NOT NULL,
+    target_key_id  TEXT        NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_id, region, alias_name),
+    FOREIGN KEY (account_id, region, target_key_id)
+        REFERENCES jc_kms_keys (account_id, region, key_id) ON DELETE CASCADE
 );
 
--- jc_kms_grants stores grant tokens issued for a key.
 CREATE TABLE IF NOT EXISTS jc_kms_grants (
-    grant_id       TEXT        NOT NULL PRIMARY KEY,
-    key_id         TEXT        NOT NULL REFERENCES jc_kms_keys(key_id) ON DELETE CASCADE,
+    account_id     TEXT        NOT NULL,
+    region         TEXT        NOT NULL,
+    grant_id       TEXT        NOT NULL,
+    key_id         TEXT        NOT NULL,
     grant_data     JSONB       NOT NULL DEFAULT '{}',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_id, region, grant_id),
+    FOREIGN KEY (account_id, region, key_id)
+        REFERENCES jc_kms_keys (account_id, region, key_id) ON DELETE CASCADE
 );
 
--- jc_kms_dek stores the single data-encryption key for envelope encryption.
--- VERSION 0x00 = plaintext, 0x01 = AES-GCM wrapped by KEK.
+-- jc_kms_dek UNCHANGED — server-level singleton, NOT scoped per account.
 CREATE TABLE IF NOT EXISTS jc_kms_dek (
     id             INT         NOT NULL PRIMARY KEY DEFAULT 1,
-    dek_blob       BYTEA       NOT NULL,           -- VERSION || IV || TAG || CIPHERTEXT (or raw if 0x00)
+    dek_blob       BYTEA       NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT single_row CHECK (id = 1)
 );
 
-CREATE INDEX IF NOT EXISTS idx_kms_aliases_key ON jc_kms_aliases (target_key_id);
-CREATE INDEX IF NOT EXISTS idx_kms_grants_key  ON jc_kms_grants  (key_id);
+CREATE INDEX IF NOT EXISTS idx_kms_aliases_key ON jc_kms_aliases (account_id, region, target_key_id);
+CREATE INDEX IF NOT EXISTS idx_kms_grants_key  ON jc_kms_grants  (account_id, region, key_id);

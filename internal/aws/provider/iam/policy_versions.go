@@ -29,7 +29,7 @@ func policyVersionKey(arn, versionId string) string {
 
 // nextVersionId increments the version counter for a policy ARN.
 func (p *IAMProvider) nextVersionId(ctx context.Context, arn string) string {
-	entries, _ := p.resources.List(ctx, rtPolicyVersion, "")
+	entries, _ := p.resources.List(ctx, "", "", rtPolicyVersion, "")
 	max := 0
 	prefix := arn + "|v"
 	for _, e := range entries {
@@ -53,7 +53,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 	setDefault := strParam(nr.Params, "SetAsDefault") == "true"
 
 	// Enforce max 5 versions
-	entries, _ := p.resources.List(ctx, rtPolicyVersion, "")
+	entries, _ := p.resources.List(ctx, "", "", rtPolicyVersion, "")
 	count := 0
 	for _, e := range entries {
 		if strings.HasPrefix(e.ID, arn+"|") {
@@ -79,7 +79,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 			}
 			v.IsDefaultVersion = false
 			data, _ := json.Marshal(v)
-			_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
+			_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
 		}
 	}
 
@@ -91,7 +91,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 		CreateDate:       now,
 	}
 	data, _ := json.Marshal(v)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtPolicyVersion, ID: policyVersionKey(arn, versionId), Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: policyVersionKey(arn, versionId), Data: data})
 
 	return provider.OK(map[string]any{"PolicyVersion": policyVersionMap(v)}), nil
 }
@@ -117,13 +117,13 @@ func (p *IAMProvider) DeletePolicyVersion(ctx context.Context, nr *model.Normali
 	if v.IsDefaultVersion {
 		return nil, model.NewProviderError("DeleteConflict", "Cannot delete the default version of a policy", http.StatusConflict)
 	}
-	_ = p.resources.Delete(ctx, rtPolicyVersion, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", rtPolicyVersion, key)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListPolicyVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PolicyArn")
-	entries, _ := p.resources.List(ctx, rtPolicyVersion, "")
+	entries, _ := p.resources.List(ctx, "", "", rtPolicyVersion, "")
 	var versions []map[string]any
 	for _, e := range entries {
 		if !strings.HasPrefix(e.ID, arn+"|") {
@@ -144,7 +144,7 @@ func (p *IAMProvider) SetDefaultPolicyVersion(ctx context.Context, nr *model.Nor
 	arn := strParam(nr.Params, "PolicyArn")
 	versionId := strParam(nr.Params, "VersionId")
 
-	entries, _ := p.resources.List(ctx, rtPolicyVersion, "")
+	entries, _ := p.resources.List(ctx, "", "", rtPolicyVersion, "")
 	found := false
 	for _, e := range entries {
 		if !strings.HasPrefix(e.ID, arn+"|") {
@@ -161,7 +161,7 @@ func (p *IAMProvider) SetDefaultPolicyVersion(ctx context.Context, nr *model.Nor
 		if v.IsDefaultVersion != shouldBeDefault {
 			v.IsDefaultVersion = shouldBeDefault
 			data, _ := json.Marshal(v)
-			_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
+			_ = p.resources.Update(ctx, nr.AccountID, "", store.ResourceEntry{Type: rtPolicyVersion, ID: e.ID, Data: data})
 		}
 	}
 	if !found {

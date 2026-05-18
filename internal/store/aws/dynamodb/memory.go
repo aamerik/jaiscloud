@@ -44,7 +44,7 @@ func (e *provisionedThroughputError) Error() string {
 	return "ProvisionedThroughputExceededException: The level of configured provisioned throughput for the table was exceeded. Consider increasing your provisioning level with the UpdateTable API"
 }
 
-func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
+func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, _, _, table, pkHash string, item map[string]any, cond ConditionSpec) (map[string]any, error) {
 	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
 		return nil, &provisionedThroughputError{table: table}
 	}
@@ -81,7 +81,7 @@ func (s *MemoryDynamoDBItemStore) PutItem(_ context.Context, table, pkHash strin
 	return returnOld, nil
 }
 
-func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, table, pkHash string) (map[string]any, error) {
+func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, _, _, table, pkHash string) (map[string]any, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.tables[table]
@@ -95,7 +95,7 @@ func (s *MemoryDynamoDBItemStore) GetItem(_ context.Context, table, pkHash strin
 	return copyItem(item), nil
 }
 
-func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
+func (s *MemoryDynamoDBItemStore) DeleteItem(_ context.Context, _, _, table, pkHash string, cond ConditionSpec) (map[string]any, error) {
 	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
 		return nil, &provisionedThroughputError{table: table}
 	}
@@ -137,7 +137,7 @@ type conditionFailedError struct{}
 
 func (e *conditionFailedError) Error() string { return "ConditionalCheckFailedException" }
 
-func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
+func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, _, _, table, pkHash string, item map[string]any, spec UpdateSpec) (map[string]any, error) {
 	if b := s.throttles[table]; b != nil && !b.TryConsume(1) {
 		return nil, &provisionedThroughputError{table: table}
 	}
@@ -188,7 +188,7 @@ func (s *MemoryDynamoDBItemStore) UpdateItem(_ context.Context, table, pkHash st
 	return copyItem(existing), nil
 }
 
-func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q QuerySpec) ([]map[string]any, int, string, error) {
+func (s *MemoryDynamoDBItemStore) Query(_ context.Context, _, _, table string, q QuerySpec) ([]map[string]any, int, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.tables[table]
@@ -322,7 +322,7 @@ func (s *MemoryDynamoDBItemStore) Query(_ context.Context, table string, q Query
 	return result, scannedCount, lastKey, nil
 }
 
-func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
+func (s *MemoryDynamoDBItemStore) Scan(_ context.Context, _, _, table string, sc ScanSpec) ([]map[string]any, int, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.tables[table]
@@ -439,7 +439,7 @@ func paginateItems(items []map[string]any, exclusiveStartKey string, limit int) 
 	return items
 }
 
-func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
+func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, _, _ string, reqs []BatchWriteRequest) ([]BatchWriteRequest, error) {
 	var unprocessed []BatchWriteRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -472,7 +472,7 @@ func (s *MemoryDynamoDBItemStore) BatchWriteItems(_ context.Context, reqs []Batc
 	return unprocessed, nil
 }
 
-func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
+func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, _, _ string, reqs []BatchGetRequest) (map[string][]map[string]any, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make(map[string][]map[string]any)
@@ -492,7 +492,7 @@ func (s *MemoryDynamoDBItemStore) BatchGetItems(_ context.Context, reqs []BatchG
 
 // TransactWriteItems evaluates all conditions atomically (under a single lock),
 // then applies all writes. Returns non-nil reasons if any condition failed.
-func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, ops []TransactWriteOp) ([]CancellationReason, error) {
+func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, _, _ string, ops []TransactWriteOp) ([]CancellationReason, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -589,7 +589,7 @@ func (s *MemoryDynamoDBItemStore) Reset() {
 	s.throttles = make(map[string]*tokenBucket)
 }
 
-func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, schema TableSchema) error {
+func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, _, _ string, schema TableSchema) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schemas[schema.TableName] = schema
@@ -615,7 +615,7 @@ func (s *MemoryDynamoDBItemStore) CreateTableSchema(_ context.Context, schema Ta
 	return nil
 }
 
-func (s *MemoryDynamoDBItemStore) DropTableSchema(_ context.Context, tableName string) error {
+func (s *MemoryDynamoDBItemStore) DropTableSchema(_ context.Context, _, _, tableName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.schemas, tableName)
@@ -625,7 +625,7 @@ func (s *MemoryDynamoDBItemStore) DropTableSchema(_ context.Context, tableName s
 	return nil
 }
 
-func (s *MemoryDynamoDBItemStore) AddGSI(_ context.Context, tableName string, schema TableSchema, idx IndexDef) error {
+func (s *MemoryDynamoDBItemStore) AddGSI(_ context.Context, _, _, tableName string, schema TableSchema, idx IndexDef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schemas[tableName] = schema
@@ -642,7 +642,7 @@ func (s *MemoryDynamoDBItemStore) AddGSI(_ context.Context, tableName string, sc
 	return nil
 }
 
-func (s *MemoryDynamoDBItemStore) DeleteGSI(_ context.Context, tableName string, schema TableSchema, indexName string) error {
+func (s *MemoryDynamoDBItemStore) DeleteGSI(_ context.Context, _, _, tableName string, schema TableSchema, indexName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schemas[tableName] = schema

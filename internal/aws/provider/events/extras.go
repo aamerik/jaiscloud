@@ -31,7 +31,7 @@ func (p *EventBridgeProvider) ListRuleNamesByTarget(ctx context.Context, nr *mod
 	// Scan all targets under the bus; collect rule names that match the ARN.
 	// Store ID format: "busName/ruleName/targetID"
 	storePrefix := busFilter + "/"
-	entries, _ := p.resources.List(ctx, resTypeTarget, storePrefix)
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeTarget, storePrefix)
 	ruleNames := []string{}
 	seen := map[string]bool{}
 	for _, e := range entries {

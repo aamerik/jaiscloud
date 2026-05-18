@@ -1,3 +1,7 @@
+// AWS-managed policy ARNs use the global `::aws:` account (not a customer
+// account) and are intentionally static constants.
+// nolint:hardcoded-arn
+
 package iam
 
 import (
@@ -39,7 +43,7 @@ func (p *IAMProvider) seedManagedPolicies(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, mp := range awsManagedPolicies {
 		// Only seed if not already present
-		if _, err := p.resources.Get(ctx, "iam_policies", mp.ARN); err == nil {
+		if _, err := p.resources.Get(ctx, "", "", "iam_policies", mp.ARN); err == nil {
 			continue
 		}
 		pd := policyData{

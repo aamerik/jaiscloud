@@ -72,7 +72,7 @@ func (p *CacheProvider) CreateCacheSubnetGroup(ctx context.Context, nr *model.No
 		ARN:                         nr.ResourceID("elasticache-subnetgroup", name),
 	}
 	data, _ := json.Marshal(g)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCacheSubnetGroup, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheSubnetGroup, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "CacheSubnetGroupAlreadyExistsFault", Message: "subnet group " + name + " already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -83,7 +83,7 @@ func (p *CacheProvider) CreateCacheSubnetGroup(ctx context.Context, nr *model.No
 
 func (p *CacheProvider) DescribeCacheSubnetGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "CacheSubnetGroupName")
-	entries, _ := p.resources.List(ctx, rtCacheSubnetGroup, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCacheSubnetGroup, "")
 	var groups []map[string]any
 	for _, e := range entries {
 		var g cacheSubnetGroup
@@ -118,7 +118,7 @@ func (p *CacheProvider) DescribeCacheSubnetGroups(ctx context.Context, nr *model
 
 func (p *CacheProvider) ModifyCacheSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "CacheSubnetGroupName")
-	e, err := p.resources.Get(ctx, rtCacheSubnetGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheSubnetGroup, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "CacheSubnetGroupNotFoundFault", Message: "subnet group " + name + " not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -131,13 +131,13 @@ func (p *CacheProvider) ModifyCacheSubnetGroup(ctx context.Context, nr *model.No
 		g.SubnetIds = ids
 	}
 	data, _ := json.Marshal(g)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheSubnetGroup, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheSubnetGroup, ID: name, Data: data})
 	return provider.OK(map[string]any{"CacheSubnetGroup": g.toWire()}), nil
 }
 
 func (p *CacheProvider) DeleteCacheSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "CacheSubnetGroupName")
-	if err := p.resources.Delete(ctx, rtCacheSubnetGroup, name); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCacheSubnetGroup, name); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "CacheSubnetGroupNotFoundFault", Message: "subnet group " + name + " not found", HTTPStatus: http.StatusBadRequest}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -171,8 +171,8 @@ func extractTagKeys(params map[string]any) []string {
 	return keys
 }
 
-func loadCacheTags(ctx context.Context, res store.ResourceStore, arn string) map[string]string {
-	e, err := res.Get(ctx, rtCacheTags, arn)
+func loadCacheTags(ctx context.Context, res store.ResourceStore, account, region, arn string) map[string]string {
+	e, err := res.Get(ctx, account, region, rtCacheTags, arn)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -181,22 +181,22 @@ func loadCacheTags(ctx context.Context, res store.ResourceStore, arn string) map
 	return m
 }
 
-func saveCacheTags(ctx context.Context, res store.ResourceStore, arn string, tags map[string]string) {
+func saveCacheTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtCacheTags, ID: arn, Data: data}
-	if err := res.Create(ctx, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, entry)
+	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		res.Update(ctx, account, region, entry)
 	}
 }
 
 func (p *CacheProvider) AddTagsToResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
 	newTags := extractCacheTags(nr.Params)
-	existing := loadCacheTags(ctx, p.resources, arn)
+	existing := loadCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for k, v := range newTags {
 		existing[k] = v
 	}
-	saveCacheTags(ctx, p.resources, arn, existing)
+	saveCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn, existing)
 	tagList := tagsToList(existing)
 	return provider.OK(map[string]any{"TagList": tagList}), nil
 }
@@ -204,18 +204,18 @@ func (p *CacheProvider) AddTagsToResource(ctx context.Context, nr *model.Normali
 func (p *CacheProvider) RemoveTagsFromResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
 	keys := extractTagKeys(nr.Params)
-	existing := loadCacheTags(ctx, p.resources, arn)
+	existing := loadCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for _, k := range keys {
 		delete(existing, k)
 	}
-	saveCacheTags(ctx, p.resources, arn, existing)
+	saveCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn, existing)
 	tagList := tagsToList(existing)
 	return provider.OK(map[string]any{"TagList": tagList}), nil
 }
 
 func (p *CacheProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceName")
-	tags := loadCacheTags(ctx, p.resources, arn)
+	tags := loadCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	return provider.OK(map[string]any{"TagList": tagsToList(tags)}), nil
 }
 
@@ -259,7 +259,7 @@ func (p *CacheProvider) CreateCacheParameterGroup(ctx context.Context, nr *model
 		ARN:                       nr.ResourceID("elasticache-parametergroup", name),
 	}
 	data, _ := json.Marshal(grp)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCacheParameterGroup, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheParameterGroup, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "CacheParameterGroupAlreadyExists", Message: "Cache parameter group already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -271,7 +271,7 @@ func (p *CacheProvider) CreateCacheParameterGroup(ctx context.Context, nr *model
 func (p *CacheProvider) DescribeCacheParameterGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "CacheParameterGroupName")
 	if name != "" {
-		e, err := p.resources.Get(ctx, rtCacheParameterGroup, name)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheParameterGroup, name)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "CacheParameterGroupNotFound", Message: "Cache parameter group not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -282,7 +282,7 @@ func (p *CacheProvider) DescribeCacheParameterGroups(ctx context.Context, nr *mo
 		json.Unmarshal(e.Data, &grp)
 		return provider.OK(map[string]any{"CacheParameterGroups": []any{grp.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtCacheParameterGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCacheParameterGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +312,7 @@ func (p *CacheProvider) DescribeCacheParameterGroups(ctx context.Context, nr *mo
 
 func (p *CacheProvider) DeleteCacheParameterGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "CacheParameterGroupName")
-	if err := p.resources.Delete(ctx, rtCacheParameterGroup, name); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCacheParameterGroup, name); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "CacheParameterGroupNotFound", Message: "Cache parameter group not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{}), nil

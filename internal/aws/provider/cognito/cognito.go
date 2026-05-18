@@ -142,8 +142,8 @@ func cognErr(code, msg string, status int) error {
 	return model.NewProviderError(code, msg, status)
 }
 
-func (p *Provider) loadPool(ctx context.Context, poolID string) (cognitoUserPool, error) {
-	e, err := p.resources.Get(ctx, rtUserPool, poolID)
+func (p *Provider) loadPool(ctx context.Context, account, region, poolID string) (cognitoUserPool, error) {
+	e, err := p.resources.Get(ctx, account, region, rtUserPool, poolID)
 	if err != nil {
 		return cognitoUserPool{}, cognErr("ResourceNotFoundException", "User pool not found: "+poolID, http.StatusBadRequest)
 	}
@@ -152,11 +152,11 @@ func (p *Provider) loadPool(ctx context.Context, poolID string) (cognitoUserPool
 	return pool, nil
 }
 
-func (p *Provider) savePool(ctx context.Context, pool cognitoUserPool) error {
+func (p *Provider) savePool(ctx context.Context, account, region string, pool cognitoUserPool) error {
 	data, _ := json.Marshal(pool)
 	entry := store.ResourceEntry{Type: rtUserPool, ID: pool.ID, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		return p.resources.Update(ctx, account, region, entry)
 	} else {
 		return err
 	}
@@ -219,7 +219,7 @@ func (p *Provider) CreateUserPool(ctx context.Context, nr *model.NormalizedReque
 		LastModifiedDate: now,
 	}
 	pool.ARN = nr.ResourceID("cognito-userpool", pool.ID)
-	if err := p.savePool(ctx, pool); err != nil {
+	if err := p.savePool(ctx, nr.AccountID, nr.Region, pool); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"UserPool": poolToWire(pool)}), nil
@@ -227,7 +227,7 @@ func (p *Provider) CreateUserPool(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) DescribeUserPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	pool, err := p.loadPool(ctx, poolID)
+	pool, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID)
 	if err != nil {
 		return nil, err
 	}
@@ -236,22 +236,22 @@ func (p *Provider) DescribeUserPool(ctx context.Context, nr *model.NormalizedReq
 
 func (p *Provider) DeleteUserPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	if _, err := p.loadPool(ctx, poolID); err != nil {
+	if _, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtUserPool, poolID)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtUserPool, poolID)
 	// Cascade: delete clients and users
-	if entries, err := p.resources.List(ctx, rtPoolClient, ""); err == nil {
+	if entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtPoolClient, ""); err == nil {
 		for _, e := range entries {
 			if strings.HasPrefix(e.ID, poolID+"/") {
-				_ = p.resources.Delete(ctx, rtPoolClient, e.ID)
+				_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPoolClient, e.ID)
 			}
 		}
 	}
-	if entries, err := p.resources.List(ctx, rtPoolUser, ""); err == nil {
+	if entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtPoolUser, ""); err == nil {
 		for _, e := range entries {
 			if strings.HasPrefix(e.ID, poolID+"/") {
-				_ = p.resources.Delete(ctx, rtPoolUser, e.ID)
+				_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPoolUser, e.ID)
 			}
 		}
 	}
@@ -259,7 +259,7 @@ func (p *Provider) DeleteUserPool(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *Provider) ListUserPools(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtUserPool, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtUserPool, "")
 	pools := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var pool cognitoUserPool
@@ -272,12 +272,12 @@ func (p *Provider) ListUserPools(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) UpdateUserPool(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	pool, err := p.loadPool(ctx, poolID)
+	pool, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID)
 	if err != nil {
 		return nil, err
 	}
 	pool.LastModifiedDate = time.Now().UTC()
-	_ = p.savePool(ctx, pool)
+	_ = p.savePool(ctx, nr.AccountID, nr.Region, pool)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -285,7 +285,7 @@ func (p *Provider) UpdateUserPool(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) CreateUserPoolClient(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	if _, err := p.loadPool(ctx, poolID); err != nil {
+	if _, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID); err != nil {
 		return nil, err
 	}
 	clientName := str(nr.Params, "ClientName")
@@ -307,14 +307,14 @@ func (p *Provider) CreateUserPoolClient(ctx context.Context, nr *model.Normalize
 		c.ClientSecret = newClientSecret()
 	}
 	data, _ := json.Marshal(c)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtPoolClient, ID: poolClientKey(poolID, clientID), Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolClient, ID: poolClientKey(poolID, clientID), Data: data})
 	return provider.OK(map[string]any{"UserPoolClient": clientToWire(c, true)}), nil
 }
 
 func (p *Provider) DescribeUserPoolClient(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
 	clientID := str(nr.Params, "ClientId")
-	e, err := p.resources.Get(ctx, rtPoolClient, poolClientKey(poolID, clientID))
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolClient, poolClientKey(poolID, clientID))
 	if err != nil {
 		return nil, cognErr("ResourceNotFoundException", fmt.Sprintf("Client %s not found in pool %s", clientID, poolID), http.StatusBadRequest)
 	}
@@ -325,7 +325,7 @@ func (p *Provider) DescribeUserPoolClient(ctx context.Context, nr *model.Normali
 
 func (p *Provider) ListUserPoolClients(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	entries, _ := p.resources.List(ctx, rtPoolClient, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtPoolClient, "")
 	prefix := poolID + "/"
 	clients := make([]map[string]any, 0)
 	for _, e := range entries {
@@ -344,10 +344,10 @@ func (p *Provider) DeleteUserPoolClient(ctx context.Context, nr *model.Normalize
 	poolID := str(nr.Params, "UserPoolId")
 	clientID := str(nr.Params, "ClientId")
 	key := poolClientKey(poolID, clientID)
-	if _, err := p.resources.Get(ctx, rtPoolClient, key); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolClient, key); err != nil {
 		return nil, cognErr("ResourceNotFoundException", "Client not found", http.StatusBadRequest)
 	}
-	_ = p.resources.Delete(ctx, rtPoolClient, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPoolClient, key)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -355,7 +355,7 @@ func (p *Provider) UpdateUserPoolClient(ctx context.Context, nr *model.Normalize
 	poolID := str(nr.Params, "UserPoolId")
 	clientID := str(nr.Params, "ClientId")
 	key := poolClientKey(poolID, clientID)
-	e, err := p.resources.Get(ctx, rtPoolClient, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolClient, key)
 	if err != nil {
 		return nil, cognErr("ResourceNotFoundException", "Client not found", http.StatusBadRequest)
 	}
@@ -365,7 +365,7 @@ func (p *Provider) UpdateUserPoolClient(ctx context.Context, nr *model.Normalize
 		c.ClientName = v
 	}
 	data, _ := json.Marshal(c)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPoolClient, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolClient, ID: key, Data: data})
 	return provider.OK(map[string]any{"UserPoolClient": clientToWire(c, true)}), nil
 }
 
@@ -391,7 +391,7 @@ func parseAttributes(params map[string]any) []map[string]string {
 
 func (p *Provider) AdminCreateUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	if _, err := p.loadPool(ctx, poolID); err != nil {
+	if _, err := p.loadPool(ctx, nr.AccountID, nr.Region, poolID); err != nil {
 		return nil, err
 	}
 	username := str(nr.Params, "Username")
@@ -399,7 +399,7 @@ func (p *Provider) AdminCreateUser(ctx context.Context, nr *model.NormalizedRequ
 		return nil, cognErr("InvalidParameterException", "Username is required", http.StatusBadRequest)
 	}
 	key := poolUserKey(poolID, username)
-	if _, err := p.resources.Get(ctx, rtPoolUser, key); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key); err == nil {
 		return nil, cognErr("UsernameExistsException", "User "+username+" already exists", http.StatusBadRequest)
 	}
 	now := time.Now().UTC()
@@ -413,14 +413,14 @@ func (p *Provider) AdminCreateUser(ctx context.Context, nr *model.NormalizedRequ
 		UserLastModifiedDate: now,
 	}
 	data, _ := json.Marshal(u)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	return provider.OK(map[string]any{"User": userToWire(u)}), nil
 }
 
 func (p *Provider) AdminGetUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
 	username := str(nr.Params, "Username")
-	e, err := p.resources.Get(ctx, rtPoolUser, poolUserKey(poolID, username))
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, poolUserKey(poolID, username))
 	if err != nil {
 		return nil, cognErr("UserNotFoundException", "User "+username+" not found", http.StatusBadRequest)
 	}
@@ -433,10 +433,10 @@ func (p *Provider) AdminDeleteUser(ctx context.Context, nr *model.NormalizedRequ
 	poolID := str(nr.Params, "UserPoolId")
 	username := str(nr.Params, "Username")
 	key := poolUserKey(poolID, username)
-	if _, err := p.resources.Get(ctx, rtPoolUser, key); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key); err != nil {
 		return nil, cognErr("UserNotFoundException", "User "+username+" not found", http.StatusBadRequest)
 	}
-	_ = p.resources.Delete(ctx, rtPoolUser, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPoolUser, key)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -444,7 +444,7 @@ func (p *Provider) AdminUpdateUserAttributes(ctx context.Context, nr *model.Norm
 	poolID := str(nr.Params, "UserPoolId")
 	username := str(nr.Params, "Username")
 	key := poolUserKey(poolID, username)
-	e, err := p.resources.Get(ctx, rtPoolUser, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key)
 	if err != nil {
 		return nil, cognErr("UserNotFoundException", "User "+username+" not found", http.StatusBadRequest)
 	}
@@ -467,7 +467,7 @@ func (p *Provider) AdminUpdateUserAttributes(ctx context.Context, nr *model.Norm
 	}
 	u.UserLastModifiedDate = time.Now().UTC()
 	data, _ := json.Marshal(u)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -475,7 +475,7 @@ func (p *Provider) AdminConfirmSignUp(ctx context.Context, nr *model.NormalizedR
 	poolID := str(nr.Params, "UserPoolId")
 	username := str(nr.Params, "Username")
 	key := poolUserKey(poolID, username)
-	e, err := p.resources.Get(ctx, rtPoolUser, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key)
 	if err != nil {
 		return nil, cognErr("UserNotFoundException", "User "+username+" not found", http.StatusBadRequest)
 	}
@@ -484,13 +484,13 @@ func (p *Provider) AdminConfirmSignUp(ctx context.Context, nr *model.NormalizedR
 	u.UserStatus = "CONFIRMED"
 	u.UserLastModifiedDate = time.Now().UTC()
 	data, _ := json.Marshal(u)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListUsers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	poolID := str(nr.Params, "UserPoolId")
-	entries, _ := p.resources.List(ctx, rtPoolUser, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtPoolUser, "")
 	prefix := poolID + "/"
 	users := make([]map[string]any, 0)
 	for _, e := range entries {
@@ -515,8 +515,8 @@ func rand6Digits() string {
 
 // resolvePoolIDFromClient resolves the pool ID from a client ID.
 // Falls back to using the clientID as pool ID for emulator simplicity.
-func (p *Provider) resolvePoolIDFromClient(ctx context.Context, clientID string) string {
-	entries, _ := p.resources.List(ctx, rtPoolClient, "")
+func (p *Provider) resolvePoolIDFromClient(ctx context.Context, account, region, clientID string) string {
+	entries, _ := p.resources.List(ctx, account, region, rtPoolClient, "")
 	for _, e := range entries {
 		var c cognitoPoolClient
 		if json.Unmarshal(e.Data, &c) == nil && c.ClientID == clientID {
@@ -527,8 +527,8 @@ func (p *Provider) resolvePoolIDFromClient(ctx context.Context, clientID string)
 }
 
 // findUserByUsername scans all pool users for a matching username.
-func (p *Provider) findUserByUsername(ctx context.Context, username string) (cognitoUser, error) {
-	entries, _ := p.resources.List(ctx, rtPoolUser, "")
+func (p *Provider) findUserByUsername(ctx context.Context, account, region, username string) (cognitoUser, error) {
+	entries, _ := p.resources.List(ctx, account, region, rtPoolUser, "")
 	for _, e := range entries {
 		var u cognitoUser
 		if json.Unmarshal(e.Data, &u) == nil && u.Username == username {
@@ -539,12 +539,12 @@ func (p *Provider) findUserByUsername(ctx context.Context, username string) (cog
 }
 
 // saveUser creates or updates a user record.
-func (p *Provider) saveUser(ctx context.Context, u cognitoUser) error {
+func (p *Provider) saveUser(ctx context.Context, account, region string, u cognitoUser) error {
 	key := poolUserKey(u.UserPoolID, u.Username)
 	data, _ := json.Marshal(u)
 	entry := store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		return p.resources.Update(ctx, account, region, entry)
 	} else {
 		return err
 	}
@@ -621,10 +621,10 @@ func (p *Provider) SignUp(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 
 	clientID := str(nr.Params, "ClientId")
-	poolID := p.resolvePoolIDFromClient(ctx, clientID)
+	poolID := p.resolvePoolIDFromClient(ctx, nr.AccountID, nr.Region, clientID)
 
 	key := poolUserKey(poolID, username)
-	if _, err := p.resources.Get(ctx, rtPoolUser, key); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key); err == nil {
 		return nil, cognErr("UsernameExistsException", "User "+username+" already exists", http.StatusBadRequest)
 	}
 
@@ -641,7 +641,7 @@ func (p *Provider) SignUp(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		UserLastModifiedDate: now,
 	}
 	data, _ := json.Marshal(u)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data}); err != nil {
 		return nil, err
 	}
 
@@ -649,7 +649,7 @@ func (p *Provider) SignUp(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	code := rand6Digits()
 	slog.Info("cognito: confirmation code", "user", username, "code", code)
 	codeData, _ := json.Marshal(confirmCodeRecord{Code: code})
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
 
 	return provider.OK(map[string]any{
 		"UserConfirmed": false,
@@ -662,16 +662,16 @@ func (p *Provider) ConfirmSignUp(ctx context.Context, nr *model.NormalizedReques
 	confirmCode := str(nr.Params, "ConfirmationCode")
 
 	clientID := str(nr.Params, "ClientId")
-	poolID := p.resolvePoolIDFromClient(ctx, clientID)
+	poolID := p.resolvePoolIDFromClient(ctx, nr.AccountID, nr.Region, clientID)
 
 	key := poolUserKey(poolID, username)
-	e, err := p.resources.Get(ctx, rtPoolUser, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key)
 	if err != nil {
 		return nil, cognErr("UserNotFoundException", "User not found", http.StatusBadRequest)
 	}
 
 	// Validate code if stored
-	if codeEntry, cerr := p.resources.Get(ctx, rtConfirmCode, key); cerr == nil {
+	if codeEntry, cerr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConfirmCode, key); cerr == nil {
 		var rec confirmCodeRecord
 		_ = json.Unmarshal(codeEntry.Data, &rec)
 		if confirmCode != "" && rec.Code != "" && confirmCode != rec.Code {
@@ -684,20 +684,20 @@ func (p *Provider) ConfirmSignUp(ctx context.Context, nr *model.NormalizedReques
 	u.UserStatus = "CONFIRMED"
 	u.UserLastModifiedDate = time.Now().UTC()
 	data, _ := json.Marshal(u)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
-	_ = p.resources.Delete(ctx, rtConfirmCode, key)
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtConfirmCode, key)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) InitiateAuth(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.handleAuth(ctx, nr.Params)
+	return p.handleAuth(ctx, nr.AccountID, nr.Region, nr.Params)
 }
 
 func (p *Provider) AdminInitiateAuth(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.handleAuth(ctx, nr.Params)
+	return p.handleAuth(ctx, nr.AccountID, nr.Region, nr.Params)
 }
 
-func (p *Provider) handleAuth(ctx context.Context, params map[string]any) (*model.ProviderResponse, error) {
+func (p *Provider) handleAuth(ctx context.Context, account, region string, params map[string]any) (*model.ProviderResponse, error) {
 	authFlow := str(params, "AuthFlow")
 	authParams := parseAuthParameters(params)
 	username := authParams["USERNAME"]
@@ -711,16 +711,16 @@ func (p *Provider) handleAuth(ctx context.Context, params map[string]any) (*mode
 	poolID := str(params, "UserPoolId")
 	if poolID == "" {
 		clientID := str(params, "ClientId")
-		poolID = p.resolvePoolIDFromClient(ctx, clientID)
+		poolID = p.resolvePoolIDFromClient(ctx, account, region, clientID)
 	}
 
 	// Find user — first try pool-scoped lookup, then global scan
 	var u cognitoUser
 	key := poolUserKey(poolID, username)
-	if e, err := p.resources.Get(ctx, rtPoolUser, key); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, rtPoolUser, key); err == nil {
 		_ = json.Unmarshal(e.Data, &u)
 	} else {
-		found, ferr := p.findUserByUsername(ctx, username)
+		found, ferr := p.findUserByUsername(ctx, account, region, username)
 		if ferr != nil {
 			return nil, cognErr("UserNotFoundException", "User not found", http.StatusBadRequest)
 		}
@@ -745,7 +745,7 @@ func (p *Provider) RespondToAuthChallenge(ctx context.Context, nr *model.Normali
 	responses := parseAuthParameters(nr.Params)
 	username := responses["USERNAME"]
 
-	u, err := p.findUserByUsername(ctx, username)
+	u, err := p.findUserByUsername(ctx, nr.AccountID, nr.Region, username)
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +757,7 @@ func (p *Provider) RespondToAuthChallenge(ctx context.Context, nr *model.Normali
 		}
 		u.UserStatus = "CONFIRMED"
 		u.UserLastModifiedDate = time.Now().UTC()
-		_ = p.saveUser(ctx, u)
+		_ = p.saveUser(ctx, nr.AccountID, nr.Region, u)
 	}
 
 	return provider.OK(buildAuthResult(u, u.UserPoolID)), nil
@@ -766,7 +766,7 @@ func (p *Provider) RespondToAuthChallenge(ctx context.Context, nr *model.Normali
 func (p *Provider) ForgotPassword(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	username := str(nr.Params, "Username")
 
-	u, err := p.findUserByUsername(ctx, username)
+	u, err := p.findUserByUsername(ctx, nr.AccountID, nr.Region, username)
 	if err != nil {
 		return nil, err
 	}
@@ -775,8 +775,8 @@ func (p *Provider) ForgotPassword(ctx context.Context, nr *model.NormalizedReque
 	slog.Info("cognito: password reset code", "user", username, "code", code)
 	key := poolUserKey(u.UserPoolID, username)
 	codeData, _ := json.Marshal(resetCodeRecord{Code: code})
-	if cerr := p.resources.Create(ctx, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData})
+	if cerr := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
+		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtResetCode, ID: key, Data: codeData})
 	}
 
 	email := findAttr(u.Attributes, "email")
@@ -797,19 +797,19 @@ func (p *Provider) ConfirmForgotPassword(ctx context.Context, nr *model.Normaliz
 	code := str(nr.Params, "ConfirmationCode")
 	newPassword := str(nr.Params, "Password")
 
-	u, err := p.findUserByUsername(ctx, username)
+	u, err := p.findUserByUsername(ctx, nr.AccountID, nr.Region, username)
 	if err != nil {
 		return nil, err
 	}
 
 	key := poolUserKey(u.UserPoolID, username)
-	if codeEntry, cerr := p.resources.Get(ctx, rtResetCode, key); cerr == nil {
+	if codeEntry, cerr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtResetCode, key); cerr == nil {
 		var rec resetCodeRecord
 		_ = json.Unmarshal(codeEntry.Data, &rec)
 		if code != "" && rec.Code != "" && code != rec.Code {
 			return nil, cognErr("CodeMismatchException", "Invalid verification code provided, please try again.", http.StatusBadRequest)
 		}
-		_ = p.resources.Delete(ctx, rtResetCode, key)
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtResetCode, key)
 	}
 
 	if newPassword != "" {
@@ -817,14 +817,14 @@ func (p *Provider) ConfirmForgotPassword(ctx context.Context, nr *model.Normaliz
 	}
 	u.UserStatus = "CONFIRMED"
 	u.UserLastModifiedDate = time.Now().UTC()
-	_ = p.saveUser(ctx, u)
+	_ = p.saveUser(ctx, nr.AccountID, nr.Region, u)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ResendConfirmationCode(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	username := str(nr.Params, "Username")
 
-	u, err := p.findUserByUsername(ctx, username)
+	u, err := p.findUserByUsername(ctx, nr.AccountID, nr.Region, username)
 	if err != nil {
 		return nil, err
 	}
@@ -833,8 +833,8 @@ func (p *Provider) ResendConfirmationCode(ctx context.Context, nr *model.Normali
 	slog.Info("cognito: confirmation code", "user", username, "code", code)
 	key := poolUserKey(u.UserPoolID, username)
 	codeData, _ := json.Marshal(confirmCodeRecord{Code: code})
-	if cerr := p.resources.Create(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
+	if cerr := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData}); cerr == store.ErrAlreadyExists {
+		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfirmCode, ID: key, Data: codeData})
 	}
 
 	email := findAttr(u.Attributes, "email")

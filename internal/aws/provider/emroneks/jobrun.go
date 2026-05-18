@@ -96,7 +96,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			return // cancelled by CancelJobRun — let it emit CANCELLED
 		}
 		slog.Warn("emroneks: SubmitClientMode failed", "jobRun", jrID, "err", err)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, "emroneks/jobruns", jrID,
+		if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, h.accountID, h.region, "emroneks/jobruns", jrID,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
@@ -109,11 +109,11 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 	// Use p.ctx (not runCtx): runCtx may already be cancelled by CancelJobRun,
 	// but the handle must survive to allow k8s Job deletion. p.ctx is only
 	// cancelled on Shutdown(), so the save succeeds for per-job cancellations.
-	if jr, loadErr := p.loadJobRun(p.ctx, vcID, jrID); loadErr != nil {
+	if jr, loadErr := p.loadJobRun(p.ctx, h.accountID, h.region, vcID, jrID); loadErr != nil {
 		slog.Error("emroneks: failed to store JobHandle on jobRun", "jobRun", jrID, "err", loadErr)
 	} else {
 		jr.JobHandle = &handle
-		p.saveJobRun(p.ctx, jr)
+		p.saveJobRun(p.ctx, h.accountID, h.region, jr)
 	}
 
 	final, err := sparkhelpers.WaitTerminal(runCtx, p.k8sClient, handle)
@@ -122,7 +122,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			return // cancelled by CancelJobRun — let it emit CANCELLED
 		}
 		slog.Warn("emroneks: WaitTerminal failed", "jobRun", jrID, "err", err)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, "emroneks/jobruns", jrID,
+		if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, h.accountID, h.region, "emroneks/jobruns", jrID,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
@@ -138,7 +138,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 	}
 	flushLogs()
 	p.emitJobRunStateChange(h, vcID, jrID, state, reason)
-	if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, "emroneks/jobruns", jrID,
+	if snapErr := k8shelpers.PersistTerminalSnapshot(runCtx, p.resources, h.accountID, h.region, "emroneks/jobruns", jrID,
 		k8shelpers.BuildSnapshot(final.Final, state)); snapErr != nil {
 		slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 	}

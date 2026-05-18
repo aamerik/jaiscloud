@@ -57,7 +57,7 @@ func (p *ContainerProvider) CreateTaskSet(ctx context.Context, nr *model.Normali
 		ts.DesiredCount = int(dc)
 	}
 	data, _ := json.Marshal(ts)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtTaskSet, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaskSet, ID: arn, Data: data}); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{"taskSet": ts.toWire()}}, nil
@@ -67,7 +67,7 @@ func (p *ContainerProvider) DescribeTaskSets(ctx context.Context, nr *model.Norm
 	taskSets := []map[string]any{}
 	ids := extractStringList(nr.Params, "taskSets")
 	if len(ids) == 0 {
-		entries, _ := p.resources.List(ctx, rtTaskSet, "")
+		entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaskSet, "")
 		for _, e := range entries {
 			var ts taskSet
 			if json.Unmarshal(e.Data, &ts) == nil {
@@ -76,7 +76,7 @@ func (p *ContainerProvider) DescribeTaskSets(ctx context.Context, nr *model.Norm
 		}
 	} else {
 		for _, id := range ids {
-			e, err := p.resources.Get(ctx, rtTaskSet, id)
+			e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskSet, id)
 			if err != nil {
 				continue
 			}
@@ -91,7 +91,7 @@ func (p *ContainerProvider) DescribeTaskSets(ctx context.Context, nr *model.Norm
 
 func (p *ContainerProvider) UpdateTaskSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tsArn, _ := nr.Params["taskSet"].(string)
-	e, err := p.resources.Get(ctx, rtTaskSet, tsArn)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskSet, tsArn)
 	if err != nil {
 		return nil, model.NewProviderError("TaskSetNotFoundException", "Task set not found", 400)
 	}
@@ -102,25 +102,25 @@ func (p *ContainerProvider) UpdateTaskSet(ctx context.Context, nr *model.Normali
 		ts.Extra = v
 	}
 	data, _ := json.Marshal(ts)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtTaskSet, ID: tsArn, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaskSet, ID: tsArn, Data: data})
 	return provider.OK(map[string]any{"taskSet": ts.toWire()}), nil
 }
 
 func (p *ContainerProvider) DeleteTaskSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tsArn, _ := nr.Params["taskSet"].(string)
-	e, err := p.resources.Get(ctx, rtTaskSet, tsArn)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskSet, tsArn)
 	if err != nil {
 		return nil, model.NewProviderError("TaskSetNotFoundException", "Task set not found", 400)
 	}
 	var ts taskSet
 	json.Unmarshal(e.Data, &ts)
-	_ = p.resources.Delete(ctx, rtTaskSet, tsArn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTaskSet, tsArn)
 	return provider.OK(map[string]any{"taskSet": ts.toWire()}), nil
 }
 
 func (p *ContainerProvider) UpdateServicePrimaryTaskSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tsArn, _ := nr.Params["primaryTaskSet"].(string)
-	e, err := p.resources.Get(ctx, rtTaskSet, tsArn)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaskSet, tsArn)
 	if err != nil {
 		return nil, model.NewProviderError("TaskSetNotFoundException", "Task set not found", 400)
 	}
@@ -128,6 +128,6 @@ func (p *ContainerProvider) UpdateServicePrimaryTaskSet(ctx context.Context, nr 
 	json.Unmarshal(e.Data, &ts)
 	ts.Status = "PRIMARY"
 	data, _ := json.Marshal(ts)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtTaskSet, ID: tsArn, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaskSet, ID: tsArn, Data: data})
 	return provider.OK(map[string]any{"taskSet": ts.toWire()}), nil
 }

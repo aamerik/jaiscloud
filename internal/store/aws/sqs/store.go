@@ -39,16 +39,16 @@ type SQSMessageStore interface {
 	// For FIFO queues with deduplication, if a duplicate is detected the original
 	// MessageID is returned as dedupMessageID. For FIFO queues, sequenceNumber is
 	// the assigned 20-digit sequence number; it is empty for standard queues.
-	Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error)
-	Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error)
-	Delete(ctx context.Context, queueURL, receiptHandle string) error
-	ChangeVisibility(ctx context.Context, queueURL, receiptHandle string, timeoutSec int, now time.Time) error
-	Purge(ctx context.Context, queueURL string) error
-	GetApproximateCounts(ctx context.Context, queueURL string, now time.Time) (visible, notVisible, delayed int, err error)
+	Send(ctx context.Context, account, region string, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error)
+	Receive(ctx context.Context, account, region, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error)
+	Delete(ctx context.Context, account, region, queueURL, receiptHandle string) error
+	ChangeVisibility(ctx context.Context, account, region, queueURL, receiptHandle string, timeoutSec int, now time.Time) error
+	Purge(ctx context.Context, account, region, queueURL string) error
+	GetApproximateCounts(ctx context.Context, account, region, queueURL string, now time.Time) (visible, notVisible, delayed int, err error)
 
 	// SetQueueRetention registers the message retention period for a queue so
 	// the store can expire old messages. retentionSecs=0 resets to the 4-day default.
-	SetQueueRetention(ctx context.Context, queueURL string, retentionSecs int) error
+	SetQueueRetention(ctx context.Context, account, region, queueURL string, retentionSecs int) error
 
 	// Reset wipes all messages across all queues.
 	Reset()

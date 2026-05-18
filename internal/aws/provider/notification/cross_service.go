@@ -29,7 +29,7 @@ func (p *SNSProvider) InternalPublish(ctx context.Context, topicARN string, mess
 		}
 	}
 	messageID := fmt.Sprintf("%x", rand.Int63())
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, "", "", "sns_subscriptions", "")
 	for _, e := range entries {
 		var sd subscriptionData
 		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != topicARN {

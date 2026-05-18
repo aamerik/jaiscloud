@@ -25,14 +25,14 @@ func newFakeStore(seed ...ResourceEntry) *fakeStore {
 
 func (s *fakeStore) key(t, id string) string { return t + "\x00" + id }
 
-func (s *fakeStore) Exists(ctx context.Context, resourceType, resourceID string) (bool, error) {
+func (s *fakeStore) Exists(ctx context.Context, account, region, resourceType, resourceID string) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, ok := s.entries[s.key(resourceType, resourceID)]
 	return ok, nil
 }
 
-func (s *fakeStore) List(ctx context.Context, resourceType, prefix string) ([]ResourceEntry, error) {
+func (s *fakeStore) List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []ResourceEntry
@@ -44,21 +44,21 @@ func (s *fakeStore) List(ctx context.Context, resourceType, prefix string) ([]Re
 	return out, nil
 }
 
-func (s *fakeStore) Delete(ctx context.Context, resourceType, resourceID string) error {
+func (s *fakeStore) Delete(ctx context.Context, account, region, resourceType, resourceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.entries, s.key(resourceType, resourceID))
 	return nil
 }
 
-func (s *fakeStore) Update(ctx context.Context, entry ResourceEntry) error {
+func (s *fakeStore) Update(ctx context.Context, account, region string, entry ResourceEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[s.key(entry.Type, entry.ID)] = entry
 	return nil
 }
 
-func (s *fakeStore) Get(ctx context.Context, resourceType, resourceID string) (ResourceEntry, error) {
+func (s *fakeStore) Get(ctx context.Context, account, region, resourceType, resourceID string) (ResourceEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	e, ok := s.entries[s.key(resourceType, resourceID)]
@@ -73,8 +73,8 @@ func (s *fakeStore) Get(ctx context.Context, resourceType, resourceID string) (R
 func childRule(parentType, childType string, policy DeletionPolicy) DeleteGuardRule {
 	return DeleteGuardRule{
 		ParentType: parentType,
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
-			entries, err := resources.List(ctx, childType, "")
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
+			entries, err := resources.List(ctx, account, region, childType, "")
 			if err != nil {
 				return nil, err
 			}
@@ -94,7 +94,7 @@ func TestCheckParent_Exists(t *testing.T) {
 	store := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	mgr := New(store, nil)
 
-	err := mgr.CheckParent(context.Background(), "cluster", "c1", "NotFound", "not found", 404)
+	err := mgr.CheckParent(context.Background(), "000000000000", "", "cluster", "c1", "NotFound", "not found", 404)
 	if err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
@@ -103,7 +103,7 @@ func TestCheckParent_Exists(t *testing.T) {
 func TestCheckParent_NotFound(t *testing.T) {
 	mgr := New(newFakeStore(), nil)
 
-	err := mgr.CheckParent(context.Background(), "cluster", "missing", "NotFound", "not found", 404)
+	err := mgr.CheckParent(context.Background(), "000000000000", "", "cluster", "missing", "NotFound", "not found", 404)
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError, got %T", err)
@@ -118,14 +118,14 @@ func TestCheckParent_IsDeleting(t *testing.T) {
 	mgr := New(store, nil)
 
 	// Acquire deletion lock — no rules so it proceeds immediately
-	handle, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("AcquireDelete failed: %v", err)
 	}
 	defer handle.Release()
 
 	// CheckParent should see the deletion lock
-	err = mgr.CheckParent(context.Background(), "cluster", "c1", "NotFound", "not found", 404)
+	err = mgr.CheckParent(context.Background(), "000000000000", "", "cluster", "c1", "NotFound", "not found", 404)
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError while deleting, got %T", err)
@@ -141,13 +141,13 @@ func TestAcquireDelete_DoubleLock(t *testing.T) {
 	store := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	mgr := New(store, nil)
 
-	h1, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	h1, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("first AcquireDelete failed: %v", err)
 	}
 	defer h1.Release()
 
-	_, err = mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err = mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError on double lock, got %T", err)
@@ -164,7 +164,7 @@ func TestAcquireDelete_PolicyFail_BlocksDelete(t *testing.T) {
 	)
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy:     PolicyFail,
@@ -173,7 +173,7 @@ func TestAcquireDelete_PolicyFail_BlocksDelete(t *testing.T) {
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError, got %T %v", err, err)
@@ -190,7 +190,7 @@ func TestAcquireDelete_PolicyFail_DefaultCodes(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy: PolicyFail,
@@ -198,7 +198,7 @@ func TestAcquireDelete_PolicyFail_DefaultCodes(t *testing.T) {
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError, got %T", err)
@@ -215,7 +215,7 @@ func TestAcquireDelete_PolicyFail_CustomMessage(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy: PolicyFail,
@@ -225,7 +225,7 @@ func TestAcquireDelete_PolicyFail_CustomMessage(t *testing.T) {
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	var opErr *OperationError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("expected *OperationError")
@@ -239,18 +239,18 @@ func TestAcquireDelete_PolicyFail_LockReleasedOnError(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy: PolicyFail,
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, _ = mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, _ = mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 
 	// Lock should be released after PolicyFail — a new AcquireDelete (with no rules) should work
 	mgr2 := New(fs, nil)
-	h, err := mgr2.AcquireDelete(context.Background(), "cluster", "c1")
+	h, err := mgr2.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("expected lock released after PolicyFail, got: %v", err)
 	}
@@ -266,14 +266,14 @@ func TestAcquireDelete_PolicyCascade_DeletesChildren(t *testing.T) {
 	rule := childRule("topic", "subscription", PolicyCascade)
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	handle, err := mgr.AcquireDelete(context.Background(), "topic", "t1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "topic", "t1")
 	if err != nil {
 		t.Fatalf("AcquireDelete failed: %v", err)
 	}
 	handle.Release()
 
 	// Verify children were deleted
-	remaining, _ := fs.List(context.Background(), "subscription", "")
+	remaining, _ := fs.List(context.Background(), "000000000000", "", "subscription", "")
 	if len(remaining) != 0 {
 		t.Errorf("expected subscriptions deleted, got %d remaining", len(remaining))
 	}
@@ -284,18 +284,18 @@ func TestAcquireDelete_PolicyCascade_CustomDeleteFn(t *testing.T) {
 	var cascadedIDs []string
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}, {Type: "job", ID: "j2"}}, nil
 		},
 		Policy: PolicyCascade,
-		CascadeDelete: func(ctx context.Context, resources ResourceStore, child ChildRef) error {
+		CascadeDelete: func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error {
 			cascadedIDs = append(cascadedIDs, child.ID)
 			return nil
 		},
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	handle, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("AcquireDelete failed: %v", err)
 	}
@@ -314,18 +314,18 @@ func TestAcquireDelete_PolicyForceTerminate(t *testing.T) {
 	var terminated []string
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "step", ID: "step1"}}, nil
 		},
 		Policy: PolicyForceTerminate,
-		ForceTerminate: func(ctx context.Context, resources ResourceStore, child ChildRef) error {
+		ForceTerminate: func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error {
 			terminated = append(terminated, child.ID)
 			return nil
 		},
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	handle, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("AcquireDelete failed: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestAcquireDelete_PolicyForceTerminate_NilFn(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "step", ID: "step1"}}, nil
 		},
 		Policy:         PolicyForceTerminate,
@@ -348,7 +348,7 @@ func TestAcquireDelete_PolicyForceTerminate_NilFn(t *testing.T) {
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err == nil {
 		t.Fatal("expected error when ForceTerminate is nil")
 	}
@@ -362,18 +362,18 @@ func TestAcquireDelete_PolicyPriorityOrdering(t *testing.T) {
 
 	cascadeRule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "log", ID: "log1"}}, nil
 		},
 		Policy: PolicyCascade,
-		CascadeDelete: func(ctx context.Context, resources ResourceStore, child ChildRef) error {
+		CascadeDelete: func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error {
 			cascaded = true
 			return nil
 		},
 	}
 	failRule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy: PolicyFail,
@@ -381,7 +381,7 @@ func TestAcquireDelete_PolicyPriorityOrdering(t *testing.T) {
 	// Register cascade first, fail second — priority sort must reorder them
 	mgr := New(fs, []DeleteGuardRule{cascadeRule, failRule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err == nil {
 		t.Fatal("expected PolicyFail to block delete")
 	}
@@ -394,14 +394,14 @@ func TestAcquireDelete_NoChildren_Succeeds(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return nil, nil // no children
 		},
 		Policy: PolicyFail,
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	handle, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("expected success with no children, got: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestDeletionHandle_Release_ClearsLock(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	mgr := New(fs, nil)
 
-	handle, _ := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, _ := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if !mgr.lock.IsDeleting("cluster", "c1") {
 		t.Error("lock should be set after AcquireDelete")
 	}
@@ -432,13 +432,13 @@ func TestRegisterRules_AddedAfterConstruction(t *testing.T) {
 
 	mgr.RegisterRules([]DeleteGuardRule{{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return []ChildRef{{Type: "job", ID: "j1"}}, nil
 		},
 		Policy: PolicyFail,
 	}})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err == nil {
 		t.Fatal("expected PolicyFail from dynamically registered rule")
 	}
@@ -455,7 +455,7 @@ func TestRegisterRules_ConcurrentRegistration(t *testing.T) {
 			defer wg.Done()
 			mgr.RegisterRules([]DeleteGuardRule{{
 				ParentType: fmt.Sprintf("type%d", n),
-				FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+				FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 					return nil, nil
 				},
 				Policy: PolicyFail,
@@ -475,7 +475,7 @@ func TestManager_Reset(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	mgr := New(fs, nil)
 
-	h, _ := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	h, _ := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	_ = h // intentionally not released
 
 	mgr.Reset()
@@ -492,7 +492,7 @@ func TestCheckParent_TOCTOU_Safety(t *testing.T) {
 	fs := newFakeStore(ResourceEntry{Type: "cluster", ID: "c1"})
 	mgr := New(fs, nil)
 
-	handle, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	handle, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if err != nil {
 		t.Fatalf("AcquireDelete: %v", err)
 	}
@@ -504,7 +504,7 @@ func TestCheckParent_TOCTOU_Safety(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := mgr.CheckParent(context.Background(), "cluster", "c1", "NotFound", "nf", 404)
+			err := mgr.CheckParent(context.Background(), "000000000000", "", "cluster", "c1", "NotFound", "nf", 404)
 			if err == nil {
 				errors <- fmt.Errorf("expected error after AcquireDelete but got nil")
 			}
@@ -520,7 +520,7 @@ func TestCheckParent_TOCTOU_Safety(t *testing.T) {
 	handle.Release()
 
 	// After release: parent exists again → CheckParent should succeed
-	err = mgr.CheckParent(context.Background(), "cluster", "c1", "NotFound", "nf", 404)
+	err = mgr.CheckParent(context.Background(), "000000000000", "", "cluster", "c1", "NotFound", "nf", 404)
 	if err != nil {
 		t.Errorf("CheckParent after Release should succeed: %v", err)
 	}
@@ -533,14 +533,14 @@ func TestAcquireDelete_FindChildrenError_ReleasesLock(t *testing.T) {
 	findErr := errors.New("store unavailable")
 	rule := DeleteGuardRule{
 		ParentType: "cluster",
-		FindChildren: func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error) {
+		FindChildren: func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error) {
 			return nil, findErr
 		},
 		Policy: PolicyFail,
 	}
 	mgr := New(fs, []DeleteGuardRule{rule})
 
-	_, err := mgr.AcquireDelete(context.Background(), "cluster", "c1")
+	_, err := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	if !errors.Is(err, findErr) {
 		t.Fatalf("expected findErr propagated, got: %v", err)
 	}

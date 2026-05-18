@@ -69,7 +69,7 @@ func (p *EKSProvider) CreateCluster(ctx context.Context, nr *model.NormalizedReq
 		CreatedAt: time.Now().UTC(),
 	}
 	data, _ := json.Marshal(c)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCluster, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "ResourceInUseException", Message: "cluster " + name + " already exists", HTTPStatus: http.StatusConflict}
 		}
@@ -80,7 +80,7 @@ func (p *EKSProvider) CreateCluster(ctx context.Context, nr *model.NormalizedReq
 
 func (p *EKSProvider) DescribeCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["name"].(string)
-	e, err := p.resources.Get(ctx, rtCluster, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + name + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -91,18 +91,18 @@ func (p *EKSProvider) DescribeCluster(ctx context.Context, nr *model.NormalizedR
 
 func (p *EKSProvider) DeleteCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["name"].(string)
-	e, err := p.resources.Get(ctx, rtCluster, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + name + " not found", HTTPStatus: http.StatusNotFound}
 	}
 	var c eksCluster
 	_ = json.Unmarshal(e.Data, &c)
-	_ = p.resources.Delete(ctx, rtCluster, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCluster, name)
 	return provider.OK(map[string]any{"cluster": clusterToWire(c)}), nil
 }
 
 func (p *EKSProvider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtCluster, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		var c eksCluster

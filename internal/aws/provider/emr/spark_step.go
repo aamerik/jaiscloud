@@ -58,7 +58,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 
 	// Load cluster Configurations to build spark-defaults --conf flags.
 	var confArgs []string
-	if c, loadErr := p.loadCluster(ctx, clusterID); loadErr == nil {
+	if c, loadErr := p.loadCluster(ctx, h.accountID, h.region, clusterID); loadErr == nil {
 		confArgs = clusterConfToSparkConfs(c.Configurations)
 	}
 
@@ -68,7 +68,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 	ep, sparkArgs, userArgs, err := parseSparkSubmitArgv(translated)
 	if err != nil {
 		slog.Warn("emr: failed to parse spark-submit args", "step", stepID, "err", err)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
+		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, h.accountID, h.region, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emr: PersistTerminalSnapshot failed", "prefix", "emr/steps", "id", stepID, "err", snapErr)
 		}
 		failStep(err.Error())
@@ -113,7 +113,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 	handle, err := sparkhelpers.SubmitClientMode(ctx, p.k8sClient, job)
 	if err != nil {
 		slog.Warn("emr: SubmitClientMode failed", "step", stepID, "err", err)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
+		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, h.accountID, h.region, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emr: PersistTerminalSnapshot failed", "prefix", "emr/steps", "id", stepID, "err", snapErr)
 		}
 		failStep(err.Error())
@@ -123,7 +123,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 	final, err := sparkhelpers.WaitTerminal(ctx, p.k8sClient, handle)
 	if err != nil {
 		slog.Warn("emr: WaitTerminal failed", "step", stepID, "err", err)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
+		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, h.accountID, h.region, "emr/steps", stepID, k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emr: PersistTerminalSnapshot failed", "prefix", "emr/steps", "id", stepID, "err", snapErr)
 		}
 		failStep(err.Error())
@@ -136,7 +136,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		reason = final.SparkReason
 	}
 	if state == "FAILED" {
-		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID,
+		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, h.accountID, h.region, "emr/steps", stepID,
 			k8shelpers.BuildSnapshot(final.Final, state)); snapErr != nil {
 			slog.Error("emr: PersistTerminalSnapshot failed", "prefix", "emr/steps", "id", stepID, "err", snapErr)
 		}
@@ -144,7 +144,7 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 	} else {
 		p.flushStepLogs(ctx, clusterID, stepID, sink)
 		p.emitStepStateChange(h, clusterID, stepID, state, reason)
-		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, "emr/steps", stepID,
+		if snapErr := k8shelpers.PersistTerminalSnapshot(ctx, p.resources, h.accountID, h.region, "emr/steps", stepID,
 			k8shelpers.BuildSnapshot(final.Final, state)); snapErr != nil {
 			slog.Error("emr: PersistTerminalSnapshot failed", "prefix", "emr/steps", "id", stepID, "err", snapErr)
 		}

@@ -100,8 +100,8 @@ func distToWire(d distribution) map[string]any {
 	}
 }
 
-func (p *Provider) loadDist(ctx context.Context, id string) (distribution, error) {
-	e, err := p.resources.Get(ctx, rtDistribution, id)
+func (p *Provider) loadDist(ctx context.Context, account, region, id string) (distribution, error) {
+	e, err := p.resources.Get(ctx, account, region, rtDistribution, id)
 	if err != nil {
 		return distribution{}, cfErr("NoSuchDistribution", "Distribution not found: "+id, http.StatusNotFound)
 	}
@@ -110,17 +110,17 @@ func (p *Provider) loadDist(ctx context.Context, id string) (distribution, error
 	return d, nil
 }
 
-func (p *Provider) saveDist(ctx context.Context, d distribution) {
+func (p *Provider) saveDist(ctx context.Context, account, region string, d distribution) {
 	data, _ := json.Marshal(d)
 	entry := store.ResourceEntry{Type: rtDistribution, ID: d.ID, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
 // findByCallerRef checks for duplicate CallerReference.
-func (p *Provider) findByCallerRef(ctx context.Context, ref string) bool {
-	entries, _ := p.resources.List(ctx, rtDistribution, "")
+func (p *Provider) findByCallerRef(ctx context.Context, account, region, ref string) bool {
+	entries, _ := p.resources.List(ctx, account, region, rtDistribution, "")
 	for _, e := range entries {
 		var d distribution
 		if json.Unmarshal(e.Data, &d) == nil && d.CallerReference == ref {
@@ -132,7 +132,7 @@ func (p *Provider) findByCallerRef(ctx context.Context, ref string) bool {
 
 func (p *Provider) CreateDistribution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	callerRef := str(nr.Params, "CallerReference")
-	if callerRef != "" && p.findByCallerRef(ctx, callerRef) {
+	if callerRef != "" && p.findByCallerRef(ctx, nr.AccountID, "", callerRef) {
 		return nil, cfErr("DistributionAlreadyExists", "A distribution with this CallerReference already exists", http.StatusConflict)
 	}
 	enabled := str(nr.Params, "Enabled") != "false"
@@ -157,7 +157,7 @@ func (p *Provider) CreateDistribution(ctx context.Context, nr *model.NormalizedR
 	if d.PriceClass == "" {
 		d.PriceClass = "PriceClass_All"
 	}
-	p.saveDist(ctx, d)
+	p.saveDist(ctx, nr.AccountID, "", d)
 	w := distToWire(d)
 	w["Location"] = "/2020-05-31/distribution/" + id
 	return provider.OK(w), nil
@@ -165,7 +165,7 @@ func (p *Provider) CreateDistribution(ctx context.Context, nr *model.NormalizedR
 
 func (p *Provider) GetDistribution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "Id")
-	d, err := p.loadDist(ctx, id)
+	d, err := p.loadDist(ctx, nr.AccountID, "", id)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (p *Provider) GetDistribution(ctx context.Context, nr *model.NormalizedRequ
 func (p *Provider) UpdateDistribution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "Id")
 	ifMatch := str(nr.Params, "IfMatch")
-	d, err := p.loadDist(ctx, id)
+	d, err := p.loadDist(ctx, nr.AccountID, "", id)
 	if err != nil {
 		return nil, err
 	}
@@ -190,25 +190,25 @@ func (p *Provider) UpdateDistribution(ctx context.Context, nr *model.NormalizedR
 	}
 	d.ETag = newETag()
 	d.LastModified = time.Now().UTC()
-	p.saveDist(ctx, d)
+	p.saveDist(ctx, nr.AccountID, "", d)
 	return provider.OK(distToWire(d)), nil
 }
 
 func (p *Provider) DeleteDistribution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "Id")
-	d, err := p.loadDist(ctx, id)
+	d, err := p.loadDist(ctx, nr.AccountID, "", id)
 	if err != nil {
 		return nil, err
 	}
 	if d.Enabled {
 		return nil, cfErr("DistributionNotDisabled", "Distribution must be disabled before deletion", http.StatusConflict)
 	}
-	_ = p.resources.Delete(ctx, rtDistribution, id)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", rtDistribution, id)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListDistributions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtDistribution, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", rtDistribution, "")
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var d distribution
@@ -218,8 +218,8 @@ func (p *Provider) ListDistributions(ctx context.Context, nr *model.NormalizedRe
 	}
 	return provider.OK(map[string]any{
 		"DistributionList": map[string]any{
-			"Items":      items,
-			"Quantity":   len(items),
+			"Items":       items,
+			"Quantity":    len(items),
 			"IsTruncated": false,
 		},
 	}), nil
@@ -228,7 +228,7 @@ func (p *Provider) ListDistributions(ctx context.Context, nr *model.NormalizedRe
 func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "Resource")
 	// Find distribution by ARN
-	entries, _ := p.resources.List(ctx, rtDistribution, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", rtDistribution, "")
 	for _, e := range entries {
 		var d distribution
 		if json.Unmarshal(e.Data, &d) != nil || d.ARN != arn {
@@ -238,7 +238,7 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 		for k, v := range newTags {
 			d.Tags[k] = v
 		}
-		p.saveDist(ctx, d)
+		p.saveDist(ctx, nr.AccountID, "", d)
 		return provider.OK(map[string]any{}), nil
 	}
 	return nil, cfErr("NoSuchDistribution", "Resource not found: "+arn, http.StatusNotFound)
@@ -246,7 +246,7 @@ func (p *Provider) TagResource(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "Resource")
-	entries, _ := p.resources.List(ctx, rtDistribution, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", rtDistribution, "")
 	for _, e := range entries {
 		var d distribution
 		if json.Unmarshal(e.Data, &d) != nil || d.ARN != arn {
@@ -257,7 +257,7 @@ func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedReques
 				delete(d.Tags, k)
 			}
 		}
-		p.saveDist(ctx, d)
+		p.saveDist(ctx, nr.AccountID, "", d)
 		return provider.OK(map[string]any{}), nil
 	}
 	return nil, cfErr("NoSuchDistribution", "Resource not found: "+arn, http.StatusNotFound)
@@ -265,7 +265,7 @@ func (p *Provider) UntagResource(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "Resource")
-	entries, _ := p.resources.List(ctx, rtDistribution, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", rtDistribution, "")
 	for _, e := range entries {
 		var d distribution
 		if json.Unmarshal(e.Data, &d) != nil || d.ARN != arn {

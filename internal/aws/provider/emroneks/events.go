@@ -26,7 +26,7 @@ func newHandlerCtx(nr *model.NormalizedRequest) handlerCtx {
 // an EMRJobRunState event on the bus with full cloud/region/account provenance.
 func (p *EMRContainersProvider) emitJobRunStateChange(h handlerCtx, vcID, jrID, state, reason string) {
 	ctx := context.Background()
-	jr, err := p.loadJobRun(ctx, vcID, jrID)
+	jr, err := p.loadJobRun(ctx, h.accountID, h.region, vcID, jrID)
 	if err != nil {
 		slog.Warn("emroneks: emitJobRunStateChange — failed to load job run",
 			"vcID", vcID, "jobRunID", jrID, "state", state, "err", err)
@@ -36,7 +36,7 @@ func (p *EMRContainersProvider) emitJobRunStateChange(h handlerCtx, vcID, jrID, 
 	if state == "FAILED" && reason != "" {
 		jr.FailureReason = reason
 	}
-	p.saveJobRun(ctx, jr)
+	p.saveJobRun(ctx, h.accountID, h.region, jr)
 	p.bus.Publish(events.Event{
 		Type: events.EventEMRJobRunState,
 		Payload: events.EMRJobRunStateEvent{

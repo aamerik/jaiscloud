@@ -345,8 +345,8 @@ func initStores(ctx context.Context, cfg *config.Config) (appStores, error) {
 	slog.Info("starting in lite mode")
 	return appStores{
 		resources:   store.NewMemoryResourceStore(),
-		messages:    sqsstore.NewMemoryMessageStore(),
-		dynamo:      dynamostore.NewMemoryDynamoDBItemStore(),
+		messages:    sqsstore.NewBundledSQSStore(),
+		dynamo:      dynamostore.NewBundledDynamoDBItemStore(),
 		s3Meta:      s3store.NewMemoryS3ObjectMetaStore(),
 		blobs:       blobfs.NewMemoryBlobStore(),
 		secrets:     secretprovider.NewMemorySecretStore(),

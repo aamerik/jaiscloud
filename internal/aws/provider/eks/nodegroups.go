@@ -57,7 +57,7 @@ func (p *EKSProvider) CreateNodegroup(ctx context.Context, nr *model.NormalizedR
 	if clusterName == "" || nodegroupName == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "clusterName and nodegroupName are required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtCluster, clusterName); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, clusterName); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + clusterName + " not found", HTTPStatus: http.StatusNotFound}
 	}
 
@@ -84,7 +84,7 @@ func (p *EKSProvider) CreateNodegroup(ctx context.Context, nr *model.NormalizedR
 	}
 	data, _ := json.Marshal(ng)
 	key := nodegroupKey(clusterName, nodegroupName)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "ResourceInUseException", Message: "nodegroup " + nodegroupName + " already exists in cluster " + clusterName, HTTPStatus: http.StatusConflict}
 		}
@@ -97,7 +97,7 @@ func (p *EKSProvider) DescribeNodegroup(ctx context.Context, nr *model.Normalize
 	clusterName, _ := nr.Params["clusterName"].(string)
 	nodegroupName, _ := nr.Params["nodegroupName"].(string)
 	key := nodegroupKey(clusterName, nodegroupName)
-	e, err := p.resources.Get(ctx, rtNodegroup, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtNodegroup, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "nodegroup " + nodegroupName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
 	}
@@ -108,7 +108,7 @@ func (p *EKSProvider) DescribeNodegroup(ctx context.Context, nr *model.Normalize
 
 func (p *EKSProvider) ListNodegroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName, _ := nr.Params["clusterName"].(string)
-	entries, _ := p.resources.List(ctx, rtNodegroup, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtNodegroup, "")
 	prefix := clusterName + "/"
 	names := make([]string, 0)
 	for _, e := range entries {
@@ -137,13 +137,13 @@ func (p *EKSProvider) DeleteNodegroup(ctx context.Context, nr *model.NormalizedR
 	clusterName, _ := nr.Params["clusterName"].(string)
 	nodegroupName, _ := nr.Params["nodegroupName"].(string)
 	key := nodegroupKey(clusterName, nodegroupName)
-	e, err := p.resources.Get(ctx, rtNodegroup, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtNodegroup, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "nodegroup " + nodegroupName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
 	}
 	var ng eksNodegroup
 	_ = json.Unmarshal(e.Data, &ng)
-	_ = p.resources.Delete(ctx, rtNodegroup, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtNodegroup, key)
 	return provider.OK(map[string]any{"nodegroup": nodegroupToWire(ng)}), nil
 }
 
@@ -151,7 +151,7 @@ func (p *EKSProvider) UpdateNodegroupConfig(ctx context.Context, nr *model.Norma
 	clusterName, _ := nr.Params["clusterName"].(string)
 	nodegroupName, _ := nr.Params["nodegroupName"].(string)
 	key := nodegroupKey(clusterName, nodegroupName)
-	e, err := p.resources.Get(ctx, rtNodegroup, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtNodegroup, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "nodegroup " + nodegroupName + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -180,7 +180,7 @@ func (p *EKSProvider) UpdateNodegroupConfig(ctx context.Context, nr *model.Norma
 	ng.ModifiedAt = time.Now().UTC()
 
 	data, _ := json.Marshal(ng)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})
 	return provider.OK(map[string]any{"update": map[string]any{
 		"clusterName":   clusterName,
 		"nodegroupName": nodegroupName,
@@ -194,7 +194,7 @@ func (p *EKSProvider) UpdateNodegroupVersion(ctx context.Context, nr *model.Norm
 	clusterName, _ := nr.Params["clusterName"].(string)
 	nodegroupName, _ := nr.Params["nodegroupName"].(string)
 	key := nodegroupKey(clusterName, nodegroupName)
-	e, err := p.resources.Get(ctx, rtNodegroup, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtNodegroup, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "nodegroup " + nodegroupName + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -207,7 +207,7 @@ func (p *EKSProvider) UpdateNodegroupVersion(ctx context.Context, nr *model.Norm
 	ng.ModifiedAt = time.Now().UTC()
 
 	data, _ := json.Marshal(ng)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})
 	return provider.OK(map[string]any{"update": map[string]any{
 		"clusterName":   clusterName,
 		"nodegroupName": nodegroupName,

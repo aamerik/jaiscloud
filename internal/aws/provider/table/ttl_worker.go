@@ -76,7 +76,7 @@ func (w *TTLWorker) Shutdown() {
 func (w *TTLWorker) Reset() {}
 
 func (w *TTLWorker) sweep(ctx context.Context) {
-	entries, err := w.resources.List(ctx, "dynamodb_tables", "")
+	entries, err := w.resources.List(ctx, "", "", "dynamodb_tables", "")
 	if err != nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (w *TTLWorker) sweep(ctx context.Context) {
 
 func (w *TTLWorker) expireTable(ctx context.Context, ts tableSchema, nowUnix int64) {
 	sc := dynamostore.ScanSpec{Limit: 0} // 0 = no limit
-	items, _, _, err := w.items.Scan(ctx, ts.TableName, sc)
+	items, _, _, err := w.items.Scan(ctx, "", "", ts.TableName, sc)
 	if err != nil {
 		return
 	}
@@ -110,7 +110,7 @@ func (w *TTLWorker) expireTable(ctx context.Context, ts tableSchema, nowUnix int
 			continue
 		}
 		pkHash := dynamostore.MemoryItemPKHash(item)
-		_, _ = w.items.DeleteItem(ctx, ts.TableName, pkHash, dynamostore.ConditionSpec{})
+		_, _ = w.items.DeleteItem(ctx, "", "", ts.TableName, pkHash, dynamostore.ConditionSpec{})
 		if w.streams != nil && w.streams.IsEnabled(ts.TableName) {
 			w.streams.Append(ts.TableName, streamstore.Record{
 				EventName:                   "REMOVE",

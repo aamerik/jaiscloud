@@ -73,7 +73,7 @@ func buildS3EventRecord(bucket, key, eventName, etag string, size int64, region,
 			"bucket": map[string]any{
 				"name":          bucket,
 				"ownerIdentity": map[string]any{"principalId": accountID},
-				"arn":           "arn:aws:s3:::" + bucket,
+				"arn":           "arn:aws:s3:::" + bucket, //nolint:hardcoded-arn S3 bucket ARNs have no account/region by AWS spec
 			},
 			"object": map[string]any{
 				"key":       key,
@@ -110,7 +110,7 @@ func (p *ObjectProvider) dispatchS3Notification(_ context.Context, bucket, key, 
 		go func(arn string, body []byte) {
 			if p.fanout.SQS != nil {
 				_ = p.fanout.SQS.InternalSend(bgCtx, arn, string(body), nil, queue.SourceContext{
-					SourceArn:        "arn:aws:s3:::" + bucket,
+					SourceArn:        "arn:aws:s3:::" + bucket, //nolint:hardcoded-arn S3 bucket ARNs have no account/region by AWS spec
 					ServicePrincipal: "s3.amazonaws.com",
 				})
 			}

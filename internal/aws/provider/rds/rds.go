@@ -215,7 +215,7 @@ func (p *RelationalProvider) CreateDBInstance(ctx context.Context, nr *model.Nor
 		VpcSecurityGroupIds:   parseVpcSecurityGroupIds(nr.Params),
 	}
 	data, _ := json.Marshal(inst)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBInstanceAlreadyExists", Message: "DB instance already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -263,7 +263,7 @@ func matchesAny(val string, allowed []string) bool {
 func (p *RelationalProvider) DescribeDBInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
 	if id != "" {
-		e, err := p.resources.Get(ctx, rtDBInstance, id)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -274,7 +274,7 @@ func (p *RelationalProvider) DescribeDBInstances(ctx context.Context, nr *model.
 		json.Unmarshal(e.Data, &inst)
 		return provider.OK(map[string]any{"DBInstances": []map[string]any{inst.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtDBInstance, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDBInstance, "")
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func (p *RelationalProvider) DescribeDBInstances(ctx context.Context, nr *model.
 
 func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -389,7 +389,7 @@ func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.Nor
 	}
 
 	data, _ := json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 
 	wireInst := inst.toWire()
 	if pendingWire != nil {
@@ -400,7 +400,7 @@ func (p *RelationalProvider) ModifyDBInstance(ctx context.Context, nr *model.Nor
 
 func (p *RelationalProvider) DeleteDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -410,13 +410,13 @@ func (p *RelationalProvider) DeleteDBInstance(ctx context.Context, nr *model.Nor
 	var inst dbInstance
 	json.Unmarshal(e.Data, &inst)
 	inst.DBInstanceStatus = "deleting"
-	p.resources.Delete(ctx, rtDBInstance, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	return provider.OK(map[string]any{"DBInstanceDeleted": inst.toWire()}), nil
 }
 
 func (p *RelationalProvider) RebootDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -427,16 +427,16 @@ func (p *RelationalProvider) RebootDBInstance(ctx context.Context, nr *model.Nor
 	json.Unmarshal(e.Data, &inst)
 	inst.DBInstanceStatus = "rebooting"
 	data, _ := json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	inst.DBInstanceStatus = "available"
 	data, _ = json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBInstanceRebooted": inst.toWire()}), nil
 }
 
 func (p *RelationalProvider) StartDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -447,13 +447,13 @@ func (p *RelationalProvider) StartDBInstance(ctx context.Context, nr *model.Norm
 	json.Unmarshal(e.Data, &inst)
 	inst.DBInstanceStatus = "available"
 	data, _ := json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBInstanceStarted": inst.toWire()}), nil
 }
 
 func (p *RelationalProvider) StopDBInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -464,13 +464,13 @@ func (p *RelationalProvider) StopDBInstance(ctx context.Context, nr *model.Norma
 	json.Unmarshal(e.Data, &inst)
 	inst.DBInstanceStatus = "stopped"
 	data, _ := json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBInstanceStopped": inst.toWire()}), nil
 }
 
 func (p *RelationalProvider) PromoteReadReplica(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
-	e, err := p.resources.Get(ctx, rtDBInstance, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -481,14 +481,14 @@ func (p *RelationalProvider) PromoteReadReplica(ctx context.Context, nr *model.N
 	json.Unmarshal(e.Data, &inst)
 	inst.ReadReplicaSourceDBInstanceIdentifier = ""
 	data, _ := json.Marshal(inst)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBInstancePromoted": inst.toWire()}), nil
 }
 
 func (p *RelationalProvider) CreateDBInstanceReadReplica(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBInstanceIdentifier")
 	sourceId := strParam(nr.Params, "SourceDBInstanceIdentifier")
-	srcEntry, err := p.resources.Get(ctx, rtDBInstance, sourceId)
+	srcEntry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBInstance, sourceId)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBInstanceNotFound", Message: "Source DB instance not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -510,7 +510,7 @@ func (p *RelationalProvider) CreateDBInstanceReadReplica(ctx context.Context, nr
 		ReadReplicaSourceDBInstanceIdentifier: sourceId,
 	}
 	data, _ := json.Marshal(replica)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBInstance, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBInstanceAlreadyExists", Message: "DB instance already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -576,7 +576,7 @@ func (p *RelationalProvider) CreateDBCluster(ctx context.Context, nr *model.Norm
 		c.EngineVersion = "8.0"
 	}
 	data, _ := json.Marshal(c)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBCluster, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBCluster, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBClusterAlreadyExistsFault", Message: "DB cluster already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -591,7 +591,7 @@ func (p *RelationalProvider) CreateDBCluster(ctx context.Context, nr *model.Norm
 func (p *RelationalProvider) DescribeDBClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBClusterIdentifier")
 	if id != "" {
-		e, err := p.resources.Get(ctx, rtDBCluster, id)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBCluster, id)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "DBClusterNotFoundFault", Message: "DB cluster not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -602,7 +602,7 @@ func (p *RelationalProvider) DescribeDBClusters(ctx context.Context, nr *model.N
 		json.Unmarshal(e.Data, &c)
 		return provider.OK(map[string]any{"DBClusters": []map[string]any{c.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtDBCluster, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDBCluster, "")
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +641,7 @@ func (p *RelationalProvider) DescribeDBClusters(ctx context.Context, nr *model.N
 
 func (p *RelationalProvider) ModifyDBCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBClusterIdentifier")
-	e, err := p.resources.Get(ctx, rtDBCluster, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBCluster, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBClusterNotFoundFault", Message: "DB cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -654,13 +654,13 @@ func (p *RelationalProvider) ModifyDBCluster(ctx context.Context, nr *model.Norm
 		// accepted but not stored
 	}
 	data, _ := json.Marshal(c)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtDBCluster, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBCluster, ID: id, Data: data})
 	return provider.OK(map[string]any{"DBClusterModified": c.toWire()}), nil
 }
 
 func (p *RelationalProvider) DeleteDBCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "DBClusterIdentifier")
-	e, err := p.resources.Get(ctx, rtDBCluster, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBCluster, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBClusterNotFoundFault", Message: "DB cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -670,7 +670,7 @@ func (p *RelationalProvider) DeleteDBCluster(ctx context.Context, nr *model.Norm
 	var c dbCluster
 	json.Unmarshal(e.Data, &c)
 	c.Status = "deleting"
-	p.resources.Delete(ctx, rtDBCluster, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDBCluster, id)
 	return provider.OK(map[string]any{"DBClusterDeleted": c.toWire()}), nil
 }
 
@@ -707,7 +707,7 @@ func (p *RelationalProvider) CreateDBSubnetGroup(ctx context.Context, nr *model.
 		DBSubnetGroupArn:         nr.ResourceID("rds-subnetgroup", name),
 	}
 	data, _ := json.Marshal(sg)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDBSubnetGroup, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBSubnetGroup, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "DBSubnetGroupAlreadyExists", Message: "DB subnet group already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -722,7 +722,7 @@ func (p *RelationalProvider) CreateDBSubnetGroup(ctx context.Context, nr *model.
 func (p *RelationalProvider) DescribeDBSubnetGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "DBSubnetGroupName")
 	if name != "" {
-		e, err := p.resources.Get(ctx, rtDBSubnetGroup, name)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDBSubnetGroup, name)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "DBSubnetGroupNotFoundFault", Message: "DB subnet group not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -733,7 +733,7 @@ func (p *RelationalProvider) DescribeDBSubnetGroups(ctx context.Context, nr *mod
 		json.Unmarshal(e.Data, &sg)
 		return provider.OK(map[string]any{"DBSubnetGroups": []map[string]any{sg.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtDBSubnetGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDBSubnetGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -748,7 +748,7 @@ func (p *RelationalProvider) DescribeDBSubnetGroups(ctx context.Context, nr *mod
 
 func (p *RelationalProvider) DeleteDBSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "DBSubnetGroupName")
-	if err := p.resources.Delete(ctx, rtDBSubnetGroup, name); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDBSubnetGroup, name); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "DBSubnetGroupNotFoundFault", Message: "DB subnet group not found", HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(nil), nil

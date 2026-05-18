@@ -17,9 +17,9 @@ import (
 // ─── Resource types ───────────────────────────────────────────────────────────
 
 const (
-	rtConnection      = "glue_connection"
-	rtResourcePolicy  = "glue_resource_policy"
-	rtPartitionIndex  = "glue_partition_index"
+	rtConnection     = "glue_connection"
+	rtResourcePolicy = "glue_resource_policy"
+	rtPartitionIndex = "glue_partition_index"
 )
 
 // ─── Connections ──────────────────────────────────────────────────────────────
@@ -35,11 +35,11 @@ func (p *GlueProvider) CreateConnection(ctx context.Context, nr *model.Normalize
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "ConnectionInput.Name is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtConnection, connectionID(name)); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConnection, connectionID(name)); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Connection %s already exists", name), HTTPStatus: http.StatusBadRequest}
 	}
 	data, _ := json.Marshal(inp)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtConnection, ID: connectionID(name), Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConnection, ID: connectionID(name), Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -47,7 +47,7 @@ func (p *GlueProvider) CreateConnection(ctx context.Context, nr *model.Normalize
 
 func (p *GlueProvider) GetConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, rtConnection, connectionID(name))
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConnection, connectionID(name))
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Connection %s not found", name), HTTPStatus: http.StatusBadRequest}
 	}
@@ -60,7 +60,7 @@ func (p *GlueProvider) GetConnection(ctx context.Context, nr *model.NormalizedRe
 }
 
 func (p *GlueProvider) GetConnections(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtConnection, "conn/")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtConnection, "conn/")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (p *GlueProvider) GetConnections(ctx context.Context, nr *model.NormalizedR
 
 func (p *GlueProvider) UpdateConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if _, err := p.resources.Get(ctx, rtConnection, connectionID(name)); err == store.ErrNotFound {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConnection, connectionID(name)); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Connection %s not found", name), HTTPStatus: http.StatusBadRequest}
 	}
 	inp, _ := nr.Params["ConnectionInput"].(map[string]any)
@@ -84,7 +84,7 @@ func (p *GlueProvider) UpdateConnection(ctx context.Context, nr *model.Normalize
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "ConnectionInput is required", HTTPStatus: http.StatusBadRequest}
 	}
 	data, _ := json.Marshal(inp)
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtConnection, ID: connectionID(name), Data: data}); err != nil {
+	if err := p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConnection, ID: connectionID(name), Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -92,10 +92,10 @@ func (p *GlueProvider) UpdateConnection(ctx context.Context, nr *model.Normalize
 
 func (p *GlueProvider) DeleteConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ConnectionName")
-	if _, err := p.resources.Get(ctx, rtConnection, connectionID(name)); err == store.ErrNotFound {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConnection, connectionID(name)); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Connection %s not found", name), HTTPStatus: http.StatusBadRequest}
 	}
-	if err := p.resources.Delete(ctx, rtConnection, connectionID(name)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtConnection, connectionID(name)); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -109,9 +109,9 @@ func (p *GlueProvider) PutResourcePolicy(ctx context.Context, nr *model.Normaliz
 	policyJSON := strParam(nr.Params, "PolicyInJson")
 	data, _ := json.Marshal(map[string]any{"PolicyInJson": policyJSON})
 	entry := store.ResourceEntry{Type: rtResourcePolicy, ID: resourcePolicyID, Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry)
 	if err == store.ErrAlreadyExists {
-		err = p.resources.Update(ctx, entry)
+		err = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 	}
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (p *GlueProvider) PutResourcePolicy(ctx context.Context, nr *model.Normaliz
 }
 
 func (p *GlueProvider) GetResourcePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	e, err := p.resources.Get(ctx, rtResourcePolicy, resourcePolicyID)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtResourcePolicy, resourcePolicyID)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFound", Message: "No resource policy found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -133,7 +133,7 @@ func (p *GlueProvider) GetResourcePolicy(ctx context.Context, nr *model.Normaliz
 }
 
 func (p *GlueProvider) DeleteResourcePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if err := p.resources.Delete(ctx, rtResourcePolicy, resourcePolicyID); err != nil && err != store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtResourcePolicy, resourcePolicyID); err != nil && err != store.ErrNotFound {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -161,17 +161,17 @@ func (p *GlueProvider) CreatePartitionIndex(ctx context.Context, nr *model.Norma
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "PartitionIndex.IndexName is required", HTTPStatus: http.StatusBadRequest}
 	}
 	id := partitionIndexID(db, table, indexName)
-	if _, err := p.resources.Get(ctx, rtPartitionIndex, id); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPartitionIndex, id); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Partition index %s already exists", indexName), HTTPStatus: http.StatusBadRequest}
 	}
 	payload := map[string]any{
-		"DatabaseName": db,
-		"TableName":    table,
+		"DatabaseName":   db,
+		"TableName":      table,
 		"PartitionIndex": inp,
-		"IndexStatus":  "ACTIVE",
+		"IndexStatus":    "ACTIVE",
 	}
 	data, _ := json.Marshal(payload)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtPartitionIndex, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPartitionIndex, ID: id, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
@@ -180,7 +180,7 @@ func (p *GlueProvider) CreatePartitionIndex(ctx context.Context, nr *model.Norma
 func (p *GlueProvider) GetPartitionIndexes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	db := strParam(nr.Params, "DatabaseName")
 	table := strParam(nr.Params, "TableName")
-	entries, err := p.resources.List(ctx, rtPartitionIndex, partitionIndexPrefix(db, table))
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtPartitionIndex, partitionIndexPrefix(db, table))
 	if err != nil {
 		return nil, err
 	}
@@ -199,9 +199,7 @@ func (p *GlueProvider) DeletePartitionIndex(ctx context.Context, nr *model.Norma
 	table := strParam(nr.Params, "TableName")
 	indexName := strParam(nr.Params, "IndexName")
 	id := partitionIndexID(db, table, indexName)
-	if err := p.resources.Delete(ctx, rtPartitionIndex, id); err == store.ErrNotFound {
-		return nil, &model.ProviderError{Code: "NotFound", Message: fmt.Sprintf("Partition index %s not found", indexName), HTTPStatus: http.StatusBadRequest}
-	} else if err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtPartitionIndex, id); err != nil && err != store.ErrNotFound {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

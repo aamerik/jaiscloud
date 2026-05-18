@@ -72,7 +72,7 @@ func WaitForMessages(
 ) ([]sqsstore.SQSMessage, error) {
 	deadline := clk.Now().Add(waitTime)
 	for {
-		msgs, err := store.Receive(ctx, queueURL, maxMessages, clk.Now())
+		msgs, err := store.Receive(ctx, "", "", queueURL, maxMessages, clk.Now())
 		if err != nil {
 			return nil, err
 		}

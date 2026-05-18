@@ -251,9 +251,9 @@ func (p *EventBridgeProvider) PutRule(ctx context.Context, nr *model.NormalizedR
 	}
 	raw, _ := json.Marshal(rule)
 	entry := store.ResourceEntry{Type: resTypeRule, ID: ruleKey(busName, name), Data: raw}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		} else {
 			return nil, err
 		}
@@ -277,14 +277,14 @@ func (p *EventBridgeProvider) DeleteRule(ctx context.Context, nr *model.Normaliz
 	busName := normBus(strParam(nr.Params, "EventBusName"))
 	// Load rule before deleting so we can retrieve the ARN for scheduler removal.
 	var rd ruleData
-	if e, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, name)); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeRule, ruleKey(busName, name)); err == nil {
 		_ = json.Unmarshal(e.Data, &rd)
 	}
-	_ = p.resources.Delete(ctx, resTypeRule, ruleKey(busName, name))
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeRule, ruleKey(busName, name))
 	// Cascade: remove all targets for this rule.
-	entries, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, name))
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeTarget, targetKeyPrefix(busName, name))
 	for _, e := range entries {
-		_ = p.resources.Delete(ctx, resTypeTarget, e.ID)
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeTarget, e.ID)
 	}
 	// Unschedule if the rule had a schedule expression.
 	if p.scheduler != nil && rd.Arn != "" {
@@ -296,7 +296,7 @@ func (p *EventBridgeProvider) DeleteRule(ctx context.Context, nr *model.Normaliz
 func (p *EventBridgeProvider) DescribeRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
 	busName := normBus(strParam(nr.Params, "EventBusName"))
-	e, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, name))
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeRule, ruleKey(busName, name))
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + name + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
@@ -320,7 +320,7 @@ func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.Normalize
 	if namePrefix != "" {
 		storePrefix = busFilter + "/" + namePrefix
 	}
-	entries, _ := p.resources.List(ctx, resTypeRule, storePrefix)
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeRule, storePrefix)
 	rules := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var rule ruleData
@@ -353,16 +353,16 @@ func (p *EventBridgeProvider) ListRules(ctx context.Context, nr *model.Normalize
 }
 
 func (p *EventBridgeProvider) EnableRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setRuleState(ctx, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "ENABLED")
+	return p.setRuleState(ctx, nr.AccountID, nr.Region, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "ENABLED")
 }
 
 func (p *EventBridgeProvider) DisableRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setRuleState(ctx, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "DISABLED")
+	return p.setRuleState(ctx, nr.AccountID, nr.Region, normBus(strParam(nr.Params, "EventBusName")), strParam(nr.Params, "Name"), "DISABLED")
 }
 
-func (p *EventBridgeProvider) setRuleState(ctx context.Context, busName, name, state string) (*model.ProviderResponse, error) {
+func (p *EventBridgeProvider) setRuleState(ctx context.Context, account, region, busName, name, state string) (*model.ProviderResponse, error) {
 	key := ruleKey(busName, name)
-	e, err := p.resources.Get(ctx, resTypeRule, key)
+	e, err := p.resources.Get(ctx, account, region, resTypeRule, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + name + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
@@ -370,7 +370,7 @@ func (p *EventBridgeProvider) setRuleState(ctx context.Context, busName, name, s
 	_ = json.Unmarshal(e.Data, &rule)
 	rule.State = state
 	raw, _ := json.Marshal(rule)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeRule, ID: key, Data: raw})
+	_ = p.resources.Update(ctx, account, region, store.ResourceEntry{Type: resTypeRule, ID: key, Data: raw})
 	return provider.OK(nil), nil
 }
 
@@ -399,7 +399,7 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Rule is required", HTTPStatus: http.StatusBadRequest}
 	}
 	busName := normBus(strParam(nr.Params, "EventBusName"))
-	if _, err := p.resources.Get(ctx, resTypeRule, ruleKey(busName, ruleName)); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeRule, ruleKey(busName, ruleName)); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Rule " + ruleName + " does not exist", HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -449,9 +449,9 @@ func (p *EventBridgeProvider) PutTargets(ctx context.Context, nr *model.Normaliz
 		raw, _ := json.Marshal(td)
 		storeID := targetKey(busName, ruleName, id)
 		entry := store.ResourceEntry{Type: resTypeTarget, ID: storeID, Data: raw}
-		if err := p.resources.Create(ctx, entry); err != nil {
+		if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 			if err == store.ErrAlreadyExists {
-				_ = p.resources.Update(ctx, entry)
+				_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 			}
 		}
 	}
@@ -485,7 +485,7 @@ func (p *EventBridgeProvider) RemoveTargets(ctx context.Context, nr *model.Norma
 		if id == "" {
 			continue
 		}
-		if err := p.resources.Delete(ctx, resTypeTarget, targetKey(busName, ruleName, id)); err != nil {
+		if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeTarget, targetKey(busName, ruleName, id)); err != nil {
 			failed = append(failed, map[string]any{"TargetId": id, "ErrorCode": "TargetNotFound", "ErrorMessage": err.Error()})
 		}
 	}
@@ -498,7 +498,7 @@ func (p *EventBridgeProvider) RemoveTargets(ctx context.Context, nr *model.Norma
 func (p *EventBridgeProvider) ListTargetsByRule(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ruleName := strParam(nr.Params, "Rule")
 	busName := normBus(strParam(nr.Params, "EventBusName"))
-	entries, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, ruleName))
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeTarget, targetKeyPrefix(busName, ruleName))
 	targets := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var td targetData
@@ -541,7 +541,7 @@ func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.Normalize
 		// Validate event bus exists (skip for default bus which always exists).
 		busName, _ := em["EventBusName"].(string)
 		if busName != "" && busName != "default" {
-			if _, err := p.resources.Get(ctx, resTypeBus, busName); err != nil {
+			if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeBus, busName); err != nil {
 				results = append(results, map[string]any{
 					"ErrorCode":    "InvalidParameterException",
 					"ErrorMessage": "Event bus " + busName + " does not exist",
@@ -611,7 +611,7 @@ func (p *EventBridgeProvider) subscribeToEventBus() {
 // deliverEvent matches envelope against all ENABLED rules and sends to matching targets.
 // It also checks all archives and appends matching events to their in-memory rings.
 func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[string]any) {
-	ruleEntries, _ := p.resources.List(ctx, resTypeRule, "")
+	ruleEntries, _ := p.resources.List(ctx, "", "", resTypeRule, "")
 	for _, e := range ruleEntries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
@@ -628,7 +628,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 			continue
 		}
 		busName := normBus(rule.EventBusName)
-		tgts, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(busName, rule.Name))
+		tgts, _ := p.resources.List(ctx, "", "", resTypeTarget, targetKeyPrefix(busName, rule.Name))
 		var wg sync.WaitGroup
 		for _, te := range tgts {
 			var td targetData
@@ -645,7 +645,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 	}
 
 	// Archive matching.
-	archiveEntries, _ := p.resources.List(ctx, resTypeArchive, "")
+	archiveEntries, _ := p.resources.List(ctx, "", "", resTypeArchive, "")
 	for _, e := range archiveEntries {
 		var arch ebArchive
 		if err := json.Unmarshal(e.Data, &arch); err != nil {
@@ -665,7 +665,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 		arch.EventCount++
 		arch.SizeBytes += int64(len(b))
 		data, _ := json.Marshal(arch)
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeArchive, ID: arch.Name, Data: data})
+		_ = p.resources.Update(ctx, "", "", store.ResourceEntry{Type: resTypeArchive, ID: arch.Name, Data: data})
 
 		p.archiveMu.Lock()
 		p.archiveEvents[arch.Name] = append(p.archiveEvents[arch.Name], envelope)
@@ -688,7 +688,7 @@ func (p *EventBridgeProvider) deliverToTarget(ctx context.Context, td targetData
 	host := fmt.Sprintf("localhost:%d", p.port)
 	queueURL := strings.Replace(td.QueueURL, jaiscloudHostPlaceholder, host, 1)
 	body, _ := json.Marshal(envelope)
-	_, _, _ = p.messages.Send(ctx, sqsstore.SQSMessage{
+	_, _, _ = p.messages.Send(ctx, "", "", sqsstore.SQSMessage{
 		QueueURL:  queueURL,
 		MessageID: newEventID(),
 		Body:      string(body),
@@ -923,7 +923,7 @@ func (p *EventBridgeProvider) CreateEventBus(ctx context.Context, nr *model.Norm
 	bd := eventBusData{Name: name, Arn: arn}
 	raw, _ := json.Marshal(bd)
 	entry := store.ResourceEntry{Type: resTypeBus, ID: name, Data: raw}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Event bus already exists: " + name, HTTPStatus: 400}
 		}
@@ -938,24 +938,24 @@ func (p *EventBridgeProvider) DeleteEventBus(ctx context.Context, nr *model.Norm
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Cannot delete default event bus", HTTPStatus: 400}
 	}
 	// Cascade: remove all rules (and their targets) bound to this bus.
-	allRules, _ := p.resources.List(ctx, resTypeRule, "")
+	allRules, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeRule, "")
 	for _, e := range allRules {
 		var rd ruleData
 		if json.Unmarshal(e.Data, &rd) == nil && rd.EventBusName == name {
 			// Remove targets for this rule.
-			tgts, _ := p.resources.List(ctx, resTypeTarget, targetKeyPrefix(name, rd.Name))
+			tgts, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeTarget, targetKeyPrefix(name, rd.Name))
 			for _, t := range tgts {
-				_ = p.resources.Delete(ctx, resTypeTarget, t.ID)
+				_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeTarget, t.ID)
 			}
 			// Remove the rule itself.
-			_ = p.resources.Delete(ctx, resTypeRule, e.ID)
+			_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeRule, e.ID)
 			// Unschedule if the rule had a schedule expression.
 			if p.scheduler != nil && rd.ScheduleExpr != "" {
 				p.scheduler.Remove(rd.Arn)
 			}
 		}
 	}
-	if err := p.resources.Delete(ctx, resTypeBus, name); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeBus, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event bus not found: "+name)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -970,7 +970,7 @@ func (p *EventBridgeProvider) DescribeEventBus(ctx context.Context, nr *model.No
 		arn := nr.ResourceID("events-bus", "default")
 		return provider.OK(map[string]any{"Name": "default", "Arn": arn}), nil
 	}
-	e, err := p.resources.Get(ctx, resTypeBus, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeBus, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Event bus not found: "+name)
 	}
@@ -987,7 +987,7 @@ func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.Norm
 	if lv, ok := nr.Params["Limit"].(float64); ok && lv > 0 {
 		maxResults = int(lv)
 	}
-	entries, _ := p.resources.List(ctx, resTypeBus, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeBus, "")
 	buses := make([]map[string]any, 0, len(entries)+1)
 	// Include default bus if no prefix filter or "default" matches the prefix.
 	if namePrefix == "" || strings.HasPrefix("default", namePrefix) {
@@ -1018,7 +1018,7 @@ func (p *EventBridgeProvider) ListEventBuses(ctx context.Context, nr *model.Norm
 
 func (p *EventBridgeProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceARN")
-	tags := p.loadTags(ctx, arn)
+	tags := p.loadTags(ctx, nr.AccountID, nr.Region, arn)
 	if rawTags, ok := nr.Params["Tags"].([]any); ok {
 		for _, t := range rawTags {
 			if m, ok := t.(map[string]any); ok {
@@ -1030,25 +1030,25 @@ func (p *EventBridgeProvider) TagResource(ctx context.Context, nr *model.Normali
 			}
 		}
 	}
-	p.saveTags(ctx, arn, tags)
+	p.saveTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EventBridgeProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceARN")
-	tags := p.loadTags(ctx, arn)
+	tags := p.loadTags(ctx, nr.AccountID, nr.Region, arn)
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
 		for _, k := range keys {
 			delete(tags, fmt.Sprintf("%v", k))
 		}
 	}
-	p.saveTags(ctx, arn, tags)
+	p.saveTags(ctx, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EventBridgeProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceARN")
-	tags := p.loadTags(ctx, arn)
+	tags := p.loadTags(ctx, nr.AccountID, nr.Region, arn)
 	out := make([]map[string]any, 0, len(tags))
 	for k, v := range tags {
 		out = append(out, map[string]any{"Key": k, "Value": v})
@@ -1056,20 +1056,20 @@ func (p *EventBridgeProvider) ListTagsForResource(ctx context.Context, nr *model
 	return provider.OK(map[string]any{"Tags": out}), nil
 }
 
-func (p *EventBridgeProvider) loadTags(ctx context.Context, arn string) map[string]string {
+func (p *EventBridgeProvider) loadTags(ctx context.Context, account, region, arn string) map[string]string {
 	tags := make(map[string]string)
-	if e, err := p.resources.Get(ctx, resTypeEBTags, arn); err == nil {
+	if e, err := p.resources.Get(ctx, account, region, resTypeEBTags, arn); err == nil {
 		_ = json.Unmarshal(e.Data, &tags)
 	}
 	return tags
 }
 
-func (p *EventBridgeProvider) saveTags(ctx context.Context, arn string, tags map[string]string) {
+func (p *EventBridgeProvider) saveTags(ctx context.Context, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: resTypeEBTags, ID: arn, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, account, region, entry)
 		}
 	}
 }
@@ -1110,7 +1110,7 @@ func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.Norma
 	if name == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "ArchiveName is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, resTypeArchive, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeArchive, name); err == nil {
 		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Archive already exists: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 	arch := ebArchive{
@@ -1126,7 +1126,7 @@ func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.Norma
 		arch.RetentionDays = int(d)
 	}
 	data, _ := json.Marshal(arch)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"ArchiveArn": arch.ARN, "CreationTime": arch.CreationTime.Unix(), "State": arch.State}), nil
@@ -1134,7 +1134,7 @@ func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.Norma
 
 func (p *EventBridgeProvider) DescribeArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ArchiveName")
-	e, err := p.resources.Get(ctx, resTypeArchive, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeArchive, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1156,7 +1156,7 @@ func (p *EventBridgeProvider) DescribeArchive(ctx context.Context, nr *model.Nor
 }
 
 func (p *EventBridgeProvider) ListArchives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, resTypeArchive, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeArchive, "")
 	namePrefix := strParam(nr.Params, "NamePrefix")
 	srcFilter := strParam(nr.Params, "EventSourceArn")
 	stateFilter := strParam(nr.Params, "State")
@@ -1189,7 +1189,7 @@ func (p *EventBridgeProvider) ListArchives(ctx context.Context, nr *model.Normal
 
 func (p *EventBridgeProvider) UpdateArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ArchiveName")
-	e, err := p.resources.Get(ctx, resTypeArchive, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeArchive, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1205,16 +1205,16 @@ func (p *EventBridgeProvider) UpdateArchive(ctx context.Context, nr *model.Norma
 		arch.RetentionDays = int(d)
 	}
 	data, _ := json.Marshal(arch)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeArchive, ID: name, Data: data})
 	return provider.OK(map[string]any{"ArchiveArn": arch.ARN, "CreationTime": arch.CreationTime.Unix(), "State": arch.State}), nil
 }
 
 func (p *EventBridgeProvider) DeleteArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ArchiveName")
-	if _, err := p.resources.Get(ctx, resTypeArchive, name); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeArchive, name); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Archive not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
-	_ = p.resources.Delete(ctx, resTypeArchive, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeArchive, name)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -1249,9 +1249,9 @@ func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.Normali
 	}
 	data, _ := json.Marshal(replay)
 	entry := store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		} else {
 			return nil, err
 		}
@@ -1295,7 +1295,7 @@ func (p *EventBridgeProvider) replayArchive(ctx context.Context, replayName, arc
 	}
 
 	now := time.Now().UTC()
-	e, err := p.resources.Get(ctx, resTypeReplay, replayName)
+	e, err := p.resources.Get(ctx, "", "", resTypeReplay, replayName)
 	if err != nil {
 		return
 	}
@@ -1304,12 +1304,12 @@ func (p *EventBridgeProvider) replayArchive(ctx context.Context, replayName, arc
 	r.State = "COMPLETED"
 	r.ReplayEndTime = &now
 	data, _ := json.Marshal(r)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeReplay, ID: replayName, Data: data})
+	_ = p.resources.Update(ctx, "", "", store.ResourceEntry{Type: resTypeReplay, ID: replayName, Data: data})
 }
 
 func (p *EventBridgeProvider) DescribeReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ReplayName")
-	e, err := p.resources.Get(ctx, resTypeReplay, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeReplay, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Replay not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1331,7 +1331,7 @@ func (p *EventBridgeProvider) DescribeReplay(ctx context.Context, nr *model.Norm
 }
 
 func (p *EventBridgeProvider) ListReplays(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, resTypeReplay, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeReplay, "")
 	namePrefix := strParam(nr.Params, "NamePrefix")
 	stateFilter := strParam(nr.Params, "State")
 	out := []map[string]any{}
@@ -1357,7 +1357,7 @@ func (p *EventBridgeProvider) ListReplays(ctx context.Context, nr *model.Normali
 
 func (p *EventBridgeProvider) CancelReplay(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "ReplayName")
-	e, err := p.resources.Get(ctx, resTypeReplay, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeReplay, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Replay not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1368,7 +1368,7 @@ func (p *EventBridgeProvider) CancelReplay(ctx context.Context, nr *model.Normal
 	}
 	r.State = "CANCELLED"
 	data, _ := json.Marshal(r)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data})
 	return provider.OK(map[string]any{"ReplayArn": r.ARN, "State": r.State}), nil
 }
 
@@ -1416,7 +1416,7 @@ func (p *EventBridgeProvider) CreateConnection(ctx context.Context, nr *model.No
 	if name == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, resTypeConnection, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name); err == nil {
 		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Connection already exists: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 	now := time.Now().UTC()
@@ -1435,7 +1435,7 @@ func (p *EventBridgeProvider) CreateConnection(ctx context.Context, nr *model.No
 		conn.AuthParameters = ap
 	}
 	data, _ := json.Marshal(conn)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix(), "LastModifiedTime": conn.LastModifiedTime.Unix()}), nil
@@ -1443,7 +1443,7 @@ func (p *EventBridgeProvider) CreateConnection(ctx context.Context, nr *model.No
 
 func (p *EventBridgeProvider) DescribeConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1463,7 +1463,7 @@ func (p *EventBridgeProvider) DescribeConnection(ctx context.Context, nr *model.
 
 func (p *EventBridgeProvider) UpdateConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1480,24 +1480,24 @@ func (p *EventBridgeProvider) UpdateConnection(ctx context.Context, nr *model.No
 	}
 	conn.LastModifiedTime = time.Now().UTC()
 	data, _ := json.Marshal(conn)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix(), "LastModifiedTime": conn.LastModifiedTime.Unix()}), nil
 }
 
 func (p *EventBridgeProvider) DeleteConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 	var conn ebConnection
 	json.Unmarshal(e.Data, &conn)
-	_ = p.resources.Delete(ctx, resTypeConnection, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeConnection, name)
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": "DELETING", "CreationTime": conn.CreationTime.Unix()}), nil
 }
 
 func (p *EventBridgeProvider) ListConnections(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, resTypeConnection, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeConnection, "")
 	namePrefix := strParam(nr.Params, "NamePrefix")
 	stateFilter := strParam(nr.Params, "ConnectionState")
 	out := []map[string]any{}
@@ -1524,7 +1524,7 @@ func (p *EventBridgeProvider) ListConnections(ctx context.Context, nr *model.Nor
 
 func (p *EventBridgeProvider) DeauthorizeConnection(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeConnection, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Connection not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1533,7 +1533,7 @@ func (p *EventBridgeProvider) DeauthorizeConnection(ctx context.Context, nr *mod
 	conn.State = "DEAUTHORIZED"
 	conn.LastModifiedTime = time.Now().UTC()
 	data, _ := json.Marshal(conn)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix()}), nil
 }
 
@@ -1544,7 +1544,7 @@ func (p *EventBridgeProvider) CreateApiDestination(ctx context.Context, nr *mode
 	}
 	connARN := strParam(nr.Params, "ConnectionArn")
 	endpoint := strParam(nr.Params, "InvocationEndpoint")
-	if _, err := p.resources.Get(ctx, resTypeApiDestination, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeApiDestination, name); err == nil {
 		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "ApiDestination already exists: " + name, HTTPStatus: http.StatusBadRequest}
 	}
 	rateLimit := 300
@@ -1566,7 +1566,7 @@ func (p *EventBridgeProvider) CreateApiDestination(ctx context.Context, nr *mode
 		LastModifiedTime:             now,
 	}
 	data, _ := json.Marshal(dest)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"ApiDestinationArn": dest.ARN, "ApiDestinationState": dest.State, "CreationTime": dest.CreationTime.Unix(), "LastModifiedTime": dest.LastModifiedTime.Unix()}), nil
@@ -1574,7 +1574,7 @@ func (p *EventBridgeProvider) CreateApiDestination(ctx context.Context, nr *mode
 
 func (p *EventBridgeProvider) DescribeApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeApiDestination, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeApiDestination, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1596,7 +1596,7 @@ func (p *EventBridgeProvider) DescribeApiDestination(ctx context.Context, nr *mo
 
 func (p *EventBridgeProvider) UpdateApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	e, err := p.resources.Get(ctx, resTypeApiDestination, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeApiDestination, name)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
@@ -1619,21 +1619,21 @@ func (p *EventBridgeProvider) UpdateApiDestination(ctx context.Context, nr *mode
 	}
 	dest.LastModifiedTime = time.Now().UTC()
 	data, _ := json.Marshal(dest)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data})
 	return provider.OK(map[string]any{"ApiDestinationArn": dest.ARN, "ApiDestinationState": dest.State, "CreationTime": dest.CreationTime.Unix(), "LastModifiedTime": dest.LastModifiedTime.Unix()}), nil
 }
 
 func (p *EventBridgeProvider) DeleteApiDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "Name")
-	if _, err := p.resources.Get(ctx, resTypeApiDestination, name); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeApiDestination, name); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "ApiDestination not found: " + name, HTTPStatus: http.StatusBadRequest}
 	}
-	_ = p.resources.Delete(ctx, resTypeApiDestination, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeApiDestination, name)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EventBridgeProvider) ListApiDestinations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, resTypeApiDestination, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeApiDestination, "")
 	namePrefix := strParam(nr.Params, "NamePrefix")
 	connFilter := strParam(nr.Params, "ConnectionArn")
 	out := []map[string]any{}

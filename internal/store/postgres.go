@@ -98,23 +98,23 @@ func (s *PostgresResourceStore) Pool() *pgxpool.Pool { return s.pool }
 // Close shuts down the connection pool.
 func (s *PostgresResourceStore) Close() { s.pool.Close() }
 
-func (s *PostgresResourceStore) Create(ctx context.Context, entry ResourceEntry) error {
+func (s *PostgresResourceStore) Create(ctx context.Context, account, region string, entry ResourceEntry) error {
 	now := time.Now()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_resources (resource_type, id, data, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
+		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
 	return wrapPgError("Create", err)
 }
 
-func (s *PostgresResourceStore) Get(ctx context.Context, resourceType, id string) (ResourceEntry, error) {
+func (s *PostgresResourceStore) Get(ctx context.Context, account, region, resourceType, id string) (ResourceEntry, error) {
 	var e ResourceEntry
 	var data []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT resource_type, id, data, created_at, updated_at
 		FROM jc_resources
-		WHERE resource_type=$1 AND id=$2
-	`, resourceType, id).Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt)
+		WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND id=$4
+	`, account, region, resourceType, id).Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		return ResourceEntry{}, wrapPgError("Get", err)
 	}
@@ -122,12 +122,12 @@ func (s *PostgresResourceStore) Get(ctx context.Context, resourceType, id string
 	return e, nil
 }
 
-func (s *PostgresResourceStore) Update(ctx context.Context, entry ResourceEntry) error {
+func (s *PostgresResourceStore) Update(ctx context.Context, account, region string, entry ResourceEntry) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_resources
 		SET data=$1, updated_at=now()
-		WHERE resource_type=$2 AND id=$3
-	`, json.RawMessage(entry.Data), entry.Type, entry.ID)
+		WHERE account_id=$2 AND region=$3 AND resource_type=$4 AND id=$5
+	`, json.RawMessage(entry.Data), account, region, entry.Type, entry.ID)
 	if err != nil {
 		return wrapPgError("Update", err)
 	}
@@ -137,10 +137,10 @@ func (s *PostgresResourceStore) Update(ctx context.Context, entry ResourceEntry)
 	return nil
 }
 
-func (s *PostgresResourceStore) Delete(ctx context.Context, resourceType, id string) error {
+func (s *PostgresResourceStore) Delete(ctx context.Context, account, region, resourceType, id string) error {
 	tag, err := s.pool.Exec(ctx, `
-		DELETE FROM jc_resources WHERE resource_type=$1 AND id=$2
-	`, resourceType, id)
+		DELETE FROM jc_resources WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND id=$4
+	`, account, region, resourceType, id)
 	if err != nil {
 		return wrapPgError("Delete", err)
 	}
@@ -150,13 +150,13 @@ func (s *PostgresResourceStore) Delete(ctx context.Context, resourceType, id str
 	return nil
 }
 
-func (s *PostgresResourceStore) List(ctx context.Context, resourceType, prefix string) ([]ResourceEntry, error) {
+func (s *PostgresResourceStore) List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT resource_type, id, data, created_at, updated_at
 		FROM jc_resources
-		WHERE resource_type=$1 AND ($2 = '' OR id LIKE '%' || $2 || '%')
+		WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR id LIKE '%' || $4 || '%')
 		ORDER BY created_at
-	`, resourceType, prefix)
+	`, account, region, resourceType, prefix)
 	if err != nil {
 		return nil, wrapPgError("List", err)
 	}
@@ -175,14 +175,19 @@ func (s *PostgresResourceStore) List(ctx context.Context, resourceType, prefix s
 	return results, wrapPgError("List rows", rows.Err())
 }
 
-func (s *PostgresResourceStore) Purge(ctx context.Context, resourceType string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE resource_type=$1`, resourceType)
+func (s *PostgresResourceStore) Purge(ctx context.Context, account, region, resourceType string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE account_id=$1 AND region=$2 AND resource_type=$3`, account, region, resourceType)
 	return wrapPgError("Purge", err)
 }
 
 func (s *PostgresResourceStore) Reset() {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_resources`)
+}
+
+// ResetScope wipes all state for a specific account+region combination.
+func (s *PostgresResourceStore) ResetScope(ctx context.Context, account, region string) {
+	s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE account_id=$1 AND region=$2`, account, region)
 }
 
 // wrapPgError classifies a pgx error:

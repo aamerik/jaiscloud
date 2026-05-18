@@ -47,7 +47,7 @@ func (p *ContainerProvider) RegisterContainerInstance(ctx context.Context, nr *m
 		ClusterName:          clusterName,
 	}
 	data, _ := json.Marshal(ci)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"containerInstance": ci.toWire()}), nil
@@ -55,7 +55,7 @@ func (p *ContainerProvider) RegisterContainerInstance(ctx context.Context, nr *m
 
 func (p *ContainerProvider) DeregisterContainerInstance(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["containerInstance"].(string)
-	e, err := p.resources.Get(ctx, rtContainerInstance, arn)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtContainerInstance, arn)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidParameterException", "Container instance not found", 400)
 	}
@@ -63,7 +63,7 @@ func (p *ContainerProvider) DeregisterContainerInstance(ctx context.Context, nr 
 	json.Unmarshal(e.Data, &ci)
 	ci.Status = "INACTIVE"
 	ci.AgentConnected = false
-	_ = p.resources.Delete(ctx, rtContainerInstance, arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtContainerInstance, arn)
 	return provider.OK(map[string]any{"containerInstance": ci.toWire()}), nil
 }
 
@@ -72,7 +72,7 @@ func (p *ContainerProvider) DescribeContainerInstances(ctx context.Context, nr *
 	instances := []map[string]any{}
 	failures := []map[string]any{}
 	for _, arn := range arns {
-		e, err := p.resources.Get(ctx, rtContainerInstance, arn)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtContainerInstance, arn)
 		if err != nil {
 			failures = append(failures, map[string]any{"arn": arn, "reason": "MISSING"})
 			continue
@@ -83,7 +83,7 @@ func (p *ContainerProvider) DescribeContainerInstances(ctx context.Context, nr *
 		}
 	}
 	if len(arns) == 0 {
-		entries, _ := p.resources.List(ctx, rtContainerInstance, "")
+		entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtContainerInstance, "")
 		for _, e := range entries {
 			var ci containerInstance
 			if json.Unmarshal(e.Data, &ci) == nil {
@@ -95,7 +95,7 @@ func (p *ContainerProvider) DescribeContainerInstances(ctx context.Context, nr *
 }
 
 func (p *ContainerProvider) ListContainerInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtContainerInstance, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtContainerInstance, "")
 	arns := make([]string, 0, len(entries))
 	for _, e := range entries {
 		arns = append(arns, e.ID)
@@ -109,7 +109,7 @@ func (p *ContainerProvider) UpdateContainerInstancesState(ctx context.Context, n
 	updated := []map[string]any{}
 	failures := []map[string]any{}
 	for _, arn := range arns {
-		e, err := p.resources.Get(ctx, rtContainerInstance, arn)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtContainerInstance, arn)
 		if err != nil {
 			failures = append(failures, map[string]any{"arn": arn, "reason": "MISSING"})
 			continue
@@ -118,7 +118,7 @@ func (p *ContainerProvider) UpdateContainerInstancesState(ctx context.Context, n
 		json.Unmarshal(e.Data, &ci)
 		ci.Status = status
 		data, _ := json.Marshal(ci)
-		_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data})
+		_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data})
 		updated = append(updated, ci.toWire())
 	}
 	return provider.OK(map[string]any{"containerInstances": updated, "failures": failures}), nil
@@ -126,7 +126,7 @@ func (p *ContainerProvider) UpdateContainerInstancesState(ctx context.Context, n
 
 func (p *ContainerProvider) UpdateContainerAgent(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn, _ := nr.Params["containerInstance"].(string)
-	e, err := p.resources.Get(ctx, rtContainerInstance, arn)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtContainerInstance, arn)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidParameterException", "Container instance not found", 400)
 	}
@@ -134,6 +134,6 @@ func (p *ContainerProvider) UpdateContainerAgent(ctx context.Context, nr *model.
 	json.Unmarshal(e.Data, &ci)
 	ci.AgentUpdateStatus = "UPDATED"
 	data, _ := json.Marshal(ci)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtContainerInstance, ID: arn, Data: data})
 	return provider.OK(map[string]any{"containerInstance": ci.toWire()}), nil
 }

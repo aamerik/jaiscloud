@@ -73,7 +73,7 @@ func deriveClusterReason(state, message string) (code, reason string) {
 // emitStepStateChange updates the step record in the cluster and publishes an
 // EMRStepState event on the bus with full cloud/region/account fields.
 func (p *EMRProvider) emitStepStateChange(h handlerCtx, clusterID, stepID, state, reason string) {
-	stepName, ok := p.updateStepRecord(context.Background(), clusterID, stepID, state, reason)
+	stepName, ok := p.updateStepRecord(context.Background(), h.accountID, h.region, clusterID, stepID, state, reason)
 	if !ok {
 		slog.Error("emr: emitStepStateChange — failed to load cluster for step record update",
 			"clusterId", clusterID, "stepId", stepID, "state", state)
@@ -103,7 +103,7 @@ func (p *EMRProvider) emitStepStateChange(h handlerCtx, clusterID, stepID, state
 // call, closing the CANCEL_AND_WAIT TOCTOU window vs concurrent runStep
 // promotion (PENDING→RUNNING between snapshot and emit).
 func (p *EMRProvider) cancelStepIfPending(ctx context.Context, h handlerCtx, clusterID, stepID, reason string) {
-	c, err := p.loadCluster(ctx, clusterID)
+	c, err := p.loadCluster(ctx, h.accountID, h.region, clusterID)
 	if err != nil {
 		slog.Error("emr: cancelStepIfPending — failed to load cluster",
 			"clusterId", clusterID, "stepId", stepID, "err", err)
@@ -136,7 +136,7 @@ func (p *EMRProvider) cancelStepIfPending(ctx context.Context, h handlerCtx, clu
 	if !applied {
 		return
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, h.accountID, h.region, c)
 	code, detailReason := deriveStepReason("CANCELLED", reason)
 	p.bus.Publish(events.Event{
 		Type: events.EventEMRStepState,

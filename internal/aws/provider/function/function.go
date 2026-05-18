@@ -303,23 +303,23 @@ func (p *FunctionProvider) functionARN(nr *model.NormalizedRequest, name string)
 	return nr.ResourceID(model.RTLambdaFunction, name)
 }
 
-func (p *FunctionProvider) saveConfig(ctx context.Context, cfg functionConfig) error {
+func (p *FunctionProvider) saveConfig(ctx context.Context, account, region string, cfg functionConfig) error {
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
 	entry := store.ResourceEntry{Type: resTypeFunction, ID: cfg.FunctionName, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, entry)
+			return p.resources.Update(ctx, account, region, entry)
 		}
 		return err
 	}
 	return nil
 }
 
-func (p *FunctionProvider) loadConfig(ctx context.Context, name string) (functionConfig, error) {
-	entry, err := p.resources.Get(ctx, resTypeFunction, name)
+func (p *FunctionProvider) loadConfig(ctx context.Context, account, region, name string) (functionConfig, error) {
+	entry, err := p.resources.Get(ctx, account, region, resTypeFunction, name)
 	if err != nil {
 		return functionConfig{}, err
 	}
@@ -329,26 +329,26 @@ func (p *FunctionProvider) loadConfig(ctx context.Context, name string) (functio
 
 // resolveConfig returns the functionConfig for (name, qualifier).
 // qualifier="" or "$LATEST" → current config; numeric → version; else → alias.
-func (p *FunctionProvider) resolveConfig(ctx context.Context, name, qualifier string) (functionConfig, string, error) {
+func (p *FunctionProvider) resolveConfig(ctx context.Context, account, region, name, qualifier string) (functionConfig, string, error) {
 	if qualifier == "" || qualifier == "$LATEST" {
-		cfg, err := p.loadConfig(ctx, name)
+		cfg, err := p.loadConfig(ctx, account, region, name)
 		return cfg, "$LATEST", err
 	}
 	// Numeric version
 	if _, err := strconv.ParseInt(qualifier, 10, 64); err == nil {
-		cfg, err := p.loadVersion(ctx, name, qualifier)
+		cfg, err := p.loadVersion(ctx, account, region, name, qualifier)
 		return cfg, qualifier, err
 	}
 	// Alias
-	a, err := p.loadAlias(ctx, name, qualifier)
+	a, err := p.loadAlias(ctx, account, region, name, qualifier)
 	if err != nil {
 		return functionConfig{}, "", err
 	}
 	if a.FunctionVersion == "$LATEST" {
-		cfg, err := p.loadConfig(ctx, name)
+		cfg, err := p.loadConfig(ctx, account, region, name)
 		return cfg, "$LATEST", err
 	}
-	cfg, err := p.loadVersion(ctx, name, a.FunctionVersion)
+	cfg, err := p.loadVersion(ctx, account, region, name, a.FunctionVersion)
 	return cfg, a.FunctionVersion, err
 }
 
@@ -450,7 +450,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		cfg.BlobKey = blobKey
 	}
 
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, model.NewProviderError("ResourceConflictException", "Function already exists", 409)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: cfgToWire(cfg)}, nil
@@ -459,7 +459,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	qualifier := strParam(nr.Params, "Qualifier")
-	cfg, resolvedVersion, err := p.resolveConfig(ctx, name, qualifier)
+	cfg, resolvedVersion, err := p.resolveConfig(ctx, nr.AccountID, nr.Region, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -475,7 +475,7 @@ func (p *FunctionProvider) GetFunction(ctx context.Context, nr *model.Normalized
 func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	qualifier := strParam(nr.Params, "Qualifier")
-	cfg, resolvedVersion, err := p.resolveConfig(ctx, name, qualifier)
+	cfg, resolvedVersion, err := p.resolveConfig(ctx, nr.AccountID, nr.Region, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -486,8 +486,8 @@ func (p *FunctionProvider) GetFunctionConfiguration(ctx context.Context, nr *mod
 
 func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, cfgErr := p.loadConfig(ctx, name)
-	if err := p.resources.Delete(ctx, resTypeFunction, name); err != nil {
+	cfg, cfgErr := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeFunction, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	if cfgErr == nil && cfg.BlobKey != "" {
@@ -498,7 +498,7 @@ func (p *FunctionProvider) DeleteFunction(ctx context.Context, nr *model.Normali
 }
 
 func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, resTypeFunction, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeFunction, "")
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +527,7 @@ func (p *FunctionProvider) ListFunctions(ctx context.Context, nr *model.Normaliz
 
 func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -560,7 +560,7 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 		cfg.Timeout = newTimeout
 	}
 	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return provider.OK(cfgToWire(cfg)), nil
@@ -568,7 +568,7 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 
 func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -586,7 +586,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 		cfg.CodeSize = codeSize
 		cfg.BlobKey = blobKey
 	}
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return provider.OK(cfgToWire(cfg)), nil
@@ -596,7 +596,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 
 // InvokeInternal invokes a Lambda function directly (used by ESM pollers).
 func (p *FunctionProvider) InvokeInternal(ctx context.Context, functionName string, payload []byte) ([]byte, error) {
-	cfg, err := p.loadConfig(ctx, functionName)
+	cfg, err := p.loadConfig(ctx, "", "", functionName)
 	if err != nil {
 		return nil, fmt.Errorf("function %q not found: %w", functionName, err)
 	}
@@ -674,13 +674,13 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 
 	// DryRun: validate the function exists then return 204 without invoking.
 	if isDryRun {
-		if _, _, err := p.resolveConfig(ctx, name, qualifier); err != nil {
+		if _, _, err := p.resolveConfig(ctx, nr.AccountID, nr.Region, name, qualifier); err != nil {
 			return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 		}
 		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 	}
 
-	cfg, _, err := p.resolveConfig(ctx, name, qualifier)
+	cfg, _, err := p.resolveConfig(ctx, nr.AccountID, nr.Region, name, qualifier)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -781,8 +781,8 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 
 func versionKey(name, version string) string { return name + "#" + version }
 
-func (p *FunctionProvider) loadVersion(ctx context.Context, name, version string) (functionConfig, error) {
-	entry, err := p.resources.Get(ctx, resTypeVersions, versionKey(name, version))
+func (p *FunctionProvider) loadVersion(ctx context.Context, account, region, name, version string) (functionConfig, error) {
+	entry, err := p.resources.Get(ctx, account, region, resTypeVersions, versionKey(name, version))
 	if err != nil {
 		return functionConfig{}, err
 	}
@@ -795,7 +795,7 @@ func (p *FunctionProvider) loadVersion(ctx context.Context, name, version string
 
 func (p *FunctionProvider) PublishVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -804,14 +804,14 @@ func (p *FunctionProvider) PublishVersion(ctx context.Context, nr *model.Normali
 
 	ve := versionEntry{functionConfig: cfg, Version: versionStr}
 	data, _ := json.Marshal(ve)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data}); err != nil {
 		if err != store.ErrAlreadyExists {
 			return nil, fmt.Errorf("lambda: publish version: %w", err)
 		}
-		p.resources.Update(ctx, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data})
+		p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeVersions, ID: versionKey(name, versionStr), Data: data})
 	}
 
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 
@@ -822,12 +822,12 @@ func (p *FunctionProvider) PublishVersion(ctx context.Context, nr *model.Normali
 
 func (p *FunctionProvider) ListVersionsByFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	entries, err := p.resources.List(ctx, resTypeVersions, name+"#")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeVersions, name+"#")
 	if err != nil {
 		return nil, fmt.Errorf("lambda: list versions: %w", err)
 	}
 	// Also include $LATEST
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -872,8 +872,8 @@ func (p *FunctionProvider) ListVersionsByFunction(ctx context.Context, nr *model
 
 func aliasKey(functionName, aliasName string) string { return functionName + "/" + aliasName }
 
-func (p *FunctionProvider) loadAlias(ctx context.Context, functionName, aliasName string) (aliasEntry, error) {
-	entry, err := p.resources.Get(ctx, resTypeAliases, aliasKey(functionName, aliasName))
+func (p *FunctionProvider) loadAlias(ctx context.Context, account, region, functionName, aliasName string) (aliasEntry, error) {
+	entry, err := p.resources.Get(ctx, account, region, resTypeAliases, aliasKey(functionName, aliasName))
 	if err != nil {
 		return aliasEntry{}, err
 	}
@@ -881,12 +881,12 @@ func (p *FunctionProvider) loadAlias(ctx context.Context, functionName, aliasNam
 	return a, json.Unmarshal(entry.Data, &a)
 }
 
-func (p *FunctionProvider) saveAlias(ctx context.Context, a aliasEntry) error {
+func (p *FunctionProvider) saveAlias(ctx context.Context, account, region string, a aliasEntry) error {
 	data, _ := json.Marshal(a)
 	entry := store.ResourceEntry{Type: resTypeAliases, ID: aliasKey(a.FunctionName, a.Name), Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, entry)
+			return p.resources.Update(ctx, account, region, entry)
 		}
 		return err
 	}
@@ -904,7 +904,7 @@ func (p *FunctionProvider) CreateAlias(ctx context.Context, nr *model.Normalized
 		funcVersion = "$LATEST"
 	}
 
-	if _, err := p.loadConfig(ctx, name); err != nil {
+	if _, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 
@@ -917,10 +917,10 @@ func (p *FunctionProvider) CreateAlias(ctx context.Context, nr *model.Normalized
 		RevisionId:      "1",
 	}
 	// Fail if alias already exists
-	if _, err := p.loadAlias(ctx, name, aliasName); err == nil {
+	if _, err := p.loadAlias(ctx, nr.AccountID, nr.Region, name, aliasName); err == nil {
 		return nil, model.NewProviderError("ResourceConflictException", "Alias already exists: "+aliasName, 409)
 	}
-	if err := p.saveAlias(ctx, a); err != nil {
+	if err := p.saveAlias(ctx, nr.AccountID, nr.Region, a); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: aliasToWire(a)}, nil
@@ -929,7 +929,7 @@ func (p *FunctionProvider) CreateAlias(ctx context.Context, nr *model.Normalized
 func (p *FunctionProvider) GetAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	aliasName := strParam(nr.Params, "_alias_name")
-	a, err := p.loadAlias(ctx, name, aliasName)
+	a, err := p.loadAlias(ctx, nr.AccountID, nr.Region, name, aliasName)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
 	}
@@ -939,7 +939,7 @@ func (p *FunctionProvider) GetAlias(ctx context.Context, nr *model.NormalizedReq
 func (p *FunctionProvider) UpdateAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	aliasName := strParam(nr.Params, "_alias_name")
-	a, err := p.loadAlias(ctx, name, aliasName)
+	a, err := p.loadAlias(ctx, nr.AccountID, nr.Region, name, aliasName)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
 	}
@@ -949,7 +949,7 @@ func (p *FunctionProvider) UpdateAlias(ctx context.Context, nr *model.Normalized
 	if d := strParam(nr.Params, "Description"); d != "" {
 		a.Description = d
 	}
-	if err := p.saveAlias(ctx, a); err != nil {
+	if err := p.saveAlias(ctx, nr.AccountID, nr.Region, a); err != nil {
 		return nil, err
 	}
 	return provider.OK(aliasToWire(a)), nil
@@ -958,7 +958,7 @@ func (p *FunctionProvider) UpdateAlias(ctx context.Context, nr *model.Normalized
 func (p *FunctionProvider) DeleteAlias(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	aliasName := strParam(nr.Params, "_alias_name")
-	if err := p.resources.Delete(ctx, resTypeAliases, aliasKey(name, aliasName)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeAliases, aliasKey(name, aliasName)); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Alias not found: "+aliasName)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -966,7 +966,7 @@ func (p *FunctionProvider) DeleteAlias(ctx context.Context, nr *model.Normalized
 
 func (p *FunctionProvider) ListAliases(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	entries, err := p.resources.List(ctx, resTypeAliases, name+"/")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeAliases, name+"/")
 	if err != nil {
 		return nil, fmt.Errorf("lambda: list aliases: %w", err)
 	}
@@ -1014,8 +1014,8 @@ func (p *FunctionProvider) layerARN(nr *model.NormalizedRequest, layerName strin
 	return nr.ResourceID(model.RTLambdaFunction, "layer:"+layerName)
 }
 
-func (p *FunctionProvider) nextLayerVersion(ctx context.Context, layerName string) (int64, error) {
-	entries, err := p.resources.List(ctx, resTypeLayers, layerName+"#")
+func (p *FunctionProvider) nextLayerVersion(ctx context.Context, account, region, layerName string) (int64, error) {
+	entries, err := p.resources.List(ctx, account, region, resTypeLayers, layerName+"#")
 	if err != nil {
 		return 0, err
 	}
@@ -1034,7 +1034,7 @@ func (p *FunctionProvider) PublishLayerVersion(ctx context.Context, nr *model.No
 	if layerName == "" {
 		return nil, model.NewProviderError("ValidationException", "LayerName is required", 400)
 	}
-	version, err := p.nextLayerVersion(ctx, layerName)
+	version, err := p.nextLayerVersion(ctx, nr.AccountID, nr.Region, layerName)
 	if err != nil {
 		return nil, fmt.Errorf("lambda: layer version: %w", err)
 	}
@@ -1068,7 +1068,7 @@ func (p *FunctionProvider) PublishLayerVersion(ctx context.Context, nr *model.No
 		}
 	}
 	data, _ := json.Marshal(le)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: resTypeLayers, ID: layerVersionKey(layerName, version), Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeLayers, ID: layerVersionKey(layerName, version), Data: data}); err != nil {
 		return nil, fmt.Errorf("lambda: publish layer: %w", err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: layerToWire(le)}, nil
@@ -1079,7 +1079,7 @@ func (p *FunctionProvider) GetLayerVersion(ctx context.Context, nr *model.Normal
 	versionStr := strParam(nr.Params, "_layer_version")
 	version, _ := strconv.ParseInt(versionStr, 10, 64)
 
-	entry, err := p.resources.Get(ctx, resTypeLayers, layerVersionKey(layerName, version))
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeLayers, layerVersionKey(layerName, version))
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Layer version not found: "+layerName+":"+versionStr)
 	}
@@ -1095,7 +1095,7 @@ func (p *FunctionProvider) DeleteLayerVersion(ctx context.Context, nr *model.Nor
 	versionStr := strParam(nr.Params, "_layer_version")
 	version, _ := strconv.ParseInt(versionStr, 10, 64)
 
-	if err := p.resources.Delete(ctx, resTypeLayers, layerVersionKey(layerName, version)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeLayers, layerVersionKey(layerName, version)); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Layer version not found")
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1103,7 +1103,7 @@ func (p *FunctionProvider) DeleteLayerVersion(ctx context.Context, nr *model.Nor
 
 func (p *FunctionProvider) ListLayerVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	layerName := strParam(nr.Params, "_layer_name")
-	entries, err := p.resources.List(ctx, resTypeLayers, layerName+"#")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeLayers, layerName+"#")
 	if err != nil {
 		return nil, fmt.Errorf("lambda: list layer versions: %w", err)
 	}
@@ -1123,7 +1123,7 @@ func (p *FunctionProvider) ListLayerVersions(ctx context.Context, nr *model.Norm
 }
 
 func (p *FunctionProvider) ListLayers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, resTypeLayers, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeLayers, "")
 	if err != nil {
 		return nil, fmt.Errorf("lambda: list layers: %w", err)
 	}
@@ -1178,7 +1178,7 @@ func functionNameFromARN(arn string) string {
 func (p *FunctionProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "_resource_arn")
 	name := functionNameFromARN(arn)
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -1190,7 +1190,7 @@ func (p *FunctionProvider) TagResource(ctx context.Context, nr *model.Normalized
 			cfg.Tags[k] = fmt.Sprint(v)
 		}
 	}
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1199,7 +1199,7 @@ func (p *FunctionProvider) TagResource(ctx context.Context, nr *model.Normalized
 func (p *FunctionProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "_resource_arn")
 	name := functionNameFromARN(arn)
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -1212,7 +1212,7 @@ func (p *FunctionProvider) UntagResource(ctx context.Context, nr *model.Normaliz
 			delete(cfg.Tags, k)
 		}
 	}
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1221,7 +1221,7 @@ func (p *FunctionProvider) UntagResource(ctx context.Context, nr *model.Normaliz
 func (p *FunctionProvider) ListTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "_resource_arn")
 	name := functionNameFromARN(arn)
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -1234,8 +1234,8 @@ func (p *FunctionProvider) ListTags(ctx context.Context, nr *model.NormalizedReq
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
 
-func (p *FunctionProvider) loadPolicy(ctx context.Context, name string) (policyDocument, error) {
-	entry, err := p.resources.Get(ctx, resTypePolicies, name)
+func (p *FunctionProvider) loadPolicy(ctx context.Context, account, region, name string) (policyDocument, error) {
+	entry, err := p.resources.Get(ctx, account, region, resTypePolicies, name)
 	if err != nil {
 		return policyDocument{Version: "2012-10-17", Id: name}, nil // empty policy
 	}
@@ -1243,12 +1243,12 @@ func (p *FunctionProvider) loadPolicy(ctx context.Context, name string) (policyD
 	return doc, json.Unmarshal(entry.Data, &doc)
 }
 
-func (p *FunctionProvider) savePolicy(ctx context.Context, name string, doc policyDocument) error {
+func (p *FunctionProvider) savePolicy(ctx context.Context, account, region, name string, doc policyDocument) error {
 	data, _ := json.Marshal(doc)
 	entry := store.ResourceEntry{Type: resTypePolicies, ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, entry)
+			return p.resources.Update(ctx, account, region, entry)
 		}
 		return err
 	}
@@ -1261,7 +1261,7 @@ func (p *FunctionProvider) AddPermission(ctx context.Context, nr *model.Normaliz
 	if statementID == "" {
 		return nil, model.NewProviderError("ValidationException", "StatementId is required", 400)
 	}
-	if _, err := p.loadConfig(ctx, name); err != nil {
+	if _, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 
@@ -1284,7 +1284,7 @@ func (p *FunctionProvider) AddPermission(ctx context.Context, nr *model.Normaliz
 		}
 	}
 
-	doc, err := p.loadPolicy(ctx, name)
+	doc, err := p.loadPolicy(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1296,7 +1296,7 @@ func (p *FunctionProvider) AddPermission(ctx context.Context, nr *model.Normaliz
 		}
 	}
 	doc.Statement = append(filtered, stmt)
-	if err := p.savePolicy(ctx, name, doc); err != nil {
+	if err := p.savePolicy(ctx, nr.AccountID, nr.Region, name, doc); err != nil {
 		return nil, err
 	}
 
@@ -1310,7 +1310,7 @@ func (p *FunctionProvider) RemovePermission(ctx context.Context, nr *model.Norma
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
 	statementID := strParam(nr.Params, "_statement_id")
 
-	doc, err := p.loadPolicy(ctx, name)
+	doc, err := p.loadPolicy(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1321,7 +1321,7 @@ func (p *FunctionProvider) RemovePermission(ctx context.Context, nr *model.Norma
 		}
 	}
 	doc.Statement = filtered
-	if err := p.savePolicy(ctx, name, doc); err != nil {
+	if err := p.savePolicy(ctx, nr.AccountID, nr.Region, name, doc); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1329,10 +1329,10 @@ func (p *FunctionProvider) RemovePermission(ctx context.Context, nr *model.Norma
 
 func (p *FunctionProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	if _, err := p.loadConfig(ctx, name); err != nil {
+	if _, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
-	doc, err := p.loadPolicy(ctx, name)
+	doc, err := p.loadPolicy(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1348,8 +1348,8 @@ func (p *FunctionProvider) GetPolicy(ctx context.Context, nr *model.NormalizedRe
 
 // ─── Function URLs ─────────────────────────────────────────────────────────────
 
-func (p *FunctionProvider) loadURLConfig(ctx context.Context, name string) (urlConfig, error) {
-	entry, err := p.resources.Get(ctx, resTypeURLs, name)
+func (p *FunctionProvider) loadURLConfig(ctx context.Context, account, region, name string) (urlConfig, error) {
+	entry, err := p.resources.Get(ctx, account, region, resTypeURLs, name)
 	if err != nil {
 		return urlConfig{}, err
 	}
@@ -1357,12 +1357,12 @@ func (p *FunctionProvider) loadURLConfig(ctx context.Context, name string) (urlC
 	return uc, json.Unmarshal(entry.Data, &uc)
 }
 
-func (p *FunctionProvider) saveURLConfig(ctx context.Context, name string, uc urlConfig) error {
+func (p *FunctionProvider) saveURLConfig(ctx context.Context, account, region, name string, uc urlConfig) error {
 	data, _ := json.Marshal(uc)
 	entry := store.ResourceEntry{Type: resTypeURLs, ID: name, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, entry)
+			return p.resources.Update(ctx, account, region, entry)
 		}
 		return err
 	}
@@ -1371,10 +1371,10 @@ func (p *FunctionProvider) saveURLConfig(ctx context.Context, name string, uc ur
 
 func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	if _, err := p.loadConfig(ctx, name); err != nil {
+	if _, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
-	if _, err := p.loadURLConfig(ctx, name); err == nil {
+	if _, err := p.loadURLConfig(ctx, nr.AccountID, nr.Region, name); err == nil {
 		return nil, model.NewProviderError("ResourceConflictException", "Function URL config already exists", 409)
 	}
 	authType := strParam(nr.Params, "AuthType")
@@ -1389,7 +1389,7 @@ func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *mode
 		CreatedTime:      now,
 		LastModifiedTime: now,
 	}
-	if err := p.saveURLConfig(ctx, name, uc); err != nil {
+	if err := p.saveURLConfig(ctx, nr.AccountID, nr.Region, name, uc); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: urlToWire(uc)}, nil
@@ -1397,7 +1397,7 @@ func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *mode
 
 func (p *FunctionProvider) GetFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	uc, err := p.loadURLConfig(ctx, name)
+	uc, err := p.loadURLConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
 	}
@@ -1406,7 +1406,7 @@ func (p *FunctionProvider) GetFunctionUrlConfig(ctx context.Context, nr *model.N
 
 func (p *FunctionProvider) UpdateFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	uc, err := p.loadURLConfig(ctx, name)
+	uc, err := p.loadURLConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
 	}
@@ -1414,7 +1414,7 @@ func (p *FunctionProvider) UpdateFunctionUrlConfig(ctx context.Context, nr *mode
 		uc.AuthType = a
 	}
 	uc.LastModifiedTime = time.Now().UTC().Format(time.RFC3339)
-	if err := p.saveURLConfig(ctx, name, uc); err != nil {
+	if err := p.saveURLConfig(ctx, nr.AccountID, nr.Region, name, uc); err != nil {
 		return nil, err
 	}
 	return provider.OK(urlToWire(uc)), nil
@@ -1422,7 +1422,7 @@ func (p *FunctionProvider) UpdateFunctionUrlConfig(ctx context.Context, nr *mode
 
 func (p *FunctionProvider) DeleteFunctionUrlConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	if err := p.resources.Delete(ctx, resTypeURLs, name); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeURLs, name); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function URL config not found: "+name)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
@@ -1442,7 +1442,7 @@ func urlToWire(uc urlConfig) map[string]any {
 
 func (p *FunctionProvider) PutFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -1454,7 +1454,7 @@ func (p *FunctionProvider) PutFunctionConcurrency(ctx context.Context, nr *model
 		concurrency = v
 	}
 	cfg.ReservedConcurrency = &concurrency
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"ReservedConcurrentExecutions": concurrency}), nil
@@ -1462,7 +1462,7 @@ func (p *FunctionProvider) PutFunctionConcurrency(ctx context.Context, nr *model
 
 func (p *FunctionProvider) GetFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
@@ -1474,12 +1474,12 @@ func (p *FunctionProvider) GetFunctionConcurrency(ctx context.Context, nr *model
 
 func (p *FunctionProvider) DeleteFunctionConcurrency(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := extractFunctionName(strParam(nr.Params, "_function_name"))
-	cfg, err := p.loadConfig(ctx, name)
+	cfg, err := p.loadConfig(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
 	cfg.ReservedConcurrency = nil
-	if err := p.saveConfig(ctx, cfg); err != nil {
+	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil

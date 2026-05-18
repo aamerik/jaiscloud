@@ -14,8 +14,8 @@ import (
 // TerminalStore is the subset of store.ResourceStore that terminal-snapshot
 // persistence needs. Defined narrowly so providers can substitute in tests.
 type TerminalStore interface {
-	Create(ctx context.Context, entry store.ResourceEntry) error
-	Get(ctx context.Context, resourceType, id string) (store.ResourceEntry, error)
+	Create(ctx context.Context, account, region string, entry store.ResourceEntry) error
+	Get(ctx context.Context, account, region, resourceType, id string) (store.ResourceEntry, error)
 }
 
 const snapshotResourceType = "k8s_terminal_snapshot"
@@ -25,7 +25,7 @@ const snapshotResourceType = "k8s_terminal_snapshot"
 //
 // Idempotent: if a snapshot already exists, logs WARN and returns nil
 // (first-write value wins).
-func PersistTerminalSnapshot(ctx context.Context, s TerminalStore, prefix, jobID string, snap Snapshot) error {
+func PersistTerminalSnapshot(ctx context.Context, s TerminalStore, account, region, prefix, jobID string, snap Snapshot) error {
 	key := prefix + "/" + jobID
 	snap.JobID = jobID
 
@@ -34,7 +34,7 @@ func PersistTerminalSnapshot(ctx context.Context, s TerminalStore, prefix, jobID
 		return fmt.Errorf("k8shelpers: marshal snapshot: %w", err)
 	}
 
-	err = s.Create(ctx, store.ResourceEntry{
+	err = s.Create(ctx, account, region, store.ResourceEntry{
 		Type:      snapshotResourceType,
 		ID:        key,
 		Data:      data,
@@ -50,9 +50,9 @@ func PersistTerminalSnapshot(ctx context.Context, s TerminalStore, prefix, jobID
 
 // LoadTerminalSnapshot reads the previously-persisted Snapshot.
 // Returns (Snapshot{}, false, nil) if no snapshot exists.
-func LoadTerminalSnapshot(ctx context.Context, s TerminalStore, prefix, jobID string) (Snapshot, bool, error) {
+func LoadTerminalSnapshot(ctx context.Context, s TerminalStore, account, region, prefix, jobID string) (Snapshot, bool, error) {
 	key := prefix + "/" + jobID
-	entry, err := s.Get(ctx, snapshotResourceType, key)
+	entry, err := s.Get(ctx, account, region, snapshotResourceType, key)
 	if errors.Is(err, store.ErrNotFound) {
 		return Snapshot{}, false, nil
 	}

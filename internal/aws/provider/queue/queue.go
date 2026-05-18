@@ -165,10 +165,10 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		}
 	}
 
-	queueURL := fmt.Sprintf("http://localhost:%d/000000000000/%s", nr.Port, name)
+	queueURL := fmt.Sprintf("http://localhost:%d/%s/%s", nr.Port, nr.AccountID, name)
 
 	// Idempotency: if queue exists, check for attribute mismatch (Task 1.10).
-	if existing, err := p.resources.Get(ctx, "sqs_queues", queueURL); err == nil {
+	if existing, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err == nil {
 		if len(attrs) > 0 {
 			var existingState map[string]any
 			json.Unmarshal(existing.Data, &existingState)
@@ -215,14 +215,14 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	data, _ := json.Marshal(state)
-	if err := p.resources.Create(ctx, store.ResourceEntry{
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{
 		Type: "sqs_queues", ID: queueURL, Data: data, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		return nil, err
 	}
 
 	if retSecs, err := strconv.Atoi(attrOrDefault(attrs, "MessageRetentionPeriod", "345600")); err == nil {
-		p.messages.SetQueueRetention(ctx, queueURL, retSecs)
+		p.messages.SetQueueRetention(ctx, nr.AccountID, nr.Region, queueURL, retSecs)
 	}
 
 	return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
@@ -233,13 +233,13 @@ func (p *QueueProvider) DeleteQueue(ctx context.Context, nr *model.NormalizedReq
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
-	if err := p.resources.Delete(ctx, "sqs_queues", queueURL); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err != nil {
 		if err == store.ErrNotFound {
 			return nil, model.NewProviderError("NotFound", "queue does not exist", 400)
 		}
 		return nil, err
 	}
-	p.messages.Purge(ctx, queueURL)
+	p.messages.Purge(ctx, nr.AccountID, nr.Region, queueURL)
 	// Record deletion for QueueDeletedRecently gate.
 	queueName := queueURL[strings.LastIndex(queueURL, "/")+1:]
 	p.rdMu.Lock()
@@ -250,7 +250,7 @@ func (p *QueueProvider) DeleteQueue(ctx context.Context, nr *model.NormalizedReq
 
 func (p *QueueProvider) ListQueues(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	prefix, _ := stringParam(nr.Params, "QueueNamePrefix")
-	entries, err := p.resources.List(ctx, "sqs_queues", prefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, "sqs_queues", prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -300,8 +300,8 @@ func (p *QueueProvider) GetQueueUrl(ctx context.Context, nr *model.NormalizedReq
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueName is required", 400)
 	}
-	queueURL := fmt.Sprintf("http://localhost:%d/000000000000/%s", nr.Port, name)
-	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
+	queueURL := fmt.Sprintf("http://localhost:%d/%s/%s", nr.Port, nr.AccountID, name)
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
 	return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
@@ -312,7 +312,7 @@ func (p *QueueProvider) GetQueueAttributes(ctx context.Context, nr *model.Normal
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -321,7 +321,7 @@ func (p *QueueProvider) GetQueueAttributes(ctx context.Context, nr *model.Normal
 	json.Unmarshal(entry.Data, &state)
 
 	now := p.clock.Now()
-	vis, notVis, delayed, _ := p.messages.GetApproximateCounts(ctx, queueURL, now)
+	vis, notVis, delayed, _ := p.messages.GetApproximateCounts(ctx, nr.AccountID, nr.Region, queueURL, now)
 
 	attrs := buildAttributes(state, vis, notVis, delayed)
 	return provider.OK(map[string]any{"Attributes": attrs}), nil
@@ -332,7 +332,7 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -352,13 +352,13 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 
 	data, _ := json.Marshal(state)
 	entry.Data = data
-	if err := p.resources.Update(ctx, entry); err != nil {
+	if err := p.resources.Update(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		return nil, err
 	}
 
 	if rp, ok := newAttrs["MessageRetentionPeriod"]; ok {
 		if retSecs, err := strconv.Atoi(rp); err == nil {
-			p.messages.SetQueueRetention(ctx, queueURL, retSecs)
+			p.messages.SetQueueRetention(ctx, nr.AccountID, nr.Region, queueURL, retSecs)
 		}
 	}
 
@@ -374,7 +374,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 	}
 	body, _ := stringParam(nr.Params, "MessageBody")
 
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -454,7 +454,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 		msg.MessageAttributes = parseMessageAttributes(ma)
 	}
 
-	origID, seqNum, err := p.messages.Send(ctx, msg)
+	origID, seqNum, err := p.messages.Send(ctx, nr.AccountID, nr.Region, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +483,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
 
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -530,7 +530,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 	if waitSec > 0 {
 		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, queueURL, maxMessages, time.Duration(waitSec)*time.Second, p.clock)
 	} else {
-		msgs, err = p.messages.Receive(ctx, queueURL, maxMessages, now)
+		msgs, err = p.messages.Receive(ctx, nr.AccountID, nr.Region, queueURL, maxMessages, now)
 	}
 	if err != nil {
 		return nil, err
@@ -543,7 +543,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 		if p.checkDLQ(ctx, state, queueURL, &msgs[i]) {
 			continue // moved to DLQ; exclude from this response
 		}
-		p.messages.ChangeVisibility(ctx, queueURL, msgs[i].ReceiptHandle, visTimeout, now)
+		p.messages.ChangeVisibility(ctx, nr.AccountID, nr.Region, queueURL, msgs[i].ReceiptHandle, visTimeout, now)
 		msgs[i].VisibleAt = now.Add(time.Duration(visTimeout) * time.Second)
 		deliverable = append(deliverable, msgs[i])
 	}
@@ -604,7 +604,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 func (p *QueueProvider) DeleteMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
 	receiptHandle, _ := stringParam(nr.Params, "ReceiptHandle")
-	if err := p.messages.Delete(ctx, queueURL, receiptHandle); err != nil {
+	if err := p.messages.Delete(ctx, nr.AccountID, nr.Region, queueURL, receiptHandle); err != nil {
 		// SQS returns success even for invalid handles (fire-and-forget)
 		return provider.OK(map[string]any{}), nil
 	}
@@ -620,7 +620,7 @@ func (p *QueueProvider) ChangeMessageVisibility(ctx context.Context, nr *model.N
 	}
 	now := p.clock.Now()
 	// AWS silently succeeds for invalid/expired receipt handles — do not return error.
-	p.messages.ChangeVisibility(ctx, queueURL, receiptHandle, timeout, now)
+	p.messages.ChangeVisibility(ctx, nr.AccountID, nr.Region, queueURL, receiptHandle, timeout, now)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -629,10 +629,10 @@ func (p *QueueProvider) PurgeQueue(ctx context.Context, nr *model.NormalizedRequ
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
-	if _, err := p.resources.Get(ctx, "sqs_queues", queueURL); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
-	p.messages.Purge(ctx, queueURL)
+	p.messages.Purge(ctx, nr.AccountID, nr.Region, queueURL)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -665,7 +665,7 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		seenIDs[id] = true
 	}
 
-	storeEntry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	storeEntry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -757,7 +757,7 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 			msg.MessageAttributes = parseMessageAttributes(ma)
 		}
 
-		origID, seqNum, sendErr := p.messages.Send(ctx, msg)
+		origID, seqNum, sendErr := p.messages.Send(ctx, nr.AccountID, nr.Region, msg)
 		if sendErr != nil {
 			failed = append(failed, map[string]any{"Id": id, "Code": "InternalError", "Message": sendErr.Error(), "SenderFault": false})
 			continue
@@ -830,7 +830,7 @@ func (p *QueueProvider) DeleteMessageBatch(ctx context.Context, nr *model.Normal
 			continue
 		}
 		rh, _ := e["ReceiptHandle"].(string)
-		if err := p.messages.Delete(ctx, queueURL, rh); err != nil {
+		if err := p.messages.Delete(ctx, nr.AccountID, nr.Region, queueURL, rh); err != nil {
 			failed = append(failed, map[string]any{
 				"Id": id, "Code": "ReceiptHandleIsInvalid",
 				"Message": "The input receipt handle is invalid.", "SenderFault": true,
@@ -877,7 +877,7 @@ func (p *QueueProvider) ChangeMessageVisibilityBatch(ctx context.Context, nr *mo
 		}
 		rh, _ := e["ReceiptHandle"].(string)
 		timeout := toInt(e["VisibilityTimeout"])
-		if err := p.messages.ChangeVisibility(ctx, queueURL, rh, timeout, now); err != nil {
+		if err := p.messages.ChangeVisibility(ctx, nr.AccountID, nr.Region, queueURL, rh, timeout, now); err != nil {
 			failed = append(failed, map[string]any{"Id": id, "Code": "InvalidParameterValue", "Message": err.Error(), "SenderFault": true})
 		} else {
 			successful = append(successful, map[string]any{"Id": id})
@@ -891,7 +891,7 @@ func (p *QueueProvider) ChangeMessageVisibilityBatch(ctx context.Context, nr *mo
 
 func (p *QueueProvider) TagQueue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -905,12 +905,12 @@ func (p *QueueProvider) TagQueue(ctx context.Context, nr *model.NormalizedReques
 	state["Tags"] = tags
 	data, _ := json.Marshal(state)
 	entry.Data = data
-	return provider.OK(map[string]any{}), p.resources.Update(ctx, entry)
+	return provider.OK(map[string]any{}), p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 }
 
 func (p *QueueProvider) UntagQueue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -925,12 +925,12 @@ func (p *QueueProvider) UntagQueue(ctx context.Context, nr *model.NormalizedRequ
 	state["Tags"] = tags
 	data, _ := json.Marshal(state)
 	entry.Data = data
-	return provider.OK(map[string]any{}), p.resources.Update(ctx, entry)
+	return provider.OK(map[string]any{}), p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 }
 
 func (p *QueueProvider) ListQueueTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	queueURL, _ := stringParam(nr.Params, "QueueUrl")
-	entry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -971,8 +971,8 @@ func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queu
 	dlqMsg.VisibleAt = time.Time{}  // clear in-flight timeout
 	dlqMsg.DelayUntil = time.Time{} // no delay in DLQ
 	dlqMsg.ReceiveCount = 0
-	p.messages.Send(ctx, dlqMsg) //nolint:errcheck
-	p.messages.Delete(ctx, queueURL, msg.ReceiptHandle)
+	p.messages.Send(ctx, "", "", dlqMsg) //nolint:errcheck
+	p.messages.Delete(ctx, "", "", queueURL, msg.ReceiptHandle)
 
 	p.bus.Publish(events.Event{
 		Type: events.EventMessageDLQ,
@@ -1298,7 +1298,7 @@ func (p *QueueProvider) ListDeadLetterSourceQueues(ctx context.Context, nr *mode
 	if !ok {
 		return nil, model.NewProviderError("InvalidParameter", "QueueUrl is required", 400)
 	}
-	dlqEntry, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	dlqEntry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "sqs_queues", queueURL)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "queue does not exist")
 	}
@@ -1306,7 +1306,7 @@ func (p *QueueProvider) ListDeadLetterSourceQueues(ctx context.Context, nr *mode
 	json.Unmarshal(dlqEntry.Data, &dlqState)
 	dlqARN := str(dlqState["QueueArn"])
 
-	entries, err := p.resources.List(ctx, "sqs_queues", "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, "sqs_queues", "")
 	if err != nil {
 		return nil, err
 	}

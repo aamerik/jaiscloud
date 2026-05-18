@@ -25,12 +25,12 @@ type ResourceEntry struct {
 // ResourceStore manages control-plane resource metadata.
 // Phase 0: MemoryResourceStore. Phase 1: PostgresResourceStore.
 type ResourceStore interface {
-	Create(ctx context.Context, entry ResourceEntry) error
-	Get(ctx context.Context, resourceType, id string) (ResourceEntry, error)
-	Update(ctx context.Context, entry ResourceEntry) error
-	Delete(ctx context.Context, resourceType, id string) error
-	List(ctx context.Context, resourceType, prefix string) ([]ResourceEntry, error)
-	Purge(ctx context.Context, resourceType string) error
+	Create(ctx context.Context, account, region string, entry ResourceEntry) error
+	Get(ctx context.Context, account, region, resourceType, id string) (ResourceEntry, error)
+	Update(ctx context.Context, account, region string, entry ResourceEntry) error
+	Delete(ctx context.Context, account, region, resourceType, id string) error
+	List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error)
+	Purge(ctx context.Context, account, region, resourceType string) error
 
 	// Reset wipes all state — used by the admin reset endpoint.
 	Reset()

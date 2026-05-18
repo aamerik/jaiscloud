@@ -156,9 +156,9 @@ func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, 
 		return err
 	}
 	entry := store.ResourceEntry{Type: resType, ID: id, Data: json.RawMessage(raw)}
-	if err := rs.Create(ctx, entry); err != nil {
+	if err := rs.Create(ctx, "", "", entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return rs.Update(ctx, entry)
+			return rs.Update(ctx, "", "", entry)
 		}
 		return err
 	}
@@ -166,7 +166,7 @@ func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, 
 }
 
 func loadEntry(ctx context.Context, rs store.ResourceStore, resType, id string, out any) error {
-	e, err := rs.Get(ctx, resType, id)
+	e, err := rs.Get(ctx, "", "", resType, id)
 	if err != nil {
 		return err
 	}
@@ -240,11 +240,11 @@ func (p *IAMProvider) DeleteRole(ctx context.Context, nr *model.NormalizedReques
 	name := strParam(nr.Params, "RoleName")
 	arn := nr.ResourceID("iam-role", name)
 	// Check for attached managed policies
-	attachments, _ := p.resources.List(ctx, "iam_attachments", arn)
+	attachments, _ := p.resources.List(ctx, nr.AccountID, "", "iam_attachments", arn)
 	if len(attachments) > 0 {
 		return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must detach all policies first", 409)
 	}
-	if err := p.resources.Delete(ctx, "iam_roles", arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, "", "iam_roles", arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Role not found")
 		}
@@ -254,7 +254,7 @@ func (p *IAMProvider) DeleteRole(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *IAMProvider) ListRoles(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, "iam_roles", "")
+	entries, err := p.resources.List(ctx, nr.AccountID, "", "iam_roles", "")
 	if err != nil {
 		return nil, err
 	}
@@ -382,14 +382,14 @@ func (p *IAMProvider) DeletePolicy(ctx context.Context, nr *model.NormalizedRequ
 	if pol.AttachmentCount > 0 {
 		return nil, model.NewProviderError("DeleteConflict", "Cannot delete a default version of a policy. To delete a policy, delete all versions of the policy and then delete the policy", 409)
 	}
-	if err := p.resources.Delete(ctx, "iam_policies", arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, "", "iam_policies", arn); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Policy not found")
 	}
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, "iam_policies", "")
+	entries, err := p.resources.List(ctx, nr.AccountID, "", "iam_policies", "")
 	if err != nil {
 		return nil, err
 	}
@@ -463,14 +463,14 @@ func (p *IAMProvider) DetachRolePolicy(ctx context.Context, nr *model.Normalized
 	roleName := strParam(nr.Params, "RoleName")
 	policyArn := strParam(nr.Params, "PolicyArn")
 	roleArn := nr.ResourceID("iam-role", roleName)
-	_ = p.resources.Delete(ctx, "iam_attachments", attachKey(roleArn, policyArn))
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_attachments", attachKey(roleArn, policyArn))
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListAttachedRolePolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	roleName := strParam(nr.Params, "RoleName")
 	roleArn := nr.ResourceID("iam-role", roleName)
-	entries, _ := p.resources.List(ctx, "iam_attachments", roleArn)
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_attachments", roleArn)
 	var attached []map[string]any
 	for _, e := range entries {
 		var d attachmentData
@@ -537,13 +537,13 @@ func (p *IAMProvider) GetRolePolicy(ctx context.Context, nr *model.NormalizedReq
 func (p *IAMProvider) DeleteRolePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	roleName := strParam(nr.Params, "RoleName")
 	policyName := strParam(nr.Params, "PolicyName")
-	_ = p.resources.Delete(ctx, "iam_inline_policies", roleName+"::"+policyName)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_inline_policies", roleName+"::"+policyName)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListRolePolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	roleName := strParam(nr.Params, "RoleName")
-	entries, _ := p.resources.List(ctx, "iam_inline_policies", roleName+"::")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_inline_policies", roleName+"::")
 	var names []string
 	for _, e := range entries {
 		var d inlinePolicyData
@@ -627,24 +627,24 @@ func (p *IAMProvider) DeleteUser(ctx context.Context, nr *model.NormalizedReques
 	name := strParam(nr.Params, "UserName")
 	arn := nr.ResourceID("iam-user", name)
 	// Check for attached managed policies
-	attachments, _ := p.resources.List(ctx, "iam_user_attachments", arn)
+	attachments, _ := p.resources.List(ctx, nr.AccountID, "", "iam_user_attachments", arn)
 	if len(attachments) > 0 {
 		return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must detach all policies first", 409)
 	}
 	// Check for access keys
-	allKeys, _ := p.resources.List(ctx, "iam_access_keys", "")
+	allKeys, _ := p.resources.List(ctx, nr.AccountID, "", "iam_access_keys", "")
 	for _, e := range allKeys {
 		var ak accessKeyData
 		if json.Unmarshal(e.Data, &ak) == nil && ak.UserName == name {
 			return nil, model.NewProviderError("DeleteConflict", "Cannot delete entity, must delete access keys first", 409)
 		}
 	}
-	_ = p.resources.Delete(ctx, "iam_users", arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_users", arn)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListUsers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "iam_users", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_users", "")
 	var users []map[string]any
 	for _, e := range entries {
 		var u userData
@@ -714,13 +714,13 @@ func (p *IAMProvider) CreateAccessKey(ctx context.Context, nr *model.NormalizedR
 
 func (p *IAMProvider) DeleteAccessKey(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	keyID := strParam(nr.Params, "AccessKeyId")
-	_ = p.resources.Delete(ctx, "iam_access_keys", keyID)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_access_keys", keyID)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListAccessKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	userName := strParam(nr.Params, "UserName")
-	entries, _ := p.resources.List(ctx, "iam_access_keys", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_access_keys", "")
 	var keys []map[string]any
 	for _, e := range entries {
 		var ak accessKeyData
@@ -832,7 +832,7 @@ func (p *IAMProvider) UpdateUser(ctx context.Context, nr *model.NormalizedReques
 		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "User not found")
 	}
 	if newName := strParam(nr.Params, "NewUserName"); newName != "" {
-		_ = p.resources.Delete(ctx, "iam_users", arn)
+		_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_users", arn)
 		u.UserName = newName
 		u.Arn = nr.ResourceID("iam-user", newName)
 		_ = saveEntry(ctx, p.resources, "iam_users", u.Arn, u)
@@ -855,14 +855,14 @@ func (p *IAMProvider) DetachUserPolicy(ctx context.Context, nr *model.Normalized
 	userName := strParam(nr.Params, "UserName")
 	policyArn := strParam(nr.Params, "PolicyArn")
 	userArn := nr.ResourceID("iam-user", userName)
-	_ = p.resources.Delete(ctx, "iam_user_attachments", attachKey(userArn, policyArn))
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_user_attachments", attachKey(userArn, policyArn))
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListAttachedUserPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	userName := strParam(nr.Params, "UserName")
 	userArn := nr.ResourceID("iam-user", userName)
-	entries, _ := p.resources.List(ctx, "iam_user_attachments", userArn)
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_user_attachments", userArn)
 	var attached []map[string]any
 	for _, e := range entries {
 		var d attachmentData
@@ -922,13 +922,13 @@ func (p *IAMProvider) GetUserPolicy(ctx context.Context, nr *model.NormalizedReq
 func (p *IAMProvider) DeleteUserPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	userName := strParam(nr.Params, "UserName")
 	policyName := strParam(nr.Params, "PolicyName")
-	_ = p.resources.Delete(ctx, "iam_user_inline_policies", userName+"::"+policyName)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_user_inline_policies", userName+"::"+policyName)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListUserPolicies(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	userName := strParam(nr.Params, "UserName")
-	entries, _ := p.resources.List(ctx, "iam_user_inline_policies", userName+"::")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_user_inline_policies", userName+"::")
 	var names []string
 	for _, e := range entries {
 		var d inlinePolicyData
@@ -1082,7 +1082,7 @@ func (p *IAMProvider) GetGroup(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, provider.StoreNotFoundError(err, "NoSuchEntity", "Group not found")
 	}
 	// List members
-	entries, _ := p.resources.List(ctx, "iam_group_members", name+"::")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_group_members", name+"::")
 	var users []map[string]any
 	for _, e := range entries {
 		var m groupMembershipData
@@ -1107,12 +1107,12 @@ func (p *IAMProvider) GetGroup(ctx context.Context, nr *model.NormalizedRequest)
 func (p *IAMProvider) DeleteGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "GroupName")
 	arn := nr.ResourceID("iam-group", name)
-	_ = p.resources.Delete(ctx, "iam_groups", arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_groups", arn)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "iam_groups", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_groups", "")
 	var groups []map[string]any
 	for _, e := range entries {
 		var g groupData
@@ -1150,14 +1150,14 @@ func (p *IAMProvider) AddUserToGroup(ctx context.Context, nr *model.NormalizedRe
 func (p *IAMProvider) RemoveUserFromGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	groupName := strParam(nr.Params, "GroupName")
 	userName := strParam(nr.Params, "UserName")
-	_ = p.resources.Delete(ctx, "iam_group_members", groupName+"::"+userName)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_group_members", groupName+"::"+userName)
 	return provider.OK(nil), nil
 }
 
 func (p *IAMProvider) ListGroupsForUser(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	userName := strParam(nr.Params, "UserName")
 	// Scan all group memberships for this user
-	allEntries, _ := p.resources.List(ctx, "iam_group_members", "")
+	allEntries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_group_members", "")
 	var groups []map[string]any
 	for _, e := range allEntries {
 		var m groupMembershipData
@@ -1246,7 +1246,7 @@ func (p *IAMProvider) GetInstanceProfile(ctx context.Context, nr *model.Normaliz
 func (p *IAMProvider) DeleteInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "InstanceProfileName")
 	arn := nr.ResourceID("iam-instance-profile", name)
-	_ = p.resources.Delete(ctx, "iam_instance_profiles", arn)
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_instance_profiles", arn)
 	return provider.OK(nil), nil
 }
 
@@ -1288,7 +1288,7 @@ func (p *IAMProvider) RemoveRoleFromInstanceProfile(ctx context.Context, nr *mod
 }
 
 func (p *IAMProvider) ListInstanceProfiles(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "iam_instance_profiles", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_instance_profiles", "")
 	var profiles []map[string]any
 	for _, e := range entries {
 		var ip instanceProfileData
@@ -1358,7 +1358,7 @@ func (p *IAMProvider) SimulatePrincipalPolicy(ctx context.Context, nr *model.Nor
 		roleName = parts[len(parts)-1]
 	}
 	if roleName != "" {
-		inlineEntries, _ := p.resources.List(ctx, "iam_inline_policies", roleName+"::")
+		inlineEntries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_inline_policies", roleName+"::")
 		for _, e := range inlineEntries {
 			var d inlinePolicyData
 			if json.Unmarshal(e.Data, &d) == nil && d.PolicyDocument != "" {
@@ -1367,7 +1367,7 @@ func (p *IAMProvider) SimulatePrincipalPolicy(ctx context.Context, nr *model.Nor
 		}
 		// Attached managed policies.
 		roleArn := nr.ResourceID("iam-role", roleName)
-		attachEntries, _ := p.resources.List(ctx, "iam_attachments", roleArn)
+		attachEntries, _ := p.resources.List(ctx, nr.AccountID, "", "iam_attachments", roleArn)
 		for _, e := range attachEntries {
 			var att attachmentData
 			if json.Unmarshal(e.Data, &att) != nil {
@@ -1514,7 +1514,7 @@ func (p *IAMProvider) DeleteServiceLinkedRole(ctx context.Context, nr *model.Nor
 	// The deletion task ID is the role name (simplified — no async tracking needed).
 	deletionTaskID := "task/" + roleName
 	// Attempt deletion — ignore not-found.
-	_ = p.resources.Delete(ctx, "iam_roles", nr.ResourceID("iam-role", roleName))
+	_ = p.resources.Delete(ctx, nr.AccountID, "", "iam_roles", nr.ResourceID("iam-role", roleName))
 	return provider.OK(map[string]any{"DeletionTaskId": deletionTaskID}), nil
 }
 

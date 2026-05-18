@@ -11,6 +11,8 @@ violations=$(grep -rn '"arn:aws:\|`arn:aws:' internal/aws/ \
   | grep -v '^\s*//' \
   | grep -v '//.*arn:aws:' \
   | grep -v 'nolint:hardcoded-arn' \
+  | grep -v '::aws:policy/' \
+  | grep -v '::aws:policy/' \
   || true)
 
 if [[ -n "$violations" ]]; then

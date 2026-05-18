@@ -304,7 +304,7 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, nr *mo
 		Tags:               parseTags(nr.Params),
 	}
 	data, _ := json.Marshal(vc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtVirtualCluster, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtVirtualCluster, ID: id, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -317,18 +317,18 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, nr *mo
 
 func (p *EMRContainersProvider) DeleteVirtualCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := pathID(nr, "virtualClusterId", "id")
-	vc, err := p.loadVC(ctx, id)
+	vc, err := p.loadVC(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
 	vc.State = "TERMINATING"
-	p.saveVC(ctx, vc)
+	p.saveVC(ctx, nr.AccountID, nr.Region, vc)
 	return provider.OK(map[string]any{"id": id}), nil
 }
 
 func (p *EMRContainersProvider) DescribeVirtualCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := pathID(nr, "virtualClusterId", "id")
-	vc, err := p.loadVC(ctx, id)
+	vc, err := p.loadVC(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -336,7 +336,7 @@ func (p *EMRContainersProvider) DescribeVirtualCluster(ctx context.Context, nr *
 }
 
 func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtVirtualCluster, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtVirtualCluster, "")
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (p *EMRContainersProvider) ListVirtualClusters(ctx context.Context, nr *mod
 
 func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
-	vc, err := p.loadVC(ctx, vcID)
+	vc, err := p.loadVC(ctx, nr.AccountID, nr.Region, vcID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -369,7 +369,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 	// Merge job template defaults if jobTemplateId is supplied.
 	// Template values are defaults; request-level params take precedence.
 	if jtID := strParam(nr.Params, "jobTemplateId"); jtID != "" {
-		if jt, jtErr := p.loadJobTemplate(ctx, jtID); jtErr == nil {
+		if jt, jtErr := p.loadJobTemplate(ctx, nr.AccountID, nr.Region, jtID); jtErr == nil {
 			nr.Params = applyJobTemplateDefaults(nr.Params, jt.JobTemplateData)
 		}
 	}
@@ -400,7 +400,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 
 	storeID := vcID + "/" + id
 	data, _ := json.Marshal(jr)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtJobRun, ID: storeID, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtJobRun, ID: storeID, Data: data}); err != nil {
 		return nil, err
 	}
 
@@ -450,7 +450,7 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 		p.cancelsMu.Unlock()
 	}()
 
-	jr, err := p.loadJobRun(ctx, vcID, jobID)
+	jr, err := p.loadJobRun(ctx, nr.AccountID, nr.Region, vcID, jobID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -511,7 +511,7 @@ func (p *EMRContainersProvider) CancelJobRun(ctx context.Context, nr *model.Norm
 func (p *EMRContainersProvider) DescribeJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	jobID := pathID(nr, "jobRunId", "id")
-	jr, err := p.loadJobRun(ctx, vcID, jobID)
+	jr, err := p.loadJobRun(ctx, nr.AccountID, nr.Region, vcID, jobID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Job run not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -521,7 +521,7 @@ func (p *EMRContainersProvider) DescribeJobRun(ctx context.Context, nr *model.No
 func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	prefix := vcID + "/"
-	entries, err := p.resources.List(ctx, rtJobRun, prefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtJobRun, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +542,7 @@ func (p *EMRContainersProvider) ListJobRuns(ctx context.Context, nr *model.Norma
 
 func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
-	if _, err := p.loadVC(ctx, vcID); err != nil {
+	if _, err := p.loadVC(ctx, nr.AccountID, nr.Region, vcID); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Virtual cluster not found", HTTPStatus: http.StatusNotFound}
 	}
 
@@ -560,7 +560,7 @@ func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *m
 	}
 	storeID := vcID + "/" + id
 	data, _ := json.Marshal(me)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtManagedEndpoint, ID: storeID, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtManagedEndpoint, ID: storeID, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -574,19 +574,19 @@ func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *m
 func (p *EMRContainersProvider) DeleteManagedEndpoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	epID := pathID(nr, "endpointId", "id")
-	me, err := p.loadEndpoint(ctx, vcID, epID)
+	me, err := p.loadEndpoint(ctx, nr.AccountID, nr.Region, vcID, epID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Managed endpoint not found", HTTPStatus: http.StatusNotFound}
 	}
 	me.State = "TERMINATING"
-	p.saveEndpoint(ctx, me)
+	p.saveEndpoint(ctx, nr.AccountID, nr.Region, me)
 	return provider.OK(map[string]any{"id": epID, "virtualClusterId": vcID}), nil
 }
 
 func (p *EMRContainersProvider) DescribeManagedEndpoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	epID := pathID(nr, "endpointId", "id")
-	me, err := p.loadEndpoint(ctx, vcID, epID)
+	me, err := p.loadEndpoint(ctx, nr.AccountID, nr.Region, vcID, epID)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Managed endpoint not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -596,7 +596,7 @@ func (p *EMRContainersProvider) DescribeManagedEndpoint(ctx context.Context, nr 
 func (p *EMRContainersProvider) ListManagedEndpoints(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	vcID := pathID(nr, "virtualClusterId", "virtualClusterId")
 	prefix := vcID + "/"
-	entries, err := p.resources.List(ctx, rtManagedEndpoint, prefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtManagedEndpoint, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +660,7 @@ func (p *EMRContainersProvider) TagResource(ctx context.Context, nr *model.Norma
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
 	}
-	e, err := p.resources.Get(ctx, rt, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rt, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
 	}
@@ -674,7 +674,7 @@ func (p *EMRContainersProvider) TagResource(ctx context.Context, nr *model.Norma
 	}
 	obj["tags"] = existing
 	data, _ := json.Marshal(obj)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rt, ID: id, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rt, ID: id, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -684,7 +684,7 @@ func (p *EMRContainersProvider) UntagResource(ctx context.Context, nr *model.Nor
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
 	}
-	e, ferr := p.resources.Get(ctx, rt, id)
+	e, ferr := p.resources.Get(ctx, nr.AccountID, nr.Region, rt, id)
 	if ferr != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
 	}
@@ -699,7 +699,7 @@ func (p *EMRContainersProvider) UntagResource(ctx context.Context, nr *model.Nor
 	}
 	obj["tags"] = existing
 	data, _ := json.Marshal(obj)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rt, ID: id, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rt, ID: id, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -709,7 +709,7 @@ func (p *EMRContainersProvider) ListTagsForResource(ctx context.Context, nr *mod
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: err.Error(), HTTPStatus: 400}
 	}
-	e, ferr := p.resources.Get(ctx, rt, id)
+	e, ferr := p.resources.Get(ctx, nr.AccountID, nr.Region, rt, id)
 	if ferr != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "Resource not found: " + arn, HTTPStatus: 400}
 	}
@@ -771,7 +771,7 @@ func (p *EMRContainersProvider) CreateSecurityConfiguration(ctx context.Context,
 		Tags:                      tags,
 	}
 	data, _ := json.Marshal(sc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtEKSSecConfig, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtEKSSecConfig, ID: id, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"id": id, "name": name, "arn": arn}), nil
@@ -779,7 +779,7 @@ func (p *EMRContainersProvider) CreateSecurityConfiguration(ctx context.Context,
 
 func (p *EMRContainersProvider) DescribeSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "id")
-	e, err := p.resources.Get(ctx, rtEKSSecConfig, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtEKSSecConfig, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Security configuration '%s' not found.", id), HTTPStatus: 400}
 	}
@@ -800,15 +800,15 @@ func (p *EMRContainersProvider) DescribeSecurityConfiguration(ctx context.Contex
 
 func (p *EMRContainersProvider) DeleteSecurityConfiguration(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "id")
-	if _, err := p.resources.Get(ctx, rtEKSSecConfig, id); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtEKSSecConfig, id); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Security configuration '%s' not found.", id), HTTPStatus: 400}
 	}
-	_ = p.resources.Delete(ctx, rtEKSSecConfig, id)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtEKSSecConfig, id)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *EMRContainersProvider) ListSecurityConfigurations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtEKSSecConfig, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtEKSSecConfig, "")
 	if err != nil {
 		return nil, err
 	}
@@ -843,7 +843,7 @@ func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context
 		}
 	}
 	// Validate virtual cluster exists
-	if _, err := p.resources.Get(ctx, rtVirtualCluster, vcID); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtVirtualCluster, vcID); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Virtual cluster '%s' not found.", vcID), HTTPStatus: 400}
 	}
 	_ = endpointID // not validated further in lite mode
@@ -878,8 +878,8 @@ func (p *EMRContainersProvider) Shutdown(_ context.Context) {
 
 // ─── Store helpers ────────────────────────────────────────────────────────────
 
-func (p *EMRContainersProvider) loadVC(ctx context.Context, id string) (virtualCluster, error) {
-	e, err := p.resources.Get(ctx, rtVirtualCluster, id)
+func (p *EMRContainersProvider) loadVC(ctx context.Context, account, region, id string) (virtualCluster, error) {
+	e, err := p.resources.Get(ctx, account, region, rtVirtualCluster, id)
 	if err != nil {
 		return virtualCluster{}, err
 	}
@@ -887,15 +887,15 @@ func (p *EMRContainersProvider) loadVC(ctx context.Context, id string) (virtualC
 	return vc, json.Unmarshal(e.Data, &vc)
 }
 
-func (p *EMRContainersProvider) saveVC(ctx context.Context, vc virtualCluster) {
+func (p *EMRContainersProvider) saveVC(ctx context.Context, account, region string, vc virtualCluster) {
 	data, _ := json.Marshal(vc)
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtVirtualCluster, ID: vc.ID, Data: data}); err != nil {
+	if err := p.resources.Update(ctx, account, region, store.ResourceEntry{Type: rtVirtualCluster, ID: vc.ID, Data: data}); err != nil {
 		slog.Warn("emroneks: failed to persist virtual cluster", "vcID", vc.ID, "err", err)
 	}
 }
 
-func (p *EMRContainersProvider) loadJobRun(ctx context.Context, vcID, jobID string) (jobRun, error) {
-	e, err := p.resources.Get(ctx, rtJobRun, vcID+"/"+jobID)
+func (p *EMRContainersProvider) loadJobRun(ctx context.Context, account, region, vcID, jobID string) (jobRun, error) {
+	e, err := p.resources.Get(ctx, account, region, rtJobRun, vcID+"/"+jobID)
 	if err != nil {
 		return jobRun{}, err
 	}
@@ -903,15 +903,15 @@ func (p *EMRContainersProvider) loadJobRun(ctx context.Context, vcID, jobID stri
 	return jr, json.Unmarshal(e.Data, &jr)
 }
 
-func (p *EMRContainersProvider) saveJobRun(ctx context.Context, jr jobRun) {
+func (p *EMRContainersProvider) saveJobRun(ctx context.Context, account, region string, jr jobRun) {
 	data, _ := json.Marshal(jr)
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtJobRun, ID: jr.VirtualClusterID + "/" + jr.ID, Data: data}); err != nil {
+	if err := p.resources.Update(ctx, account, region, store.ResourceEntry{Type: rtJobRun, ID: jr.VirtualClusterID + "/" + jr.ID, Data: data}); err != nil {
 		slog.Warn("emroneks: failed to persist job run", "vcID", jr.VirtualClusterID, "jobRunID", jr.ID, "err", err)
 	}
 }
 
-func (p *EMRContainersProvider) loadEndpoint(ctx context.Context, vcID, epID string) (managedEndpoint, error) {
-	e, err := p.resources.Get(ctx, rtManagedEndpoint, vcID+"/"+epID)
+func (p *EMRContainersProvider) loadEndpoint(ctx context.Context, account, region, vcID, epID string) (managedEndpoint, error) {
+	e, err := p.resources.Get(ctx, account, region, rtManagedEndpoint, vcID+"/"+epID)
 	if err != nil {
 		return managedEndpoint{}, err
 	}
@@ -919,9 +919,9 @@ func (p *EMRContainersProvider) loadEndpoint(ctx context.Context, vcID, epID str
 	return me, json.Unmarshal(e.Data, &me)
 }
 
-func (p *EMRContainersProvider) saveEndpoint(ctx context.Context, me managedEndpoint) {
+func (p *EMRContainersProvider) saveEndpoint(ctx context.Context, account, region string, me managedEndpoint) {
 	data, _ := json.Marshal(me)
-	if err := p.resources.Update(ctx, store.ResourceEntry{Type: rtManagedEndpoint, ID: me.VirtualClusterID + "/" + me.ID, Data: data}); err != nil {
+	if err := p.resources.Update(ctx, account, region, store.ResourceEntry{Type: rtManagedEndpoint, ID: me.VirtualClusterID + "/" + me.ID, Data: data}); err != nil {
 		slog.Warn("emroneks: failed to persist managed endpoint", "vcID", me.VirtualClusterID, "epID", me.ID, "err", err)
 	}
 }

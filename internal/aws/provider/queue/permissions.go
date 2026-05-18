@@ -48,7 +48,7 @@ func (p *QueueProvider) AddPermission(ctx context.Context, nr *model.NormalizedR
 	attrs["Policy"] = string(raw)
 	state["Attributes"] = attrs
 
-	saveErr := p.saveQueueState(ctx, queueURL, state)
+	saveErr := p.saveQueueState(ctx, nr.AccountID, nr.Region, queueURL, state)
 	return provider.OK(map[string]any{}), saveErr
 }
 
@@ -81,12 +81,12 @@ func (p *QueueProvider) RemovePermission(ctx context.Context, nr *model.Normaliz
 			state["Attributes"] = attrs
 		}
 	}
-	return provider.OK(map[string]any{}), p.saveQueueState(ctx, queueURL, state)
+	return provider.OK(map[string]any{}), p.saveQueueState(ctx, nr.AccountID, nr.Region, queueURL, state)
 }
 
 // getQueueByURL loads queue state by URL.
 func (p *QueueProvider) getQueueByURL(ctx context.Context, queueURL string) (map[string]any, error) {
-	e, err := p.resources.Get(ctx, "sqs_queues", queueURL)
+	e, err := p.resources.Get(ctx, "", "", "sqs_queues", queueURL)
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +98,9 @@ func (p *QueueProvider) getQueueByURL(ctx context.Context, queueURL string) (map
 }
 
 // saveQueueState persists queue state back to the store.
-func (p *QueueProvider) saveQueueState(ctx context.Context, queueURL string, state map[string]any) error {
+func (p *QueueProvider) saveQueueState(ctx context.Context, account, region, queueURL string, state map[string]any) error {
 	data, _ := json.Marshal(state)
-	return p.resources.Update(ctx, store.ResourceEntry{Type: "sqs_queues", ID: queueURL, Data: data})
+	return p.resources.Update(ctx, account, region, store.ResourceEntry{Type: "sqs_queues", ID: queueURL, Data: data})
 }
 
 // extractMemberList reads a []any or string param as a []string.

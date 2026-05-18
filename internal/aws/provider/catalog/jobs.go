@@ -52,23 +52,23 @@ type jobRunEntry struct {
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
 
-func jobID(name string) string         { return "job/" + name }
+func jobID(name string) string             { return "job/" + name }
 func jobRunID(jobName, runID string) string { return "run/" + jobName + "/" + runID }
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
 
-func (p *GlueProvider) saveJob(ctx context.Context, j jobEntry) error {
+func (p *GlueProvider) saveJob(ctx context.Context, account, region string, j jobEntry) error {
 	data, _ := json.Marshal(j)
 	entry := store.ResourceEntry{Type: rtJob, ID: jobID(j.Name), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadJob(ctx context.Context, name string) (jobEntry, error) {
-	e, err := p.resources.Get(ctx, rtJob, jobID(name))
+func (p *GlueProvider) loadJob(ctx context.Context, account, region, name string) (jobEntry, error) {
+	e, err := p.resources.Get(ctx, account, region, rtJob, jobID(name))
 	if err == store.ErrNotFound {
 		return jobEntry{}, &model.ProviderError{
 			Code:       "NotFound",
@@ -84,18 +84,18 @@ func (p *GlueProvider) loadJob(ctx context.Context, name string) (jobEntry, erro
 	return j, nil
 }
 
-func (p *GlueProvider) saveJobRun(ctx context.Context, run jobRunEntry) error {
+func (p *GlueProvider) saveJobRun(ctx context.Context, account, region string, run jobRunEntry) error {
 	data, _ := json.Marshal(run)
 	entry := store.ResourceEntry{Type: rtJobRun, ID: jobRunID(run.JobName, run.Id), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *GlueProvider) loadJobRun(ctx context.Context, jobName, runID string) (jobRunEntry, error) {
-	e, err := p.resources.Get(ctx, rtJobRun, jobRunID(jobName, runID))
+func (p *GlueProvider) loadJobRun(ctx context.Context, account, region, jobName, runID string) (jobRunEntry, error) {
+	e, err := p.resources.Get(ctx, account, region, rtJobRun, jobRunID(jobName, runID))
 	if err == store.ErrNotFound {
 		return jobRunEntry{}, &model.ProviderError{
 			Code:       "NotFound",
@@ -118,7 +118,7 @@ func (p *GlueProvider) CreateJob(ctx context.Context, nr *model.NormalizedReques
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidInput", Message: "Name is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtJob, jobID(name)); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtJob, jobID(name)); err == nil {
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Job %s already exists", name), HTTPStatus: http.StatusBadRequest}
 	}
 
@@ -144,7 +144,7 @@ func (p *GlueProvider) CreateJob(ctx context.Context, nr *model.NormalizedReques
 		CreatedOn:        now,
 		LastModifiedOn:   now,
 	}
-	if err := p.saveJob(ctx, j); err != nil {
+	if err := p.saveJob(ctx, nr.AccountID, nr.Region, j); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"Name": name}), nil
@@ -152,7 +152,7 @@ func (p *GlueProvider) CreateJob(ctx context.Context, nr *model.NormalizedReques
 
 func (p *GlueProvider) UpdateJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "JobName")
-	j, err := p.loadJob(ctx, name)
+	j, err := p.loadJob(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (p *GlueProvider) UpdateJob(ctx context.Context, nr *model.NormalizedReques
 		j.Timeout = int(v)
 	}
 	j.LastModifiedOn = time.Now()
-	if err := p.saveJob(ctx, j); err != nil {
+	if err := p.saveJob(ctx, nr.AccountID, nr.Region, j); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"JobName": name}), nil
@@ -184,10 +184,10 @@ func (p *GlueProvider) UpdateJob(ctx context.Context, nr *model.NormalizedReques
 
 func (p *GlueProvider) DeleteJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "JobName")
-	if _, err := p.loadJob(ctx, name); err != nil {
+	if _, err := p.loadJob(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, rtJob, jobID(name)); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtJob, jobID(name)); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"JobName": name}), nil
@@ -195,7 +195,7 @@ func (p *GlueProvider) DeleteJob(ctx context.Context, nr *model.NormalizedReques
 
 func (p *GlueProvider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "JobName")
-	j, err := p.loadJob(ctx, name)
+	j, err := p.loadJob(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (p *GlueProvider) GetJob(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *GlueProvider) GetJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtJob, "job/")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtJob, "job/")
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +232,7 @@ func (p *GlueProvider) GetJobs(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *GlueProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	jobName := strParam(nr.Params, "JobName")
-	if _, err := p.loadJob(ctx, jobName); err != nil {
+	if _, err := p.loadJob(ctx, nr.AccountID, nr.Region, jobName); err != nil {
 		return nil, err
 	}
 	runID := newID()
@@ -249,7 +249,7 @@ func (p *GlueProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequ
 	run.JobRunState = "SUCCEEDED"
 	run.CompletedOn = &completedNow
 
-	if err := p.saveJobRun(ctx, run); err != nil {
+	if err := p.saveJobRun(ctx, nr.AccountID, nr.Region, run); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"JobRunId": runID}), nil
@@ -258,7 +258,7 @@ func (p *GlueProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequ
 func (p *GlueProvider) GetJobRun(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	jobName := strParam(nr.Params, "JobName")
 	runID := strParam(nr.Params, "RunId")
-	run, err := p.loadJobRun(ctx, jobName, runID)
+	run, err := p.loadJobRun(ctx, nr.AccountID, nr.Region, jobName, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func (p *GlueProvider) GetJobRun(ctx context.Context, nr *model.NormalizedReques
 func (p *GlueProvider) GetJobRuns(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	jobName := strParam(nr.Params, "JobName")
 	prefix := "run/" + jobName + "/"
-	entries, err := p.resources.List(ctx, rtJobRun, prefix)
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtJobRun, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +301,7 @@ func (p *GlueProvider) BatchStopJobRun(ctx context.Context, nr *model.Normalized
 
 	errors := []map[string]any{}
 	for _, runID := range runIDs {
-		run, err := p.loadJobRun(ctx, jobName, runID)
+		run, err := p.loadJobRun(ctx, nr.AccountID, nr.Region, jobName, runID)
 		if err != nil {
 			errors = append(errors, map[string]any{
 				"JobRunId":    runID,
@@ -314,7 +314,7 @@ func (p *GlueProvider) BatchStopJobRun(ctx context.Context, nr *model.Normalized
 			run.JobRunState = "STOPPED"
 			now := time.Now()
 			run.CompletedOn = &now
-			p.saveJobRun(ctx, run)
+			p.saveJobRun(ctx, nr.AccountID, nr.Region, run) //nolint:errcheck
 		}
 	}
 	return provider.OK(map[string]any{

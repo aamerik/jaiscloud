@@ -21,7 +21,7 @@ func (p *EventBridgeProvider) PutPermission(ctx context.Context, nr *model.Norma
 	action := strParam(nr.Params, "Action")
 
 	var doc map[string]any
-	if e, err := p.resources.Get(ctx, rtBusPolicy, busName); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtBusPolicy, busName); err == nil {
 		json.Unmarshal(e.Data, &doc)
 	}
 	if doc == nil {
@@ -44,9 +44,9 @@ func (p *EventBridgeProvider) PutPermission(ctx context.Context, nr *model.Norma
 	doc["Statement"] = append(filtered, stmt)
 	raw, _ := json.Marshal(doc)
 	entry := store.ResourceEntry{Type: rtBusPolicy, ID: busName, Data: raw}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -59,7 +59,7 @@ func (p *EventBridgeProvider) RemovePermission(ctx context.Context, nr *model.No
 	}
 	statementID := strParam(nr.Params, "StatementId")
 
-	e, err := p.resources.Get(ctx, rtBusPolicy, busName)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtBusPolicy, busName)
 	if err != nil {
 		return provider.OK(map[string]any{}), nil
 	}
@@ -77,6 +77,6 @@ func (p *EventBridgeProvider) RemovePermission(ctx context.Context, nr *model.No
 	}
 	doc["Statement"] = filtered
 	raw, _ := json.Marshal(doc)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtBusPolicy, ID: busName, Data: raw})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtBusPolicy, ID: busName, Data: raw})
 	return provider.OK(map[string]any{}), nil
 }

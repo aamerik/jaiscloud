@@ -89,7 +89,7 @@ func (p *StackProvider) CreateChangeSet(ctx context.Context, nr *model.Normalize
 	}
 
 	// Stack must exist
-	se, serr := p.resources.Get(ctx, rtStack, stackName)
+	se, serr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtStack, stackName)
 	var stackID string
 	if serr == nil {
 		var s cfStack
@@ -144,7 +144,7 @@ func (p *StackProvider) CreateChangeSet(ctx context.Context, nr *model.Normalize
 
 	data, _ := json.Marshal(cs)
 	key := changeSetKey(stackName, csName)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtChangeSet, ID: key, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtChangeSet, ID: key, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "AlreadyExistsException", Message: "change set " + csName + " already exists for stack " + stackName, HTTPStatus: http.StatusBadRequest}
 		}
@@ -157,7 +157,7 @@ func (p *StackProvider) DescribeChangeSet(ctx context.Context, nr *model.Normali
 	stackName := strParam(nr.Params, "StackName")
 	csName := strParam(nr.Params, "ChangeSetName")
 	key := changeSetKey(stackName, csName)
-	e, err := p.resources.Get(ctx, rtChangeSet, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtChangeSet, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ChangeSetNotFoundException", Message: fmt.Sprintf("change set %s not found for stack %s", csName, stackName), HTTPStatus: http.StatusNotFound}
 	}
@@ -168,7 +168,7 @@ func (p *StackProvider) DescribeChangeSet(ctx context.Context, nr *model.Normali
 
 func (p *StackProvider) ListChangeSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	stackName := strParam(nr.Params, "StackName")
-	entries, _ := p.resources.List(ctx, rtChangeSet, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtChangeSet, "")
 	prefix := stackName + "/"
 	var summaries []map[string]any
 	for _, e := range entries {
@@ -198,7 +198,7 @@ func (p *StackProvider) ExecuteChangeSet(ctx context.Context, nr *model.Normaliz
 	stackName := strParam(nr.Params, "StackName")
 	csName := strParam(nr.Params, "ChangeSetName")
 	key := changeSetKey(stackName, csName)
-	e, err := p.resources.Get(ctx, rtChangeSet, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtChangeSet, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ChangeSetNotFoundException", Message: fmt.Sprintf("change set %s not found", csName), HTTPStatus: http.StatusNotFound}
 	}
@@ -229,7 +229,7 @@ func (p *StackProvider) ExecuteChangeSet(ctx context.Context, nr *model.Normaliz
 
 	cs.Status = "EXECUTE_COMPLETE"
 	data, _ := json.Marshal(cs)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtChangeSet, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtChangeSet, ID: key, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -237,7 +237,7 @@ func (p *StackProvider) DeleteChangeSet(ctx context.Context, nr *model.Normalize
 	stackName := strParam(nr.Params, "StackName")
 	csName := strParam(nr.Params, "ChangeSetName")
 	key := changeSetKey(stackName, csName)
-	if err := p.resources.Delete(ctx, rtChangeSet, key); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtChangeSet, key); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ChangeSetNotFoundException", Message: fmt.Sprintf("change set %s not found", csName), HTTPStatus: http.StatusNotFound}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -261,7 +261,7 @@ func (p *StackProvider) DescribeStackEvents(ctx context.Context, nr *model.Norma
 	stackName := strParam(nr.Params, "StackName")
 
 	// Derive synthetic events from the stack's current resources
-	se, err := p.resources.Get(ctx, rtStack, stackName)
+	se, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtStack, stackName)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ValidationError", Message: "stack " + stackName + " not found", HTTPStatus: http.StatusBadRequest}
 	}

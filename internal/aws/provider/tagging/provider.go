@@ -47,7 +47,7 @@ func (p *Provider) GetResources(ctx context.Context, nr *model.NormalizedRequest
 	// Build tag filter from TagFilters list
 	tagFilters := extractTagFilters(nr.Params)
 
-	entries, err := p.resources.List(ctx, rtTaggingResource, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaggingResource, "")
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (p *Provider) GetResources(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) GetTagKeys(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtTaggingResource, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaggingResource, "")
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func (p *Provider) GetTagKeys(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *Provider) GetTagValues(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterKey := strParam(nr.Params, "Key")
 
-	entries, err := p.resources.List(ctx, rtTaggingResource, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtTaggingResource, "")
 	if err != nil {
 		return nil, err
 	}
@@ -145,15 +145,15 @@ func (p *Provider) TagResources(ctx context.Context, nr *model.NormalizedRequest
 
 	for _, arn := range arns {
 		res := taggedResource{ARN: arn, Tags: map[string]string{}}
-		if e, err := p.resources.Get(ctx, rtTaggingResource, arn); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaggingResource, arn); err == nil {
 			json.Unmarshal(e.Data, &res)
 		}
 		for k, v := range tags {
 			res.Tags[k] = v
 		}
 		data, _ := json.Marshal(res)
-		_ = p.resources.Delete(ctx, rtTaggingResource, arn)
-		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTaggingResource, arn)
+		_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
 	}
 
 	return provider.OK(map[string]any{"FailedResourcesMap": map[string]any{}}), nil
@@ -165,15 +165,15 @@ func (p *Provider) UntagResources(ctx context.Context, nr *model.NormalizedReque
 
 	for _, arn := range arns {
 		res := taggedResource{ARN: arn, Tags: map[string]string{}}
-		if e, err := p.resources.Get(ctx, rtTaggingResource, arn); err == nil {
+		if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtTaggingResource, arn); err == nil {
 			json.Unmarshal(e.Data, &res)
 		}
 		for _, k := range keys {
 			delete(res.Tags, k)
 		}
 		data, _ := json.Marshal(res)
-		_ = p.resources.Delete(ctx, rtTaggingResource, arn)
-		if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data}); err != nil {
+		_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtTaggingResource, arn)
+		if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data}); err != nil {
 			return nil, err
 		}
 	}
@@ -326,15 +326,15 @@ func (p *Provider) InternalTagResource(ctx context.Context, arn string, tags map
 		return nil
 	}
 	res := taggedResource{ARN: arn, Tags: map[string]string{}}
-	if e, err := p.resources.Get(ctx, rtTaggingResource, arn); err == nil {
+	if e, err := p.resources.Get(ctx, "", "", rtTaggingResource, arn); err == nil {
 		json.Unmarshal(e.Data, &res)
 	}
 	for k, v := range tags {
 		res.Tags[k] = v
 	}
 	data, _ := json.Marshal(res)
-	_ = p.resources.Delete(ctx, rtTaggingResource, arn)
-	return p.resources.Create(ctx, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, "", "", rtTaggingResource, arn)
+	return p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
 }
 
 // InternalUntagResource allows other providers to remove tags from their resources.
@@ -343,15 +343,15 @@ func (p *Provider) InternalUntagResource(ctx context.Context, arn string, keys [
 		return nil
 	}
 	res := taggedResource{ARN: arn, Tags: map[string]string{}}
-	if e, err := p.resources.Get(ctx, rtTaggingResource, arn); err == nil {
+	if e, err := p.resources.Get(ctx, "", "", rtTaggingResource, arn); err == nil {
 		json.Unmarshal(e.Data, &res)
 	}
 	for _, k := range keys {
 		delete(res.Tags, k)
 	}
 	data, _ := json.Marshal(res)
-	_ = p.resources.Delete(ctx, rtTaggingResource, arn)
-	return p.resources.Create(ctx, store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, "", "", rtTaggingResource, arn)
+	return p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtTaggingResource, ID: arn, Data: data})
 }
 
 // ErrorFailedResource represents a resource that couldn't be tagged.

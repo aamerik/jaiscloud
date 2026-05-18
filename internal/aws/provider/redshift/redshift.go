@@ -122,8 +122,8 @@ func clusterToWire(c redshiftCluster) map[string]any {
 	}
 }
 
-func (p *Provider) loadCluster(ctx context.Context, id string) (redshiftCluster, error) {
-	e, err := p.resources.Get(ctx, rtCluster, id)
+func (p *Provider) loadCluster(ctx context.Context, account, region, id string) (redshiftCluster, error) {
+	e, err := p.resources.Get(ctx, account, region, rtCluster, id)
 	if err != nil {
 		return redshiftCluster{}, rsErr("ClusterNotFound", "Cluster not found: "+id, http.StatusNotFound)
 	}
@@ -132,11 +132,11 @@ func (p *Provider) loadCluster(ctx context.Context, id string) (redshiftCluster,
 	return c, nil
 }
 
-func (p *Provider) saveCluster(ctx context.Context, c redshiftCluster) {
+func (p *Provider) saveCluster(ctx context.Context, account, region string, c redshiftCluster) {
 	data, _ := json.Marshal(c)
 	entry := store.ResourceEntry{Type: rtCluster, ID: c.ClusterIdentifier, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
@@ -145,7 +145,7 @@ func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedReques
 	if id == "" {
 		return nil, rsErr("InvalidParameterValue", "ClusterIdentifier is required", http.StatusBadRequest)
 	}
-	if _, err := p.resources.Get(ctx, rtCluster, id); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, id); err == nil {
 		return nil, rsErr("ClusterAlreadyExists", "Cluster "+id+" already exists", http.StatusBadRequest)
 	}
 	nodeType := str(nr.Params, "NodeType")
@@ -172,13 +172,13 @@ func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedReques
 		Tags:              map[string]string{},
 		ARN:               nr.ResourceID("redshift-cluster", id),
 	}
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
 func (p *Provider) DescribeClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterID := str(nr.Params, "ClusterIdentifier")
-	entries, _ := p.resources.List(ctx, rtCluster, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtCluster, "")
 	var clusters []map[string]any
 	for _, e := range entries {
 		var c redshiftCluster
@@ -198,17 +198,17 @@ func (p *Provider) DescribeClusters(ctx context.Context, nr *model.NormalizedReq
 
 func (p *Provider) DeleteCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "ClusterIdentifier")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtCluster, id)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCluster, id)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
 func (p *Provider) ModifyCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "ClusterIdentifier")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
@@ -219,40 +219,40 @@ func (p *Provider) ModifyCluster(ctx context.Context, nr *model.NormalizedReques
 		c.NumberOfNodes = v
 	}
 	c.ClusterStatus = "available"
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
 func (p *Provider) RebootCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "ClusterIdentifier")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
 	c.ClusterStatus = "available"
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
 func (p *Provider) ResumeCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "ClusterIdentifier")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
 	c.ClusterStatus = "available"
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
 func (p *Provider) PauseCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := str(nr.Params, "ClusterIdentifier")
-	c, err := p.loadCluster(ctx, id)
+	c, err := p.loadCluster(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
 	c.ClusterStatus = "paused"
-	p.saveCluster(ctx, c)
+	p.saveCluster(ctx, nr.AccountID, nr.Region, c)
 	return provider.OK(map[string]any{"Cluster": clusterToWire(c)}), nil
 }
 
@@ -275,7 +275,7 @@ func (p *Provider) CreateClusterSubnetGroup(ctx context.Context, nr *model.Norma
 	if name == "" {
 		return nil, rsErr("InvalidParameterValue", "ClusterSubnetGroupName is required", http.StatusBadRequest)
 	}
-	if _, err := p.resources.Get(ctx, rtSubnetGroup, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSubnetGroup, name); err == nil {
 		return nil, rsErr("ClusterSubnetGroupAlreadyExists", "Subnet group "+name+" already exists", http.StatusBadRequest)
 	}
 	g := clusterSubnetGroup{
@@ -286,13 +286,13 @@ func (p *Provider) CreateClusterSubnetGroup(ctx context.Context, nr *model.Norma
 		SubnetIDs:   extractSubnetIDs(nr.Params),
 	}
 	data, _ := json.Marshal(g)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnetGroup, ID: name, Data: data})
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSubnetGroup, ID: name, Data: data})
 	return provider.OK(map[string]any{"ClusterSubnetGroup": subnetGroupToWire(g)}), nil
 }
 
 func (p *Provider) DescribeClusterSubnetGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "ClusterSubnetGroupName")
-	entries, _ := p.resources.List(ctx, rtSubnetGroup, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtSubnetGroup, "")
 	var groups []map[string]any
 	for _, e := range entries {
 		var g clusterSubnetGroup
@@ -312,7 +312,7 @@ func (p *Provider) DescribeClusterSubnetGroups(ctx context.Context, nr *model.No
 
 func (p *Provider) DeleteClusterSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "ClusterSubnetGroupName")
-	if err := p.resources.Delete(ctx, rtSubnetGroup, name); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtSubnetGroup, name); err == store.ErrNotFound {
 		return nil, rsErr("ClusterSubnetGroupNotFoundFault", "Subnet group not found: "+name, http.StatusNotFound)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -320,7 +320,7 @@ func (p *Provider) DeleteClusterSubnetGroup(ctx context.Context, nr *model.Norma
 
 func (p *Provider) ModifyClusterSubnetGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "ClusterSubnetGroupName")
-	e, err := p.resources.Get(ctx, rtSubnetGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSubnetGroup, name)
 	if err != nil {
 		return nil, rsErr("ClusterSubnetGroupNotFoundFault", "Subnet group not found: "+name, http.StatusNotFound)
 	}
@@ -333,7 +333,7 @@ func (p *Provider) ModifyClusterSubnetGroup(ctx context.Context, nr *model.Norma
 		g.SubnetIDs = ids
 	}
 	data, _ := json.Marshal(g)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtSubnetGroup, ID: name, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSubnetGroup, ID: name, Data: data})
 	return provider.OK(map[string]any{"ClusterSubnetGroup": subnetGroupToWire(g)}), nil
 }
 
@@ -368,17 +368,17 @@ func extractEC2Tags(params map[string]any) map[string]string {
 
 func (p *Provider) CreateTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceName")
-	tags := loadRSTags(ctx, p.resources, arn)
+	tags := loadRSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for k, v := range extractEC2Tags(nr.Params) {
 		tags[k] = v
 	}
-	saveRSTags(ctx, p.resources, arn, tags)
+	saveRSTags(ctx, p.resources, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DeleteTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceName")
-	tags := loadRSTags(ctx, p.resources, arn)
+	tags := loadRSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	for i := 1; ; i++ {
 		k := str(nr.Params, fmt.Sprintf("Tag.%d.Key", i))
 		if k == "" {
@@ -386,13 +386,13 @@ func (p *Provider) DeleteTags(ctx context.Context, nr *model.NormalizedRequest) 
 		}
 		delete(tags, k)
 	}
-	saveRSTags(ctx, p.resources, arn, tags)
+	saveRSTags(ctx, p.resources, nr.AccountID, nr.Region, arn, tags)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := str(nr.Params, "ResourceName")
-	tags := loadRSTags(ctx, p.resources, arn)
+	tags := loadRSTags(ctx, p.resources, nr.AccountID, nr.Region, arn)
 	list := make([]map[string]any, 0, len(tags))
 	for k, v := range tags {
 		list = append(list, map[string]any{
@@ -405,8 +405,8 @@ func (p *Provider) DescribeTags(ctx context.Context, nr *model.NormalizedRequest
 	return provider.OK(map[string]any{"TaggedResources": list}), nil
 }
 
-func loadRSTags(ctx context.Context, res store.ResourceStore, arn string) map[string]string {
-	e, err := res.Get(ctx, rtRSTags, arn)
+func loadRSTags(ctx context.Context, res store.ResourceStore, account, region, arn string) map[string]string {
+	e, err := res.Get(ctx, account, region, rtRSTags, arn)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -415,11 +415,11 @@ func loadRSTags(ctx context.Context, res store.ResourceStore, arn string) map[st
 	return m
 }
 
-func saveRSTags(ctx context.Context, res store.ResourceStore, arn string, tags map[string]string) {
+func saveRSTags(ctx context.Context, res store.ResourceStore, account, region, arn string, tags map[string]string) {
 	data, _ := json.Marshal(tags)
 	entry := store.ResourceEntry{Type: rtRSTags, ID: arn, Data: data}
-	if err := res.Create(ctx, entry); err == store.ErrAlreadyExists {
-		res.Update(ctx, entry)
+	if err := res.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		res.Update(ctx, account, region, entry)
 	}
 }
 

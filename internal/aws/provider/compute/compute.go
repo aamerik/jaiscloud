@@ -30,7 +30,7 @@ func New(resources store.ResourceStore) *ComputeProvider {
 
 func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 	// Return if a default VPC already exists (e.g. restarted with full mode).
-	entries, _ := p.resources.List(ctx, rtVpc, "")
+	entries, _ := p.resources.List(ctx, "", "", rtVpc, "")
 	for _, e := range entries {
 		var vpc ec2Vpc
 		json.Unmarshal(e.Data, &vpc)
@@ -48,7 +48,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 		EnableDnsHostnames: true,
 	}
 	data, _ := json.Marshal(vpc)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
+	_ = p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
 
 	// Seed three default subnets in different AZs.
 	azCidrs := [][2]string{
@@ -69,7 +69,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 			MapPublicIpOnLaunch:     true,
 		}
 		sdata, _ := json.Marshal(subnet)
-		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
+		_ = p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
 	}
 }
 
@@ -186,18 +186,18 @@ type ec2Instance struct {
 	LastRebootTime          string            `json:"LastRebootTime,omitempty"`
 }
 
-func (p *ComputeProvider) saveInstance(ctx context.Context, inst ec2Instance) error {
+func (p *ComputeProvider) saveInstance(ctx context.Context, account, region string, inst ec2Instance) error {
 	data, _ := json.Marshal(inst)
 	entry := store.ResourceEntry{Type: rtInstance, ID: inst.InstanceId, Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *ComputeProvider) loadInstance(ctx context.Context, id string) (ec2Instance, error) {
-	e, err := p.resources.Get(ctx, rtInstance, id)
+func (p *ComputeProvider) loadInstance(ctx context.Context, account, region, id string) (ec2Instance, error) {
+	e, err := p.resources.Get(ctx, account, region, rtInstance, id)
 	if err == store.ErrNotFound {
 		return ec2Instance{}, &model.ProviderError{Code: "InvalidInstanceID.NotFound", Message: fmt.Sprintf("The instance ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -279,7 +279,7 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 	// If no subnet specified, place in the first default subnet (seeded at startup).
 	defaultVpcId := ""
 	if subnetId == "" {
-		snEntries, _ := p.resources.List(ctx, rtSubnet, "")
+		snEntries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtSubnet, "")
 		for _, se := range snEntries {
 			var sn ec2Subnet
 			if json.Unmarshal(se.Data, &sn) == nil && sn.IsDefault {
@@ -326,18 +326,19 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 			Tags:                   tags,
 		}
 		inst.PrivateDnsName = fmt.Sprintf("ip-%s.ec2.internal", strings.ReplaceAll(inst.PrivateIpAddress, ".", "-"))
-		if err := p.saveInstance(ctx, inst); err != nil {
+		if err := p.saveInstance(ctx, nr.AccountID, nr.Region, inst); err != nil {
 			return nil, err
 		}
 		// Transition pending → running after 2s; skip if instance was deleted (reset).
 		instCopy := inst
+		account, region := nr.AccountID, nr.Region
 		time.AfterFunc(2*time.Second, func() {
-			loaded, err := p.loadInstance(context.Background(), instCopy.InstanceId)
+			loaded, err := p.loadInstance(context.Background(), account, region, instCopy.InstanceId)
 			if err != nil || loaded.State != "pending" {
 				return
 			}
 			loaded.State = "running"
-			p.saveInstance(context.Background(), loaded)
+			p.saveInstance(context.Background(), account, region, loaded)
 		})
 		instances = append(instances, instanceToWire(inst))
 	}
@@ -442,7 +443,7 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 	// Only suppress terminated/shutting-down instances when the caller has not
 	// explicitly asked for those states via an instance-state-name filter.
 	_, hasStateFilter := filters["instance-state-name"]
-	entries, err := p.resources.List(ctx, rtInstance, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtInstance, "")
 	if err != nil {
 		return nil, err
 	}
@@ -484,23 +485,24 @@ func (p *ComputeProvider) DescribeInstances(ctx context.Context, nr *model.Norma
 func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ids := extractIndexedParam(nr.Params, "InstanceId")
 	result := []map[string]any{}
+	account, region := nr.AccountID, nr.Region
 	for _, id := range ids {
-		inst, err := p.loadInstance(ctx, id)
+		inst, err := p.loadInstance(ctx, account, region, id)
 		if err != nil {
 			return nil, err
 		}
 		prev := inst.State
 		inst.State = "shutting-down"
-		p.saveInstance(ctx, inst)
+		p.saveInstance(ctx, account, region, inst)
 		// Transition shutting-down → terminated after 2s; skip if instance was deleted (reset).
 		instCopy := inst
 		time.AfterFunc(2*time.Second, func() {
-			loaded, err := p.loadInstance(context.Background(), instCopy.InstanceId)
+			loaded, err := p.loadInstance(context.Background(), account, region, instCopy.InstanceId)
 			if err != nil || loaded.State != "shutting-down" {
 				return
 			}
 			loaded.State = "terminated"
-			p.saveInstance(context.Background(), loaded)
+			p.saveInstance(context.Background(), account, region, loaded)
 		})
 		result = append(result, map[string]any{
 			"InstanceId":    id,
@@ -515,13 +517,13 @@ func (p *ComputeProvider) StartInstances(ctx context.Context, nr *model.Normaliz
 	ids := extractIndexedParam(nr.Params, "InstanceId")
 	result := []map[string]any{}
 	for _, id := range ids {
-		inst, err := p.loadInstance(ctx, id)
+		inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, id)
 		if err != nil {
 			return nil, err
 		}
 		prev := inst.State
 		inst.State = "running"
-		p.saveInstance(ctx, inst)
+		p.saveInstance(ctx, nr.AccountID, nr.Region, inst)
 		result = append(result, map[string]any{
 			"InstanceId":    id,
 			"CurrentState":  map[string]any{"Code": "16", "Name": "running"},
@@ -534,19 +536,20 @@ func (p *ComputeProvider) StartInstances(ctx context.Context, nr *model.Normaliz
 func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ids := extractIndexedParam(nr.Params, "InstanceId")
 	result := []map[string]any{}
+	account, region := nr.AccountID, nr.Region
 	for _, id := range ids {
-		inst, err := p.loadInstance(ctx, id)
+		inst, err := p.loadInstance(ctx, account, region, id)
 		if err != nil {
 			return nil, err
 		}
 		prev := inst.State
 		inst.State = "stopping"
-		p.saveInstance(ctx, inst)
+		p.saveInstance(ctx, account, region, inst)
 		// Transition stopping → stopped after 2s.
 		instCopy := inst
 		time.AfterFunc(2*time.Second, func() {
 			instCopy.State = "stopped"
-			p.saveInstance(context.Background(), instCopy)
+			p.saveInstance(context.Background(), account, region, instCopy)
 		})
 		result = append(result, map[string]any{
 			"InstanceId":    id,
@@ -560,19 +563,19 @@ func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.Normalize
 func (p *ComputeProvider) RebootInstances(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	ids := extractIndexedParam(nr.Params, "InstanceId")
 	for _, id := range ids {
-		inst, err := p.loadInstance(ctx, id)
+		inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, id)
 		if err != nil {
 			return nil, err
 		}
 		inst.LastRebootTime = time.Now().UTC().Format(time.RFC3339)
-		p.saveInstance(ctx, inst)
+		p.saveInstance(ctx, nr.AccountID, nr.Region, inst)
 	}
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) ModifyInstanceAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "InstanceId")
-	inst, err := p.loadInstance(ctx, id)
+	inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
@@ -590,14 +593,14 @@ func (p *ComputeProvider) ModifyInstanceAttribute(ctx context.Context, nr *model
 			inst.DisableApiTermination = val == "true"
 		}
 	}
-	p.saveInstance(ctx, inst)
+	p.saveInstance(ctx, nr.AccountID, nr.Region, inst)
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) DescribeInstanceAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "InstanceId")
 	attr := strParam(nr.Params, "Attribute")
-	inst, err := p.loadInstance(ctx, id)
+	inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
@@ -619,7 +622,7 @@ func (p *ComputeProvider) DescribeInstanceAttribute(ctx context.Context, nr *mod
 
 func (p *ComputeProvider) DescribeInstanceStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "InstanceId")
-	entries, err := p.resources.List(ctx, rtInstance, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtInstance, "")
 	if err != nil {
 		return nil, err
 	}
@@ -647,7 +650,7 @@ func (p *ComputeProvider) DescribeInstanceStatus(ctx context.Context, nr *model.
 
 func (p *ComputeProvider) AssociateIamInstanceProfile(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	instanceId := strParam(nr.Params, "InstanceId")
-	inst, err := p.loadInstance(ctx, instanceId)
+	inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, instanceId)
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +659,7 @@ func (p *ComputeProvider) AssociateIamInstanceProfile(ctx context.Context, nr *m
 	iamName := strParam(nr.Params, "IamInstanceProfile.Name")
 	inst.IamInstanceProfileArn = iamArn
 	inst.IamInstanceProfileName = iamName
-	if err := p.saveInstance(ctx, inst); err != nil {
+	if err := p.saveInstance(ctx, nr.AccountID, nr.Region, inst); err != nil {
 		return nil, err
 	}
 	assocId := newID("iip-assoc")
@@ -680,7 +683,7 @@ func (p *ComputeProvider) DisassociateIamInstanceProfile(ctx context.Context, nr
 		// Try to look up by AssociationId — for now map to InstanceId param (best-effort).
 		instanceId = strParam(nr.Params, "AssociationId")
 	}
-	inst, err := p.loadInstance(ctx, instanceId)
+	inst, err := p.loadInstance(ctx, nr.AccountID, nr.Region, instanceId)
 	if err != nil {
 		// If not found by AssociationId as InstanceId, return a placeholder response.
 		assocId := strParam(nr.Params, "AssociationId")
@@ -694,7 +697,7 @@ func (p *ComputeProvider) DisassociateIamInstanceProfile(ctx context.Context, nr
 	prevArn := inst.IamInstanceProfileArn
 	inst.IamInstanceProfileArn = ""
 	inst.IamInstanceProfileName = ""
-	if err := p.saveInstance(ctx, inst); err != nil {
+	if err := p.saveInstance(ctx, nr.AccountID, nr.Region, inst); err != nil {
 		return nil, err
 	}
 	assocId := strParam(nr.Params, "AssociationId")
@@ -765,10 +768,10 @@ func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.Nor
 		OwnerId:     nr.AccountID,
 	}
 	data, _ := json.Marshal(sg)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: sg.GroupId, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSecurityGroup, ID: sg.GroupId, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			// Idempotent: return the existing subnet if same ID already exists.
-			if entry, getErr := p.resources.Get(ctx, rtSecurityGroup, sgId); getErr == nil {
+			if entry, getErr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSecurityGroup, sgId); getErr == nil {
 				var existing securityGroup
 				json.Unmarshal(entry.Data, &existing)
 				return provider.OK(map[string]any{"GroupId": existing.GroupId}), nil
@@ -781,7 +784,7 @@ func (p *ComputeProvider) CreateSecurityGroup(ctx context.Context, nr *model.Nor
 
 func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "GroupId")
-	entries, err := p.resources.List(ctx, rtSecurityGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtSecurityGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +831,7 @@ func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.
 
 func (p *ComputeProvider) DeleteSecurityGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "GroupId")
-	if err := p.resources.Delete(ctx, rtSecurityGroup, id); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtSecurityGroup, id); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: fmt.Sprintf("The security group '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
 	}
 	return provider.OK(nil), nil
@@ -844,7 +847,7 @@ func (p *ComputeProvider) AuthorizeSecurityGroupEgress(ctx context.Context, nr *
 
 func (p *ComputeProvider) RevokeSecurityGroupIngress(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "GroupId")
-	e, err := p.resources.Get(ctx, rtSecurityGroup, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSecurityGroup, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: "security group not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -853,13 +856,13 @@ func (p *ComputeProvider) RevokeSecurityGroupIngress(ctx context.Context, nr *mo
 	toRevoke := parseSGRules(nr.Params)
 	sg.IngressRules = removeSGRules(sg.IngressRules, toRevoke)
 	data, _ := json.Marshal(sg)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) addSGRule(ctx context.Context, nr *model.NormalizedRequest, ingress bool) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "GroupId")
-	e, err := p.resources.Get(ctx, rtSecurityGroup, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSecurityGroup, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidGroup.NotFound", Message: "security group not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -872,7 +875,7 @@ func (p *ComputeProvider) addSGRule(ctx context.Context, nr *model.NormalizedReq
 		sg.EgressRules = append(sg.EgressRules, rules...)
 	}
 	data, _ := json.Marshal(sg)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSecurityGroup, ID: id, Data: data})
 	return provider.OK(nil), nil
 }
 
@@ -958,7 +961,7 @@ func (p *ComputeProvider) CreateKeyPair(ctx context.Context, nr *model.Normalize
 		KeyMaterial:    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...(mock)...\n-----END RSA PRIVATE KEY-----",
 	}
 	data, _ := json.Marshal(kp)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -971,7 +974,7 @@ func (p *ComputeProvider) CreateKeyPair(ctx context.Context, nr *model.Normalize
 
 func (p *ComputeProvider) DescribeKeyPairs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterNames := extractIndexedParam(nr.Params, "KeyName")
-	entries, err := p.resources.List(ctx, rtKeyPair, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtKeyPair, "")
 	if err != nil {
 		return nil, err
 	}
@@ -997,7 +1000,7 @@ func (p *ComputeProvider) DeleteKeyPair(ctx context.Context, nr *model.Normalize
 	if id == "" {
 		// Look up by name
 		name := strParam(nr.Params, "KeyName")
-		entries, _ := p.resources.List(ctx, rtKeyPair, "")
+		entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtKeyPair, "")
 		for _, e := range entries {
 			var kp keyPair
 			json.Unmarshal(e.Data, &kp)
@@ -1007,7 +1010,7 @@ func (p *ComputeProvider) DeleteKeyPair(ctx context.Context, nr *model.Normalize
 			}
 		}
 	}
-	p.resources.Delete(ctx, rtKeyPair, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtKeyPair, id)
 	return provider.OK(nil), nil
 }
 
@@ -1019,7 +1022,7 @@ func (p *ComputeProvider) ImportKeyPair(ctx context.Context, nr *model.Normalize
 		KeyFingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
 	}
 	data, _ := json.Marshal(kp)
-	p.resources.Create(ctx, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data})
+	p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtKeyPair, ID: kp.KeyPairId, Data: data})
 	return provider.OK(map[string]any{
 		"KeyPairId":      kp.KeyPairId,
 		"KeyName":        kp.KeyName,
@@ -1057,9 +1060,9 @@ func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedReq
 		OwnerId:   nr.AccountID,
 	}
 	data, _ := json.Marshal(vpc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtVpc, ID: vpc.VpcId, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtVpc, ID: vpc.VpcId, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
-			if entry, getErr := p.resources.Get(ctx, rtVpc, vpcId); getErr == nil {
+			if entry, getErr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtVpc, vpcId); getErr == nil {
 				var existingVPC ec2Vpc
 				json.Unmarshal(entry.Data, &existingVPC)
 				return provider.OK(map[string]any{"Vpc": vpcToWire(existingVPC)}), nil
@@ -1072,7 +1075,7 @@ func (p *ComputeProvider) CreateVpc(ctx context.Context, nr *model.NormalizedReq
 
 func (p *ComputeProvider) DescribeVpcs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "VpcId")
-	entries, err := p.resources.List(ctx, rtVpc, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtVpc, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1103,7 +1106,7 @@ func (p *ComputeProvider) DescribeVpcs(ctx context.Context, nr *model.Normalized
 
 func (p *ComputeProvider) DeleteVpc(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "VpcId")
-	if err := p.resources.Delete(ctx, rtVpc, id); err == store.ErrNotFound {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, rtVpc, id); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidVpcID.NotFound", Message: fmt.Sprintf("The vpc ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
 	}
 	return provider.OK(nil), nil
@@ -1111,7 +1114,7 @@ func (p *ComputeProvider) DeleteVpc(ctx context.Context, nr *model.NormalizedReq
 
 func (p *ComputeProvider) ModifyVpcAttribute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "VpcId")
-	e, err := p.resources.Get(ctx, rtVpc, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtVpc, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "InvalidVpcID.NotFound", Message: fmt.Sprintf("The vpc ID '%s' does not exist", id), HTTPStatus: http.StatusBadRequest}
 	}
@@ -1124,7 +1127,7 @@ func (p *ComputeProvider) ModifyVpcAttribute(ctx context.Context, nr *model.Norm
 		vpc.EnableDnsHostnames = v == "true"
 	}
 	data, _ := json.Marshal(vpc)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtVpc, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtVpc, ID: id, Data: data})
 	return provider.OK(nil), nil
 }
 
@@ -1178,10 +1181,10 @@ func (p *ComputeProvider) CreateSubnet(ctx context.Context, nr *model.Normalized
 		AvailableIpAddressCount: 251,
 	}
 	data, _ := json.Marshal(sn)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtSubnet, ID: sn.SubnetId, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSubnet, ID: sn.SubnetId, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			// Idempotent: return the existing subnet if same ID already exists.
-			if entry, getErr := p.resources.Get(ctx, rtSubnet, subnetId); getErr == nil {
+			if entry, getErr := p.resources.Get(ctx, nr.AccountID, nr.Region, rtSubnet, subnetId); getErr == nil {
 				var existing ec2Subnet
 				json.Unmarshal(entry.Data, &existing)
 				return provider.OK(map[string]any{"Subnet": subnetToWire(existing)}), nil
@@ -1194,7 +1197,7 @@ func (p *ComputeProvider) CreateSubnet(ctx context.Context, nr *model.Normalized
 
 func (p *ComputeProvider) DescribeSubnets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "SubnetId")
-	entries, err := p.resources.List(ctx, rtSubnet, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtSubnet, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1225,7 +1228,7 @@ func (p *ComputeProvider) DescribeSubnets(ctx context.Context, nr *model.Normali
 
 func (p *ComputeProvider) DeleteSubnet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "SubnetId")
-	p.resources.Delete(ctx, rtSubnet, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtSubnet, id)
 	return provider.OK(nil), nil
 }
 
@@ -1256,7 +1259,7 @@ func (p *ComputeProvider) CreateInternetGateway(ctx context.Context, nr *model.N
 		OwnerId:           nr.AccountID,
 	}
 	data, _ := json.Marshal(igw)
-	p.resources.Create(ctx, store.ResourceEntry{Type: rtIGW, ID: igw.InternetGatewayId, Data: data})
+	p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtIGW, ID: igw.InternetGatewayId, Data: data})
 	return provider.OK(map[string]any{"InternetGateway": map[string]any{
 		"InternetGatewayId": igw.InternetGatewayId,
 		"OwnerId":           igw.OwnerId,
@@ -1265,7 +1268,7 @@ func (p *ComputeProvider) CreateInternetGateway(ctx context.Context, nr *model.N
 
 func (p *ComputeProvider) DescribeInternetGateways(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "InternetGatewayId")
-	entries, _ := p.resources.List(ctx, rtIGW, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtIGW, "")
 	igws := []map[string]any{}
 	for _, e := range entries {
 		var igw ec2IGW
@@ -1288,14 +1291,14 @@ func (p *ComputeProvider) DescribeInternetGateways(ctx context.Context, nr *mode
 
 func (p *ComputeProvider) DeleteInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "InternetGatewayId")
-	p.resources.Delete(ctx, rtIGW, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtIGW, id)
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) AttachInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	igwId := strParam(nr.Params, "InternetGatewayId")
 	vpcId := strParam(nr.Params, "VpcId")
-	e, err := p.resources.Get(ctx, rtIGW, igwId)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtIGW, igwId)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidInternetGatewayID.NotFound", Message: "igw not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1303,14 +1306,14 @@ func (p *ComputeProvider) AttachInternetGateway(ctx context.Context, nr *model.N
 	json.Unmarshal(e.Data, &igw)
 	igw.Attachments = append(igw.Attachments, map[string]string{"VpcId": vpcId, "State": "available"})
 	data, _ := json.Marshal(igw)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) DetachInternetGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	igwId := strParam(nr.Params, "InternetGatewayId")
 	vpcId := strParam(nr.Params, "VpcId")
-	e, err := p.resources.Get(ctx, rtIGW, igwId)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtIGW, igwId)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidInternetGatewayID.NotFound", Message: "igw not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1324,7 +1327,7 @@ func (p *ComputeProvider) DetachInternetGateway(ctx context.Context, nr *model.N
 	}
 	igw.Attachments = filtered
 	data, _ := json.Marshal(igw)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtIGW, ID: igwId, Data: data})
 	return provider.OK(nil), nil
 }
 
@@ -1349,13 +1352,13 @@ func (p *ComputeProvider) CreateRouteTable(ctx context.Context, nr *model.Normal
 		},
 	}
 	data, _ := json.Marshal(rt)
-	p.resources.Create(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rt.RouteTableId, Data: data})
+	p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtRouteTable, ID: rt.RouteTableId, Data: data})
 	return provider.OK(map[string]any{"RouteTable": rtToWire(rt)}), nil
 }
 
 func (p *ComputeProvider) DescribeRouteTables(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "RouteTableId")
-	entries, _ := p.resources.List(ctx, rtRouteTable, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtRouteTable, "")
 	rts := []map[string]any{}
 	for _, e := range entries {
 		var rt ec2RouteTable
@@ -1370,7 +1373,7 @@ func (p *ComputeProvider) DescribeRouteTables(ctx context.Context, nr *model.Nor
 
 func (p *ComputeProvider) DeleteRouteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "RouteTableId")
-	p.resources.Delete(ctx, rtRouteTable, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtRouteTable, id)
 	return provider.OK(nil), nil
 }
 
@@ -1378,7 +1381,7 @@ func (p *ComputeProvider) CreateRoute(ctx context.Context, nr *model.NormalizedR
 	rtId := strParam(nr.Params, "RouteTableId")
 	dest := strParam(nr.Params, "DestinationCidrBlock")
 	gwId := strParam(nr.Params, "GatewayId")
-	e, err := p.resources.Get(ctx, rtRouteTable, rtId)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtRouteTable, rtId)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRouteTableID.NotFound", Message: "route table not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1390,14 +1393,14 @@ func (p *ComputeProvider) CreateRoute(ctx context.Context, nr *model.NormalizedR
 		"State":                "active",
 	})
 	data, _ := json.Marshal(rt)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
 	return provider.OK(nil), nil
 }
 
 func (p *ComputeProvider) DeleteRoute(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	rtId := strParam(nr.Params, "RouteTableId")
 	dest := strParam(nr.Params, "DestinationCidrBlock")
-	e, err := p.resources.Get(ctx, rtRouteTable, rtId)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtRouteTable, rtId)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "InvalidRouteTableID.NotFound", Message: "route table not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1411,7 +1414,7 @@ func (p *ComputeProvider) DeleteRoute(ctx context.Context, nr *model.NormalizedR
 	}
 	rt.Routes = filtered
 	data, _ := json.Marshal(rt)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtRouteTable, ID: rtId, Data: data})
 	return provider.OK(nil), nil
 }
 
@@ -1447,7 +1450,7 @@ func (p *ComputeProvider) CreateNatGateway(ctx context.Context, nr *model.Normal
 		CreateTime:   time.Now(),
 	}
 	// Look up VPC from subnet
-	entries, _ := p.resources.List(ctx, rtSubnet, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtSubnet, "")
 	for _, e := range entries {
 		var sn ec2Subnet
 		json.Unmarshal(e.Data, &sn)
@@ -1457,13 +1460,13 @@ func (p *ComputeProvider) CreateNatGateway(ctx context.Context, nr *model.Normal
 		}
 	}
 	data, _ := json.Marshal(ngw)
-	p.resources.Create(ctx, store.ResourceEntry{Type: rtNatGateway, ID: ngw.NatGatewayId, Data: data})
+	p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNatGateway, ID: ngw.NatGatewayId, Data: data})
 	return provider.OK(map[string]any{"NatGateway": ngwToWire(ngw)}), nil
 }
 
 func (p *ComputeProvider) DescribeNatGateways(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	filterIds := extractIndexedParam(nr.Params, "NatGatewayId")
-	entries, _ := p.resources.List(ctx, rtNatGateway, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtNatGateway, "")
 	ngws := []map[string]any{}
 	for _, e := range entries {
 		var ngw ec2NatGateway
@@ -1481,7 +1484,7 @@ func (p *ComputeProvider) DescribeNatGateways(ctx context.Context, nr *model.Nor
 
 func (p *ComputeProvider) DeleteNatGateway(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "NatGatewayId")
-	e, err := p.resources.Get(ctx, rtNatGateway, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtNatGateway, id)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "NatGatewayNotFound", Message: "nat gateway not found", HTTPStatus: http.StatusBadRequest}
 	}
@@ -1489,7 +1492,7 @@ func (p *ComputeProvider) DeleteNatGateway(ctx context.Context, nr *model.Normal
 	json.Unmarshal(e.Data, &ngw)
 	ngw.State = "deleted"
 	data, _ := json.Marshal(ngw)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtNatGateway, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNatGateway, ID: id, Data: data})
 	return provider.OK(map[string]any{"NatGatewayId": id}), nil
 }
 

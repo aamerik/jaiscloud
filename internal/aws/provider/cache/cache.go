@@ -202,7 +202,7 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 		c.EngineVersion = defaultEngineVersion(engine)
 	}
 	data, _ := json.Marshal(c)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "CacheClusterAlreadyExists", Message: "Cache cluster already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -211,7 +211,7 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 	// Persist any tags provided at creation time.
 	if tags := extractCacheTags(nr.Params); len(tags) > 0 {
 		arn := nr.ResourceID("elasticache-cluster", id)
-		saveCacheTags(ctx, p.resources, arn, tags)
+		saveCacheTags(ctx, p.resources, nr.AccountID, nr.Region, arn, tags)
 	}
 	return &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: map[string]any{"CacheCluster": c.toWire()}}, nil
 }
@@ -219,7 +219,7 @@ func (p *CacheProvider) CreateCacheCluster(ctx context.Context, nr *model.Normal
 func (p *CacheProvider) DescribeCacheClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "CacheClusterId")
 	if id != "" {
-		e, err := p.resources.Get(ctx, rtCacheCluster, id)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheCluster, id)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "CacheClusterNotFound", Message: "Cache cluster not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -230,7 +230,7 @@ func (p *CacheProvider) DescribeCacheClusters(ctx context.Context, nr *model.Nor
 		json.Unmarshal(e.Data, &c)
 		return provider.OK(map[string]any{"CacheClusters": []map[string]any{c.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtCacheCluster, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtCacheCluster, "")
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func (p *CacheProvider) DescribeCacheClusters(ctx context.Context, nr *model.Nor
 
 func (p *CacheProvider) ModifyCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "CacheClusterId")
-	e, err := p.resources.Get(ctx, rtCacheCluster, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheCluster, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "CacheClusterNotFound", Message: "Cache cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -273,13 +273,13 @@ func (p *CacheProvider) ModifyCacheCluster(ctx context.Context, nr *model.Normal
 		c.CacheNodeType = v
 	}
 	data, _ := json.Marshal(c)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
 	return provider.OK(map[string]any{"CacheClusterModified": c.toWire()}), nil
 }
 
 func (p *CacheProvider) DeleteCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "CacheClusterId")
-	e, err := p.resources.Get(ctx, rtCacheCluster, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheCluster, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "CacheClusterNotFound", Message: "Cache cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -289,13 +289,13 @@ func (p *CacheProvider) DeleteCacheCluster(ctx context.Context, nr *model.Normal
 	var c cacheCluster
 	json.Unmarshal(e.Data, &c)
 	c.CacheClusterStatus = "deleting"
-	p.resources.Delete(ctx, rtCacheCluster, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtCacheCluster, id)
 	return provider.OK(map[string]any{"CacheClusterDeleted": c.toWire()}), nil
 }
 
 func (p *CacheProvider) RebootCacheCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "CacheClusterId")
-	e, err := p.resources.Get(ctx, rtCacheCluster, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCacheCluster, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "CacheClusterNotFound", Message: "Cache cluster not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -307,10 +307,10 @@ func (p *CacheProvider) RebootCacheCluster(ctx context.Context, nr *model.Normal
 	// Transition through rebooting and back to available.
 	c.CacheClusterStatus = "rebooting"
 	data, _ := json.Marshal(c)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
 	c.CacheClusterStatus = "available"
 	data, _ = json.Marshal(c)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCacheCluster, ID: id, Data: data})
 	return provider.OK(map[string]any{"CacheCluster": c.toWire()}), nil
 }
 
@@ -347,7 +347,7 @@ func (p *CacheProvider) CreateReplicationGroup(ctx context.Context, nr *model.No
 		Engine:             "redis",
 	}
 	data, _ := json.Marshal(rg)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtReplicationGroup, ID: id, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtReplicationGroup, ID: id, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "ReplicationGroupAlreadyExistsFault", Message: "Replication group already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -359,7 +359,7 @@ func (p *CacheProvider) CreateReplicationGroup(ctx context.Context, nr *model.No
 func (p *CacheProvider) DescribeReplicationGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ReplicationGroupId")
 	if id != "" {
-		e, err := p.resources.Get(ctx, rtReplicationGroup, id)
+		e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtReplicationGroup, id)
 		if err == store.ErrNotFound {
 			return nil, &model.ProviderError{Code: "ReplicationGroupNotFoundFault", Message: "Replication group not found", HTTPStatus: http.StatusNotFound}
 		}
@@ -370,7 +370,7 @@ func (p *CacheProvider) DescribeReplicationGroups(ctx context.Context, nr *model
 		json.Unmarshal(e.Data, &rg)
 		return provider.OK(map[string]any{"ReplicationGroups": []map[string]any{rg.toWire()}}), nil
 	}
-	entries, err := p.resources.List(ctx, rtReplicationGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtReplicationGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +400,7 @@ func (p *CacheProvider) DescribeReplicationGroups(ctx context.Context, nr *model
 
 func (p *CacheProvider) ModifyReplicationGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ReplicationGroupId")
-	e, err := p.resources.Get(ctx, rtReplicationGroup, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtReplicationGroup, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ReplicationGroupNotFoundFault", Message: "Replication group not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -413,13 +413,13 @@ func (p *CacheProvider) ModifyReplicationGroup(ctx context.Context, nr *model.No
 		rg.Description = v
 	}
 	data, _ := json.Marshal(rg)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtReplicationGroup, ID: id, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtReplicationGroup, ID: id, Data: data})
 	return provider.OK(map[string]any{"ReplicationGroupModified": rg.toWire()}), nil
 }
 
 func (p *CacheProvider) DeleteReplicationGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := strParam(nr.Params, "ReplicationGroupId")
-	e, err := p.resources.Get(ctx, rtReplicationGroup, id)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtReplicationGroup, id)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "ReplicationGroupNotFoundFault", Message: "Replication group not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -429,7 +429,7 @@ func (p *CacheProvider) DeleteReplicationGroup(ctx context.Context, nr *model.No
 	var rg replicationGroup
 	json.Unmarshal(e.Data, &rg)
 	rg.Status = "deleting"
-	p.resources.Delete(ctx, rtReplicationGroup, id)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtReplicationGroup, id)
 	return provider.OK(map[string]any{"ReplicationGroupDeleted": rg.toWire()}), nil
 }
 

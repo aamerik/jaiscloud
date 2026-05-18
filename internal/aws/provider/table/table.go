@@ -252,7 +252,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	raw, _ := json.Marshal(ts)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: "dynamodb_tables", ID: name, Data: json.RawMessage(raw)}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: "dynamodb_tables", ID: name, Data: json.RawMessage(raw)}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, model.NewProviderError("ResourceInUseException", "Table already exists", 400)
 		}
@@ -265,7 +265,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 	storeSchema.BillingMode = billing
 	storeSchema.WCU = wcu
 	storeSchema.RCU = rcu
-	if err := p.items.CreateTableSchema(ctx, storeSchema); err != nil {
+	if err := p.items.CreateTableSchema(ctx, nr.AccountID, nr.Region, storeSchema); err != nil {
 		// Non-fatal: legacy store doesn't need this. Log and continue.
 		_ = err
 	}
@@ -275,7 +275,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 
 func (p *TableProvider) DescribeTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -284,12 +284,12 @@ func (p *TableProvider) DescribeTable(ctx context.Context, nr *model.NormalizedR
 
 func (p *TableProvider) DeleteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
-	_ = p.resources.Delete(ctx, "dynamodb_tables", name)
-	_ = p.items.DropTableSchema(ctx, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "dynamodb_tables", name)
+	_ = p.items.DropTableSchema(ctx, nr.AccountID, nr.Region, name)
 	if p.streams != nil {
 		p.streams.Disable(name)
 	}
@@ -297,7 +297,7 @@ func (p *TableProvider) DeleteTable(ctx context.Context, nr *model.NormalizedReq
 }
 
 func (p *TableProvider) ListTables(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "dynamodb_tables", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "dynamodb_tables", "")
 	var names []string
 	for _, e := range entries {
 		var ts tableSchema
@@ -313,7 +313,7 @@ func (p *TableProvider) ListTables(ctx context.Context, nr *model.NormalizedRequ
 
 func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -363,7 +363,7 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 					}
 					return m
 				}(), false)
-				if err := p.items.AddGSI(ctx, name, schema, idx); err != nil {
+				if err := p.items.AddGSI(ctx, nr.AccountID, nr.Region, name, schema, idx); err != nil {
 					return nil, err
 				}
 			}
@@ -377,13 +377,13 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 				}
 				ts.GlobalSecondaryIndexes = newGSIs
 				schema := toStoreSchema(ts, ts.AttributeDefinitions)
-				if err := p.items.DeleteGSI(ctx, name, schema, indexName); err != nil {
+				if err := p.items.DeleteGSI(ctx, nr.AccountID, nr.Region, name, schema, indexName); err != nil {
 					return nil, err
 				}
 			}
 		}
 	}
-	_ = p.saveTable(ctx, ts)
+	_ = p.saveTable(ctx, nr.AccountID, nr.Region, ts)
 	return provider.OK(map[string]any{"TableDescription": tableDesc(ts)}), nil
 }
 
@@ -399,10 +399,10 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 		return nil, model.NewProviderError("ValidationException",
 			"Item size has exceeded the maximum allowed size of 400 KB", 400)
 	}
-	ts, _ := p.loadTable(ctx, name)
+	ts, _ := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	pkHash := computePKHash(item, ts)
 	// Peek at existing item for stream event type — before the conditional write.
-	existingForStream, _ := p.items.GetItem(ctx, name, pkHash)
+	existingForStream, _ := p.items.GetItem(ctx, nr.AccountID, nr.Region, name, pkHash)
 	schema := buildItemSchema(ts)
 	cond := dynamostore.ConditionSpec{
 		ConditionExpression:       strParam(nr.Params, "ConditionExpression"),
@@ -411,7 +411,7 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
 		Schema:                    schema,
 	}
-	oldItem, err := p.items.PutItem(ctx, name, pkHash, item, cond)
+	oldItem, err := p.items.PutItem(ctx, nr.AccountID, nr.Region, name, pkHash, item, cond)
 	if err != nil {
 		if isThrottled(err) {
 			return nil, storeErrToProvider(err)
@@ -439,12 +439,12 @@ func (p *TableProvider) GetItem(ctx context.Context, nr *model.NormalizedRequest
 	if key == nil {
 		return nil, model.NewProviderError("ValidationException", "Key is required", 400)
 	}
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
 	pkHash := computePKHash(key, ts)
-	item, err := p.items.GetItem(ctx, name, pkHash)
+	item, err := p.items.GetItem(ctx, nr.AccountID, nr.Region, name, pkHash)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +459,7 @@ func (p *TableProvider) GetItem(ctx context.Context, nr *model.NormalizedRequest
 func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
 	key := itemParam(nr.Params, "Key")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -471,7 +471,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		ReturnValues:              strParam(nr.Params, "ReturnValues"),
 		Schema:                    buildItemSchema(ts),
 	}
-	oldItem, err := p.items.DeleteItem(ctx, name, pkHash, cond)
+	oldItem, err := p.items.DeleteItem(ctx, nr.AccountID, nr.Region, name, pkHash, cond)
 	if err != nil {
 		if isThrottled(err) {
 			return nil, storeErrToProvider(err)
@@ -492,7 +492,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
 	key := itemParam(nr.Params, "Key")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -507,8 +507,8 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		Schema:                    buildItemSchema(ts),
 	}
 
-	oldItem, _ := p.items.GetItem(ctx, name, pkHash)
-	updated, err := p.items.UpdateItem(ctx, name, pkHash, key, spec)
+	oldItem, _ := p.items.GetItem(ctx, nr.AccountID, nr.Region, name, pkHash)
+	updated, err := p.items.UpdateItem(ctx, nr.AccountID, nr.Region, name, pkHash, key, spec)
 	if err != nil {
 		if isThrottled(err) {
 			return nil, storeErrToProvider(err)
@@ -574,7 +574,7 @@ func deepEqualDynamo(a, b any) bool {
 
 func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, _ := p.loadTable(ctx, name)
+	ts, _ := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	indexName := strParam(nr.Params, "IndexName")
 	scanFwd := true
 	if v, ok := nr.Params["ScanIndexForward"].(bool); ok {
@@ -629,7 +629,7 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 		Limit:                     intParam(nr.Params, "Limit", 0),
 		ExclusiveStartKey:         esk,
 	}
-	items, scannedCount, lastKey, err := p.items.Query(ctx, name, q)
+	items, scannedCount, lastKey, err := p.items.Query(ctx, nr.AccountID, nr.Region, name, q)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
@@ -676,7 +676,7 @@ func (p *TableProvider) Query(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, _ := p.loadTable(ctx, name)
+	ts, _ := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	indexName := strParam(nr.Params, "IndexName")
 	selectVal := strParam(nr.Params, "Select")
 	projExpr := strParam(nr.Params, "ProjectionExpression")
@@ -724,7 +724,7 @@ func (p *TableProvider) Scan(ctx context.Context, nr *model.NormalizedRequest) (
 		sc.TotalSegments = totalParam
 	}
 
-	items, scannedCount, lastKey, err := p.items.Scan(ctx, name, sc)
+	items, scannedCount, lastKey, err := p.items.Scan(ctx, nr.AccountID, nr.Region, name, sc)
 	if err != nil {
 		return nil, storeErrToProvider(err)
 	}
@@ -778,7 +778,7 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 
 	var reqs []dynamostore.BatchWriteRequest
 	for tableName, v := range requestItems {
-		ts, _ := p.loadTable(ctx, tableName)
+		ts, _ := p.loadTable(ctx, nr.AccountID, nr.Region, tableName)
 		writeReqs, _ := v.([]any)
 		for _, wr := range writeReqs {
 			m, _ := wr.(map[string]any)
@@ -806,7 +806,7 @@ func (p *TableProvider) BatchWriteItem(ctx context.Context, nr *model.Normalized
 			}
 		}
 	}
-	unprocessed, err := p.items.BatchWriteItems(ctx, reqs)
+	unprocessed, err := p.items.BatchWriteItems(ctx, nr.AccountID, nr.Region, reqs)
 	if err != nil {
 		return nil, err
 	}
@@ -871,7 +871,7 @@ func (p *TableProvider) BatchGetItem(ctx context.Context, nr *model.NormalizedRe
 		}
 		projections[table] = tableProjection{dynamostore.ParseProjection(projExpr, names)}
 	}
-	result, err := p.items.BatchGetItems(ctx, reqs)
+	result, err := p.items.BatchGetItems(ctx, nr.AccountID, nr.Region, reqs)
 	if err != nil {
 		return nil, err
 	}
@@ -910,7 +910,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			put, _ := m["Put"].(map[string]any)
 			table := strParam(put, "TableName")
 			item := itemParam(put, "Item")
-			ts, err := p.loadTable(ctx, table)
+			ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, table)
 			if err != nil {
 				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
@@ -929,7 +929,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			del, _ := m["Delete"].(map[string]any)
 			table := strParam(del, "TableName")
 			key := itemParam(del, "Key")
-			ts, err := p.loadTable(ctx, table)
+			ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, table)
 			if err != nil {
 				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
@@ -948,7 +948,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			upd, _ := m["Update"].(map[string]any)
 			table := strParam(upd, "TableName")
 			key := itemParam(upd, "Key")
-			ts, err := p.loadTable(ctx, table)
+			ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, table)
 			if err != nil {
 				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
@@ -973,7 +973,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 			cc, _ := m["ConditionCheck"].(map[string]any)
 			table := strParam(cc, "TableName")
 			key := itemParam(cc, "Key")
-			ts, err := p.loadTable(ctx, table)
+			ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, table)
 			if err != nil {
 				return nil, model.NewProviderError("ResourceNotFoundException", "Table not found: "+table, 400)
 			}
@@ -1006,7 +1006,7 @@ func (p *TableProvider) TransactWriteItems(ctx context.Context, nr *model.Normal
 		ops = append(ops, op)
 	}
 
-	reasons, err := p.items.TransactWriteItems(ctx, ops)
+	reasons, err := p.items.TransactWriteItems(ctx, nr.AccountID, nr.Region, ops)
 	if err != nil {
 		return nil, err
 	}
@@ -1039,9 +1039,9 @@ func (p *TableProvider) TransactGetItems(ctx context.Context, nr *model.Normaliz
 		if get, ok := m["Get"].(map[string]any); ok {
 			table := strParam(get, "TableName")
 			key := itemParam(get, "Key")
-			ts, _ := p.loadTable(ctx, table)
+			ts, _ := p.loadTable(ctx, nr.AccountID, nr.Region, table)
 			h := computePKHash(key, ts)
-			item, _ := p.items.GetItem(ctx, table, h)
+			item, _ := p.items.GetItem(ctx, nr.AccountID, nr.Region, table, h)
 			if item != nil {
 				projExpr, _ := get["ProjectionExpression"].(string)
 				names := map[string]string{}
@@ -1065,7 +1065,7 @@ func (p *TableProvider) TransactGetItems(ctx context.Context, nr *model.Normaliz
 func (p *TableProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	name := arnToTableName(arn)
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -1078,13 +1078,13 @@ func (p *TableProvider) TagResource(ctx context.Context, nr *model.NormalizedReq
 			}
 		}
 	}
-	return provider.OK(nil), p.saveTable(ctx, ts)
+	return provider.OK(nil), p.saveTable(ctx, nr.AccountID, nr.Region, ts)
 }
 
 func (p *TableProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	name := arnToTableName(arn)
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -1093,13 +1093,13 @@ func (p *TableProvider) UntagResource(ctx context.Context, nr *model.NormalizedR
 			delete(ts.Tags, fmt.Sprintf("%v", k))
 		}
 	}
-	return provider.OK(nil), p.saveTable(ctx, ts)
+	return provider.OK(nil), p.saveTable(ctx, nr.AccountID, nr.Region, ts)
 }
 
 func (p *TableProvider) ListTagsOfResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	name := arnToTableName(arn)
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -1117,7 +1117,7 @@ func (p *TableProvider) ListTagsOfResource(ctx context.Context, nr *model.Normal
 
 func (p *TableProvider) DescribeTimeToLive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -1135,7 +1135,7 @@ func (p *TableProvider) DescribeTimeToLive(ctx context.Context, nr *model.Normal
 
 func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Table not found")
 	}
@@ -1147,7 +1147,7 @@ func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.Normaliz
 	}
 	enabled, _ := spec["Enabled"].(bool)
 	ts.TTLSpec = &TTLSpecification{AttributeName: attrName, Enabled: enabled}
-	if err := p.saveTable(ctx, ts); err != nil {
+	if err := p.saveTable(ctx, nr.AccountID, nr.Region, ts); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -1162,7 +1162,7 @@ func (p *TableProvider) UpdateTimeToLive(ctx context.Context, nr *model.Normaliz
 
 func (p *TableProvider) DescribeContinuousBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "TableNotFoundException", "Table not found")
 	}
@@ -1182,14 +1182,14 @@ func (p *TableProvider) DescribeContinuousBackups(ctx context.Context, nr *model
 
 func (p *TableProvider) UpdateContinuousBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := strParam(nr.Params, "TableName")
-	ts, err := p.loadTable(ctx, name)
+	ts, err := p.loadTable(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "TableNotFoundException", "Table not found")
 	}
 	spec, _ := nr.Params["PointInTimeRecoverySpecification"].(map[string]any)
 	enabled, _ := spec["PointInTimeRecoveryEnabled"].(bool)
 	ts.PITREnabled = enabled
-	if err := p.saveTable(ctx, ts); err != nil {
+	if err := p.saveTable(ctx, nr.AccountID, nr.Region, ts); err != nil {
 		return nil, err
 	}
 	pitrStatus := "DISABLED"
@@ -1208,8 +1208,8 @@ func (p *TableProvider) UpdateContinuousBackups(ctx context.Context, nr *model.N
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-func (p *TableProvider) loadTable(ctx context.Context, name string) (tableSchema, error) {
-	e, err := p.resources.Get(ctx, "dynamodb_tables", name)
+func (p *TableProvider) loadTable(ctx context.Context, account, region, name string) (tableSchema, error) {
+	e, err := p.resources.Get(ctx, account, region, "dynamodb_tables", name)
 	if err != nil {
 		return tableSchema{}, err
 	}
@@ -1217,9 +1217,9 @@ func (p *TableProvider) loadTable(ctx context.Context, name string) (tableSchema
 	return ts, json.Unmarshal(e.Data, &ts)
 }
 
-func (p *TableProvider) saveTable(ctx context.Context, ts tableSchema) error {
+func (p *TableProvider) saveTable(ctx context.Context, account, region string, ts tableSchema) error {
 	raw, _ := json.Marshal(ts)
-	return p.resources.Update(ctx, store.ResourceEntry{Type: "dynamodb_tables", ID: ts.TableName, Data: json.RawMessage(raw)})
+	return p.resources.Update(ctx, account, region, store.ResourceEntry{Type: "dynamodb_tables", ID: ts.TableName, Data: json.RawMessage(raw)})
 }
 
 func tableDesc(ts tableSchema) map[string]any {
@@ -1851,8 +1851,8 @@ func (p *TableProvider) kinesisDestKey(tableName string) string {
 	return "dynamodb_kinesis_dest_" + tableName
 }
 
-func (p *TableProvider) loadKinesisDests(ctx context.Context, tableName string) ([]kinesisDestInfo, error) {
-	entry, err := p.resources.Get(ctx, p.kinesisDestKey(tableName), tableName)
+func (p *TableProvider) loadKinesisDests(ctx context.Context, account, region, tableName string) ([]kinesisDestInfo, error) {
+	entry, err := p.resources.Get(ctx, account, region, p.kinesisDestKey(tableName), tableName)
 	if err != nil {
 		return nil, nil // not found = empty list
 	}
@@ -1861,15 +1861,15 @@ func (p *TableProvider) loadKinesisDests(ctx context.Context, tableName string) 
 	return dests, nil
 }
 
-func (p *TableProvider) saveKinesisDests(ctx context.Context, tableName string, dests []kinesisDestInfo) error {
+func (p *TableProvider) saveKinesisDests(ctx context.Context, account, region, tableName string, dests []kinesisDestInfo) error {
 	data, _ := json.Marshal(dests)
 	key := p.kinesisDestKey(tableName)
-	entry, err := p.resources.Get(ctx, key, tableName)
+	entry, err := p.resources.Get(ctx, account, region, key, tableName)
 	if err != nil {
-		return p.resources.Create(ctx, store.ResourceEntry{Type: key, ID: tableName, Data: json.RawMessage(data)})
+		return p.resources.Create(ctx, account, region, store.ResourceEntry{Type: key, ID: tableName, Data: json.RawMessage(data)})
 	}
 	entry.Data = json.RawMessage(data)
-	return p.resources.Update(ctx, entry)
+	return p.resources.Update(ctx, account, region, entry)
 }
 
 func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1878,7 +1878,7 @@ func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, n
 	if tableName == "" || streamArn == "" {
 		return nil, model.NewProviderError("ValidationException", "TableName and StreamArn are required", 400)
 	}
-	dests, err := p.loadKinesisDests(ctx, tableName)
+	dests, err := p.loadKinesisDests(ctx, nr.AccountID, nr.Region, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
 	}
@@ -1893,7 +1893,7 @@ func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, n
 		DestinationStatus: "ACTIVE",
 		TimePrecision:     "MILLISECOND",
 	})
-	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+	if err := p.saveKinesisDests(ctx, nr.AccountID, nr.Region, tableName, dests); err != nil {
 		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
 	}
 	return provider.OK(map[string]any{
@@ -1906,7 +1906,7 @@ func (p *TableProvider) EnableKinesisStreamingDestination(ctx context.Context, n
 func (p *TableProvider) DisableKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tableName, _ := nr.Params["TableName"].(string)
 	streamArn, _ := nr.Params["StreamArn"].(string)
-	dests, err := p.loadKinesisDests(ctx, tableName)
+	dests, err := p.loadKinesisDests(ctx, nr.AccountID, nr.Region, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
 	}
@@ -1924,7 +1924,7 @@ func (p *TableProvider) DisableKinesisStreamingDestination(ctx context.Context, 
 	if !found {
 		return nil, model.NewProviderError("ValidationException", "Kinesis destination not active", 400)
 	}
-	if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+	if err := p.saveKinesisDests(ctx, nr.AccountID, nr.Region, tableName, dests); err != nil {
 		return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
 	}
 	return provider.OK(map[string]any{
@@ -1936,7 +1936,7 @@ func (p *TableProvider) DisableKinesisStreamingDestination(ctx context.Context, 
 
 func (p *TableProvider) DescribeKinesisStreamingDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tableName, _ := nr.Params["TableName"].(string)
-	dests, err := p.loadKinesisDests(ctx, tableName)
+	dests, err := p.loadKinesisDests(ctx, nr.AccountID, nr.Region, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
 	}
@@ -1961,7 +1961,7 @@ func (p *TableProvider) UpdateKinesisStreamingDestination(ctx context.Context, n
 	if cfg, ok := nr.Params["UpdateKinesisStreamingConfiguration"].(map[string]any); ok {
 		precision, _ = cfg["ApproximateCreationDateTimePrecision"].(string)
 	}
-	dests, err := p.loadKinesisDests(ctx, tableName)
+	dests, err := p.loadKinesisDests(ctx, nr.AccountID, nr.Region, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("dynamodb: load kinesis dests: %w", err)
 	}
@@ -1970,7 +1970,7 @@ func (p *TableProvider) UpdateKinesisStreamingDestination(ctx context.Context, n
 			if precision != "" {
 				dests[i].TimePrecision = precision
 			}
-			if err := p.saveKinesisDests(ctx, tableName, dests); err != nil {
+			if err := p.saveKinesisDests(ctx, nr.AccountID, nr.Region, tableName, dests); err != nil {
 				return nil, fmt.Errorf("dynamodb: save kinesis dests: %w", err)
 			}
 			return provider.OK(map[string]any{
@@ -1990,7 +1990,7 @@ func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.Normali
 	if name == "" {
 		return nil, model.NewProviderError("ValidationException", "GlobalTableName is required", 400)
 	}
-	if _, err := p.resources.Get(ctx, "dynamodb_global_tables", name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "dynamodb_global_tables", name); err == nil {
 		return nil, model.NewProviderError("GlobalTableAlreadyExistsException", "Global table already exists: "+name, 400)
 	}
 
@@ -2014,7 +2014,7 @@ func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.Normali
 		"ReplicationGroup":  replicas,
 	}
 	data, _ := json.Marshal(desc)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: "dynamodb_global_tables", ID: name, Data: json.RawMessage(data)}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: "dynamodb_global_tables", ID: name, Data: json.RawMessage(data)}); err != nil {
 		return nil, fmt.Errorf("dynamodb: create global table: %w", err)
 	}
 	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil
@@ -2022,7 +2022,7 @@ func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.Normali
 
 func (p *TableProvider) DescribeGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["GlobalTableName"].(string)
-	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "dynamodb_global_tables", name)
 	if err != nil {
 		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
 	}
@@ -2032,7 +2032,7 @@ func (p *TableProvider) DescribeGlobalTable(ctx context.Context, nr *model.Norma
 }
 
 func (p *TableProvider) ListGlobalTables(ctx context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, "dynamodb_global_tables", "")
+	entries, err := p.resources.List(ctx, "", "", "dynamodb_global_tables", "")
 	if err != nil {
 		return nil, fmt.Errorf("dynamodb: list global tables: %w", err)
 	}
@@ -2053,7 +2053,7 @@ func (p *TableProvider) ListGlobalTables(ctx context.Context, _ *model.Normalize
 
 func (p *TableProvider) UpdateGlobalTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["GlobalTableName"].(string)
-	entry, err := p.resources.Get(ctx, "dynamodb_global_tables", name)
+	entry, err := p.resources.Get(ctx, nr.AccountID, nr.Region, "dynamodb_global_tables", name)
 	if err != nil {
 		return nil, model.NewProviderError("GlobalTableNotFoundException", "Global table not found: "+name, 400)
 	}
@@ -2096,7 +2096,7 @@ func (p *TableProvider) UpdateGlobalTable(ctx context.Context, nr *model.Normali
 
 	data, _ := json.Marshal(desc)
 	entry.Data = json.RawMessage(data)
-	if err := p.resources.Update(ctx, entry); err != nil {
+	if err := p.resources.Update(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		return nil, fmt.Errorf("dynamodb: update global table: %w", err)
 	}
 	return provider.OK(map[string]any{"GlobalTableDescription": desc}), nil

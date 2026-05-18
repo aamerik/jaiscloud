@@ -73,7 +73,7 @@ func (p *Provider) CreateGroup(ctx context.Context, nr *model.NormalizedRequest)
 	}
 
 	data, _ := json.Marshal(g)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtGroup, ID: name, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtGroup, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "AlreadyExistsException", Message: "A resource group with this name already exists", HTTPStatus: http.StatusBadRequest}
 		}
@@ -93,7 +93,7 @@ func (p *Provider) DeleteGroup(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, &model.ProviderError{Code: "BadRequestException", Message: "Group name is required", HTTPStatus: http.StatusBadRequest}
 	}
 
-	e, err := p.resources.Get(ctx, rtGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroup, name)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFoundException", Message: "Group not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -103,7 +103,7 @@ func (p *Provider) DeleteGroup(ctx context.Context, nr *model.NormalizedRequest)
 
 	var g resourceGroup
 	json.Unmarshal(e.Data, &g)
-	p.resources.Delete(ctx, rtGroup, name)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtGroup, name)
 
 	return provider.OK(map[string]any{"Group": groupToWire(g)}), nil
 }
@@ -114,7 +114,7 @@ func (p *Provider) GetGroup(ctx context.Context, nr *model.NormalizedRequest) (*
 		return nil, &model.ProviderError{Code: "BadRequestException", Message: "Group name is required", HTTPStatus: http.StatusBadRequest}
 	}
 
-	e, err := p.resources.Get(ctx, rtGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroup, name)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFoundException", Message: "Group not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -128,7 +128,7 @@ func (p *Provider) GetGroup(ctx context.Context, nr *model.NormalizedRequest) (*
 }
 
 func (p *Provider) ListGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtGroup, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtGroup, "")
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (p *Provider) UpdateGroup(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, &model.ProviderError{Code: "BadRequestException", Message: "Group name is required", HTTPStatus: http.StatusBadRequest}
 	}
 
-	e, err := p.resources.Get(ctx, rtGroup, name)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroup, name)
 	if err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NotFoundException", Message: "Group not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -167,7 +167,7 @@ func (p *Provider) UpdateGroup(ctx context.Context, nr *model.NormalizedRequest)
 	}
 
 	data, _ := json.Marshal(g)
-	p.resources.Update(ctx, store.ResourceEntry{Type: rtGroup, ID: name, Data: data})
+	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtGroup, ID: name, Data: data})
 
 	return provider.OK(map[string]any{"Group": groupToWire(g)}), nil
 }
@@ -183,7 +183,7 @@ func (p *Provider) Tag(ctx context.Context, nr *model.NormalizedRequest) (*model
 	tags := toStringMap(paramMap(nr.Params, "Tags"))
 
 	existing := map[string]string{}
-	if e, err := p.resources.Get(ctx, rtGroupTag, arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroupTag, arn); err == nil {
 		json.Unmarshal(e.Data, &existing)
 	}
 	for k, v := range tags {
@@ -191,8 +191,8 @@ func (p *Provider) Tag(ctx context.Context, nr *model.NormalizedRequest) (*model
 	}
 
 	data, _ := json.Marshal(existing)
-	_ = p.resources.Delete(ctx, rtGroupTag, arn)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtGroupTag, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtGroupTag, arn)
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtGroupTag, ID: arn, Data: data})
 
 	return provider.OK(map[string]any{"Arn": arn, "Tags": existing}), nil
 }
@@ -205,7 +205,7 @@ func (p *Provider) Untag(ctx context.Context, nr *model.NormalizedRequest) (*mod
 
 	keys, _ := nr.Params["Keys"].([]any)
 	existing := map[string]string{}
-	if e, err := p.resources.Get(ctx, rtGroupTag, arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroupTag, arn); err == nil {
 		json.Unmarshal(e.Data, &existing)
 	}
 	for _, k := range keys {
@@ -214,8 +214,8 @@ func (p *Provider) Untag(ctx context.Context, nr *model.NormalizedRequest) (*mod
 		}
 	}
 	data, _ := json.Marshal(existing)
-	_ = p.resources.Delete(ctx, rtGroupTag, arn)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtGroupTag, ID: arn, Data: data})
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtGroupTag, arn)
+	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtGroupTag, ID: arn, Data: data})
 
 	return provider.OK(map[string]any{"Arn": arn, "Keys": keys}), nil
 }
@@ -227,7 +227,7 @@ func (p *Provider) GetTags(ctx context.Context, nr *model.NormalizedRequest) (*m
 	}
 
 	existing := map[string]string{}
-	if e, err := p.resources.Get(ctx, rtGroupTag, arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtGroupTag, arn); err == nil {
 		json.Unmarshal(e.Data, &existing)
 	}
 

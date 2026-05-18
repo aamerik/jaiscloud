@@ -192,8 +192,8 @@ func streamToWire(s deliveryStream) map[string]any {
 	}
 }
 
-func (p *Provider) loadStream(ctx context.Context, name string) (deliveryStream, error) {
-	e, err := p.resources.Get(ctx, rtDeliveryStream, name)
+func (p *Provider) loadStream(ctx context.Context, account, region, name string) (deliveryStream, error) {
+	e, err := p.resources.Get(ctx, account, region, rtDeliveryStream, name)
 	if err != nil {
 		return deliveryStream{}, fhErr("ResourceNotFoundException", "Delivery stream not found: "+name, http.StatusBadRequest)
 	}
@@ -202,11 +202,11 @@ func (p *Provider) loadStream(ctx context.Context, name string) (deliveryStream,
 	return s, nil
 }
 
-func (p *Provider) saveStream(ctx context.Context, s deliveryStream) {
+func (p *Provider) saveStream(ctx context.Context, account, region string, s deliveryStream) {
 	data, _ := json.Marshal(s)
 	entry := store.ResourceEntry{Type: rtDeliveryStream, ID: s.Name, Data: data}
-	if err := p.resources.Create(ctx, entry); err == store.ErrAlreadyExists {
-		p.resources.Update(ctx, entry)
+	if err := p.resources.Create(ctx, account, region, entry); err == store.ErrAlreadyExists {
+		p.resources.Update(ctx, account, region, entry)
 	}
 }
 
@@ -247,12 +247,12 @@ func (p *Provider) CreateDeliveryStream(ctx context.Context, nr *model.Normalize
 		return nil, fhErr("InvalidArgumentException", "DeliveryStreamName must be <= 64 chars", http.StatusBadRequest)
 	}
 
-	if _, err := p.resources.Get(ctx, rtDeliveryStream, name); err == nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDeliveryStream, name); err == nil {
 		return nil, fhErr("ResourceInUseException", "Delivery stream "+name+" already exists", http.StatusBadRequest)
 	}
 
 	// Check 50-stream limit
-	if entries, _ := p.resources.List(ctx, rtDeliveryStream, ""); len(entries) >= 50 {
+	if entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtDeliveryStream, ""); len(entries) >= 50 {
 		return nil, fhErr("LimitExceededException", "Maximum number of delivery streams reached (50)", http.StatusBadRequest)
 	}
 
@@ -285,16 +285,16 @@ func (p *Provider) CreateDeliveryStream(ctx context.Context, nr *model.Normalize
 		S3Bucket:        bucket,
 		S3Prefix:        prefix,
 	}
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{"DeliveryStreamARN": s.ARN}), nil
 }
 
 func (p *Provider) DeleteDeliveryStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	if _, err := p.loadStream(ctx, name); err != nil {
+	if _, err := p.loadStream(ctx, nr.AccountID, nr.Region, name); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtDeliveryStream, name)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDeliveryStream, name)
 	// Remove buffer
 	p.mu.Lock()
 	delete(p.buffers, name)
@@ -304,7 +304,7 @@ func (p *Provider) DeleteDeliveryStream(ctx context.Context, nr *model.Normalize
 
 func (p *Provider) DescribeDeliveryStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +312,7 @@ func (p *Provider) DescribeDeliveryStream(ctx context.Context, nr *model.Normali
 }
 
 func (p *Provider) ListDeliveryStreams(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, rtDeliveryStream, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtDeliveryStream, "")
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		var s deliveryStream
@@ -325,12 +325,12 @@ func (p *Provider) ListDeliveryStreams(ctx context.Context, nr *model.Normalized
 
 func (p *Provider) UpdateDestination(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	s.VersionID = randHex(4)
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{}), nil
 }
 
@@ -377,7 +377,7 @@ func (p *Provider) flushStream(ctx context.Context, streamName string) {
 	p.mu.Unlock()
 
 	// Load stream config to find the S3 destination
-	s, err := p.loadStream(ctx, streamName)
+	s, err := p.loadStream(ctx, "", "", streamName)
 	if err != nil || s.S3Bucket == "" || p.s3writer == nil {
 		return
 	}
@@ -408,12 +408,12 @@ func (p *Provider) FlushAll(ctx context.Context) {
 
 func (p *Provider) PutRecord(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	s.RecordCount++
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 
 	// Buffer the record for S3 delivery
 	if s.S3Bucket != "" {
@@ -432,7 +432,7 @@ func (p *Provider) PutRecord(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) PutRecordBatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +442,7 @@ func (p *Provider) PutRecordBatch(ctx context.Context, nr *model.NormalizedReque
 		count = 1
 	}
 	s.RecordCount += count
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 
 	// Buffer records for S3 delivery
 	if s.S3Bucket != "" {
@@ -470,29 +470,29 @@ func (p *Provider) PutRecordBatch(ctx context.Context, nr *model.NormalizedReque
 
 func (p *Provider) StartDeliveryStreamEncryption(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	s.Encrypted = true
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) StopDeliveryStreamEncryption(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
 	s.Encrypted = false
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) TagDeliveryStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -507,13 +507,13 @@ func (p *Provider) TagDeliveryStream(ctx context.Context, nr *model.NormalizedRe
 			}
 		}
 	}
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) UntagDeliveryStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}
@@ -524,13 +524,13 @@ func (p *Provider) UntagDeliveryStream(ctx context.Context, nr *model.Normalized
 			}
 		}
 	}
-	p.saveStream(ctx, s)
+	p.saveStream(ctx, nr.AccountID, nr.Region, s)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) ListTagsForDeliveryStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name := str(nr.Params, "DeliveryStreamName")
-	s, err := p.loadStream(ctx, name)
+	s, err := p.loadStream(ctx, nr.AccountID, nr.Region, name)
 	if err != nil {
 		return nil, err
 	}

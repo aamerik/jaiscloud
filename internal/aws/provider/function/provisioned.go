@@ -43,9 +43,9 @@ func (p *FunctionProvider) PutProvisionedConcurrencyConfig(ctx context.Context, 
 	}
 	data, _ := json.Marshal(pe)
 	entry := store.ResourceEntry{Type: resTypeProvisioned, ID: key, Data: data}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return &model.ProviderResponse{HTTPStatus: 202, Data: provisionedToWire(pe)}, nil
@@ -55,7 +55,7 @@ func (p *FunctionProvider) GetProvisionedConcurrencyConfig(ctx context.Context, 
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
 	qualifier := strParam(nr.Params, "Qualifier")
 	key := fmt.Sprintf("%s:%s", funcName, qualifier)
-	e, err := p.resources.Get(ctx, resTypeProvisioned, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeProvisioned, key)
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ProvisionedConcurrencyConfigNotFoundException", "No provisioned concurrency config for "+key)
 	}
@@ -68,13 +68,13 @@ func (p *FunctionProvider) DeleteProvisionedConcurrencyConfig(ctx context.Contex
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
 	qualifier := strParam(nr.Params, "Qualifier")
 	key := fmt.Sprintf("%s:%s", funcName, qualifier)
-	_ = p.resources.Delete(ctx, resTypeProvisioned, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, resTypeProvisioned, key)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 func (p *FunctionProvider) ListProvisionedConcurrencyConfigs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	funcName := extractFunctionName(strParam(nr.Params, "FunctionName"))
-	entries, _ := p.resources.List(ctx, resTypeProvisioned, funcName+":")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, resTypeProvisioned, funcName+":")
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		var pe provisionedEntry

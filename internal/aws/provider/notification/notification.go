@@ -138,9 +138,9 @@ func subArn(nr *model.NormalizedRequest, topicName string) string {
 func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, data any) error {
 	raw, _ := json.Marshal(data)
 	entry := store.ResourceEntry{Type: resType, ID: id, Data: json.RawMessage(raw)}
-	if err := rs.Create(ctx, entry); err != nil {
+	if err := rs.Create(ctx, "", "", entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return rs.Update(ctx, entry)
+			return rs.Update(ctx, "", "", entry)
 		}
 		return err
 	}
@@ -148,7 +148,7 @@ func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, 
 }
 
 func loadEntry(ctx context.Context, rs store.ResourceStore, resType, id string, out any) error {
-	e, err := rs.Get(ctx, resType, id)
+	e, err := rs.Get(ctx, "", "", resType, id)
 	if err != nil {
 		return err
 	}
@@ -223,18 +223,18 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 
 func (p *SNSProvider) DeleteTopic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "TopicArn")
-	if err := p.resources.Delete(ctx, "sns_topics", arn); err != nil {
+	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, "sns_topics", arn); err != nil {
 		if err == store.ErrNotFound {
 			return nil, model.NewProviderError("NotFound", "Topic not found", 404)
 		}
 		return nil, err
 	}
 	// Delete all subscriptions for this topic.
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_subscriptions", "")
 	for _, e := range entries {
 		var s subscriptionData
 		if json.Unmarshal(e.Data, &s) == nil && s.TopicArn == arn {
-			_ = p.resources.Delete(ctx, "sns_subscriptions", s.SubscriptionArn)
+			_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "sns_subscriptions", s.SubscriptionArn)
 		}
 	}
 	return provider.OK(nil), nil
@@ -262,7 +262,7 @@ func (p *SNSProvider) SetTopicAttributes(ctx context.Context, nr *model.Normaliz
 }
 
 func (p *SNSProvider) ListTopics(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "sns_topics", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_topics", "")
 	var topics []map[string]any
 	for _, e := range entries {
 		var td topicData
@@ -336,7 +336,7 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *SNSProvider) Unsubscribe(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	sArn := strParam(nr.Params, "SubscriptionArn")
-	_ = p.resources.Delete(ctx, "sns_subscriptions", sArn)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, "sns_subscriptions", sArn)
 	return provider.OK(nil), nil
 }
 
@@ -345,7 +345,7 @@ func (p *SNSProvider) ConfirmSubscription(ctx context.Context, nr *model.Normali
 	tArn := strParam(nr.Params, "TopicArn")
 	token := strParam(nr.Params, "Token")
 
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_subscriptions", "")
 	for _, e := range entries {
 		var sd subscriptionData
 		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != tArn {
@@ -361,13 +361,13 @@ func (p *SNSProvider) ConfirmSubscription(ctx context.Context, nr *model.Normali
 }
 
 func (p *SNSProvider) ListSubscriptions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_subscriptions", "")
 	return provider.OK(map[string]any{"Subscriptions": subscriptionList(entries)}), nil
 }
 
 func (p *SNSProvider) ListSubscriptionsByTopic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	tArn := strParam(nr.Params, "TopicArn")
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_subscriptions", "")
 	var filtered []store.ResourceEntry
 	for _, e := range entries {
 		var sd subscriptionData
@@ -484,7 +484,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 	}
 
 	// ── Deliver to each matching subscription ─────────────────────────────────
-	entries, _ := p.resources.List(ctx, "sns_subscriptions", "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, "sns_subscriptions", "")
 	for _, e := range entries {
 		var sd subscriptionData
 		if json.Unmarshal(e.Data, &sd) != nil || sd.TopicArn != tArn {
@@ -588,7 +588,7 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 		Body:      bodyStr,
 		SentAt:    time.Now(),
 	}
-	_, _, err := p.messages.Send(ctx, msg)
+	_, _, err := p.messages.Send(ctx, "", "", msg)
 	return err
 }
 

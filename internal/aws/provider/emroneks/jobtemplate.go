@@ -42,18 +42,18 @@ func applyJobTemplateDefaults(requestParams map[string]any, templateData map[str
 	return merged
 }
 
-func (p *EMRContainersProvider) saveJobTemplate(ctx context.Context, jt jobTemplate) error {
+func (p *EMRContainersProvider) saveJobTemplate(ctx context.Context, account, region string, jt jobTemplate) error {
 	data, _ := json.Marshal(jt)
 	entry := store.ResourceEntry{Type: rtJobTemplate, ID: jobTemplateStoreID(jt.Id), Data: data}
-	err := p.resources.Create(ctx, entry)
+	err := p.resources.Create(ctx, account, region, entry)
 	if err == store.ErrAlreadyExists {
-		return p.resources.Update(ctx, entry)
+		return p.resources.Update(ctx, account, region, entry)
 	}
 	return err
 }
 
-func (p *EMRContainersProvider) loadJobTemplate(ctx context.Context, id string) (jobTemplate, error) {
-	e, err := p.resources.Get(ctx, rtJobTemplate, jobTemplateStoreID(id))
+func (p *EMRContainersProvider) loadJobTemplate(ctx context.Context, account, region, id string) (jobTemplate, error) {
+	e, err := p.resources.Get(ctx, account, region, rtJobTemplate, jobTemplateStoreID(id))
 	if err == store.ErrNotFound {
 		return jobTemplate{}, &model.ProviderError{
 			Code:       "ResourceNotFoundException",
@@ -88,7 +88,7 @@ func (p *EMRContainersProvider) CreateJobTemplate(ctx context.Context, nr *model
 		Tags:            tags,
 		JobTemplateData: jobTemplateData,
 	}
-	if err := p.saveJobTemplate(ctx, jt); err != nil {
+	if err := p.saveJobTemplate(ctx, nr.AccountID, nr.Region, jt); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
@@ -102,7 +102,7 @@ func (p *EMRContainersProvider) CreateJobTemplate(ctx context.Context, nr *model
 // DescribeJobTemplate returns a single job template by ID.
 func (p *EMRContainersProvider) DescribeJobTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := pathID(nr, "templateId", "id")
-	jt, err := p.loadJobTemplate(ctx, id)
+	jt, err := p.loadJobTemplate(ctx, nr.AccountID, nr.Region, id)
 	if err != nil {
 		return nil, err
 	}
@@ -122,16 +122,16 @@ func (p *EMRContainersProvider) DescribeJobTemplate(ctx context.Context, nr *mod
 // DeleteJobTemplate deletes a job template by ID.
 func (p *EMRContainersProvider) DeleteJobTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	id := pathID(nr, "templateId", "id")
-	if _, err := p.loadJobTemplate(ctx, id); err != nil {
+	if _, err := p.loadJobTemplate(ctx, nr.AccountID, nr.Region, id); err != nil {
 		return nil, err
 	}
-	_ = p.resources.Delete(ctx, rtJobTemplate, jobTemplateStoreID(id))
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtJobTemplate, jobTemplateStoreID(id))
 	return provider.OK(map[string]any{"id": id}), nil
 }
 
 // ListJobTemplates returns a paginated list of job templates with optional name filter.
 func (p *EMRContainersProvider) ListJobTemplates(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtJobTemplate, "jt/")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtJobTemplate, "jt/")
 	if err != nil {
 		return nil, err
 	}

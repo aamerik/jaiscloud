@@ -37,9 +37,8 @@ func DetectService(r *http.Request, body []byte) (service string, source Detecti
 
 	// Priority 2.5: Presigned URL - X-Amz-Credential query param with SigV4 scope.
 	if cred := r.URL.Query().Get("X-Amz-Credential"); cred != "" {
-		parts := strings.Split(cred, "/")
-		if len(parts) >= 4 && knownServices[parts[3]] {
-			return parts[3], SourceSigV4
+		if c, ok := ParseSigV4Credential("Credential=" + cred); ok && knownServices[c.Service] {
+			return c.Service, SourceSigV4
 		}
 	}
 
@@ -87,22 +86,47 @@ func graniteActionFromPath(path string) string {
 	return path[i+len(opMarker):]
 }
 
-// extractSigV4Service parses the service name from an AWS SigV4 Authorization header.
-// Format: AWS4-HMAC-SHA256 Credential=AKID/20240101/us-east-1/sqs/aws4_request, ...
-func extractSigV4Service(auth string) string {
-	idx := strings.Index(auth, "Credential=")
+// SigV4Cred holds the parsed components of a SigV4 Credential= string.
+// Exported so it can be used by both service detection and identity resolution
+// without requiring a shared package import.
+type SigV4Cred struct {
+	AccessKey string
+	Date      string
+	Region    string
+	Service   string
+}
+
+// ParseSigV4Credential extracts the SigV4 credential fields from an
+// Authorization header value or "Credential=..." value. Returns (zero, false)
+// for any malformed input — no panics. Used by DetectService (service field)
+// and by the identity package (AccessKey + Region fields).
+func ParseSigV4Credential(value string) (SigV4Cred, bool) {
+	idx := strings.Index(value, "Credential=")
 	if idx < 0 {
-		return ""
+		return SigV4Cred{}, false
 	}
-	cred := auth[idx+len("Credential="):]
+	cred := value[idx+len("Credential="):]
 	if end := strings.IndexByte(cred, ','); end >= 0 {
 		cred = cred[:end]
 	}
 	cred = strings.TrimSpace(cred)
 	// Format: AccessKeyId/YYYYMMDD/region/service/aws4_request
 	parts := strings.Split(cred, "/")
-	if len(parts) >= 4 {
-		return parts[3]
+	if len(parts) < 5 {
+		return SigV4Cred{}, false
+	}
+	return SigV4Cred{
+		AccessKey: parts[0],
+		Date:      parts[1],
+		Region:    parts[2],
+		Service:   parts[3],
+	}, true
+}
+
+// extractSigV4Service parses the service name from an AWS SigV4 Authorization header.
+func extractSigV4Service(auth string) string {
+	if c, ok := ParseSigV4Credential(auth); ok {
+		return c.Service
 	}
 	return ""
 }

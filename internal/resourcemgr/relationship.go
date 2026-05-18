@@ -41,19 +41,19 @@ type DeleteGuardRule struct {
 	// "Active" means children that should block or trigger the policy — terminal children
 	// (COMPLETED, FAILED) already in the store are typically excluded.
 	// The ResourceStore passed is the host's store — no second store needed.
-	FindChildren func(ctx context.Context, resources ResourceStore, parentID string) ([]ChildRef, error)
+	FindChildren func(ctx context.Context, resources ResourceStore, account, region, parentID string) ([]ChildRef, error)
 
 	// Policy declares what to do when FindChildren returns a non-empty list.
 	Policy DeletionPolicy
 
 	// CascadeDelete removes a single child from the ResourceStore.
 	// Required when Policy == PolicyCascade.
-	// If nil, defaults to: resources.Delete(ctx, child.Type, child.ID)
-	CascadeDelete func(ctx context.Context, resources ResourceStore, child ChildRef) error
+	// If nil, defaults to: resources.Delete(ctx, account, region, child.Type, child.ID)
+	CascadeDelete func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error
 
 	// ForceTerminate updates a child's state to a terminal value in the ResourceStore.
 	// Required when Policy == PolicyForceTerminate.
-	ForceTerminate func(ctx context.Context, resources ResourceStore, child ChildRef) error
+	ForceTerminate func(ctx context.Context, resources ResourceStore, account, region string, child ChildRef) error
 
 	// FailCode is the cloud-specific error code returned when Policy == PolicyFail
 	// and a blocking child is found. Defaults to "ValidationException".

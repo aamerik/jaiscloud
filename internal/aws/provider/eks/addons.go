@@ -49,7 +49,7 @@ func (p *EKSProvider) CreateAddon(ctx context.Context, nr *model.NormalizedReque
 	if clusterName == "" || addonName == "" {
 		return nil, &model.ProviderError{Code: "ValidationException", Message: "clusterName and addonName are required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtCluster, clusterName); err != nil {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtCluster, clusterName); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + clusterName + " not found", HTTPStatus: http.StatusNotFound}
 	}
 
@@ -67,7 +67,7 @@ func (p *EKSProvider) CreateAddon(ctx context.Context, nr *model.NormalizedReque
 	}
 	data, _ := json.Marshal(a)
 	key := addonKey(clusterName, addonName)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtAddon, ID: key, Data: data}); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtAddon, ID: key, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, &model.ProviderError{Code: "ResourceInUseException", Message: "addon " + addonName + " already exists in cluster " + clusterName, HTTPStatus: http.StatusConflict}
 		}
@@ -80,7 +80,7 @@ func (p *EKSProvider) DescribeAddon(ctx context.Context, nr *model.NormalizedReq
 	clusterName, _ := nr.Params["clusterName"].(string)
 	addonName, _ := nr.Params["addonName"].(string)
 	key := addonKey(clusterName, addonName)
-	e, err := p.resources.Get(ctx, rtAddon, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtAddon, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
 	}
@@ -91,7 +91,7 @@ func (p *EKSProvider) DescribeAddon(ctx context.Context, nr *model.NormalizedReq
 
 func (p *EKSProvider) ListAddons(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	clusterName, _ := nr.Params["clusterName"].(string)
-	entries, _ := p.resources.List(ctx, rtAddon, "")
+	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtAddon, "")
 	prefix := clusterName + "/"
 	names := make([]string, 0)
 	for _, e := range entries {
@@ -120,13 +120,13 @@ func (p *EKSProvider) DeleteAddon(ctx context.Context, nr *model.NormalizedReque
 	clusterName, _ := nr.Params["clusterName"].(string)
 	addonName, _ := nr.Params["addonName"].(string)
 	key := addonKey(clusterName, addonName)
-	e, err := p.resources.Get(ctx, rtAddon, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtAddon, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found in cluster " + clusterName, HTTPStatus: http.StatusNotFound}
 	}
 	var a eksAddon
 	_ = json.Unmarshal(e.Data, &a)
-	_ = p.resources.Delete(ctx, rtAddon, key)
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtAddon, key)
 	return provider.OK(map[string]any{"addon": addonToWire(a)}), nil
 }
 
@@ -134,7 +134,7 @@ func (p *EKSProvider) UpdateAddon(ctx context.Context, nr *model.NormalizedReque
 	clusterName, _ := nr.Params["clusterName"].(string)
 	addonName, _ := nr.Params["addonName"].(string)
 	key := addonKey(clusterName, addonName)
-	e, err := p.resources.Get(ctx, rtAddon, key)
+	e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtAddon, key)
 	if err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "addon " + addonName + " not found", HTTPStatus: http.StatusNotFound}
 	}
@@ -153,7 +153,7 @@ func (p *EKSProvider) UpdateAddon(ctx context.Context, nr *model.NormalizedReque
 	a.ModifiedAt = time.Now().UTC()
 
 	data, _ := json.Marshal(a)
-	_ = p.resources.Update(ctx, store.ResourceEntry{Type: rtAddon, ID: key, Data: data})
+	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtAddon, ID: key, Data: data})
 	return provider.OK(map[string]any{"update": map[string]any{
 		"clusterName": clusterName,
 		"addonName":   addonName,

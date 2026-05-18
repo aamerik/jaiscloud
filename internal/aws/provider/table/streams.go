@@ -206,7 +206,7 @@ func (p *TableProvider) appendStreamRecord(tableName, eventName, eventID string,
 		return
 	}
 	// Look up StreamViewType; default to NEW_AND_OLD_IMAGES.
-	ts, err := p.loadTable(context.Background(), tableName)
+	ts, err := p.loadTable(context.Background(), "", "", tableName)
 	viewType := "NEW_AND_OLD_IMAGES"
 	if err == nil && ts.StreamViewType != "" {
 		viewType = ts.StreamViewType

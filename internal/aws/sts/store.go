@@ -11,7 +11,7 @@ type Tag struct {
 	Value string
 }
 
-// SessionConfig captures tagging context for an issued session credential.
+// SessionConfig captures tagging context and identity for an issued session credential.
 type SessionConfig struct {
 	// lowercase key → Tag{case-preserved key, value}
 	Tags map[string]Tag `json:"tags"`
@@ -19,6 +19,11 @@ type SessionConfig struct {
 	TransitiveTags []string `json:"transitive_tags"`
 	// IAMContext reserved for future use
 	IAMContext map[string]any `json:"iam_context,omitempty"`
+
+	// Identity fields added for multi-account support (MA-5a).
+	Account         string `json:"account,omitempty"`           // 12-digit target account ID
+	RoleName        string `json:"role_name,omitempty"`         // role assumed (without path)
+	RoleSessionName string `json:"role_session_name,omitempty"` // session name from AssumeRole
 }
 
 // SessionStore persists session configs keyed by AccessKeyId.

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	awsarn "jaiscloud/internal/aws/arn"
+	"jaiscloud/internal/aws/identity"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -69,45 +71,23 @@ func (p *STSProvider) Reset() {
 // ─── handlers ─────────────────────────────────────────────────────────────────
 
 func (p *STSProvider) GetCallerIdentity(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Extract the access key from the Authorization header so we can distinguish
-	// between static IAM credentials and temporary session credentials.
-	var authHeader string
-	if nr.Raw != nil {
-		authHeader = nr.Raw.Header.Get("Authorization")
-	}
-	accessKey := extractAccessKeyFromAuth(authHeader)
+	// nr.AccountID is already decoded correctly by IdentityEnricher (LSIA → account).
+	// Use it as-is for the Account field.
 
-	// ASIA* prefix indicates a temporary/session credential issued by AssumeRole.
-	if strings.HasPrefix(accessKey, "ASIA") {
-		if sess, ok := p.store.GetSession(accessKey); ok {
-			// Best-effort: use tag context to reconstruct role/session names.
-			roleName := "assumed-role"
-			sessionName := "session"
-			if rn, exists := sess.IAMContext["role_name"]; exists {
-				if s, ok := rn.(string); ok && s != "" {
-					roleName = s
-				}
-			}
-			if sn, exists := sess.IAMContext["session_name"]; exists {
-				if s, ok := sn.(string); ok && s != "" {
-					sessionName = s
-				}
-			}
+	// Check if we have a stored session for this access key (LSIA/ASIA assumed-role creds).
+	if nr.AccessKey != "" {
+		if sess, ok := p.store.GetSession(nr.AccessKey); ok && sess.RoleName != "" {
+			arnStr := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s",
+				nr.AccountID, sess.RoleName, sess.RoleSessionName)
 			return provider.OK(map[string]any{
 				"Account": nr.AccountID,
-				"Arn":     nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
-				"UserId":  accessKey + ":" + sessionName,
+				"Arn":     arnStr,
+				"UserId":  sess.RoleName + ":" + sess.RoleSessionName,
 			}), nil
 		}
-		// ASIA key but no session found — return a generic assumed-role identity.
-		return provider.OK(map[string]any{
-			"Account": nr.AccountID,
-			"Arn":     nr.ResourceID("sts-assumed-role", "assumed-role/session"),
-			"UserId":  accessKey + ":session",
-		}), nil
 	}
 
-	// Static credentials or no key — return root identity.
+	// Static credentials or no session found — return root identity.
 	return provider.OK(map[string]any{
 		"Account": nr.AccountID,
 		"Arn":     nr.ResourceID("iam-root", ""),
@@ -133,18 +113,37 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 			sessionName), 400)
 	}
 
-	// extract caller's access key from Authorization header for tag propagation
-	var authHeader string
-	if nr.Raw != nil {
-		authHeader = nr.Raw.Header.Get("Authorization")
+	// Resolve target account and role name from the role ARN.
+	targetAccount := nr.AccountID
+	roleName := roleArn
+	if parsed, err := awsarn.Parse(roleArn); err == nil {
+		if parsed.AccountID != "" {
+			targetAccount = parsed.AccountID
+		}
+		// Resource is "role/name" or "role/path/name"
+		if parts := strings.Split(parsed.Resource, "/"); len(parts) > 1 {
+			roleName = parts[len(parts)-1]
+		}
+	} else if parts := strings.Split(roleArn, "/"); len(parts) > 1 {
+		roleName = parts[len(parts)-1]
 	}
-	callerKey := extractAccessKeyFromAuth(authHeader)
+
+	// Mint an LSIA access key encoding the target account.
+	accessKey, err := identity.EncodeLSIA(targetAccount)
+	if err != nil {
+		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
+	}
+	secretKey := randBase64(30)
+	sessionToken := randBase64(36)
+	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+
+	// Resolve transitive tags from the caller's existing session.
+	callerKey := nr.AccessKey
 	existing, hasExisting := p.store.GetSession(callerKey)
 
-	// process tags
+	// Validate tags.
 	tags := parseTags(nr.Params, "Tags")
 	transitiveKeys := parseStringList(nr.Params, "TransitiveTagKeys")
-
 	if len(tags) > 0 {
 		tagKeySet := make(map[string]bool, len(tags))
 		for _, t := range tags {
@@ -177,9 +176,7 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 		}
 	}
 
-	creds := generateCredentials(durationSecs)
-
-	// build merged session for tag propagation
+	// Build merged tag set.
 	merged := make(map[string]Tag)
 	mergedTransitive := make([]string, 0)
 	if hasExisting {
@@ -189,32 +186,35 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 		}
 	}
 	for _, t := range tags {
-		lk := strings.ToLower(t.Key)
-		merged[lk] = t
+		merged[strings.ToLower(t.Key)] = t
 	}
 	for _, tk := range transitiveKeys {
-		lk := strings.ToLower(tk)
-		mergedTransitive = append(mergedTransitive, lk)
-	}
-	if len(merged) > 0 {
-		_ = p.store.StoreSession(creds.AccessKeyId, SessionConfig{
-			Tags:           merged,
-			TransitiveTags: mergedTransitive,
-			IAMContext:     map[string]any{},
-		})
+		mergedTransitive = append(mergedTransitive, strings.ToLower(tk))
 	}
 
-	// extract role name from ARN for the assumed-role user
-	roleName := roleArn
-	if parts := strings.Split(roleArn, "/"); len(parts) > 1 {
-		roleName = parts[len(parts)-1]
-	}
+	// Store session with identity and tag info.
+	_ = p.store.StoreSession(accessKey, SessionConfig{
+		Tags:            merged,
+		TransitiveTags:  mergedTransitive,
+		IAMContext:      map[string]any{},
+		Account:         targetAccount,
+		RoleName:        roleName,
+		RoleSessionName: sessionName,
+	})
+
+	// AssumedRoleUser.Arn uses the TARGET account (fix for §11.1.2).
+	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", targetAccount, roleName, sessionName)
 
 	return provider.OK(map[string]any{
-		"Credentials": credMap(creds),
+		"Credentials": map[string]any{
+			"AccessKeyId":     accessKey,
+			"SecretAccessKey": secretKey,
+			"SessionToken":    sessionToken,
+			"Expiration":      expiry.Format(time.RFC3339),
+		},
 		"AssumedRoleUser": map[string]any{
-			"AssumedRoleId": "AROA" + randID(16) + ":" + sessionName,
-			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
+			"AssumedRoleId": roleName + ":" + sessionName,
+			"Arn":           assumedArn,
 		},
 		"PackedPolicySize": 0,
 	}), nil
@@ -239,18 +239,30 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 	if err != nil {
 		return nil, err
 	}
-	creds := generateCredentials(durationSecs)
 
-	roleName := roleArn
-	if parts := strings.Split(roleArn, "/"); len(parts) > 1 {
-		roleName = parts[len(parts)-1]
+	targetAccount, roleName := accountAndRoleFromARN(roleArn, nr.AccountID)
+	accessKey, err := identity.EncodeLSIA(targetAccount)
+	if err != nil {
+		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
+	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", targetAccount, roleName, sessionName)
+	_ = p.store.StoreSession(accessKey, SessionConfig{
+		Account:         targetAccount,
+		RoleName:        roleName,
+		RoleSessionName: sessionName,
+	})
 
 	return provider.OK(map[string]any{
-		"Credentials": credMap(creds),
+		"Credentials": map[string]any{
+			"AccessKeyId":     accessKey,
+			"SecretAccessKey": randBase64(30),
+			"SessionToken":    randBase64(36),
+			"Expiration":      expiry.Format(time.RFC3339),
+		},
 		"AssumedRoleUser": map[string]any{
-			"AssumedRoleId": "AROA" + randID(16) + ":" + sessionName,
-			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/"+sessionName),
+			"AssumedRoleId": roleName + ":" + sessionName,
+			"Arn":           assumedArn,
 		},
 		"SubjectFromWebIdentityToken": subject,
 		"PackedPolicySize":            0,
@@ -265,24 +277,35 @@ func (p *STSProvider) AssumeRoleWithSAML(_ context.Context, nr *model.Normalized
 		return nil, stsErr("ValidationError", fmt.Sprintf("%s is invalid", roleArn), 400)
 	}
 
-	creds := generateCredentials(durationSecs)
-
-	roleName := roleArn
-	if parts := strings.Split(roleArn, "/"); len(parts) > 1 {
-		roleName = parts[len(parts)-1]
+	targetAccount, roleName := accountAndRoleFromARN(roleArn, nr.AccountID)
+	accessKey, err := identity.EncodeLSIA(targetAccount)
+	if err != nil {
+		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
+	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/saml-session", targetAccount, roleName)
+	_ = p.store.StoreSession(accessKey, SessionConfig{
+		Account:         targetAccount,
+		RoleName:        roleName,
+		RoleSessionName: "saml-session",
+	})
 
 	return provider.OK(map[string]any{
-		"Credentials": credMap(creds),
-		"AssumedRoleUser": map[string]any{
-			"AssumedRoleId": "AROA" + randID(16) + ":saml-session",
-			"Arn":           nr.ResourceID("sts-assumed-role", roleName+"/saml-session"),
+		"Credentials": map[string]any{
+			"AccessKeyId":     accessKey,
+			"SecretAccessKey": randBase64(30),
+			"SessionToken":    randBase64(36),
+			"Expiration":      expiry.Format(time.RFC3339),
 		},
-		"Subject":       "saml-subject",
-		"SubjectType":   "persistent",
-		"Issuer":        "saml-issuer",
-		"Audience":      "https://signin.aws.amazon.com/saml",
-		"NameQualifier": "",
+		"AssumedRoleUser": map[string]any{
+			"AssumedRoleId": roleName + ":saml-session",
+			"Arn":           assumedArn,
+		},
+		"Subject":          "saml-subject",
+		"SubjectType":      "persistent",
+		"Issuer":           "saml-issuer",
+		"Audience":         "https://signin.aws.amazon.com/saml",
+		"NameQualifier":    "",
 		"PackedPolicySize": 0,
 	}), nil
 }
@@ -535,6 +558,24 @@ func extractJWTSubject(token string) (string, error) {
 
 func stsErr(code, msg string, status int) error {
 	return model.NewProviderError(code, msg, status)
+}
+
+// accountAndRoleFromARN extracts the target account ID and role name from a role ARN.
+// Falls back to callerAccount when the ARN has no account field.
+func accountAndRoleFromARN(roleArn, callerAccount string) (account, roleName string) {
+	account = callerAccount
+	roleName = roleArn
+	if parsed, err := awsarn.Parse(roleArn); err == nil {
+		if parsed.AccountID != "" {
+			account = parsed.AccountID
+		}
+		if parts := strings.Split(parsed.Resource, "/"); len(parts) > 1 {
+			roleName = parts[len(parts)-1]
+		}
+	} else if parts := strings.Split(roleArn, "/"); len(parts) > 1 {
+		roleName = parts[len(parts)-1]
+	}
+	return
 }
 
 // extractJWTSubjectWithVerification checks whether OIDC issuers are configured

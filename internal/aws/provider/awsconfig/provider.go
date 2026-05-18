@@ -103,16 +103,16 @@ func (p *Provider) PutConfigurationRecorder(ctx context.Context, nr *model.Norma
 	}
 
 	data, _ := json.Marshal(rec)
-	_ = p.resources.Delete(ctx, rtRecorder, name)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtRecorder, ID: name, Data: data}); err != nil {
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtRecorder, name)
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtRecorder, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 
 	// Initialize status if it doesn't exist
-	if _, err := p.resources.Get(ctx, rtRecorderStatus, name); err == store.ErrNotFound {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtRecorderStatus, name); err == store.ErrNotFound {
 		st := recorderStatus{Name: name, Recording: false, LastStatus: "Pending"}
 		stData, _ := json.Marshal(st)
-		_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtRecorderStatus, ID: name, Data: stData})
+		_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtRecorderStatus, ID: name, Data: stData})
 	}
 
 	return provider.OK(map[string]any{}), nil
@@ -121,7 +121,7 @@ func (p *Provider) PutConfigurationRecorder(ctx context.Context, nr *model.Norma
 func (p *Provider) DescribeConfigurationRecorders(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	nameFilter := strParam(nr.Params, "ConfigurationRecorderNames.member.1")
 
-	entries, err := p.resources.List(ctx, rtRecorder, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtRecorder, "")
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (p *Provider) StartConfigurationRecorder(ctx context.Context, nr *model.Nor
 	if name == "" {
 		name = "default"
 	}
-	return p.setRecorderStatus(ctx, name, true)
+	return p.setRecorderStatus(ctx, nr.AccountID, nr.Region, name, true)
 }
 
 func (p *Provider) StopConfigurationRecorder(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -154,10 +154,10 @@ func (p *Provider) StopConfigurationRecorder(ctx context.Context, nr *model.Norm
 	if name == "" {
 		name = "default"
 	}
-	return p.setRecorderStatus(ctx, name, false)
+	return p.setRecorderStatus(ctx, nr.AccountID, nr.Region, name, false)
 }
 
-func (p *Provider) setRecorderStatus(ctx context.Context, name string, recording bool) (*model.ProviderResponse, error) {
+func (p *Provider) setRecorderStatus(ctx context.Context, account, region, name string, recording bool) (*model.ProviderResponse, error) {
 	st := recorderStatus{
 		Name:      name,
 		Recording: recording,
@@ -169,15 +169,15 @@ func (p *Provider) setRecorderStatus(ctx context.Context, name string, recording
 		st.LastStopTime = float64(time.Now().Unix())
 	}
 	data, _ := json.Marshal(st)
-	_ = p.resources.Delete(ctx, rtRecorderStatus, name)
-	_ = p.resources.Create(ctx, store.ResourceEntry{Type: rtRecorderStatus, ID: name, Data: data})
+	_ = p.resources.Delete(ctx, account, region, rtRecorderStatus, name)
+	_ = p.resources.Create(ctx, account, region, store.ResourceEntry{Type: rtRecorderStatus, ID: name, Data: data})
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeConfigurationRecorderStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	nameFilter := strParam(nr.Params, "ConfigurationRecorderNames.member.1")
 
-	entries, err := p.resources.List(ctx, rtRecorderStatus, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtRecorderStatus, "")
 	if err != nil {
 		return nil, err
 	}
@@ -217,15 +217,15 @@ func (p *Provider) PutDeliveryChannel(ctx context.Context, nr *model.NormalizedR
 	}
 
 	data, _ := json.Marshal(ch)
-	_ = p.resources.Delete(ctx, rtDeliveryChannel, name)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtDeliveryChannel, ID: name, Data: data}); err != nil {
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDeliveryChannel, name)
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDeliveryChannel, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeDeliveryChannels(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtDeliveryChannel, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDeliveryChannel, "")
 	if err != nil {
 		return nil, err
 	}
@@ -267,15 +267,15 @@ func (p *Provider) PutConfigRule(ctx context.Context, nr *model.NormalizedReques
 	}
 
 	data, _ := json.Marshal(rule)
-	_ = p.resources.Delete(ctx, rtConfigRule, name)
-	if err := p.resources.Create(ctx, store.ResourceEntry{Type: rtConfigRule, ID: name, Data: data}); err != nil {
+	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtConfigRule, name)
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtConfigRule, ID: name, Data: data}); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeConfigRules(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtConfigRule, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtConfigRule, "")
 	if err != nil {
 		return nil, err
 	}
@@ -297,15 +297,15 @@ func (p *Provider) DeleteConfigRule(ctx context.Context, nr *model.NormalizedReq
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "ConfigRuleName is required", HTTPStatus: http.StatusBadRequest}
 	}
-	if _, err := p.resources.Get(ctx, rtConfigRule, name); err == store.ErrNotFound {
+	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtConfigRule, name); err == store.ErrNotFound {
 		return nil, &model.ProviderError{Code: "NoSuchConfigRuleException", Message: "Config rule not found", HTTPStatus: http.StatusBadRequest}
 	}
-	p.resources.Delete(ctx, rtConfigRule, name)
+	p.resources.Delete(ctx, nr.AccountID, nr.Region, rtConfigRule, name)
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) DescribeDeliveryChannelStatus(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, rtDeliveryChannel, "")
+	entries, err := p.resources.List(ctx, nr.AccountID, nr.Region, rtDeliveryChannel, "")
 	if err != nil {
 		return nil, err
 	}

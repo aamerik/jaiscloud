@@ -42,7 +42,7 @@ func (e *alarmEvaluator) EvaluateAll(ctx context.Context) {
 }
 
 func (e *alarmEvaluator) evaluateAll(ctx context.Context) {
-	entries, err := e.p.resources.List(ctx, "cloudwatch_alarm", "")
+	entries, err := e.p.resources.List(ctx, "", "", "cloudwatch_alarm", "")
 	if err != nil {
 		return
 	}
@@ -147,13 +147,13 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 	if err != nil {
 		return
 	}
-	if err := e.p.resources.Update(ctx, store.ResourceEntry{Type: "cloudwatch_alarm", ID: entry.ID, Data: data}); err != nil {
+	if err := e.p.resources.Update(ctx, "", "", store.ResourceEntry{Type: "cloudwatch_alarm", ID: entry.ID, Data: data}); err != nil {
 		slog.Warn("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 		return
 	}
 
 	// Record alarm history entry for this state transition.
-	e.p.writeAlarmHistory(ctx, name, "MetricAlarm", "StateUpdate",
+	e.p.writeAlarmHistory(ctx, "", "", name, "MetricAlarm", "StateUpdate",
 		fmt.Sprintf("Alarm updated from %s to %s", current, newState),
 		map[string]any{"version": "1.0", "oldState": map[string]any{"stateValue": current}, "newState": map[string]any{"stateValue": newState, "stateReason": reason}},
 		now)

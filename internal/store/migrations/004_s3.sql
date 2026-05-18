@@ -1,9 +1,13 @@
 -- S3 bucket and object metadata.
 CREATE TABLE IF NOT EXISTS jc_s3_buckets (
-    name       TEXT        PRIMARY KEY,
-    meta       JSONB       NOT NULL DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    name             TEXT        PRIMARY KEY,
+    owner_account_id TEXT        NOT NULL,
+    region           TEXT        NOT NULL,
+    meta             JSONB       NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_s3_buckets_owner
+    ON jc_s3_buckets (owner_account_id);
 
 CREATE TABLE IF NOT EXISTS jc_s3_objects (
     bucket               TEXT        NOT NULL,

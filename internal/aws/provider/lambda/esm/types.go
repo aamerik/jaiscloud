@@ -54,6 +54,9 @@ type EventSourceMapping struct {
 	QueueName          string `json:"-"`
 	TableName          string `json:"-"`
 	LastSequenceNumber int    `json:"-"`
+	// SourceAccountID and SourceRegion are parsed from EventSourceArn (MA-5b §11.1.6).
+	SourceAccountID string `json:"-"`
+	SourceRegion    string `json:"-"`
 }
 
 // SQSSenderAPI is the SQS interface needed for DLQ delivery.

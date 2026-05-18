@@ -45,7 +45,7 @@ func seedClusterWithSteps(t *testing.T, p *EMRProvider, stepStates []string) (cl
 		Steps: steps,
 	}
 	data, _ := json.Marshal(c)
-	require.NoError(t, p.resources.Create(context.Background(),
+	require.NoError(t, p.resources.Create(context.Background(), "000000000000", "us-east-1",
 		store.ResourceEntry{Type: rtCluster, ID: clusterID, Data: data}))
 	return clusterID, stepIDs
 }
@@ -114,7 +114,7 @@ func TestCascade_TerminateCluster(t *testing.T) {
 	assert.Equal(t, []string{"TERMINATING", "TERMINATED_WITH_ERRORS"}, clusterStates)
 
 	// Verify store reflects TERMINATED_WITH_ERRORS and INTERRUPTED step states
-	c, err := p.loadCluster(context.Background(), clusterID)
+	c, err := p.loadCluster(context.Background(), h.accountID, h.region, clusterID)
 	require.NoError(t, err)
 	assert.Equal(t, "TERMINATED_WITH_ERRORS", c.Status.State, "cluster store state")
 	for _, step := range c.Steps {
@@ -155,7 +155,7 @@ func TestCascade_CancelAndWait(t *testing.T) {
 	assert.Empty(t, clusterStatesSeen, "cluster state must not change for CANCEL_AND_WAIT")
 
 	// Verify store: PENDING step should now be CANCELLED
-	c, err := p.loadCluster(context.Background(), clusterID)
+	c, err := p.loadCluster(context.Background(), h.accountID, h.region, clusterID)
 	require.NoError(t, err)
 	assert.Equal(t, "RUNNING", c.Status.State, "cluster status unchanged")
 	for _, step := range c.Steps {
@@ -184,7 +184,7 @@ func TestCascade_Continue(t *testing.T) {
 
 	assert.Empty(t, evts, "CONTINUE must produce no bus events")
 
-	c, err := p.loadCluster(context.Background(), clusterID)
+	c, err := p.loadCluster(context.Background(), h.accountID, h.region, clusterID)
 	require.NoError(t, err)
 	for _, step := range c.Steps {
 		sid, _ := step["Id"].(string)
@@ -221,7 +221,7 @@ func TestCascade_TerminateCluster_WithTerminalSteps(t *testing.T) {
 	assert.False(t, interruptedIDs[stepIDs[2]], "CANCELLED step must not be touched")
 
 	// Verify store
-	c, err := p.loadCluster(context.Background(), clusterID)
+	c, err := p.loadCluster(context.Background(), h.accountID, h.region, clusterID)
 	require.NoError(t, err)
 	for _, step := range c.Steps {
 		sid, _ := step["Id"].(string)

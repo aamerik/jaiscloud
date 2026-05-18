@@ -1,0 +1,22 @@
+{
+    "version": "0.0.0-SNAPSHOT-8bb9b2a",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/raj-jaiswal/jaiscloud/releases/download/v0.0.0/jaiscloud-aws_0.0.0-SNAPSHOT-8bb9b2a_windows_amd64.zip",
+            "bin": [
+                "jaiscloud-aws.exe"
+            ],
+            "hash": "367b0fb2c9060524324cc3c75faf42095a162561ef253b09e02037d1eb51c657"
+        },
+        "arm64": {
+            "url": "https://github.com/raj-jaiswal/jaiscloud/releases/download/v0.0.0/jaiscloud-aws_0.0.0-SNAPSHOT-8bb9b2a_windows_arm64.zip",
+            "bin": [
+                "jaiscloud-aws.exe"
+            ],
+            "hash": "400f53fdaf7d4e2be945b69550eeef3ebdbfaa9d12fe233f987d7ec48f53cc71"
+        }
+    },
+    "homepage": "https://github.com/jaislocal/jaiscloud",
+    "license": "Apache-2.0",
+    "description": "Local AWS cloud emulator — AWS wire-protocol compatible"
+}

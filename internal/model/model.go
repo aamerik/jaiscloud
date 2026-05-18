@@ -66,6 +66,20 @@ type NormalizedRequest struct {
 	Port      int
 	Cloud     Cloud // which cloud adapter handled this request (aws, azure, gcp)
 
+	// AccessKey is the raw SigV4/SigV2 access-key-id extracted from the
+	// Authorization header or presigned URL. Empty for anonymous requests.
+	// Used by STS GetCallerIdentity and session-store lookups (§5.3, §9.3).
+	AccessKey string
+
+	// SourceArn carries the ARN of the resource that originated a cross-resource
+	// fan-out call (e.g. the SNS topic ARN when SNS delivers to SQS). Propagated
+	// via synthesised NormalizedRequest for in-process cross-resource dispatch (§11.0).
+	SourceArn string
+
+	// ServicePrincipal identifies the AWS service making a cross-resource call
+	// (e.g. "sns.amazonaws.com"). Mirrors LocalStack's request_metadata propagation.
+	ServicePrincipal string
+
 	// ResourceID constructs a cloud-specific resource identifier from an abstract
 	// resource type and logical name. Injected by the gateway; providers must call
 	// this instead of formatting cloud-specific IDs (ARNs, Azure resource IDs, etc.)

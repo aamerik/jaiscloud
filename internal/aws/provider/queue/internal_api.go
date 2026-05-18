@@ -17,7 +17,7 @@ func (p *QueueProvider) InternalReceive(ctx context.Context, queueName string, m
 	}
 
 	now := p.clock.Now()
-	msgs, err := p.messages.Receive(ctx, queueURL, maxMessages, now)
+	msgs, err := p.messages.Receive(ctx, "", "", queueURL, maxMessages, now)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (p *QueueProvider) InternalDeleteBatch(ctx context.Context, queueName strin
 	}
 	for _, rh := range receiptHandles {
 		// SQS silently succeeds for invalid handles — mirror that behaviour here
-		_ = p.messages.Delete(ctx, queueURL, rh)
+		_ = p.messages.Delete(ctx, "", "", queueURL, rh)
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ func (p *QueueProvider) InternalDeleteBatch(ctx context.Context, queueName strin
 // resolveQueueURLByName scans all SQS queues and finds the one whose URL ends
 // with the given queue name (last path segment).
 func (p *QueueProvider) resolveQueueURLByName(ctx context.Context, queueName string) (string, error) {
-	entries, err := p.resources.List(ctx, "sqs_queues", "")
+	entries, err := p.resources.List(ctx, "", "", "sqs_queues", "")
 	if err != nil {
 		return "", fmt.Errorf("esm: failed to list queues: %w", err)
 	}

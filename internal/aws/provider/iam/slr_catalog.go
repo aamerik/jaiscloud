@@ -1,5 +1,9 @@
 package iam
 
+// AWS-managed service-linked role policy ARNs use the global `::aws:` account
+// (not a customer account) and are intentionally static constants.
+// nolint:hardcoded-arn
+
 // slrEntry maps a service principal to its SLR metadata.
 type slrEntry struct {
 	RoleName    string

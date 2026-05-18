@@ -99,7 +99,7 @@ func (s *MemoryMessageStore) getOrCreateQueue(queueURL string) *queueData {
 	return q
 }
 
-func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
+func (s *MemoryMessageStore) Send(ctx context.Context, account, region string, msg SQSMessage) (dedupMessageID, sequenceNumber string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -138,7 +138,7 @@ func (s *MemoryMessageStore) Send(ctx context.Context, msg SQSMessage) (dedupMes
 	return "", msg.SequenceNumber, nil
 }
 
-func (s *MemoryMessageStore) Receive(ctx context.Context, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {
+func (s *MemoryMessageStore) Receive(ctx context.Context, account, region, queueURL string, maxMessages int, now time.Time) ([]SQSMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -193,7 +193,7 @@ func (s *MemoryMessageStore) Receive(ctx context.Context, queueURL string, maxMe
 	return result, nil
 }
 
-func (s *MemoryMessageStore) Delete(ctx context.Context, queueURL, receiptHandle string) error {
+func (s *MemoryMessageStore) Delete(ctx context.Context, account, region, queueURL, receiptHandle string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,7 +211,7 @@ func (s *MemoryMessageStore) Delete(ctx context.Context, queueURL, receiptHandle
 	return fmt.Errorf("receipt handle not found")
 }
 
-func (s *MemoryMessageStore) ChangeVisibility(ctx context.Context, queueURL, receiptHandle string, timeoutSec int, now time.Time) error {
+func (s *MemoryMessageStore) ChangeVisibility(ctx context.Context, account, region, queueURL, receiptHandle string, timeoutSec int, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -232,7 +232,7 @@ func (s *MemoryMessageStore) ChangeVisibility(ctx context.Context, queueURL, rec
 	return fmt.Errorf("receipt handle not found")
 }
 
-func (s *MemoryMessageStore) Purge(ctx context.Context, queueURL string) error {
+func (s *MemoryMessageStore) Purge(ctx context.Context, account, region, queueURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if q := s.queues[queueURL]; q != nil {
@@ -241,7 +241,7 @@ func (s *MemoryMessageStore) Purge(ctx context.Context, queueURL string) error {
 	return nil
 }
 
-func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, queueURL string, now time.Time) (visible, notVisible, delayed int, err error) {
+func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, account, region, queueURL string, now time.Time) (visible, notVisible, delayed int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -261,7 +261,7 @@ func (s *MemoryMessageStore) GetApproximateCounts(ctx context.Context, queueURL 
 	return
 }
 
-func (s *MemoryMessageStore) SetQueueRetention(_ context.Context, queueURL string, retentionSecs int) error {
+func (s *MemoryMessageStore) SetQueueRetention(_ context.Context, _, _, queueURL string, retentionSecs int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	q := s.getOrCreateQueue(queueURL)

@@ -16,9 +16,9 @@ func (p *SNSProvider) PutDataProtectionPolicy(ctx context.Context, nr *model.Nor
 	policy := strParam(nr.Params, "DataProtectionPolicy")
 	raw, _ := json.Marshal(map[string]string{"policy": policy})
 	entry := store.ResourceEntry{Type: rtDataProtection, ID: arn, Data: raw}
-	if err := p.resources.Create(ctx, entry); err != nil {
+	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			_ = p.resources.Update(ctx, entry)
+			_ = p.resources.Update(ctx, nr.AccountID, nr.Region, entry)
 		}
 	}
 	return provider.OK(map[string]any{}), nil
@@ -27,7 +27,7 @@ func (p *SNSProvider) PutDataProtectionPolicy(ctx context.Context, nr *model.Nor
 func (p *SNSProvider) GetDataProtectionPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	policy := ""
-	if e, err := p.resources.Get(ctx, rtDataProtection, arn); err == nil {
+	if e, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtDataProtection, arn); err == nil {
 		var m map[string]string
 		if json.Unmarshal(e.Data, &m) == nil {
 			policy = m["policy"]

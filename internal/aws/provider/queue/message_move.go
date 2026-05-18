@@ -69,7 +69,7 @@ func (p *QueueProvider) StartMessageMoveTask(ctx context.Context, nr *model.Norm
 
 	// Validate source queue exists
 	sourceURL := arnToURL(sourceArn, 4566)
-	if _, err := p.resources.Get(ctx, "sqs_queues", sourceURL); err != nil {
+	if _, err := p.resources.Get(ctx, "", "", "sqs_queues", sourceURL); err != nil {
 		return nil, model.NewProviderError("QueueDoesNotExist", "The specified source queue does not exist", 400)
 	}
 
@@ -131,7 +131,7 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 			globalMoveTasks.mu.Unlock()
 			return
 		case <-ticker.C:
-			msgs, err := p.messages.Receive(ctx, sourceURL, 1, time.Now())
+			msgs, err := p.messages.Receive(ctx, "", "", sourceURL, 1, time.Now())
 			if err != nil || len(msgs) == 0 {
 				globalMoveTasks.mu.Lock()
 				task.status = "COMPLETED"
@@ -154,8 +154,8 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 				VisibleAt:         time.Time{},
 				DelayUntil:        time.Time{},
 			}
-			p.messages.Send(ctx, moved)
-			p.messages.Delete(ctx, sourceURL, msg.ReceiptHandle)
+			p.messages.Send(ctx, "", "", moved)
+			p.messages.Delete(ctx, "", "", sourceURL, msg.ReceiptHandle)
 			globalMoveTasks.mu.Lock()
 			task.messagesMoved++
 			globalMoveTasks.mu.Unlock()
