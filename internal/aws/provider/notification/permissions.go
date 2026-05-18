@@ -13,7 +13,7 @@ func (p *SNSProvider) AddPermission(ctx context.Context, nr *model.NormalizedReq
 	label := strParam(nr.Params, "Label")
 
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	if td.Attributes == nil {
@@ -45,7 +45,7 @@ func (p *SNSProvider) AddPermission(ctx context.Context, nr *model.NormalizedReq
 	raw, _ := json.Marshal(doc)
 	td.Attributes["Policy"] = string(raw)
 
-	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, "sns_topics", arn, td)
+	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td)
 }
 
 func (p *SNSProvider) RemovePermission(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -53,7 +53,7 @@ func (p *SNSProvider) RemovePermission(ctx context.Context, nr *model.Normalized
 	label := strParam(nr.Params, "Label")
 
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	if td.Attributes != nil {
@@ -75,7 +75,7 @@ func (p *SNSProvider) RemovePermission(ctx context.Context, nr *model.Normalized
 			td.Attributes["Policy"] = string(raw)
 		}
 	}
-	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, "sns_topics", arn, td)
+	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td)
 }
 
 func extractSNSMemberList(params map[string]any, key string) []string {

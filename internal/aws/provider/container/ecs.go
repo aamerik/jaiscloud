@@ -472,6 +472,8 @@ type service struct {
 	RunningCount   int    `json:"runningCount"`
 	PendingCount   int    `json:"pendingCount"`
 	Status         string `json:"status"`
+	AccountID      string `json:"accountId,omitempty"`
+	Region         string `json:"region,omitempty"`
 }
 
 func (s service) toWire() map[string]any {
@@ -505,6 +507,8 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 		RunningCount:   0,
 		PendingCount:   0,
 		Status:         "ACTIVE",
+		AccountID:      nr.AccountID,
+		Region:         nr.Region,
 	}
 	id := clusterName + "/" + svcName
 	data, _ := json.Marshal(svc)
@@ -517,7 +521,7 @@ func (p *ContainerProvider) CreateService(ctx context.Context, nr *model.Normali
 	// Launch background goroutine to ramp RunningCount up to DesiredCount.
 	if desired > 0 {
 		p.wg.Add(1)
-		go p.reconcileService(id)
+		go p.reconcileService(id, nr.AccountID, nr.Region)
 	}
 	return provider.OK(map[string]any{"service": svc.toWire()}), nil
 }
@@ -571,7 +575,7 @@ func (p *ContainerProvider) UpdateService(ctx context.Context, nr *model.Normali
 	p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtService, ID: id, Data: data})
 	if needsRamp {
 		p.wg.Add(1)
-		go p.reconcileService(id)
+		go p.reconcileService(id, nr.AccountID, nr.Region)
 	}
 	return provider.OK(map[string]any{"service": svc.toWire()}), nil
 }
@@ -579,7 +583,7 @@ func (p *ContainerProvider) UpdateService(ctx context.Context, nr *model.Normali
 // reconcileService increments RunningCount by 1 every 2 seconds until it
 // reaches DesiredCount. It reads the current state from the store each tick
 // so it picks up any concurrent DesiredCount changes (e.g. scale-down or delete).
-func (p *ContainerProvider) reconcileService(id string) {
+func (p *ContainerProvider) reconcileService(id, account, region string) {
 	defer p.wg.Done()
 	for {
 		select {
@@ -588,7 +592,7 @@ func (p *ContainerProvider) reconcileService(id string) {
 		case <-time.After(2 * time.Second):
 		}
 
-		e, err := p.resources.Get(p.ctx, "", "", rtService, id)
+		e, err := p.resources.Get(p.ctx, account, region, rtService, id)
 		if err != nil {
 			// Service deleted — stop.
 			return
@@ -602,7 +606,7 @@ func (p *ContainerProvider) reconcileService(id string) {
 
 		svc.RunningCount++
 		data, _ := json.Marshal(svc)
-		p.resources.Update(p.ctx, "", "", store.ResourceEntry{Type: rtService, ID: id, Data: data})
+		p.resources.Update(p.ctx, account, region, store.ResourceEntry{Type: rtService, ID: id, Data: data})
 
 		slog.Debug("ecs: service reconciliation tick", "service", id,
 			"running", svc.RunningCount, "desired", svc.DesiredCount)
@@ -660,13 +664,15 @@ func (p *ContainerProvider) ListServices(ctx context.Context, nr *model.Normaliz
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
 type task struct {
-	TaskArn        string           `json:"taskArn"`
-	ClusterArn     string           `json:"clusterArn"`
-	TaskDefinition string           `json:"taskDefinition"`
-	LastStatus     string           `json:"lastStatus"`
-	DesiredStatus  string           `json:"desiredStatus"`
-	Group          string           `json:"group"`
-	Containers     []taskContainer  `json:"containers,omitempty"`
+	TaskArn        string          `json:"taskArn"`
+	ClusterArn     string          `json:"clusterArn"`
+	TaskDefinition string          `json:"taskDefinition"`
+	LastStatus     string          `json:"lastStatus"`
+	DesiredStatus  string          `json:"desiredStatus"`
+	Group          string          `json:"group"`
+	Containers     []taskContainer `json:"containers,omitempty"`
+	AccountID      string          `json:"accountId,omitempty"`
+	Region         string          `json:"region,omitempty"`
 }
 
 type taskContainer struct {
@@ -731,6 +737,8 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 			LastStatus:     "PROVISIONING",
 			DesiredStatus:  "RUNNING",
 			Containers:     containers,
+			AccountID:      nr.AccountID,
+			Region:         nr.Region,
 		}
 		data, _ := json.Marshal(t)
 		p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtTask, ID: id, Data: data})
@@ -759,7 +767,7 @@ func (p *ContainerProvider) RunTask(ctx context.Context, nr *model.NormalizedReq
 			p.handles[id] = handle
 			p.mu.Unlock()
 			p.wg.Add(1)
-			go p.watchTask(id, taskARN, handle)
+			go p.watchTask(id, taskARN, nr.AccountID, nr.Region, handle)
 		}
 
 		tasks = append(tasks, t.toWire())
@@ -855,7 +863,7 @@ func (p *ContainerProvider) buildTaskSpec(nr *model.NormalizedRequest, clusterNa
 }
 
 // watchTask polls the executor every 2s and updates the persisted task record.
-func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.TaskHandle) {
+func (p *ContainerProvider) watchTask(shortID, taskARN, account, region string, handle ecsexec.TaskHandle) {
 	defer p.wg.Done()
 	for {
 		select {
@@ -870,7 +878,7 @@ func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.Ta
 			continue
 		}
 
-		e, getErr := p.resources.Get(p.ctx, "", "", rtTask, shortID)
+		e, getErr := p.resources.Get(p.ctx, account, region, rtTask, shortID)
 		if getErr != nil {
 			return
 		}
@@ -890,7 +898,7 @@ func (p *ContainerProvider) watchTask(shortID, taskARN string, handle ecsexec.Ta
 		}
 
 		data, _ := json.Marshal(t)
-		p.resources.Update(p.ctx, "", "", store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
+		p.resources.Update(p.ctx, account, region, store.ResourceEntry{Type: rtTask, ID: shortID, Data: data})
 
 		if st.LastStatus == "STOPPED" {
 			p.mu.Lock()

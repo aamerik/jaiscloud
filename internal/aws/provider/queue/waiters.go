@@ -65,6 +65,7 @@ func WaitForMessages(
 	ctx context.Context,
 	store sqsstore.SQSMessageStore,
 	waiters *Waiters,
+	account, region string,
 	queueURL string,
 	maxMessages int,
 	waitTime time.Duration,
@@ -72,7 +73,7 @@ func WaitForMessages(
 ) ([]sqsstore.SQSMessage, error) {
 	deadline := clk.Now().Add(waitTime)
 	for {
-		msgs, err := store.Receive(ctx, "", "", queueURL, maxMessages, clk.Now())
+		msgs, err := store.Receive(ctx, account, region, queueURL, maxMessages, clk.Now())
 		if err != nil {
 			return nil, err
 		}

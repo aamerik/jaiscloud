@@ -91,13 +91,25 @@ func (s *MemoryResourceStore) List(ctx context.Context, account, region, resourc
 			if len(parts) < 4 || parts[2] != resourceType {
 				continue
 			}
+			if prefix != "" && !strings.Contains(e.ID, prefix) {
+				continue
+			}
+			// Populate Account/Region from key for cross-scope callers.
+			entry := e
+			entry.Account = parts[0]
+			entry.Region = parts[1]
+			results = append(results, entry)
+			continue
 		} else if !strings.HasPrefix(k, scopePrefix) {
 			continue
 		}
 		if prefix != "" && !strings.Contains(e.ID, prefix) {
 			continue
 		}
-		results = append(results, e)
+		entry := e
+		entry.Account = account
+		entry.Region = region
+		results = append(results, entry)
 	}
 	return results, nil
 }

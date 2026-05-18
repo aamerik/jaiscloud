@@ -20,17 +20,19 @@ import (
 // ComputeProvider handles EC2 instances, VPC networking, security groups, and key pairs.
 type ComputeProvider struct {
 	resources store.ResourceStore
+	accountID string
+	region    string
 }
 
-func New(resources store.ResourceStore) *ComputeProvider {
-	p := &ComputeProvider{resources: resources}
+func New(resources store.ResourceStore, accountID, region string) *ComputeProvider {
+	p := &ComputeProvider{resources: resources, accountID: accountID, region: region}
 	p.seedDefaultVPC(context.Background())
 	return p
 }
 
 func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 	// Return if a default VPC already exists (e.g. restarted with full mode).
-	entries, _ := p.resources.List(ctx, "", "", rtVpc, "")
+	entries, _ := p.resources.List(ctx, p.accountID, p.region, rtVpc, "")
 	for _, e := range entries {
 		var vpc ec2Vpc
 		json.Unmarshal(e.Data, &vpc)
@@ -48,7 +50,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 		EnableDnsHostnames: true,
 	}
 	data, _ := json.Marshal(vpc)
-	_ = p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
+	_ = p.resources.Create(ctx, p.accountID, p.region, store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
 
 	// Seed three default subnets in different AZs.
 	azCidrs := [][2]string{
@@ -69,7 +71,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context) {
 			MapPublicIpOnLaunch:     true,
 		}
 		sdata, _ := json.Marshal(subnet)
-		_ = p.resources.Create(ctx, "", "", store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
+		_ = p.resources.Create(ctx, p.accountID, p.region, store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
 	}
 }
 

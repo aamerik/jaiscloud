@@ -297,7 +297,7 @@ func (p *Provider) DeleteDeliveryStream(ctx context.Context, nr *model.Normalize
 	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtDeliveryStream, name)
 	// Remove buffer
 	p.mu.Lock()
-	delete(p.buffers, name)
+	delete(p.buffers, bufferKey(nr.AccountID, nr.Region, name))
 	p.mu.Unlock()
 	return provider.OK(map[string]any{}), nil
 }
@@ -334,20 +334,26 @@ func (p *Provider) UpdateDestination(ctx context.Context, nr *model.NormalizedRe
 	return provider.OK(map[string]any{}), nil
 }
 
+// bufferKey returns the buffers map key encoding account, region, and stream name.
+func bufferKey(account, region, name string) string {
+	return account + ":" + region + ":" + name
+}
+
 // bufferRecord appends a decoded record to the in-memory buffer for a stream.
 // If the buffer exceeds maxBufferBytes, it triggers an async flush.
-func (p *Provider) bufferRecord(ctx context.Context, streamName string, data []byte) {
+func (p *Provider) bufferRecord(ctx context.Context, account, region, streamName string, data []byte) {
+	key := bufferKey(account, region, streamName)
 	p.mu.Lock()
-	p.buffers[streamName] = append(p.buffers[streamName], string(data))
+	p.buffers[key] = append(p.buffers[key], string(data))
 	totalBytes := 0
-	for _, r := range p.buffers[streamName] {
+	for _, r := range p.buffers[key] {
 		totalBytes += len(r)
 	}
 	shouldFlush := totalBytes >= maxBufferBytes
 	p.mu.Unlock()
 
 	if shouldFlush {
-		go p.flushStream(ctx, streamName)
+		go p.flushStream(ctx, account, region, streamName)
 	}
 }
 
@@ -366,18 +372,19 @@ func s3KeyForStream(prefix string) string {
 }
 
 // flushStream writes buffered records for a stream to S3.
-func (p *Provider) flushStream(ctx context.Context, streamName string) {
+func (p *Provider) flushStream(ctx context.Context, account, region, streamName string) {
+	key := bufferKey(account, region, streamName)
 	p.mu.Lock()
-	records := p.buffers[streamName]
+	records := p.buffers[key]
 	if len(records) == 0 {
 		p.mu.Unlock()
 		return
 	}
-	p.buffers[streamName] = nil
+	p.buffers[key] = nil
 	p.mu.Unlock()
 
 	// Load stream config to find the S3 destination
-	s, err := p.loadStream(ctx, "", "", streamName)
+	s, err := p.loadStream(ctx, account, region, streamName)
 	if err != nil || s.S3Bucket == "" || p.s3writer == nil {
 		return
 	}
@@ -389,20 +396,24 @@ func (p *Provider) flushStream(ctx context.Context, streamName string) {
 		buf.WriteByte('\n')
 	}
 
-	key := s3KeyForStream(s.S3Prefix)
-	_ = p.s3writer.InternalPutObject(ctx, s.S3Bucket, key, "application/octet-stream", buf.Bytes())
+	s3key := s3KeyForStream(s.S3Prefix)
+	_ = p.s3writer.InternalPutObject(ctx, s.S3Bucket, s3key, "application/octet-stream", buf.Bytes())
 }
 
 // FlushAll flushes all stream buffers immediately. Used by the admin flush endpoint.
 func (p *Provider) FlushAll(ctx context.Context) {
 	p.mu.Lock()
-	names := make([]string, 0, len(p.buffers))
-	for name := range p.buffers {
-		names = append(names, name)
+	keys := make([]string, 0, len(p.buffers))
+	for k := range p.buffers {
+		keys = append(keys, k)
 	}
 	p.mu.Unlock()
-	for _, name := range names {
-		p.flushStream(ctx, name)
+	for _, k := range keys {
+		// key format: "account:region:streamName"
+		parts := strings.SplitN(k, ":", 3)
+		if len(parts) == 3 {
+			p.flushStream(ctx, parts[0], parts[1], parts[2])
+		}
 	}
 }
 
@@ -421,7 +432,7 @@ func (p *Provider) PutRecord(ctx context.Context, nr *model.NormalizedRequest) (
 			if dataStr, ok := rec["Data"].(string); ok {
 				decoded, derr := base64.StdEncoding.DecodeString(dataStr)
 				if derr == nil {
-					p.bufferRecord(ctx, name, decoded)
+					p.bufferRecord(ctx, nr.AccountID, nr.Region, name, decoded)
 				}
 			}
 		}
@@ -451,7 +462,7 @@ func (p *Provider) PutRecordBatch(ctx context.Context, nr *model.NormalizedReque
 				if dataStr, ok := rec["Data"].(string); ok {
 					decoded, derr := base64.StdEncoding.DecodeString(dataStr)
 					if derr == nil {
-						p.bufferRecord(ctx, name, decoded)
+						p.bufferRecord(ctx, nr.AccountID, nr.Region, name, decoded)
 					}
 				}
 			}

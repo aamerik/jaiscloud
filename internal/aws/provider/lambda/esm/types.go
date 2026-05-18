@@ -48,6 +48,7 @@ type EventSourceMapping struct {
 	FilterCriteria                 string            `json:"FilterCriteria,omitempty"`
 	DestinationConfig              DestinationConfig `json:"DestinationConfig,omitempty"`
 	Region                         string            `json:"Region"`
+	AccountID                      string            `json:"AccountID"`
 	Cloud                          string            `json:"Cloud"`
 
 	ConsecutiveErrors  int    `json:"-"`

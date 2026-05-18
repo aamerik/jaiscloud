@@ -87,6 +87,8 @@ func (p *SecretProvider) CreateSecret(ctx context.Context, nr *model.NormalizedR
 	tags := extractTags(nr.Params)
 
 	e := SecretEntry{
+		AccountID:    nr.AccountID,
+		Region:       nr.Region,
 		SecretID:     secretID,
 		Name:         name,
 		Description:  desc,

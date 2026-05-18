@@ -10,7 +10,9 @@ import (
 
 const (
 	// LSIAPrefix is the prefix emitted by JaisCloud for session credentials.
-	LSIAPrefix = "LSIA"
+	// Using "ASIA" matches the real AWS prefix for temporary/assumed-role credentials,
+	// which is required for SDK compatibility and test assertions.
+	LSIAPrefix = "ASIA"
 	// LKIAPrefix is the alternative LocalStack-compatible prefix.
 	LKIAPrefix = "LKIA"
 

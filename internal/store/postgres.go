@@ -151,12 +151,25 @@ func (s *PostgresResourceStore) Delete(ctx context.Context, account, region, res
 }
 
 func (s *PostgresResourceStore) List(ctx context.Context, account, region, resourceType, prefix string) ([]ResourceEntry, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT resource_type, id, data, created_at, updated_at
-		FROM jc_resources
-		WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR id LIKE '%' || $4 || '%')
-		ORDER BY created_at
-	`, account, region, resourceType, prefix)
+	var rows pgx.Rows
+	var err error
+	if account == "" && region == "" {
+		// Cross-scope scan: match all accounts/regions for this resource type.
+		// Mirrors MemoryResourceStore behaviour when both account and region are "".
+		rows, err = s.pool.Query(ctx, `
+			SELECT account_id, region, resource_type, id, data, created_at, updated_at
+			FROM jc_resources
+			WHERE resource_type=$1 AND ($2 = '' OR id LIKE '%' || $2 || '%')
+			ORDER BY created_at
+		`, resourceType, prefix)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+			SELECT account_id, region, resource_type, id, data, created_at, updated_at
+			FROM jc_resources
+			WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR id LIKE '%' || $4 || '%')
+			ORDER BY created_at
+		`, account, region, resourceType, prefix)
+	}
 	if err != nil {
 		return nil, wrapPgError("List", err)
 	}
@@ -166,7 +179,7 @@ func (s *PostgresResourceStore) List(ctx context.Context, account, region, resou
 	for rows.Next() {
 		var e ResourceEntry
 		var data []byte
-		if err := rows.Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.Account, &e.Region, &e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, wrapPgError("List scan", err)
 		}
 		e.Data = json.RawMessage(data)

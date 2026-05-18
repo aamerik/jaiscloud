@@ -70,7 +70,7 @@ func (p *IAMProvider) CreateOpenIDConnectProvider(ctx context.Context, nr *model
 func (p *IAMProvider) GetOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	return provider.OK(oidcToWire(op)), nil
@@ -102,18 +102,18 @@ func (p *IAMProvider) DeleteOpenIDConnectProvider(ctx context.Context, nr *model
 func (p *IAMProvider) UpdateOpenIDConnectProviderThumbprint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	op.Thumbprints = extractStrList(nr.Params, "ThumbprintList")
-	return nil, saveEntry(ctx, p.resources, rtOIDCProvider, arn, op)
+	return nil, saveEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, op)
 }
 
 func (p *IAMProvider) AddClientIDToOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	clientID := strParam(nr.Params, "ClientID")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	for _, id := range op.ClientIDs {
@@ -122,14 +122,14 @@ func (p *IAMProvider) AddClientIDToOpenIDConnectProvider(ctx context.Context, nr
 		}
 	}
 	op.ClientIDs = append(op.ClientIDs, clientID)
-	return nil, saveEntry(ctx, p.resources, rtOIDCProvider, arn, op)
+	return nil, saveEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, op)
 }
 
 func (p *IAMProvider) RemoveClientIDFromOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	clientID := strParam(nr.Params, "ClientID")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	newIDs := op.ClientIDs[:0]
@@ -139,13 +139,13 @@ func (p *IAMProvider) RemoveClientIDFromOpenIDConnectProvider(ctx context.Contex
 		}
 	}
 	op.ClientIDs = newIDs
-	return nil, saveEntry(ctx, p.resources, rtOIDCProvider, arn, op)
+	return nil, saveEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, op)
 }
 
 func (p *IAMProvider) TagOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	tags := extractIAMTags(nr.Params)
@@ -155,26 +155,26 @@ func (p *IAMProvider) TagOpenIDConnectProvider(ctx context.Context, nr *model.No
 	for k, v := range tags {
 		op.Tags[k] = v
 	}
-	return nil, saveEntry(ctx, p.resources, rtOIDCProvider, arn, op)
+	return nil, saveEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, op)
 }
 
 func (p *IAMProvider) UntagOpenIDConnectProvider(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	keys := extractIAMTagKeys(nr.Params)
 	for _, k := range keys {
 		delete(op.Tags, k)
 	}
-	return nil, saveEntry(ctx, p.resources, rtOIDCProvider, arn, op)
+	return nil, saveEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, op)
 }
 
 func (p *IAMProvider) ListOpenIDConnectProviderTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "OpenIDConnectProviderArn")
 	var op oidcProviderData
-	if err := loadEntry(ctx, p.resources, rtOIDCProvider, arn, &op); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtOIDCProvider, arn, &op); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "OIDC provider not found", http.StatusNotFound)
 	}
 	tags := make([]map[string]any, 0, len(op.Tags))

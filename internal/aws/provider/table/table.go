@@ -425,7 +425,7 @@ func (p *TableProvider) PutItem(ctx context.Context, nr *model.NormalizedRequest
 	if existingForStream != nil {
 		eventName = "MODIFY"
 	}
-	p.appendStreamRecord(name, eventName, newEventID(), extractKeys(item, ts), item, existingForStream)
+	p.appendStreamRecord(nr.AccountID, nr.Region, name, eventName, newEventID(), extractKeys(item, ts), item, existingForStream)
 	result := map[string]any{}
 	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
 		result["Attributes"] = oldItem
@@ -481,7 +481,7 @@ func (p *TableProvider) DeleteItem(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, storeErrToProvider(err)
 	}
-	p.appendStreamRecord(name, "REMOVE", newEventID(), key, nil, oldItem)
+	p.appendStreamRecord(nr.AccountID, nr.Region, name, "REMOVE", newEventID(), key, nil, oldItem)
 	result := map[string]any{}
 	if cond.ReturnValues == "ALL_OLD" && oldItem != nil {
 		result["Attributes"] = oldItem
@@ -518,7 +518,7 @@ func (p *TableProvider) UpdateItem(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, storeErrToProvider(err)
 	}
-	p.appendStreamRecord(name, "MODIFY", newEventID(), key, updated, oldItem)
+	p.appendStreamRecord(nr.AccountID, nr.Region, name, "MODIFY", newEventID(), key, updated, oldItem)
 	result := map[string]any{}
 	switch spec.ReturnValues {
 	case "ALL_NEW":

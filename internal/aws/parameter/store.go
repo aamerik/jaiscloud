@@ -15,6 +15,8 @@ var (
 
 // ParameterEntry holds metadata and the encrypted value for a parameter.
 type ParameterEntry struct {
+	AccountID   string
+	Region      string
 	Name        string
 	Type        string // "String" | "StringList" | "SecureString"
 	Description string

@@ -20,6 +20,11 @@ type ResourceEntry struct {
 	Data      json.RawMessage // serialised resource state (JSONB in Postgres mode)
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Account and Region are populated by List when doing a cross-scope scan
+	// (account="" and region=""). Callers that need to Update after a cross-scope
+	// List must use these values for the subsequent Update call.
+	Account string
+	Region  string
 }
 
 // ResourceStore manages control-plane resource metadata.

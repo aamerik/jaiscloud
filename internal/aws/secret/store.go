@@ -16,6 +16,8 @@ var (
 
 // SecretEntry holds metadata for a secret (not the value).
 type SecretEntry struct {
+	AccountID    string
+	Region       string
 	SecretID     string
 	Name         string
 	Description  string
@@ -38,6 +40,8 @@ type SecretEntry struct {
 
 // VersionEntry holds an encrypted version of a secret value.
 type VersionEntry struct {
+	AccountID    string
+	Region       string
 	SecretID     string
 	VersionID    string
 	SecretBinary []byte   // AES-GCM ciphertext (plaintext in lite/noop mode)

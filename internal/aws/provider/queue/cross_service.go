@@ -60,12 +60,15 @@ func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, 
 // the message to the correct per-scope store (multi-account fix §11.1.1).
 func (p *QueueProvider) resolveQueueURLWithScope(ctx context.Context, arnOrURL string) (url, account, region string, err error) {
 	if strings.HasPrefix(arnOrURL, "http://") || strings.HasPrefix(arnOrURL, "https://") {
-		// Parse account+region from URL path: http://host/{account}/{name}
-		account, region = accountRegionFromQueueURL(arnOrURL)
-		if _, e := p.resources.Get(ctx, account, region, "sqs_queues", arnOrURL); e != nil {
-			return "", "", "", fmt.Errorf("queue: URL not found: %s", arnOrURL)
+		// Region is not encoded in SQS URLs; use cross-scope List to find account+region.
+		// Use cross-scope List to find the queue entry and recover its region.
+		entries, _ := p.resources.List(ctx, "", "", "sqs_queues", "")
+		for _, entry := range entries {
+			if entry.ID == arnOrURL {
+				return arnOrURL, entry.Account, entry.Region, nil
+			}
 		}
-		return arnOrURL, account, region, nil
+		return "", "", "", fmt.Errorf("queue: URL not found: %s", arnOrURL)
 	}
 	if strings.HasPrefix(arnOrURL, "arn:") {
 		parsed, e := awsarn.Parse(arnOrURL)
@@ -85,8 +88,8 @@ func (p *QueueProvider) resolveQueueURLWithScope(ctx context.Context, arnOrURL s
 		return queueURL, account, region, nil
 	}
 	// Bare name — fall back to scanning without account/region scope.
-	queueURL, e := p.resolveQueueURLByName(ctx, arnOrURL)
-	return queueURL, "", "", e
+	queueURL, acct, reg, e := p.resolveQueueURLByName(ctx, arnOrURL)
+	return queueURL, acct, reg, e
 }
 
 // accountRegionFromQueueURL parses account and region from a JaisCloud SQS URL.

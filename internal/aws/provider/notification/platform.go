@@ -41,7 +41,7 @@ func (p *SNSProvider) CreatePlatformApplication(ctx context.Context, nr *model.N
 		}
 	}
 	app := platformApp{PlatformApplicationArn: arn, Platform: platform, Name: name, Attributes: attrs}
-	if err := saveEntry(ctx, p.resources, rtPlatformApp, arn, app); err != nil {
+	if err := saveEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformApp, arn, app); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"PlatformApplicationArn": arn}), nil
@@ -50,7 +50,7 @@ func (p *SNSProvider) CreatePlatformApplication(ctx context.Context, nr *model.N
 func (p *SNSProvider) GetPlatformApplicationAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PlatformApplicationArn")
 	var app platformApp
-	if err := loadEntry(ctx, p.resources, rtPlatformApp, arn, &app); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformApp, arn, &app); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Platform application not found")
 	}
 	return provider.OK(map[string]any{"Attributes": app.Attributes}), nil
@@ -59,7 +59,7 @@ func (p *SNSProvider) GetPlatformApplicationAttributes(ctx context.Context, nr *
 func (p *SNSProvider) SetPlatformApplicationAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "PlatformApplicationArn")
 	var app platformApp
-	if err := loadEntry(ctx, p.resources, rtPlatformApp, arn, &app); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformApp, arn, &app); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Platform application not found")
 	}
 	if m, ok := nr.Params["Attributes"].(map[string]any); ok {
@@ -69,7 +69,7 @@ func (p *SNSProvider) SetPlatformApplicationAttributes(ctx context.Context, nr *
 			}
 		}
 	}
-	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, rtPlatformApp, arn, app)
+	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformApp, arn, app)
 }
 
 func (p *SNSProvider) DeletePlatformApplication(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -127,7 +127,7 @@ func (p *SNSProvider) CreatePlatformEndpoint(ctx context.Context, nr *model.Norm
 func (p *SNSProvider) GetEndpointAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "EndpointArn")
 	var ep platformEndpoint
-	if err := loadEntry(ctx, p.resources, rtPlatformEndpoint, arn, &ep); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformEndpoint, arn, &ep); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Endpoint not found")
 	}
 	return provider.OK(map[string]any{"Attributes": ep.Attributes}), nil
@@ -136,7 +136,7 @@ func (p *SNSProvider) GetEndpointAttributes(ctx context.Context, nr *model.Norma
 func (p *SNSProvider) SetEndpointAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "EndpointArn")
 	var ep platformEndpoint
-	if err := loadEntry(ctx, p.resources, rtPlatformEndpoint, arn, &ep); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformEndpoint, arn, &ep); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Endpoint not found")
 	}
 	if m, ok := nr.Params["Attributes"].(map[string]any); ok {
@@ -146,7 +146,7 @@ func (p *SNSProvider) SetEndpointAttributes(ctx context.Context, nr *model.Norma
 			}
 		}
 	}
-	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, rtPlatformEndpoint, arn, ep)
+	return provider.OK(map[string]any{}), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, rtPlatformEndpoint, arn, ep)
 }
 
 func (p *SNSProvider) DeleteEndpoint(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

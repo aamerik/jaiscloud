@@ -214,6 +214,7 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		FilterCriteria:                 filterCriteria,
 		DestinationConfig:              destCfg,
 		Region:                         region,
+		AccountID:                      nr.AccountID,
 		Cloud:                          cloud,
 		QueueName:                      queueName,
 		TableName:                      tableName,
@@ -369,7 +370,7 @@ func (p *Provider) handleDeleteESM(ctx context.Context, nr *model.NormalizedRequ
 	// Stop poller before deletion
 	p.stopPollerForMapping(id)
 
-	if err := p.resources.Delete(ctx, nr.AccountID, nr.Region, esmResourceType, id); err != nil {
+	if err := p.resources.Delete(ctx, esm.AccountID, esm.Region, esmResourceType, id); err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "event source mapping not found: "+id)
 	}
 
@@ -380,15 +381,17 @@ func (p *Provider) handleDeleteESM(ctx context.Context, nr *model.NormalizedRequ
 // ─── Helper methods ───────────────────────────────────────────────────────────
 
 func (p *Provider) loadESM(ctx context.Context, id string) (EventSourceMapping, error) {
-	entry, err := p.resources.Get(ctx, "", "", esmResourceType, id)
+	entries, err := p.resources.List(ctx, "", "", esmResourceType, id)
 	if err != nil {
 		return EventSourceMapping{}, err
 	}
-	var esm EventSourceMapping
-	if err := json.Unmarshal(entry.Data, &esm); err != nil {
-		return EventSourceMapping{}, err
+	for _, entry := range entries {
+		var esm EventSourceMapping
+		if json.Unmarshal(entry.Data, &esm) == nil && esm.UUID == id {
+			return p.restoreTransientFields(esm), nil
+		}
 	}
-	return p.restoreTransientFields(esm), nil
+	return EventSourceMapping{}, store.ErrNotFound
 }
 
 func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error {
@@ -402,9 +405,9 @@ func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error
 		Data:      data,
 		UpdatedAt: time.Now(),
 	}
-	if err := p.resources.Create(ctx, "", "", entry); err != nil {
+	if err := p.resources.Create(ctx, esm.AccountID, esm.Region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return p.resources.Update(ctx, "", "", entry)
+			return p.resources.Update(ctx, esm.AccountID, esm.Region, entry)
 		}
 		return err
 	}

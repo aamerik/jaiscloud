@@ -611,7 +611,11 @@ func (p *EventBridgeProvider) subscribeToEventBus() {
 // deliverEvent matches envelope against all ENABLED rules and sends to matching targets.
 // It also checks all archives and appends matching events to their in-memory rings.
 func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[string]any) {
-	ruleEntries, _ := p.resources.List(ctx, "", "", resTypeRule, "")
+	// Extract account and region from the event envelope so rule/target lookups are scoped correctly.
+	account, _ := envelope["account"].(string)
+	region, _ := envelope["region"].(string)
+
+	ruleEntries, _ := p.resources.List(ctx, account, region, resTypeRule, "")
 	for _, e := range ruleEntries {
 		var rule ruleData
 		if err := json.Unmarshal(e.Data, &rule); err != nil {
@@ -628,7 +632,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 			continue
 		}
 		busName := normBus(rule.EventBusName)
-		tgts, _ := p.resources.List(ctx, "", "", resTypeTarget, targetKeyPrefix(busName, rule.Name))
+		tgts, _ := p.resources.List(ctx, account, region, resTypeTarget, targetKeyPrefix(busName, rule.Name))
 		var wg sync.WaitGroup
 		for _, te := range tgts {
 			var td targetData
@@ -645,7 +649,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 	}
 
 	// Archive matching.
-	archiveEntries, _ := p.resources.List(ctx, "", "", resTypeArchive, "")
+	archiveEntries, _ := p.resources.List(ctx, account, region, resTypeArchive, "")
 	for _, e := range archiveEntries {
 		var arch ebArchive
 		if err := json.Unmarshal(e.Data, &arch); err != nil {
@@ -665,7 +669,7 @@ func (p *EventBridgeProvider) deliverEvent(ctx context.Context, envelope map[str
 		arch.EventCount++
 		arch.SizeBytes += int64(len(b))
 		data, _ := json.Marshal(arch)
-		_ = p.resources.Update(ctx, "", "", store.ResourceEntry{Type: resTypeArchive, ID: arch.Name, Data: data})
+		_ = p.resources.Update(ctx, account, region, store.ResourceEntry{Type: resTypeArchive, ID: arch.Name, Data: data})
 
 		p.archiveMu.Lock()
 		p.archiveEvents[arch.Name] = append(p.archiveEvents[arch.Name], envelope)

@@ -11,13 +11,13 @@ import (
 // InternalReceive is the ESM-internal SQS receive that bypasses the wire layer.
 // It resolves the queue URL from the queue name, then calls the message store directly.
 func (p *QueueProvider) InternalReceive(ctx context.Context, queueName string, maxMessages int, waitTimeSec int) ([]lambdaesm.InternalMessage, error) {
-	queueURL, err := p.resolveQueueURLByName(ctx, queueName)
+	queueURL, account, region, err := p.resolveQueueURLByName(ctx, queueName)
 	if err != nil {
 		return nil, err
 	}
 
 	now := p.clock.Now()
-	msgs, err := p.messages.Receive(ctx, "", "", queueURL, maxMessages, now)
+	msgs, err := p.messages.Receive(ctx, account, region, queueURL, maxMessages, now)
 	if err != nil {
 		return nil, err
 	}
@@ -50,34 +50,34 @@ func (p *QueueProvider) InternalReceive(ctx context.Context, queueName string, m
 
 // InternalDeleteBatch deletes a batch of messages by receipt handle for ESM use.
 func (p *QueueProvider) InternalDeleteBatch(ctx context.Context, queueName string, receiptHandles []string) error {
-	queueURL, err := p.resolveQueueURLByName(ctx, queueName)
+	queueURL, account, region, err := p.resolveQueueURLByName(ctx, queueName)
 	if err != nil {
 		return err
 	}
 	for _, rh := range receiptHandles {
 		// SQS silently succeeds for invalid handles — mirror that behaviour here
-		_ = p.messages.Delete(ctx, "", "", queueURL, rh)
+		_ = p.messages.Delete(ctx, account, region, queueURL, rh)
 	}
 	return nil
 }
 
-// resolveQueueURLByName scans all SQS queues and finds the one whose URL ends
-// with the given queue name (last path segment).
-func (p *QueueProvider) resolveQueueURLByName(ctx context.Context, queueName string) (string, error) {
-	entries, err := p.resources.List(ctx, "", "", "sqs_queues", "")
-	if err != nil {
-		return "", fmt.Errorf("esm: failed to list queues: %w", err)
+// resolveQueueURLByName scans all SQS queues (cross-scope) and finds the one whose URL
+// ends with the given queue name (last path segment). Returns the URL and its stored scope.
+func (p *QueueProvider) resolveQueueURLByName(ctx context.Context, queueName string) (url, account, region string, err error) {
+	entries, listErr := p.resources.List(ctx, "", "", "sqs_queues", "")
+	if listErr != nil {
+		return "", "", "", fmt.Errorf("esm: failed to list queues: %w", listErr)
 	}
 	for _, e := range entries {
 		// The resource ID for SQS queues is the queue URL itself
-		url := e.ID
+		qURL := e.ID
 		// Match last path segment
-		idx := strings.LastIndex(url, "/")
-		if idx >= 0 && url[idx+1:] == queueName {
-			return url, nil
+		idx := strings.LastIndex(qURL, "/")
+		if idx >= 0 && qURL[idx+1:] == queueName {
+			return qURL, e.Account, e.Region, nil
 		}
 	}
-	return "", fmt.Errorf("esm: queue not found: %s", queueName)
+	return "", "", "", fmt.Errorf("esm: queue not found: %s", queueName)
 }
 
 // Ensure QueueProvider satisfies QueueInternalAPI at compile time.

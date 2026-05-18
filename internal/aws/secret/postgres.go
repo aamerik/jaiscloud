@@ -26,9 +26,9 @@ func NewPostgresSecretStore(pool *pgxpool.Pool) *PostgresSecretStore {
 func (s *PostgresSecretStore) CreateSecret(ctx context.Context, e SecretEntry) error {
 	data, _ := json.Marshal(secretMeta(e))
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_secrets (secret_id, name, secret_data)
-		VALUES ($1, $2, $3)`,
-		e.SecretID, e.Name, data,
+		INSERT INTO jc_sm_secrets (account_id, region, secret_id, name, secret_data)
+		VALUES ($1, $2, $3, $4, $5)`,
+		e.AccountID, e.Region, e.SecretID, e.Name, data,
 	)
 	if err != nil {
 		if isPgUnique(err) {
@@ -41,13 +41,13 @@ func (s *PostgresSecretStore) CreateSecret(ctx context.Context, e SecretEntry) e
 
 func (s *PostgresSecretStore) GetSecret(ctx context.Context, secretID string) (SecretEntry, error) {
 	return s.scanSecret(ctx, `
-		SELECT secret_id, name, secret_data, deleted_at, created_at, updated_at
+		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
 		FROM jc_sm_secrets WHERE secret_id=$1`, secretID)
 }
 
 func (s *PostgresSecretStore) GetSecretByName(ctx context.Context, name string) (SecretEntry, error) {
 	return s.scanSecret(ctx, `
-		SELECT secret_id, name, secret_data, deleted_at, created_at, updated_at
+		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
 		FROM jc_sm_secrets WHERE name=$1`, name)
 }
 
@@ -81,7 +81,7 @@ func (s *PostgresSecretStore) DeleteSecret(ctx context.Context, secretID string)
 
 func (s *PostgresSecretStore) ListSecrets(ctx context.Context) ([]SecretEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, name, secret_data, deleted_at, created_at, updated_at
+		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
 		FROM jc_sm_secrets`)
 	if err != nil {
 		return nil, fmt.Errorf("sm postgres: list secrets: %w", err)
@@ -101,6 +101,12 @@ func (s *PostgresSecretStore) ListSecrets(ctx context.Context) ([]SecretEntry, e
 // ─── Version operations ───────────────────────────────────────────────────────
 
 func (s *PostgresSecretStore) PutVersion(ctx context.Context, v VersionEntry) error {
+	// Derive account/region from the parent secret if not explicitly set.
+	if v.AccountID == "" {
+		s.pool.QueryRow(ctx, `SELECT account_id, region FROM jc_sm_secrets WHERE secret_id=$1`, v.SecretID).
+			Scan(&v.AccountID, &v.Region)
+	}
+
 	// Demote current AWSCURRENT to AWSPREVIOUS in the same TX.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -121,11 +127,11 @@ func (s *PostgresSecretStore) PutVersion(ctx context.Context, v VersionEntry) er
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO jc_sm_versions (secret_id, version_id, secret_binary, stages, is_binary)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (secret_id, version_id) DO UPDATE
-		  SET secret_binary=$3, stages=$4, is_binary=$5`,
-		v.SecretID, v.VersionID, v.SecretBinary, v.Stages, v.IsBinary,
+		INSERT INTO jc_sm_versions (account_id, region, secret_id, version_id, secret_binary, stages, is_binary)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (account_id, region, secret_id, version_id) DO UPDATE
+		  SET secret_binary=$5, stages=$6, is_binary=$7`,
+		v.AccountID, v.Region, v.SecretID, v.VersionID, v.SecretBinary, v.Stages, v.IsBinary,
 	)
 	if err != nil {
 		return fmt.Errorf("sm postgres: put version: %w", err)
@@ -155,10 +161,10 @@ func (s *PostgresSecretStore) GetVersion(ctx context.Context, secretID, versionI
 	var v VersionEntry
 	var stages []string
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
+		SELECT account_id, region, secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 AND version_id=$2`,
 		secretID, versionID,
-	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
+	).Scan(&v.AccountID, &v.Region, &v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VersionEntry{}, ErrVersionNotFound
 	}
@@ -173,11 +179,11 @@ func (s *PostgresSecretStore) GetVersionByStage(ctx context.Context, secretID, s
 	var v VersionEntry
 	var stages []string
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
+		SELECT account_id, region, secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 AND $2=ANY(stages)
 		ORDER BY created_at DESC LIMIT 1`,
 		secretID, stage,
-	).Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
+	).Scan(&v.AccountID, &v.Region, &v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VersionEntry{}, ErrVersionNotFound
 	}
@@ -190,7 +196,7 @@ func (s *PostgresSecretStore) GetVersionByStage(ctx context.Context, secretID, s
 
 func (s *PostgresSecretStore) ListVersions(ctx context.Context, secretID string) ([]VersionEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, secret_binary, stages, is_binary, created_at
+		SELECT account_id, region, secret_id, version_id, secret_binary, stages, is_binary, created_at
 		FROM jc_sm_versions WHERE secret_id=$1 ORDER BY created_at DESC`,
 		secretID,
 	)
@@ -202,7 +208,7 @@ func (s *PostgresSecretStore) ListVersions(ctx context.Context, secretID string)
 	for rows.Next() {
 		var v VersionEntry
 		var stages []string
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.AccountID, &v.Region, &v.SecretID, &v.VersionID, &v.SecretBinary, &stages, &v.IsBinary, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		v.Stages = stages
@@ -265,7 +271,7 @@ func scanSecretRow(row pgScanner) (SecretEntry, error) {
 	var e SecretEntry
 	var data []byte
 	var deletedAt *time.Time
-	if err := row.Scan(&e.SecretID, &e.Name, &data, &deletedAt, &e.CreatedAt, &e.UpdatedAt); err != nil {
+	if err := row.Scan(&e.AccountID, &e.Region, &e.SecretID, &e.Name, &data, &deletedAt, &e.CreatedAt, &e.UpdatedAt); err != nil {
 		return SecretEntry{}, err
 	}
 	e.DeletedAt = deletedAt

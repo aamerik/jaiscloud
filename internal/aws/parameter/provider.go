@@ -105,6 +105,8 @@ func (p *ParameterProvider) PutParameter(ctx context.Context, nr *model.Normaliz
 	isCreate := errors.Is(existsErr, ErrParameterNotFound)
 
 	e := ParameterEntry{
+		AccountID:   nr.AccountID,
+		Region:      nr.Region,
 		Name:        name,
 		Type:        paramType,
 		Description: desc,

@@ -32,12 +32,14 @@ func (s *PostgresParameterStore) PutParameter(ctx context.Context, e *ParameterE
 	}
 	defer tx.Rollback(ctx)
 
-	// Check if it exists first.
+	// Check if it exists first (scoped by account+region).
 	var existingVersion int64
 	var existingValue []byte
 	var existingType string
 	scanErr := tx.QueryRow(ctx,
-		`SELECT version, param_value, param_data->>'type' FROM jc_ssm_parameters WHERE name=$1`, e.Name,
+		`SELECT version, param_value, param_data->>'type' FROM jc_ssm_parameters
+		 WHERE account_id=$1 AND region=$2 AND name=$3`,
+		e.AccountID, e.Region, e.Name,
 	).Scan(&existingVersion, &existingValue, &existingType)
 
 	if scanErr == nil {
@@ -47,25 +49,29 @@ func (s *PostgresParameterStore) PutParameter(ctx context.Context, e *ParameterE
 		}
 		// Archive current version to history.
 		_, err = tx.Exec(ctx, `
-			INSERT INTO jc_ssm_param_history (name, version, param_data, param_value, created_at)
-			SELECT name, version, param_data, param_value, updated_at FROM jc_ssm_parameters WHERE name=$1`,
-			e.Name,
+			INSERT INTO jc_ssm_param_history (account_id, region, name, version, param_data, param_value, created_at)
+			SELECT account_id, region, name, version, param_data, param_value, updated_at
+			FROM jc_ssm_parameters
+			WHERE account_id=$1 AND region=$2 AND name=$3`,
+			e.AccountID, e.Region, e.Name,
 		)
 		if err != nil {
 			return fmt.Errorf("ssm postgres: archive history: %w", err)
 		}
 		e.Version = existingVersion + 1
 		_, err = tx.Exec(ctx, `
-			UPDATE jc_ssm_parameters SET param_data=$2, param_value=$3, version=$4, updated_at=$5 WHERE name=$1`,
-			e.Name, data, e.Value, e.Version, now,
+			UPDATE jc_ssm_parameters
+			SET param_data=$4, param_value=$5, version=$6, updated_at=$7
+			WHERE account_id=$1 AND region=$2 AND name=$3`,
+			e.AccountID, e.Region, e.Name, data, e.Value, e.Version, now,
 		)
 	} else if errors.Is(scanErr, pgx.ErrNoRows) {
 		// New parameter.
 		e.Version = 1
 		_, err = tx.Exec(ctx, `
-			INSERT INTO jc_ssm_parameters (name, param_data, param_value, version, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $5)`,
-			e.Name, data, e.Value, e.Version, now,
+			INSERT INTO jc_ssm_parameters (account_id, region, name, param_data, param_value, version, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+			e.AccountID, e.Region, e.Name, data, e.Value, e.Version, now,
 		)
 		if err != nil {
 			if isPgUnique(err) {
@@ -85,9 +91,9 @@ func (s *PostgresParameterStore) GetParameter(ctx context.Context, name string) 
 	var e ParameterEntry
 	var data []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT name, param_data, param_value, version, created_at, updated_at
+		SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at
 		FROM jc_ssm_parameters WHERE name=$1`, name,
-	).Scan(&e.Name, &data, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt)
+	).Scan(&e.AccountID, &e.Region, &e.Name, &data, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ParameterEntry{}, ErrParameterNotFound
 	}
@@ -119,10 +125,10 @@ func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string
 	}
 	if path == "" {
 		rows, err = s.pool.Query(ctx,
-			`SELECT name, param_data, param_value, version, created_at, updated_at FROM jc_ssm_parameters`)
+			`SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at FROM jc_ssm_parameters`)
 	} else {
 		rows, err = s.pool.Query(ctx,
-			`SELECT name, param_data, param_value, version, created_at, updated_at
+			`SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at
 			 FROM jc_ssm_parameters WHERE name LIKE $1`, prefix+"%")
 	}
 	if err != nil {
@@ -133,7 +139,7 @@ func (s *PostgresParameterStore) ListParameters(ctx context.Context, path string
 	for rows.Next() {
 		var e ParameterEntry
 		var data []byte
-		if err := rows.Scan(&e.Name, &data, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.AccountID, &e.Region, &e.Name, &data, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		unmarshalParamMeta(&e, data)
@@ -214,6 +220,11 @@ func isPgUnique(err error) bool {
 }
 
 func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, name string, version int64, labels []string) ([]string, error) {
+	// Resolve account/region from the parameter record.
+	e, err := s.GetParameter(ctx, name)
+	if err != nil {
+		return nil, err
+	}
 	var invalid []string
 	var valid []string
 	for _, lbl := range labels {
@@ -225,9 +236,9 @@ func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, name
 	}
 	for _, lbl := range valid {
 		_, err := s.pool.Exec(ctx,
-			`INSERT INTO jc_ssm_parameter_labels (parameter_name, version, label)
-			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-			name, version, lbl,
+			`INSERT INTO jc_ssm_parameter_labels (account_id, region, parameter_name, version, label)
+			 VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+			e.AccountID, e.Region, name, version, lbl,
 		)
 		if err != nil {
 			return invalid, fmt.Errorf("ssm postgres: label parameter: %w", err)

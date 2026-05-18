@@ -56,6 +56,6 @@ func (p *IAMProvider) seedManagedPolicies(ctx context.Context) {
 			CreateDate:  now,
 			UpdateDate:  now,
 		}
-		_ = saveEntry(ctx, p.resources, "iam_policies", mp.ARN, pd)
+		_ = saveEntry(ctx, p.resources, "", "iam_policies", mp.ARN, pd)
 	}
 }

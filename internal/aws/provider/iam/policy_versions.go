@@ -100,7 +100,7 @@ func (p *IAMProvider) GetPolicyVersion(ctx context.Context, nr *model.Normalized
 	arn := strParam(nr.Params, "PolicyArn")
 	versionId := strParam(nr.Params, "VersionId")
 	var v policyVersionData
-	if err := loadEntry(ctx, p.resources, rtPolicyVersion, policyVersionKey(arn, versionId), &v); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtPolicyVersion, policyVersionKey(arn, versionId), &v); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "Policy version not found", http.StatusNotFound)
 	}
 	return provider.OK(map[string]any{"PolicyVersion": policyVersionMap(v)}), nil
@@ -111,7 +111,7 @@ func (p *IAMProvider) DeletePolicyVersion(ctx context.Context, nr *model.Normali
 	versionId := strParam(nr.Params, "VersionId")
 	key := policyVersionKey(arn, versionId)
 	var v policyVersionData
-	if err := loadEntry(ctx, p.resources, rtPolicyVersion, key, &v); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, rtPolicyVersion, key, &v); err != nil {
 		return nil, model.NewProviderError("NoSuchEntity", "Policy version not found", http.StatusNotFound)
 	}
 	if v.IsDefaultVersion {

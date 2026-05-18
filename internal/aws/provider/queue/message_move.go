@@ -67,9 +67,9 @@ func (p *QueueProvider) StartMessageMoveTask(ctx context.Context, nr *model.Norm
 		maxPerSec = int(v)
 	}
 
-	// Validate source queue exists
-	sourceURL := arnToURL(sourceArn, 4566)
-	if _, err := p.resources.Get(ctx, "", "", "sqs_queues", sourceURL); err != nil {
+	// Validate source queue exists and resolve its scope
+	sourceURL, sourceAccount, sourceRegion, err := p.resolveQueueURLWithScope(ctx, sourceArn)
+	if err != nil {
 		return nil, model.NewProviderError("QueueDoesNotExist", "The specified source queue does not exist", 400)
 	}
 
@@ -97,20 +97,23 @@ func (p *QueueProvider) StartMessageMoveTask(ctx context.Context, nr *model.Norm
 	globalMoveTasks.tasks[taskHandle] = task
 	globalMoveTasks.mu.Unlock()
 
-	// Resolve destination URL: empty means original source queue
-	destURL := destinationArn
-	if destURL != "" {
-		destURL = arnToURL(destinationArn, 4566)
+	// Resolve destination URL and scope
+	var destURL, destAccount, destRegion string
+	if destinationArn != "" {
+		destURL, destAccount, destRegion, err = p.resolveQueueURLWithScope(ctx, destinationArn)
+		if err != nil {
+			return nil, model.NewProviderError("QueueDoesNotExist", "The specified destination queue does not exist", 400)
+		}
 	}
 
-	go p.runMoveTask(taskCtx, task, sourceURL, destURL)
+	go p.runMoveTask(taskCtx, task, sourceURL, sourceAccount, sourceRegion, destURL, destAccount, destRegion)
 
 	return provider.OK(map[string]any{
 		"TaskHandle": taskHandle,
 	}), nil
 }
 
-func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, sourceURL, destURL string) {
+func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, sourceURL, sourceAccount, sourceRegion, destURL, destAccount, destRegion string) {
 	interval := time.Second / time.Duration(task.maxNumberPerSecond)
 	if interval < time.Millisecond {
 		interval = time.Millisecond
@@ -122,16 +125,12 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 		select {
 		case <-ctx.Done():
 			globalMoveTasks.mu.Lock()
-			if task.status == "CANCELLING" {
-				task.status = "CANCELLED"
-			} else {
-				task.status = "CANCELLED"
-			}
+			task.status = "CANCELLED"
 			task.cancelFn = nil
 			globalMoveTasks.mu.Unlock()
 			return
 		case <-ticker.C:
-			msgs, err := p.messages.Receive(ctx, "", "", sourceURL, 1, time.Now())
+			msgs, err := p.messages.Receive(ctx, sourceAccount, sourceRegion, sourceURL, 1, time.Now())
 			if err != nil || len(msgs) == 0 {
 				globalMoveTasks.mu.Lock()
 				task.status = "COMPLETED"
@@ -141,8 +140,12 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 			}
 			msg := msgs[0]
 			dst := destURL
+			dstAccount := destAccount
+			dstRegion := destRegion
 			if dst == "" {
 				dst = sourceURL
+				dstAccount = sourceAccount
+				dstRegion = sourceRegion
 			}
 			moved := sqsstore.SQSMessage{
 				MessageID:         msg.MessageID,
@@ -154,8 +157,8 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 				VisibleAt:         time.Time{},
 				DelayUntil:        time.Time{},
 			}
-			p.messages.Send(ctx, "", "", moved)
-			p.messages.Delete(ctx, "", "", sourceURL, msg.ReceiptHandle)
+			p.messages.Send(ctx, dstAccount, dstRegion, moved)     //nolint:errcheck
+			p.messages.Delete(ctx, sourceAccount, sourceRegion, sourceURL, msg.ReceiptHandle) //nolint:errcheck
 			globalMoveTasks.mu.Lock()
 			task.messagesMoved++
 			globalMoveTasks.mu.Unlock()

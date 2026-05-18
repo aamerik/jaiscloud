@@ -16,6 +16,8 @@ var (
 
 // KeyEntry holds the persisted state of a KMS key.
 type KeyEntry struct {
+	AccountID       string
+	Region          string
 	KeyID           string
 	Enabled         bool
 	PendingDeletion bool      // true after ScheduleKeyDeletion until deletion date
@@ -49,12 +51,16 @@ type KeyEntry struct {
 
 // AliasEntry maps an alias name to a key ID.
 type AliasEntry struct {
+	AccountID   string
+	Region      string
 	AliasName   string
 	TargetKeyID string
 }
 
 // GrantEntry records a KMS grant.
 type GrantEntry struct {
+	AccountID        string
+	Region           string
 	GrantID          string
 	KeyID            string
 	KeyArn           string

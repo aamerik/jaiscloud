@@ -111,6 +111,8 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 	}
 
 	e := KeyEntry{
+		AccountID:   nr.AccountID,
+		Region:      nr.Region,
 		KeyID:       keyID,
 		Enabled:     true,
 		Description: desc,
@@ -390,7 +392,7 @@ func (p *KeyProvider) CreateAlias(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	if err := p.store.CreateAlias(ctx, AliasEntry{AliasName: aliasName, TargetKeyID: resolvedID}); err != nil {
+	if err := p.store.CreateAlias(ctx, AliasEntry{AccountID: nr.AccountID, Region: nr.Region, AliasName: aliasName, TargetKeyID: resolvedID}); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
 			return nil, model.NewProviderError("AlreadyExistsException", "alias already exists: "+aliasName, 400)
 		}
@@ -420,7 +422,7 @@ func (p *KeyProvider) UpdateAlias(ctx context.Context, nr *model.NormalizedReque
 	if err := p.store.DeleteAlias(ctx, aliasName); err != nil && !errors.Is(err, ErrAliasNotFound) {
 		return nil, fmt.Errorf("kms: update alias delete: %w", err)
 	}
-	if err := p.store.CreateAlias(ctx, AliasEntry{AliasName: aliasName, TargetKeyID: resolvedID}); err != nil {
+	if err := p.store.CreateAlias(ctx, AliasEntry{AccountID: nr.AccountID, Region: nr.Region, AliasName: aliasName, TargetKeyID: resolvedID}); err != nil {
 		return nil, fmt.Errorf("kms: update alias create: %w", err)
 	}
 	return provider.OK(map[string]any{}), nil
@@ -551,6 +553,8 @@ func (p *KeyProvider) CreateGrant(ctx context.Context, nr *model.NormalizedReque
 	grantID := newID()
 	keyARN := nr.ResourceID(model.RTKMSKey, keyID)
 	e := GrantEntry{
+		AccountID:         nr.AccountID,
+		Region:            nr.Region,
 		GrantID:           grantID,
 		KeyID:             keyID,
 		KeyArn:            keyARN,

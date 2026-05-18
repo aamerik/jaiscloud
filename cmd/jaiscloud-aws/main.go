@@ -569,7 +569,11 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	glueP := catalog.New(s.resources)
 	glueP.SetObjectProvider(objectP)
 	registry.RegisterAll(glueP.Routes())
-	computeP := compute.New(s.resources)
+	// TODO: seedDefaultVPC runs at construction time, before any request arrives,
+	// so there is no NormalizedRequest to supply account/region. Refactor to lazy
+	// seeding (seed on first DescribeVpcs per account+region) to remove this coupling
+	// and support multi-account EC2 correctly.
+	computeP := compute.New(s.resources, cfg.AccountID, cfg.Region)
 	registry.RegisterAll(computeP.Routes())
 	registry.RegisterAll(dns.New(s.resources).Routes())
 	registry.RegisterAll(rdsprovider.New(s.resources).Routes())

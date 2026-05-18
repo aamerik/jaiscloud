@@ -143,8 +143,9 @@ func FromRequest(r *http.Request) Parsed {
 // Reference: localstack-core/localstack/aws/accounts.py:60-81.
 //
 //  1. ^\d{12}$ literal numeric key → the key IS the account (LocalStack pattern).
-//  2. "LSIA" or "LKIA" prefix + length ≥ 20 → base32-decode embedded account.
-//  3. "ASIA" or "AKIA" prefix + JAISCLOUD_PARITY_AWS_ACCESS_KEY_ID=true → same decode.
+//  2. "ASIA", "LSIA", or "LKIA" prefix + length ≥ 20 → base32-decode embedded account.
+//     JaisCloud issues ASIA-prefixed keys (AWS-compatible) with an embedded account ID.
+//  3. "AKIA" prefix + JAISCLOUD_PARITY_AWS_ACCESS_KEY_ID=true → same decode.
 //  4. Everything else (including "test", empty, malformed) → DefaultAccountID.
 func AccountFromAccessKey(accessKey string) string {
 	if TwelveDigit.MatchString(accessKey) {
@@ -153,11 +154,11 @@ func AccountFromAccessKey(accessKey string) string {
 	if len(accessKey) >= 20 {
 		prefix := accessKey[:4]
 		switch prefix {
-		case "LSIA", "LKIA":
+		case "ASIA", "LSIA", "LKIA":
 			if acct, ok := DecodeLSIA(accessKey); ok {
 				return acct
 			}
-		case "ASIA", "AKIA":
+		case "AKIA":
 			if parityEnabled() {
 				if acct, ok := DecodeLSIA(accessKey); ok {
 					return acct

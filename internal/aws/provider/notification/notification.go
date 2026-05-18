@@ -135,20 +135,20 @@ func subArn(nr *model.NormalizedRequest, topicName string) string {
 	return nr.ResourceID("sns-subscription", topicName+":"+suffix)
 }
 
-func saveEntry(ctx context.Context, rs store.ResourceStore, resType, id string, data any) error {
+func saveEntry(ctx context.Context, rs store.ResourceStore, account, region, resType, id string, data any) error {
 	raw, _ := json.Marshal(data)
 	entry := store.ResourceEntry{Type: resType, ID: id, Data: json.RawMessage(raw)}
-	if err := rs.Create(ctx, "", "", entry); err != nil {
+	if err := rs.Create(ctx, account, region, entry); err != nil {
 		if err == store.ErrAlreadyExists {
-			return rs.Update(ctx, "", "", entry)
+			return rs.Update(ctx, account, region, entry)
 		}
 		return err
 	}
 	return nil
 }
 
-func loadEntry(ctx context.Context, rs store.ResourceStore, resType, id string, out any) error {
-	e, err := rs.Get(ctx, "", "", resType, id)
+func loadEntry(ctx context.Context, rs store.ResourceStore, account, region, resType, id string, out any) error {
+	e, err := rs.Get(ctx, account, region, resType, id)
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 		Tags:      map[string]string{},
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := saveEntry(ctx, p.resources, "sns_topics", arn, td); err != nil {
+	if err := saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"TopicArn": arn}), nil
@@ -243,7 +243,7 @@ func (p *SNSProvider) DeleteTopic(ctx context.Context, nr *model.NormalizedReque
 func (p *SNSProvider) GetTopicAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "TopicArn")
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	return provider.OK(map[string]any{"Attributes": td.Attributes}), nil
@@ -254,11 +254,11 @@ func (p *SNSProvider) SetTopicAttributes(ctx context.Context, nr *model.Normaliz
 	attr := strParam(nr.Params, "AttributeName")
 	val := strParam(nr.Params, "AttributeValue")
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Topic not found")
 	}
 	td.Attributes[attr] = val
-	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_topics", arn, td)
+	return provider.OK(nil), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td)
 }
 
 func (p *SNSProvider) ListTopics(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -328,7 +328,7 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 		Confirmed:       confirmed,
 		RedrivePolicy:   attrs["RedrivePolicy"],
 	}
-	if err := saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd); err != nil {
+	if err := saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_subscriptions", sArn, sd); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{"SubscriptionArn": sArn}), nil
@@ -353,7 +353,7 @@ func (p *SNSProvider) ConfirmSubscription(ctx context.Context, nr *model.Normali
 		}
 		if sd.Token == token || token == "" {
 			sd.Confirmed = true
-			_ = saveEntry(ctx, p.resources, "sns_subscriptions", sd.SubscriptionArn, sd)
+			_ = saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_subscriptions", sd.SubscriptionArn, sd)
 			return provider.OK(map[string]any{"SubscriptionArn": sd.SubscriptionArn}), nil
 		}
 	}
@@ -381,7 +381,7 @@ func (p *SNSProvider) ListSubscriptionsByTopic(ctx context.Context, nr *model.No
 func (p *SNSProvider) GetSubscriptionAttributes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	sArn := strParam(nr.Params, "SubscriptionArn")
 	var sd subscriptionData
-	if err := loadEntry(ctx, p.resources, "sns_subscriptions", sArn, &sd); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_subscriptions", sArn, &sd); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")
 	}
 	attrs := map[string]string{
@@ -408,14 +408,14 @@ func (p *SNSProvider) SetSubscriptionAttributes(ctx context.Context, nr *model.N
 		}
 	}
 	var sd subscriptionData
-	if err := loadEntry(ctx, p.resources, "sns_subscriptions", sArn, &sd); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_subscriptions", sArn, &sd); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Subscription not found")
 	}
 	sd.Attributes[attr] = val
 	if attr == "RedrivePolicy" {
 		sd.RedrivePolicy = val
 	}
-	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_subscriptions", sArn, sd)
+	return provider.OK(nil), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_subscriptions", sArn, sd)
 }
 
 func subscriptionList(entries []store.ResourceEntry) []map[string]any {
@@ -457,7 +457,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 
 	// ── FIFO dedup ────────────────────────────────────────────────────────────
 	var td topicData
-	if loadErr := loadEntry(ctx, p.resources, "sns_topics", tArn, &td); loadErr == nil {
+	if loadErr := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", tArn, &td); loadErr == nil {
 		if td.Attributes["FifoTopic"] == "true" {
 			dedupID := strParam(nr.Params, "MessageDeduplicationId")
 			if dedupID == "" && td.Attributes["ContentBasedDeduplication"] == "true" {
@@ -478,7 +478,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 					return provider.OK(map[string]any{"MessageId": messageID}), nil
 				}
 				td.DedupCache[dedupID] = now + 300 // 5-min window
-				_ = saveEntry(ctx, p.resources, "sns_topics", tArn, td)
+				_ = saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", tArn, td)
 			}
 		}
 	}
@@ -735,7 +735,7 @@ func snsAttrsToEventDoc(msgAttrs map[string]any) map[string]any {
 func (p *SNSProvider) TagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	if tags, ok := nr.Params["Tags"].([]any); ok {
@@ -747,13 +747,13 @@ func (p *SNSProvider) TagResource(ctx context.Context, nr *model.NormalizedReque
 			}
 		}
 	}
-	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_topics", arn, td)
+	return provider.OK(nil), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td)
 }
 
 func (p *SNSProvider) UntagResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	if keys, ok := nr.Params["TagKeys"].([]any); ok {
@@ -761,13 +761,13 @@ func (p *SNSProvider) UntagResource(ctx context.Context, nr *model.NormalizedReq
 			delete(td.Tags, fmt.Sprintf("%v", k))
 		}
 	}
-	return provider.OK(nil), saveEntry(ctx, p.resources, "sns_topics", arn, td)
+	return provider.OK(nil), saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td)
 }
 
 func (p *SNSProvider) ListTagsForResource(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	arn := strParam(nr.Params, "ResourceArn")
 	var td topicData
-	if err := loadEntry(ctx, p.resources, "sns_topics", arn, &td); err != nil {
+	if err := loadEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, &td); err != nil {
 		return nil, provider.StoreNotFoundError(err, "NotFound", "Resource not found")
 	}
 	var tags []map[string]any

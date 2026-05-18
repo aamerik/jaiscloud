@@ -528,7 +528,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 	now := p.clock.Now()
 	var msgs []sqsstore.SQSMessage
 	if waitSec > 0 {
-		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, queueURL, maxMessages, time.Duration(waitSec)*time.Second, p.clock)
+		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, nr.AccountID, nr.Region, queueURL, maxMessages, time.Duration(waitSec)*time.Second, p.clock)
 	} else {
 		msgs, err = p.messages.Receive(ctx, nr.AccountID, nr.Region, queueURL, maxMessages, now)
 	}
@@ -540,7 +540,7 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 	// maxReceiveCount must not be delivered to the caller.
 	var deliverable []sqsstore.SQSMessage
 	for i := range msgs {
-		if p.checkDLQ(ctx, state, queueURL, &msgs[i]) {
+		if p.checkDLQ(ctx, state, nr.AccountID, nr.Region, queueURL, &msgs[i]) {
 			continue // moved to DLQ; exclude from this response
 		}
 		p.messages.ChangeVisibility(ctx, nr.AccountID, nr.Region, queueURL, msgs[i].ReceiptHandle, visTimeout, now)
@@ -944,7 +944,7 @@ func (p *QueueProvider) ListQueueTags(ctx context.Context, nr *model.NormalizedR
 // checkDLQ evaluates whether msg has exceeded its maxReceiveCount and, if so,
 // moves it to the dead-letter queue. Returns true if the message was moved (and
 // must therefore NOT be delivered to the caller).
-func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queueURL string, msg *sqsstore.SQSMessage) bool {
+func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, account, region, queueURL string, msg *sqsstore.SQSMessage) bool {
 	rp, ok := state["RedrivePolicy"].(string)
 	if !ok || rp == "" {
 		return false
@@ -971,8 +971,14 @@ func (p *QueueProvider) checkDLQ(ctx context.Context, state map[string]any, queu
 	dlqMsg.VisibleAt = time.Time{}  // clear in-flight timeout
 	dlqMsg.DelayUntil = time.Time{} // no delay in DLQ
 	dlqMsg.ReceiveCount = 0
-	p.messages.Send(ctx, "", "", dlqMsg) //nolint:errcheck
-	p.messages.Delete(ctx, "", "", queueURL, msg.ReceiptHandle)
+	dlqParts := strings.Split(dlqArn, ":")
+	dlqAccount, dlqRegion := "", ""
+	if len(dlqParts) >= 5 {
+		dlqRegion = dlqParts[3]
+		dlqAccount = dlqParts[4]
+	}
+	p.messages.Send(ctx, dlqAccount, dlqRegion, dlqMsg) //nolint:errcheck
+	p.messages.Delete(ctx, account, region, queueURL, msg.ReceiptHandle)
 
 	p.bus.Publish(events.Event{
 		Type: events.EventMessageDLQ,

@@ -51,11 +51,11 @@ func (e *alarmEvaluator) evaluateAll(ctx context.Context) {
 		if err := json.Unmarshal(entry.Data, &alarm); err != nil {
 			continue
 		}
-		e.evaluateAlarm(ctx, alarm, entry)
+		e.evaluateAlarm(ctx, alarm, entry, entry.Account, entry.Region)
 	}
 }
 
-func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any, entry store.ResourceEntry) {
+func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any, entry store.ResourceEntry, account, region string) {
 	name, _ := alarm["AlarmName"].(string)
 	ns, _ := alarm["Namespace"].(string)
 	metricName, _ := alarm["MetricName"].(string)
@@ -86,7 +86,7 @@ func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any
 	ring, ok := e.p.metrics[key]
 	if !ok {
 		e.p.mu.Unlock()
-		e.transitionState(ctx, name, alarm, entry, "INSUFFICIENT_DATA")
+		e.transitionState(ctx, name, alarm, entry, account, region, "INSUFFICIENT_DATA")
 		return
 	}
 
@@ -103,7 +103,7 @@ func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any
 	e.p.mu.Unlock()
 
 	if len(vals) == 0 {
-		e.transitionState(ctx, name, alarm, entry, "INSUFFICIENT_DATA")
+		e.transitionState(ctx, name, alarm, entry, account, region, "INSUFFICIENT_DATA")
 		return
 	}
 
@@ -118,10 +118,10 @@ func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any
 		newState = "OK"
 	}
 
-	e.transitionState(ctx, name, alarm, entry, newState)
+	e.transitionState(ctx, name, alarm, entry, account, region, newState)
 }
 
-func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm map[string]any, entry store.ResourceEntry, newState string) {
+func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm map[string]any, entry store.ResourceEntry, account, region, newState string) {
 	current, _ := alarm["StateValue"].(string)
 	if current == newState {
 		return
@@ -147,13 +147,13 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 	if err != nil {
 		return
 	}
-	if err := e.p.resources.Update(ctx, "", "", store.ResourceEntry{Type: "cloudwatch_alarm", ID: entry.ID, Data: data}); err != nil {
+	if err := e.p.resources.Update(ctx, account, region, store.ResourceEntry{Type: "cloudwatch_alarm", ID: entry.ID, Data: data}); err != nil {
 		slog.Warn("cloudwatch: failed to persist alarm state", "alarm", name, "err", err)
 		return
 	}
 
 	// Record alarm history entry for this state transition.
-	e.p.writeAlarmHistory(ctx, "", "", name, "MetricAlarm", "StateUpdate",
+	e.p.writeAlarmHistory(ctx, account, region, name, "MetricAlarm", "StateUpdate",
 		fmt.Sprintf("Alarm updated from %s to %s", current, newState),
 		map[string]any{"version": "1.0", "oldState": map[string]any{"stateValue": current}, "newState": map[string]any{"stateValue": newState, "stateReason": reason}},
 		now)

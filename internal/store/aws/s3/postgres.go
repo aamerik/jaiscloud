@@ -30,10 +30,12 @@ func (s *PostgresS3ObjectMetaStore) CreateBucket(ctx context.Context, bucket str
 	}
 	meta["Name"] = bucket
 	meta["CreationDate"] = time.Now().UTC().Format(time.RFC3339)
+	ownerAccountID, _ := meta["AccountID"].(string)
+	bucketRegion, _ := meta["Region"].(string)
 	raw, _ := json.Marshal(meta)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_s3_buckets (name, meta) VALUES ($1, $2)
-	`, bucket, json.RawMessage(raw))
+		INSERT INTO jc_s3_buckets (name, owner_account_id, region, meta) VALUES ($1, $2, $3, $4)
+	`, bucket, ownerAccountID, bucketRegion, json.RawMessage(raw))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

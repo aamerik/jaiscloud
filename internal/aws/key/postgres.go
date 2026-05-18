@@ -33,9 +33,9 @@ func (s *PostgresKeyStore) CreateKey(ctx context.Context, e KeyEntry) error {
 		return fmt.Errorf("kms postgres: marshal key data: %w", err)
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO jc_kms_keys (key_id, key_data, key_material, enabled)
-		VALUES ($1, $2, $3, $4)`,
-		e.KeyID, data, e.KeyMaterial, e.Enabled,
+		INSERT INTO jc_kms_keys (account_id, region, key_id, key_data, key_material, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		e.AccountID, e.Region, e.KeyID, data, e.KeyMaterial, e.Enabled,
 	)
 	if err != nil {
 		if isPgUniqueViolation(err) {
@@ -48,7 +48,7 @@ func (s *PostgresKeyStore) CreateKey(ctx context.Context, e KeyEntry) error {
 
 func (s *PostgresKeyStore) GetKey(ctx context.Context, keyID string) (KeyEntry, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT key_id, key_data, key_material, enabled
+		SELECT account_id, region, key_id, key_data, key_material, enabled
 		FROM jc_kms_keys WHERE key_id=$1`, keyID)
 	return scanKey(row)
 }
@@ -61,14 +61,26 @@ func (s *PostgresKeyStore) UpdateKey(ctx context.Context, e KeyEntry) error {
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE jc_kms_keys
 		SET key_data=$2, key_material=$3, enabled=$4, updated_at=now()
-		WHERE key_id=$1`,
-		e.KeyID, data, e.KeyMaterial, e.Enabled,
+		WHERE account_id=$5 AND region=$6 AND key_id=$1`,
+		e.KeyID, data, e.KeyMaterial, e.Enabled, e.AccountID, e.Region,
 	)
 	if err != nil {
 		return fmt.Errorf("kms postgres: update key: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrKeyNotFound
+		// Fallback: try update without account/region scope (e.g. entry loaded before fields were set)
+		ct, err = s.pool.Exec(ctx, `
+			UPDATE jc_kms_keys
+			SET key_data=$2, key_material=$3, enabled=$4, updated_at=now()
+			WHERE key_id=$1`,
+			e.KeyID, data, e.KeyMaterial, e.Enabled,
+		)
+		if err != nil {
+			return fmt.Errorf("kms postgres: update key: %w", err)
+		}
+		if ct.RowsAffected() == 0 {
+			return ErrKeyNotFound
+		}
 	}
 	return nil
 }
@@ -85,7 +97,7 @@ func (s *PostgresKeyStore) DeleteKey(ctx context.Context, keyID string) error {
 }
 
 func (s *PostgresKeyStore) ListKeys(ctx context.Context) ([]KeyEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT key_id, key_data, key_material, enabled FROM jc_kms_keys`)
+	rows, err := s.pool.Query(ctx, `SELECT account_id, region, key_id, key_data, key_material, enabled FROM jc_kms_keys`)
 	if err != nil {
 		return nil, fmt.Errorf("kms postgres: list keys: %w", err)
 	}
@@ -105,8 +117,8 @@ func (s *PostgresKeyStore) ListKeys(ctx context.Context) ([]KeyEntry, error) {
 
 func (s *PostgresKeyStore) CreateAlias(ctx context.Context, e AliasEntry) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_kms_aliases (alias_name, target_key_id) VALUES ($1, $2)`,
-		e.AliasName, e.TargetKeyID,
+		INSERT INTO jc_kms_aliases (account_id, region, alias_name, target_key_id) VALUES ($1, $2, $3, $4)`,
+		e.AccountID, e.Region, e.AliasName, e.TargetKeyID,
 	)
 	if err != nil {
 		if isPgUniqueViolation(err) {
@@ -120,8 +132,8 @@ func (s *PostgresKeyStore) CreateAlias(ctx context.Context, e AliasEntry) error 
 func (s *PostgresKeyStore) GetAlias(ctx context.Context, name string) (AliasEntry, error) {
 	var e AliasEntry
 	err := s.pool.QueryRow(ctx, `
-		SELECT alias_name, target_key_id FROM jc_kms_aliases WHERE alias_name=$1`, name,
-	).Scan(&e.AliasName, &e.TargetKeyID)
+		SELECT account_id, region, alias_name, target_key_id FROM jc_kms_aliases WHERE alias_name=$1`, name,
+	).Scan(&e.AccountID, &e.Region, &e.AliasName, &e.TargetKeyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AliasEntry{}, ErrAliasNotFound
 	}
@@ -146,10 +158,10 @@ func (s *PostgresKeyStore) ListAliases(ctx context.Context, keyID string) ([]Ali
 	var rows pgx.Rows
 	var err error
 	if keyID == "" {
-		rows, err = s.pool.Query(ctx, `SELECT alias_name, target_key_id FROM jc_kms_aliases`)
+		rows, err = s.pool.Query(ctx, `SELECT account_id, region, alias_name, target_key_id FROM jc_kms_aliases`)
 	} else {
 		rows, err = s.pool.Query(ctx, `
-			SELECT alias_name, target_key_id FROM jc_kms_aliases WHERE target_key_id=$1`, keyID)
+			SELECT account_id, region, alias_name, target_key_id FROM jc_kms_aliases WHERE target_key_id=$1`, keyID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("kms postgres: list aliases: %w", err)
@@ -158,7 +170,7 @@ func (s *PostgresKeyStore) ListAliases(ctx context.Context, keyID string) ([]Ali
 	var out []AliasEntry
 	for rows.Next() {
 		var a AliasEntry
-		if err := rows.Scan(&a.AliasName, &a.TargetKeyID); err != nil {
+		if err := rows.Scan(&a.AccountID, &a.Region, &a.AliasName, &a.TargetKeyID); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -171,8 +183,8 @@ func (s *PostgresKeyStore) ListAliases(ctx context.Context, keyID string) ([]Ali
 func (s *PostgresKeyStore) CreateGrant(ctx context.Context, e GrantEntry) error {
 	data, _ := json.Marshal(e)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_kms_grants (grant_id, key_id, grant_data) VALUES ($1, $2, $3)`,
-		e.GrantID, e.KeyID, data,
+		INSERT INTO jc_kms_grants (account_id, region, grant_id, key_id, grant_data) VALUES ($1, $2, $3, $4, $5)`,
+		e.AccountID, e.Region, e.GrantID, e.KeyID, data,
 	)
 	if err != nil {
 		if isPgUniqueViolation(err) {
@@ -315,7 +327,7 @@ func keyDataMap(e KeyEntry) map[string]any {
 func scanKey(row scannable) (KeyEntry, error) {
 	var e KeyEntry
 	var data []byte
-	if err := row.Scan(&e.KeyID, &data, &e.KeyMaterial, &e.Enabled); err != nil {
+	if err := row.Scan(&e.AccountID, &e.Region, &e.KeyID, &data, &e.KeyMaterial, &e.Enabled); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return KeyEntry{}, ErrKeyNotFound
 		}
