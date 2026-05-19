@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -184,15 +185,21 @@ func (s *MemoryResourceStore) ResetAccount(account string) {
 	}
 }
 
-func (s *MemoryResourceStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryResourceStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.Marshal(s.entries)
+	return json.NewEncoder(w).Encode(s.entries)
 }
 
-func (s *MemoryResourceStore) Restore(data json.RawMessage) error {
+func (s *MemoryResourceStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.entries) == 0, nil
+}
+
+func (s *MemoryResourceStore) Restore(_ context.Context, r io.Reader) error {
 	var entries map[string]ResourceEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
+	if err := json.NewDecoder(r).Decode(&entries); err != nil {
 		return err
 	}
 	s.mu.Lock()

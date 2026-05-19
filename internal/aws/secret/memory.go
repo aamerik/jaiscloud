@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -240,7 +241,13 @@ func (s *MemorySecretStore) Reset() {
 	s.versions = make(map[string][]VersionEntry)
 }
 
-func (s *MemorySecretStore) Snapshot() (json.RawMessage, error) {
+func (s *MemorySecretStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.secrets) == 0, nil
+}
+
+func (s *MemorySecretStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := struct {
@@ -248,15 +255,15 @@ func (s *MemorySecretStore) Snapshot() (json.RawMessage, error) {
 		ByName   map[string]string         `json:"by_name"`
 		Versions map[string][]VersionEntry `json:"versions"`
 	}{s.secrets, s.byName, s.versions}
-	return json.Marshal(snap)
+	return json.NewEncoder(w).Encode(snap)
 }
 
-func (s *MemorySecretStore) Restore(raw json.RawMessage) error {
+func (s *MemorySecretStore) Restore(_ context.Context, r io.Reader) error {
 	var snap struct {
 		Secrets  map[string]SecretEntry    `json:"secrets"`
 		Versions map[string][]VersionEntry `json:"versions"`
 	}
-	if err := json.Unmarshal(raw, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

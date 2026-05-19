@@ -860,7 +860,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 		h.RegisterSnapshotter("resources", snap)
 	}
 	if snap, ok := keyStore.(admin.Snapshotter); ok {
-		h.RegisterSnapshotter("kms-keys", snap)
+		h.RegisterSnapshotter("keys", snap)
 	}
 	if snap, ok := secretStore.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("secrets", snap)

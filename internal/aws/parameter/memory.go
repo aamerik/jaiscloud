@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -192,7 +193,13 @@ func (s *MemoryParameterStore) Reset() {
 	s.labels = make(map[string]map[string]struct{})
 }
 
-func (s *MemoryParameterStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryParameterStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.params) == 0, nil
+}
+
+func (s *MemoryParameterStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	lblSnap := make(map[string][]string, len(s.labels))
@@ -208,16 +215,16 @@ func (s *MemoryParameterStore) Snapshot() (json.RawMessage, error) {
 		History map[string][]HistoryEntry `json:"history"`
 		Labels  map[string][]string       `json:"labels"`
 	}{s.params, s.history, lblSnap}
-	return json.Marshal(snap)
+	return json.NewEncoder(w).Encode(snap)
 }
 
-func (s *MemoryParameterStore) Restore(raw json.RawMessage) error {
+func (s *MemoryParameterStore) Restore(_ context.Context, r io.Reader) error {
 	var snap struct {
 		Params  map[string]ParameterEntry `json:"params"`
 		History map[string][]HistoryEntry `json:"history"`
 		Labels  map[string][]string       `json:"labels"`
 	}
-	if err := json.Unmarshal(raw, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

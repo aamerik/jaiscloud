@@ -46,6 +46,17 @@ type Server struct {
 	// corsLookup returns the stored CORS rules for a given S3 bucket name.
 	// If nil, CORS preflight handling is disabled.
 	corsLookup func(bucket string) []map[string]any
+	// barrier gates cloud requests during import/reset (503 while write-lock held).
+	barrier middleware.BarrierMiddleware
+}
+
+// WithBarrier wires the persistence barrier into the gateway.
+// When set, all non-admin cloud requests acquire a read lock.
+// Import/reset acquire the write lock, causing 503 during that window.
+func WithBarrier(b middleware.BarrierMiddleware) func(*Server) {
+	return func(s *Server) {
+		s.barrier = b
+	}
 }
 
 // WithExtraRoutes registers additional routes on the server's router before the
@@ -121,7 +132,12 @@ func (s *Server) buildRouter() {
 		attach(r)
 	}
 
-	r.HandleFunc("/*", s.handleCloudRequest)
+	// Cloud catch-all: wrap with barrier middleware when configured.
+	var cloudHandler http.Handler = http.HandlerFunc(s.handleCloudRequest)
+	if s.barrier != nil {
+		cloudHandler = middleware.Persistence(s.barrier)(cloudHandler)
+	}
+	r.Handle("/*", cloudHandler)
 
 	s.router = r
 }

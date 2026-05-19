@@ -1,9 +1,11 @@
 package stepfunctions
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -578,7 +580,13 @@ type sfnSnapshot struct {
 	Tags       map[string]map[string]string `json:"tags"`
 }
 
-func (s *MemoryStepFunctionsStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryStepFunctionsStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.machines) == 0, nil
+}
+
+func (s *MemoryStepFunctionsStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := sfnSnapshot{
@@ -587,12 +595,12 @@ func (s *MemoryStepFunctionsStore) Snapshot() (json.RawMessage, error) {
 		Activities: s.activities,
 		Tags:       s.tags,
 	}
-	return json.Marshal(snap)
+	return json.NewEncoder(w).Encode(snap)
 }
 
-func (s *MemoryStepFunctionsStore) Restore(data json.RawMessage) error {
+func (s *MemoryStepFunctionsStore) Restore(_ context.Context, r io.Reader) error {
 	var snap sfnSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

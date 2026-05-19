@@ -1,11 +1,13 @@
 package kinesis
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"strings"
 	"sync"
@@ -814,19 +816,25 @@ type snapshotData struct {
 	Iterators map[string]*IteratorEntry `json:"iterators"`
 }
 
-func (s *MemoryKinesisStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryKinesisStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.Marshal(snapshotData{
+	return len(s.streams) == 0, nil
+}
+
+func (s *MemoryKinesisStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return json.NewEncoder(w).Encode(snapshotData{
 		Streams:   s.streams,
 		NameScope: s.nameScope,
 		Iterators: s.iterators,
 	})
 }
 
-func (s *MemoryKinesisStore) Restore(data json.RawMessage) error {
+func (s *MemoryKinesisStore) Restore(_ context.Context, r io.Reader) error {
 	var snap snapshotData
-	if err := json.Unmarshal(data, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

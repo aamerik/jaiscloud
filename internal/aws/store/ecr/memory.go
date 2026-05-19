@@ -1,9 +1,11 @@
 package ecr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -498,7 +500,13 @@ type ecrSnapshot struct {
 	ReplicationConfig string                          `json:"replication_config"`
 }
 
-func (s *MemoryECRStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryECRStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.repos) == 0, nil
+}
+
+func (s *MemoryECRStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := ecrSnapshot{
@@ -507,12 +515,12 @@ func (s *MemoryECRStore) Snapshot() (json.RawMessage, error) {
 		RegistryPolicy:    s.registryPolicy,
 		ReplicationConfig: s.replicationConfig,
 	}
-	return json.Marshal(snap)
+	return json.NewEncoder(w).Encode(snap)
 }
 
-func (s *MemoryECRStore) Restore(data json.RawMessage) error {
+func (s *MemoryECRStore) Restore(_ context.Context, r io.Reader) error {
 	var snap ecrSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

@@ -3,6 +3,7 @@ package key
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"sync"
 )
 
@@ -211,7 +212,13 @@ func (s *MemoryKeyStore) Reset() {
 	s.dek = nil
 }
 
-func (s *MemoryKeyStore) Snapshot() (json.RawMessage, error) {
+func (s *MemoryKeyStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.keys) == 0, nil
+}
+
+func (s *MemoryKeyStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := struct {
@@ -220,17 +227,17 @@ func (s *MemoryKeyStore) Snapshot() (json.RawMessage, error) {
 		Grants  map[string]GrantEntry `json:"grants"`
 		DEK     []byte                `json:"dek"`
 	}{s.keys, s.aliases, s.grants, s.dek}
-	return json.Marshal(snap)
+	return json.NewEncoder(w).Encode(snap)
 }
 
-func (s *MemoryKeyStore) Restore(raw json.RawMessage) error {
+func (s *MemoryKeyStore) Restore(_ context.Context, r io.Reader) error {
 	var snap struct {
 		Keys    map[string]KeyEntry   `json:"keys"`
 		Aliases map[string]AliasEntry `json:"aliases"`
 		Grants  map[string]GrantEntry `json:"grants"`
 		DEK     []byte                `json:"dek"`
 	}
-	if err := json.Unmarshal(raw, &snap); err != nil {
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
 	s.mu.Lock()

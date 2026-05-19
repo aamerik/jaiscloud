@@ -1,7 +1,9 @@
 package sts
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"sync"
 )
 
@@ -33,8 +35,9 @@ type SessionStore interface {
 	DeleteSession(accessKeyID string)
 
 	Reset()
-	Snapshot() (json.RawMessage, error)
-	Restore(data json.RawMessage) error
+	Snapshot(ctx context.Context, w io.Writer) error
+	Restore(ctx context.Context, r io.Reader) error
+	IsEmpty(ctx context.Context) (bool, error)
 }
 
 // MemorySessionStore is an in-memory SessionStore.
@@ -73,15 +76,21 @@ func (s *MemorySessionStore) Reset() {
 	s.mu.Unlock()
 }
 
-func (s *MemorySessionStore) Snapshot() (json.RawMessage, error) {
+func (s *MemorySessionStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.Marshal(s.sessions)
+	return len(s.sessions) == 0, nil
 }
 
-func (s *MemorySessionStore) Restore(data json.RawMessage) error {
+func (s *MemorySessionStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return json.NewEncoder(w).Encode(s.sessions)
+}
+
+func (s *MemorySessionStore) Restore(_ context.Context, r io.Reader) error {
 	var m map[string]SessionConfig
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := json.NewDecoder(r).Decode(&m); err != nil {
 		return err
 	}
 	s.mu.Lock()
