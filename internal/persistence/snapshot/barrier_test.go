@@ -103,3 +103,25 @@ func TestBarrier_ContextCancellation(t *testing.T) {
 		t.Fatal("expected context cancellation error from ReadBegin")
 	}
 }
+
+// TestBarrier_Gateway503_UnderWriteLock verifies that TryReadBegin returns
+// ok=false while the write lock is held, which is what the gateway Persistence
+// middleware uses to return 503.
+func TestBarrier_Gateway503_UnderWriteLock(t *testing.T) {
+	b := NewBarrier()
+
+	// Hold the write lock.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := b.WriteBegin(ctx)
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+	defer release()
+
+	// TryReadBegin should fail while write lock is held.
+	_, ok := b.TryReadBegin()
+	if ok {
+		t.Error("expected TryReadBegin to return ok=false while write lock is held")
+	}
+}

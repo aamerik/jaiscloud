@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,3 +177,144 @@ func mustReadEnvelope(t *testing.T, dir string) version.Envelope {
 
 // keep compiler happy — bytes is used by the import.
 var _ = bytes.Buffer{}
+
+// TestSnapshotLoop_SaveNow_AtomicRename verifies that SaveNow does not leave a
+// .tmp file on success.
+func TestSnapshotLoop_SaveNow_AtomicRename(t *testing.T) {
+	dir := t.TempDir()
+	snap := newMockSnapshotter()
+
+	cfg := SnapshotLoopConfig{
+		Stores:      map[string]snapshottypes.Snapshotter{"test": snap},
+		DataDir:     dir,
+		Interval:    1 * time.Hour,
+		Clock:       clock.RealClock{},
+		SaveTimeout: 5 * time.Second,
+	}
+	loop := NewSnapshotLoop(cfg)
+
+	if err := loop.SaveNow(context.Background()); err != nil {
+		t.Fatalf("SaveNow: %v", err)
+	}
+
+	// state.json must exist.
+	if _, err := os.Stat(dir + "/state.json"); err != nil {
+		t.Fatalf("expected state.json to exist: %v", err)
+	}
+
+	// No .tmp file must remain.
+	tmpFiles, err := filepath.Glob(dir + "/*.tmp")
+	if err != nil {
+		t.Fatalf("filepath.Glob: %v", err)
+	}
+	if len(tmpFiles) > 0 {
+		t.Errorf("unexpected .tmp files left behind: %v", tmpFiles)
+	}
+}
+
+// TestSnapshotLoop_SaveNow_BarrierRLock verifies that SaveNow blocks while the
+// barrier write lock is held and proceeds once the lock is released.
+func TestSnapshotLoop_SaveNow_BarrierRLock(t *testing.T) {
+	dir := t.TempDir()
+	snap := newMockSnapshotter()
+	barrier := NewBarrier()
+
+	cfg := SnapshotLoopConfig{
+		Barrier:     barrier,
+		Stores:      map[string]snapshottypes.Snapshotter{"test": snap},
+		DataDir:     dir,
+		Interval:    1 * time.Hour,
+		Clock:       clock.RealClock{},
+		SaveTimeout: 5 * time.Second,
+	}
+	loop := NewSnapshotLoop(cfg)
+
+	// Acquire the write lock so SaveNow will block on ReadBegin.
+	ctx := context.Background()
+	release, err := barrier.WriteBegin(ctx)
+	if err != nil {
+		t.Fatalf("WriteBegin: %v", err)
+	}
+
+	saveNowDone := make(chan error, 1)
+	go func() {
+		saveNowDone <- loop.SaveNow(ctx)
+	}()
+
+	// After 20ms, SaveNow should still be waiting for the read lock.
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-saveNowDone:
+		t.Fatal("SaveNow completed before write lock was released — expected it to block")
+	default:
+		// Good — still waiting.
+	}
+
+	// Release the write lock.
+	release()
+
+	// SaveNow must complete within 500ms.
+	select {
+	case err := <-saveNowDone:
+		if err != nil {
+			t.Fatalf("SaveNow returned error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SaveNow did not complete within 500ms after write lock was released")
+	}
+
+	// Verify state.json was written.
+	if _, err := os.Stat(dir + "/state.json"); err != nil {
+		t.Fatalf("expected state.json to exist after SaveNow: %v", err)
+	}
+}
+
+// TestSnapshotLoop_PeriodicSave_Timeout verifies that a slow Snapshot
+// implementation that exceeds SaveTimeout does not crash the loop; the loop
+// should log a warning and continue running.
+func TestSnapshotLoop_PeriodicSave_Timeout(t *testing.T) {
+	dir := t.TempDir()
+
+	slow := &sleepSnapshotter{sleep: 200 * time.Millisecond}
+
+	cfg := SnapshotLoopConfig{
+		Stores:      map[string]snapshottypes.Snapshotter{"slow": slow},
+		DataDir:     dir,
+		Interval:    30 * time.Millisecond,
+		Clock:       clock.RealClock{},
+		SaveTimeout: 50 * time.Millisecond,
+	}
+	loop := NewSnapshotLoop(cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	loop.Start(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+	loop.Stop()
+	// If we reach this point the loop exited cleanly without panicking.
+}
+
+// sleepSnapshotter is a Snapshotter whose Snapshot blocks for a fixed duration.
+type sleepSnapshotter struct {
+	sleep time.Duration
+}
+
+func (s *sleepSnapshotter) Snapshot(ctx context.Context, w io.Writer) error {
+	select {
+	case <-time.After(s.sleep):
+		return json.NewEncoder(w).Encode(map[string]string{})
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *sleepSnapshotter) Restore(_ context.Context, r io.Reader) error {
+	var m map[string]string
+	return json.NewDecoder(r).Decode(&m)
+}
+
+func (s *sleepSnapshotter) IsEmpty(_ context.Context) (bool, error) { return true, nil }
+
+var _ snapshottypes.Snapshotter = (*sleepSnapshotter)(nil)

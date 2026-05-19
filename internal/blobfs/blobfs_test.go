@@ -319,6 +319,98 @@ func TestLocalFSBlobStore_Tarball_RoundTrip(t *testing.T) {
 	assertGet(t, dst, "s3", "nested/key2", "value2")
 }
 
+// TestLocalFSBlobStore_WriteTarball_PathSanitised verifies that ReadTarball
+// rejects tarball entries that contain path-traversal sequences ("../").
+func TestLocalFSBlobStore_WriteTarball_PathSanitised(t *testing.T) {
+	s := mustNew(t)
+
+	// Build a malicious tarball with a path-traversal entry.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("pwned")
+	hdr := &tar.Header{
+		Name:     "blobs/../../etc/passwd",
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(content)),
+		Mode:     0600,
+	}
+	tw.WriteHeader(hdr)
+	tw.Write(content)
+	tw.Close()
+
+	tr := tar.NewReader(&buf)
+	err := s.ReadTarball(context.Background(), tr)
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unsafe") && !strings.Contains(msg, "blobs") {
+		t.Errorf("expected error to mention \"unsafe\" or \"blobs\", got: %v", err)
+	}
+}
+
+// TestLocalFSBlobStore_WriteTarball_NonRegularEntry verifies that ReadTarball
+// silently skips non-regular entries (e.g. symlinks) without returning an error
+// and without writing any file for that entry.
+func TestLocalFSBlobStore_WriteTarball_NonRegularEntry(t *testing.T) {
+	s := mustNew(t)
+
+	// Build a tarball that contains a symlink entry.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name:     "blobs/mylink",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "/etc/passwd",
+	}
+	tw.WriteHeader(hdr)
+	tw.Close()
+
+	tr := tar.NewReader(&buf)
+	if err := s.ReadTarball(context.Background(), tr); err != nil {
+		t.Fatalf("expected nil error for symlink entry, got: %v", err)
+	}
+
+	// The store must not have created a file named "mylink".
+	symlinkPath := filepath.Join(s.baseDir, "mylink")
+	assertNoFile(t, symlinkPath)
+}
+
+// TestLocalFSBlobStore_SessionDirLifecycle verifies that NewSessionBlobStore
+// creates a working store whose session directory is removed by Cleanup.
+func TestLocalFSBlobStore_SessionDirLifecycle(t *testing.T) {
+	instanceID := "test-instance-lifecycle"
+	store, err := NewSessionBlobStore(instanceID)
+	if err != nil {
+		t.Fatalf("NewSessionBlobStore: %v", err)
+	}
+	if store == nil {
+		t.Fatal("expected non-nil store")
+	}
+
+	baseDir := store.BaseDir()
+	if _, err := os.Stat(baseDir); err != nil {
+		t.Fatalf("expected base dir to exist after NewSessionBlobStore: %v", err)
+	}
+
+	// Write a blob to confirm the store is functional.
+	if err := store.Put(context.Background(), "b", "hello", []byte("world")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	assertGet(t, store, "b", "hello", "world")
+
+	// Cleanup must remove the session directory (parent of baseDir).
+	if err := store.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+
+	// The parent session directory should no longer exist.
+	sessionDir := filepath.Dir(baseDir)
+	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+		t.Errorf("expected session dir %s to be removed after Cleanup", sessionDir)
+	}
+}
+
 func TestLocalFSBlobStore_Tarball_BlobsSortedByPath(t *testing.T) {
 	s := mustNew(t)
 	ctx := context.Background()

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"jaiscloud/internal/persistence/version"
@@ -480,3 +481,148 @@ func buildTestTarball(t *testing.T, env version.Envelope) []byte {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// --- Additional Handler.Import tests ---
+
+// TestHandler_Import_MissingStoreKey registers a snapshotter for "resources" but the
+// snapshot's stores map only contains "other-store". Import should succeed (200)
+// and the "resources" snapshotter is left untouched (Restore never called).
+func TestHandler_Import_MissingStoreKey(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+
+	snap := &mockSnapshotter{isEmpty: true}
+	h.RegisterSnapshotter("resources", snap)
+
+	env := version.Envelope{
+		SchemaVersion: version.CodeSnapshotVersion,
+		Cloud:         "aws",
+		Stores:        map[string]json.RawMessage{"other-store": json.RawMessage("{}")},
+	}
+	tarball := buildTestTarball(t, env)
+
+	rec := httptest.NewRecorder()
+	h.Import(rec, httptest.NewRequest(http.MethodPost, "/_jaiscloud/import", bytes.NewReader(tarball)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// Restore was never called — data must still be nil.
+	if snap.data != nil {
+		t.Error("expected snapshotter data to remain nil (Restore should not have been called)")
+	}
+}
+
+// TestHandler_Import_KMSMaterial_NewInstance checks that ?new_instance=true blocks
+// import when the snapshot contains non-empty KMS key material.
+func TestHandler_Import_KMSMaterial_NewInstance(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+
+	// Plain JSON path (no gzip magic bytes) — KMS gate runs before barrier acquisition.
+	env := SnapshotEnvelope{
+		SchemaVersion: 3,
+		Cloud:         "aws",
+		Stores:        map[string]json.RawMessage{"keys": json.RawMessage(`{"key-id-1":{}}`)},
+	}
+	body, _ := json.Marshal(env)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/_jaiscloud/import?new_instance=true", bytes.NewReader(body))
+	h.Import(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when importing KMS material with new_instance=true, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandler_Import_KMSMaterial_NewInstance_Empty checks that ?new_instance=true
+// does NOT block import when the "keys" store is an empty object.
+func TestHandler_Import_KMSMaterial_NewInstance_Empty(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+
+	snap := &mockSnapshotter{isEmpty: true}
+	h.RegisterSnapshotter("keys", snap)
+
+	// Plain JSON envelope with "keys": {} — empty, so KMS gate must not fire.
+	env := SnapshotEnvelope{
+		SchemaVersion: 3,
+		Cloud:         "aws",
+		Stores:        map[string]json.RawMessage{"keys": json.RawMessage(`{}`)},
+	}
+	body, _ := json.Marshal(env)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/_jaiscloud/import?new_instance=true", bytes.NewReader(body))
+	h.Import(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when keys store is empty with new_instance=true, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// blockingSnapshotter is a Snapshotter whose Restore blocks until ready is closed
+// or ctx is cancelled. Used to test context cancellation mid-restore.
+type blockingSnapshotter struct {
+	ready   chan struct{}
+	failErr error
+	isEmpty bool
+	restored atomic.Bool
+}
+
+func (b *blockingSnapshotter) Snapshot(_ context.Context, w io.Writer) error { return nil }
+
+func (b *blockingSnapshotter) Restore(ctx context.Context, _ io.Reader) error {
+	select {
+	case <-b.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	b.restored.Store(true)
+	return b.failErr
+}
+
+func (b *blockingSnapshotter) IsEmpty(_ context.Context) (bool, error) { return b.isEmpty, nil }
+
+func (b *blockingSnapshotter) Reset() { b.isEmpty = true }
+
+// TestImport_ContextCancel_MidRestore verifies that when the request context is
+// already cancelled before Import runs, the handler does not return 200 and
+// rollback (Reset) is invoked on the blocking snapshotter.
+func TestImport_ContextCancel_MidRestore(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+
+	blocker := &blockingSnapshotter{
+		ready:   make(chan struct{}), // never closed — Restore will block until ctx cancel
+		isEmpty: true,
+	}
+	h.RegisterSnapshotter("resources", blocker)
+	h.RegisterResetter(blocker)
+
+	env := version.Envelope{
+		SchemaVersion: version.CodeSnapshotVersion,
+		Cloud:         "aws",
+		Stores:        map[string]json.RawMessage{"resources": json.RawMessage("{}")},
+	}
+	tarball := buildTestTarball(t, env)
+
+	// Use an already-cancelled context so any blocking select immediately returns.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/_jaiscloud/import", bytes.NewReader(tarball)).WithContext(ctx)
+	h.Import(rec, req)
+
+	// The handler must NOT succeed (200 would mean we restored with a cancelled ctx).
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected non-200 response when context is cancelled, got 200")
+	}
+
+	// Rollback must have run — blocker.isEmpty is set to true by Reset().
+	if !blocker.isEmpty {
+		t.Error("expected blocker.isEmpty == true after rollback (Reset was called)")
+	}
+}
