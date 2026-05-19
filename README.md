@@ -7,11 +7,11 @@
 > **Early Development Notice**
 > JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
 
-**⚡ JaisCloud — Fast, local, realistic cloud emulation for AI-driven development. Runs anywhere: laptop, CI, or Kubernetes.**
+**JaisCloud — Fast, local cloud emulation for developers and CI. Runs anywhere: laptop, CI, or Kubernetes.**
 
-JaisCloud is a free, open-source multi-cloud emulator that lets AI agents and developers run, test, and validate cloud-dependent workloads without touching real cloud infrastructure. It implements the exact wire protocols each cloud uses — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified.
+JaisCloud is a free, open-source cloud emulator that lets developers test cloud-dependent applications without touching real cloud infrastructure. It implements the exact wire protocols each cloud uses — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified.
 
-**One binary per cloud.** Each binary is self-contained and speaks that cloud's exact protocol. There is no `--cloud` flag.
+**One binary per cloud.** Each binary is fully self-contained. There is no `--cloud` flag.
 
 | Cloud | Binary | Status |
 |---|---|---|
@@ -78,128 +78,47 @@ EC2 · Route 53 · RDS · ElastiCache · ECS · EKS · ELBv2 · ECR · ACM · Ki
 
 SES · Cognito (User Pools + Identity Pools)
 
-For per-operation coverage, persistence details, and execution modes see the [Developer Guide](DEVELOPER_GUIDE.md).
+For per-operation coverage details see the [Developer Guide](DEVELOPER_GUIDE.md).
 
 ---
 
-## Architecture
+## Quick Start
 
-JaisCloud follows a **one binary per cloud** model. Each binary speaks that cloud's exact wire protocol and contains all adapter, provider, and store logic for that cloud. Nothing is shared across clouds except infrastructure utilities.
+Three steps: install, start, connect.
 
-```
-HTTP request
-  → gateway.Server          (Chi router, middleware)
-      → CloudAdapter         (detects service + action, decodes wire format)
-          → Registry.Dispatch ("Service.Action", NormalizedRequest)
-              → Provider     (business logic, in-memory or PostgreSQL store)
-          → Codec.Encode     (serialises response to wire format)
-  → HTTP response
-```
-
-### Identity and multi-account
-
-Every incoming request carries a SigV4 `Authorization` header. JaisCloud parses the **access key** out of that header and derives the calling account from it — no config change needed.
-
-```
-Access key  →  account ID  →  per-account store scope
-──────────────────────────────────────────────────────
-AKIAIOSFODNN7EXAMPLE  →  (default account, e.g. 000000000000)
-ASIA<base32(acct_int)>  →  12-digit account ID embedded in the key
-000000000000            →  account ID taken literally
-```
-
-This is the **LSIA encoding** (LocalStack-compatible). `EncodeLSIA("123456789012")` produces the `ASIA…` key; `DecodeLSIA(key)` recovers the account ID. Every provider stores resources under `(account, region, type, id)` — two requests with different access keys see completely separate state.
-
-### Request flow with multi-account
-
-```
-Authorization: AWS4-HMAC-SHA256 Credential=ASIA<acct_encoded>/…
-  → identity.FromRequest  → nr.AccountID = "123456789012"
-  → Registry.Dispatch
-      → provider.resources.Get(ctx, "123456789012", "us-east-1", ...)
-```
-
-### Per-cloud binary layout
-
-```
-jaiscloud-aws  =  internal/aws/adapter  +  internal/aws/provider/*  +  shared infra
-jaiscloud-azure  =  internal/azure/adapter (stub)  +  shared infra
-jaiscloud-gcp    =  internal/gcp/adapter (stub)    +  shared infra
-```
-
-Shared infrastructure (`store`, `gateway`, `admin`, `blobfs`, `events`, `executor`) is cloud-neutral and never imports cloud-specific code.
-
----
-
-## Multi-Account Support
-
-JaisCloud emulates real AWS multi-account behaviour. Each account gets fully isolated state — queues, tables, buckets, keys, secrets — with no cross-contamination.
-
-### How it works
-
-Account identity is derived from the **access key** you pass to the SDK, using the same LSIA encoding as LocalStack. No server restart or config change is needed to use multiple accounts simultaneously.
-
-| Access key format | Resolved account |
-|---|---|
-| `ASIA<base32-encoded-account>` | Decoded 12-digit account ID |
-| Any 12-digit numeric string | Taken as account ID literally |
-| Anything else (`test`, `AKIA…`) | Server default (`JAISCLOUD_ACCOUNT_ID`) |
-
-### Quick start — two accounts
-
-```go
-import (
-    "github.com/aws/aws-sdk-go-v2/credentials"
-    "jaiscloud/internal/aws/identity"
-)
-
-// Mint LSIA-encoded access keys (or use the 12-digit literal shortcut).
-keyA, _ := identity.EncodeLSIA("111111111111")
-keyB, _ := identity.EncodeLSIA("222222222222")
-
-// Build two SDK configs pointing at the same emulator.
-cfgA, _ := config.LoadDefaultConfig(ctx,
-    config.WithRegion("us-east-1"),
-    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(keyA, "test", "")),
-)
-cfgB, _ := config.LoadDefaultConfig(ctx,
-    config.WithRegion("us-east-1"),
-    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(keyB, "test", "")),
-)
-
-sqsA := sqs.NewFromConfig(cfgA, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
-sqsB := sqs.NewFromConfig(cfgB, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
-
-// Account A and B each get isolated state.
-sqsA.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
-sqsB.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
-// Each account sees only its own queue.
-```
-
-### Cross-account dispatch
-
-Resources that reference other resources by ARN route correctly across accounts:
-
-- **SNS → SQS**: subscribe a queue in account B to a topic in account A — messages land in B's queue.
-- **EventBridge → Lambda / SQS**: rule targets in a different account are dispatched to that account's store.
-- **STS AssumeRole**: returns LSIA-encoded credentials for the target account; subsequent calls resolve to that account.
-- **Lambda cross-account invoke**: `InvokeFunction` with a full ARN routes to the function owner's account.
-
-### KMS cross-account protection
-
-Ciphertext produced by account A embeds A's account ID in the blob (v2 format). A `Decrypt` call from account B returns `IncorrectKeyException` — exactly matching real AWS behaviour.
-
-### Scoped state reset
+### 1. Install
 
 ```bash
-# Wipe all state (original behaviour)
-curl -X POST http://localhost:4566/_jaiscloud/reset
+# macOS
+brew tap rjaiswal/tap && brew install jaiscloud-aws
 
-# Wipe one account across all regions
-curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111"
+# Docker (any platform)
+docker pull ghcr.io/jaisrajms/jaiscloud-aws:latest
 
-# Wipe one (account, region) pair
-curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111&region=us-east-1"
+# Or download a pre-built binary from the Releases page (no Go required)
+```
+
+Full installation options are in the [Install](#install) section below.
+
+### 2. Start
+
+```bash
+jaiscloud-aws start
+# Listening on http://localhost:4566
+```
+
+### 3. Connect
+
+```bash
+# Set once — every AWS CLI call routes to JaisCloud automatically
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+
+aws s3 mb s3://my-bucket
+aws sqs create-queue --queue-name my-queue
+aws dynamodb list-tables
 ```
 
 ---
@@ -272,11 +191,33 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
 ---
 
-## Connect your AWS SDK
+## Connect your SDK
 
 Point any SDK at `http://localhost:4566` with dummy credentials — no code changes required.
 
+### AWS CLI
+
+The simplest approach is to set `AWS_ENDPOINT_URL` in your environment. Every AWS CLI and SDK call then routes to JaisCloud automatically with no per-call flags.
+
+```bash
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+
+aws s3 mb s3://my-bucket
+aws sqs create-queue --queue-name my-queue
+aws dynamodb list-tables
+```
+
+Or pass `--endpoint-url` per call:
+
+```bash
+aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
+```
+
 ### Go (aws-sdk-go-v2)
+
 ```go
 cfg, _ := config.LoadDefaultConfig(ctx,
     config.WithRegion("us-east-1"),
@@ -289,6 +230,7 @@ s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 ```
 
 ### Python (boto3)
+
 ```python
 import boto3
 client = boto3.client(
@@ -301,6 +243,7 @@ client = boto3.client(
 ```
 
 ### Node.js (aws-sdk v3)
+
 ```javascript
 import { S3Client } from "@aws-sdk/client-s3";
 const client = new S3Client({
@@ -311,11 +254,86 @@ const client = new S3Client({
 });
 ```
 
-### AWS CLI
+---
+
+## Running in CI/CD
+
+### GitHub Actions
+
+Use the JaisCloud Docker image as a service container. The health check endpoint (`/_jaiscloud/health`) lets you wait for the emulator to be ready before running tests.
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      jaiscloud:
+        image: ghcr.io/jaisrajms/jaiscloud-aws:latest
+        ports:
+          - 4566:4566
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for JaisCloud
+        run: |
+          until curl -sf http://localhost:4566/_jaiscloud/health; do
+            echo "waiting for JaisCloud..."; sleep 1
+          done
+
+      - name: Run tests
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: go test ./...
+```
+
+### Docker Compose
+
+Add JaisCloud as a dependency in your `docker-compose.yml`:
+
+```yaml
+services:
+  jaiscloud:
+    image: ghcr.io/jaisrajms/jaiscloud-aws:latest
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_jaiscloud/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  your-app:
+    build: .
+    depends_on:
+      jaiscloud:
+        condition: service_healthy
+    environment:
+      AWS_ENDPOINT_URL: http://jaiscloud:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+```
+
+### Reset state between tests
+
+Call the reset endpoint between test runs to start with a clean slate:
+
 ```bash
-aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
-aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name my-queue
-aws --endpoint-url http://localhost:4566 dynamodb list-tables
+curl -X POST http://localhost:4566/_jaiscloud/reset
+```
+
+In Go:
+```go
+func resetState(t *testing.T) {
+    t.Helper()
+    resp, err := http.Post("http://localhost:4566/_jaiscloud/reset", "", nil)
+    require.NoError(t, err)
+    require.Equal(t, http.StatusOK, resp.StatusCode)
+}
 ```
 
 ---
@@ -327,17 +345,34 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--port` | `JAISCLOUD_PORT` | `4566` | Listen port |
-| `--mode` | `JAISCLOUD_MODE` | `memory` | `memory` (in-memory) or `persistence` (Memory/PostgreSQL) |
-| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN (optional with `--mode persistent`) |
+| `--mode` | `JAISCLOUD_MODE` | `memory` | `memory` (in-memory, no external deps) or `persistent` (PostgreSQL) |
+| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN (optional; enables Postgres-backed stores when `--mode persistent`) |
+| `--data-dir` | `JAISCLOUD_DATA_DIR` | — | Directory for snapshots and periodic state saves |
 | `--region` | `JAISCLOUD_REGION` | `us-east-1` | AWS region reported in responses |
-| `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | AWS account ID in ARNs |
+| `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | Default AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
 | `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | — | `mock` / `docker` / `k8s` for Lambda and EMR |
 
-**Memory mode** (default) — all state in memory, zero external dependencies, lost on restart. Ideal for unit tests and CI.
+**Memory mode** (default) — all state lives in memory. Zero external dependencies. State is lost on restart. Ideal for unit tests and CI.
 
-**Persistent mode** — resource metadata persisted in PostgreSQL if postgres configured else in a file. Ideal for integration environments and state that must survive restarts.
+**Persistent mode** — state survives restarts. Two sub-modes depending on whether `--dsn` is provided:
+- **File-backed** (no `--dsn`): stores are in-memory, state is saved periodically to `state.json` in `--data-dir`.
+- **Postgres-backed** (`--dsn` set): stores are backed by PostgreSQL.
+
+```bash
+# Memory mode (default — state lost on restart)
+jaiscloud-aws start
+
+# Persistent mode, file-backed (state saved to ~/.jaiscloud/jaiscloud-aws/state.json)
+jaiscloud-aws start --mode persistent
+
+# Persistent mode, file-backed with explicit data directory
+jaiscloud-aws start --mode persistent --data-dir ~/.jaiscloud
+
+# Persistent mode, Postgres-backed
+jaiscloud-aws start --mode persistent --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+```
 
 For the full configuration reference including Kubernetes, Spark, and platform options see the [Developer Guide](DEVELOPER_GUIDE.md).
 
@@ -346,28 +381,90 @@ For the full configuration reference including Kubernetes, Spark, and platform o
 ## CLI Reference
 
 ```bash
-jaiscloud-aws start                      # start the emulator
-jaiscloud-aws version                    # print version, commit, build date
-jaiscloud-aws env                        # print effective config as env vars
-jaiscloud-aws doctor                     # verify the emulator is reachable
-jaiscloud-aws reset                      # wipe all state
-jaiscloud-aws export -o snapshot.json    # save full state snapshot to file
-jaiscloud-aws import -i snapshot.json    # restore state from snapshot file
+jaiscloud-aws start                             # start the emulator
+jaiscloud-aws version                           # print version, commit, build date
+jaiscloud-aws env                               # print effective config as env vars
+jaiscloud-aws doctor                            # verify the emulator is reachable
+jaiscloud-aws reset                             # wipe all state
+jaiscloud-aws services                          # list service implementation levels
+jaiscloud-aws export -o snapshot.tar.gz        # save full state to a snapshot tarball
+jaiscloud-aws import -i snapshot.tar.gz        # restore state from a snapshot tarball
+jaiscloud-aws snapshot create --name <name>    # create a named on-disk snapshot
+jaiscloud-aws snapshot list                    # list all named snapshots
+jaiscloud-aws snapshot revert <name>           # revert to a named snapshot
+jaiscloud-aws snapshot delete <name> --yes     # delete a named snapshot
+jaiscloud-aws snapshot inspect <name>          # show snapshot metadata
 ```
 
 ---
 
 ## Admin API
 
+All endpoints are available at the emulator's base URL (default `http://localhost:4566`).
+
 | Endpoint | Method | Description |
 |---|---|---|
-| `/_jaiscloud/health` | GET | `{"status":"ok"}` liveness check |
+| `/_jaiscloud/health` | GET | `{"status":"ok"}` — liveness check |
+| `/_jaiscloud/doctor` | GET | Emulator diagnostics (version, mode, instance ID, uptime) |
 | `/_jaiscloud/reset` | POST | Wipe all state |
 | `/_jaiscloud/reset?account=X` | POST | Wipe all regions for account X |
 | `/_jaiscloud/reset?account=X&region=Y` | POST | Wipe one (account, region) scope |
-| `/_jaiscloud/export` | GET | JSON snapshot of all state (schema v3) |
-| `/_jaiscloud/import` | POST | Restore state from JSON snapshot |
+| `/_jaiscloud/export` | GET | Export full state as a gzip tarball (`Content-Type: application/gzip`) |
+| `/_jaiscloud/import` | POST | Restore from a gzip tarball (`Content-Type: application/gzip`); `?dry_run=true` validates only |
+| `/_jaiscloud/snapshot` | POST | Create a named snapshot (`{"name":"<n>","description":"<d>"}`) |
+| `/_jaiscloud/snapshots` | GET | List all named snapshots |
+| `/_jaiscloud/snapshot/{name}` | GET | Inspect snapshot metadata |
+| `/_jaiscloud/snapshot/{name}/revert` | POST | Revert to a named snapshot |
+| `/_jaiscloud/snapshot/{name}` | DELETE | Delete a named snapshot (`?yes=true` required) |
 | `/metrics` | GET | Prometheus metrics (requires `--metrics`) |
+
+---
+
+## UI Console
+
+> **Coming Soon** — The JaisCloud UI Console is currently under active development and will be released in an upcoming version.
+
+The UI Console will provide a browser-based interface for interacting with the emulator without the CLI or SDK. Planned features include:
+
+- **Resource browser** — view and manage all emulated resources (queues, tables, buckets, functions, etc.) across accounts and regions
+- **State management** — trigger reset, export, import, and named snapshot operations from the UI
+- **Multi-account switcher** — toggle between emulated accounts and see per-account resource scopes
+- **Metrics dashboard** — visualise request throughput and error rates without a separate Prometheus setup
+
+Watch the [GitHub releases page](https://github.com/jaisrajms/jaiscloud/releases) for announcements.
+
+---
+
+## Multi-Account Support
+
+JaisCloud supports isolated state per AWS account. Each account gets its own queues, tables, buckets, keys, and secrets — no cross-contamination.
+
+Account identity is derived from the **access key** you pass to the SDK. To use multiple accounts simultaneously, pass a 12-digit account ID as the access key:
+
+```go
+// Account A — access key is the literal account ID
+cfgA, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("111111111111", "test", "")),
+)
+
+// Account B
+cfgB, _ := config.LoadDefaultConfig(ctx,
+    config.WithRegion("us-east-1"),
+    config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("222222222222", "test", "")),
+)
+
+sqsA := sqs.NewFromConfig(cfgA, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
+sqsB := sqs.NewFromConfig(cfgB, func(o *sqs.Options) { o.BaseEndpoint = aws.String("http://localhost:4566") })
+
+// Each account sees only its own resources
+sqsA.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
+sqsB.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
+```
+
+Any other access key (e.g. `"test"`, `"AKIAIOSFODNN7EXAMPLE"`) resolves to the server default account (`JAISCLOUD_ACCOUNT_ID`, default `000000000000`).
+
+For cross-account ARN routing, STS AssumeRole, and LSIA encoding details see the [Developer Guide](DEVELOPER_GUIDE.md).
 
 ---
 

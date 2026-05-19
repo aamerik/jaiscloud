@@ -302,7 +302,8 @@ func startCmd() *cobra.Command {
 
 	cmd.Flags().Int("port", 4566, "Listen port")
 	cmd.Flags().String("mode", "memory", "Mode: memory or persistent")
-	cmd.Flags().String("dsn", "", `PostgreSQL connection string (required when --mode persistent).
+	cmd.Flags().String("dsn", "", `PostgreSQL connection string (optional; enables Postgres-backed persistence when --mode persistent).
+	If omitted with --mode persistent, state is kept in memory and saved periodically to state.json in --data-dir.
 	Format:  postgres://USER:PASSWORD@HOST:PORT/DBNAME
 	Example: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
 	Env var: JAISCLOUD_DSN`)
@@ -407,11 +408,8 @@ type appStores struct {
 // initStores constructs the store layer for the chosen mode (memory or persistent).
 // instanceID is used to create a session-scoped blob directory in memory mode.
 func initStores(ctx context.Context, cfg *config.Config, instanceID string) (appStores, error) {
-	if cfg.Mode == config.ModePersistent {
-		if cfg.DSN == "" {
-			return appStores{}, fmt.Errorf("--mode persistent requires --dsn (or JAISCLOUD_DSN)")
-		}
-		slog.Info("starting in persistent mode", "dsn", cfg.DSN)
+	if cfg.Mode == config.ModePersistent && cfg.DSN != "" {
+		slog.Info("starting in persistent mode (postgres)", "dsn", cfg.DSN)
 		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, cfg.Cloud)
 		if err != nil {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
@@ -439,9 +437,14 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 		}, nil
 	}
 
-	// Lite mode: use a session-scoped LocalFSBlobStore under /tmp/jaiscloud-<instanceID>/blobs/
-	// so that snapshot export/import includes blob data even in memory mode.
-	slog.Info("starting in memory mode")
+	// File-backed persistent mode or memory mode.
+	// In both cases stores are in-memory; the snapshot loop (wired in startCmd) periodically
+	// saves state to data-dir/state.json and restores it on startup.
+	if cfg.Mode == config.ModePersistent {
+		slog.Info("starting in persistent mode (file-backed): state will be saved to state.json")
+	} else {
+		slog.Info("starting in memory mode")
+	}
 	sessionBlobs, err := blobfs.NewSessionBlobStore(instanceID)
 	if err != nil {
 		slog.Warn("session blob store unavailable, falling back to MemoryBlobStore", "err", err)

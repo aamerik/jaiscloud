@@ -266,7 +266,7 @@ JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode persistent --dsn "po
 ```bash
 JAISCLOUD_PORT=4566
 JAISCLOUD_MODE=memory                # or "persistent" (formerly "lite"/"full" — rejected)
-JAISCLOUD_DSN=                       # required when MODE=persistent
+JAISCLOUD_DSN=                       # optional; if set with MODE=persistent, enables Postgres-backed stores; if unset, uses file-backed stores (state.json)
 JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info

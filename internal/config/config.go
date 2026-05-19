@@ -38,7 +38,7 @@ type Config struct {
 	LogLevel  string
 	Region    string
 	AccountID string
-	DSN       string // PostgreSQL DSN (required when Mode == persistent)
+	DSN       string // PostgreSQL DSN (optional; if set with Mode==persistent, enables Postgres-backed stores)
 	// BlobDir is deprecated; use DataDir instead. Kept for backward compatibility.
 	BlobDir string // Deprecated: use DataDir
 	DataDir string // Root data directory for persistent-file backend (default: ~/.jaiscloud/<binary>)

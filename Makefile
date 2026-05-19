@@ -30,6 +30,13 @@ JAISCLOUD_DSN  ?= postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
 JAISCLOUD_PORT ?= 4566
 JAISCLOUD_HOST ?= http://localhost:$(JAISCLOUD_PORT)
 
+# Per-mode ports for test-integration — allows memory and persistent suites to run in parallel
+JAISCLOUD_PORT_MEMORY     ?= 4566
+JAISCLOUD_PORT_PERSISTENT ?= 4567
+_INTEGRATION_MODE         := $(shell printf '%s' '$(MODE)' | tr '[:upper:]' '[:lower:]')
+_INTEGRATION_PORT         := $(if $(filter persistent,$(_INTEGRATION_MODE)),$(JAISCLOUD_PORT_PERSISTENT),$(JAISCLOUD_PORT_MEMORY))
+_INTEGRATION_HOST         := http://localhost:$(_INTEGRATION_PORT)
+
 # ─── Local Postgres container ─────────────────────────────────────────────────
 PG_CONTAINER ?= jaiscloud-postgres
 PG_VOLUME    ?= jaiscloud-postgres-data
@@ -47,7 +54,7 @@ IMAGE             := jaiscloud-aws
 JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
 
 .PHONY: lint lint-pagination help build test docker clean \
-        server-lite server-full server-docker server-k8s server-full-all \
+        server-memory server-persistent server-docker server-k8s server-persistent-all \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
         test-integration \
@@ -57,7 +64,7 @@ JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
         test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
         test-e2e-iceberg \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
-        _build-for-e2e _restart-server-lite _wait-docker _wait-postgres \
+        _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq
 
@@ -134,11 +141,11 @@ test: ## Run all unit tests with the race detector  (no server needed)
 
 ##@ Server — foreground (Ctrl-C to stop)
 
-server-lite: build ## In-memory stores, mock executors — no postgres required
+server-memory: build ## In-memory stores, mock executors — no postgres required
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start
 
-server-full: build ## Postgres stores, mock executors — requires JAISCLOUD_DSN
+server-persistent: build ## Postgres stores, mock executors — requires JAISCLOUD_DSN
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)"
 
@@ -151,7 +158,7 @@ server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda
 server-k8s: _check-k8s-prereq up-k8s ## Persistent mode + Spark and Lambda via K8s  (requires docker-desktop K8s)
 	kubectl port-forward -n jaiscloud svc/jaiscloud $(JAISCLOUD_PORT):4566
 
-server-full-all: server-k8s ## Alias for server-k8s (persistent mode, all executors via K8s)
+server-persistent-all: server-k8s ## Alias for server-k8s (persistent mode, all executors via K8s)
 
 stop-server: ## Stop background jaiscloud-aws process and clean up Lambda/Spark resources
 	@pkill -f "jaiscloud-aws start" 2>/dev/null && echo "jaiscloud-aws stopped" || echo "jaiscloud-aws was not running"
@@ -219,30 +226,30 @@ postgres-down: ## Stop and remove the local Postgres container  (volume is kept 
 
 ##@ Integration tests
 
-# MODE controls the store backend. The value is case-insensitive (full/Full/FULL all work).
+# MODE controls the store backend. The value is case-insensitive (persistent/Persistent/PERSISTENT all work).
 # Note: the variable NAME must be uppercase MODE — Make variable names are case-sensitive.
 
-test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RUN=TestSQS to target one service
+test-integration: ## Run tests/integration/ — MODE=memory|persistent required; TEST_RUN=TestSQS to target one service
 	@if [ -z "$(MODE)" ]; then \
 	  printf "\n\033[1mUsage:\033[0m\n"; \
-	  printf "  make test-integration \033[36mMODE=lite\033[0m               run against in-memory stores (no postgres)\n"; \
-	  printf "  make test-integration \033[36mMODE=full\033[0m               run against postgres (resets data)\n"; \
-	  printf "  make test-integration \033[36mMODE=full TEST_RUN=TestS3\033[0m  target a single service\n\n"; \
+	  printf "  make test-integration \033[36mMODE=memory\033[0m               run against in-memory stores (no postgres)\n"; \
+	  printf "  make test-integration \033[36mMODE=persistent\033[0m               run against postgres (resets data)\n"; \
+	  printf "  make test-integration \033[36mMODE=persistent TEST_RUN=TestS3\033[0m  target a single service\n\n"; \
 	  printf "\033[33mMODE is required.\033[0m\n\n"; \
 	  exit 1; \
 	fi
 	@_mode=$$(printf '%s' "$(MODE)" | tr '[:upper:]' '[:lower:]'); \
-	if [ "$$_mode" != "lite" ] && [ "$$_mode" != "full" ]; then \
-	  printf "\033[31mERROR: MODE must be 'lite' or 'full', got '$(MODE)'\033[0m\n"; \
+	if [ "$$_mode" != "memory" ] && [ "$$_mode" != "persistent" ]; then \
+	  printf "\033[31mERROR: MODE must be 'memory' or 'persistent', got '$(MODE)'\033[0m\n"; \
 	  exit 1; \
 	fi; \
-	if [ "$$_mode" = "full" ]; then \
+	if [ "$$_mode" = "persistent" ]; then \
 	  docker info > /dev/null 2>&1 || { printf "\033[31mERROR: Docker is not running\033[0m\n"; exit 1; }; \
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
 	  printf   "\033[1m│   JaisCloud Integration Suite — Persistent Mode (Postgres)  │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
-	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud-aws instance...\n"; \
-	  pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud-aws on port $(_INTEGRATION_PORT)...\n"; \
+	  lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	  printf "\033[1m[2/4]\033[0m Building jaiscloud-aws... "; \
 	  go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ \
 	    && printf "\033[32m✓ OK\033[0m\n" \
@@ -256,49 +263,49 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	    $(MAKE) postgres-up; \
 	  fi; \
 	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws in persistent mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start --mode persistent --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
-	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start --mode persistent --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
+	  JAISCLOUD_PORT=$(_INTEGRATION_PORT) \
 	    ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)" \
-	    > /tmp/jaiscloud-full.log 2>&1 & \
-	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
+	    > /tmp/jaiscloud-persistent.log 2>&1 & \
+	  n=0; until curl -sf $(_INTEGRATION_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-full.log\033[0m\n"; \
-	      pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-persistent.log\033[0m\n"; \
+	      lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
 	  done; \
-	  printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-full.log)\033[0m\n"; \
+	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-persistent.log)\033[0m\n"; \
 	else \
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
-	  printf   "\033[1m│  JaisCloud Integration Suite — Lite Mode (in-memory)  │\033[0m\n"; \
+	  printf   "\033[1m│  JaisCloud Integration Suite — Memory Mode (in-memory)  │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
-	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud-aws instance...\n"; \
-	  pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud-aws on port $(_INTEGRATION_PORT)...\n"; \
+	  lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	  printf "\033[1m[2/3]\033[0m Building jaiscloud-aws... "; \
 	  go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ \
 	    && printf "\033[32m✓ OK\033[0m\n" \
 	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
-	  printf "\033[1m[3/3]\033[0m Starting jaiscloud-aws in lite mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start\033[0m\n"; \
-	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  printf "\033[1m[3/3]\033[0m Starting jaiscloud-aws in memory mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start\033[0m\n"; \
+	  JAISCLOUD_PORT=$(_INTEGRATION_PORT) \
 	    ./jaiscloud-aws start \
-	    > /tmp/jaiscloud-e2e.log 2>&1 & \
-	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
+	    > /tmp/jaiscloud-memory.log 2>&1 & \
+	  n=0; until curl -sf $(_INTEGRATION_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-e2e.log\033[0m\n"; \
-	      pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-memory.log\033[0m\n"; \
+	      lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
 	  done; \
-	  printf "\033[32m  ✓ Ready → $(JAISCLOUD_HOST)  (log: /tmp/jaiscloud-e2e.log)\033[0m\n"; \
+	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-memory.log)\033[0m\n"; \
 	fi
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
 	@go clean -testcache
-	@JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
+	@JAISCLOUD_HOST=$(_INTEGRATION_HOST) \
 	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ ./tests/integration/multiaccount/ \
 	  > /tmp/integration-results.txt 2>&1; \
 	echo $$? > /tmp/integration-exit.txt; \
@@ -324,7 +331,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	    print "\033[1m══════════════════════════════════════════════════════\033[0m"; \
 	  } \
 	' /tmp/integration-results.txt; \
-	pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
+	lsof -ti tcp:$(_INTEGRATION_PORT) 2>/dev/null | xargs kill 2>/dev/null || true; \
 	exit $$(cat /tmp/integration-exit.txt)
 
 ##@ Full-mode e2e tests  (start server, run suite, stop server)
@@ -487,7 +494,7 @@ _start-k8s: _check-k8s-prereq up-k8s
 
 _stop-k8s: down-k8s
 
-_restart-server-lite: _build-for-e2e
+_restart-server-memory: _build-for-e2e
 	@pkill -f "jaiscloud-aws start" 2>/dev/null || true
 	@sleep 1
 	@JAISCLOUD_PORT=$(JAISCLOUD_PORT) \

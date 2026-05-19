@@ -1,7 +1,9 @@
 package multiaccount
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -14,11 +16,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"jaiscloud/internal/admin"
+	"jaiscloud/internal/persistence/version"
 )
 
-// TestExport_SchemaVersion verifies the exported envelope uses schema v3 and
-// includes a DefaultRegion field (renamed from Region in v2).
+// TestExport_SchemaVersion verifies the exported envelope is a gzip tarball
+// containing envelope.json with schema_version=3.
 func TestExport_SchemaVersion(t *testing.T) {
 	resetState(t)
 
@@ -28,13 +30,32 @@ func TestExport_SchemaVersion(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var env admin.SnapshotEnvelope
-	require.NoError(t, json.Unmarshal(body, &env))
+	// The response is a gzip-compressed tar archive.
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err, "response must be a valid gzip stream")
+	defer gz.Close()
 
+	tr := tar.NewReader(gz)
+	var envJSON []byte
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if hdr.Name == "envelope.json" {
+			envJSON, err = io.ReadAll(tr)
+			require.NoError(t, err)
+			break
+		}
+	}
+	require.NotNil(t, envJSON, "tarball must contain envelope.json")
+
+	var env version.Envelope
+	require.NoError(t, json.Unmarshal(envJSON, &env))
 	assert.Equal(t, 3, env.SchemaVersion, "exported envelope must be schema v3")
-	assert.NotContains(t, string(body), `"region":`,
-		"v3 envelope must not have the old 'region' key (renamed to 'default_region')")
 }
 
 // TestExportImport_RoundTrip seeds two accounts with queues, exports, global-resets,

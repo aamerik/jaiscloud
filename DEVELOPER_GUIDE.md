@@ -84,11 +84,11 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 
 | Goal | Mode | Pre-built binary | Docker / K8s | From source |
 |---|---|---|---|---|
-| Run unit tests / CI pipelines | **Lite** (in-memory) | ✅ | ✅ | ✅ |
-| Build and test AWS integrations locally | **Lite** or **Full** | ✅ (memory only) | ✅ | ✅ |
-| State survives server restarts | **Full** (PostgreSQL) | Needs Postgres separately | ✅ | ✅ |
-| Run EMR/Spark API calls that return mock results instantly | **Full + Mock executor** | Needs Postgres separately | ✅ | ✅ |
-| Actually run a Spark job end-to-end | **Full + K8s executor** | — | ✅ | ✅ |
+| Run unit tests / CI pipelines | **memory** (in-memory) | ✅ | ✅ | ✅ |
+| Build and test AWS integrations locally | **memory** or **persistent** | ✅ (memory only) | ✅ | ✅ |
+| State survives server restarts | **persistent** (file-backed or PostgreSQL) | ✅ | ✅ | ✅ |
+| Run EMR/Spark API calls that return mock results instantly | **persistent + Mock executor** | ✅ | ✅ | ✅ |
+| Actually run a Spark job end-to-end | **persistent + K8s executor** | — | ✅ | ✅ |
 
 ---
 
@@ -100,8 +100,8 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
   - [Building from source](#building-from-source-requires-go-126)
 - [Service Reference](#service-reference)
 - [Prerequisites](#prerequisites)
-- [Mode 1 — Memory (in-memory, no dependencies)](#mode-1--lite-in-memory-no-dependencies)
-- [Mode 2 — Full (PostgreSQL persistence)](#mode-2--full-postgresql-persistence)
+- [Mode 1 — Memory (in-memory, no dependencies)](#mode-1--memory-in-memory-no-dependencies)
+- [Mode 2 — Persistent (file-backed or PostgreSQL)](#mode-2--persistent-file-backed-or-postgresql)
 - [Mode 3 — JaisCloud on Kubernetes](#mode-3--jaiscloud-on-kubernetes)
 - [EMR Spark — Mock Mode (instant results)](#emr-spark--mock-mode-instant-results)
 - [EMR Spark — Kubernetes Executor (real Spark jobs)](#emr-spark--kubernetes-executor-real-spark-jobs)
@@ -166,7 +166,7 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 
 ### Service implementation matrix
 
-| Service | Tier | Lite-mode storage | Full-mode storage | Integration tests |
+| Service | Tier | Memory-mode storage | Persistent-mode storage | Integration tests |
 |---|---|---|---|---|
 | Amazon S3 | ✅ Full | In-memory + MemoryBlobStore | PostgreSQL + LocalFS blobs | `tests/integration/s3_*.go` |
 | Amazon SQS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sqs_*.go` |
@@ -288,9 +288,9 @@ This is intentional: these services exist so that IaC tooling (CloudFormation, T
 
 You need different tools depending on which mode you are using. Install only what you need for your current goal.
 
-### Always required
+### Required only if building from source
 
-**Go 1.26+** — JaisCloud is a Go binary. Check your version:
+**Go 1.26+** — only needed if you are building from source. The pre-built binary and Docker image require no Go. Check your version:
 
 ```bash
 go version
@@ -299,7 +299,7 @@ go version
 
 If Go is not installed or out of date: https://go.dev/dl/
 
-### Required for persistent mode and Spark
+### Required for persistent mode (PostgreSQL) and Spark
 
 **Docker** — needed to run PostgreSQL (persistent mode) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud-aws:latest`.
 
@@ -330,11 +330,11 @@ aws --version
 
 ---
 
-## Mode 1 — Lite (in-memory, no dependencies)
+## Mode 1 — Memory (in-memory, no dependencies)
 
 **What it is:** JaisCloud keeps all state in RAM. No database, no Docker, no external services. Everything resets when the server stops. This is the right choice for unit tests, CI, and first-time setup.
 
-**What you need:** Go only.
+**What you need:** Go only (or the pre-built binary — no Go required).
 
 ### Step 1 — Build the binary
 
@@ -421,18 +421,25 @@ This wipes all in-memory state. Useful between test runs without restarting the 
 |---|---|
 | `--port 9000` | Listen on a different port |
 | `--region eu-west-1` | Change the region reported in responses |
+| `--account-id 123456789012` | Set a custom default account ID in ARNs |
+| `--data-dir ~/.jaiscloud` | Save state periodically to `state.json` (survives restarts) |
+| `--fresh-start` | Skip loading existing `state.json` on startup (start clean) |
 | `--log-level debug` | Print every request and response (very verbose) |
 | `--metrics` | Enable Prometheus metrics at `http://localhost:4566/metrics` |
 
 ---
 
-## Mode 2 — Full (PostgreSQL persistence)
+## Mode 2 — Persistent (file-backed or PostgreSQL)
 
-**What it is:** JaisCloud stores all state in PostgreSQL. State survives server restarts. Use this when you need a persistent dev environment, shared team setup, or you are testing restart behaviour.
+**What it is:** JaisCloud state survives server restarts. Use this when you need a persistent dev environment, shared team setup, or you are testing restart behaviour.
 
-**What you need:** Go + Docker.
+**What you need:** Go (or the pre-built binary). Docker is only required if you want PostgreSQL-backed persistence.
 
-**What is different from Lite:** the only difference is where data lives. All AWS APIs work identically. You just add `--mode persistent` and a database connection string.
+**What is different from memory mode:** the only difference is where data lives. All AWS APIs work identically.
+
+There are two sub-modes:
+- **File-backed** (no `--dsn`): stores stay in memory but are saved periodically to `state.json` in `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws`). On the next startup, state is restored automatically. No external dependencies.
+- **PostgreSQL-backed** (`--dsn` set): all store state is persisted in PostgreSQL. Use this for shared team environments or when you need full ACID durability.
 
 ### Step 1 — Start PostgreSQL
 
@@ -492,13 +499,12 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
 Expected output:
 ```
-INFO  executor   lambda=mock  spark=mock
-INFO  store      mode=full
+INFO  executor      lambda=mock  spark=mock
 INFO  blob storage  dir=/Users/yourname/.jaiscloud/blobs
-INFO  jaiscloud started  port=4566  mode=full
+INFO  jaiscloud started  port=4566  mode=persistent
 ```
 
-> **Where do S3 blobs go?** In persistent mode, S3 object *bodies* are written to `~/.jaiscloud/blobs` on the local filesystem (a `LocalFSBlobStore`). They survive server restarts. S3 *metadata* (bucket names, keys, sizes, ETags) goes into PostgreSQL. You can change the blob directory with `--blob-dir /path/to/dir` or `JAISCLOUD_BLOB_DIR`. In memory mode, blobs are in memory and lost when the server stops.
+> **Where do S3 blobs go?** In PostgreSQL-backed persistent mode, S3 object *bodies* are written to a local `LocalFSBlobStore` under `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws`). They survive server restarts. S3 *metadata* (bucket names, keys, sizes, ETags) goes into PostgreSQL. In memory mode, blobs are held in a session-scoped temporary directory and included in snapshot exports.
 
 JaisCloud runs SQL migrations automatically on every startup — no manual schema setup is needed.
 
@@ -525,10 +531,35 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
 You can use environment variables instead of flags:
 
 ```bash
-export JAISCLOUD_MODE=full
+export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 ./jaiscloud-aws start
 ```
+
+### File-backed persistent mode (no PostgreSQL)
+
+If you omit `--dsn`, JaisCloud uses in-memory stores and saves state periodically to `state.json`:
+
+```bash
+# Persistent mode, file-backed — state saved to ~/.jaiscloud/jaiscloud-aws/state.json
+./jaiscloud-aws start --mode persistent
+
+# Explicit data directory
+./jaiscloud-aws start --mode persistent --data-dir /var/lib/jaiscloud
+
+# Start fresh, ignoring any previous state.json
+./jaiscloud-aws start --mode persistent --fresh-start
+```
+
+Relevant env vars for file-backed mode:
+
+| Env var | Default | Description |
+|---|---|---|
+| `JAISCLOUD_DATA_DIR` | `~/.jaiscloud/jaiscloud-aws` | Directory where `state.json` and named snapshots are stored |
+| `JAISCLOUD_SNAPSHOT_INTERVAL` | `30s` | How often the snapshot loop saves `state.json` |
+| `JAISCLOUD_FRESH_START` | `false` | Skip loading previous `state.json` on startup |
+
+---
 
 ### Connection string format
 
@@ -828,9 +859,9 @@ export JAISCLOUD_K8S_SPARK_SA=spark-driver         # SA for executor pods
 
 Expected output:
 ```
-INFO  executor    lambda=k8s  spark=k8s
+INFO  executor      lambda=k8s  spark=k8s
 INFO  blob storage  dir=/home/yourname/.jaiscloud/blobs
-INFO  jaiscloud started  port=4566  mode=full
+INFO  jaiscloud started  port=4566  mode=persistent
 ```
 
 > **Why two service accounts?** `JAISCLOUD_K8S_SA` is the service account the Spark *driver pod* runs as — it needs permission to create executor pods. `JAISCLOUD_K8S_SPARK_SA` is forwarded to Spark as the service account for *executor pods*. They can be the same SA (as above) or different ones if you want finer-grained RBAC. See [JAISCLOUD_K8S_SA vs JAISCLOUD_K8S_SPARK_SA](#jaiscloud_k8s_sa-vs-jaiscloud_k8s_spark_sa) for details.
@@ -1097,7 +1128,7 @@ If steps are flipping to `FAILED` unexpectedly in a healthy cluster, increase th
 
 **What it controls:** the UUID stamped as `jaiscloud.io/instance-id` on every K8s resource JaisCloud creates (Spark Jobs, Lambda Pods, Lambda Services).
 
-**Default:** auto-generated stable UUID (persisted in-memory for the lifetime of the process)
+**Default:** auto-generated UUID, persisted to `<stateDir>/instance-id` so it survives restarts. `stateDir` is resolved automatically using this priority: `JAISCLOUD_STATE_DIR` env var → `~/.jaiscloud` → `/var/lib/jaiscloud` → `/tmp/jaiscloud-<uid>` (ephemeral fallback — logs a warning). On any normal developer machine `~/.jaiscloud` is used, so the UUID is always stable across restarts without any configuration.
 
 **Why it exists:** if two JaisCloud instances run against the same K8s cluster (e.g. two developers sharing a devbox cluster, or parallel CI jobs), `cleanupOrphans` on startup would otherwise delete each other's resources. The instance ID ensures each instance only touches its own resources.
 
@@ -1343,8 +1374,6 @@ No server configuration or restart is needed to use additional accounts. Any cli
 
 ### LSIA key encoding
 
-The LSIA scheme is compatible with LocalStack. The encoding is:
-
 ```
 account_int = int(account_id_string)      // e.g. 111111111111
 value       = account_int + 549755813888  // constant offset
@@ -1423,22 +1452,30 @@ Stores that implement `ScopedResetter` (all bundled stores) honour the narrow sc
 
 ### Snapshot export and import
 
-The snapshot envelope (schema v3) stores each resource collection under its `(account, region)` key. Exporting a two-account emulator and re-importing it restores both accounts' state intact:
+The snapshot envelope stores each resource collection under its `(account, region)` key. Exporting a two-account emulator and re-importing it restores both accounts' state intact.
+
+The export format is a **gzip tarball** (`application/gzip`), not JSON. Use the CLI commands or the admin endpoints:
 
 ```bash
-# Export
-curl http://localhost:4566/_jaiscloud/export -o snapshot.json
+# Export via CLI (recommended)
+jaiscloud-aws export -o snapshot.tar.gz
+
+# Export via HTTP
+curl http://localhost:4566/_jaiscloud/export -o snapshot.tar.gz
 
 # Wipe everything
 curl -X POST http://localhost:4566/_jaiscloud/reset
 
-# Restore
+# Restore via CLI (recommended)
+jaiscloud-aws import -i snapshot.tar.gz
+
+# Restore via HTTP
 curl -X POST http://localhost:4566/_jaiscloud/import \
-     -H "Content-Type: application/json" \
-     --data-binary @snapshot.json
+     -H "Content-Type: application/gzip" \
+     --data-binary @snapshot.tar.gz
 ```
 
-The `DefaultRegion` field in the v3 envelope is informational — each store carries its own (account, region) scope. Importing a v2 snapshot is supported transparently.
+Add `?dry_run=true` to the import endpoint to validate the tarball without applying it.
 
 ### Spark driver pod credentials
 
@@ -1545,7 +1582,7 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
 Migrations run automatically on startup. You should see:
 ```
-INFO jaiscloud started port=4566 mode=full
+INFO jaiscloud started port=4566 mode=persistent
 ```
 
 #### 3. Run the integration tests
@@ -1617,7 +1654,7 @@ Or run manually:
 
 ```bash
 # Start server via docker-compose
-make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0
+make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_K8S_SPARK_IMAGE=apache/spark:3.5.0
 
 # Run tests
 SPARK_E2E_DOCKER_IMAGE=apache/spark:3.5.0 JAISCLOUD_HOST=http://localhost:4566 \
@@ -1665,8 +1702,6 @@ JAISCLOUD_HOST=http://localhost:4566 \
   go test -v -tags spark_e2e -timeout 10m ./tests/full_mode/aws/eventbridge/
 make down-docker
 ```
-
----
 
 ---
 
@@ -2064,8 +2099,6 @@ go test -race ./...
 
 ---
 
----
-
 ## Platform Runtime Layer
 
 The Platform Runtime Layer (`internal/platform/`) injects TLS certificate trust, extra volumes, and environment variables uniformly into **every** JaisCloud-managed container or pod — Lambda Docker/K8s executors and Spark Docker/K8s executors alike. Configuration is loaded once at startup via `platform.LoadFromEnv()` and passed by pointer to each executor constructor. It never embeds into any workload-specific config.
@@ -2295,7 +2328,7 @@ Requires a running Docker daemon. Each Lambda function gets a warm Docker contai
 ```bash
 # ── Core ──────────────────────────────────────────────────────────────────────
 export JAISCLOUD_EXECUTOR_MODE=docker
-export JAISCLOUD_MODE=full
+export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 
 # ── Lambda ────────────────────────────────────────────────────────────────────
@@ -2304,13 +2337,11 @@ export JAISCLOUD_LAMBDA_NETWORK=jaiscloud-net                     # Docker netwo
 export JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300                        # idle container TTL
 
 # ── Spark (EMR / EMR on EKS) ──────────────────────────────────────────────────
-export JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0   # Spark Docker image
+export JAISCLOUD_K8S_SPARK_IMAGE=apache/spark:3.5.0   # Spark image for all executor modes
 
-# Optional: S3 endpoint so Spark containers can reach JaisCloud's S3
-export JAISCLOUD_SPARK_S3_ENDPOINT=http://host.docker.internal:4566
-export JAISCLOUD_AWS_REGION=us-east-1
-export JAISCLOUD_AWS_ACCESS_KEY_ID=test
-export JAISCLOUD_AWS_SECRET_ACCESS_KEY=test
+# Optional: inject JaisCloud's S3 endpoint into Spark containers
+export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://host.docker.internal:4566
+export JAISCLOUD_REGION=us-east-1
 
 # ── Platform layer ─────────────────────────────────────────────────────────────
 # TLS: disable if no custom CA is needed
@@ -2351,7 +2382,7 @@ Requires a reachable Kubernetes cluster. Each Lambda function gets a warm Pod + 
 ```bash
 # ── Core ──────────────────────────────────────────────────────────────────────
 export JAISCLOUD_EXECUTOR_MODE=k8s
-export JAISCLOUD_MODE=full
+export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 
 # ── Kubernetes API server ─────────────────────────────────────────────────────
@@ -2367,15 +2398,12 @@ export JAISCLOUD_K8S_SA=jaiscloud-sa
 export JAISCLOUD_LAMBDA_KEEPALIVE_SECS=300    # idle pod TTL before garbage collection
 
 # ── Spark (EMR / EMR on EKS) ──────────────────────────────────────────────────
-export JAISCLOUD_SPARK_IMAGE=apache/spark:3.5.0
-export JAISCLOUD_K8S_SPARK_NAMESPACE=jaiscloud       # namespace for Spark batch Jobs
-export JAISCLOUD_K8S_SPARK_SA=spark-sa               # service account for the Spark driver
+export JAISCLOUD_K8S_SPARK_IMAGE=apache/spark:3.5.0   # Spark image for K8s executor
+export JAISCLOUD_K8S_SPARK_SA=spark-sa                # service account for the Spark driver
 
-# Optional: S3 endpoint for Spark pods to reach JaisCloud's S3
-export JAISCLOUD_SPARK_S3_ENDPOINT=http://jaiscloud.jaiscloud.svc.cluster.local:4566
-export JAISCLOUD_AWS_REGION=us-east-1
-export JAISCLOUD_AWS_ACCESS_KEY_ID=test
-export JAISCLOUD_AWS_SECRET_ACCESS_KEY=test
+# Optional: inject JaisCloud's S3 endpoint into Spark pods
+export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://jaiscloud.jaiscloud.svc.cluster.local:4566
+export JAISCLOUD_REGION=us-east-1
 
 # ── Platform layer ─────────────────────────────────────────────────────────────
 # TLS: inject a CA from a ConfigMap that already exists in the cluster
@@ -2559,9 +2587,7 @@ func (p *MyServiceProvider) Routes() map[string]provider.HandlerFunc {
 
 ```go
 myServiceProvider := myservice.New(resources, bus)
-for action, h := range myServiceProvider.Routes() {
-    registry.Register(action, h)
-}
+registry.RegisterAll(myServiceProvider.Routes())
 ```
 
 **Step 5 — Add the ARN format** (if needed):

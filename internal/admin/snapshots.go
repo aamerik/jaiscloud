@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -197,7 +198,7 @@ func (h *Handler) SnapshotRevert(w http.ResponseWriter, r *http.Request) {
 	tarPath := snapshotTarball(dataDir, name)
 	data, err := os.ReadFile(tarPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "snapshot not found: "+name, http.StatusNotFound)
 			return
 		}
@@ -271,7 +272,7 @@ func (h *Handler) SnapshotInspect(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := readSnapshotMeta(dataDir, name)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "snapshot not found: "+name, http.StatusNotFound)
 			return
 		}

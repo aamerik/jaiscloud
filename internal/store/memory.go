@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -134,6 +135,7 @@ func (s *MemoryResourceStore) List(ctx context.Context, account, region, resourc
 		entry.Region = region
 		results = append(results, entry)
 	}
+	sort.Slice(results, func(i, j int) bool { return results[i].ID < results[j].ID })
 	return results, nil
 }
 
