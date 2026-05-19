@@ -103,6 +103,7 @@ func (s *Server) buildRouter() {
 
 	r.Route("/_jaiscloud", func(r chi.Router) {
 		r.Get("/health", s.adminHandler.Health)
+		r.Get("/doctor", s.adminHandler.Doctor)
 		r.Post("/reset", s.adminHandler.Reset)
 		r.Get("/export", s.adminHandler.Export)
 		r.Post("/import", s.adminHandler.Import)
@@ -110,6 +111,12 @@ func (s *Server) buildRouter() {
 		r.Get("/lambda/layer/{account}/{layer}/{version}", s.adminHandler.LambdaLayerHandler)
 		r.Post("/firehose/flush", s.adminHandler.FirehoseFlushHandler)
 		r.Post("/cw-evaluate", s.adminHandler.CWEvaluateHandler)
+		// Managed snapshot endpoints (Phase 10).
+		r.Post("/snapshot", s.adminHandler.SnapshotCreate)
+		r.Get("/snapshots", s.adminHandler.SnapshotList)
+		r.Post("/snapshot/{name}/revert", s.adminHandler.SnapshotRevert)
+		r.Delete("/snapshot/{name}", s.adminHandler.SnapshotDelete)
+		r.Get("/snapshot/{name}", s.adminHandler.SnapshotInspect)
 		// SNS dummy signing certificate — returned in SNS notification envelopes so
 		// SDK-level certificate validation does not fail in integration tests.
 		r.Get("/sns/SimpleNotificationService.pem", func(w http.ResponseWriter, r *http.Request) {

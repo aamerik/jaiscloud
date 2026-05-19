@@ -4,12 +4,14 @@
 package blobfs
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -194,6 +196,9 @@ const (
 	// promoSuffix is the temp-file suffix during directory promotion.
 	promoSuffix = ".jaiscloud_promo"
 )
+
+// BaseDir returns the root directory of this blob store.
+func (s *LocalFSBlobStore) BaseDir() string { return s.baseDir }
 
 func NewLocalFSBlobStore(baseDir string) (*LocalFSBlobStore, error) {
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
@@ -520,4 +525,130 @@ func (s *LocalFSBlobStore) Reset() {
 	defer s.mu.Unlock()
 	_ = os.RemoveAll(s.baseDir)
 	_ = os.MkdirAll(s.baseDir, 0o755)
+}
+
+// WriteTarball walks s.baseDir recursively and writes each regular file as a
+// tar entry with a path of the form "blobs/<relative-path>". Entries are
+// written in sorted order so the tarball is deterministic.
+func (s *LocalFSBlobStore) WriteTarball(ctx context.Context, tw *tar.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Collect all regular file paths relative to baseDir.
+	var relPaths []string
+	err := filepath.WalkDir(s.baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if d.IsDir() {
+			return nil
+		}
+		// Skip internal housekeeping files.
+		name := d.Name()
+		if name == dirObjFlag ||
+			strings.HasPrefix(name, putTmpPrefix) ||
+			strings.HasSuffix(name, promoSuffix) {
+			return nil
+		}
+		rel, err := filepath.Rel(s.baseDir, path)
+		if err != nil {
+			return nil
+		}
+		relPaths = append(relPaths, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("blobfs WriteTarball walk: %w", err)
+	}
+	sort.Strings(relPaths)
+
+	for _, rel := range relPaths {
+		absPath := filepath.Join(s.baseDir, filepath.FromSlash(rel))
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // deleted between walk and read
+			}
+			return fmt.Errorf("blobfs WriteTarball read %s: %w", rel, err)
+		}
+		hdr := &tar.Header{
+			Name:     "blobs/" + rel,
+			Typeflag: tar.TypeReg,
+			Size:     int64(len(data)),
+			Mode:     0600,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("blobfs WriteTarball header %s: %w", rel, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return fmt.Errorf("blobfs WriteTarball write %s: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+// ReadTarball extracts tar entries whose name starts with "blobs/" into s.baseDir.
+// Path sanitisation: rejects entries with ".." components or absolute paths.
+func (s *LocalFSBlobStore) ReadTarball(ctx context.Context, tr *tar.Reader) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("blobfs ReadTarball next: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		if !strings.HasPrefix(hdr.Name, "blobs/") {
+			continue
+		}
+		// Strip the "blobs/" prefix to get the path relative to baseDir.
+		rel := hdr.Name[len("blobs/"):]
+		if rel == "" {
+			continue
+		}
+		// Security: reject absolute paths and ".." components.
+		clean := filepath.Clean(rel)
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+			return fmt.Errorf("blobfs ReadTarball: unsafe path %q", hdr.Name)
+		}
+
+		dst := filepath.Join(s.baseDir, clean)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("blobfs ReadTarball mkdir %s: %w", filepath.Dir(dst), err)
+		}
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("blobfs ReadTarball create %s: %w", dst, err)
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			f.Close()
+			return fmt.Errorf("blobfs ReadTarball copy %s: %w", dst, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("blobfs ReadTarball close %s: %w", dst, err)
+		}
+	}
+	return nil
+}
+
+// NewSessionBlobStore creates a session-scoped LocalFSBlobStore under
+// /tmp/jaiscloud-<instanceID>/blobs/. The caller must call Cleanup() on
+// graceful shutdown to remove the session directory.
+func NewSessionBlobStore(instanceID string) (*LocalFSBlobStore, error) {
+	dir := filepath.Join(os.TempDir(), "jaiscloud-"+instanceID, "blobs")
+	return NewLocalFSBlobStore(dir)
+}
+
+// Cleanup removes the session directory (parent of baseDir) created by
+// NewSessionBlobStore. Safe to call even if the directory no longer exists.
+func (s *LocalFSBlobStore) Cleanup() error {
+	// parent is /tmp/jaiscloud-<instanceID>
+	parent := filepath.Dir(s.baseDir)
+	return os.RemoveAll(parent)
 }

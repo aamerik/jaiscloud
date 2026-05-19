@@ -14,9 +14,10 @@ const (
 	// No MinUpgradableFrom — pre-release, no backward compatibility needed.
 	CodeSnapshotVersion = 3
 
-	// CodeDBSchemaVersion is set in Phase 8 once the 014 migration gap is resolved.
-	// PLACEHOLDER: do not use until Phase 8.
-	CodeDBSchemaVersion = 0
+	// CodeDBSchemaVersion equals the number of SQL migration files embedded in
+	// internal/store/migrations/. Update this constant whenever a new migration
+	// file is added. The RunMigrations function verifies the applied count matches.
+	CodeDBSchemaVersion = 15
 )
 
 var (

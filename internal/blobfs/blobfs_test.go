@@ -1,9 +1,14 @@
 package blobfs
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -250,3 +255,109 @@ func assertNoFile(t *testing.T, path string) {
 }
 
 func hasPrefix(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
+
+// ── WriteTarball / ReadTarball ────────────────────────────────────────────────
+
+func TestLocalFSBlobStore_WriteTarball_Empty(t *testing.T) {
+	s := mustNew(t)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := s.WriteTarball(context.Background(), tw); err != nil {
+		t.Fatalf("WriteTarball: %v", err)
+	}
+	tw.Close()
+
+	// Reading the tarball should yield no entries under "blobs/".
+	tr := tar.NewReader(&buf)
+	count := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar.Next: %v", err)
+		}
+		if strings.HasPrefix(hdr.Name, "blobs/") {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Errorf("expected 0 blob entries, got %d", count)
+	}
+}
+
+func TestLocalFSBlobStore_Tarball_RoundTrip(t *testing.T) {
+	src := mustNew(t)
+	ctx := context.Background()
+
+	// Write some blobs.
+	if err := src.Put(ctx, "s3", "key1", []byte("value1")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := src.Put(ctx, "s3", "nested/key2", []byte("value2")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	// Export to tarball.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := src.WriteTarball(ctx, tw); err != nil {
+		t.Fatalf("WriteTarball: %v", err)
+	}
+	tw.Close()
+
+	// Import into a fresh store.
+	dst := mustNew(t)
+	tr := tar.NewReader(&buf)
+	if err := dst.ReadTarball(ctx, tr); err != nil {
+		t.Fatalf("ReadTarball: %v", err)
+	}
+
+	// Verify contents.
+	assertGet(t, dst, "s3", "key1", "value1")
+	assertGet(t, dst, "s3", "nested/key2", "value2")
+}
+
+func TestLocalFSBlobStore_Tarball_BlobsSortedByPath(t *testing.T) {
+	s := mustNew(t)
+	ctx := context.Background()
+
+	keys := []string{"c", "a", "b/z", "b/a"}
+	for _, k := range keys {
+		if err := s.Put(ctx, "bucket", k, []byte(k)); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := s.WriteTarball(ctx, tw); err != nil {
+		t.Fatalf("WriteTarball: %v", err)
+	}
+	tw.Close()
+
+	tr := tar.NewReader(&buf)
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar.Next: %v", err)
+		}
+		if strings.HasPrefix(hdr.Name, "blobs/") {
+			names = append(names, hdr.Name)
+		}
+	}
+
+	sorted := make([]string, len(names))
+	copy(sorted, names)
+	sort.Strings(sorted)
+	for i, n := range names {
+		if n != sorted[i] {
+			t.Errorf("entries not sorted: position %d is %q, expected %q", i, n, sorted[i])
+		}
+	}
+}

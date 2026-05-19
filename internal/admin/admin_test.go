@@ -1,13 +1,17 @@
 package admin
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"jaiscloud/internal/persistence/version"
 )
 
 // mockSnapshotter is a test double implementing admin.Snapshotter.
@@ -99,6 +103,42 @@ func TestSnapshotHasKMSMaterial_WrongKey(t *testing.T) {
 	}
 }
 
+// --- Export helpers ---
+
+// decodeExportEnvelope extracts the envelope.json entry from a gzip tarball
+// written by Handler.Export and decodes it into a version.Envelope.
+func decodeExportEnvelope(t *testing.T, body []byte) version.Envelope {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("gzip open: %v", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar.Next: %v", err)
+		}
+		if hdr.Name == "envelope.json" {
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				t.Fatalf("read envelope.json: %v", err)
+			}
+			var env version.Envelope
+			if err := json.Unmarshal(data, &env); err != nil {
+				t.Fatalf("parse envelope.json: %v", err)
+			}
+			return env
+		}
+	}
+	t.Fatal("tarball missing envelope.json")
+	return version.Envelope{}
+}
+
 // --- Handler.Export ---
 
 func TestHandler_Export_IncludesAllRegisteredStores(t *testing.T) {
@@ -109,10 +149,7 @@ func TestHandler_Export_IncludesAllRegisteredStores(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Export(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/export", nil))
 
-	var env SnapshotEnvelope
-	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
+	env := decodeExportEnvelope(t, rec.Body.Bytes())
 	for _, name := range []string{"resources", "keys", "secrets", "parameters"} {
 		if _, ok := env.Stores[name]; !ok {
 			t.Errorf("expected store key %q in export", name)
@@ -125,10 +162,7 @@ func TestHandler_Export_SchemaVersion3(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Export(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/export", nil))
 
-	var env SnapshotEnvelope
-	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	env := decodeExportEnvelope(t, rec.Body.Bytes())
 	if env.SchemaVersion != 3 {
 		t.Errorf("expected schema_version 3, got %d", env.SchemaVersion)
 	}
@@ -140,8 +174,7 @@ func TestHandler_Export_CloudField(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Export(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/export", nil))
 
-	var env SnapshotEnvelope
-	json.NewDecoder(rec.Body).Decode(&env)
+	env := decodeExportEnvelope(t, rec.Body.Bytes())
 	if env.Cloud != "aws" {
 		t.Errorf("expected cloud 'aws', got %q", env.Cloud)
 	}
@@ -157,6 +190,19 @@ func TestHandler_Export_SnapshotterError(t *testing.T) {
 	h.Export(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/export", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandler_Export_KEKFingerprint(t *testing.T) {
+	h := NewHandler()
+	h.SetKEKFingerprint("abc1234567890def")
+
+	rec := httptest.NewRecorder()
+	h.Export(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/export", nil))
+
+	env := decodeExportEnvelope(t, rec.Body.Bytes())
+	if env.KEKFingerprint != "abc1234567890def" {
+		t.Errorf("expected kek_fingerprint 'abc1234567890def', got %q", env.KEKFingerprint)
 	}
 }
 
@@ -347,6 +393,87 @@ func TestHandler_Reset_AccountRegionScope(t *testing.T) {
 	if r.resetCalled {
 		t.Error("expected Reset() NOT to be called when account+region params are set")
 	}
+}
+
+func TestImport_RestoreFailure_RollsBackToEmpty(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+
+	// snap1 restores successfully, snap2 fails — both should be rolled back.
+	snap1 := &mockSnapshotter{isEmpty: true}
+	snap2 := &mockSnapshotter{isEmpty: true, restErr: errTest("restore failed")}
+	h.RegisterSnapshotter("store1", snap1)
+	h.RegisterSnapshotter("store2", snap2)
+	// Register them as resetters too so rollback can clear them.
+	h.RegisterResetter(snap1)
+	h.RegisterResetter(snap2)
+
+	stores := map[string]json.RawMessage{
+		"store1": json.RawMessage(`{"k":"v"}`),
+		"store2": json.RawMessage(`{"k":"v"}`),
+	}
+	env := SnapshotEnvelope{SchemaVersion: 3, Cloud: "aws", Stores: stores}
+	body, _ := json.Marshal(env)
+
+	rec := httptest.NewRecorder()
+	h.Import(rec, httptest.NewRequest(http.MethodPost, "/_jaiscloud/import", bytes.NewReader(body)))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on restore error, got %d", rec.Code)
+	}
+	// After rollback, snap1 must have been reset (data cleared).
+	if snap1.data != nil {
+		t.Error("expected snap1 to be rolled back (data nil) after restore failure")
+	}
+}
+
+func TestImport_KEKMismatch_Rejected(t *testing.T) {
+	h := NewHandler()
+	h.SetMeta(HandlerMeta{Cloud: "aws"})
+	h.SetKEKFingerprint("aaaa000011112222") // instance fingerprint
+
+	// Build a tarball whose envelope has a different KEK fingerprint.
+	env := version.Envelope{
+		SchemaVersion:  version.CodeSnapshotVersion,
+		Cloud:          "aws",
+		KEKFingerprint: "bbbb999988887777", // different
+		Stores:         map[string]json.RawMessage{},
+	}
+	tarball := buildTestTarball(t, env)
+
+	rec := httptest.NewRecorder()
+	h.Import(rec, httptest.NewRequest(http.MethodPost, "/_jaiscloud/import", bytes.NewReader(tarball)))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 on KEK mismatch, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// buildTestTarball creates a minimal gzip tarball with envelope.json for testing.
+func buildTestTarball(t *testing.T, env version.Envelope) []byte {
+	t.Helper()
+	envJSON, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	hdr := &tar.Header{
+		Name:     "envelope.json",
+		Typeflag: tar.TypeReg,
+		Size:     int64(len(envJSON)),
+		Mode:     0600,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := tw.Write(envJSON); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
 }
 
 // errTest is a simple error value for tests.

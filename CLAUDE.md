@@ -53,8 +53,13 @@ internal/
   reqctx/                  # Request context helpers
   resourcemgr/             # Deletion guards: CheckParent, AcquireDelete, DeleteGuardRule
   certstore/               # TLS cert storage
+  snapshottypes/           # Snapshotter/Resetter/PostRestoreHook interfaces (cycle-breaking)
+  persistence/
+    version/               # CodeSnapshotVersion, CodeDBSchemaVersion, Envelope struct, FingerprintKEK
+    snapshot/              # SnapshotLoop — periodic state.json persistence
+    platform/              # flock_darwin.go / flock_linux.go — data-dir OS lock
   store/                   # ResourceStore interface + memory/postgres implementations
-    migrations/            # SQL migration files (001–013)
+    migrations/            # SQL migration files (001–015)
     aws/
       dynamodb/            # DynamoDBItemStore (memory + postgres)
       s3/                  # S3ObjectMetaStore (memory + postgres)
@@ -203,7 +208,7 @@ Defined once in `internal/aws/adapter/services.go` — no switch statement anywh
 
 `JAISCLOUD_EXECUTOR_MODE`: `""` / `mock` / `docker` / `k8s` — applies to both Spark (EMR) and Lambda.
 
-| Service | Lite (default) | Full (`--mode full`) | `docker` executor | `k8s` executor |
+| Service | Memory (default) | Persistent (`--mode persistent`) | `docker` executor | `k8s` executor |
 |---|---|---|---|---|
 | SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory | PostgreSQL | PostgreSQL | PostgreSQL |
 | DynamoDB + Streams | In-memory | PostgreSQL | PostgreSQL | PostgreSQL |
@@ -217,6 +222,8 @@ Defined once in `internal/aws/adapter/services.go` — no switch statement anywh
 | CloudFormation | In-memory + real dispatch | PostgreSQL + real dispatch | — | — |
 | Glue / EventBridge | In-memory | PostgreSQL | — | — |
 
+> **Mode names:** `memory` (default, formerly `lite`) and `persistent` (formerly `full`). The old names `lite` / `full` are rejected with a migration error at startup.
+
 ---
 
 ## Build & run
@@ -228,21 +235,27 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 # Build all cloud binaries
 make build-all   # → jaiscloud-aws, jaiscloud-azure, jaiscloud-gcp
 
-# Lite mode (default, port 4566)
+# Memory mode (default, port 4566)
 ./jaiscloud-aws start
 
-# Full mode (PostgreSQL persistence)
-./jaiscloud-aws start --mode full --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+# Memory mode with data-dir (enables snapshots + periodic state.json saves)
+./jaiscloud-aws start --data-dir ~/.jaiscloud
+
+# Persistent mode (PostgreSQL persistence)
+./jaiscloud-aws start --mode persistent --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+
+# Persistent mode with data-dir (enables named snapshots on disk)
+./jaiscloud-aws start --mode persistent --dsn "postgres://..." --data-dir /var/lib/jaiscloud
 
 # Docker-compose (postgres on 5433, jaiscloud-aws on 4566)
 make up-docker
 make down-docker
 
 # K8s executors (Spark + Lambda)
-JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start --mode full --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start --mode persistent --dsn "postgres://..."
 
 # Docker executors
-JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode full --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode persistent --dsn "postgres://..."
 
 # Prometheus metrics (at /metrics)
 ./jaiscloud-aws start --metrics
@@ -252,8 +265,8 @@ JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode full --dsn "postgres
 
 ```bash
 JAISCLOUD_PORT=4566
-JAISCLOUD_MODE=lite                  # or "full"
-JAISCLOUD_DSN=                       # required when MODE=full
+JAISCLOUD_MODE=memory                # or "persistent" (formerly "lite"/"full" — rejected)
+JAISCLOUD_DSN=                       # required when MODE=persistent
 JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
@@ -266,6 +279,13 @@ JAISCLOUD_IMDS_ENABLED=false
 JAISCLOUD_AWS_EMULATOR_ENDPOINT=     # JaisCloud endpoint reachable from Spark pods
 JAISCLOUD_SPARK_K8S_CLUSTER_MODE=auto   # auto | always | never
 JAISCLOUD_INSTANCE_ID=               # override auto-generated instance UUID
+
+# Snapshot / persistence env vars
+JAISCLOUD_DATA_DIR=                  # path for snapshots + state.json (optional in memory mode)
+JAISCLOUD_FRESH_START=false          # if true, skip loading state.json on startup
+JAISCLOUD_SNAPSHOT_INTERVAL=5m      # how often SnapshotLoop saves state.json (default 5m)
+JAISCLOUD_SNAPSHOT_SAVE_TIMEOUT=30s # per-save context deadline (default 30s)
+JAISCLOUD_EXPORT_SOFT_LIMIT=        # max bytes in export tarball before warning (default unlimited)
 ```
 
 Note: `JAISCLOUD_CLOUD` is **not** an env var. The binary determines the cloud.
@@ -281,10 +301,15 @@ Note: `JAISCLOUD_CLOUD` is **not** an env var. The binary determines the cloud.
 | `env` | Print effective config as env vars |
 | `doctor` | Check emulator reachability |
 | `reset` | Wipe all state via HTTP |
-| `export [-o file] [--strip-kek]` | Export state snapshot |
-| `import [-i file]` | Restore state from snapshot |
+| `export [-o file]` | Export state as a gzip tarball (stdout if no `-o`) |
+| `import [-i file] [--dry-run]` | Restore state from a snapshot tarball |
 | `rotate-master-key --new-key <hex>` | Re-wrap KMS DEK with new KEK |
 | `services` | Print service implementation levels |
+| `snapshot create --name <n>` | Create a named on-disk snapshot |
+| `snapshot list` | List named snapshots |
+| `snapshot revert <name>` | Revert to a named snapshot |
+| `snapshot delete <name> --yes` | Delete a named snapshot |
+| `snapshot inspect <name>` | Show snapshot metadata |
 
 ---
 
@@ -362,7 +387,13 @@ EMR/EMRContainers providers capture `handlerCtx{cloud, region, accountID}` at ha
 | Endpoint | Method | Description |
 |---|---|---|
 | `/_jaiscloud/health` | GET | Liveness check |
+| `/_jaiscloud/doctor` | GET | Emulator diagnostics (version, mode, instance ID, uptime) |
 | `/_jaiscloud/reset` | POST | Wipe all state |
-| `/_jaiscloud/export` | GET | JSON state snapshot |
-| `/_jaiscloud/import` | POST | Restore from snapshot |
+| `/_jaiscloud/export` | GET | Export state as gzip tarball (`application/x-tar`) |
+| `/_jaiscloud/import` | POST | Restore from snapshot tarball or legacy JSON; `?dry_run=true` validates only |
+| `/_jaiscloud/snapshot` | POST | Create named snapshot (`{"name":"<n>","description":"<d>"}`) |
+| `/_jaiscloud/snapshots` | GET | List named snapshots |
+| `/_jaiscloud/snapshot/{name}` | GET | Inspect snapshot metadata |
+| `/_jaiscloud/snapshot/{name}/revert` | POST | Revert to named snapshot (`?reset_first=true` to clear state first) |
+| `/_jaiscloud/snapshot/{name}` | DELETE | Delete named snapshot (`?yes=true` required) |
 | `/metrics` | GET | Prometheus (requires `--metrics`) |

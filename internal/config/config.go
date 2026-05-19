@@ -24,7 +24,14 @@ func hashName(name string) uint32 {
 type Mode string
 
 const (
+	// ModeMemory is the default mode: all state is in-memory (no PostgreSQL required).
+	ModeMemory Mode = "memory"
+	// ModePersistent uses PostgreSQL for durable storage across restarts.
+	ModePersistent Mode = "persistent"
+
+	// ModeLite is a deprecated alias for ModeMemory.
 	ModeLite Mode = "lite"
+	// ModeFull is a deprecated alias for ModePersistent.
 	ModeFull Mode = "full"
 )
 
@@ -35,8 +42,16 @@ type Config struct {
 	LogLevel  string
 	Region    string
 	AccountID string
-	DSN       string // PostgreSQL DSN (required when Mode == full)
-	BlobDir   string // Directory for S3 blob bytes (full mode only; defaults to ~/.jaiscloud/blobs)
+	DSN       string // PostgreSQL DSN (required when Mode == persistent)
+	// BlobDir is deprecated; use DataDir instead. Kept for backward compatibility.
+	BlobDir string // Deprecated: use DataDir
+	DataDir string // Root data directory for persistent-file backend (default: ~/.jaiscloud/<binary>)
+	// FreshStart wipes existing state on startup before initializing stores.
+	FreshStart bool
+	// SnapshotInterval controls how often the file-backend snapshot loop saves state (default: 30s).
+	SnapshotInterval time.Duration
+	// ExportSoftLimit is the size threshold (bytes) above which export logs a warning (default: 2 GiB).
+	ExportSoftLimit int64
 
 	// ExecutorMode selects the container orchestrator for all executors (Spark + Lambda).
 	// Values: "" (default, mock/instant) | "mock" | "docker" | "k8s".
@@ -347,16 +362,21 @@ func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
 
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
-	viper.SetDefault("mode", "lite")
+	viper.SetDefault("mode", "memory")
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
 	viper.SetDefault("dsn", "")
 	if home, err := os.UserHomeDir(); err == nil {
 		viper.SetDefault("blob_dir", filepath.Join(home, ".jaiscloud", "blobs"))
+		viper.SetDefault("data_dir", "")
 	} else {
 		viper.SetDefault("blob_dir", ".jaiscloud/blobs")
+		viper.SetDefault("data_dir", "")
 	}
+	viper.SetDefault("fresh_start", false)
+	viper.SetDefault("snapshot_interval", "30s")
+	viper.SetDefault("export_soft_limit", int64(2*1024*1024*1024))
 	viper.SetDefault("executor_mode", "")
 	viper.SetDefault("kms_master_key", "")
 	viper.SetDefault("k8s_namespace", "jaiscloud")
@@ -381,14 +401,26 @@ func Load() (*Config, error) {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 
+	// Parse snapshot interval.
+	snapshotInterval := 30 * time.Second
+	if s := viper.GetString("snapshot_interval"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil {
+			snapshotInterval = d
+		}
+	}
+
 	cfg := &Config{
 		Port:     viper.GetInt("port"),
 		Mode:     Mode(viper.GetString("mode")),
 		LogLevel: viper.GetString("log_level"),
-		Region:        viper.GetString("region"),
-		AccountID:     viper.GetString("account_id"),
-		DSN:           viper.GetString("dsn"),
-		BlobDir:       viper.GetString("blob_dir"),
+		Region:           viper.GetString("region"),
+		AccountID:        viper.GetString("account_id"),
+		DSN:              viper.GetString("dsn"),
+		BlobDir:          viper.GetString("blob_dir"),
+		DataDir:          viper.GetString("data_dir"),
+		FreshStart:       viper.GetBool("fresh_start"),
+		SnapshotInterval: snapshotInterval,
+		ExportSoftLimit:  viper.GetInt64("export_soft_limit"),
 		ExecutorMode:        viper.GetString("executor_mode"),
 		KMSMasterKey:        viper.GetString("kms_master_key"),
 		K8sNamespace:        viper.GetString("k8s_namespace"),
@@ -410,8 +442,22 @@ func Load() (*Config, error) {
 		OIDCIssuers:   nil, // populated below from oidc_issuers
 	}
 
-	if cfg.Mode != ModeLite && cfg.Mode != ModeFull {
-		return nil, fmt.Errorf("invalid mode %q: must be lite or full", cfg.Mode)
+	// Reject deprecated mode names with guidance.
+	switch cfg.Mode {
+	case ModeLite:
+		return nil, fmt.Errorf("mode=lite is no longer valid; use --mode memory")
+	case ModeFull:
+		return nil, fmt.Errorf("mode=full is no longer valid; use --mode persistent")
+	}
+
+	// CI auto-detection: default to memory mode when running in CI.
+	if os.Getenv("CI") == "true" && cfg.Mode == "" {
+		slog.Warn("CI detected; defaulting to --mode memory (override with --mode persistent)")
+		cfg.Mode = ModeMemory
+	}
+
+	if cfg.Mode != ModeMemory && cfg.Mode != ModePersistent {
+		return nil, fmt.Errorf("invalid mode %q: must be memory or persistent", cfg.Mode)
 	}
 
 	// Parse OIDC_ISSUERS: "issuer1=jwks_url1,issuer2=jwks_url2"
