@@ -10,6 +10,13 @@ import (
 // HandlerFunc is the signature every provider operation must implement.
 type HandlerFunc func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
+// Provider is implemented by every service provider. Routes returns the full
+// set of operation handlers keyed by their registry action name (e.g. "CreateQueue").
+// The registry prefix (e.g. "Queue") is defined in the adapter's service map.
+type Provider interface {
+	Routes() map[string]HandlerFunc
+}
+
 // ServiceDispatcher allows one provider to invoke another provider's handler.
 // Used by the Step Functions execution engine to call Lambda, DynamoDB, SQS, etc.
 type ServiceDispatcher interface {

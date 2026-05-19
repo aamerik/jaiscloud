@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/model"
 
 	"github.com/spf13/viper"
 )
@@ -25,7 +26,7 @@ const (
 type Config struct {
 	Port      int
 	Mode      Mode
-	Cloud     string // Cloud provider to emulate: aws (default), azure, gcp
+	Cloud     model.Cloud // Cloud provider to emulate: aws (default), azure, gcp
 	LogLevel  string
 	Region    string
 	AccountID string

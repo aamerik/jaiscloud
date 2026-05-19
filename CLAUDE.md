@@ -60,12 +60,9 @@ internal/
     platform/              # flock_darwin.go / flock_linux.go — data-dir OS lock
   store/                   # ResourceStore interface + memory/postgres implementations
     migrations/            # SQL migration files (001–015)
-    aws/
-      dynamodb/            # DynamoDBItemStore (memory + postgres)
-      s3/                  # S3ObjectMetaStore (memory + postgres)
-      sqs/                 # SQSMessageStore (memory + postgres)
     object/                # Generic ObjectStore
     stream/                # MemoryStreamStore (DynamoDB Streams)
+  workers/                 # Worker interface + Registry — centralised lifecycle for background goroutines
 
   # ── AWS-SPECIFIC (internal/aws/) ─────────────────────────────────────────
   aws/
@@ -97,6 +94,14 @@ internal/
     key/                   # KeyProvider — KMS
     secret/                # SecretProvider — SecretsManager
     parameter/             # ParameterProvider — SSM
+    arn/                   # AWS ARN formatters (moved from internal/config)
+    store/
+      dynamodb/            # DynamoDBItemStore (memory + postgres)
+      object/              # S3ObjectMetaStore (memory + postgres)
+      s3/                  # S3 blob metadata helpers
+      sqs/                 # SQSMessageStore (memory + postgres)
+      stream/              # MemoryStreamStore (DynamoDB Streams)
+      bundle/              # Generic per-scope store wrappers (LocalBundle, CrossRegion, CrossAccount)
 
   # ── AZURE-SPECIFIC (stub, returns 501) ───────────────────────────────────
   azure/
@@ -147,7 +152,7 @@ HTTP request
 Key design rules:
 - **No layer imports its caller.** `model` package breaks the cycle between `gateway` and `adapter`.
 - **Single cloud per binary.** `cfg.Cloud` is set unconditionally in `main.go`; no `--cloud` flag, no per-request cloud detection.
-- **No shared providers.** Each cloud owns its adapters and providers entirely. Storage backends (`store/aws/*`) are shared as data storage only — they don't implement wire protocols.
+- **No shared providers.** Each cloud owns its adapters and providers entirely. Storage backends (`internal/aws/store/*`) are AWS-specific data stores — they don't implement wire protocols.
 - **Executors are wired at startup.** `JAISCLOUD_EXECUTOR_MODE` controls the container orchestrator for Spark and Lambda.
 
 ### CloudAdapter interface

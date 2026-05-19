@@ -10,6 +10,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
 	"github.com/spf13/cobra"
@@ -45,7 +46,7 @@ func startCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg.Cloud = "azure"
+			cfg.Cloud = model.CloudAzure
 
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			var certs certstore.CertStore

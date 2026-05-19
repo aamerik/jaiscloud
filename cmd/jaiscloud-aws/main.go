@@ -74,6 +74,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
+	"jaiscloud/internal/model"
 	ecsexec "jaiscloud/internal/executor/ecs"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
@@ -136,7 +137,7 @@ func startCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg.Cloud = "aws"
+			cfg.Cloud = model.CloudAWS
 
 			ctx := context.Background()
 
@@ -262,7 +263,7 @@ func startCmd() *cobra.Command {
 					slog.Warn("startup: state.json parse failed; starting fresh", "err", parseErr)
 				} else if versionErr := snapversion.CheckSnapshotVersion(env.SchemaVersion); versionErr != nil {
 					return fmt.Errorf("startup: state.json version check failed: %w\nRun with --fresh-start to wipe state", versionErr)
-				} else if env.Cloud != "" && env.Cloud != cfg.Cloud {
+				} else if env.Cloud != "" && env.Cloud != string(cfg.Cloud) {
 					return fmt.Errorf("startup: state.json cloud mismatch: stored=%q running=%q", env.Cloud, cfg.Cloud)
 				} else {
 					// Restore each store.
@@ -410,7 +411,7 @@ type appStores struct {
 func initStores(ctx context.Context, cfg *config.Config, instanceID string) (appStores, error) {
 	if cfg.Mode == config.ModePersistent && cfg.DSN != "" {
 		slog.Info("starting in persistent mode (postgres)", "dsn", cfg.DSN)
-		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, cfg.Cloud)
+		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, string(cfg.Cloud))
 		if err != nil {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
 		}
