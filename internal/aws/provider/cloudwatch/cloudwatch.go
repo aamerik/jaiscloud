@@ -22,7 +22,7 @@ import (
 
 // Provider handles CloudWatch metric + alarm RPCs.
 // Metric data is stored in an in-memory ring (bounded) per (namespace, metric, dims).
-// Alarms are persisted via store.ResourceStore so they survive restarts in full mode.
+// Alarms are persisted via store.ResourceStore so they survive restarts in persistent mode.
 type Provider struct {
 	resources store.ResourceStore
 	bus       *events.EventBus
@@ -80,12 +80,12 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"CloudWatch.UntagResource":           p.UntagResource,
 		"CloudWatch.ListTagsForResource":     p.ListTagsForResource,
 		// Composite alarms (13.8)
-		"CloudWatch.PutCompositeAlarm":           p.PutCompositeAlarm,
-		"CloudWatch.DescribeAlarmHistory":        p.DescribeAlarmHistory,
+		"CloudWatch.PutCompositeAlarm":    p.PutCompositeAlarm,
+		"CloudWatch.DescribeAlarmHistory": p.DescribeAlarmHistory,
 		// Anomaly detectors (13.8)
-		"CloudWatch.PutAnomalyDetector":          p.PutAnomalyDetector,
-		"CloudWatch.DescribeAnomalyDetectors":    p.DescribeAnomalyDetectors,
-		"CloudWatch.DeleteAnomalyDetector":       p.DeleteAnomalyDetector,
+		"CloudWatch.PutAnomalyDetector":       p.PutAnomalyDetector,
+		"CloudWatch.DescribeAnomalyDetectors": p.DescribeAnomalyDetectors,
+		"CloudWatch.DeleteAnomalyDetector":    p.DeleteAnomalyDetector,
 		// Metric streams (13.9)
 		"CloudWatch.PutMetricStream":    p.PutMetricStream,
 		"CloudWatch.GetMetricStream":    p.GetMetricStream,
@@ -842,16 +842,16 @@ func (p *Provider) DeleteAnomalyDetector(ctx context.Context, nr *model.Normaliz
 // ─── Metric Streams (13.9) ────────────────────────────────────────────────────
 
 type metricStream struct {
-	Name             string         `json:"Name"`
-	ARN              string         `json:"ARN"`
-	State            string         `json:"State"`
-	FirehoseARN      string         `json:"FirehoseArn"`
-	RoleARN          string         `json:"RoleArn"`
-	OutputFormat     string         `json:"OutputFormat"`
-	IncludeFilters   []map[string]any `json:"IncludeFilters"`
-	ExcludeFilters   []map[string]any `json:"ExcludeFilters"`
-	CreationDate     time.Time      `json:"CreationDate"`
-	LastUpdateDate   time.Time      `json:"LastUpdateDate"`
+	Name           string           `json:"Name"`
+	ARN            string           `json:"ARN"`
+	State          string           `json:"State"`
+	FirehoseARN    string           `json:"FirehoseArn"`
+	RoleARN        string           `json:"RoleArn"`
+	OutputFormat   string           `json:"OutputFormat"`
+	IncludeFilters []map[string]any `json:"IncludeFilters"`
+	ExcludeFilters []map[string]any `json:"ExcludeFilters"`
+	CreationDate   time.Time        `json:"CreationDate"`
+	LastUpdateDate time.Time        `json:"LastUpdateDate"`
 }
 
 func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

@@ -109,7 +109,7 @@ else
     echo "  Installing Docker Desktop..."
     brew install --cask docker
     echo -e "  ${YELLOW}!${NC} Open Docker Desktop from Applications to complete setup."
-    echo "     Docker must be running before you can use full mode."
+    echo "     Docker must be running before you can use persistent mode."
 fi
 
 # =============================================================================
@@ -212,7 +212,7 @@ fi
 echo -e "  ${YELLOW}!${NC} Run 'claude' to authenticate if this is your first time."
 
 # =============================================================================
-# 11. kind (local K8s — needed for full mode)
+# 11. kind (local K8s — needed for persistent mode)
 # =============================================================================
 progress "kind (local Kubernetes)"
 
@@ -296,10 +296,10 @@ build:
 	go build -o bin/localcloud ./cmd/localcloud
 
 run: build
-	./bin/localcloud start --port 4566 --mode lite
+	./bin/localcloud start --port 4566 --mode memory
 
 dev:
-	go run ./cmd/localcloud start --port 4566 --mode lite --log-level debug
+	go run ./cmd/localcloud start --port 4566 --mode memory --log-level debug
 
 test: test-unit test-integration
 
@@ -354,7 +354,7 @@ as a proof of concept. See plan-localcloud-lld-00-poc.md for the full spec.
 go build ./cmd/localcloud
 
 # Run
-go run ./cmd/localcloud start --port 4566 --mode lite
+go run ./cmd/localcloud start --port 4566 --mode memory
 
 # Run tests (requires LocalCloud running on :4566)
 go test ./tests/integration/ -v -count=1

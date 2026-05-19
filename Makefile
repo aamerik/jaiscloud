@@ -140,18 +140,18 @@ server-lite: build ## In-memory stores, mock executors — no postgres required
 
 server-full: build ## Postgres stores, mock executors — requires JAISCLOUD_DSN
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud-aws start --mode full --dsn "$(JAISCLOUD_DSN)"
+	  ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)"
 
-server-docker: _check-docker-prereq docker ## Full mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
+server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
 	  JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE) \
 	  JAISCLOUD_LAMBDA_IMAGE=$(LAMBDA_IMAGE) \
 	  docker-compose up
 
-server-k8s: _check-k8s-prereq up-k8s ## Full mode + Spark and Lambda via K8s  (requires docker-desktop K8s)
+server-k8s: _check-k8s-prereq up-k8s ## Persistent mode + Spark and Lambda via K8s  (requires docker-desktop K8s)
 	kubectl port-forward -n jaiscloud svc/jaiscloud $(JAISCLOUD_PORT):4566
 
-server-full-all: server-k8s ## Alias for server-k8s (full mode, all executors via K8s)
+server-full-all: server-k8s ## Alias for server-k8s (persistent mode, all executors via K8s)
 
 stop-server: ## Stop background jaiscloud-aws process and clean up Lambda/Spark resources
 	@pkill -f "jaiscloud-aws start" 2>/dev/null && echo "jaiscloud-aws stopped" || echo "jaiscloud-aws was not running"
@@ -239,7 +239,7 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	if [ "$$_mode" = "full" ]; then \
 	  docker info > /dev/null 2>&1 || { printf "\033[31mERROR: Docker is not running\033[0m\n"; exit 1; }; \
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
-	  printf   "\033[1m│   JaisCloud Integration Suite — Full Mode (Postgres)  │\033[0m\n"; \
+	  printf   "\033[1m│   JaisCloud Integration Suite — Persistent Mode (Postgres)  │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
 	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud-aws instance...\n"; \
 	  pkill -f "jaiscloud-aws start" 2>/dev/null || true; \
@@ -255,10 +255,10 @@ test-integration: ## Run tests/integration/ — MODE=lite|full required; TEST_RU
 	    printf "  Postgres not running — starting\n"; \
 	    $(MAKE) postgres-up; \
 	  fi; \
-	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws in full mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start --mode full --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
+	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws in persistent mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(JAISCLOUD_PORT) ./jaiscloud-aws start --mode persistent --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
 	  JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	    ./jaiscloud-aws start --mode full --dsn "$(JAISCLOUD_DSN)" \
+	    ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)" \
 	    > /tmp/jaiscloud-full.log 2>&1 & \
 	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
@@ -418,19 +418,19 @@ test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/full_
 	  go test -v -tags s3_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/s3/
 	$(MAKE) down-docker
 
-test-e2e-kinesis: ## Kinesis full mode e2e tests — tests/full_mode/aws/kinesis/ (tag: kinesis_e2e, requires kinesis-mock binary)
+test-e2e-kinesis: ## Kinesis persistent mode e2e tests — tests/full_mode/aws/kinesis/ (tag: kinesis_e2e, requires kinesis-mock binary)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -v -tags kinesis_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kinesis/
 	$(MAKE) down-docker
 
-test-e2e-ecr: ## ECR full mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
+test-e2e-ecr: ## ECR persistent mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/ecr/
 
-test-e2e-sfn: ## Step Functions full mode e2e tests — tests/full_mode/aws/stepfunctions/ (tag: sfn_e2e)
+test-e2e-sfn: ## Step Functions persistent mode e2e tests — tests/full_mode/aws/stepfunctions/ (tag: sfn_e2e)
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
 	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/full_mode/aws/stepfunctions/

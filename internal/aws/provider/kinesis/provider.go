@@ -12,15 +12,15 @@ import (
 	"regexp"
 	"time"
 
+	kinesisstore "jaiscloud/internal/aws/store/kinesis"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	kinesisstore "jaiscloud/internal/aws/store/kinesis"
 )
 
 var streamNameRE = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
 
 // Provider handles Kinesis API operations.
-// In lite mode it uses the in-memory store; in full mode it proxies to kinesis-mock.
+// In lite mode it uses the in-memory store; in persistent mode it proxies to kinesis-mock.
 type Provider struct {
 	store      *kinesisstore.MemoryKinesisStore
 	mockServer *MockServer
@@ -33,7 +33,7 @@ func New(store *kinesisstore.MemoryKinesisStore) *Provider {
 	return &Provider{store: store, httpClient: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// NewFull constructs a Provider in full mode backed by a kinesis-mock subprocess.
+// NewFull constructs a Provider in persistent mode backed by a kinesis-mock subprocess.
 func NewFull(store *kinesisstore.MemoryKinesisStore, mock *MockServer) *Provider {
 	return &Provider{
 		store:      store,
@@ -82,7 +82,7 @@ func (p *Provider) proxyToMock(ctx context.Context, nr *model.NormalizedRequest)
 }
 
 // Routes returns all Kinesis handler registrations.
-// In full mode every route is wrapped to proxy to kinesis-mock.
+// In persistent mode every route is wrapped to proxy to kinesis-mock.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	routes := p.liteRoutes()
 	if p.fullMode {
@@ -106,18 +106,18 @@ func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 		"Kinesis.DeleteStream":          p.DeleteStream,
 		"Kinesis.DescribeStream":        p.DescribeStream,
 		"Kinesis.DescribeStreamSummary": p.DescribeStreamSummary,
-		"Kinesis.ListStreams":            p.ListStreams,
+		"Kinesis.ListStreams":           p.ListStreams,
 		"Kinesis.UpdateStreamMode":      p.UpdateStreamMode,
 		// Records
-		"Kinesis.PutRecord":           p.PutRecord,
-		"Kinesis.PutRecords":          p.PutRecords,
-		"Kinesis.GetShardIterator":    p.GetShardIterator,
-		"Kinesis.GetRecords":          p.GetRecords,
+		"Kinesis.PutRecord":        p.PutRecord,
+		"Kinesis.PutRecords":       p.PutRecords,
+		"Kinesis.GetShardIterator": p.GetShardIterator,
+		"Kinesis.GetRecords":       p.GetRecords,
 		// Shards
-		"Kinesis.ListShards":         p.ListShards,
-		"Kinesis.SplitShard":         p.SplitShard,
-		"Kinesis.MergeShards":        p.MergeShards,
-		"Kinesis.UpdateShardCount":   p.UpdateShardCount,
+		"Kinesis.ListShards":       p.ListShards,
+		"Kinesis.SplitShard":       p.SplitShard,
+		"Kinesis.MergeShards":      p.MergeShards,
+		"Kinesis.UpdateShardCount": p.UpdateShardCount,
 		// Consumers (Enhanced Fan-Out)
 		"Kinesis.RegisterStreamConsumer":   p.RegisterStreamConsumer,
 		"Kinesis.DeregisterStreamConsumer": p.DeregisterStreamConsumer,
@@ -129,8 +129,8 @@ func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 		"Kinesis.DecreaseStreamRetentionPeriod": p.DecreaseStreamRetentionPeriod,
 		// Tags
 		"Kinesis.AddTagsToStream":      p.AddTagsToStream,
-		"Kinesis.RemoveTagsFromStream":  p.RemoveTagsFromStream,
-		"Kinesis.ListTagsForStream":     p.ListTagsForStream,
+		"Kinesis.RemoveTagsFromStream": p.RemoveTagsFromStream,
+		"Kinesis.ListTagsForStream":    p.ListTagsForStream,
 		// Monitoring (stubs)
 		"Kinesis.EnableEnhancedMonitoring":  p.EnableEnhancedMonitoring,
 		"Kinesis.DisableEnhancedMonitoring": p.DisableEnhancedMonitoring,
@@ -141,7 +141,7 @@ func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 	}
 }
 
-// Reset wipes all state. In full mode, restarts kinesis-mock subprocess.
+// Reset wipes all state. In persistent mode, restarts kinesis-mock subprocess.
 func (p *Provider) Reset() {
 	if p.fullMode && p.mockServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -299,9 +299,9 @@ func (p *Provider) ListStreams(_ context.Context, nr *model.NormalizedRequest) (
 			out := make([]map[string]any, len(all))
 			for i, st := range all {
 				out[i] = map[string]any{
-					"StreamName": st.Name,
-					"StreamARN":  st.ARN,
-					"StreamStatus": string(st.Status),
+					"StreamName":        st.Name,
+					"StreamARN":         st.ARN,
+					"StreamStatus":      string(st.Status),
 					"StreamModeDetails": map[string]any{"StreamMode": string(st.Mode)},
 				}
 			}
@@ -517,10 +517,10 @@ func (p *Provider) UpdateShardCount(_ context.Context, nr *model.NormalizedReque
 		}
 	}
 	return provider.OK(map[string]any{
-		"StreamName":       name,
+		"StreamName":        name,
 		"CurrentShardCount": openCount,
-		"TargetShardCount": target,
-		"StreamARN":        stream.ARN,
+		"TargetShardCount":  target,
+		"StreamARN":         stream.ARN,
 	}), nil
 }
 
@@ -806,9 +806,9 @@ func buildShardList(shards []kinesisstore.Shard) []map[string]any {
 
 func buildConsumer(c *kinesisstore.Consumer) map[string]any {
 	return map[string]any{
-		"ConsumerName":             c.Name,
-		"ConsumerARN":              c.ARN,
-		"ConsumerStatus":           c.Status,
+		"ConsumerName":              c.Name,
+		"ConsumerARN":               c.ARN,
+		"ConsumerStatus":            c.Status,
 		"ConsumerCreationTimestamp": c.CreatedAt.Unix(),
 	}
 }

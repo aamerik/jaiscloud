@@ -1,6 +1,6 @@
 // Package blobfs provides blob (binary large object) storage used by S3 and Lambda.
 // Two implementations are available: MemoryBlobStore (lite mode) and
-// LocalFSBlobStore (full mode, persists to disk).
+// LocalFSBlobStore (persistent mode, persists to disk).
 package blobfs
 
 import (
@@ -139,7 +139,7 @@ func (s *MemoryBlobStore) Reset() {
 
 // -- LocalFSBlobStore --
 
-// LocalFSBlobStore is a filesystem-backed BlobStore for full mode.
+// LocalFSBlobStore is a filesystem-backed BlobStore for persistent mode.
 //
 // # Flat-key semantics on a hierarchical filesystem
 //

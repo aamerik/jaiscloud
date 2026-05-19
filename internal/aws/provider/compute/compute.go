@@ -34,7 +34,7 @@ func New(resources store.ResourceStore, accountID, region string) *ComputeProvid
 // It is called both at startup (for the configured default account) and lazily for any
 // other account that first issues a DescribeVpcs or similar request.
 func (p *ComputeProvider) seedDefaultVPC(ctx context.Context, accountID, region string) {
-	// Return if a default VPC already exists (e.g. restarted with full mode).
+	// Return if a default VPC already exists (e.g. restarted with persistent mode).
 	entries, _ := p.resources.List(ctx, accountID, region, rtVpc, "")
 	for _, e := range entries {
 		var vpc ec2Vpc
@@ -91,17 +91,17 @@ func (p *ComputeProvider) Reset() {
 func (p *ComputeProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Instances
-		"Compute.RunInstances":              p.RunInstances,
-		"Compute.DescribeInstances":         p.DescribeInstances,
-		"Compute.TerminateInstances":        p.TerminateInstances,
-		"Compute.StartInstances":            p.StartInstances,
-		"Compute.StopInstances":             p.StopInstances,
-		"Compute.RebootInstances":           p.RebootInstances,
-		"Compute.ModifyInstanceAttribute":          p.ModifyInstanceAttribute,
-		"Compute.DescribeInstanceAttribute":        p.DescribeInstanceAttribute,
-		"Compute.DescribeInstanceStatus":           p.DescribeInstanceStatus,
-		"Compute.AssociateIamInstanceProfile":      p.AssociateIamInstanceProfile,
-		"Compute.DisassociateIamInstanceProfile":   p.DisassociateIamInstanceProfile,
+		"Compute.RunInstances":                   p.RunInstances,
+		"Compute.DescribeInstances":              p.DescribeInstances,
+		"Compute.TerminateInstances":             p.TerminateInstances,
+		"Compute.StartInstances":                 p.StartInstances,
+		"Compute.StopInstances":                  p.StopInstances,
+		"Compute.RebootInstances":                p.RebootInstances,
+		"Compute.ModifyInstanceAttribute":        p.ModifyInstanceAttribute,
+		"Compute.DescribeInstanceAttribute":      p.DescribeInstanceAttribute,
+		"Compute.DescribeInstanceStatus":         p.DescribeInstanceStatus,
+		"Compute.AssociateIamInstanceProfile":    p.AssociateIamInstanceProfile,
+		"Compute.DisassociateIamInstanceProfile": p.DisassociateIamInstanceProfile,
 		// AMIs
 		"Compute.DescribeImages": p.DescribeImages,
 		// Security Groups
@@ -177,23 +177,23 @@ func newID(prefix string) string {
 // ─── Instance metadata ────────────────────────────────────────────────────────
 
 type ec2Instance struct {
-	InstanceId              string            `json:"InstanceId"`
-	ImageId                 string            `json:"ImageId"`
-	InstanceType            string            `json:"InstanceType"`
-	KeyName                 string            `json:"KeyName"`
-	SubnetId                string            `json:"SubnetId"`
-	VpcId                   string            `json:"VpcId"`
-	SecurityGroupIds        []string          `json:"SecurityGroupIds"`
-	PrivateIpAddress        string            `json:"PrivateIpAddress"`
-	PrivateDnsName          string            `json:"PrivateDnsName"`
-	State                   string            `json:"State"` // pending, running, stopping, stopped, terminated
-	Tags                    map[string]string `json:"Tags"`
-	LaunchTime              time.Time         `json:"LaunchTime"`
-	UserData                string            `json:"UserData,omitempty"`
-	IamInstanceProfileArn   string            `json:"IamInstanceProfileArn,omitempty"`
-	IamInstanceProfileName  string            `json:"IamInstanceProfileName,omitempty"`
-	DisableApiTermination   bool              `json:"DisableApiTermination,omitempty"`
-	LastRebootTime          string            `json:"LastRebootTime,omitempty"`
+	InstanceId             string            `json:"InstanceId"`
+	ImageId                string            `json:"ImageId"`
+	InstanceType           string            `json:"InstanceType"`
+	KeyName                string            `json:"KeyName"`
+	SubnetId               string            `json:"SubnetId"`
+	VpcId                  string            `json:"VpcId"`
+	SecurityGroupIds       []string          `json:"SecurityGroupIds"`
+	PrivateIpAddress       string            `json:"PrivateIpAddress"`
+	PrivateDnsName         string            `json:"PrivateDnsName"`
+	State                  string            `json:"State"` // pending, running, stopping, stopped, terminated
+	Tags                   map[string]string `json:"Tags"`
+	LaunchTime             time.Time         `json:"LaunchTime"`
+	UserData               string            `json:"UserData,omitempty"`
+	IamInstanceProfileArn  string            `json:"IamInstanceProfileArn,omitempty"`
+	IamInstanceProfileName string            `json:"IamInstanceProfileName,omitempty"`
+	DisableApiTermination  bool              `json:"DisableApiTermination,omitempty"`
+	LastRebootTime         string            `json:"LastRebootTime,omitempty"`
 }
 
 func (p *ComputeProvider) saveInstance(ctx context.Context, account, region string, inst ec2Instance) error {
@@ -674,8 +674,8 @@ func (p *ComputeProvider) AssociateIamInstanceProfile(ctx context.Context, nr *m
 			"AssociationId": assocId,
 			"InstanceId":    instanceId,
 			"IamInstanceProfile": map[string]any{
-				"Arn":  iamArn,
-				"Id":   newID("aipa"),
+				"Arn": iamArn,
+				"Id":  newID("aipa"),
 			},
 			"State": "associated",
 		},
@@ -810,13 +810,13 @@ func (p *ComputeProvider) DescribeSecurityGroups(ctx context.Context, nr *model.
 			egress = []map[string]any{}
 		}
 		groups = append(groups, map[string]any{
-			"GroupId":          sg.GroupId,
-			"GroupName":        sg.GroupName,
-			"Description":      sg.Description,
-			"VpcId":            sg.VpcId,
-			"OwnerId":          sg.OwnerId,
-			"IngressRules":     ingress,
-			"EgressRules":      egress,
+			"GroupId":      sg.GroupId,
+			"GroupName":    sg.GroupName,
+			"Description":  sg.Description,
+			"VpcId":        sg.VpcId,
+			"OwnerId":      sg.OwnerId,
+			"IngressRules": ingress,
+			"EgressRules":  egress,
 		})
 	}
 	maxResults := 100

@@ -18,69 +18,71 @@ import (
 	"jaiscloud/internal/aws/provider/compute"
 	containerprovider "jaiscloud/internal/aws/provider/container"
 	"jaiscloud/internal/aws/provider/dns"
+	ecrprovider "jaiscloud/internal/aws/provider/ecr"
 	eksprovider "jaiscloud/internal/aws/provider/eks"
 	emrprovider "jaiscloud/internal/aws/provider/emr"
 	emrcontainersprovider "jaiscloud/internal/aws/provider/emroneks"
 	eventsprovider "jaiscloud/internal/aws/provider/events"
+	ebscheduler "jaiscloud/internal/aws/provider/events/scheduler"
+	"jaiscloud/internal/aws/provider/events/targets"
 	functionprovider "jaiscloud/internal/aws/provider/function"
 	iamprovider "jaiscloud/internal/aws/provider/iam"
 	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
-	ecrprovider "jaiscloud/internal/aws/provider/ecr"
-	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
-	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
-	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
-	stsprovider "jaiscloud/internal/aws/sts"
-	"jaiscloud/internal/aws/provider/events/targets"
-	ebscheduler "jaiscloud/internal/aws/provider/events/scheduler"
-	"jaiscloud/internal/workers"
-	"jaiscloud/internal/logstream"
-	kinesisstore "jaiscloud/internal/aws/store/kinesis"
-	ecrstore "jaiscloud/internal/aws/store/ecr"
-	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 	"jaiscloud/internal/aws/provider/notification"
 	objectprovider "jaiscloud/internal/aws/provider/object"
 	"jaiscloud/internal/aws/provider/queue"
 	rdsprovider "jaiscloud/internal/aws/provider/rds"
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/aws/provider/stack/handlers"
+	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
+	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
+	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
+	ecrstore "jaiscloud/internal/aws/store/ecr"
+	kinesisstore "jaiscloud/internal/aws/store/kinesis"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
+	stsprovider "jaiscloud/internal/aws/sts"
+	"jaiscloud/internal/logstream"
+	"jaiscloud/internal/workers"
+
 	// Phase 15 providers
+	acmprovider "jaiscloud/internal/aws/provider/acm"
+	athenaprovider "jaiscloud/internal/aws/provider/athena"
+	cloudfrontprovider "jaiscloud/internal/aws/provider/cloudfront"
 	cognitoprovider "jaiscloud/internal/aws/provider/cognito"
 	cognitoidentityprovider "jaiscloud/internal/aws/provider/cognitoidentity"
-	acmprovider "jaiscloud/internal/aws/provider/acm"
-	sesprovider "jaiscloud/internal/aws/provider/ses"
 	firehoseprovider "jaiscloud/internal/aws/provider/firehose"
-	cloudfrontprovider "jaiscloud/internal/aws/provider/cloudfront"
-	athenaprovider "jaiscloud/internal/aws/provider/athena"
 	redshiftprovider "jaiscloud/internal/aws/provider/redshift"
+	sesprovider "jaiscloud/internal/aws/provider/ses"
+
 	// G-PENDING new providers
-	elbv2provider "jaiscloud/internal/aws/provider/elbv2"
-	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
-	resourcegroupsprovider "jaiscloud/internal/aws/provider/resourcegroups"
-	taggingprovider "jaiscloud/internal/aws/provider/tagging"
-	stackprovider "jaiscloud/internal/aws/provider/stack"
-	"jaiscloud/internal/aws/provider/table"
-	secretprovider "jaiscloud/internal/aws/secret"
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
+	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
+	elbv2provider "jaiscloud/internal/aws/provider/elbv2"
+	resourcegroupsprovider "jaiscloud/internal/aws/provider/resourcegroups"
+	stackprovider "jaiscloud/internal/aws/provider/stack"
+	"jaiscloud/internal/aws/provider/table"
+	taggingprovider "jaiscloud/internal/aws/provider/tagging"
+	secretprovider "jaiscloud/internal/aws/secret"
+	dynamostore "jaiscloud/internal/aws/store/dynamodb"
+	objectstore "jaiscloud/internal/aws/store/object"
+	s3store "jaiscloud/internal/aws/store/s3"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
+	streamstore "jaiscloud/internal/aws/store/stream"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
-	"jaiscloud/internal/persistence/snapshot"
-	snapversion "jaiscloud/internal/persistence/version"
-	"jaiscloud/internal/snapshottypes"
 	ecsexec "jaiscloud/internal/executor/ecs"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
+	"jaiscloud/internal/persistence/snapshot"
+	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
-	objectstore "jaiscloud/internal/aws/store/object"
+	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
-	dynamostore "jaiscloud/internal/aws/store/dynamodb"
-	s3store "jaiscloud/internal/aws/store/s3"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
-	streamstore "jaiscloud/internal/aws/store/stream"
 	"log/slog"
 	"net/http"
 	"os"
@@ -224,7 +226,7 @@ func startCmd() *cobra.Command {
 			}
 			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(objectP.GetBucketCORSRules))
 
-			// ECR full mode: register OCI Distribution v2 routes before the wildcard.
+			// ECR persistent mode: register OCI Distribution v2 routes before the wildcard.
 			if ociHandler := ecrP.OCIHandler(); ociHandler != nil {
 				gatewayOpts = append(gatewayOpts, gateway.WithExtraRoutes(func(r chi.Router) {
 					r.HandleFunc("/v2/*", ociHandler)
@@ -316,7 +318,7 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int64("seed", 0, "Random seed (requires --deterministic)")
 	cmd.Flags().String("time", "", "Base time RFC3339 (requires --deterministic)")
 	cmd.Flags().String("time-mode", "offset", "Time mode: frozen or offset")
-	cmd.Flags().String("blob-dir", "", `Directory for S3 blob bytes (full mode only).
+	cmd.Flags().String("blob-dir", "", `Directory for S3 blob bytes (persistent mode only).
 	Defaults to ~/.jaiscloud/blobs.
 	Env var: JAISCLOUD_BLOB_DIR`)
 	cmd.Flags().String("kms-master-key", "", `32-byte hex KEK for KMS envelope encryption.
@@ -385,21 +387,21 @@ func bindFlags(cmd *cobra.Command) {
 
 // appStores holds all store instances that the server depends on.
 type appStores struct {
-	resources   store.ResourceStore
-	messages    sqsstore.SQSMessageStore
-	dynamo      dynamostore.DynamoDBItemStore
-	s3Meta      objectstore.ObjectMetaStore
-	blobs       blobfs.BlobStore
+	resources store.ResourceStore
+	messages  sqsstore.SQSMessageStore
+	dynamo    dynamostore.DynamoDBItemStore
+	s3Meta    objectstore.ObjectMetaStore
+	blobs     blobfs.BlobStore
 	// localBlobs holds the concrete *LocalFSBlobStore when in session or persistent
 	// file mode, so it can be registered with the admin handler for tarball export/import.
 	// nil when using MemoryBlobStore (no disk backing).
-	localBlobs  *blobfs.LocalFSBlobStore
-	secrets     secretprovider.SecretStore
-	parameters  paramprovider.ParameterStore
-	stsSession  *stsprovider.MemorySessionStore
-	kinesis     *kinesisstore.MemoryKinesisStore
-	ecr         *ecrstore.MemoryECRStore
-	sfn         *sfnstore.MemoryStepFunctionsStore
+	localBlobs *blobfs.LocalFSBlobStore
+	secrets    secretprovider.SecretStore
+	parameters paramprovider.ParameterStore
+	stsSession *stsprovider.MemorySessionStore
+	kinesis    *kinesisstore.MemoryKinesisStore
+	ecr        *ecrstore.MemoryECRStore
+	sfn        *sfnstore.MemoryStepFunctionsStore
 }
 
 // initStores constructs the store layer for the chosen mode (memory or persistent).
@@ -422,18 +424,18 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 		}
 		slog.Info("blob storage", "dir", cfg.BlobDir)
 		return appStores{
-			resources:   pgStore,
-			messages:    sqsstore.NewPostgresSQSMessageStore(pool),
-			dynamo:      dynamostore.NewPostgresDynamoDBItemStore(pool),
-			s3Meta:      s3store.NewPostgresS3ObjectMetaStore(pool),
-			blobs:       blobs,
-			localBlobs:  blobs,
-			secrets:     secretprovider.NewPostgresSecretStore(pool),
-			parameters:  paramprovider.NewPostgresParameterStore(pool),
-			stsSession:  stsprovider.NewMemorySessionStore(),
-			kinesis:     kinesisstore.NewMemoryKinesisStore(),
-			ecr:         ecrstore.NewMemoryECRStore(),
-			sfn:         sfnstore.NewMemoryStepFunctionsStore(),
+			resources:  pgStore,
+			messages:   sqsstore.NewPostgresSQSMessageStore(pool),
+			dynamo:     dynamostore.NewPostgresDynamoDBItemStore(pool),
+			s3Meta:     s3store.NewPostgresS3ObjectMetaStore(pool),
+			blobs:      blobs,
+			localBlobs: blobs,
+			secrets:    secretprovider.NewPostgresSecretStore(pool),
+			parameters: paramprovider.NewPostgresParameterStore(pool),
+			stsSession: stsprovider.NewMemorySessionStore(),
+			kinesis:    kinesisstore.NewMemoryKinesisStore(),
+			ecr:        ecrstore.NewMemoryECRStore(),
+			sfn:        sfnstore.NewMemoryStepFunctionsStore(),
 		}, nil
 	}
 
@@ -444,38 +446,38 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 	if err != nil {
 		slog.Warn("session blob store unavailable, falling back to MemoryBlobStore", "err", err)
 		return appStores{
-			resources:   store.NewMemoryResourceStore(),
-			messages:    sqsstore.NewBundledSQSStore(),
-			dynamo:      dynamostore.NewBundledDynamoDBItemStore(),
-			s3Meta:      s3store.NewMemoryS3ObjectMetaStore(),
-			blobs:       blobfs.NewMemoryBlobStore(),
-			secrets:     secretprovider.NewMemorySecretStore(),
-			parameters:  paramprovider.NewMemoryParameterStore(),
-			stsSession:  stsprovider.NewMemorySessionStore(),
-			kinesis:     kinesisstore.NewMemoryKinesisStore(),
-			ecr:         ecrstore.NewMemoryECRStore(),
-			sfn:         sfnstore.NewMemoryStepFunctionsStore(),
+			resources:  store.NewMemoryResourceStore(),
+			messages:   sqsstore.NewBundledSQSStore(),
+			dynamo:     dynamostore.NewBundledDynamoDBItemStore(),
+			s3Meta:     s3store.NewMemoryS3ObjectMetaStore(),
+			blobs:      blobfs.NewMemoryBlobStore(),
+			secrets:    secretprovider.NewMemorySecretStore(),
+			parameters: paramprovider.NewMemoryParameterStore(),
+			stsSession: stsprovider.NewMemorySessionStore(),
+			kinesis:    kinesisstore.NewMemoryKinesisStore(),
+			ecr:        ecrstore.NewMemoryECRStore(),
+			sfn:        sfnstore.NewMemoryStepFunctionsStore(),
 		}, nil
 	}
 	slog.Info("session blob storage", "dir", sessionBlobs.BaseDir())
 	return appStores{
-		resources:   store.NewMemoryResourceStore(),
-		messages:    sqsstore.NewBundledSQSStore(),
-		dynamo:      dynamostore.NewBundledDynamoDBItemStore(),
-		s3Meta:      s3store.NewMemoryS3ObjectMetaStore(),
-		blobs:       sessionBlobs,
-		localBlobs:  sessionBlobs,
-		secrets:     secretprovider.NewMemorySecretStore(),
-		parameters:  paramprovider.NewMemoryParameterStore(),
-		stsSession:  stsprovider.NewMemorySessionStore(),
-		kinesis:     kinesisstore.NewMemoryKinesisStore(),
-		ecr:         ecrstore.NewMemoryECRStore(),
-		sfn:         sfnstore.NewMemoryStepFunctionsStore(),
+		resources:  store.NewMemoryResourceStore(),
+		messages:   sqsstore.NewBundledSQSStore(),
+		dynamo:     dynamostore.NewBundledDynamoDBItemStore(),
+		s3Meta:     s3store.NewMemoryS3ObjectMetaStore(),
+		blobs:      sessionBlobs,
+		localBlobs: sessionBlobs,
+		secrets:    secretprovider.NewMemorySecretStore(),
+		parameters: paramprovider.NewMemoryParameterStore(),
+		stsSession: stsprovider.NewMemorySessionStore(),
+		kinesis:    kinesisstore.NewMemoryKinesisStore(),
+		ecr:        ecrstore.NewMemoryECRStore(),
+		sfn:        sfnstore.NewMemoryStepFunctionsStore(),
 	}, nil
 }
 
 // bootstrapDEK loads or creates the server data-encryption key.
-// In full mode it is persisted in PostgreSQL (wrapped by KMSMasterKey if set).
+// In persistent mode it is persisted in PostgreSQL (wrapped by KMSMasterKey if set).
 // In lite mode a fresh ephemeral key is generated each startup.
 func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte, error) {
 	if cfg.Mode == config.ModePersistent {
@@ -1009,7 +1011,7 @@ func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecr
 			slog.Warn("ecr: registry:2 failed to start, falling back to lite mode", "err", err)
 			return ecrprovider.New(s.ecr)
 		}
-		slog.Info("ecr full mode: registry:2 proxy ready")
+		slog.Info("ecr persistent mode: registry:2 proxy ready")
 		return ecrprovider.NewFull(s.ecr, proxy)
 	}
 	return ecrprovider.New(s.ecr)
@@ -1029,7 +1031,7 @@ func buildKinesisProvider(ctx context.Context, cfg *config.Config, s appStores) 
 			slog.Warn("kinesis-mock failed to start, falling back to lite mode", "err", err)
 			return kinesisprovider.New(s.kinesis)
 		}
-		slog.Info("kinesis full mode: using kinesis-mock subprocess", "port", mock.Port())
+		slog.Info("kinesis persistent mode: using kinesis-mock subprocess", "port", mock.Port())
 		return kinesisprovider.NewFull(s.kinesis, mock)
 	}
 	return kinesisprovider.New(s.kinesis)

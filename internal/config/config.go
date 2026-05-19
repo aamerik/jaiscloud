@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/viper"
 	"jaiscloud/internal/clock"
+
+	"github.com/spf13/viper"
 )
 
 // hashName produces a short deterministic hash for use in ARN suffixes.
@@ -28,11 +29,6 @@ const (
 	ModeMemory Mode = "memory"
 	// ModePersistent uses PostgreSQL for durable storage across restarts.
 	ModePersistent Mode = "persistent"
-
-	// ModeLite is a deprecated alias for ModeMemory.
-	ModeLite Mode = "lite"
-	// ModeFull is a deprecated alias for ModePersistent.
-	ModeFull Mode = "full"
 )
 
 type Config struct {
@@ -138,7 +134,7 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"events-connection":      func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:connection/%s", r, a, n) },
 	"events-api-destination": func(r, a, n string) string { return fmt.Sprintf("arn:aws:events:%s:%s:api-destination/%s", r, a, n) },
 	// EMR
-	"emr-cluster":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", r, a, n) },
+	"emr-cluster": func(r, a, n string) string { return fmt.Sprintf("arn:aws:elasticmapreduce:%s:%s:cluster/%s", r, a, n) },
 	// EMR Containers — name encodes composite IDs as "vcID/resourceID" where needed.
 	"emr-virtual-cluster": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:emr-containers:%s:%s:/virtualclusters/%s", r, a, n)
@@ -212,7 +208,7 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 	"sts-federated-user":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", a, n) },
 	"iam-group":            func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:group/%s", a, n) },
 	"iam-instance-profile": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:instance-profile/%s", a, n) },
-	"rds-snapshot":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:snapshot:%s", r, a, n) },
+	"rds-snapshot":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:rds:%s:%s:snapshot:%s", r, a, n) },
 	"cfn-changeset": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:cloudformation:%s:%s:changeSet/%s", r, a, n)
 	},
@@ -239,23 +235,25 @@ var awsARNFormatters = map[string]func(region, accountID, name string) string{
 		return fmt.Sprintf("arn:aws:lambda:%s:%s:code-signing-config/%s", r, a, n)
 	},
 	// ECS task set and capacity provider
-	"ecs-task-set":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:task-set/%s", r, a, n) },
+	"ecs-task-set":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:task-set/%s", r, a, n) },
 	"ecs-capacity-provider": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ecs:%s:%s:capacity-provider/%s", r, a, n) },
 	// Phase 15 additions
-	"cognito-userpool":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", r, a, n) },
-	"cognito-identitypool":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-identity:%s:%s:identitypool/%s", r, a, n) },
-	"acm-certificate":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:acm:%s:%s:certificate/%s", r, a, n) },
-	"firehose-stream":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", r, a, n) },
-	"cloudfront-distribution":  func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudfront::%s:distribution/%s", a, n) },
-	"athena-workgroup":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
-	"redshift-cluster":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
-	"s3-accesspoint":           func(r, a, n string) string { return fmt.Sprintf("arn:aws:s3:%s:%s:accesspoint/%s", r, a, n) },
+	"cognito-userpool": func(r, a, n string) string { return fmt.Sprintf("arn:aws:cognito-idp:%s:%s:userpool/%s", r, a, n) },
+	"cognito-identitypool": func(r, a, n string) string {
+		return fmt.Sprintf("arn:aws:cognito-identity:%s:%s:identitypool/%s", r, a, n)
+	},
+	"acm-certificate":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:acm:%s:%s:certificate/%s", r, a, n) },
+	"firehose-stream":         func(r, a, n string) string { return fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", r, a, n) },
+	"cloudfront-distribution": func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudfront::%s:distribution/%s", a, n) },
+	"athena-workgroup":        func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
+	"redshift-cluster":        func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
+	"s3-accesspoint":          func(r, a, n string) string { return fmt.Sprintf("arn:aws:s3:%s:%s:accesspoint/%s", r, a, n) },
 	// CloudWatch
 	"cloudwatch-alarm":     func(r, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch:%s:%s:alarm:%s", r, a, n) },
 	"cloudwatch-dashboard": func(_, a, n string) string { return fmt.Sprintf("arn:aws:cloudwatch::%s:dashboard/%s", a, n) },
 	// IAM OIDC + additional IAM types
-	"iam-oidc-provider":    func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },
-	"iam-managed-policy":   func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:policy/%s", a, n) },
+	"iam-oidc-provider":  func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:oidc-provider/%s", a, n) },
+	"iam-managed-policy": func(_, a, n string) string { return fmt.Sprintf("arn:aws:iam::%s:policy/%s", a, n) },
 	// SES
 	"ses-identity": func(r, a, n string) string { return fmt.Sprintf("arn:aws:ses:%s:%s:identity/%s", r, a, n) },
 	// Redshift additional
@@ -410,17 +408,17 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Port:     viper.GetInt("port"),
-		Mode:     Mode(viper.GetString("mode")),
-		LogLevel: viper.GetString("log_level"),
-		Region:           viper.GetString("region"),
-		AccountID:        viper.GetString("account_id"),
-		DSN:              viper.GetString("dsn"),
-		BlobDir:          viper.GetString("blob_dir"),
-		DataDir:          viper.GetString("data_dir"),
-		FreshStart:       viper.GetBool("fresh_start"),
-		SnapshotInterval: snapshotInterval,
-		ExportSoftLimit:  viper.GetInt64("export_soft_limit"),
+		Port:                viper.GetInt("port"),
+		Mode:                Mode(viper.GetString("mode")),
+		LogLevel:            viper.GetString("log_level"),
+		Region:              viper.GetString("region"),
+		AccountID:           viper.GetString("account_id"),
+		DSN:                 viper.GetString("dsn"),
+		BlobDir:             viper.GetString("blob_dir"),
+		DataDir:             viper.GetString("data_dir"),
+		FreshStart:          viper.GetBool("fresh_start"),
+		SnapshotInterval:    snapshotInterval,
+		ExportSoftLimit:     viper.GetInt64("export_soft_limit"),
 		ExecutorMode:        viper.GetString("executor_mode"),
 		KMSMasterKey:        viper.GetString("kms_master_key"),
 		K8sNamespace:        viper.GetString("k8s_namespace"),
@@ -435,19 +433,11 @@ func Load() (*Config, error) {
 		LambdaNetwork:       viper.GetString("lambda_network"),
 		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),
 		Metrics:             viper.GetBool("metrics"),
-		Tracing:       viper.GetBool("tracing"),
-		Deterministic: viper.GetBool("deterministic"),
-		Seed:          viper.GetInt64("seed"),
-		TimeMode:      viper.GetString("time_mode"),
-		OIDCIssuers:   nil, // populated below from oidc_issuers
-	}
-
-	// Reject deprecated mode names with guidance.
-	switch cfg.Mode {
-	case ModeLite:
-		return nil, fmt.Errorf("mode=lite is no longer valid; use --mode memory")
-	case ModeFull:
-		return nil, fmt.Errorf("mode=full is no longer valid; use --mode persistent")
+		Tracing:             viper.GetBool("tracing"),
+		Deterministic:       viper.GetBool("deterministic"),
+		Seed:                viper.GetInt64("seed"),
+		TimeMode:            viper.GetString("time_mode"),
+		OIDCIssuers:         nil, // populated below from oidc_issuers
 	}
 
 	// CI auto-detection: default to memory mode when running in CI.
@@ -470,8 +460,6 @@ func Load() (*Config, error) {
 			}
 		}
 	}
-
-
 
 	// Parse base time for deterministic mode
 	if ts := viper.GetString("time"); ts != "" {

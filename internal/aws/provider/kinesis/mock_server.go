@@ -18,16 +18,16 @@ import (
 )
 
 const (
-	kinesismockVersion   = "0.4.7"
-	kinesismockBaseURL   = "https://github.com/etspaceman/kinesis-mock/releases/download/v" + kinesismockVersion
-	kinesismockShardLimit = 500
+	kinesismockVersion       = "0.4.7"
+	kinesismockBaseURL       = "https://github.com/etspaceman/kinesis-mock/releases/download/v" + kinesismockVersion
+	kinesismockShardLimit    = 500
 	kinesismockOnDemandLimit = 50
 )
 
 // MockServer manages a kinesis-mock subprocess for full-fidelity Kinesis emulation.
 type MockServer struct {
-	port      int
-	tlsPort   int // allocated but not used; kinesis-mock requires it
+	port       int
+	tlsPort    int // allocated but not used; kinesis-mock requires it
 	binaryPath string
 	accountID  string
 	dataDir    string
@@ -109,7 +109,7 @@ func (s *MockServer) Stop() error {
 	return nil
 }
 
-// Restart stops then starts kinesis-mock (used for reset in full mode).
+// Restart stops then starts kinesis-mock (used for reset in persistent mode).
 func (s *MockServer) Restart(ctx context.Context) error {
 	if err := s.Stop(); err != nil {
 		return err

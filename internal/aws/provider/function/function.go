@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/blobfs"
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	resTypeFunction   = "lambda_functions"
-	resTypeVersions   = "lambda_versions"
-	resTypeAliases    = "lambda_aliases"
-	resTypeLayers     = "lambda_layers"
-	resTypePolicies   = "lambda_policies"
-	resTypeURLs       = "lambda_urls"
+	resTypeFunction = "lambda_functions"
+	resTypeVersions = "lambda_versions"
+	resTypeAliases  = "lambda_aliases"
+	resTypeLayers   = "lambda_layers"
+	resTypePolicies = "lambda_policies"
+	resTypeURLs     = "lambda_urls"
 )
 
 // FunctionProvider handles all Lambda operations.
@@ -70,7 +70,7 @@ func NewWithLimits(resources store.ResourceStore, exec lambdaexec.LambdaExecutor
 	return p
 }
 
-// NewWithBlobs constructs a FunctionProvider with an explicit BlobStore (used in main.go for full mode).
+// NewWithBlobs constructs a FunctionProvider with an explicit BlobStore (used in main.go for persistent mode).
 func NewWithBlobs(resources store.ResourceStore, exec lambdaexec.LambdaExecutor, cfg lambdaexec.LambdaConfig, blobs blobfs.BlobStore) *FunctionProvider {
 	p := NewWithLimits(resources, exec, cfg)
 	p.blobs = blobs
@@ -99,49 +99,49 @@ func (p *FunctionProvider) Routes() map[string]provider.HandlerFunc {
 		"Function.UpdateFunctionCode":          p.UpdateFunctionCode,
 		"Function.InvokeFunction":              p.InvokeFunction,
 		// Versions
-		"Function.PublishVersion":              p.PublishVersion,
-		"Function.ListVersionsByFunction":      p.ListVersionsByFunction,
+		"Function.PublishVersion":         p.PublishVersion,
+		"Function.ListVersionsByFunction": p.ListVersionsByFunction,
 		// Aliases
-		"Function.CreateAlias":                 p.CreateAlias,
-		"Function.GetAlias":                    p.GetAlias,
-		"Function.UpdateAlias":                 p.UpdateAlias,
-		"Function.DeleteAlias":                 p.DeleteAlias,
-		"Function.ListAliases":                 p.ListAliases,
+		"Function.CreateAlias": p.CreateAlias,
+		"Function.GetAlias":    p.GetAlias,
+		"Function.UpdateAlias": p.UpdateAlias,
+		"Function.DeleteAlias": p.DeleteAlias,
+		"Function.ListAliases": p.ListAliases,
 		// Layers
-		"Function.ListLayers":                  p.ListLayers,
-		"Function.PublishLayerVersion":         p.PublishLayerVersion,
-		"Function.GetLayerVersion":             p.GetLayerVersion,
-		"Function.ListLayerVersions":           p.ListLayerVersions,
-		"Function.DeleteLayerVersion":          p.DeleteLayerVersion,
+		"Function.ListLayers":          p.ListLayers,
+		"Function.PublishLayerVersion": p.PublishLayerVersion,
+		"Function.GetLayerVersion":     p.GetLayerVersion,
+		"Function.ListLayerVersions":   p.ListLayerVersions,
+		"Function.DeleteLayerVersion":  p.DeleteLayerVersion,
 		// Tags
-		"Function.TagResource":                 p.TagResource,
-		"Function.UntagResource":               p.UntagResource,
-		"Function.ListTags":                    p.ListTags,
+		"Function.TagResource":   p.TagResource,
+		"Function.UntagResource": p.UntagResource,
+		"Function.ListTags":      p.ListTags,
 		// Permissions
-		"Function.AddPermission":               p.AddPermission,
-		"Function.RemovePermission":            p.RemovePermission,
-		"Function.GetPolicy":                   p.GetPolicy,
+		"Function.AddPermission":    p.AddPermission,
+		"Function.RemovePermission": p.RemovePermission,
+		"Function.GetPolicy":        p.GetPolicy,
 		// Function URLs
-		"Function.CreateFunctionUrlConfig":     p.CreateFunctionUrlConfig,
-		"Function.GetFunctionUrlConfig":        p.GetFunctionUrlConfig,
-		"Function.UpdateFunctionUrlConfig":     p.UpdateFunctionUrlConfig,
-		"Function.DeleteFunctionUrlConfig":     p.DeleteFunctionUrlConfig,
+		"Function.CreateFunctionUrlConfig": p.CreateFunctionUrlConfig,
+		"Function.GetFunctionUrlConfig":    p.GetFunctionUrlConfig,
+		"Function.UpdateFunctionUrlConfig": p.UpdateFunctionUrlConfig,
+		"Function.DeleteFunctionUrlConfig": p.DeleteFunctionUrlConfig,
 		// Concurrency
-		"Function.PutFunctionConcurrency":      p.PutFunctionConcurrency,
-		"Function.GetFunctionConcurrency":      p.GetFunctionConcurrency,
-		"Function.DeleteFunctionConcurrency":   p.DeleteFunctionConcurrency,
+		"Function.PutFunctionConcurrency":    p.PutFunctionConcurrency,
+		"Function.GetFunctionConcurrency":    p.GetFunctionConcurrency,
+		"Function.DeleteFunctionConcurrency": p.DeleteFunctionConcurrency,
 		// Account
-		"Function.GetAccountSettings":          p.GetAccountSettings,
+		"Function.GetAccountSettings": p.GetAccountSettings,
 		// Code signing configs
-		"Function.CreateCodeSigningConfig":               p.CreateCodeSigningConfig,
-		"Function.GetCodeSigningConfig":                  p.GetCodeSigningConfig,
-		"Function.UpdateCodeSigningConfig":               p.UpdateCodeSigningConfig,
-		"Function.DeleteCodeSigningConfig":               p.DeleteCodeSigningConfig,
-		"Function.ListCodeSigningConfigs":                p.ListCodeSigningConfigs,
-		"Function.PutFunctionCodeSigningConfig":          p.PutFunctionCodeSigningConfig,
-		"Function.GetFunctionCodeSigningConfig":          p.GetFunctionCodeSigningConfig,
-		"Function.DeleteFunctionCodeSigningConfig":       p.DeleteFunctionCodeSigningConfig,
-		"Function.ListFunctionsByCodeSigningConfig":      p.ListFunctionsByCodeSigningConfig,
+		"Function.CreateCodeSigningConfig":          p.CreateCodeSigningConfig,
+		"Function.GetCodeSigningConfig":             p.GetCodeSigningConfig,
+		"Function.UpdateCodeSigningConfig":          p.UpdateCodeSigningConfig,
+		"Function.DeleteCodeSigningConfig":          p.DeleteCodeSigningConfig,
+		"Function.ListCodeSigningConfigs":           p.ListCodeSigningConfigs,
+		"Function.PutFunctionCodeSigningConfig":     p.PutFunctionCodeSigningConfig,
+		"Function.GetFunctionCodeSigningConfig":     p.GetFunctionCodeSigningConfig,
+		"Function.DeleteFunctionCodeSigningConfig":  p.DeleteFunctionCodeSigningConfig,
+		"Function.ListFunctionsByCodeSigningConfig": p.ListFunctionsByCodeSigningConfig,
 		// Provisioned concurrency
 		"Function.PutProvisionedConcurrencyConfig":    p.PutProvisionedConcurrencyConfig,
 		"Function.GetProvisionedConcurrencyConfig":    p.GetProvisionedConcurrencyConfig,
@@ -1125,8 +1125,8 @@ func (p *FunctionProvider) ListLayers(ctx context.Context, nr *model.NormalizedR
 	layers := make([]map[string]any, 0, len(latest))
 	for _, le := range latest {
 		layers = append(layers, map[string]any{
-			"LayerName":          le.LayerName,
-			"LayerArn":           le.LayerArn,
+			"LayerName":             le.LayerName,
+			"LayerArn":              le.LayerArn,
 			"LatestMatchingVersion": layerToWire(le),
 		})
 	}
@@ -1470,8 +1470,8 @@ func (p *FunctionProvider) GetAccountSettings(_ context.Context, _ *model.Normal
 			"UnreservedConcurrentExecutions": 1000,
 		},
 		"AccountUsage": map[string]any{
-			"TotalCodeSize":        0,
-			"FunctionCount":        0,
+			"TotalCodeSize": 0,
+			"FunctionCount": 0,
 		},
 	}), nil
 }

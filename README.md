@@ -26,8 +26,8 @@ JaisCloud is a free, open-source multi-cloud emulator that lets AI agents and de
 | | JaisCloud | LocalStack (Community) | Moto |
 |---|---|---|---|
 | **Single static binary** | ✅ | ❌ (Python + Docker) | ❌ (Python library) |
-| **Zero runtime deps (lite mode)** | ✅ | ❌ | ❌ |
-| **Postgres persistence (full mode)** | ✅ | 💰 Pro | ❌ |
+| **Zero runtime deps (memory mode)** | ✅ | ❌ | ❌ |
+| **Postgres persistence (persistent mode)** | ✅ | 💰 Pro | ❌ |
 | **Exact AWS wire protocol** | ✅ | ✅ | Partial |
 | **Kubernetes-native** | ✅ | Partial | ❌ |
 | **State export / import** | ✅ | ❌ | ❌ |
@@ -327,17 +327,17 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--port` | `JAISCLOUD_PORT` | `4566` | Listen port |
-| `--mode` | `JAISCLOUD_MODE` | `lite` | `lite` (in-memory) or `full` (PostgreSQL) |
-| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN (required when `--mode full`) |
+| `--mode` | `JAISCLOUD_MODE` | `memory` | `memory` (in-memory) or `persistence` (Memory/PostgreSQL) |
+| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN (optional with `--mode persistent`) |
 | `--region` | `JAISCLOUD_REGION` | `us-east-1` | AWS region reported in responses |
 | `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
 | `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | — | `mock` / `docker` / `k8s` for Lambda and EMR |
 
-**Lite mode** (default) — all state in memory, zero external dependencies, lost on restart. Ideal for unit tests and CI.
+**Memory mode** (default) — all state in memory, zero external dependencies, lost on restart. Ideal for unit tests and CI.
 
-**Full mode** — resource metadata persisted in PostgreSQL. Ideal for integration environments and state that must survive restarts.
+**Persistent mode** — resource metadata persisted in PostgreSQL if postgres configured else in a file. Ideal for integration environments and state that must survive restarts.
 
 For the full configuration reference including Kubernetes, Spark, and platform options see the [Developer Guide](DEVELOPER_GUIDE.md).
 
