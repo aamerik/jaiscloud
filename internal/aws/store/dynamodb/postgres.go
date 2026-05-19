@@ -485,6 +485,58 @@ func (s *PostgresDynamoDBItemStore) Reset() {
 	}
 }
 
+func (s *PostgresDynamoDBItemStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	s.dropIndexTables(ctx, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresDynamoDBItemStore) ResetAccount(account string) {
+	ctx := context.Background()
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT region, table_name FROM jc_dynamodb_items WHERE account_id=$1`, account)
+	if err == nil {
+		type entry struct{ region, table string }
+		var entries []entry
+		for rows.Next() {
+			var e entry
+			if rows.Scan(&e.region, &e.table) == nil {
+				entries = append(entries, e)
+			}
+		}
+		rows.Close()
+		for _, e := range entries {
+			suffix := pgSuffix(account, e.region, e.table)
+			s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS jc_dt_%s_lsi`, suffix))
+			s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS jc_dt_%s_gsi`, suffix))
+		}
+	}
+	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items WHERE account_id=$1`, account)
+}
+
+// dropIndexTables drops all GSI/LSI index tables for items in the given (account, region).
+func (s *PostgresDynamoDBItemStore) dropIndexTables(ctx context.Context, account, region string) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT table_name FROM jc_dynamodb_items WHERE account_id=$1 AND region=$2`,
+		account, region)
+	if err != nil {
+		return
+	}
+	var tables []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			tables = append(tables, n)
+		}
+	}
+	rows.Close()
+	for _, t := range tables {
+		suffix := pgSuffix(account, region, t)
+		s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS jc_dt_%s_lsi`, suffix))
+		s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS jc_dt_%s_gsi`, suffix))
+	}
+}
+
 // ─── Table-lifecycle methods ──────────────────────────────────────────────────
 
 // CreateTableSchema creates GSI and LSI index tables for a DynamoDB table.

@@ -215,9 +215,14 @@ func (s *PostgresResourceStore) Reset() {
 	s.pool.Exec(ctx, `DELETE FROM jc_resources`)
 }
 
-// ResetScope wipes all state for a specific account+region combination.
-func (s *PostgresResourceStore) ResetScope(ctx context.Context, account, region string) {
+func (s *PostgresResourceStore) ResetScope(account, region string) {
+	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresResourceStore) ResetAccount(account string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE account_id=$1`, account)
 }
 
 // wrapPgError classifies a pgx error:

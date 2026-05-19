@@ -298,6 +298,20 @@ func (s *PostgresKeyStore) Reset() {
 	// Do NOT wipe jc_kms_dek — the DEK is a server-level secret, not user state.
 }
 
+func (s *PostgresKeyStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_grants  WHERE account_id=$1 AND region=$2`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_aliases WHERE account_id=$1 AND region=$2`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_keys    WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresKeyStore) ResetAccount(account string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_grants  WHERE account_id=$1`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_aliases WHERE account_id=$1`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_kms_keys    WHERE account_id=$1`, account)
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 type scannable interface {

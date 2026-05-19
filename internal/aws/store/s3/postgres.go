@@ -581,3 +581,26 @@ func (s *PostgresS3ObjectMetaStore) Reset() {
 		slog.Warn("s3 reset: commit failed", "err", err)
 	}
 }
+
+func (s *PostgresS3ObjectMetaStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	// jc_s3_objects/versions/multipart have no account_id; filter via bucket ownership.
+	inBuckets := `(SELECT name FROM jc_s3_buckets WHERE owner_account_id=$1 AND region=$2)`
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_parts WHERE upload_id IN
+		(SELECT upload_id FROM jc_s3_multipart_uploads WHERE bucket IN `+inBuckets+`)`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_uploads WHERE bucket IN `+inBuckets, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_object_versions  WHERE bucket IN `+inBuckets, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_objects           WHERE bucket IN `+inBuckets, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_buckets WHERE owner_account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresS3ObjectMetaStore) ResetAccount(account string) {
+	ctx := context.Background()
+	inBuckets := `(SELECT name FROM jc_s3_buckets WHERE owner_account_id=$1)`
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_parts WHERE upload_id IN
+		(SELECT upload_id FROM jc_s3_multipart_uploads WHERE bucket IN `+inBuckets+`)`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_multipart_uploads WHERE bucket IN `+inBuckets, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_object_versions  WHERE bucket IN `+inBuckets, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_objects           WHERE bucket IN `+inBuckets, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_s3_buckets WHERE owner_account_id=$1`, account)
+}

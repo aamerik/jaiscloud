@@ -324,3 +324,15 @@ func (s *PostgresSQSMessageStore) Reset() {
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages`)
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_dedup`)
 }
+
+func (s *PostgresSQSMessageStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages WHERE account_id=$1 AND region=$2`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_sqs_dedup    WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresSQSMessageStore) ResetAccount(account string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages WHERE account_id=$1`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_sqs_dedup    WHERE account_id=$1`, account)
+}

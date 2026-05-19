@@ -186,6 +186,18 @@ func (s *PostgresParameterStore) Reset() {
 	s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters`)
 }
 
+func (s *PostgresParameterStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_ssm_param_history WHERE account_id=$1 AND region=$2`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters    WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresParameterStore) ResetAccount(account string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_ssm_param_history WHERE account_id=$1`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters    WHERE account_id=$1`, account)
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func paramMeta(e ParameterEntry) map[string]any {

@@ -253,6 +253,18 @@ func (s *PostgresSecretStore) Reset() {
 	s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets`)
 }
 
+func (s *PostgresSecretStore) ResetScope(account, region string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_sm_versions WHERE account_id=$1 AND region=$2`, account, region)
+	s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets  WHERE account_id=$1 AND region=$2`, account, region)
+}
+
+func (s *PostgresSecretStore) ResetAccount(account string) {
+	ctx := context.Background()
+	s.pool.Exec(ctx, `DELETE FROM jc_sm_versions WHERE account_id=$1`, account)
+	s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets  WHERE account_id=$1`, account)
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func (s *PostgresSecretStore) scanSecret(ctx context.Context, query string, arg any) (SecretEntry, error) {
