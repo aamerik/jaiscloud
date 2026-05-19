@@ -163,13 +163,14 @@ func startCmd() *cobra.Command {
 			}
 
 			ecrP := buildECRProvider(ctx, cfg, s)
-			registry, streamStore, bus, keyStore, secretStore, paramStore, lambdaResetter, cleanup, objectP, queueResetter, logsResetter, sfnP, cwResetter, funcP, firehoseP, computeP := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
-			defer cleanup()
+			app := buildRegistry(ctx, cfg, s, dek, platformCfg, instanceID, ecrP)
+			cleanup := app.Cleanup
+			defer func() { cleanup() }()
 
 			// Wire Step Functions execution engine — provides real ASL execution.
-			sfnDisp := sfndispatcher.New(registry, cfg)
+			sfnDisp := sfndispatcher.New(app.Registry, cfg)
 			sfnEng := sfnengine.New(s.sfn, sfnDisp, cfg.Clock)
-			sfnP.SetEngine(sfnEng)
+			app.SfnP.SetEngine(sfnEng)
 			prevCleanup := cleanup
 			cleanup = func() {
 				shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -179,10 +180,10 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
-			adminHandler := buildAdminHandler(s, streamStore, keyStore, secretStore, paramStore, lambdaResetter, queueResetter, logsResetter, cwResetter, computeP)
-			adminHandler.SetLambdaCodeFetcher(funcP)
-			adminHandler.SetCWAlarmEvaluator(cwResetter.Evaluator())
-			adminHandler.SetFirehoseFlusher(firehoseP)
+			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
+			adminHandler.SetLambdaCodeFetcher(app.FuncP)
+			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
+			adminHandler.SetFirehoseFlusher(app.FirehoseP)
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      "aws",
@@ -225,7 +226,7 @@ func startCmd() *cobra.Command {
 					awsadapter.RegisterIMDSRoutes(r, imdsCfg)
 				}))
 			}
-			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(objectP.GetBucketCORSRules))
+			gatewayOpts = append(gatewayOpts, gateway.WithCORSLookup(app.ObjectP.GetBucketCORSRules))
 
 			// ECR persistent mode: register OCI Distribution v2 routes before the wildcard.
 			if ociHandler := ecrP.OCIHandler(); ociHandler != nil {
@@ -295,8 +296,8 @@ func startCmd() *cobra.Command {
 			prevCleanup4 := cleanup
 			cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 
-			srv := gateway.NewServer(cfg, adminHandler, registry, cloudAdapter, certs, gatewayOpts...)
-			_ = bus
+			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
+			_ = app.Bus
 			return srv.ListenAndServe()
 		},
 	}
@@ -385,6 +386,28 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("spark_emr_image", cmd.Flags().Lookup("spark-emr-image"))
 	viper.BindPFlag("spark_emreks_image", cmd.Flags().Lookup("spark-emreks-image"))
 	viper.BindPFlag("s3_virtual_host_bases", cmd.Flags().Lookup("s3-virtual-host-bases"))
+}
+
+// AppContext holds every provider and service created by buildRegistry.
+// Replacing 16 individual return values with a single struct keeps the wiring
+// function signature manageable as new services are added.
+type AppContext struct {
+	Registry       *provider.Registry
+	StreamStore    *streamstore.MemoryStreamStore
+	Bus            *events.EventBus
+	KeyStore       keyprovider.KeyStore
+	SecretStore    secretprovider.SecretStore
+	ParamStore     paramprovider.ParameterStore
+	LambdaResetter admin.Resetter
+	Cleanup        func()
+	ObjectP        *objectprovider.ObjectProvider
+	QueueP         *queue.QueueProvider
+	LogsP          *cwlogs.Provider
+	SfnP           *sfnprovider.Provider
+	CWP            *cloudwatchprovider.Provider
+	FuncP          *functionprovider.FunctionProvider
+	FirehoseP      *firehoseprovider.Provider
+	ComputeP       *compute.ComputeProvider
 }
 
 // appStores holds all store instances that the server depends on.
@@ -503,8 +526,9 @@ func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte,
 	return dek, nil
 }
 
-// buildRegistry wires all providers and returns the populated registry plus a cleanup func.
-func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) (*provider.Registry, *streamstore.MemoryStreamStore, *events.EventBus, keyprovider.KeyStore, secretprovider.SecretStore, paramprovider.ParameterStore, admin.Resetter, func(), *objectprovider.ObjectProvider, *queue.QueueProvider, *cwlogs.Provider, *sfnprovider.Provider, *cloudwatchprovider.Provider, *functionprovider.FunctionProvider, *firehoseprovider.Provider, *compute.ComputeProvider) {
+// buildRegistry wires all providers and returns an AppContext holding the
+// populated registry, all provider references, and a cleanup func.
+func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []byte, platformCfg *platform.PlatformConfig, instanceID string, ecrP *ecrprovider.Provider) *AppContext {
 	bus := events.NewEventBus()
 	streams := streamstore.NewMemoryStreamStore()
 
@@ -803,7 +827,24 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	registerCFNHandlers(stackP, queueP, notifP, objectP, tableProvider, iamP, funcP, keyProv, secretProv, paramProv,
 		logsProvider, cwP, eventsP, ecsP, sfnP, esmProvider, apigwP, computeP)
 
-	return registry, streams, bus, keyStore, s.secrets, s.parameters, lambdaExec, cleanup, objectP, queueP, logsProvider, sfnP, cwP, funcP, firehoseP, computeP
+	return &AppContext{
+		Registry:       registry,
+		StreamStore:    streams,
+		Bus:            bus,
+		KeyStore:       keyStore,
+		SecretStore:    s.secrets,
+		ParamStore:     s.parameters,
+		LambdaResetter: lambdaExec,
+		Cleanup:        cleanup,
+		ObjectP:        objectP,
+		QueueP:         queueP,
+		LogsP:          logsProvider,
+		SfnP:           sfnP,
+		CWP:            cwP,
+		FuncP:          funcP,
+		FirehoseP:      firehoseP,
+		ComputeP:       computeP,
+	}
 }
 
 // cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
