@@ -1,7 +1,10 @@
 package sqs
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"time"
 
 	"jaiscloud/internal/aws/store/bundle"
@@ -81,6 +84,72 @@ func (s *BundledSQSStore) SetQueueRetention(ctx context.Context, account, region
 	return st.SetQueueRetention(ctx, account, region, queueURL, retentionSecs)
 }
 
-func (s *BundledSQSStore) Reset()                         { s.b.Reset() }
+func (s *BundledSQSStore) Reset()                            { s.b.Reset() }
 func (s *BundledSQSStore) ResetScope(account, region string) { s.b.ResetScope(account, region) }
 func (s *BundledSQSStore) ResetAccount(account string)       { s.b.ResetAccount(account) }
+
+// ─── Snapshotter ──────────────────────────────────────────────────────────────
+
+type bundledSQSScopeSnap struct {
+	Account string          `json:"account"`
+	Region  string          `json:"region"`
+	Data    json.RawMessage `json:"data"`
+}
+
+func (s *BundledSQSStore) IsEmpty(_ context.Context) (bool, error) {
+	empty := true
+	s.b.Iter(func(_, _ string, st *MemoryMessageStore) {
+		if !empty {
+			return
+		}
+		ok, _ := st.IsEmpty(context.Background())
+		if !ok {
+			empty = false
+		}
+	})
+	return empty, nil
+}
+
+func (s *BundledSQSStore) Snapshot(_ context.Context, w io.Writer) error {
+	scopes := make([]bundledSQSScopeSnap, 0)
+	var iterErr error
+	s.b.Iter(func(account, region string, st *MemoryMessageStore) {
+		if iterErr != nil {
+			return
+		}
+		var buf bytes.Buffer
+		if err := st.Snapshot(context.Background(), &buf); err != nil {
+			iterErr = err
+			return
+		}
+		scopes = append(scopes, bundledSQSScopeSnap{
+			Account: account,
+			Region:  region,
+			Data:    json.RawMessage(buf.Bytes()),
+		})
+	})
+	if iterErr != nil {
+		return iterErr
+	}
+	return json.NewEncoder(w).Encode(map[string]any{"kind": "local", "scopes": scopes})
+}
+
+func (s *BundledSQSStore) Restore(_ context.Context, r io.Reader) error {
+	var envelope struct {
+		Scopes []bundledSQSScopeSnap `json:"scopes"`
+	}
+	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
+		return err
+	}
+	s.b.ResetAndDiscard()
+	for _, scope := range envelope.Scopes {
+		st, err := s.b.Get(scope.Account, scope.Region)
+		if err != nil {
+			return err
+		}
+		if err := st.Restore(context.Background(), bytes.NewReader(scope.Data)); err != nil {
+			return err
+		}
+	}
+	return nil
+}

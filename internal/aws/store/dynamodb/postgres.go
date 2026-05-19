@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -946,4 +947,235 @@ func (s *PostgresDynamoDBItemStore) filterAndPaginate(items []map[string]any, ke
 		result = []map[string]any{}
 	}
 	return result, scannedCount, lastKey, nil
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type pgDynamoRow struct {
+	AccountID string          `json:"account_id"`
+	Region    string          `json:"region"`
+	TableName string          `json:"table_name"`
+	PKHash    string          `json:"pk_hash"`
+	Item      json.RawMessage `json:"item"`
+}
+
+type pgDynamoSnap struct {
+	Items       []pgDynamoRow        `json:"items"`
+	IndexTables []pgDynamoIndexTable `json:"index_tables,omitempty"`
+}
+
+type pgDynamoIndexTable struct {
+	Suffix string     `json:"suffix"`
+	GSI    []pgGSIRow `json:"gsi,omitempty"`
+	LSI    []pgLSIRow `json:"lsi,omitempty"`
+}
+
+type pgGSIRow struct {
+	IndexName string   `json:"index_name"`
+	GSIPKVal  string   `json:"gsi_pk_val"`
+	GSISKVal  string   `json:"gsi_sk_val"`
+	GSISKNum  *float64 `json:"gsi_sk_num"`
+	PKHash    string   `json:"pk_hash"`
+}
+
+type pgLSIRow struct {
+	IndexName string   `json:"index_name"`
+	PKVal     string   `json:"pk_val"`
+	LSISKVal  string   `json:"lsi_sk_val"`
+	LSISKNum  *float64 `json:"lsi_sk_num"`
+	PKHash    string   `json:"pk_hash"`
+}
+
+func (s *PostgresDynamoDBItemStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_dynamodb_items`).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresDynamoDBItemStore) Snapshot(ctx context.Context, w io.Writer) error {
+	rows, err := s.pool.Query(ctx, `
+		SELECT account_id, region, table_name, pk_hash, item
+		FROM jc_dynamodb_items
+		ORDER BY account_id, region, table_name, pk_hash
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot dynamodb query: %w", err)
+	}
+	defer rows.Close()
+
+	var snap pgDynamoSnap
+	for rows.Next() {
+		var r pgDynamoRow
+		var raw []byte
+		if err := rows.Scan(&r.AccountID, &r.Region, &r.TableName, &r.PKHash, &raw); err != nil {
+			return fmt.Errorf("snapshot dynamodb scan: %w", err)
+		}
+		r.Item = json.RawMessage(raw)
+		snap.Items = append(snap.Items, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Snapshot GSI and LSI index tables grouped by suffix.
+	idxRows, err := s.pool.Query(ctx, `
+		SELECT tablename FROM pg_tables
+		WHERE schemaname=current_schema() AND tablename LIKE 'jc_dt_%'
+		ORDER BY tablename
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot dynamodb list index tables: %w", err)
+	}
+	suffixSet := make(map[string]struct{})
+	for idxRows.Next() {
+		var tname string
+		if idxRows.Scan(&tname) == nil {
+			// Extract suffix from jc_dt_{suffix}_gsi or jc_dt_{suffix}_lsi.
+			if after, ok := strings.CutPrefix(tname, "jc_dt_"); ok {
+				if suf, _, found := strings.Cut(after, "_"); found {
+					suffixSet[suf] = struct{}{}
+				}
+			}
+		}
+	}
+	idxRows.Close()
+
+	for suf := range suffixSet {
+		var entry pgDynamoIndexTable
+		entry.Suffix = suf
+		gsiTable := "jc_dt_" + suf + "_gsi"
+		grows, err := s.pool.Query(ctx, fmt.Sprintf(
+			`SELECT index_name, gsi_pk_val, gsi_sk_val, gsi_sk_num, pk_hash FROM %s ORDER BY index_name, pk_hash`, gsiTable))
+		if err == nil {
+			for grows.Next() {
+				var g pgGSIRow
+				if grows.Scan(&g.IndexName, &g.GSIPKVal, &g.GSISKVal, &g.GSISKNum, &g.PKHash) == nil {
+					entry.GSI = append(entry.GSI, g)
+				}
+			}
+			grows.Close()
+		}
+		lsiTable := "jc_dt_" + suf + "_lsi"
+		lrows, err := s.pool.Query(ctx, fmt.Sprintf(
+			`SELECT index_name, pk_val, lsi_sk_val, lsi_sk_num, pk_hash FROM %s ORDER BY index_name, pk_hash`, lsiTable))
+		if err == nil {
+			for lrows.Next() {
+				var l pgLSIRow
+				if lrows.Scan(&l.IndexName, &l.PKVal, &l.LSISKVal, &l.LSISKNum, &l.PKHash) == nil {
+					entry.LSI = append(entry.LSI, l)
+				}
+			}
+			lrows.Close()
+		}
+		snap.IndexTables = append(snap.IndexTables, entry)
+	}
+
+	return json.NewEncoder(w).Encode(snap)
+}
+
+func (s *PostgresDynamoDBItemStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgDynamoSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+
+	// Collect existing index table names before opening the transaction.
+	idxRows, err := s.pool.Query(ctx, `
+		SELECT tablename FROM pg_tables
+		WHERE schemaname=current_schema() AND tablename LIKE 'jc_dt_%'
+	`)
+	var existingIndexTables []string
+	if err == nil {
+		for idxRows.Next() {
+			var n string
+			if idxRows.Scan(&n) == nil {
+				existingIndexTables = append(existingIndexTables, n)
+			}
+		}
+		idxRows.Close()
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("restore dynamodb begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Drop all existing per-table index tables.
+	for _, n := range existingIndexTables {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, n)); err != nil {
+			return fmt.Errorf("restore dynamodb drop index table %s: %w", n, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_dynamodb_items`); err != nil {
+		return fmt.Errorf("restore dynamodb delete items: %w", err)
+	}
+
+	// Recreate index tables from the snapshot and insert their rows.
+	for _, entry := range snap.IndexTables {
+		suf := entry.Suffix
+		main := "jc_dt_" + suf
+		ddl := fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS %s_gsi (
+    index_name TEXT NOT NULL,
+    gsi_pk_val TEXT NOT NULL,
+    gsi_sk_val TEXT NOT NULL DEFAULT '',
+    gsi_sk_num NUMERIC,
+    pk_hash    TEXT NOT NULL,
+    PRIMARY KEY (index_name, pk_hash)
+);
+CREATE INDEX IF NOT EXISTS %s_gsi_q ON %s_gsi (index_name, gsi_pk_val, gsi_sk_val);
+CREATE TABLE IF NOT EXISTS %s_lsi (
+    index_name TEXT NOT NULL,
+    pk_val     TEXT NOT NULL,
+    lsi_sk_val TEXT NOT NULL DEFAULT '',
+    lsi_sk_num NUMERIC,
+    pk_hash    TEXT NOT NULL,
+    PRIMARY KEY (index_name, pk_hash)
+);
+CREATE INDEX IF NOT EXISTS %s_lsi_q ON %s_lsi (index_name, pk_val, lsi_sk_val);
+`, main, main, main, main, main, main)
+		if _, err := tx.Exec(ctx, ddl); err != nil {
+			return fmt.Errorf("restore dynamodb recreate index tables for %s: %w", suf, err)
+		}
+	}
+
+	// Insert items.
+	for _, row := range snap.Items {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_dynamodb_items (account_id, region, table_name, pk_hash, item)
+			VALUES ($1, $2, $3, $4, $5)
+		`, row.AccountID, row.Region, row.TableName, row.PKHash, json.RawMessage(row.Item),
+		); err != nil {
+			return fmt.Errorf("restore dynamodb insert item: %w", err)
+		}
+	}
+
+	// Insert GSI/LSI index rows.
+	for _, entry := range snap.IndexTables {
+		suf := entry.Suffix
+		gsiTable := "jc_dt_" + suf + "_gsi"
+		for _, g := range entry.GSI {
+			if _, err := tx.Exec(ctx, fmt.Sprintf(
+				`INSERT INTO %s (index_name, gsi_pk_val, gsi_sk_val, gsi_sk_num, pk_hash) VALUES ($1,$2,$3,$4,$5)`,
+				gsiTable), g.IndexName, g.GSIPKVal, g.GSISKVal, g.GSISKNum, g.PKHash,
+			); err != nil {
+				return fmt.Errorf("restore dynamodb insert gsi row: %w", err)
+			}
+		}
+		lsiTable := "jc_dt_" + suf + "_lsi"
+		for _, l := range entry.LSI {
+			if _, err := tx.Exec(ctx, fmt.Sprintf(
+				`INSERT INTO %s (index_name, pk_val, lsi_sk_val, lsi_sk_num, pk_hash) VALUES ($1,$2,$3,$4,$5)`,
+				lsiTable), l.IndexName, l.PKVal, l.LSISKVal, l.LSISKNum, l.PKHash,
+			); err != nil {
+				return fmt.Errorf("restore dynamodb insert lsi row: %w", err)
+			}
+		}
+	}
+
+	return tx.Commit(ctx)
 }

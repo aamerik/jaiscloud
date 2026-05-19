@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -229,6 +230,154 @@ func unmarshalParamMeta(e *ParameterEntry, data []byte) {
 func isPgUnique(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ─── Snapshotter ──────────────────────────────────────────────────────────────
+
+type pgSSMSnap struct {
+	Parameters []pgSSMParamRow  `json:"parameters"`
+	History    []pgSSMHistRow   `json:"history"`
+	Labels     []pgSSMLabelRow  `json:"labels"`
+}
+
+type pgSSMParamRow struct {
+	AccountID  string    `json:"account_id"`
+	Region     string    `json:"region"`
+	Name       string    `json:"name"`
+	ParamData  []byte    `json:"param_data"`
+	ParamValue []byte    `json:"param_value"`
+	Version    int64     `json:"version"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type pgSSMHistRow struct {
+	AccountID  string    `json:"account_id"`
+	Region     string    `json:"region"`
+	Name       string    `json:"name"`
+	Version    int64     `json:"version"`
+	ParamData  []byte    `json:"param_data"`
+	ParamValue []byte    `json:"param_value"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type pgSSMLabelRow struct {
+	AccountID     string    `json:"account_id"`
+	Region        string    `json:"region"`
+	ParameterName string    `json:"parameter_name"`
+	Version       int64     `json:"version"`
+	Label         string    `json:"label"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (s *PostgresParameterStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_ssm_parameters`).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresParameterStore) Snapshot(ctx context.Context, w io.Writer) error {
+	prows, err := s.pool.Query(ctx, `SELECT account_id, region, name, param_data, param_value, version, created_at, updated_at FROM jc_ssm_parameters ORDER BY account_id, region, name`)
+	if err != nil {
+		return fmt.Errorf("ssm snapshot params: %w", err)
+	}
+	defer prows.Close()
+	var params []pgSSMParamRow
+	for prows.Next() {
+		var r pgSSMParamRow
+		if err := prows.Scan(&r.AccountID, &r.Region, &r.Name, &r.ParamData, &r.ParamValue, &r.Version, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return err
+		}
+		params = append(params, r)
+	}
+	if err := prows.Err(); err != nil {
+		return err
+	}
+
+	hrows, err := s.pool.Query(ctx, `SELECT account_id, region, name, version, param_data, param_value, created_at FROM jc_ssm_param_history ORDER BY account_id, region, name, version`)
+	if err != nil {
+		return fmt.Errorf("ssm snapshot history: %w", err)
+	}
+	defer hrows.Close()
+	var history []pgSSMHistRow
+	for hrows.Next() {
+		var r pgSSMHistRow
+		if err := hrows.Scan(&r.AccountID, &r.Region, &r.Name, &r.Version, &r.ParamData, &r.ParamValue, &r.CreatedAt); err != nil {
+			return err
+		}
+		history = append(history, r)
+	}
+	if err := hrows.Err(); err != nil {
+		return err
+	}
+
+	lrows, err := s.pool.Query(ctx, `SELECT account_id, region, parameter_name, version, label, created_at FROM jc_ssm_parameter_labels ORDER BY account_id, region, parameter_name, version, label`)
+	if err != nil {
+		return fmt.Errorf("ssm snapshot labels: %w", err)
+	}
+	defer lrows.Close()
+	var labels []pgSSMLabelRow
+	for lrows.Next() {
+		var r pgSSMLabelRow
+		if err := lrows.Scan(&r.AccountID, &r.Region, &r.ParameterName, &r.Version, &r.Label, &r.CreatedAt); err != nil {
+			return err
+		}
+		labels = append(labels, r)
+	}
+	if err := lrows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(pgSSMSnap{Parameters: params, History: history, Labels: labels})
+}
+
+func (s *PostgresParameterStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgSSMSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return fmt.Errorf("ssm restore decode: %w", err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("ssm restore begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_ssm_parameter_labels`); err != nil {
+		return fmt.Errorf("ssm restore delete labels: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_ssm_param_history`); err != nil {
+		return fmt.Errorf("ssm restore delete history: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_ssm_parameters`); err != nil {
+		return fmt.Errorf("ssm restore delete params: %w", err)
+	}
+	for _, p := range snap.Parameters {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_ssm_parameters (account_id, region, name, param_data, param_value, version, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			p.AccountID, p.Region, p.Name, json.RawMessage(p.ParamData), p.ParamValue, p.Version, p.CreatedAt, p.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("ssm restore insert param %s: %w", p.Name, err)
+		}
+	}
+	for _, h := range snap.History {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_ssm_param_history (account_id, region, name, version, param_data, param_value, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			h.AccountID, h.Region, h.Name, h.Version, json.RawMessage(h.ParamData), h.ParamValue, h.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("ssm restore insert history %s v%d: %w", h.Name, h.Version, err)
+		}
+	}
+	for _, l := range snap.Labels {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_ssm_parameter_labels (account_id, region, parameter_name, version, label, created_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+			l.AccountID, l.Region, l.ParameterName, l.Version, l.Label, l.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("ssm restore insert label %s: %w", l.Label, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresParameterStore) LabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) ([]string, error) {

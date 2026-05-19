@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -480,4 +483,87 @@ func (s *MemoryS3ObjectMetaStore) Reset() {
 	s.uploads = make(map[string]multipartUpload)
 	s.versions = make(map[string]map[string][]ObjectMeta)
 	s.versioningStatus = make(map[string]string)
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type s3MultipartSnap struct {
+	Bucket    string             `json:"bucket"`
+	Key       string             `json:"key"`
+	Meta      map[string]any     `json:"meta"`
+	Parts     map[string]PartMeta `json:"parts"`
+	Initiated time.Time          `json:"initiated"`
+}
+
+type s3MemSnap struct {
+	Buckets          map[string]map[string]any          `json:"buckets"`
+	Objects          map[string]map[string]ObjectMeta   `json:"objects"`
+	Uploads          map[string]s3MultipartSnap         `json:"uploads"`
+	Versions         map[string]map[string][]ObjectMeta `json:"versions"`
+	VersioningStatus map[string]string                  `json:"versioning_status"`
+}
+
+func (s *MemoryS3ObjectMetaStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.buckets) == 0, nil
+}
+
+func (s *MemoryS3ObjectMetaStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	uploads := make(map[string]s3MultipartSnap, len(s.uploads))
+	for id, u := range s.uploads {
+		parts := make(map[string]PartMeta, len(u.Parts))
+		for n, p := range u.Parts {
+			parts[strconv.Itoa(n)] = p
+		}
+		uploads[id] = s3MultipartSnap{Bucket: u.Bucket, Key: u.Key, Meta: u.Meta, Parts: parts, Initiated: u.Initiated}
+	}
+	return json.NewEncoder(w).Encode(s3MemSnap{
+		Buckets:          s.buckets,
+		Objects:          s.objects,
+		Uploads:          uploads,
+		Versions:         s.versions,
+		VersioningStatus: s.versioningStatus,
+	})
+}
+
+func (s *MemoryS3ObjectMetaStore) Restore(_ context.Context, r io.Reader) error {
+	var snap s3MemSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snap.Buckets == nil {
+		snap.Buckets = make(map[string]map[string]any)
+	}
+	if snap.Objects == nil {
+		snap.Objects = make(map[string]map[string]ObjectMeta)
+	}
+	uploads := make(map[string]multipartUpload, len(snap.Uploads))
+	for id, u := range snap.Uploads {
+		parts := make(map[int]PartMeta, len(u.Parts))
+		for ns, p := range u.Parts {
+			if n, err := strconv.Atoi(ns); err == nil {
+				parts[n] = p
+			}
+		}
+		uploads[id] = multipartUpload{Bucket: u.Bucket, Key: u.Key, Meta: u.Meta, Parts: parts, Initiated: u.Initiated}
+	}
+	s.buckets = snap.Buckets
+	s.objects = snap.Objects
+	s.uploads = uploads
+	if snap.Versions != nil {
+		s.versions = snap.Versions
+	} else {
+		s.versions = make(map[string]map[string][]ObjectMeta)
+	}
+	if snap.VersioningStatus != nil {
+		s.versioningStatus = snap.VersioningStatus
+	} else {
+		s.versioningStatus = make(map[string]string)
+	}
+	return nil
 }

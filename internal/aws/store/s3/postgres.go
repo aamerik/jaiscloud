@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -603,4 +604,301 @@ func (s *PostgresS3ObjectMetaStore) ResetAccount(account string) {
 	s.pool.Exec(ctx, `DELETE FROM jc_s3_object_versions  WHERE bucket IN `+inBuckets, account)
 	s.pool.Exec(ctx, `DELETE FROM jc_s3_objects           WHERE bucket IN `+inBuckets, account)
 	s.pool.Exec(ctx, `DELETE FROM jc_s3_buckets WHERE owner_account_id=$1`, account)
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type pgS3BucketRow struct {
+	Name           string          `json:"name"`
+	OwnerAccountID string          `json:"owner_account_id"`
+	Region         string          `json:"region"`
+	Meta           json.RawMessage `json:"meta"`
+}
+
+type pgS3ObjectRow struct {
+	Bucket              string          `json:"bucket"`
+	Key                 string          `json:"key"`
+	ETag                string          `json:"etag"`
+	CRC32               string          `json:"crc32"`
+	Size                int64           `json:"size"`
+	ContentType         string          `json:"content_type"`
+	LastModified        time.Time       `json:"last_modified"`
+	Metadata            json.RawMessage `json:"metadata"`
+	StorageClass        string          `json:"storage_class"`
+	VersionID           string          `json:"version_id"`
+	Tags                json.RawMessage `json:"tags"`
+	Encryption          string          `json:"encryption"`
+	KMSKeyID            string          `json:"kms_key_id"`
+	SSECKeyMD5          string          `json:"ssec_key_md5"`
+	LockMode            string          `json:"lock_mode"`
+	LockRetainUntil     *time.Time      `json:"lock_retain_until"`
+	LegalHoldStatus     string          `json:"legal_hold_status"`
+	ACL                 string          `json:"acl"`
+	ChecksumAlgorithm   string          `json:"checksum_algorithm"`
+	ChecksumValue       string          `json:"checksum_value"`
+}
+
+type pgS3VersionRow struct {
+	Bucket            string          `json:"bucket"`
+	Key               string          `json:"key"`
+	VersionID         string          `json:"version_id"`
+	IsDeleteMarker    bool            `json:"is_delete_marker"`
+	IsLatest          bool            `json:"is_latest"`
+	ETag              string          `json:"etag"`
+	CRC32             string          `json:"crc32"`
+	Size              int64           `json:"size"`
+	ContentType       string          `json:"content_type"`
+	LastModified      time.Time       `json:"last_modified"`
+	Metadata          json.RawMessage `json:"metadata"`
+	StorageClass      string          `json:"storage_class"`
+	Encryption        string          `json:"encryption"`
+	KMSKeyID          string          `json:"kms_key_id"`
+	SSECKeyMD5        string          `json:"ssec_key_md5"`
+	LockMode          string          `json:"lock_mode"`
+	LockRetainUntil   *time.Time      `json:"lock_retain_until"`
+	LegalHoldStatus   string          `json:"legal_hold_status"`
+	ACL               string          `json:"acl"`
+	Tags              json.RawMessage `json:"tags"`
+	ChecksumAlgorithm string          `json:"checksum_algorithm"`
+	ChecksumValue     string          `json:"checksum_value"`
+}
+
+type pgS3UploadRow struct {
+	UploadID string          `json:"upload_id"`
+	Bucket   string          `json:"bucket"`
+	Key      string          `json:"key"`
+	Meta     json.RawMessage `json:"meta"`
+}
+
+type pgS3PartRow struct {
+	UploadID   string `json:"upload_id"`
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+	Size       int64  `json:"size"`
+}
+
+type pgS3Snap struct {
+	Buckets []pgS3BucketRow  `json:"buckets"`
+	Objects []pgS3ObjectRow  `json:"objects"`
+	Versions []pgS3VersionRow `json:"versions"`
+	Uploads []pgS3UploadRow  `json:"uploads"`
+	Parts   []pgS3PartRow    `json:"parts"`
+}
+
+func (s *PostgresS3ObjectMetaStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_s3_buckets`).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresS3ObjectMetaStore) Snapshot(ctx context.Context, w io.Writer) error {
+	var snap pgS3Snap
+
+	// Buckets
+	brows, err := s.pool.Query(ctx, `SELECT name, owner_account_id, region, meta FROM jc_s3_buckets ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("snapshot s3 buckets: %w", err)
+	}
+	defer brows.Close()
+	for brows.Next() {
+		var r pgS3BucketRow
+		var raw []byte
+		if err := brows.Scan(&r.Name, &r.OwnerAccountID, &r.Region, &raw); err != nil {
+			return fmt.Errorf("snapshot s3 bucket scan: %w", err)
+		}
+		r.Meta = json.RawMessage(raw)
+		snap.Buckets = append(snap.Buckets, r)
+	}
+	if err := brows.Err(); err != nil {
+		return err
+	}
+
+	// Objects
+	orows, err := s.pool.Query(ctx, `
+		SELECT bucket, key, etag, crc32, size, content_type, last_modified, metadata,
+		       storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5,
+		       lock_mode, lock_retain_until, legal_hold_status, acl, checksum_algorithm, checksum_value
+		FROM jc_s3_objects ORDER BY bucket, key
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot s3 objects: %w", err)
+	}
+	defer orows.Close()
+	for orows.Next() {
+		var r pgS3ObjectRow
+		var metaRaw, tagsRaw []byte
+		if err := orows.Scan(
+			&r.Bucket, &r.Key, &r.ETag, &r.CRC32, &r.Size, &r.ContentType, &r.LastModified,
+			&metaRaw, &r.StorageClass, &r.VersionID, &tagsRaw, &r.Encryption, &r.KMSKeyID,
+			&r.SSECKeyMD5, &r.LockMode, &r.LockRetainUntil, &r.LegalHoldStatus, &r.ACL,
+			&r.ChecksumAlgorithm, &r.ChecksumValue,
+		); err != nil {
+			return fmt.Errorf("snapshot s3 object scan: %w", err)
+		}
+		r.Metadata = json.RawMessage(metaRaw)
+		r.Tags = json.RawMessage(tagsRaw)
+		snap.Objects = append(snap.Objects, r)
+	}
+	if err := orows.Err(); err != nil {
+		return err
+	}
+
+	// Versions
+	vrows, err := s.pool.Query(ctx, `
+		SELECT bucket, key, version_id, is_delete_marker, is_latest, etag, crc32, size,
+		       content_type, last_modified, metadata, storage_class, encryption, kms_key_id,
+		       ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, tags,
+		       checksum_algorithm, checksum_value
+		FROM jc_s3_object_versions ORDER BY bucket, key, last_modified DESC
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot s3 versions: %w", err)
+	}
+	defer vrows.Close()
+	for vrows.Next() {
+		var r pgS3VersionRow
+		var metaRaw, tagsRaw []byte
+		if err := vrows.Scan(
+			&r.Bucket, &r.Key, &r.VersionID, &r.IsDeleteMarker, &r.IsLatest,
+			&r.ETag, &r.CRC32, &r.Size, &r.ContentType, &r.LastModified,
+			&metaRaw, &r.StorageClass, &r.Encryption, &r.KMSKeyID, &r.SSECKeyMD5,
+			&r.LockMode, &r.LockRetainUntil, &r.LegalHoldStatus, &r.ACL, &tagsRaw,
+			&r.ChecksumAlgorithm, &r.ChecksumValue,
+		); err != nil {
+			return fmt.Errorf("snapshot s3 version scan: %w", err)
+		}
+		r.Metadata = json.RawMessage(metaRaw)
+		r.Tags = json.RawMessage(tagsRaw)
+		snap.Versions = append(snap.Versions, r)
+	}
+	if err := vrows.Err(); err != nil {
+		return err
+	}
+
+	// Multipart uploads
+	urows, err := s.pool.Query(ctx, `SELECT upload_id, bucket, key, meta FROM jc_s3_multipart_uploads ORDER BY upload_id`)
+	if err != nil {
+		return fmt.Errorf("snapshot s3 uploads: %w", err)
+	}
+	defer urows.Close()
+	for urows.Next() {
+		var r pgS3UploadRow
+		var raw []byte
+		if err := urows.Scan(&r.UploadID, &r.Bucket, &r.Key, &raw); err != nil {
+			return fmt.Errorf("snapshot s3 upload scan: %w", err)
+		}
+		r.Meta = json.RawMessage(raw)
+		snap.Uploads = append(snap.Uploads, r)
+	}
+	if err := urows.Err(); err != nil {
+		return err
+	}
+
+	// Parts
+	prows, err := s.pool.Query(ctx, `SELECT upload_id, part_number, etag, size FROM jc_s3_multipart_parts ORDER BY upload_id, part_number`)
+	if err != nil {
+		return fmt.Errorf("snapshot s3 parts: %w", err)
+	}
+	defer prows.Close()
+	for prows.Next() {
+		var r pgS3PartRow
+		if err := prows.Scan(&r.UploadID, &r.PartNumber, &r.ETag, &r.Size); err != nil {
+			return fmt.Errorf("snapshot s3 part scan: %w", err)
+		}
+		snap.Parts = append(snap.Parts, r)
+	}
+	if err := prows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(snap)
+}
+
+func (s *PostgresS3ObjectMetaStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgS3Snap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("restore s3 begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for _, stmt := range []string{
+		`DELETE FROM jc_s3_multipart_parts`,
+		`DELETE FROM jc_s3_multipart_uploads`,
+		`DELETE FROM jc_s3_object_versions`,
+		`DELETE FROM jc_s3_objects`,
+		`DELETE FROM jc_s3_buckets`,
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("restore s3 truncate (%s): %w", stmt, err)
+		}
+	}
+
+	for _, b := range snap.Buckets {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_s3_buckets (name, owner_account_id, region, meta) VALUES ($1,$2,$3,$4)
+		`, b.Name, b.OwnerAccountID, b.Region, json.RawMessage(b.Meta)); err != nil {
+			return fmt.Errorf("restore s3 insert bucket: %w", err)
+		}
+	}
+
+	for _, o := range snap.Objects {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_s3_objects
+				(bucket, key, etag, crc32, size, content_type, last_modified, metadata,
+				 storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5,
+				 lock_mode, lock_retain_until, legal_hold_status, acl, checksum_algorithm, checksum_value)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		`, o.Bucket, o.Key, o.ETag, o.CRC32, o.Size, o.ContentType, o.LastModified,
+			json.RawMessage(o.Metadata), o.StorageClass, o.VersionID,
+			json.RawMessage(o.Tags), o.Encryption, o.KMSKeyID, o.SSECKeyMD5,
+			o.LockMode, o.LockRetainUntil, o.LegalHoldStatus, o.ACL,
+			o.ChecksumAlgorithm, o.ChecksumValue,
+		); err != nil {
+			return fmt.Errorf("restore s3 insert object: %w", err)
+		}
+	}
+
+	for _, v := range snap.Versions {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_s3_object_versions
+				(bucket, key, version_id, is_delete_marker, is_latest, etag, crc32, size,
+				 content_type, last_modified, metadata, storage_class, encryption, kms_key_id,
+				 ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, tags,
+				 checksum_algorithm, checksum_value)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+		`, v.Bucket, v.Key, v.VersionID, v.IsDeleteMarker, v.IsLatest,
+			v.ETag, v.CRC32, v.Size, v.ContentType, v.LastModified,
+			json.RawMessage(v.Metadata), v.StorageClass, v.Encryption, v.KMSKeyID, v.SSECKeyMD5,
+			v.LockMode, v.LockRetainUntil, v.LegalHoldStatus, v.ACL, json.RawMessage(v.Tags),
+			v.ChecksumAlgorithm, v.ChecksumValue,
+		); err != nil {
+			return fmt.Errorf("restore s3 insert version: %w", err)
+		}
+	}
+
+	for _, u := range snap.Uploads {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_s3_multipart_uploads (upload_id, bucket, key, meta) VALUES ($1,$2,$3,$4)
+		`, u.UploadID, u.Bucket, u.Key, json.RawMessage(u.Meta)); err != nil {
+			return fmt.Errorf("restore s3 insert upload: %w", err)
+		}
+	}
+
+	for _, p := range snap.Parts {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_s3_multipart_parts (upload_id, part_number, etag, size) VALUES ($1,$2,$3,$4)
+		`, p.UploadID, p.PartNumber, p.ETag, p.Size); err != nil {
+			return fmt.Errorf("restore s3 insert part: %w", err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }

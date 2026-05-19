@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -332,4 +333,115 @@ func secretMeta(e SecretEntry) map[string]any {
 func isPgUnique(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ─── Snapshotter ──────────────────────────────────────────────────────────────
+
+type pgSMSnap struct {
+	Secrets  []pgSMSecretRow  `json:"secrets"`
+	Versions []pgSMVersionRow `json:"versions"`
+}
+
+type pgSMSecretRow struct {
+	AccountID  string     `json:"account_id"`
+	Region     string     `json:"region"`
+	SecretID   string     `json:"secret_id"`
+	Name       string     `json:"name"`
+	SecretData []byte     `json:"secret_data"`
+	DeletedAt  *time.Time `json:"deleted_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type pgSMVersionRow struct {
+	AccountID    string    `json:"account_id"`
+	Region       string    `json:"region"`
+	SecretID     string    `json:"secret_id"`
+	VersionID    string    `json:"version_id"`
+	SecretBinary []byte    `json:"secret_binary"`
+	IsBinary     bool      `json:"is_binary"`
+	Stages       []string  `json:"stages"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (s *PostgresSecretStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_sm_secrets`).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresSecretStore) Snapshot(ctx context.Context, w io.Writer) error {
+	srows, err := s.pool.Query(ctx, `SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at FROM jc_sm_secrets ORDER BY account_id, region, secret_id`)
+	if err != nil {
+		return fmt.Errorf("sm snapshot secrets: %w", err)
+	}
+	defer srows.Close()
+	var secrets []pgSMSecretRow
+	for srows.Next() {
+		var r pgSMSecretRow
+		if err := srows.Scan(&r.AccountID, &r.Region, &r.SecretID, &r.Name, &r.SecretData, &r.DeletedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return err
+		}
+		secrets = append(secrets, r)
+	}
+	if err := srows.Err(); err != nil {
+		return err
+	}
+
+	vrows, err := s.pool.Query(ctx, `SELECT account_id, region, secret_id, version_id, secret_binary, is_binary, stages, created_at FROM jc_sm_versions ORDER BY secret_id, created_at`)
+	if err != nil {
+		return fmt.Errorf("sm snapshot versions: %w", err)
+	}
+	defer vrows.Close()
+	var versions []pgSMVersionRow
+	for vrows.Next() {
+		var r pgSMVersionRow
+		if err := vrows.Scan(&r.AccountID, &r.Region, &r.SecretID, &r.VersionID, &r.SecretBinary, &r.IsBinary, &r.Stages, &r.CreatedAt); err != nil {
+			return err
+		}
+		versions = append(versions, r)
+	}
+	if err := vrows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(pgSMSnap{Secrets: secrets, Versions: versions})
+}
+
+func (s *PostgresSecretStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgSMSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return fmt.Errorf("sm restore decode: %w", err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("sm restore begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sm_versions`); err != nil {
+		return fmt.Errorf("sm restore delete versions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sm_secrets`); err != nil {
+		return fmt.Errorf("sm restore delete secrets: %w", err)
+	}
+	for _, sec := range snap.Secrets {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_sm_secrets (account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			sec.AccountID, sec.Region, sec.SecretID, sec.Name, json.RawMessage(sec.SecretData), sec.DeletedAt, sec.CreatedAt, sec.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("sm restore insert secret %s: %w", sec.SecretID, err)
+		}
+	}
+	for _, v := range snap.Versions {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_sm_versions (account_id, region, secret_id, version_id, secret_binary, is_binary, stages, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			v.AccountID, v.Region, v.SecretID, v.VersionID, v.SecretBinary, v.IsBinary, v.Stages, v.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("sm restore insert version %s: %w", v.VersionID, err)
+		}
+	}
+	return tx.Commit(ctx)
 }

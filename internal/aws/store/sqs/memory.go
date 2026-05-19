@@ -3,7 +3,9 @@ package sqs
 import (
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"sync"
 	"time"
@@ -287,4 +289,75 @@ func (s *MemoryMessageStore) Reset() {
 
 func newHandle() string {
 	return fmt.Sprintf("%x", rand.Int63())
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type sqsDedupEntrySnap struct {
+	Expiry    time.Time `json:"expiry"`
+	MessageID string    `json:"message_id"`
+}
+
+type sqsQueueDataSnap struct {
+	Messages      []*SQSMessage `json:"messages"`
+	RetentionSecs int           `json:"retention_secs"`
+}
+
+type sqsMemSnap struct {
+	Queues     map[string]*sqsQueueDataSnap `json:"queues"`
+	Dedup      map[string]sqsDedupEntrySnap `json:"dedup"`
+	SeqCounter map[string]int64             `json:"seq_counter"`
+}
+
+func (s *MemoryMessageStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, q := range s.queues {
+		if len(q.messages) > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *MemoryMessageStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dedup := make(map[string]sqsDedupEntrySnap, len(s.dedup))
+	for k, v := range s.dedup {
+		dedup[k] = sqsDedupEntrySnap{Expiry: v.expiry, MessageID: v.messageID}
+	}
+	queues := make(map[string]*sqsQueueDataSnap, len(s.queues))
+	for k, v := range s.queues {
+		queues[k] = &sqsQueueDataSnap{Messages: v.messages, RetentionSecs: v.retentionSecs}
+	}
+	return json.NewEncoder(w).Encode(sqsMemSnap{Queues: queues, Dedup: dedup, SeqCounter: s.seqCounter})
+}
+
+func (s *MemoryMessageStore) Restore(_ context.Context, r io.Reader) error {
+	var snap sqsMemSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	queues := make(map[string]*queueData, len(snap.Queues))
+	for k, v := range snap.Queues {
+		if v == nil {
+			continue
+		}
+		queues[k] = &queueData{messages: v.Messages, retentionSecs: v.RetentionSecs}
+	}
+	s.queues = queues
+	dedup := make(map[string]dedupEntry, len(snap.Dedup))
+	for k, v := range snap.Dedup {
+		dedup[k] = dedupEntry{expiry: v.Expiry, messageID: v.MessageID}
+	}
+	s.dedup = dedup
+	if snap.SeqCounter != nil {
+		s.seqCounter = snap.SeqCounter
+	} else {
+		s.seqCounter = make(map[string]int64)
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"reflect"
 	"sort"
 	"strings"
@@ -874,4 +875,59 @@ func extractDynamoString(v any) any {
 		}
 	}
 	return v
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type dynamoMemSnap struct {
+	Schemas map[string]TableSchema                    `json:"schemas"`
+	Tables  map[string]map[string]map[string]any      `json:"tables"`
+	GsiIdx  map[string]map[string]map[string][]string `json:"gsi_idx"`
+}
+
+func (s *MemoryDynamoDBItemStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.schemas) == 0, nil
+}
+
+func (s *MemoryDynamoDBItemStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return json.NewEncoder(w).Encode(dynamoMemSnap{
+		Schemas: s.schemas,
+		Tables:  s.tables,
+		GsiIdx:  s.gsiIdx,
+	})
+}
+
+func (s *MemoryDynamoDBItemStore) Restore(_ context.Context, r io.Reader) error {
+	var snap dynamoMemSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snap.Schemas == nil {
+		snap.Schemas = make(map[string]TableSchema)
+	}
+	if snap.Tables == nil {
+		snap.Tables = make(map[string]map[string]map[string]any)
+	}
+	if snap.GsiIdx == nil {
+		snap.GsiIdx = make(map[string]map[string]map[string][]string)
+	}
+	s.schemas = snap.Schemas
+	s.tables = snap.Tables
+	s.gsiIdx = snap.GsiIdx
+	// Rebuild throttle buckets from restored schemas.
+	s.throttles = make(map[string]*tokenBucket)
+	for _, schema := range s.schemas {
+		if schema.BillingMode == "PAY_PER_REQUEST" {
+			s.throttles[schema.TableName] = newTokenBucket(40000, 40000.0)
+		} else if schema.WCU > 0 {
+			s.throttles[schema.TableName] = newTokenBucket(int(schema.WCU), float64(schema.WCU))
+		}
+	}
+	return nil
 }

@@ -1,7 +1,10 @@
 package dynamodb
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 
 	"jaiscloud/internal/aws/store/bundle"
 )
@@ -129,3 +132,69 @@ func (s *BundledDynamoDBItemStore) DeleteGSI(ctx context.Context, account, regio
 }
 
 func (s *BundledDynamoDBItemStore) Reset() { s.b.Reset() }
+
+// ─── Snapshotter ──────────────────────────────────────────────────────────────
+
+type bundledDynamoScopeSnap struct {
+	Account string          `json:"account"`
+	Region  string          `json:"region"`
+	Data    json.RawMessage `json:"data"`
+}
+
+func (s *BundledDynamoDBItemStore) IsEmpty(_ context.Context) (bool, error) {
+	empty := true
+	s.b.Iter(func(_, _ string, st *MemoryDynamoDBItemStore) {
+		if !empty {
+			return
+		}
+		ok, _ := st.IsEmpty(context.Background())
+		if !ok {
+			empty = false
+		}
+	})
+	return empty, nil
+}
+
+func (s *BundledDynamoDBItemStore) Snapshot(_ context.Context, w io.Writer) error {
+	scopes := make([]bundledDynamoScopeSnap, 0)
+	var iterErr error
+	s.b.Iter(func(account, region string, st *MemoryDynamoDBItemStore) {
+		if iterErr != nil {
+			return
+		}
+		var buf bytes.Buffer
+		if err := st.Snapshot(context.Background(), &buf); err != nil {
+			iterErr = err
+			return
+		}
+		scopes = append(scopes, bundledDynamoScopeSnap{
+			Account: account,
+			Region:  region,
+			Data:    json.RawMessage(buf.Bytes()),
+		})
+	})
+	if iterErr != nil {
+		return iterErr
+	}
+	return json.NewEncoder(w).Encode(map[string]any{"kind": "local", "scopes": scopes})
+}
+
+func (s *BundledDynamoDBItemStore) Restore(_ context.Context, r io.Reader) error {
+	var envelope struct {
+		Scopes []bundledDynamoScopeSnap `json:"scopes"`
+	}
+	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
+		return err
+	}
+	s.b.ResetAndDiscard()
+	for _, scope := range envelope.Scopes {
+		st, err := s.b.Get(scope.Account, scope.Region)
+		if err != nil {
+			return err
+		}
+		if err := st.Restore(context.Background(), bytes.NewReader(scope.Data)); err != nil {
+			return err
+		}
+	}
+	return nil
+}

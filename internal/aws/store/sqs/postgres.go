@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -335,4 +336,148 @@ func (s *PostgresSQSMessageStore) ResetAccount(account string) {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages WHERE account_id=$1`, account)
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_dedup    WHERE account_id=$1`, account)
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type pgSQSMsgRow struct {
+	AccountID       string     `json:"account_id"`
+	Region          string     `json:"region"`
+	QueueURL        string     `json:"queue_url"`
+	ID              string     `json:"id"`
+	ReceiptHandle   string     `json:"receipt_handle"`
+	Body            string     `json:"body"`
+	MD5OfBody       string     `json:"md5_of_body"`
+	MsgAttributes   []byte     `json:"msg_attributes"`
+	GroupID         string     `json:"group_id"`
+	DedupID         string     `json:"dedup_id"`
+	SequenceNumber  string     `json:"sequence_number"`
+	VisibleAt       *time.Time `json:"visible_at"`
+	SentAt          time.Time  `json:"sent_at"`
+	DelayUntil      *time.Time `json:"delay_until"`
+	ReceiveCount    int        `json:"receive_count"`
+	FirstReceivedAt *time.Time `json:"first_received_at"`
+}
+
+type pgSQSDedupRow struct {
+	AccountID string    `json:"account_id"`
+	Region    string    `json:"region"`
+	DedupKey  string    `json:"dedup_key"`
+	MessageID string    `json:"message_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type pgSQSSnap struct {
+	Messages []pgSQSMsgRow   `json:"messages"`
+	Dedup    []pgSQSDedupRow `json:"dedup"`
+}
+
+func (s *PostgresSQSMessageStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_sqs_messages`).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresSQSMessageStore) Snapshot(ctx context.Context, w io.Writer) error {
+	var snap pgSQSSnap
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT account_id, region, queue_url, id, receipt_handle, body, md5_of_body,
+		       msg_attributes, group_id, dedup_id, sequence_number,
+		       visible_at, sent_at, delay_until, receive_count, first_received_at
+		FROM jc_sqs_messages
+		ORDER BY account_id, region, queue_url, sent_at
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot sqs_messages query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m pgSQSMsgRow
+		if err := rows.Scan(
+			&m.AccountID, &m.Region, &m.QueueURL, &m.ID, &m.ReceiptHandle,
+			&m.Body, &m.MD5OfBody, &m.MsgAttributes, &m.GroupID, &m.DedupID,
+			&m.SequenceNumber, &m.VisibleAt, &m.SentAt, &m.DelayUntil,
+			&m.ReceiveCount, &m.FirstReceivedAt,
+		); err != nil {
+			return fmt.Errorf("snapshot sqs_messages scan: %w", err)
+		}
+		snap.Messages = append(snap.Messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	drows, err := s.pool.Query(ctx, `
+		SELECT account_id, region, dedup_key, message_id, expires_at
+		FROM jc_sqs_dedup
+		ORDER BY account_id, region, dedup_key
+	`)
+	if err != nil {
+		return fmt.Errorf("snapshot sqs_dedup query: %w", err)
+	}
+	defer drows.Close()
+	for drows.Next() {
+		var d pgSQSDedupRow
+		if err := drows.Scan(&d.AccountID, &d.Region, &d.DedupKey, &d.MessageID, &d.ExpiresAt); err != nil {
+			return fmt.Errorf("snapshot sqs_dedup scan: %w", err)
+		}
+		snap.Dedup = append(snap.Dedup, d)
+	}
+	if err := drows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(snap)
+}
+
+func (s *PostgresSQSMessageStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgSQSSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("restore sqs begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sqs_messages`); err != nil {
+		return fmt.Errorf("restore sqs truncate messages: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sqs_dedup`); err != nil {
+		return fmt.Errorf("restore sqs truncate dedup: %w", err)
+	}
+
+	for _, m := range snap.Messages {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_sqs_messages
+				(account_id, region, queue_url, id, receipt_handle, body, md5_of_body,
+				 msg_attributes, group_id, dedup_id, sequence_number,
+				 visible_at, sent_at, delay_until, receive_count, first_received_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		`, m.AccountID, m.Region, m.QueueURL, m.ID, m.ReceiptHandle,
+			m.Body, m.MD5OfBody, json.RawMessage(m.MsgAttributes),
+			m.GroupID, m.DedupID, m.SequenceNumber,
+			m.VisibleAt, m.SentAt, m.DelayUntil, m.ReceiveCount, m.FirstReceivedAt,
+		); err != nil {
+			return fmt.Errorf("restore sqs insert message: %w", err)
+		}
+	}
+
+	for _, d := range snap.Dedup {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_sqs_dedup (account_id, region, dedup_key, message_id, expires_at)
+			VALUES ($1,$2,$3,$4,$5)
+		`, d.AccountID, d.Region, d.DedupKey, d.MessageID, d.ExpiresAt,
+		); err != nil {
+			return fmt.Errorf("restore sqs insert dedup: %w", err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }

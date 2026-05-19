@@ -977,6 +977,16 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	if snap, ok := s.resources.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("resources", snap)
 	}
+	if snap, ok := s.messages.(admin.Snapshotter); ok {
+		h.RegisterSnapshotter("sqs_messages", snap)
+	}
+	if snap, ok := s.dynamo.(admin.Snapshotter); ok {
+		h.RegisterSnapshotter("dynamodb_items", snap)
+	}
+	if snap, ok := s.s3Meta.(admin.Snapshotter); ok {
+		h.RegisterSnapshotter("s3_objects", snap)
+	}
+	h.RegisterSnapshotter("dynamodb_streams", streams)
 	if snap, ok := keyStore.(admin.Snapshotter); ok {
 		h.RegisterSnapshotter("keys", snap)
 	}

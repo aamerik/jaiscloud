@@ -2,7 +2,10 @@
 package stream
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -149,4 +152,44 @@ func (s *MemoryStreamStore) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.streams = make(map[string]*tableStream)
+}
+
+// ─── Snapshotter ─────────────────────────────────────────────────────────────
+
+type streamSnap struct {
+	Info    StreamInfo `json:"info"`
+	Records []Record   `json:"records"`
+	NextSeq int        `json:"next_seq"`
+}
+
+func (s *MemoryStreamStore) IsEmpty(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.streams) == 0, nil
+}
+
+func (s *MemoryStreamStore) Snapshot(_ context.Context, w io.Writer) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snaps := make(map[string]streamSnap, len(s.streams))
+	for k, ts := range s.streams {
+		snaps[k] = streamSnap{Info: ts.info, Records: ts.records, NextSeq: ts.nextSeq}
+	}
+	return json.NewEncoder(w).Encode(snaps)
+}
+
+func (s *MemoryStreamStore) Restore(_ context.Context, r io.Reader) error {
+	var snaps map[string]streamSnap
+	if err := json.NewDecoder(r).Decode(&snaps); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	streams := make(map[string]*tableStream, len(snaps))
+	for k, v := range snaps {
+		ts := v
+		streams[k] = &tableStream{info: ts.Info, records: ts.Records, nextSeq: ts.NextSeq}
+	}
+	s.streams = streams
+	return nil
 }

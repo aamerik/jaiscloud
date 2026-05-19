@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -386,4 +387,146 @@ func scanKey(row scannable) (KeyEntry, error) {
 func isPgUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ─── Snapshotter ──────────────────────────────────────────────────────────────
+
+type pgKMSSnap struct {
+	Keys    []pgKMSKeyRow   `json:"keys"`
+	Aliases []pgKMSAliasRow `json:"aliases"`
+	Grants  []pgKMSGrantRow `json:"grants"`
+}
+
+type pgKMSKeyRow struct {
+	AccountID   string `json:"account_id"`
+	Region      string `json:"region"`
+	KeyID       string `json:"key_id"`
+	KeyData     []byte `json:"key_data"`
+	KeyMaterial []byte `json:"key_material"`
+	Enabled     bool   `json:"enabled"`
+}
+
+type pgKMSAliasRow struct {
+	AccountID   string `json:"account_id"`
+	Region      string `json:"region"`
+	AliasName   string `json:"alias_name"`
+	TargetKeyID string `json:"target_key_id"`
+}
+
+type pgKMSGrantRow struct {
+	AccountID string `json:"account_id"`
+	Region    string `json:"region"`
+	GrantID   string `json:"grant_id"`
+	KeyID     string `json:"key_id"`
+	GrantData []byte `json:"grant_data"`
+}
+
+func (s *PostgresKeyStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_kms_keys`).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (s *PostgresKeyStore) Snapshot(ctx context.Context, w io.Writer) error {
+	rows, err := s.pool.Query(ctx, `SELECT account_id, region, key_id, key_data, key_material, enabled FROM jc_kms_keys ORDER BY account_id, region, key_id`)
+	if err != nil {
+		return fmt.Errorf("kms snapshot keys: %w", err)
+	}
+	defer rows.Close()
+	var keys []pgKMSKeyRow
+	for rows.Next() {
+		var r pgKMSKeyRow
+		if err := rows.Scan(&r.AccountID, &r.Region, &r.KeyID, &r.KeyData, &r.KeyMaterial, &r.Enabled); err != nil {
+			return err
+		}
+		keys = append(keys, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	arows, err := s.pool.Query(ctx, `SELECT account_id, region, alias_name, target_key_id FROM jc_kms_aliases ORDER BY account_id, region, alias_name`)
+	if err != nil {
+		return fmt.Errorf("kms snapshot aliases: %w", err)
+	}
+	defer arows.Close()
+	var aliases []pgKMSAliasRow
+	for arows.Next() {
+		var r pgKMSAliasRow
+		if err := arows.Scan(&r.AccountID, &r.Region, &r.AliasName, &r.TargetKeyID); err != nil {
+			return err
+		}
+		aliases = append(aliases, r)
+	}
+	if err := arows.Err(); err != nil {
+		return err
+	}
+
+	grows, err := s.pool.Query(ctx, `SELECT account_id, region, grant_id, key_id, grant_data FROM jc_kms_grants ORDER BY account_id, region, grant_id`)
+	if err != nil {
+		return fmt.Errorf("kms snapshot grants: %w", err)
+	}
+	defer grows.Close()
+	var grants []pgKMSGrantRow
+	for grows.Next() {
+		var r pgKMSGrantRow
+		if err := grows.Scan(&r.AccountID, &r.Region, &r.GrantID, &r.KeyID, &r.GrantData); err != nil {
+			return err
+		}
+		grants = append(grants, r)
+	}
+	if err := grows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(pgKMSSnap{Keys: keys, Aliases: aliases, Grants: grants})
+}
+
+func (s *PostgresKeyStore) Restore(ctx context.Context, r io.Reader) error {
+	var snap pgKMSSnap
+	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+		return fmt.Errorf("kms restore decode: %w", err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("kms restore begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_kms_grants`); err != nil {
+		return fmt.Errorf("kms restore delete grants: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_kms_aliases`); err != nil {
+		return fmt.Errorf("kms restore delete aliases: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_kms_keys`); err != nil {
+		return fmt.Errorf("kms restore delete keys: %w", err)
+	}
+	for _, k := range snap.Keys {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_kms_keys (account_id, region, key_id, key_data, key_material, enabled) VALUES ($1,$2,$3,$4,$5,$6)`,
+			k.AccountID, k.Region, k.KeyID, json.RawMessage(k.KeyData), k.KeyMaterial, k.Enabled,
+		); err != nil {
+			return fmt.Errorf("kms restore insert key %s: %w", k.KeyID, err)
+		}
+	}
+	for _, a := range snap.Aliases {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_kms_aliases (account_id, region, alias_name, target_key_id) VALUES ($1,$2,$3,$4)`,
+			a.AccountID, a.Region, a.AliasName, a.TargetKeyID,
+		); err != nil {
+			return fmt.Errorf("kms restore insert alias %s: %w", a.AliasName, err)
+		}
+	}
+	for _, g := range snap.Grants {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO jc_kms_grants (account_id, region, grant_id, key_id, grant_data) VALUES ($1,$2,$3,$4,$5)`,
+			g.AccountID, g.Region, g.GrantID, g.KeyID, json.RawMessage(g.GrantData),
+		); err != nil {
+			return fmt.Errorf("kms restore insert grant %s: %w", g.GrantID, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
