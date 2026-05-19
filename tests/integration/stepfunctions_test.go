@@ -249,7 +249,7 @@ func TestSFN_ExecutionLifecycle_LiteMode_InstantSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
 	assert.Equal(t, input, *descOut.Input)
-	assert.JSONEq(t, input, aws.ToString(descOut.Output)) // passthrough (JSON equality in full mode)
+	assert.JSONEq(t, input, aws.ToString(descOut.Output)) // passthrough (JSON equality in persistent mode)
 	assert.NotNil(t, descOut.StopDate)
 }
 

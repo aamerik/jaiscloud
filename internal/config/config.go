@@ -440,10 +440,10 @@ func Load() (*Config, error) {
 		OIDCIssuers:         nil, // populated below from oidc_issuers
 	}
 
-	// CI auto-detection: default to memory mode when running in CI.
-	if os.Getenv("CI") == "true" && cfg.Mode == "" {
-		slog.Warn("CI detected; defaulting to --mode memory (override with --mode persistent)")
-		cfg.Mode = ModeMemory
+	// DSN must not be set for memory mode.
+	// Detect via the env var since viper cannot distinguish between default from explicit for flags.
+	if cfg.Mode == ModeMemory && cfg.DSN != "" && os.Getenv("JAISCLOUD_DSN") != string(ModeMemory) {
+		return nil, fmt.Errorf("JAISCLOUD_DSN is set but mode is memory: either unset JAISCLOUD_DSN or set mode to persistent")
 	}
 
 	if cfg.Mode != ModeMemory && cfg.Mode != ModePersistent {

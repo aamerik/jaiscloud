@@ -688,7 +688,7 @@ func TestSFN_SendTaskSuccess_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	// In lite mode (no engine), SendTaskSuccess is a no-op and returns success.
-	// In full mode with a fake token, returns TaskDoesNotExist.
+	// In persistent mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskSuccess(ctx, &awssfn.SendTaskSuccessInput{
 		TaskToken: aws.String("fake-token-success"),
 		Output:    aws.String(`{}`),
@@ -705,7 +705,7 @@ func TestSFN_SendTaskFailure_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	// In lite mode (no engine), SendTaskFailure is a no-op and returns success.
-	// In full mode with a fake token, returns TaskDoesNotExist.
+	// In persistent mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskFailure(ctx, &awssfn.SendTaskFailureInput{
 		TaskToken: aws.String("fake-token-failure"),
 		Error:     aws.String("TestError"),

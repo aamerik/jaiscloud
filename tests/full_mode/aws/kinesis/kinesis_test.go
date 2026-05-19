@@ -102,7 +102,7 @@ func TestE2E_PutAndGetRecord(t *testing.T) {
 
 	waitForStreamActive(t, client, name)
 
-	payload := []byte("hello kinesis full mode")
+	payload := []byte("hello kinesis persistent mode")
 	putOut, err := client.PutRecord(ctx, &awskinesis.PutRecordInput{
 		StreamName:   aws.String(name),
 		PartitionKey: aws.String("pk1"),
