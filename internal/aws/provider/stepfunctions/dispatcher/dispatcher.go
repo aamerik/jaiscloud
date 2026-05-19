@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -29,7 +30,7 @@ func New(reg *provider.Registry, cfg *config.Config) *RegistryDispatcher {
 		cloud:      model.CloudAWS,
 		region:     cfg.Region,
 		accountID:  cfg.AccountID,
-		resourceID: config.AWSResourceID(cfg.Region, cfg.AccountID),
+		resourceID: arn.ResourceID(cfg.Region, cfg.AccountID),
 	}
 }
 

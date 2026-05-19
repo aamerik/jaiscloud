@@ -28,4 +28,14 @@ type CloudAdapter interface {
 	// Each cloud adapter owns this mapping for its own wire protocol.
 	// Returns the service name unchanged if no mapping is found.
 	ServiceToProvider(service string) string
+
+	// EnrichRequest extracts per-request identity (region, accountID, accessKey) from r.
+	// defaultRegion and defaultAccountID are the config-level fallbacks used when the
+	// request carries no credential (e.g. anonymous access or stub clouds).
+	EnrichRequest(r *http.Request, defaultRegion, defaultAccountID string) (region, accountID, accessKey string)
+
+	// ResourceIDFor returns a function that formats cloud-specific resource identifiers
+	// (ARNs for AWS, resource paths for Azure/GCP) for the given region and account.
+	// Inject the returned function into NormalizedRequest.ResourceID at the gateway.
+	ResourceIDFor(region, accountID string) func(resourceType, name string) string
 }

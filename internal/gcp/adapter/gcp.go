@@ -34,3 +34,15 @@ func (a *GCPAdapter) DetectAndDecode(_ *http.Request, _ []byte) (*model.Normaliz
 		501,
 	)
 }
+
+// EnrichRequest implements adapter.CloudAdapter.
+// Stub: returns the config-level defaults unchanged until GCP identity parsing is implemented.
+func (a *GCPAdapter) EnrichRequest(_ *http.Request, defaultRegion, defaultAccountID string) (region, accountID, accessKey string) {
+	return defaultRegion, defaultAccountID, ""
+}
+
+// ResourceIDFor implements adapter.CloudAdapter.
+// Stub: returns name unchanged until GCP resource name formatting is implemented.
+func (a *GCPAdapter) ResourceIDFor(_, _ string) func(resourceType, name string) string {
+	return func(_, name string) string { return name }
+}

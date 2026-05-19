@@ -18,29 +18,20 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/persistence/snapshot"
 	"jaiscloud/internal/persistence/version"
+	"jaiscloud/internal/snapshottypes"
 )
 
-// Resetter is implemented by any store that can wipe its state.
-type Resetter interface {
-	Reset()
-}
+// Resetter is an alias for the canonical snapshottypes.Resetter.
+type Resetter = snapshottypes.Resetter
+
+// Snapshotter is an alias for the canonical snapshottypes.Snapshotter.
+type Snapshotter = snapshottypes.Snapshotter
 
 // ScopedResetter is implemented by stores that support per-account/region wipes.
 type ScopedResetter interface {
 	Resetter
 	ResetScope(account, region string)
 	ResetAccount(account string)
-}
-
-// Snapshotter is implemented by stores that support export/import.
-type Snapshotter interface {
-	// Snapshot writes deterministic JSON state to w. Keys must be sorted.
-	Snapshot(ctx context.Context, w io.Writer) error
-	// Restore reads JSON state from r, replacing the store's contents atomically.
-	Restore(ctx context.Context, r io.Reader) error
-	// IsEmpty returns true when the store holds no externally-visible state.
-	// Must NOT acquire the barrier — it is called inside WriteBegin.
-	IsEmpty(ctx context.Context) (bool, error)
 }
 
 // CloudMismatchError is returned when the snapshot cloud does not match the running binary cloud.

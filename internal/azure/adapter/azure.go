@@ -35,3 +35,15 @@ func (a *AzureAdapter) DetectAndDecode(_ *http.Request, _ []byte) (*model.Normal
 		501,
 	)
 }
+
+// EnrichRequest implements adapter.CloudAdapter.
+// Stub: returns the config-level defaults unchanged until Azure identity parsing is implemented.
+func (a *AzureAdapter) EnrichRequest(_ *http.Request, defaultRegion, defaultAccountID string) (region, accountID, accessKey string) {
+	return defaultRegion, defaultAccountID, ""
+}
+
+// ResourceIDFor implements adapter.CloudAdapter.
+// Stub: returns name unchanged until Azure resource ID formatting is implemented.
+func (a *AzureAdapter) ResourceIDFor(_, _ string) func(resourceType, name string) string {
+	return func(_, name string) string { return name }
+}

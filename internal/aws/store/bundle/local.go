@@ -9,15 +9,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"jaiscloud/internal/snapshottypes"
 )
 
-// Resetter is implemented by stores that know how to wipe their own data
-// in place (preferred) rather than letting the bundle drop the instance.
-// LocalStack semantics: reset() preserves store object identity so that
-// goroutines holding a reference see empty data, not a dangling pointer.
-type Resetter interface {
-	Reset()
-}
+// Resetter is an alias for the canonical snapshottypes.Resetter.
+type Resetter = snapshottypes.Resetter
 
 // twelveDigit is the strict-anchored 12-digit account-ID validator.
 // We intentionally deviate from LocalStack's unanchored \d{12} to avoid

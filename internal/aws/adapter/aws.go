@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"jaiscloud/internal/adapter"
+	"jaiscloud/internal/aws/arn"
+	"jaiscloud/internal/aws/identity"
 	"jaiscloud/internal/model"
 )
 
@@ -69,6 +71,22 @@ func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 		return nil, codec, err
 	}
 	return nr, codec, nil
+}
+
+// EnrichRequest implements adapter.CloudAdapter.
+// Extracts account ID, region, and access key from SigV4/SigV2 credentials.
+func (a *AWSAdapter) EnrichRequest(r *http.Request, defaultRegion, defaultAccountID string) (region, accountID, accessKey string) {
+	ident := identity.FromRequest(r)
+	accountID = ident.AccountID
+	region = identity.NormaliseRegion(ident.Region, defaultRegion)
+	accessKey = ident.AccessKey
+	return
+}
+
+// ResourceIDFor implements adapter.CloudAdapter.
+// Returns an AWS ARN formatter for the given region and account.
+func (a *AWSAdapter) ResourceIDFor(region, accountID string) func(resourceType, name string) string {
+	return arn.ResourceID(region, accountID)
 }
 
 // authPrefix returns only the first 40 chars of the Authorization header for

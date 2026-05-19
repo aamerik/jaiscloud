@@ -23,7 +23,6 @@ import (
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/aws/identity"
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
@@ -265,33 +264,16 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject gateway context — derive account/region from the request credential
-	// (MA-2a: identity enricher per LLD §5.3). For AWS, parse SigV4/SigV2
-	// credentials from the Authorization header or presigned URL params.
-	// Non-AWS clouds (Azure, GCP) fall back to the config-level defaults.
-	accountID := s.cfg.AccountID
-	region := s.cfg.Region
-	accessKey := ""
-	if s.cloudAdapter.Cloud() == model.CloudAWS {
-		ident := identity.FromRequest(r)
-		accountID = ident.AccountID
-		region = identity.NormaliseRegion(ident.Region, s.cfg.Region)
-		accessKey = ident.AccessKey
-	}
+	// Inject gateway context — each cloud adapter extracts identity from the request
+	// and supplies its own resource-ID formatter. The gateway has no cloud-specific logic.
+	region, accountID, accessKey := s.cloudAdapter.EnrichRequest(r, s.cfg.Region, s.cfg.AccountID)
 	nr.Clock = s.cfg.Clock
 	nr.Region = region
 	nr.AccountID = accountID
 	nr.AccessKey = accessKey
 	nr.Port = s.cfg.Port
 	nr.Cloud = s.cloudAdapter.Cloud()
-	switch s.cloudAdapter.Cloud() {
-	case model.CloudAWS:
-		nr.ResourceID = config.AWSResourceID(region, accountID)
-	case model.CloudAzure:
-		nr.ResourceID = config.AzureResourceID(region, accountID)
-	case model.CloudGCP:
-		nr.ResourceID = config.GCPResourceID(accountID)
-	}
+	nr.ResourceID = s.cloudAdapter.ResourceIDFor(region, accountID)
 
 	// Attach labels for Prometheus metrics middleware
 	r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
