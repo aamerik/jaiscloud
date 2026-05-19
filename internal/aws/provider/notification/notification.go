@@ -18,7 +18,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // FunctionInvoker is the narrow interface SNS uses to invoke Lambda functions.

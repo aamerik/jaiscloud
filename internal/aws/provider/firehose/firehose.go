@@ -17,7 +17,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	objectstore "jaiscloud/internal/store/object"
+	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 const rtDeliveryStream = "firehose_delivery_stream"

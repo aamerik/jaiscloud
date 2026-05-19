@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	streamstore "jaiscloud/internal/store/stream"
+	streamstore "jaiscloud/internal/aws/store/stream"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"

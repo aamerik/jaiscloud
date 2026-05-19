@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	awsarn "jaiscloud/internal/aws/arn"
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // MessageAttribute is a simplified SQS message attribute for internal cross-service use.

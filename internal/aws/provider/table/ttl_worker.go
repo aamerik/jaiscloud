@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	dynamostore "jaiscloud/internal/store/aws/dynamodb"
-	streamstore "jaiscloud/internal/store/stream"
+	dynamostore "jaiscloud/internal/aws/store/dynamodb"
+	streamstore "jaiscloud/internal/aws/store/stream"
 
 	"jaiscloud/internal/store"
 )

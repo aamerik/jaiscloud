@@ -11,7 +11,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/aws/provider/queue"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 func setup(t *testing.T) (*queue.QueueProvider, store.ResourceStore, sqsstore.SQSMessageStore) {

@@ -2,7 +2,7 @@
 // The canonical interface and types are defined in internal/store/object.
 package s3
 
-import objectstore "jaiscloud/internal/store/object"
+import objectstore "jaiscloud/internal/aws/store/object"
 
 // Type aliases so memory.go and postgres.go use the canonical types without change.
 type ObjectMeta = objectstore.ObjectMeta

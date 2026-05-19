@@ -8,7 +8,7 @@ import (
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // messageMoveTask tracks a single in-progress or completed move task.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"jaiscloud/internal/store/bundle"
+	"jaiscloud/internal/aws/store/bundle"
 )
 
 // BundledSQSStore wraps LocalBundle[MemoryMessageStore] to provide per-(account,region)

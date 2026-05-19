@@ -16,7 +16,7 @@ import (
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	ecrstore "jaiscloud/internal/store/aws/ecr"
+	ecrstore "jaiscloud/internal/aws/store/ecr"
 )
 
 // validManifestMediaTypes are the only accepted mediaType values for PutImage.

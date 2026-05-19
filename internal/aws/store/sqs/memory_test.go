@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 const testQueue = "http://localhost:4566/000000000000/test-queue"

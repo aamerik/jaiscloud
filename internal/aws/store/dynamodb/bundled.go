@@ -3,7 +3,7 @@ package dynamodb
 import (
 	"context"
 
-	"jaiscloud/internal/store/bundle"
+	"jaiscloud/internal/aws/store/bundle"
 )
 
 // BundledDynamoDBItemStore wraps LocalBundle[MemoryDynamoDBItemStore] to provide

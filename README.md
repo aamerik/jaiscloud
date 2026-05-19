@@ -5,7 +5,7 @@
 </p>
 
 > **Early Development Notice**
-> JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/raj-jaiswal/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
+> JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
 
 **⚡ JaisCloud — Fast, local, realistic cloud emulation for AI-driven development. Runs anywhere: laptop, CI, or Kubernetes.**
 
@@ -209,7 +209,7 @@ curl -X POST "http://localhost:4566/_jaiscloud/reset?account=111111111111&region
 ### Homebrew (macOS)
 
 ```bash
-brew tap raj-jaiswal/tap
+brew tap rjaiswal/tap
 brew install jaiscloud-aws
 jaiscloud-aws start
 ```
@@ -217,14 +217,14 @@ jaiscloud-aws start
 ### Scoop (Windows)
 
 ```powershell
-scoop bucket add jaiscloud https://github.com/raj-jaiswal/scoop-jaiscloud
+scoop bucket add jaiscloud https://github.com/jaisrajms/scoop-jaiscloud
 scoop install jaiscloud-aws
 jaiscloud-aws start
 ```
 
 ### Download binary (all platforms — no Go required)
 
-Pre-built binaries are published on the [GitHub Releases page](https://github.com/raj-jaiswal/jaiscloud/releases).
+Pre-built binaries are published on the [GitHub Releases page](https://github.com/jaisrajms/jaiscloud/releases).
 
 | Platform | Download |
 |----------|----------|
@@ -237,13 +237,13 @@ Pre-built binaries are published on the [GitHub Releases page](https://github.co
 
 ```bash
 # macOS arm64
-curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
 tar -xzf jaiscloud-aws_darwin_arm64.tar.gz
 sudo mv jaiscloud-aws /usr/local/bin/
 jaiscloud-aws start
 
 # Linux amd64 (Debian/Ubuntu)
-curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
 sudo dpkg -i jaiscloud-aws_linux_amd64.deb
 jaiscloud-aws start
 ```
@@ -253,7 +253,7 @@ A `checksums.txt` is published alongside every release for verification.
 ### Docker
 
 ```bash
-docker run -p 4566:4566 ghcr.io/raj-jaiswal/jaiscloud-aws:latest
+docker run -p 4566:4566 ghcr.io/jaisrajms/jaiscloud-aws:latest
 ```
 
 ### Docker Compose (with Postgres persistence)

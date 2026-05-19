@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
-	sqsstore "jaiscloud/internal/store/aws/sqs"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // Waiters holds per-queue channels for long-polling notification.

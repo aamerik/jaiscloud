@@ -92,7 +92,7 @@ nfpms:
     ids: [jaiscloud-aws]
     package_name: jaiscloud-aws
     vendor: JaisCloud
-    homepage: https://github.com/jaislocal/jaiscloud
+    homepage: https://github.com/jaisrajms/jaiscloud
     maintainer: "Raj Jaiswal jaisraj@gmail.com"
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
@@ -107,11 +107,11 @@ homebrew_casks:
   - ids: [aws]
     name: jaiscloud-aws
     repository:
-      owner: raj-jaiswal
+      owner: rjaiswal
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: https://github.com/jaislocal/jaiscloud
+    homepage: https://github.com/jaisrajms/jaiscloud
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
 
@@ -121,10 +121,10 @@ scoops:
   - ids: [aws]
     name: jaiscloud-aws
     repository:
-      owner: raj-jaiswal
+      owner: rjaiswal
       name: scoop-jaiscloud
       token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
-    homepage: https://github.com/jaislocal/jaiscloud
+    homepage: https://github.com/jaisrajms/jaiscloud
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
 
@@ -143,7 +143,7 @@ changelog:
 
 release:
   github:
-    owner: raj-jaiswal
+    owner: rjaiswal
     name: jaiscloud
   draft: false
   prerelease: auto

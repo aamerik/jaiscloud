@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	objectstore "jaiscloud/internal/store/object"
+	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 func setupBucketWithObjects(t *testing.T, store objectstore.ObjectMetaStore, bucket string, keys []string) {

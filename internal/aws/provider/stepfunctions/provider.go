@@ -14,7 +14,7 @@ import (
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 var nameRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)

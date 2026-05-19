@@ -14,7 +14,7 @@ import (
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/provider"
-	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 // ExecutionEngine runs ASL state machine executions.

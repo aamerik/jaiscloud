@@ -9,7 +9,7 @@ import (
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	"jaiscloud/internal/clock"
-	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 // mockDispatcher is a no-op dispatcher that echoes params as output.

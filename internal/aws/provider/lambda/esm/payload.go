@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	streamstore "jaiscloud/internal/store/stream"
+	streamstore "jaiscloud/internal/aws/store/stream"
 )
 
 func buildSQSEventPayload(messages []InternalMessage, sourceArn, cloud, region string) []byte {

@@ -31,7 +31,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	objectstore "jaiscloud/internal/store/object"
+	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ObjectProvider handles all S3 operations.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"jaiscloud/internal/store/stream"
+	"jaiscloud/internal/aws/store/stream"
 )
 
 const (

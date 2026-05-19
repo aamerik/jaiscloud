@@ -11,8 +11,8 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
-	s3impl "jaiscloud/internal/store/aws/s3"
-	objectstore "jaiscloud/internal/store/object"
+	s3impl "jaiscloud/internal/aws/store/s3"
+	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ─── stubs ────────────────────────────────────────────────────────────────────

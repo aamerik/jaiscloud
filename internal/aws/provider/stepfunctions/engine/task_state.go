@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
-	sfnstore "jaiscloud/internal/store/aws/stepfunctions"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 // evalTaskWithRetry evaluates a Task state, applying Retry rules on failure.

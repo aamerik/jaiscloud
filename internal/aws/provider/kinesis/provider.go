@@ -14,7 +14,7 @@ import (
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	kinesisstore "jaiscloud/internal/store/aws/kinesis"
+	kinesisstore "jaiscloud/internal/aws/store/kinesis"
 )
 
 var streamNameRE = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)

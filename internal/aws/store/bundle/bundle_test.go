@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"jaiscloud/internal/store/bundle"
+	"jaiscloud/internal/aws/store/bundle"
 )
 
 // ---- helpers ----------------------------------------------------------------

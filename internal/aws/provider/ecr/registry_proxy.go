@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
-	ecrstore "jaiscloud/internal/store/aws/ecr"
+	ecrstore "jaiscloud/internal/aws/store/ecr"
 )
 
 const (

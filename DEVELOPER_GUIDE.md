@@ -22,35 +22,35 @@ You can run JaisCloud three ways — pick the one that fits your situation:
 
 **macOS (Homebrew)**
 ```bash
-brew tap raj-jaiswal/tap
+brew tap rjaiswal/tap
 brew install jaiscloud-aws
 jaiscloud-aws start
 ```
 
 **Windows (Scoop)**
 ```powershell
-scoop bucket add jaiscloud https://github.com/raj-jaiswal/scoop-jaiscloud
+scoop bucket add jaiscloud https://github.com/jaisrajms/scoop-jaiscloud
 scoop install jaiscloud-aws
 jaiscloud-aws start
 ```
 
 **All platforms — manual download**
 
-Download the binary for your platform from the [GitHub Releases page](https://github.com/raj-jaiswal/jaiscloud/releases), extract it, and put it on your `PATH`.
+Download the binary for your platform from the [GitHub Releases page](https://github.com/jaisrajms/jaiscloud/releases), extract it, and put it on your `PATH`.
 
 ```bash
 # macOS arm64 (Apple Silicon)
-curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
 tar -xzf jaiscloud-aws_darwin_arm64.tar.gz
 sudo mv jaiscloud-aws /usr/local/bin/
 
 # Linux amd64
-curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.tar.gz
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.tar.gz
 tar -xzf jaiscloud-aws_linux_amd64.tar.gz
 sudo mv jaiscloud-aws /usr/local/bin/
 
 # Linux amd64 — Debian/Ubuntu package
-curl -LO https://github.com/raj-jaiswal/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
 sudo dpkg -i jaiscloud-aws_linux_amd64.deb
 ```
 
