@@ -33,6 +33,12 @@ func (r *Registry) RegisterAll(routes map[string]HandlerFunc) {
 	}
 }
 
+// Register registers all routes returned by p.Routes().
+// Prefer this over RegisterAll when the caller already has the provider value.
+func (r *Registry) Register(p Provider) {
+	r.RegisterAll(p.Routes())
+}
+
 // RegisterPlugin registers a plugin as the wildcard handler for a provider prefix.
 // When Dispatch finds no exact key match, it tries the plugin handler for the prefix.
 // A plugin handler takes precedence over the built-in wildcard fallback.

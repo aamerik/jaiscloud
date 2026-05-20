@@ -696,51 +696,46 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
 
 	registry := provider.NewRegistry()
-	registry.RegisterAll(keyProv.Routes())
-	registry.RegisterAll(secretProv.Routes())
-	registry.RegisterAll(paramProv.Routes())
-	registry.RegisterAll(funcP.Routes())
-	registry.RegisterAll(esmProvider.Routes())
-	registry.RegisterAll(queueP.Routes())
-	registry.RegisterAll(iamP.Routes())
-	registry.RegisterAll(stsP.Routes())
-	registry.RegisterAll(kinesisP.Routes())
-	registry.RegisterAll(ecrP.Routes())
+	registry.Register(keyProv)
+	registry.Register(secretProv)
+	registry.Register(paramProv)
+	registry.Register(funcP)
+	registry.Register(esmProvider)
+	registry.Register(queueP)
+	registry.Register(iamP)
+	registry.Register(stsP)
+	registry.Register(kinesisP)
+	registry.Register(ecrP)
 	sfnP := sfnprovider.New(s.sfn)
-	registry.RegisterAll(sfnP.Routes())
-	registry.RegisterAll(notifP.Routes())
-	registry.RegisterAll(tableProvider.Routes())
+	registry.Register(sfnP)
+	registry.Register(notifP)
+	registry.Register(tableProvider)
 	registry.RegisterAll(tableProvider.StreamRoutes())
-	registry.RegisterAll(objectP.Routes())
+	registry.Register(objectP)
 	glueP := catalog.New(s.resources)
 	glueP.SetObjectProvider(objectP)
-	registry.RegisterAll(glueP.Routes())
+	registry.Register(glueP)
 	// TODO: seedDefaultVPC runs at construction time, before any request arrives,
 	// so there is no NormalizedRequest to supply account/region. Refactor to lazy
 	// seeding (seed on first DescribeVpcs per account+region) to remove this coupling
 	// and support multi-account EC2 correctly.
 	computeP := compute.New(s.resources, cfg.AccountID, cfg.Region)
-	registry.RegisterAll(computeP.Routes())
-	registry.RegisterAll(dns.New(s.resources).Routes())
-	registry.RegisterAll(rdsprovider.New(s.resources).Routes())
-	registry.RegisterAll(cacheprovider.New(s.resources).Routes())
+	registry.Register(computeP)
 	ecsP := containerprovider.New(s.resources)
-	registry.RegisterAll(ecsP.Routes())
-	registry.RegisterAll(stackP.Routes())
+	registry.Register(stackP)
 	emrP.SetObjectProvider(objectP)
-	registry.RegisterAll(emrP.Routes())
+	registry.Register(emrP)
 	emrcP.SetObjectProvider(objectP)
-	registry.RegisterAll(emrcP.Routes())
-	registry.RegisterAll(eksprovider.New(s.resources).Routes())
+	registry.Register(emrcP)
 	eventsP := eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port)
-	registry.RegisterAll(eventsP.Routes())
+	registry.Register(eventsP)
 	apigwP := apigwprovider.New(s.resources)
-	registry.RegisterAll(apigwP.Routes())
+	registry.Register(apigwP)
 	cwP := cloudwatchprovider.New(s.resources, bus)
-	registry.RegisterAll(cwP.Routes())
-
+	registry.Register(cwP)
 	logsProvider := cwlogs.New()
-	registry.RegisterAll(logsProvider.Routes())
+	registry.Register(logsProvider)
+	registerStatelessProviders(registry, s.resources)
 
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
@@ -767,24 +762,13 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if cfg.AWSEmulatorEndpoint != "" {
 		ecsP.SetJaisCloudEndpoint(cfg.AWSEmulatorEndpoint)
 	}
+	registry.Register(ecsP)
 
-	// Phase 15 providers
-	registry.RegisterAll(cognitoprovider.New(s.resources).Routes())
-	registry.RegisterAll(cognitoidentityprovider.New(s.resources).Routes())
-	registry.RegisterAll(acmprovider.New(s.resources).Routes())
 	sesP := sesprovider.New(s.resources)
-	registry.RegisterAll(sesP.Routes())
+	registry.Register(sesP)
 	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(objectP)
-	registry.RegisterAll(firehoseP.Routes())
+	registry.Register(firehoseP)
 	firehoseP.Start()
-	registry.RegisterAll(cloudfrontprovider.New(s.resources).Routes())
-	registry.RegisterAll(athenaprovider.New(s.resources).Routes())
-	registry.RegisterAll(redshiftprovider.New(s.resources).Routes())
-	// G-PENDING new providers
-	registry.RegisterAll(elbv2provider.New(s.resources).Routes())
-	registry.RegisterAll(awsconfigprovider.New(s.resources).Routes())
-	registry.RegisterAll(resourcegroupsprovider.New(s.resources).Routes())
-	registry.RegisterAll(taggingprovider.New(s.resources).Routes())
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
@@ -845,6 +829,26 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		FirehoseP:      firehoseP,
 		ComputeP:       computeP,
 	}
+}
+
+// registerStatelessProviders registers providers that only need a ResourceStore and
+// have no cross-service wiring. Adding a new AWS service with no dependencies
+// requires one line here rather than touching the buildRegistry body.
+func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) {
+	reg.Register(dns.New(res))
+	reg.Register(rdsprovider.New(res))
+	reg.Register(cacheprovider.New(res))
+	reg.Register(eksprovider.New(res))
+	reg.Register(cognitoprovider.New(res))
+	reg.Register(cognitoidentityprovider.New(res))
+	reg.Register(acmprovider.New(res))
+	reg.Register(cloudfrontprovider.New(res))
+	reg.Register(athenaprovider.New(res))
+	reg.Register(redshiftprovider.New(res))
+	reg.Register(elbv2provider.New(res))
+	reg.Register(awsconfigprovider.New(res))
+	reg.Register(resourcegroupsprovider.New(res))
+	reg.Register(taggingprovider.New(res))
 }
 
 // cwMetricAdapter bridges cloudwatch.Provider.InternalPutMetricData (uses cloudwatch.MetricDatum)
