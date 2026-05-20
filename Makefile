@@ -32,7 +32,7 @@ JAISCLOUD_HOST ?= http://localhost:$(JAISCLOUD_PORT)
 
 # Per-mode ports for test-integration — allows memory and persistent suites to run in parallel
 JAISCLOUD_PORT_MEMORY     ?= 4566
-JAISCLOUD_PORT_PERSISTENT ?= 4567
+JAISCLOUD_PORT_PERSISTENT ?= 4566
 _INTEGRATION_MODE         := $(shell printf '%s' '$(MODE)' | tr '[:upper:]' '[:lower:]')
 _INTEGRATION_PORT         := $(if $(filter persistent,$(_INTEGRATION_MODE)),$(JAISCLOUD_PORT_PERSISTENT),$(JAISCLOUD_PORT_MEMORY))
 _INTEGRATION_HOST         := http://localhost:$(_INTEGRATION_PORT)

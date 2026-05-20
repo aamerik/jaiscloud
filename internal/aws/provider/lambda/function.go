@@ -1,5 +1,5 @@
 // Package function implements the Lambda provider (FunctionProvider).
-package function
+package lambda
 
 import (
 	"context"

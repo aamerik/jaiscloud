@@ -4,7 +4,7 @@ import (
 	"context"
 
 	stackprovider "jaiscloud/internal/aws/provider/stack"
-	functionprovider "jaiscloud/internal/aws/provider/function"
+	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	"jaiscloud/internal/model"
 )
 

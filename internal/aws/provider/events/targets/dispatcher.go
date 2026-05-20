@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/events/transform"
-	fnprovider "jaiscloud/internal/aws/provider/function"
+	fnprovider "jaiscloud/internal/aws/provider/lambda"
 	notifprovider "jaiscloud/internal/aws/provider/notification"
 	"jaiscloud/internal/aws/provider/queue"
 )

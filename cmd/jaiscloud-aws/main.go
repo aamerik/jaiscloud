@@ -25,7 +25,7 @@ import (
 	eventsprovider "jaiscloud/internal/aws/provider/events"
 	ebscheduler "jaiscloud/internal/aws/provider/events/scheduler"
 	"jaiscloud/internal/aws/provider/events/targets"
-	functionprovider "jaiscloud/internal/aws/provider/function"
+	functionprovider "jaiscloud/internal/aws/provider/lambda"
 	iamprovider "jaiscloud/internal/aws/provider/iam"
 	kinesisprovider "jaiscloud/internal/aws/provider/kinesis"
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"

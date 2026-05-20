@@ -1,4 +1,4 @@
-package function_test
+package lambda_test
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/aws/provider/function"
+	"jaiscloud/internal/aws/provider/lambda"
 	"jaiscloud/internal/store"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +33,7 @@ func newRequest(params map[string]any) *model.NormalizedRequest {
 }
 
 // createFn registers a function in the store and returns the provider.
-func createFn(t *testing.T, p *function.FunctionProvider, name string, timeout int) {
+func createFn(t *testing.T, p *lambda.FunctionProvider, name string, timeout int) {
 	t.Helper()
 	nr := newRequest(map[string]any{
 		"FunctionName": name,
@@ -73,7 +73,7 @@ func TestCreateFunction_TimeoutBoundaries(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("", func(t *testing.T) {
-			p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, lambdaexec.LambdaConfig{})
+			p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, lambdaexec.LambdaConfig{})
 			nr := newRequest(map[string]any{
 				"FunctionName": "fn",
 				"Runtime":      "provided",
@@ -95,7 +95,7 @@ func TestCreateFunction_TimeoutBoundaries(t *testing.T) {
 }
 
 func TestUpdateFunctionConfiguration_TimeoutValidation(t *testing.T) {
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, lambdaexec.LambdaConfig{})
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, lambdaexec.LambdaConfig{})
 	createFn(t, p, "fn", 3)
 
 	nr := newRequest(map[string]any{
@@ -112,7 +112,7 @@ func TestUpdateFunctionConfiguration_TimeoutValidation(t *testing.T) {
 // ─── Timeout envelope ─────────────────────────────────────────────────────────
 
 func TestInvokeFunction_TimeoutReturnsAWSEnvelope(t *testing.T) {
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &blockingExecutor{}, lambdaexec.LambdaConfig{})
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &blockingExecutor{}, lambdaexec.LambdaConfig{})
 	createFn(t, p, "slow", 1) // 1-second timeout
 
 	nr := newRequest(map[string]any{
@@ -136,7 +136,7 @@ func TestInvokeFunction_TimeoutReturnsAWSEnvelope(t *testing.T) {
 
 func TestInvokeFunction_ConcurrencyLimitThrottles(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{ConcurrencyLimit: 1}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &blockingExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &blockingExecutor{}, cfg)
 	createFn(t, p, "fn", 10)
 
 	// First invocation runs (blocks in background).
@@ -167,7 +167,7 @@ func TestInvokeFunction_ConcurrencyLimitThrottles(t *testing.T) {
 
 func TestInvokeFunction_ZeroConcurrencyIsUnlimited(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{ConcurrencyLimit: 0}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	for i := 0; i < 20; i++ {
@@ -181,7 +181,7 @@ func TestInvokeFunction_ZeroConcurrencyIsUnlimited(t *testing.T) {
 
 func TestInvokeFunction_SyncPayloadTooLarge(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{SyncPayloadMax: 100}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	nr := newRequest(map[string]any{
@@ -198,7 +198,7 @@ func TestInvokeFunction_SyncPayloadTooLarge(t *testing.T) {
 
 func TestInvokeFunction_AsyncPayloadTooLarge(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{AsyncPayloadMax: 50}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	nr := newRequest(map[string]any{
@@ -215,7 +215,7 @@ func TestInvokeFunction_AsyncPayloadTooLarge(t *testing.T) {
 
 func TestInvokeFunction_AsyncWithinLimit_Returns202(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{AsyncPayloadMax: 100}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	nr := newRequest(map[string]any{
@@ -231,7 +231,7 @@ func TestInvokeFunction_AsyncWithinLimit_Returns202(t *testing.T) {
 func TestInvokeFunction_ResponseTooLarge_ReturnsEnvelope(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{ResponsePayloadMax: 10}
 	// MockExecutor echoes the payload; send a response that exceeds the cap.
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	nr := newRequest(map[string]any{
@@ -251,7 +251,7 @@ func TestInvokeFunction_ResponseTooLarge_ReturnsEnvelope(t *testing.T) {
 
 func TestInvokeFunction_ZeroResponseMax_NoLimit(t *testing.T) {
 	cfg := lambdaexec.LambdaConfig{ResponsePayloadMax: 0}
-	p := function.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
+	p := lambda.NewWithLimits(store.NewMemoryResourceStore(), &lambdaexec.MockExecutor{}, cfg)
 	createFn(t, p, "fn", 3)
 
 	bigPayload := bytes.Repeat([]byte("x"), 10*1024*1024)
