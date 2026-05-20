@@ -35,12 +35,12 @@ func TestPersistTerminalSnapshot_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	snap := Snapshot{
-		State:     "COMPLETED",
-		Reason:    "done",
-		StartTime: time.Now().Add(-10 * time.Second),
-		EndTime:   time.Now(),
-		ExitCode:  0,
-		LogURIs:   map[string]string{"stdout": "s3://bucket/logs/stdout.gz"},
+		State:      "COMPLETED",
+		Reason:     "done",
+		StartTime:  time.Now().Add(-10 * time.Second),
+		EndTime:    time.Now(),
+		ExitCode:   0,
+		LogURIs:    map[string]string{"stdout": "s3://bucket/logs/stdout.gz"},
 		CallerMeta: map[string]string{"cluster": "c-123"},
 	}
 

@@ -28,12 +28,12 @@ type SecretEntry struct {
 	UpdatedAt    time.Time
 	RandomSuffix string // 6-char suffix appended to ARN (AWS: name-XXXXXX)
 	// Rotation fields.
-	RotationEnabled      bool
-	RotationLambdaARN    string
-	AutoRotateAfterDays  int
-	LastRotatedDate      *time.Time
-	NextRotationDate     *time.Time
-	LastAccessedDate     *time.Time
+	RotationEnabled     bool
+	RotationLambdaARN   string
+	AutoRotateAfterDays int
+	LastRotatedDate     *time.Time
+	NextRotationDate    *time.Time
+	LastAccessedDate    *time.Time
 	// ResourcePolicy holds the resource-based policy JSON.
 	ResourcePolicy string
 }

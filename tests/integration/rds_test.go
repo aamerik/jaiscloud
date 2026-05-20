@@ -36,8 +36,8 @@ func TestRDS_CreateDescribeDeleteDBInstance(t *testing.T) {
 	assert.NotNil(t, descOut.DBInstances[0].Endpoint)
 
 	_, err = client.DeleteDBInstance(ctx, &awsrds.DeleteDBInstanceInput{
-		DBInstanceIdentifier:   aws.String("mydb"),
-		SkipFinalSnapshot:      aws.Bool(true),
+		DBInstanceIdentifier: aws.String("mydb"),
+		SkipFinalSnapshot:    aws.Bool(true),
 	})
 	require.NoError(t, err)
 

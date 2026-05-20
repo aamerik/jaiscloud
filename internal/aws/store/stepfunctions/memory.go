@@ -13,13 +13,13 @@ import (
 
 // MemoryStepFunctionsStore is the default in-memory Step Functions store.
 type MemoryStepFunctionsStore struct {
-	mu           sync.RWMutex
-	machines     map[string]*StateMachine // ARN → machine
-	nameToARN    map[string]string        // "account:name" → ARN (scoped to prevent cross-account collisions)
-	executions   map[string]*Execution   // ARN → execution
-	activities   map[string]*Activity    // ARN → activity
+	mu         sync.RWMutex
+	machines   map[string]*StateMachine // ARN → machine
+	nameToARN  map[string]string        // "account:name" → ARN (scoped to prevent cross-account collisions)
+	executions map[string]*Execution    // ARN → execution
+	activities map[string]*Activity     // ARN → activity
 	// ARN-keyed tags for any resource type (machines, activities, aliases)
-	tags         map[string]map[string]string
+	tags map[string]map[string]string
 }
 
 // sfnNameKey returns the scoped nameToARN key for a state machine.
@@ -574,9 +574,9 @@ func (s *MemoryStepFunctionsStore) Reset(ctx context.Context) {
 }
 
 type sfnSnapshot struct {
-	Machines   map[string]*StateMachine `json:"machines"`
-	Executions map[string]*Execution   `json:"executions"`
-	Activities map[string]*Activity    `json:"activities"`
+	Machines   map[string]*StateMachine     `json:"machines"`
+	Executions map[string]*Execution        `json:"executions"`
+	Activities map[string]*Activity         `json:"activities"`
 	Tags       map[string]map[string]string `json:"tags"`
 }
 

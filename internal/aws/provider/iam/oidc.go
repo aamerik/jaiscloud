@@ -16,12 +16,12 @@ import (
 const rtOIDCProvider = "iam_oidc_provider"
 
 type oidcProviderData struct {
-	Arn          string            `json:"Arn"`
-	URL          string            `json:"Url"`
-	ClientIDs    []string          `json:"ClientIDList"`
-	Thumbprints  []string          `json:"ThumbprintList"`
-	Tags         map[string]string `json:"Tags"`
-	CreateDate   time.Time         `json:"CreateDate"`
+	Arn         string            `json:"Arn"`
+	URL         string            `json:"Url"`
+	ClientIDs   []string          `json:"ClientIDList"`
+	Thumbprints []string          `json:"ThumbprintList"`
+	Tags        map[string]string `json:"Tags"`
+	CreateDate  time.Time         `json:"CreateDate"`
 }
 
 func oidcARN(nr *model.NormalizedRequest, url string) string {
@@ -198,11 +198,11 @@ func oidcToWire(op oidcProviderData) map[string]any {
 		thumbprints = []string{}
 	}
 	return map[string]any{
-		"Url":             op.URL,
-		"ClientIDList":    clientIDs,
-		"ThumbprintList":  thumbprints,
-		"Tags":            tags,
-		"CreateDate":      op.CreateDate.UTC().Format(time.RFC3339),
+		"Url":            op.URL,
+		"ClientIDList":   clientIDs,
+		"ThumbprintList": thumbprints,
+		"Tags":           tags,
+		"CreateDate":     op.CreateDate.UTC().Format(time.RFC3339),
 	}
 }
 

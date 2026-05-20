@@ -133,10 +133,10 @@ func TestCWL_PutSubscriptionFilter_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.PutSubscriptionFilter(ctx, &awscwl.PutSubscriptionFilterInput{
-		LogGroupName:     aws.String("/sub/test"),
-		FilterName:       aws.String("my-filter"),
-		FilterPattern:    aws.String("ERROR"),
-		DestinationArn:   aws.String("arn:aws:lambda:us-east-1:000000000000:function:log-processor"),
+		LogGroupName:   aws.String("/sub/test"),
+		FilterName:     aws.String("my-filter"),
+		FilterPattern:  aws.String("ERROR"),
+		DestinationArn: aws.String("arn:aws:lambda:us-east-1:000000000000:function:log-processor"),
 	})
 	if err != nil {
 		t.Skipf("PutSubscriptionFilter not implemented: %v", err)

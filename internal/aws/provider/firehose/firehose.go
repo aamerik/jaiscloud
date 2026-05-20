@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 const rtDeliveryStream = "firehose_delivery_stream"
@@ -46,8 +46,8 @@ type Provider struct {
 	mu      sync.Mutex
 	buffers map[string][]string // streamName → buffered records (base64-decoded)
 
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 func New(resources store.ResourceStore) *Provider {
@@ -125,18 +125,18 @@ var _ BucketChecker = (objectstore.ObjectMetaStore)(nil)
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Firehose.CreateDeliveryStream":           p.CreateDeliveryStream,
-		"Firehose.DeleteDeliveryStream":           p.DeleteDeliveryStream,
-		"Firehose.DescribeDeliveryStream":         p.DescribeDeliveryStream,
-		"Firehose.ListDeliveryStreams":             p.ListDeliveryStreams,
-		"Firehose.UpdateDestination":              p.UpdateDestination,
-		"Firehose.PutRecord":                      p.PutRecord,
-		"Firehose.PutRecordBatch":                 p.PutRecordBatch,
-		"Firehose.StartDeliveryStreamEncryption":  p.StartDeliveryStreamEncryption,
-		"Firehose.StopDeliveryStreamEncryption":   p.StopDeliveryStreamEncryption,
-		"Firehose.TagDeliveryStream":              p.TagDeliveryStream,
-		"Firehose.UntagDeliveryStream":            p.UntagDeliveryStream,
-		"Firehose.ListTagsForDeliveryStream":      p.ListTagsForDeliveryStream,
+		"Firehose.CreateDeliveryStream":          p.CreateDeliveryStream,
+		"Firehose.DeleteDeliveryStream":          p.DeleteDeliveryStream,
+		"Firehose.DescribeDeliveryStream":        p.DescribeDeliveryStream,
+		"Firehose.ListDeliveryStreams":           p.ListDeliveryStreams,
+		"Firehose.UpdateDestination":             p.UpdateDestination,
+		"Firehose.PutRecord":                     p.PutRecord,
+		"Firehose.PutRecordBatch":                p.PutRecordBatch,
+		"Firehose.StartDeliveryStreamEncryption": p.StartDeliveryStreamEncryption,
+		"Firehose.StopDeliveryStreamEncryption":  p.StopDeliveryStreamEncryption,
+		"Firehose.TagDeliveryStream":             p.TagDeliveryStream,
+		"Firehose.UntagDeliveryStream":           p.UntagDeliveryStream,
+		"Firehose.ListTagsForDeliveryStream":     p.ListTagsForDeliveryStream,
 	}
 }
 

@@ -345,9 +345,9 @@ func TestKinesis_SplitShard(t *testing.T) {
 	shardID := *desc.StreamDescription.Shards[0].ShardId
 
 	_, err = client.SplitShard(ctx, &awskinesis.SplitShardInput{
-		StreamName:           aws.String("split-stream"),
-		ShardToSplit:         aws.String(shardID),
-		NewStartingHashKey:   aws.String("170141183460469231731687303715884105728"), // 2^127
+		StreamName:         aws.String("split-stream"),
+		ShardToSplit:       aws.String(shardID),
+		NewStartingHashKey: aws.String("170141183460469231731687303715884105728"), // 2^127
 	})
 	require.NoError(t, err)
 

@@ -112,8 +112,8 @@ func TestSTS_AssumeRoleWithSAML(t *testing.T) {
 	import64 := "PHNhbWxwOlJlc3BvbnNlPjwvc2FtbHA6UmVzcG9uc2U+"
 
 	out, err := client.AssumeRoleWithSAML(ctx, &awssts.AssumeRoleWithSAMLInput{
-		RoleArn:      aws.String("arn:aws:iam::000000000000:role/SAMLRole"),
-		PrincipalArn: aws.String("arn:aws:iam::000000000000:saml-provider/MySAML"),
+		RoleArn:       aws.String("arn:aws:iam::000000000000:role/SAMLRole"),
+		PrincipalArn:  aws.String("arn:aws:iam::000000000000:saml-provider/MySAML"),
 		SAMLAssertion: aws.String(import64),
 	})
 	require.NoError(t, err)

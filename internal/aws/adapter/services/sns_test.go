@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"jaiscloud/internal/aws/adapter/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"jaiscloud/internal/aws/adapter/services"
 )
 
 func TestSNSAddPermissionWireParse(t *testing.T) {

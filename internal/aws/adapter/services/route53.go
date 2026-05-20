@@ -303,7 +303,7 @@ func parseChangeBatchBody(body []byte, params map[string]any) {
 		ResourceRecords []xmlResourceRecord `xml:"ResourceRecords>ResourceRecord"`
 	}
 	type xmlChange struct {
-		Action           string               `xml:"Action"`
+		Action            string               `xml:"Action"`
 		ResourceRecordSet xmlResourceRecordSet `xml:"ResourceRecordSet"`
 	}
 	type xmlChangeBatch struct {

@@ -85,19 +85,19 @@ type PostRestoreHook interface {
 
 // Handler serves the /_jaiscloud/* admin endpoints.
 type Handler struct {
-	mu                sync.Mutex
-	meta              HandlerMeta
-	resetters         []Resetter
-	snapshotters      map[string]Snapshotter
-	postRestoreHooks  []PostRestoreHook
-	lambdaCode        LambdaCodeFetcher
-	firehoseFlusher   FirehoseFlusher
-	cwAlarmEvaluator  CWAlarmEvaluator
-	blobStore         *blobfs.LocalFSBlobStore
-	kekFingerprint    string
-	dataDir           string
-	exportSoftLimit   int64
-	barrier           *snapshot.Barrier
+	mu               sync.Mutex
+	meta             HandlerMeta
+	resetters        []Resetter
+	snapshotters     map[string]Snapshotter
+	postRestoreHooks []PostRestoreHook
+	lambdaCode       LambdaCodeFetcher
+	firehoseFlusher  FirehoseFlusher
+	cwAlarmEvaluator CWAlarmEvaluator
+	blobStore        *blobfs.LocalFSBlobStore
+	kekFingerprint   string
+	dataDir          string
+	exportSoftLimit  int64
+	barrier          *snapshot.Barrier
 }
 
 func NewHandler() *Handler {

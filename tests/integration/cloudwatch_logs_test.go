@@ -136,9 +136,9 @@ func TestCWLogs_FilterLogEvents_TimeRange(t *testing.T) {
 	startTime := now.Add(-45 * time.Second).UnixMilli()
 	endTime := now.Add(1 * time.Second).UnixMilli()
 	out, err := c.FilterLogEvents(ctx, &awscwl.FilterLogEventsInput{
-		LogGroupName:  aws.String(group),
-		StartTime:     aws.Int64(startTime),
-		EndTime:       aws.Int64(endTime),
+		LogGroupName: aws.String(group),
+		StartTime:    aws.Int64(startTime),
+		EndTime:      aws.Int64(endTime),
 	})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(out.Events), 1, "expected at least 1 event in time range")

@@ -84,8 +84,8 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.TransactWriteItems": p.TransactWriteItems,
 		"Table.TransactGetItems":   p.TransactGetItems,
 		// Tags
-		"Table.TagResource":       p.TagResource,
-		"Table.UntagResource":     p.UntagResource,
+		"Table.TagResource":        p.TagResource,
+		"Table.UntagResource":      p.UntagResource,
 		"Table.ListTagsOfResource": p.ListTagsOfResource,
 		// TTL
 		"Table.DescribeTimeToLive": p.DescribeTimeToLive,
@@ -103,10 +103,10 @@ func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 		"Table.ListGlobalTables":    p.ListGlobalTables,
 		"Table.UpdateGlobalTable":   p.UpdateGlobalTable,
 		// Kinesis Streaming Destinations (metadata-only)
-		"Table.EnableKinesisStreamingDestination":  p.EnableKinesisStreamingDestination,
-		"Table.DisableKinesisStreamingDestination": p.DisableKinesisStreamingDestination,
+		"Table.EnableKinesisStreamingDestination":   p.EnableKinesisStreamingDestination,
+		"Table.DisableKinesisStreamingDestination":  p.DisableKinesisStreamingDestination,
 		"Table.DescribeKinesisStreamingDestination": p.DescribeKinesisStreamingDestination,
-		"Table.UpdateKinesisStreamingDestination":  p.UpdateKinesisStreamingDestination,
+		"Table.UpdateKinesisStreamingDestination":   p.UpdateKinesisStreamingDestination,
 		// Misc stubs
 		"Table.DescribeEndpoints":           p.DescribeEndpoints,
 		"Table.DescribeLimits":              p.DescribeLimits,
@@ -1298,9 +1298,9 @@ func parseGSIs(v any) []map[string]any {
 		for _, gi := range g {
 			if m, ok := gi.(map[string]any); ok {
 				gsi := map[string]any{
-					"IndexName":  m["IndexName"],
-					"KeySchema":  parseKeySchema(m["KeySchema"]),
-					"Projection": m["Projection"],
+					"IndexName":   m["IndexName"],
+					"KeySchema":   parseKeySchema(m["KeySchema"]),
+					"Projection":  m["Projection"],
 					"IndexStatus": "ACTIVE",
 				}
 				result = append(result, gsi)
@@ -1943,13 +1943,13 @@ func (p *TableProvider) DescribeKinesisStreamingDestination(ctx context.Context,
 	items := make([]map[string]any, 0, len(dests))
 	for _, d := range dests {
 		items = append(items, map[string]any{
-			"StreamArn":         d.StreamArn,
-			"DestinationStatus": d.DestinationStatus,
+			"StreamArn":                            d.StreamArn,
+			"DestinationStatus":                    d.DestinationStatus,
 			"ApproximateCreationDateTimePrecision": d.TimePrecision,
 		})
 	}
 	return provider.OK(map[string]any{
-		"TableName":                    tableName,
+		"TableName":                     tableName,
 		"KinesisDataStreamDestinations": items,
 	}), nil
 }

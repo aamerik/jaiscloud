@@ -12,9 +12,9 @@ type fakeDetector struct {
 	hasHome   bool
 }
 
-func (f fakeDetector) IsContainer() bool        { return f.container }
-func (f fakeDetector) WorkingDir() string        { return f.cwd }
-func (f fakeDetector) HomeDir() (string, bool)   { return f.home, f.hasHome }
+func (f fakeDetector) IsContainer() bool       { return f.container }
+func (f fakeDetector) WorkingDir() string      { return f.cwd }
+func (f fakeDetector) HomeDir() (string, bool) { return f.home, f.hasHome }
 
 func TestResolveDataDir_FlagTakesPrecedence(t *testing.T) {
 	det := fakeDetector{hasHome: true, home: "/home/user", cwd: "/app"}

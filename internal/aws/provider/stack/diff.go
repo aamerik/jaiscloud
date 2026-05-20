@@ -40,7 +40,7 @@ func buildResolvedDoc(doc map[string]any, rc *resolveCtx) map[string]any {
 
 // ResourceChange describes a single resource change in a ChangeSet.
 type ResourceChange struct {
-	Action            string   // "Add" | "Modify" | "Remove"
+	Action            string // "Add" | "Modify" | "Remove"
 	LogicalResourceID string
 	ResourceType      string
 	Replacement       string   // "True" | "False" | "Conditional"

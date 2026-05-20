@@ -155,7 +155,6 @@ func (p *Provider) DescribeLogGroups(_ context.Context, nr *model.NormalizedRequ
 	return provider.OK(result), nil
 }
 
-
 // ─── retention policy ─────────────────────────────────────────────────────────
 
 var validRetentionDays = map[int]bool{
@@ -346,4 +345,3 @@ func (p *Provider) ListTagsForResource(_ context.Context, nr *model.NormalizedRe
 	}
 	return provider.OK(map[string]any{"tags": out}), nil
 }
-

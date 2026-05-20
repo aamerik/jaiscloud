@@ -14,10 +14,10 @@ var nonJVMEnvVars = []string{
 }
 
 const (
-	pemBundlePath      = "/etc/ssl/certs/jaiscloud-ca-bundle.pem"
-	pemScratchVolName  = "jaiscloud-pem-scratch"
-	pemScratchMount    = "/tmp/jaiscloud-pem-build"
-	pemInitImage       = "busybox:1.36"
+	pemBundlePath     = "/etc/ssl/certs/jaiscloud-ca-bundle.pem"
+	pemScratchVolName = "jaiscloud-pem-scratch"
+	pemScratchMount   = "/tmp/jaiscloud-pem-build"
+	pemInitImage      = "busybox:1.36"
 )
 
 type pemBundleMaterializer struct{}

@@ -4,12 +4,12 @@ import "encoding/json"
 
 // StateMachineDefinition is the top-level ASL structure.
 type StateMachineDefinition struct {
-	Comment        string             `json:"Comment,omitempty"`
-	StartAt        string             `json:"StartAt"`
+	Comment        string              `json:"Comment,omitempty"`
+	StartAt        string              `json:"StartAt"`
 	States         map[string]StateDef `json:"-"` // populated by Parse
-	Version        string             `json:"Version,omitempty"`
-	TimeoutSeconds int                `json:"TimeoutSeconds,omitempty"`
-	QueryLanguage  string             `json:"QueryLanguage,omitempty"` // "JSONPath" (default) or "JSONata"
+	Version        string              `json:"Version,omitempty"`
+	TimeoutSeconds int                 `json:"TimeoutSeconds,omitempty"`
+	QueryLanguage  string              `json:"QueryLanguage,omitempty"` // "JSONPath" (default) or "JSONata"
 }
 
 // StateDef is the common interface for all state types.
@@ -48,24 +48,24 @@ func (c *CommonState) IsEnd() bool     { return c.End }
 
 type PassState struct {
 	CommonState
-	Result      json.RawMessage `json:"Result,omitempty"`
-	ResultPath  *string         `json:"ResultPath,omitempty"`
-	Parameters  json.RawMessage `json:"Parameters,omitempty"`
+	Result     json.RawMessage `json:"Result,omitempty"`
+	ResultPath *string         `json:"ResultPath,omitempty"`
+	Parameters json.RawMessage `json:"Parameters,omitempty"`
 }
 
 type TaskState struct {
 	CommonState
-	Resource              string          `json:"Resource"`
-	Parameters            json.RawMessage `json:"Parameters,omitempty"`
-	ResultSelector        json.RawMessage `json:"ResultSelector,omitempty"`
-	ResultPath            *string         `json:"ResultPath,omitempty"`
-	Retry                 []RetryRule     `json:"Retry,omitempty"`
-	Catch                 []CatchRule     `json:"Catch,omitempty"`
-	TimeoutSeconds        int             `json:"TimeoutSeconds,omitempty"`
-	TimeoutSecondsPath    string          `json:"TimeoutSecondsPath,omitempty"`
-	HeartbeatSeconds      int             `json:"HeartbeatSeconds,omitempty"`
-	HeartbeatSecondsPath  string          `json:"HeartbeatSecondsPath,omitempty"`
-	Credentials           *Credentials    `json:"Credentials,omitempty"`
+	Resource             string          `json:"Resource"`
+	Parameters           json.RawMessage `json:"Parameters,omitempty"`
+	ResultSelector       json.RawMessage `json:"ResultSelector,omitempty"`
+	ResultPath           *string         `json:"ResultPath,omitempty"`
+	Retry                []RetryRule     `json:"Retry,omitempty"`
+	Catch                []CatchRule     `json:"Catch,omitempty"`
+	TimeoutSeconds       int             `json:"TimeoutSeconds,omitempty"`
+	TimeoutSecondsPath   string          `json:"TimeoutSecondsPath,omitempty"`
+	HeartbeatSeconds     int             `json:"HeartbeatSeconds,omitempty"`
+	HeartbeatSecondsPath string          `json:"HeartbeatSecondsPath,omitempty"`
+	Credentials          *Credentials    `json:"Credentials,omitempty"`
 }
 
 type Credentials struct {
@@ -139,15 +139,15 @@ type ProcessorConfig struct {
 }
 
 type ItemReader struct {
-	Resource     string         `json:"Resource"`
-	ReaderConfig *ReaderConfig  `json:"ReaderConfig,omitempty"`
+	Resource     string          `json:"Resource"`
+	ReaderConfig *ReaderConfig   `json:"ReaderConfig,omitempty"`
 	Parameters   json.RawMessage `json:"Parameters,omitempty"`
 }
 
 type ReaderConfig struct {
-	InputType          string `json:"InputType,omitempty"`
-	CSVHeaderLocation  string `json:"CSVHeaderLocation,omitempty"`
-	MaxItems           int    `json:"MaxItems,omitempty"`
+	InputType         string `json:"InputType,omitempty"`
+	CSVHeaderLocation string `json:"CSVHeaderLocation,omitempty"`
+	MaxItems          int    `json:"MaxItems,omitempty"`
 }
 
 type ResultWriter struct {
@@ -174,17 +174,17 @@ type ChoiceRule struct {
 	Variable string `json:"Variable,omitempty"`
 
 	// String comparisons
-	StringEquals               string `json:"StringEquals,omitempty"`
-	StringEqualsPath           string `json:"StringEqualsPath,omitempty"`
-	StringLessThan             string `json:"StringLessThan,omitempty"`
-	StringLessThanPath         string `json:"StringLessThanPath,omitempty"`
-	StringGreaterThan          string `json:"StringGreaterThan,omitempty"`
-	StringGreaterThanPath      string `json:"StringGreaterThanPath,omitempty"`
-	StringLessThanEquals       string `json:"StringLessThanEquals,omitempty"`
-	StringLessThanEqualsPath   string `json:"StringLessThanEqualsPath,omitempty"`
-	StringGreaterThanEquals    string `json:"StringGreaterThanEquals,omitempty"`
+	StringEquals                string `json:"StringEquals,omitempty"`
+	StringEqualsPath            string `json:"StringEqualsPath,omitempty"`
+	StringLessThan              string `json:"StringLessThan,omitempty"`
+	StringLessThanPath          string `json:"StringLessThanPath,omitempty"`
+	StringGreaterThan           string `json:"StringGreaterThan,omitempty"`
+	StringGreaterThanPath       string `json:"StringGreaterThanPath,omitempty"`
+	StringLessThanEquals        string `json:"StringLessThanEquals,omitempty"`
+	StringLessThanEqualsPath    string `json:"StringLessThanEqualsPath,omitempty"`
+	StringGreaterThanEquals     string `json:"StringGreaterThanEquals,omitempty"`
 	StringGreaterThanEqualsPath string `json:"StringGreaterThanEqualsPath,omitempty"`
-	StringMatches              string `json:"StringMatches,omitempty"`
+	StringMatches               string `json:"StringMatches,omitempty"`
 
 	// Numeric comparisons
 	NumericEquals                *float64 `json:"NumericEquals,omitempty"`
@@ -203,15 +203,15 @@ type ChoiceRule struct {
 	BooleanEqualsPath string `json:"BooleanEqualsPath,omitempty"`
 
 	// Timestamp comparisons
-	TimestampEquals               string `json:"TimestampEquals,omitempty"`
-	TimestampEqualsPath           string `json:"TimestampEqualsPath,omitempty"`
-	TimestampLessThan             string `json:"TimestampLessThan,omitempty"`
-	TimestampLessThanPath         string `json:"TimestampLessThanPath,omitempty"`
-	TimestampGreaterThan          string `json:"TimestampGreaterThan,omitempty"`
-	TimestampGreaterThanPath      string `json:"TimestampGreaterThanPath,omitempty"`
-	TimestampLessThanEquals       string `json:"TimestampLessThanEquals,omitempty"`
-	TimestampLessThanEqualsPath   string `json:"TimestampLessThanEqualsPath,omitempty"`
-	TimestampGreaterThanEquals    string `json:"TimestampGreaterThanEquals,omitempty"`
+	TimestampEquals                string `json:"TimestampEquals,omitempty"`
+	TimestampEqualsPath            string `json:"TimestampEqualsPath,omitempty"`
+	TimestampLessThan              string `json:"TimestampLessThan,omitempty"`
+	TimestampLessThanPath          string `json:"TimestampLessThanPath,omitempty"`
+	TimestampGreaterThan           string `json:"TimestampGreaterThan,omitempty"`
+	TimestampGreaterThanPath       string `json:"TimestampGreaterThanPath,omitempty"`
+	TimestampLessThanEquals        string `json:"TimestampLessThanEquals,omitempty"`
+	TimestampLessThanEqualsPath    string `json:"TimestampLessThanEqualsPath,omitempty"`
+	TimestampGreaterThanEquals     string `json:"TimestampGreaterThanEquals,omitempty"`
 	TimestampGreaterThanEqualsPath string `json:"TimestampGreaterThanEqualsPath,omitempty"`
 
 	// Type checks
@@ -223,9 +223,9 @@ type ChoiceRule struct {
 	IsTimestamp *bool `json:"IsTimestamp,omitempty"`
 
 	// Compound
-	And []ChoiceRule  `json:"And,omitempty"`
-	Or  []ChoiceRule  `json:"Or,omitempty"`
-	Not *ChoiceRule   `json:"Not,omitempty"`
+	And []ChoiceRule `json:"And,omitempty"`
+	Or  []ChoiceRule `json:"Or,omitempty"`
+	Not *ChoiceRule  `json:"Not,omitempty"`
 
 	Next string `json:"Next,omitempty"`
 }

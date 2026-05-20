@@ -20,12 +20,12 @@ const (
 type ExecutionStatus string
 
 const (
-	ExecutionStatusRunning         ExecutionStatus = "RUNNING"
-	ExecutionStatusSucceeded       ExecutionStatus = "SUCCEEDED"
-	ExecutionStatusFailed          ExecutionStatus = "FAILED"
-	ExecutionStatusTimedOut        ExecutionStatus = "TIMED_OUT"
-	ExecutionStatusAborted         ExecutionStatus = "ABORTED"
-	ExecutionStatusPendingRedrive  ExecutionStatus = "PENDING_REDRIVE"
+	ExecutionStatusRunning        ExecutionStatus = "RUNNING"
+	ExecutionStatusSucceeded      ExecutionStatus = "SUCCEEDED"
+	ExecutionStatusFailed         ExecutionStatus = "FAILED"
+	ExecutionStatusTimedOut       ExecutionStatus = "TIMED_OUT"
+	ExecutionStatusAborted        ExecutionStatus = "ABORTED"
+	ExecutionStatusPendingRedrive ExecutionStatus = "PENDING_REDRIVE"
 )
 
 type StateMachine struct {
@@ -88,8 +88,8 @@ type TracingConfiguration struct {
 }
 
 type EncryptionConfiguration struct {
-	Type                        string
-	KMSKeyID                    string
+	Type                         string
+	KMSKeyID                     string
 	KMSDataKeyReusePeriodSeconds int
 }
 
@@ -122,15 +122,15 @@ type HistoryEvent struct {
 	Timestamp       time.Time
 	Type            string
 
-	ExecutionStartedEventDetails    *ExecutionStartedEventDetails
-	ExecutionSucceededEventDetails  *ExecutionSucceededEventDetails
-	ExecutionFailedEventDetails     *ExecutionFailedEventDetails
-	ExecutionAbortedEventDetails    *ExecutionAbortedEventDetails
-	StateEnteredEventDetails        *StateEnteredEventDetails
-	StateExitedEventDetails         *StateExitedEventDetails
-	TaskScheduledEventDetails       *TaskScheduledEventDetails
-	TaskSucceededEventDetails       *TaskSucceededEventDetails
-	TaskFailedEventDetails          *TaskFailedEventDetails
+	ExecutionStartedEventDetails   *ExecutionStartedEventDetails
+	ExecutionSucceededEventDetails *ExecutionSucceededEventDetails
+	ExecutionFailedEventDetails    *ExecutionFailedEventDetails
+	ExecutionAbortedEventDetails   *ExecutionAbortedEventDetails
+	StateEnteredEventDetails       *StateEnteredEventDetails
+	StateExitedEventDetails        *StateExitedEventDetails
+	TaskScheduledEventDetails      *TaskScheduledEventDetails
+	TaskSucceededEventDetails      *TaskSucceededEventDetails
+	TaskFailedEventDetails         *TaskFailedEventDetails
 }
 
 type ExecutionStartedEventDetails struct {

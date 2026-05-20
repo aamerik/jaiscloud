@@ -250,8 +250,8 @@ func TestResolveParameters_WithDefault(t *testing.T) {
 	rc := baseCtx()
 	rc.resolveParameters(
 		map[string]any{
-			"Env":     map[string]any{"Type": "String", "Default": "dev"},
-			"Region":  map[string]any{"Type": "String"},
+			"Env":    map[string]any{"Type": "String", "Default": "dev"},
+			"Region": map[string]any{"Type": "String"},
 		},
 		map[string]string{"Region": "eu-west-1"},
 	)

@@ -33,18 +33,18 @@ func New(resources store.ResourceStore) *Provider {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Clusters
-		"Redshift.CreateCluster":   p.CreateCluster,
+		"Redshift.CreateCluster":    p.CreateCluster,
 		"Redshift.DescribeClusters": p.DescribeClusters,
-		"Redshift.DeleteCluster":   p.DeleteCluster,
-		"Redshift.ModifyCluster":   p.ModifyCluster,
-		"Redshift.RebootCluster":   p.RebootCluster,
-		"Redshift.ResumeCluster":   p.ResumeCluster,
-		"Redshift.PauseCluster":    p.PauseCluster,
+		"Redshift.DeleteCluster":    p.DeleteCluster,
+		"Redshift.ModifyCluster":    p.ModifyCluster,
+		"Redshift.RebootCluster":    p.RebootCluster,
+		"Redshift.ResumeCluster":    p.ResumeCluster,
+		"Redshift.PauseCluster":     p.PauseCluster,
 		// Subnet groups
-		"Redshift.CreateClusterSubnetGroup":   p.CreateClusterSubnetGroup,
+		"Redshift.CreateClusterSubnetGroup":    p.CreateClusterSubnetGroup,
 		"Redshift.DescribeClusterSubnetGroups": p.DescribeClusterSubnetGroups,
-		"Redshift.DeleteClusterSubnetGroup":   p.DeleteClusterSubnetGroup,
-		"Redshift.ModifyClusterSubnetGroup":   p.ModifyClusterSubnetGroup,
+		"Redshift.DeleteClusterSubnetGroup":    p.DeleteClusterSubnetGroup,
+		"Redshift.ModifyClusterSubnetGroup":    p.ModifyClusterSubnetGroup,
 		// Tags
 		"Redshift.CreateTags":   p.CreateTags,
 		"Redshift.DeleteTags":   p.DeleteTags,
@@ -53,16 +53,16 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 }
 
 type redshiftCluster struct {
-	ClusterIdentifier string    `json:"ClusterIdentifier"`
-	NodeType          string    `json:"NodeType"`
-	ClusterStatus     string    `json:"ClusterStatus"`
-	MasterUsername    string    `json:"MasterUsername"`
-	DBName            string    `json:"DBName"`
-	NumberOfNodes     int       `json:"NumberOfNodes"`
-	Endpoint          endpoint  `json:"Endpoint"`
-	ClusterCreateTime time.Time `json:"ClusterCreateTime"`
+	ClusterIdentifier string            `json:"ClusterIdentifier"`
+	NodeType          string            `json:"NodeType"`
+	ClusterStatus     string            `json:"ClusterStatus"`
+	MasterUsername    string            `json:"MasterUsername"`
+	DBName            string            `json:"DBName"`
+	NumberOfNodes     int               `json:"NumberOfNodes"`
+	Endpoint          endpoint          `json:"Endpoint"`
+	ClusterCreateTime time.Time         `json:"ClusterCreateTime"`
 	Tags              map[string]string `json:"Tags"`
-	ARN               string    `json:"ClusterNamespaceArn"`
+	ARN               string            `json:"ClusterNamespaceArn"`
 }
 
 type endpoint struct {
@@ -117,8 +117,8 @@ func clusterToWire(c redshiftCluster) map[string]any {
 			"Address": c.Endpoint.Address,
 			"Port":    fmt.Sprintf("%d", c.Endpoint.Port),
 		},
-		"ClusterCreateTime":    c.ClusterCreateTime.UTC().Format(time.RFC3339),
-		"ClusterNamespaceArn":  c.ARN,
+		"ClusterCreateTime":   c.ClusterCreateTime.UTC().Format(time.RFC3339),
+		"ClusterNamespaceArn": c.ARN,
 	}
 }
 

@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	ecsLabelApp       = "jaiscloud-ecs"
-	ecsK8sDefaultNS   = "jaiscloud"
-	ecsK8sAPIServer   = "https://kubernetes.default.svc"
+	ecsLabelApp     = "jaiscloud-ecs"
+	ecsK8sDefaultNS = "jaiscloud"
+	ecsK8sAPIServer = "https://kubernetes.default.svc"
 )
 
 type k8sExecutor struct {
@@ -117,7 +117,7 @@ func (e *k8sExecutor) Run(ctx context.Context, spec TaskSpec) (TaskHandle, error
 	}
 
 	podLabels := map[string]string{
-		"app":              ecsLabelApp,
+		"app":               ecsLabelApp,
 		"jaiscloud.io/task": spec.TaskARN,
 	}
 

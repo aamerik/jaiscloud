@@ -17,12 +17,12 @@ import (
 	"jaiscloud/internal/aws/provider/events/scheduler"
 	"jaiscloud/internal/aws/provider/events/targets"
 	"jaiscloud/internal/aws/provider/events/transform"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 const (
@@ -144,34 +144,34 @@ func (p *EventBridgeProvider) Routes() map[string]provider.HandlerFunc {
 		"EventBridge.DescribeEventBus": p.DescribeEventBus,
 		"EventBridge.ListEventBuses":   p.ListEventBuses,
 		// Tags
-		"EventBridge.TagResource":              p.TagResource,
-		"EventBridge.UntagResource":            p.UntagResource,
-		"EventBridge.ListTagsForResource":      p.ListTagsForResource,
+		"EventBridge.TagResource":         p.TagResource,
+		"EventBridge.UntagResource":       p.UntagResource,
+		"EventBridge.ListTagsForResource": p.ListTagsForResource,
 		// Archive + Replay (13.6)
-		"EventBridge.CreateArchive":     p.CreateArchive,
-		"EventBridge.DescribeArchive":   p.DescribeArchive,
-		"EventBridge.ListArchives":      p.ListArchives,
-		"EventBridge.UpdateArchive":     p.UpdateArchive,
-		"EventBridge.DeleteArchive":     p.DeleteArchive,
-		"EventBridge.StartReplay":       p.StartReplay,
-		"EventBridge.DescribeReplay":    p.DescribeReplay,
-		"EventBridge.ListReplays":       p.ListReplays,
-		"EventBridge.CancelReplay":      p.CancelReplay,
+		"EventBridge.CreateArchive":   p.CreateArchive,
+		"EventBridge.DescribeArchive": p.DescribeArchive,
+		"EventBridge.ListArchives":    p.ListArchives,
+		"EventBridge.UpdateArchive":   p.UpdateArchive,
+		"EventBridge.DeleteArchive":   p.DeleteArchive,
+		"EventBridge.StartReplay":     p.StartReplay,
+		"EventBridge.DescribeReplay":  p.DescribeReplay,
+		"EventBridge.ListReplays":     p.ListReplays,
+		"EventBridge.CancelReplay":    p.CancelReplay,
 		// Connection + ApiDestination (13.7)
-		"EventBridge.CreateConnection":          p.CreateConnection,
-		"EventBridge.DescribeConnection":        p.DescribeConnection,
-		"EventBridge.UpdateConnection":          p.UpdateConnection,
-		"EventBridge.DeleteConnection":          p.DeleteConnection,
-		"EventBridge.ListConnections":           p.ListConnections,
-		"EventBridge.DeauthorizeConnection":     p.DeauthorizeConnection,
-		"EventBridge.CreateApiDestination":      p.CreateApiDestination,
-		"EventBridge.DescribeApiDestination":    p.DescribeApiDestination,
-		"EventBridge.UpdateApiDestination":      p.UpdateApiDestination,
-		"EventBridge.DeleteApiDestination":      p.DeleteApiDestination,
-		"EventBridge.ListApiDestinations":       p.ListApiDestinations,
+		"EventBridge.CreateConnection":       p.CreateConnection,
+		"EventBridge.DescribeConnection":     p.DescribeConnection,
+		"EventBridge.UpdateConnection":       p.UpdateConnection,
+		"EventBridge.DeleteConnection":       p.DeleteConnection,
+		"EventBridge.ListConnections":        p.ListConnections,
+		"EventBridge.DeauthorizeConnection":  p.DeauthorizeConnection,
+		"EventBridge.CreateApiDestination":   p.CreateApiDestination,
+		"EventBridge.DescribeApiDestination": p.DescribeApiDestination,
+		"EventBridge.UpdateApiDestination":   p.UpdateApiDestination,
+		"EventBridge.DeleteApiDestination":   p.DeleteApiDestination,
+		"EventBridge.ListApiDestinations":    p.ListApiDestinations,
 		// Extras
-		"EventBridge.TestEventPattern":        p.TestEventPattern,
-		"EventBridge.ListRuleNamesByTarget":   p.ListRuleNamesByTarget,
+		"EventBridge.TestEventPattern":      p.TestEventPattern,
+		"EventBridge.ListRuleNamesByTarget": p.ListRuleNamesByTarget,
 		// Permissions
 		"EventBridge.PutPermission":    p.PutPermission,
 		"EventBridge.RemovePermission": p.RemovePermission,
@@ -1083,18 +1083,18 @@ type ebArchive struct {
 }
 
 type ebReplay struct {
-	Name               string     `json:"Name"`
-	ARN                string     `json:"ARN"`
-	EventSourceARN     string     `json:"EventSourceArn"`
-	DestinationARN     string     `json:"DestinationArn"`
-	FilterARNs         []string   `json:"FilterArns"`
-	EventStartTime     time.Time  `json:"EventStartTime"`
-	EventEndTime       time.Time  `json:"EventEndTime"`
-	State              string     `json:"State"`
-	StateReason        string     `json:"StateReason"`
-	Description        string     `json:"Description"`
-	ReplayStartTime    time.Time  `json:"ReplayStartTime"`
-	ReplayEndTime      *time.Time `json:"ReplayEndTime,omitempty"`
+	Name            string     `json:"Name"`
+	ARN             string     `json:"ARN"`
+	EventSourceARN  string     `json:"EventSourceArn"`
+	DestinationARN  string     `json:"DestinationArn"`
+	FilterARNs      []string   `json:"FilterArns"`
+	EventStartTime  time.Time  `json:"EventStartTime"`
+	EventEndTime    time.Time  `json:"EventEndTime"`
+	State           string     `json:"State"`
+	StateReason     string     `json:"StateReason"`
+	Description     string     `json:"Description"`
+	ReplayStartTime time.Time  `json:"ReplayStartTime"`
+	ReplayEndTime   *time.Time `json:"ReplayEndTime,omitempty"`
 }
 
 func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1304,12 +1304,12 @@ func (p *EventBridgeProvider) DescribeReplay(ctx context.Context, nr *model.Norm
 	var r ebReplay
 	json.Unmarshal(e.Data, &r)
 	out := map[string]any{
-		"ReplayName":     r.Name,
-		"ReplayArn":      r.ARN,
-		"EventSourceArn": r.EventSourceARN,
-		"Description":    r.Description,
-		"State":          r.State,
-		"StateReason":    r.StateReason,
+		"ReplayName":      r.Name,
+		"ReplayArn":       r.ARN,
+		"EventSourceArn":  r.EventSourceARN,
+		"Description":     r.Description,
+		"State":           r.State,
+		"StateReason":     r.StateReason,
 		"ReplayStartTime": r.ReplayStartTime.Unix(),
 	}
 	if r.ReplayEndTime != nil {
@@ -1333,10 +1333,10 @@ func (p *EventBridgeProvider) ListReplays(ctx context.Context, nr *model.Normali
 			continue
 		}
 		out = append(out, map[string]any{
-			"ReplayName":     r.Name,
-			"ReplayArn":      r.ARN,
-			"EventSourceArn": r.EventSourceARN,
-			"State":          r.State,
+			"ReplayName":      r.Name,
+			"ReplayArn":       r.ARN,
+			"EventSourceArn":  r.EventSourceARN,
+			"State":           r.State,
 			"ReplayStartTime": r.ReplayStartTime.Unix(),
 		})
 	}

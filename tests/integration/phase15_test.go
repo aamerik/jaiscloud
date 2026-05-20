@@ -7,24 +7,24 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
+	awsacmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	awsathena "github.com/aws/aws-sdk-go-v2/service/athena"
 	awsathenatype "github.com/aws/aws-sdk-go-v2/service/athena/types"
 	awscloudfront "github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	awscftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
+	awscognitoidentity "github.com/aws/aws-sdk-go-v2/service/cognitoidentity"
 	awscognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	awscognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
-	awscognitoidentity "github.com/aws/aws-sdk-go-v2/service/cognitoidentity"
-	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
-	awsacmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	awsfirehose "github.com/aws/aws-sdk-go-v2/service/firehose"
 	awsfirehosetypes "github.com/aws/aws-sdk-go-v2/service/firehose/types"
 	awsredshift "github.com/aws/aws-sdk-go-v2/service/redshift"
 	awsredshifttypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
-	awsses "github.com/aws/aws-sdk-go-v2/service/ses"
-	awssestypes "github.com/aws/aws-sdk-go-v2/service/ses/types"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	awss3control "github.com/aws/aws-sdk-go-v2/service/s3control"
+	awsses "github.com/aws/aws-sdk-go-v2/service/ses"
+	awssestypes "github.com/aws/aws-sdk-go-v2/service/ses/types"
 )
 
 // ─── Cognito User Pools ───────────────────────────────────────────────────────
@@ -116,8 +116,8 @@ func TestCognito_UserPool_ClientAndUser(t *testing.T) {
 
 	// Admin create user
 	_, err = c.AdminCreateUser(ctx, &awscognitoidp.AdminCreateUserInput{
-		UserPoolId: aws.String(poolID),
-		Username:   aws.String("alice"),
+		UserPoolId:        aws.String(poolID),
+		Username:          aws.String("alice"),
 		TemporaryPassword: aws.String("Temp1234!"),
 	})
 	if err != nil {
@@ -224,7 +224,7 @@ func TestACM_CertificateCRUD(t *testing.T) {
 	c := newACMClient(t)
 
 	reqOut, err := c.RequestCertificate(ctx, &awsacm.RequestCertificateInput{
-		DomainName: aws.String("example.com"),
+		DomainName:              aws.String("example.com"),
 		SubjectAlternativeNames: []string{"www.example.com"},
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestACM_CertificateCRUD(t *testing.T) {
 
 	_, err = c.AddTagsToCertificate(ctx, &awsacm.AddTagsToCertificateInput{
 		CertificateArn: aws.String(certARN),
-		Tags: []awsacmtypes.Tag{{Key: aws.String("env"), Value: aws.String("test")}},
+		Tags:           []awsacmtypes.Tag{{Key: aws.String("env"), Value: aws.String("test")}},
 	})
 	if err != nil {
 		t.Fatalf("AddTagsToCertificate: %v", err)
@@ -649,7 +649,7 @@ func TestRedshift_ClusterCRUD(t *testing.T) {
 	}
 
 	_, err = c.ModifyCluster(ctx, &awsredshift.ModifyClusterInput{
-		ClusterIdentifier: aws.String("my-cluster"),
+		ClusterIdentifier:  aws.String("my-cluster"),
 		MasterUserPassword: aws.String("NewPass1234!"),
 	})
 	if err != nil {

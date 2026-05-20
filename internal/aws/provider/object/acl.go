@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ─── P2-4: ACLs ──────────────────────────────────────────────────────────────
@@ -668,8 +668,8 @@ func (p *ObjectProvider) DeleteBucketReplication(ctx context.Context, nr *model.
 
 // selectRequest is the XML body of a SelectObjectContent request.
 type selectRequest struct {
-	Expression     string `xml:"Expression"`
-	ExpressionType string `xml:"ExpressionType"`
+	Expression         string `xml:"Expression"`
+	ExpressionType     string `xml:"ExpressionType"`
 	InputSerialization struct {
 		CSV *struct {
 			FileHeaderInfo             string `xml:"FileHeaderInfo"`

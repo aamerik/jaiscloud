@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ─── Multipart ────────────────────────────────────────────────────────────────
@@ -254,4 +254,3 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 		},
 	}), nil
 }
-

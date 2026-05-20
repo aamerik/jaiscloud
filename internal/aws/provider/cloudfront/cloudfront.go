@@ -27,14 +27,14 @@ func New(resources store.ResourceStore) *Provider {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"CloudFront.CreateDistribution":    p.CreateDistribution,
-		"CloudFront.GetDistribution":       p.GetDistribution,
-		"CloudFront.UpdateDistribution":    p.UpdateDistribution,
-		"CloudFront.DeleteDistribution":    p.DeleteDistribution,
-		"CloudFront.ListDistributions":     p.ListDistributions,
-		"CloudFront.TagResource":           p.TagResource,
-		"CloudFront.UntagResource":         p.UntagResource,
-		"CloudFront.ListTagsForResource":   p.ListTagsForResource,
+		"CloudFront.CreateDistribution":  p.CreateDistribution,
+		"CloudFront.GetDistribution":     p.GetDistribution,
+		"CloudFront.UpdateDistribution":  p.UpdateDistribution,
+		"CloudFront.DeleteDistribution":  p.DeleteDistribution,
+		"CloudFront.ListDistributions":   p.ListDistributions,
+		"CloudFront.TagResource":         p.TagResource,
+		"CloudFront.UntagResource":       p.UntagResource,
+		"CloudFront.ListTagsForResource": p.ListTagsForResource,
 	}
 }
 
@@ -70,8 +70,8 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func newDistributionID() string  { return "D" + randAlphaNum(13) }
-func newETag() string            { return randHex(16) }
+func newDistributionID() string { return "D" + randAlphaNum(13) }
+func newETag() string           { return randHex(16) }
 
 func str(params map[string]any, key string) string {
 	v, _ := params[key].(string)
@@ -84,12 +84,12 @@ func cfErr(code, msg string, status int) error {
 
 func distToWire(d distribution) map[string]any {
 	return map[string]any{
-		"Id":           d.ID,
-		"ARN":          d.ARN,
-		"Status":       d.Status,
-		"DomainName":   d.DomainName,
+		"Id":               d.ID,
+		"ARN":              d.ARN,
+		"Status":           d.Status,
+		"DomainName":       d.DomainName,
 		"LastModifiedTime": d.LastModified.UTC().Format(time.RFC3339),
-		"_etag":        d.ETag,
+		"_etag":            d.ETag,
 		"DistributionConfig": map[string]any{
 			"CallerReference": d.CallerReference,
 			"Comment":         d.Comment,

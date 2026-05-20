@@ -156,8 +156,8 @@ func TestDynamoDB_ProjectionExpression_Scan(t *testing.T) {
 	}
 
 	out, err := c.Scan(ctx, &awsdynamo.ScanInput{
-		TableName:            aws.String("proj-scan-tbl"),
-		ProjectionExpression: aws.String("PK, #n"),
+		TableName:                aws.String("proj-scan-tbl"),
+		ProjectionExpression:     aws.String("PK, #n"),
 		ExpressionAttributeNames: map[string]string{"#n": "name"},
 	})
 	require.NoError(t, err)
@@ -203,8 +203,8 @@ func TestDynamoDB_ProjectionExpression_Query(t *testing.T) {
 	}
 
 	qOut, err := c.Query(ctx, &awsdynamo.QueryInput{
-		TableName:            aws.String("proj-query-tbl"),
-		ProjectionExpression: aws.String("PK, SK, visible"),
+		TableName:              aws.String("proj-query-tbl"),
+		ProjectionExpression:   aws.String("PK, SK, visible"),
 		KeyConditionExpression: aws.String("PK = :pk"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":pk": &types.AttributeValueMemberS{Value: "user1"},

@@ -32,25 +32,25 @@ func EvalFilter(item map[string]any, expr string, names map[string]string, value
 type tokenKind int
 
 const (
-	tkEOF tokenKind = iota
-	tkIdent     // keyword, function name, or attribute name
-	tkExprName  // #name
-	tkExprVal   // :name
-	tkNumber    // digits (list indices)
-	tkDot       // .
-	tkLBracket  // [
-	tkRBracket  // ]
-	tkLParen    // (
-	tkRParen    // )
-	tkComma     // ,
-	tkEq        // =
-	tkNeq       // <>
-	tkLt        // <
-	tkLe        // <=
-	tkGt        // >
-	tkGe        // >=
-	tkPlus      // +
-	tkMinus     // -
+	tkEOF      tokenKind = iota
+	tkIdent              // keyword, function name, or attribute name
+	tkExprName           // #name
+	tkExprVal            // :name
+	tkNumber             // digits (list indices)
+	tkDot                // .
+	tkLBracket           // [
+	tkRBracket           // ]
+	tkLParen             // (
+	tkRParen             // )
+	tkComma              // ,
+	tkEq                 // =
+	tkNeq                // <>
+	tkLt                 // <
+	tkLe                 // <=
+	tkGt                 // >
+	tkGe                 // >=
+	tkPlus               // +
+	tkMinus              // -
 )
 
 type token struct {
@@ -152,8 +152,8 @@ func tokenize(s string) ([]token, error) {
 	return toks, nil
 }
 
-func isAlpha(c byte) bool  { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
-func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
+func isAlpha(c byte) bool    { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+func isDigit(c byte) bool    { return c >= '0' && c <= '9' }
 func isAlphaNum(c byte) bool { return isAlpha(c) || isDigit(c) }
 
 // ─── AST node types ───────────────────────────────────────────────────────────

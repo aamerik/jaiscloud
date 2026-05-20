@@ -14,15 +14,15 @@ import (
 )
 
 type eksAddon struct {
-	ClusterName            string    `json:"clusterName"`
-	AddonName              string    `json:"addonName"`
-	AddonVersion           string    `json:"addonVersion"`
-	Arn                    string    `json:"addonArn"`
-	Status                 string    `json:"status"`
-	ServiceAccountRoleArn  string    `json:"serviceAccountRoleArn"`
-	ConfigurationValues    string    `json:"configurationValues"`
-	CreatedAt              time.Time `json:"createdAt"`
-	ModifiedAt             time.Time `json:"modifiedAt"`
+	ClusterName           string    `json:"clusterName"`
+	AddonName             string    `json:"addonName"`
+	AddonVersion          string    `json:"addonVersion"`
+	Arn                   string    `json:"addonArn"`
+	Status                string    `json:"status"`
+	ServiceAccountRoleArn string    `json:"serviceAccountRoleArn"`
+	ConfigurationValues   string    `json:"configurationValues"`
+	CreatedAt             time.Time `json:"createdAt"`
+	ModifiedAt            time.Time `json:"modifiedAt"`
 }
 
 func addonKey(clusterName, addonName string) string {

@@ -34,16 +34,16 @@ func New(resources store.ResourceStore) *Provider {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"SES.SendEmail":                        p.SendEmail,
-		"SES.SendRawEmail":                     p.SendRawEmail,
-		"SES.SendBulkTemplatedEmail":           p.SendBulkTemplatedEmail,
-		"SES.VerifyEmailIdentity":              p.VerifyEmailIdentity,
-		"SES.VerifyDomainIdentity":             p.VerifyDomainIdentity,
-		"SES.ListIdentities":                   p.ListIdentities,
-		"SES.DeleteIdentity":                   p.DeleteIdentity,
+		"SES.SendEmail":                         p.SendEmail,
+		"SES.SendRawEmail":                      p.SendRawEmail,
+		"SES.SendBulkTemplatedEmail":            p.SendBulkTemplatedEmail,
+		"SES.VerifyEmailIdentity":               p.VerifyEmailIdentity,
+		"SES.VerifyDomainIdentity":              p.VerifyDomainIdentity,
+		"SES.ListIdentities":                    p.ListIdentities,
+		"SES.DeleteIdentity":                    p.DeleteIdentity,
 		"SES.GetIdentityVerificationAttributes": p.GetIdentityVerificationAttributes,
-		"SES.GetSendQuota":                     p.GetSendQuota,
-		"SES.GetSendStatistics":                p.GetSendStatistics,
+		"SES.GetSendQuota":                      p.GetSendQuota,
+		"SES.GetSendStatistics":                 p.GetSendStatistics,
 	}
 }
 

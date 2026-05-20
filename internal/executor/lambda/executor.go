@@ -16,7 +16,7 @@ type InvokeRequest struct {
 	FunctionName string
 	Runtime      string
 	Handler      string
-	Image        string            // override image; empty = derive from Runtime
+	Image        string // override image; empty = derive from Runtime
 	MemoryMB     int
 	TimeoutSecs  int
 	EnvVars      map[string]string

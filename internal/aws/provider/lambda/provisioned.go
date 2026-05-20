@@ -14,14 +14,14 @@ import (
 const resTypeProvisioned = "lambda_provisioned"
 
 type provisionedEntry struct {
-	FunctionName                    string `json:"FunctionName"`
-	Qualifier                       string `json:"Qualifier"`
-	RequestedProvisionedConcurrentExecutions int `json:"RequestedProvisionedConcurrentExecutions"`
-	AllocatedProvisionedConcurrentExecutions int `json:"AllocatedProvisionedConcurrentExecutions"`
-	AvailableProvisionedConcurrentExecutions int `json:"AvailableProvisionedConcurrentExecutions"`
-	StatusReason                    string `json:"StatusReason"`
-	Status                          string `json:"Status"`
-	LastModified                    string `json:"LastModified"`
+	FunctionName                             string `json:"FunctionName"`
+	Qualifier                                string `json:"Qualifier"`
+	RequestedProvisionedConcurrentExecutions int    `json:"RequestedProvisionedConcurrentExecutions"`
+	AllocatedProvisionedConcurrentExecutions int    `json:"AllocatedProvisionedConcurrentExecutions"`
+	AvailableProvisionedConcurrentExecutions int    `json:"AvailableProvisionedConcurrentExecutions"`
+	StatusReason                             string `json:"StatusReason"`
+	Status                                   string `json:"Status"`
+	LastModified                             string `json:"LastModified"`
 }
 
 func (p *FunctionProvider) PutProvisionedConcurrencyConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -33,13 +33,13 @@ func (p *FunctionProvider) PutProvisionedConcurrencyConfig(ctx context.Context, 
 	}
 	key := fmt.Sprintf("%s:%s", funcName, qualifier)
 	pe := provisionedEntry{
-		FunctionName:                    funcName,
-		Qualifier:                       qualifier,
+		FunctionName:                             funcName,
+		Qualifier:                                qualifier,
 		RequestedProvisionedConcurrentExecutions: requested,
 		AllocatedProvisionedConcurrentExecutions: requested,
 		AvailableProvisionedConcurrentExecutions: requested,
-		Status:       "READY",
-		LastModified: time.Now().UTC().Format(time.RFC3339),
+		Status:                                   "READY",
+		LastModified:                             time.Now().UTC().Format(time.RFC3339),
 	}
 	data, _ := json.Marshal(pe)
 	entry := store.ResourceEntry{Type: resTypeProvisioned, ID: key, Data: data}

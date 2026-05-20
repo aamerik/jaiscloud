@@ -430,10 +430,10 @@ func TestDDB_UpdateExpression_REMOVE(t *testing.T) {
 	_, err := c.PutItem(ctx, &awsddb.PutItemInput{
 		TableName: aws.String("expr-remove-tbl"),
 		Item: map[string]ddbtypes.AttributeValue{
-			"pk":        &ddbtypes.AttributeValueMemberS{Value: "item"},
-			"sk":        &ddbtypes.AttributeValueMemberS{Value: "1"},
-			"keepMe":    &ddbtypes.AttributeValueMemberS{Value: "stay"},
-			"removeMe":  &ddbtypes.AttributeValueMemberS{Value: "gone"},
+			"pk":       &ddbtypes.AttributeValueMemberS{Value: "item"},
+			"sk":       &ddbtypes.AttributeValueMemberS{Value: "1"},
+			"keepMe":   &ddbtypes.AttributeValueMemberS{Value: "stay"},
+			"removeMe": &ddbtypes.AttributeValueMemberS{Value: "gone"},
 		},
 	})
 	require.NoError(t, err)

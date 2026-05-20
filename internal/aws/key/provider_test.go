@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/key"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 

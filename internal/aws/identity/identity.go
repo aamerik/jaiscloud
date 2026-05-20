@@ -25,12 +25,12 @@ var TwelveDigit = regexp.MustCompile(`^\d{12}$`)
 type Source uint8
 
 const (
-	SourceDefault   Source = iota // no credential found; identity is DefaultAccountID
-	SourceSigV4Header             // Authorization: AWS4-HMAC-SHA256 Credential=...
-	SourceSigV4Query              // X-Amz-Credential=... (presigned URL)
-	SourceSigV2Header             // Authorization: AWS <key>:<sig>
-	SourceSigV2Query              // AWSAccessKeyId=... in query string (legacy S3)
-	SourceFallback                // SigV4 shape valid, account not decodable; region extracted
+	SourceDefault     Source = iota // no credential found; identity is DefaultAccountID
+	SourceSigV4Header               // Authorization: AWS4-HMAC-SHA256 Credential=...
+	SourceSigV4Query                // X-Amz-Credential=... (presigned URL)
+	SourceSigV2Header               // Authorization: AWS <key>:<sig>
+	SourceSigV2Query                // AWSAccessKeyId=... in query string (legacy S3)
+	SourceFallback                  // SigV4 shape valid, account not decodable; region extracted
 )
 
 // Parsed is the per-request identity derived from the HTTP request.

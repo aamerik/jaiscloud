@@ -28,11 +28,11 @@ func New(resources store.ResourceStore) *Provider {
 // Routes returns all Tagging API handler registrations.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Tagging.GetResources":     p.GetResources,
-		"Tagging.GetTagKeys":       p.GetTagKeys,
-		"Tagging.GetTagValues":     p.GetTagValues,
-		"Tagging.TagResources":     p.TagResources,
-		"Tagging.UntagResources":   p.UntagResources,
+		"Tagging.GetResources":   p.GetResources,
+		"Tagging.GetTagKeys":     p.GetTagKeys,
+		"Tagging.GetTagValues":   p.GetTagValues,
+		"Tagging.TagResources":   p.TagResources,
+		"Tagging.UntagResources": p.UntagResources,
 	}
 }
 
@@ -375,8 +375,8 @@ func (p *Provider) InternalUntagResource(ctx context.Context, arn string, keys [
 
 // ErrorFailedResource represents a resource that couldn't be tagged.
 type ErrorFailedResource struct {
-	StatusCode  int    `json:"StatusCode"`
-	ErrorCode   string `json:"ErrorCode"`
+	StatusCode   int    `json:"StatusCode"`
+	ErrorCode    string `json:"ErrorCode"`
 	ErrorMessage string `json:"ErrorMessage"`
 }
 

@@ -196,7 +196,7 @@ func TestEventBridge_CreateConnection_BasicAuth(t *testing.T) {
 	eb := newEventBridgeClient(t)
 
 	out, err := eb.CreateConnection(ctx, &awseb.CreateConnectionInput{
-		Name:             aws.String("basic-conn"),
+		Name:              aws.String("basic-conn"),
 		AuthorizationType: ebtypes.ConnectionAuthorizationTypeBasic,
 		AuthParameters: &ebtypes.CreateConnectionAuthRequestParameters{
 			BasicAuthParameters: &ebtypes.CreateConnectionBasicAuthRequestParameters{
@@ -217,7 +217,7 @@ func TestEventBridge_CreateConnection_ApiKey(t *testing.T) {
 	eb := newEventBridgeClient(t)
 
 	_, err := eb.CreateConnection(ctx, &awseb.CreateConnectionInput{
-		Name:             aws.String("apikey-conn"),
+		Name:              aws.String("apikey-conn"),
 		AuthorizationType: ebtypes.ConnectionAuthorizationTypeApiKey,
 		AuthParameters: &ebtypes.CreateConnectionAuthRequestParameters{
 			ApiKeyAuthParameters: &ebtypes.CreateConnectionApiKeyAuthRequestParameters{
@@ -237,7 +237,7 @@ func TestEventBridge_DescribeConnection_AfterCreate(t *testing.T) {
 	eb := newEventBridgeClient(t)
 
 	_, err := eb.CreateConnection(ctx, &awseb.CreateConnectionInput{
-		Name:             aws.String("desc-conn"),
+		Name:              aws.String("desc-conn"),
 		AuthorizationType: ebtypes.ConnectionAuthorizationTypeBasic,
 		AuthParameters: &ebtypes.CreateConnectionAuthRequestParameters{
 			BasicAuthParameters: &ebtypes.CreateConnectionBasicAuthRequestParameters{
@@ -263,7 +263,7 @@ func TestEventBridge_DeleteConnection_Success(t *testing.T) {
 	eb := newEventBridgeClient(t)
 
 	_, err := eb.CreateConnection(ctx, &awseb.CreateConnectionInput{
-		Name:             aws.String("del-conn"),
+		Name:              aws.String("del-conn"),
 		AuthorizationType: ebtypes.ConnectionAuthorizationTypeBasic,
 		AuthParameters: &ebtypes.CreateConnectionAuthRequestParameters{
 			BasicAuthParameters: &ebtypes.CreateConnectionBasicAuthRequestParameters{
@@ -290,7 +290,7 @@ func TestEventBridge_CreateApiDestination_Success(t *testing.T) {
 	eb := newEventBridgeClient(t)
 
 	connOut, err := eb.CreateConnection(ctx, &awseb.CreateConnectionInput{
-		Name:             aws.String("apidest-conn"),
+		Name:              aws.String("apidest-conn"),
 		AuthorizationType: ebtypes.ConnectionAuthorizationTypeBasic,
 		AuthParameters: &ebtypes.CreateConnectionAuthRequestParameters{
 			BasicAuthParameters: &ebtypes.CreateConnectionBasicAuthRequestParameters{
@@ -304,10 +304,10 @@ func TestEventBridge_CreateApiDestination_Success(t *testing.T) {
 	}
 
 	out, err := eb.CreateApiDestination(ctx, &awseb.CreateApiDestinationInput{
-		Name:              aws.String("my-dest"),
-		ConnectionArn:     connOut.ConnectionArn,
+		Name:               aws.String("my-dest"),
+		ConnectionArn:      connOut.ConnectionArn,
 		InvocationEndpoint: aws.String("https://example.com/webhook"),
-		HttpMethod:        ebtypes.ApiDestinationHttpMethodPost,
+		HttpMethod:         ebtypes.ApiDestinationHttpMethodPost,
 	})
 	if err != nil {
 		t.Skipf("CreateApiDestination not implemented: %v", err)

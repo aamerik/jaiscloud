@@ -4,18 +4,18 @@ package ecr
 import "time"
 
 type Repository struct {
-	RegistryID           string
-	Name                 string
-	ARN                  string
-	URI                  string
-	CreatedAt            time.Time
-	ImageTagMutability   string // "MUTABLE" or "IMMUTABLE"
-	ImageScanningConfig  ImageScanningConfig
-	EncryptionConfig     EncryptionConfig
-	Images               map[string]*Image // digest → image
-	LifecyclePolicy      string
-	RepositoryPolicy     string
-	Tags                 map[string]string
+	RegistryID          string
+	Name                string
+	ARN                 string
+	URI                 string
+	CreatedAt           time.Time
+	ImageTagMutability  string // "MUTABLE" or "IMMUTABLE"
+	ImageScanningConfig ImageScanningConfig
+	EncryptionConfig    EncryptionConfig
+	Images              map[string]*Image // digest → image
+	LifecyclePolicy     string
+	RepositoryPolicy    string
+	Tags                map[string]string
 }
 
 type ImageScanningConfig struct {
@@ -28,15 +28,15 @@ type EncryptionConfig struct {
 }
 
 type Image struct {
-	Digest             string
-	Manifest           string
-	ManifestMediaType  string
-	Tags               []string
-	PushedAt           time.Time
-	Size               int64
-	ScanFindings       *ImageScanFindings
-	ArtifactMediaType  string
-	Layers             []LayerRef // parsed layer references from manifest
+	Digest            string
+	Manifest          string
+	ManifestMediaType string
+	Tags              []string
+	PushedAt          time.Time
+	Size              int64
+	ScanFindings      *ImageScanFindings
+	ArtifactMediaType string
+	Layers            []LayerRef // parsed layer references from manifest
 }
 
 // LayerRef holds a digest and size for a single layer, as extracted from the
@@ -53,9 +53,9 @@ type ImageIdentifier struct {
 }
 
 type ImageScanFindings struct {
-	ImageScanFindingsSummary ImageScanFindingsSummary
-	Findings                 []ImageScanFinding
-	ScanCompletedAt          time.Time
+	ImageScanFindingsSummary     ImageScanFindingsSummary
+	Findings                     []ImageScanFinding
+	ScanCompletedAt              time.Time
 	VulnerabilitySourceUpdatedAt time.Time
 }
 
@@ -80,7 +80,7 @@ type FailedImage struct {
 }
 
 type PullThroughCacheRule struct {
-	EcrRepositoryPrefix  string
-	UpstreamRegistryURL  string
-	CreatedAt            time.Time
+	EcrRepositoryPrefix string
+	UpstreamRegistryURL string
+	CreatedAt           time.Time
 }

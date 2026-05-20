@@ -236,8 +236,8 @@ func TestLambdaDocker_EnvironmentVariables_PassedToContainer(t *testing.T) {
 		Role:         aws.String("arn:aws:iam::000000000000:role/lambda-role"),
 		Environment: &types.Environment{
 			Variables: map[string]string{
-				"TEST_KEY":  "hello-from-env",
-				"STAGE":     "e2e",
+				"TEST_KEY": "hello-from-env",
+				"STAGE":    "e2e",
 			},
 		},
 	})

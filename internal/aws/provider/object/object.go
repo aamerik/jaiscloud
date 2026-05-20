@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ObjectProvider handles all S3 operations.
@@ -103,10 +103,10 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		"Object.PutObjectLegalHold":         p.PutObjectLegalHold,
 		"Object.GetObjectLegalHold":         p.GetObjectLegalHold,
 		// ACLs (P2-4)
-		"Object.GetBucketAcl":  p.GetBucketAcl,
-		"Object.PutBucketAcl":  p.PutBucketAcl,
-		"Object.GetObjectAcl":  p.GetObjectAcl,
-		"Object.PutObjectAcl":  p.PutObjectAcl,
+		"Object.GetBucketAcl": p.GetBucketAcl,
+		"Object.PutBucketAcl": p.PutBucketAcl,
+		"Object.GetObjectAcl": p.GetObjectAcl,
+		"Object.PutObjectAcl": p.PutObjectAcl,
 		// Ownership Controls (P4.3)
 		"Object.PutBucketOwnershipControls":    p.PutBucketOwnershipControls,
 		"Object.GetBucketOwnershipControls":    p.GetBucketOwnershipControls,
@@ -116,7 +116,7 @@ func (p *ObjectProvider) Routes() map[string]provider.HandlerFunc {
 		// Lifecycle (P2-5)
 		"Object.PutBucketLifecycleConfiguration": p.PutBucketLifecycleConfiguration,
 		"Object.GetBucketLifecycleConfiguration": p.GetBucketLifecycleConfiguration,
-		"Object.DeleteBucketLifecycle":            p.DeleteBucketLifecycle,
+		"Object.DeleteBucketLifecycle":           p.DeleteBucketLifecycle,
 		// CORS (P2-6)
 		"Object.PutBucketCors":    p.PutBucketCors,
 		"Object.GetBucketCors":    p.GetBucketCors,

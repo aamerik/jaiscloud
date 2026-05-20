@@ -225,4 +225,4 @@ func (s *errStore) List(_ context.Context, _, _, _, _ string) ([]store.ResourceE
 	return nil, s.err
 }
 func (s *errStore) Purge(_ context.Context, _, _, _ string) error { return s.err }
-func (s *errStore) Reset(ctx context.Context)                                         {}
+func (s *errStore) Reset(ctx context.Context)                     {}

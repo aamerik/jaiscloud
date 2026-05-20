@@ -32,18 +32,21 @@ func newSimpleStoreGlobal() *simpleStore {
 }
 
 func (s *simpleStore) Set(k, v string) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Data[k] = v
 }
 
 func (s *simpleStore) Get(k string) (string, bool) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	v, ok := s.Data[k]
 	return v, ok
 }
 
 func (s *simpleStore) Reset(ctx context.Context) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Data = make(map[string]string)
 }
 
@@ -92,7 +95,9 @@ func TestLocalBundle_ResetScope_Isolation(t *testing.T) {
 	a, _ := b.Get("111111111111", "us-east-1")
 	c, _ := b.Get("111111111111", "us-west-2")
 	d, _ := b.Get("222222222222", "us-east-1")
-	a.Set("x", "1"); c.Set("x", "2"); d.Set("x", "3")
+	a.Set("x", "1")
+	c.Set("x", "2")
+	d.Set("x", "3")
 
 	b.ResetScope("111111111111", "us-east-1")
 
@@ -112,7 +117,9 @@ func TestLocalBundle_ResetAccount(t *testing.T) {
 	a, _ := b.Get("111111111111", "us-east-1")
 	c, _ := b.Get("111111111111", "us-west-2")
 	d, _ := b.Get("222222222222", "us-east-1")
-	a.Set("x", "1"); c.Set("x", "2"); d.Set("x", "3")
+	a.Set("x", "1")
+	c.Set("x", "2")
+	d.Set("x", "3")
 
 	b.ResetAccount("111111111111")
 
@@ -210,7 +217,11 @@ func waitTimeout() <-chan struct{} {
 		// 2-second timeout is generous for a unit test
 		var wg sync.WaitGroup
 		wg.Add(1)
-		go func() { defer wg.Done(); for range 2_000_000_000 { } }()
+		go func() {
+			defer wg.Done()
+			for range 2_000_000_000 {
+			}
+		}()
 		wg.Wait()
 		close(ch)
 	}()
@@ -271,7 +282,8 @@ func TestCrossRegionBundle_ResetAccount(t *testing.T) {
 	b := bundle.NewCrossRegion(newSimpleStoreAccount)
 	s1, _ := b.Get("111111111111")
 	s2, _ := b.Get("222222222222")
-	s1.Set("x", "1"); s2.Set("x", "2")
+	s1.Set("x", "1")
+	s2.Set("x", "2")
 
 	b.ResetAccount("111111111111")
 	if _, ok := s1.Get("x"); ok {

@@ -51,26 +51,26 @@ func New(store SecretStore, kms model.KeyEncryptor) *SecretProvider {
 // Routes returns all SecretsManager handler registrations.
 func (p *SecretProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Secret.CreateSecret":          p.CreateSecret,
-		"Secret.DescribeSecret":        p.DescribeSecret,
-		"Secret.UpdateSecret":          p.UpdateSecret,
-		"Secret.DeleteSecret":          p.DeleteSecret,
-		"Secret.RestoreSecret":         p.RestoreSecret,
-		"Secret.ListSecrets":           p.ListSecrets,
-		"Secret.PutSecretValue":        p.PutSecretValue,
-		"Secret.GetSecretValue":        p.GetSecretValue,
-		"Secret.ListSecretVersionIds":  p.ListSecretVersionIds,
-		"Secret.TagResource":           p.TagResource,
-		"Secret.UntagResource":         p.UntagResource,
-		"Secret.RotateSecret":          p.RotateSecret,
-		"Secret.CancelRotateSecret":    p.CancelRotateSecret,
-		"Secret.GetResourcePolicy":          p.GetResourcePolicy,
-		"Secret.PutResourcePolicy":          p.PutResourcePolicy,
-		"Secret.DeleteResourcePolicy":       p.DeleteResourcePolicy,
-		"Secret.UpdateSecretVersionStage":   p.UpdateSecretVersionStage,
-		"Secret.GetRandomPassword":          p.GetRandomPassword,
-		"Secret.BatchGetSecretValue":        p.BatchGetSecretValue,
-		"Secret.ValidateResourcePolicy":     p.ValidateResourcePolicy,
+		"Secret.CreateSecret":             p.CreateSecret,
+		"Secret.DescribeSecret":           p.DescribeSecret,
+		"Secret.UpdateSecret":             p.UpdateSecret,
+		"Secret.DeleteSecret":             p.DeleteSecret,
+		"Secret.RestoreSecret":            p.RestoreSecret,
+		"Secret.ListSecrets":              p.ListSecrets,
+		"Secret.PutSecretValue":           p.PutSecretValue,
+		"Secret.GetSecretValue":           p.GetSecretValue,
+		"Secret.ListSecretVersionIds":     p.ListSecretVersionIds,
+		"Secret.TagResource":              p.TagResource,
+		"Secret.UntagResource":            p.UntagResource,
+		"Secret.RotateSecret":             p.RotateSecret,
+		"Secret.CancelRotateSecret":       p.CancelRotateSecret,
+		"Secret.GetResourcePolicy":        p.GetResourcePolicy,
+		"Secret.PutResourcePolicy":        p.PutResourcePolicy,
+		"Secret.DeleteResourcePolicy":     p.DeleteResourcePolicy,
+		"Secret.UpdateSecretVersionStage": p.UpdateSecretVersionStage,
+		"Secret.GetRandomPassword":        p.GetRandomPassword,
+		"Secret.BatchGetSecretValue":      p.BatchGetSecretValue,
+		"Secret.ValidateResourcePolicy":   p.ValidateResourcePolicy,
 	}
 }
 
@@ -474,11 +474,11 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 
 	pendingVersionID := newID()
 	if err := p.store.PutVersion(ctx, VersionEntry{
-		SecretID:      e.SecretID,
-		VersionID:     pendingVersionID,
+		SecretID:     e.SecretID,
+		VersionID:    pendingVersionID,
 		SecretBinary: currentV.SecretBinary,
-		IsBinary:      currentV.IsBinary,
-		Stages:        []string{"AWSPENDING"},
+		IsBinary:     currentV.IsBinary,
+		Stages:       []string{"AWSPENDING"},
 	}); err != nil {
 		return nil, fmt.Errorf("sm: put pending version: %w", err)
 	}
@@ -491,11 +491,11 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 	if rotateNow {
 		// Promote AWSPENDING → AWSCURRENT (PutVersion demotes old AWSCURRENT to AWSPREVIOUS).
 		if err := p.store.PutVersion(ctx, VersionEntry{
-			SecretID:      e.SecretID,
-			VersionID:     pendingVersionID,
-			SecretBinary:  currentV.SecretBinary,
-			IsBinary:      currentV.IsBinary,
-			Stages:        []string{"AWSCURRENT"},
+			SecretID:     e.SecretID,
+			VersionID:    pendingVersionID,
+			SecretBinary: currentV.SecretBinary,
+			IsBinary:     currentV.IsBinary,
+			Stages:       []string{"AWSCURRENT"},
 		}); err != nil {
 			return nil, fmt.Errorf("sm: promote pending version: %w", err)
 		}

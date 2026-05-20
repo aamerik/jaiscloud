@@ -23,16 +23,16 @@ import (
 )
 
 var (
-	roleARNRegex           = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
-	sessionNameRegex       = regexp.MustCompile(`^[\w+=,.@-]*$`)
-	federationNameRegex    = regexp.MustCompile(`^[\w+=,.@-]+$`)
+	roleARNRegex        = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
+	sessionNameRegex    = regexp.MustCompile(`^[\w+=,.@-]*$`)
+	federationNameRegex = regexp.MustCompile(`^[\w+=,.@-]+$`)
 )
 
 // STSProvider handles STS API operations.
 type STSProvider struct {
-	store        SessionStore
-	oidcIssuers  map[string]string // issuer URL → JWKS URL (nil = skip verification)
-	jwksCache    *JWKSCache
+	store       SessionStore
+	oidcIssuers map[string]string // issuer URL → JWKS URL (nil = skip verification)
+	jwksCache   *JWKSCache
 }
 
 // New constructs an STSProvider.

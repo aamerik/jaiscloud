@@ -15,7 +15,7 @@ import (
 )
 
 type Config struct {
-	Port      int
+	Port int
 	// Ephemeral disables all state persistence. State is lost on process exit.
 	// Mutually exclusive with DSN. Intended for CI, unit tests, and throw-away runs.
 	Ephemeral bool

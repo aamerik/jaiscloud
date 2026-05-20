@@ -50,14 +50,14 @@ func (p *ParameterProvider) SetSecretGetter(sg SecretValueGetter) { p.secretGett
 // Routes returns all SSM handler registrations.
 func (p *ParameterProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Parameter.PutParameter":           p.PutParameter,
-		"Parameter.GetParameter":           p.GetParameter,
-		"Parameter.GetParameters":          p.GetParameters,
-		"Parameter.GetParametersByPath":    p.GetParametersByPath,
-		"Parameter.DeleteParameter":        p.DeleteParameter,
-		"Parameter.DeleteParameters":       p.DeleteParameters,
-		"Parameter.DescribeParameters":     p.DescribeParameters,
-		"Parameter.GetParameterHistory":    p.GetParameterHistory,
+		"Parameter.PutParameter":            p.PutParameter,
+		"Parameter.GetParameter":            p.GetParameter,
+		"Parameter.GetParameters":           p.GetParameters,
+		"Parameter.GetParametersByPath":     p.GetParametersByPath,
+		"Parameter.DeleteParameter":         p.DeleteParameter,
+		"Parameter.DeleteParameters":        p.DeleteParameters,
+		"Parameter.DescribeParameters":      p.DescribeParameters,
+		"Parameter.GetParameterHistory":     p.GetParameterHistory,
 		"Parameter.AddTagsToResource":       p.AddTagsToResource,
 		"Parameter.RemoveTagsFromResource":  p.RemoveTagsFromResource,
 		"Parameter.ListTagsForResource":     p.ListTagsForResource,

@@ -19,11 +19,11 @@ import (
 )
 
 const (
-	rtUserPool       = "cognito_user_pool"
-	rtPoolClient     = "cognito_pool_client"
-	rtPoolUser       = "cognito_pool_user"
-	rtConfirmCode    = "cognito_confirm_code"
-	rtResetCode      = "cognito_reset_code"
+	rtUserPool    = "cognito_user_pool"
+	rtPoolClient  = "cognito_pool_client"
+	rtPoolUser    = "cognito_pool_user"
+	rtConfirmCode = "cognito_confirm_code"
+	rtResetCode   = "cognito_reset_code"
 )
 
 type Provider struct {
@@ -37,33 +37,33 @@ func New(resources store.ResourceStore) *Provider {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// User Pools
-		"Cognito.CreateUserPool":  p.CreateUserPool,
+		"Cognito.CreateUserPool":   p.CreateUserPool,
 		"Cognito.DescribeUserPool": p.DescribeUserPool,
-		"Cognito.DeleteUserPool":  p.DeleteUserPool,
-		"Cognito.ListUserPools":   p.ListUserPools,
-		"Cognito.UpdateUserPool":  p.UpdateUserPool,
+		"Cognito.DeleteUserPool":   p.DeleteUserPool,
+		"Cognito.ListUserPools":    p.ListUserPools,
+		"Cognito.UpdateUserPool":   p.UpdateUserPool,
 		// Clients
-		"Cognito.CreateUserPoolClient":  p.CreateUserPoolClient,
+		"Cognito.CreateUserPoolClient":   p.CreateUserPoolClient,
 		"Cognito.DescribeUserPoolClient": p.DescribeUserPoolClient,
-		"Cognito.ListUserPoolClients":   p.ListUserPoolClients,
-		"Cognito.DeleteUserPoolClient":  p.DeleteUserPoolClient,
-		"Cognito.UpdateUserPoolClient":  p.UpdateUserPoolClient,
+		"Cognito.ListUserPoolClients":    p.ListUserPoolClients,
+		"Cognito.DeleteUserPoolClient":   p.DeleteUserPoolClient,
+		"Cognito.UpdateUserPoolClient":   p.UpdateUserPoolClient,
 		// Users
-		"Cognito.AdminCreateUser":            p.AdminCreateUser,
-		"Cognito.AdminGetUser":               p.AdminGetUser,
-		"Cognito.AdminDeleteUser":            p.AdminDeleteUser,
-		"Cognito.AdminUpdateUserAttributes":  p.AdminUpdateUserAttributes,
-		"Cognito.AdminConfirmSignUp":         p.AdminConfirmSignUp,
-		"Cognito.ListUsers":                  p.ListUsers,
+		"Cognito.AdminCreateUser":           p.AdminCreateUser,
+		"Cognito.AdminGetUser":              p.AdminGetUser,
+		"Cognito.AdminDeleteUser":           p.AdminDeleteUser,
+		"Cognito.AdminUpdateUserAttributes": p.AdminUpdateUserAttributes,
+		"Cognito.AdminConfirmSignUp":        p.AdminConfirmSignUp,
+		"Cognito.ListUsers":                 p.ListUsers,
 		// Self-service auth flows
-		"Cognito.SignUp":                      p.SignUp,
-		"Cognito.ConfirmSignUp":               p.ConfirmSignUp,
-		"Cognito.InitiateAuth":                p.InitiateAuth,
-		"Cognito.AdminInitiateAuth":           p.AdminInitiateAuth,
-		"Cognito.RespondToAuthChallenge":      p.RespondToAuthChallenge,
-		"Cognito.ForgotPassword":              p.ForgotPassword,
-		"Cognito.ConfirmForgotPassword":       p.ConfirmForgotPassword,
-		"Cognito.ResendConfirmationCode":      p.ResendConfirmationCode,
+		"Cognito.SignUp":                 p.SignUp,
+		"Cognito.ConfirmSignUp":          p.ConfirmSignUp,
+		"Cognito.InitiateAuth":           p.InitiateAuth,
+		"Cognito.AdminInitiateAuth":      p.AdminInitiateAuth,
+		"Cognito.RespondToAuthChallenge": p.RespondToAuthChallenge,
+		"Cognito.ForgotPassword":         p.ForgotPassword,
+		"Cognito.ConfirmForgotPassword":  p.ConfirmForgotPassword,
+		"Cognito.ResendConfirmationCode": p.ResendConfirmationCode,
 	}
 }
 

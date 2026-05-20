@@ -64,18 +64,18 @@ func (p *GlueProvider) Routes() map[string]provider.HandlerFunc {
 		"Glue.GetJobRuns":      p.GetJobRuns,
 		"Glue.BatchStopJobRun": p.BatchStopJobRun,
 		// Crawlers (§3.9)
-		"Glue.CreateCrawler":      p.CreateCrawler,
-		"Glue.UpdateCrawler":      p.UpdateCrawler,
-		"Glue.DeleteCrawler":      p.DeleteCrawler,
-		"Glue.GetCrawler":         p.GetCrawler,
-		"Glue.GetCrawlers":        p.GetCrawlers,
-		"Glue.StartCrawler":       p.StartCrawler,
-		"Glue.StopCrawler":        p.StopCrawler,
-		"Glue.GetCrawlerMetrics":  p.GetCrawlerMetrics,
+		"Glue.CreateCrawler":     p.CreateCrawler,
+		"Glue.UpdateCrawler":     p.UpdateCrawler,
+		"Glue.DeleteCrawler":     p.DeleteCrawler,
+		"Glue.GetCrawler":        p.GetCrawler,
+		"Glue.GetCrawlers":       p.GetCrawlers,
+		"Glue.StartCrawler":      p.StartCrawler,
+		"Glue.StopCrawler":       p.StopCrawler,
+		"Glue.GetCrawlerMetrics": p.GetCrawlerMetrics,
 		// Table Versions (§3.9)
-		"Glue.GetTableVersion":        p.GetTableVersion,
-		"Glue.GetTableVersions":       p.GetTableVersions,
-		"Glue.DeleteTableVersions":    p.DeleteTableVersions,
+		"Glue.GetTableVersion":         p.GetTableVersion,
+		"Glue.GetTableVersions":        p.GetTableVersions,
+		"Glue.DeleteTableVersions":     p.DeleteTableVersions,
 		"Glue.BatchDeleteTableVersion": p.BatchDeleteTableVersion,
 		// Connections (stub)
 		"Glue.CreateConnection": p.CreateConnection,
@@ -88,9 +88,9 @@ func (p *GlueProvider) Routes() map[string]provider.HandlerFunc {
 		"Glue.GetResourcePolicy":    p.GetResourcePolicy,
 		"Glue.DeleteResourcePolicy": p.DeleteResourcePolicy,
 		// Partition Indexes (stub)
-		"Glue.CreatePartitionIndex":  p.CreatePartitionIndex,
-		"Glue.GetPartitionIndexes":   p.GetPartitionIndexes,
-		"Glue.DeletePartitionIndex":  p.DeletePartitionIndex,
+		"Glue.CreatePartitionIndex": p.CreatePartitionIndex,
+		"Glue.GetPartitionIndexes":  p.GetPartitionIndexes,
+		"Glue.DeletePartitionIndex": p.DeletePartitionIndex,
 	}
 }
 
@@ -162,7 +162,7 @@ func (p *GlueProvider) GetTags(ctx context.Context, nr *model.NormalizedRequest)
 	return provider.OK(map[string]any{"Tags": tags}), nil
 }
 
-func dbID(name string) string        { return strings.ToLower(name) }
+func dbID(name string) string         { return strings.ToLower(name) }
 func tableID(db, table string) string { return strings.ToLower(db) + "/" + strings.ToLower(table) }
 func partitionID(db, table string, values []string) string {
 	h := md5.New()
@@ -203,19 +203,19 @@ func (p *GlueProvider) loadDB(ctx context.Context, account, region, name string)
 // ─── Table metadata ───────────────────────────────────────────────────────────
 
 type glueTable struct {
-	DatabaseName                   string            `json:"DatabaseName"`
-	OriginalDatabaseName           string            `json:"OriginalDatabaseName,omitempty"` // preserves caller's casing
-	Name                           string            `json:"Name"`
-	OriginalName                   string            `json:"OriginalName,omitempty"` // preserves caller's casing
-	Description                    string            `json:"Description,omitempty"`
-	Owner                          string            `json:"Owner,omitempty"`
-	TableType                      string            `json:"TableType,omitempty"`
-	Parameters                     map[string]string `json:"Parameters,omitempty"`
-	StorageDescriptor              map[string]any    `json:"StorageDescriptor,omitempty"`
-	PartitionKeys                  []map[string]any  `json:"PartitionKeys,omitempty"`
-	CreateTime                     time.Time         `json:"CreateTime"`
-	UpdateTime                     time.Time         `json:"UpdateTime"`
-	IsRegisteredWithLakeFormation  bool              `json:"IsRegisteredWithLakeFormation,omitempty"`
+	DatabaseName                  string            `json:"DatabaseName"`
+	OriginalDatabaseName          string            `json:"OriginalDatabaseName,omitempty"` // preserves caller's casing
+	Name                          string            `json:"Name"`
+	OriginalName                  string            `json:"OriginalName,omitempty"` // preserves caller's casing
+	Description                   string            `json:"Description,omitempty"`
+	Owner                         string            `json:"Owner,omitempty"`
+	TableType                     string            `json:"TableType,omitempty"`
+	Parameters                    map[string]string `json:"Parameters,omitempty"`
+	StorageDescriptor             map[string]any    `json:"StorageDescriptor,omitempty"`
+	PartitionKeys                 []map[string]any  `json:"PartitionKeys,omitempty"`
+	CreateTime                    time.Time         `json:"CreateTime"`
+	UpdateTime                    time.Time         `json:"UpdateTime"`
+	IsRegisteredWithLakeFormation bool              `json:"IsRegisteredWithLakeFormation,omitempty"`
 }
 
 func (p *GlueProvider) saveTable(ctx context.Context, account, region string, t glueTable) error {

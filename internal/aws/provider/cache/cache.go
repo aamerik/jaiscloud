@@ -25,27 +25,27 @@ func New(resources store.ResourceStore) *CacheProvider {
 
 func (p *CacheProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"ElastiCache.CreateCacheCluster":       p.CreateCacheCluster,
-		"ElastiCache.DescribeCacheClusters":    p.DescribeCacheClusters,
-		"ElastiCache.ModifyCacheCluster":       p.ModifyCacheCluster,
-		"ElastiCache.DeleteCacheCluster":       p.DeleteCacheCluster,
-		"ElastiCache.CreateReplicationGroup":   p.CreateReplicationGroup,
+		"ElastiCache.CreateCacheCluster":        p.CreateCacheCluster,
+		"ElastiCache.DescribeCacheClusters":     p.DescribeCacheClusters,
+		"ElastiCache.ModifyCacheCluster":        p.ModifyCacheCluster,
+		"ElastiCache.DeleteCacheCluster":        p.DeleteCacheCluster,
+		"ElastiCache.CreateReplicationGroup":    p.CreateReplicationGroup,
 		"ElastiCache.DescribeReplicationGroups": p.DescribeReplicationGroups,
-		"ElastiCache.ModifyReplicationGroup":   p.ModifyReplicationGroup,
-		"ElastiCache.DeleteReplicationGroup":   p.DeleteReplicationGroup,
+		"ElastiCache.ModifyReplicationGroup":    p.ModifyReplicationGroup,
+		"ElastiCache.DeleteReplicationGroup":    p.DeleteReplicationGroup,
 		// Subnet groups (14.6)
-		"ElastiCache.CreateCacheSubnetGroup":   p.CreateCacheSubnetGroup,
+		"ElastiCache.CreateCacheSubnetGroup":    p.CreateCacheSubnetGroup,
 		"ElastiCache.DescribeCacheSubnetGroups": p.DescribeCacheSubnetGroups,
-		"ElastiCache.ModifyCacheSubnetGroup":   p.ModifyCacheSubnetGroup,
-		"ElastiCache.DeleteCacheSubnetGroup":   p.DeleteCacheSubnetGroup,
+		"ElastiCache.ModifyCacheSubnetGroup":    p.ModifyCacheSubnetGroup,
+		"ElastiCache.DeleteCacheSubnetGroup":    p.DeleteCacheSubnetGroup,
 		// Tagging (14.6)
 		"ElastiCache.AddTagsToResource":      p.AddTagsToResource,
 		"ElastiCache.RemoveTagsFromResource": p.RemoveTagsFromResource,
 		"ElastiCache.ListTagsForResource":    p.ListTagsForResource,
 		// Parameter Groups
-		"ElastiCache.CreateCacheParameterGroup":   p.CreateCacheParameterGroup,
+		"ElastiCache.CreateCacheParameterGroup":    p.CreateCacheParameterGroup,
 		"ElastiCache.DescribeCacheParameterGroups": p.DescribeCacheParameterGroups,
-		"ElastiCache.DeleteCacheParameterGroup":   p.DeleteCacheParameterGroup,
+		"ElastiCache.DeleteCacheParameterGroup":    p.DeleteCacheParameterGroup,
 		// Reboot
 		"ElastiCache.RebootCacheCluster": p.RebootCacheCluster,
 	}
@@ -59,19 +59,19 @@ const (
 // ─── Cache Clusters ───────────────────────────────────────────────────────────
 
 type cacheCluster struct {
-	CacheClusterId               string   `json:"CacheClusterId"`
-	CacheClusterStatus           string   `json:"CacheClusterStatus"`
-	CacheNodeType                string   `json:"CacheNodeType"`
-	Engine                       string   `json:"Engine"`
-	EngineVersion                string   `json:"EngineVersion"`
-	NumCacheNodes                int      `json:"NumCacheNodes"`
-	Port                         int      `json:"Port,omitempty"`
-	SubnetGroupName              string   `json:"SubnetGroupName,omitempty"`
-	SecurityGroupIds             []string `json:"SecurityGroupIds,omitempty"`
-	SnapshotRetentionLimit       int      `json:"SnapshotRetentionLimit,omitempty"`
-	PreferredMaintenanceWindow   string   `json:"PreferredMaintenanceWindow,omitempty"`
-	AutoMinorVersionUpgrade      bool     `json:"AutoMinorVersionUpgrade"`
-	ARN                          string   `json:"ARN,omitempty"`
+	CacheClusterId             string   `json:"CacheClusterId"`
+	CacheClusterStatus         string   `json:"CacheClusterStatus"`
+	CacheNodeType              string   `json:"CacheNodeType"`
+	Engine                     string   `json:"Engine"`
+	EngineVersion              string   `json:"EngineVersion"`
+	NumCacheNodes              int      `json:"NumCacheNodes"`
+	Port                       int      `json:"Port,omitempty"`
+	SubnetGroupName            string   `json:"SubnetGroupName,omitempty"`
+	SecurityGroupIds           []string `json:"SecurityGroupIds,omitempty"`
+	SnapshotRetentionLimit     int      `json:"SnapshotRetentionLimit,omitempty"`
+	PreferredMaintenanceWindow string   `json:"PreferredMaintenanceWindow,omitempty"`
+	AutoMinorVersionUpgrade    bool     `json:"AutoMinorVersionUpgrade"`
+	ARN                        string   `json:"ARN,omitempty"`
 }
 
 func defaultEngineVersion(engine string) string {

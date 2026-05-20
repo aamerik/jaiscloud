@@ -30,22 +30,22 @@ func New(resources store.ResourceStore) *Provider {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"CognitoIdentity.CreateIdentityPool":          p.CreateIdentityPool,
-		"CognitoIdentity.DescribeIdentityPool":        p.DescribeIdentityPool,
-		"CognitoIdentity.DeleteIdentityPool":          p.DeleteIdentityPool,
-		"CognitoIdentity.ListIdentityPools":           p.ListIdentityPools,
-		"CognitoIdentity.UpdateIdentityPool":          p.UpdateIdentityPool,
-		"CognitoIdentity.GetId":                       p.GetId,
-		"CognitoIdentity.GetCredentialsForIdentity":   p.GetCredentialsForIdentity,
-		"CognitoIdentity.GetOpenIdToken":              p.GetOpenIdToken,
+		"CognitoIdentity.CreateIdentityPool":        p.CreateIdentityPool,
+		"CognitoIdentity.DescribeIdentityPool":      p.DescribeIdentityPool,
+		"CognitoIdentity.DeleteIdentityPool":        p.DeleteIdentityPool,
+		"CognitoIdentity.ListIdentityPools":         p.ListIdentityPools,
+		"CognitoIdentity.UpdateIdentityPool":        p.UpdateIdentityPool,
+		"CognitoIdentity.GetId":                     p.GetId,
+		"CognitoIdentity.GetCredentialsForIdentity": p.GetCredentialsForIdentity,
+		"CognitoIdentity.GetOpenIdToken":            p.GetOpenIdToken,
 	}
 }
 
 type identityPool struct {
-	IdentityPoolID                string            `json:"IdentityPoolId"`
-	IdentityPoolName              string            `json:"IdentityPoolName"`
-	AllowUnauthenticatedIdentities bool             `json:"AllowUnauthenticatedIdentities"`
-	Tags                          map[string]string `json:"IdentityPoolTags"`
+	IdentityPoolID                 string            `json:"IdentityPoolId"`
+	IdentityPoolName               string            `json:"IdentityPoolName"`
+	AllowUnauthenticatedIdentities bool              `json:"AllowUnauthenticatedIdentities"`
+	Tags                           map[string]string `json:"IdentityPoolTags"`
 }
 
 type identity struct {
@@ -76,10 +76,10 @@ func ciErr(code, msg string) error {
 
 func poolToWire(pool identityPool) map[string]any {
 	return map[string]any{
-		"IdentityPoolId":                  pool.IdentityPoolID,
-		"IdentityPoolName":                pool.IdentityPoolName,
-		"AllowUnauthenticatedIdentities":  pool.AllowUnauthenticatedIdentities,
-		"IdentityPoolTags":                pool.Tags,
+		"IdentityPoolId":                 pool.IdentityPoolID,
+		"IdentityPoolName":               pool.IdentityPoolName,
+		"AllowUnauthenticatedIdentities": pool.AllowUnauthenticatedIdentities,
+		"IdentityPoolTags":               pool.Tags,
 	}
 }
 

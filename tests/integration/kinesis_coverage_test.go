@@ -860,4 +860,3 @@ func TestKinesisCov_RetentionPeriod_TooLong_Error(t *testing.T) {
 	})
 	require.Error(t, err)
 }
-

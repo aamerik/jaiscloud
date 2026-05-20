@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	ErrParameterNotFound    = errors.New("parameter not found")
-	ErrAlreadyExists        = errors.New("parameter already exists")
-	ErrVersionNotFound      = errors.New("parameter version not found")
+	ErrParameterNotFound = errors.New("parameter not found")
+	ErrAlreadyExists     = errors.New("parameter already exists")
+	ErrVersionNotFound   = errors.New("parameter version not found")
 )
 
 // ParameterEntry holds metadata and the encrypted value for a parameter.

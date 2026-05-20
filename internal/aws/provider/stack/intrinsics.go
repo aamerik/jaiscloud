@@ -27,13 +27,13 @@ func newResolveCtx(region, accountID string, port int) *resolveCtx {
 		conditions: make(map[string]bool),
 		mappings:   make(map[string]any),
 		pseudoParams: map[string]string{
-			"AWS::Region":        region,
-			"AWS::AccountId":     accountID,
-			"AWS::Partition":     "aws",
-			"AWS::URLSuffix":     "amazonaws.com",
-			"AWS::StackName":     "", // set later
-			"AWS::StackId":       "", // set later
-			"AWS::NoValue":       "",
+			"AWS::Region":           region,
+			"AWS::AccountId":        accountID,
+			"AWS::Partition":        "aws",
+			"AWS::URLSuffix":        "amazonaws.com",
+			"AWS::StackName":        "", // set later
+			"AWS::StackId":          "", // set later
+			"AWS::NoValue":          "",
 			"AWS::NotificationARNs": "",
 		},
 	}

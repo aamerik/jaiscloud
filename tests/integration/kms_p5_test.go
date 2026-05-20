@@ -134,8 +134,8 @@ func TestKMS_ImportKeyMaterial_ReturnsUnsupported(t *testing.T) {
 
 	// ImportKeyMaterial should return UnsupportedOperationException
 	_, err := c.ImportKeyMaterial(ctx, &awskms.ImportKeyMaterialInput{
-		KeyId:          aws.String("fake-key-id"),
-		ImportToken:    []byte("token"),
+		KeyId:                aws.String("fake-key-id"),
+		ImportToken:          []byte("token"),
 		EncryptedKeyMaterial: []byte("material"),
 	})
 	require.Error(t, err, "ImportKeyMaterial must return an error (not supported)")

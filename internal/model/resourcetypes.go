@@ -34,10 +34,10 @@ const (
 	RTEventsRule = "events-rule"
 
 	// EMR
-	RTEMRCluster          = "emr-cluster"
-	RTEMRVirtualCluster   = "emr-virtual-cluster"
-	RTEMRJobRun           = "emr-job-run"
-	RTEMRManagedEndpoint  = "emr-managed-endpoint"
+	RTEMRCluster         = "emr-cluster"
+	RTEMRVirtualCluster  = "emr-virtual-cluster"
+	RTEMRJobRun          = "emr-job-run"
+	RTEMRManagedEndpoint = "emr-managed-endpoint"
 
 	// KMS
 	RTKMSKey   = "kms-key"

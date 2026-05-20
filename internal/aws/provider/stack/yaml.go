@@ -87,7 +87,7 @@ func copyNode(n *yaml.Node) *yaml.Node {
 		Anchor:      n.Anchor,
 		Alias:       n.Alias,
 		HeadComment: n.HeadComment,
-		LineComment:  n.LineComment,
+		LineComment: n.LineComment,
 		FootComment: n.FootComment,
 		Line:        n.Line,
 		Column:      n.Column,

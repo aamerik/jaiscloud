@@ -12,15 +12,15 @@ import (
 const rtTaskSet = "ecs_task_set"
 
 type taskSet struct {
-	ID          string         `json:"id"`
-	Arn         string         `json:"taskSetArn"`
-	ClusterArn  string         `json:"clusterArn"`
-	ServiceArn  string         `json:"serviceArn"`
-	Status      string         `json:"status"`
-	TaskDef     string         `json:"taskDefinition"`
-	DesiredCount int           `json:"desiredCount"`
-	ExternalID  string         `json:"externalId"`
-	Extra       map[string]any `json:"extra,omitempty"`
+	ID           string         `json:"id"`
+	Arn          string         `json:"taskSetArn"`
+	ClusterArn   string         `json:"clusterArn"`
+	ServiceArn   string         `json:"serviceArn"`
+	Status       string         `json:"status"`
+	TaskDef      string         `json:"taskDefinition"`
+	DesiredCount int            `json:"desiredCount"`
+	ExternalID   string         `json:"externalId"`
+	Extra        map[string]any `json:"extra,omitempty"`
 }
 
 func (t taskSet) toWire() map[string]any {

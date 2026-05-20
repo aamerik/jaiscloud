@@ -52,7 +52,7 @@ type jobRunEntry struct {
 
 // ─── ID helpers ───────────────────────────────────────────────────────────────
 
-func jobID(name string) string             { return "job/" + name }
+func jobID(name string) string              { return "job/" + name }
 func jobRunID(jobName, runID string) string { return "run/" + jobName + "/" + runID }
 
 // ─── Persistence helpers ──────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ func (p *GlueProvider) BatchStopJobRun(ctx context.Context, nr *model.Normalized
 	}
 	return provider.OK(map[string]any{
 		"SuccessfulSubmissions": []map[string]any{},
-		"Errors":               errors,
+		"Errors":                errors,
 	}), nil
 }
 

@@ -84,13 +84,13 @@ type ConditionSpec struct {
 
 // TransactWriteOp is a single operation within a TransactWriteItems call.
 type TransactWriteOp struct {
-	Type      string         // "Put", "Delete", "Update", "ConditionCheck"
-	Table     string
-	PKHash    string
-	Item      map[string]any // Put only
-	Key       map[string]any // Delete, Update, ConditionCheck
-	Cond      ConditionSpec
-	Update    UpdateSpec
+	Type   string // "Put", "Delete", "Update", "ConditionCheck"
+	Table  string
+	PKHash string
+	Item   map[string]any // Put only
+	Key    map[string]any // Delete, Update, ConditionCheck
+	Cond   ConditionSpec
+	Update UpdateSpec
 	// ReturnValuesOnConditionCheckFailure controls what is returned in a
 	// CancellationReason when this operation's condition fails.
 	// Valid value: "ALL_OLD".  Empty string means do not return the item.
@@ -99,7 +99,7 @@ type TransactWriteOp struct {
 
 // CancellationReason is the per-item failure detail for TransactionCanceledException.
 type CancellationReason struct {
-	Code    string         // "None", "ConditionalCheckFailed", "TransactionConflict", "ThrottlingError", "ValidationError", "ResourceNotFound", "ItemCollectionSizeLimitExceeded"
+	Code    string // "None", "ConditionalCheckFailed", "TransactionConflict", "ThrottlingError", "ValidationError", "ResourceNotFound", "ItemCollectionSizeLimitExceeded"
 	Message string
 	Item    map[string]any // ReturnValuesOnConditionCheckFailure — set when Code=="ConditionalCheckFailed" and the caller requested ALL_OLD
 }

@@ -120,9 +120,9 @@ func TestS3Full_LargeMultipart(t *testing.T) {
 	}
 
 	_, err = c.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
-		Bucket:   aws.String("mp-large-bucket"),
-		Key:      aws.String("assembled.bin"),
-		UploadId: aws.String(uploadID),
+		Bucket:          aws.String("mp-large-bucket"),
+		Key:             aws.String("assembled.bin"),
+		UploadId:        aws.String(uploadID),
 		MultipartUpload: &types.CompletedMultipartUpload{Parts: completedParts},
 	})
 	require.NoError(t, err)

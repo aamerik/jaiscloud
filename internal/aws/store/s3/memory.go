@@ -17,9 +17,9 @@ import (
 // MemoryS3ObjectMetaStore is an in-memory S3ObjectMetaStore.
 type MemoryS3ObjectMetaStore struct {
 	mu               sync.RWMutex
-	buckets          map[string]map[string]any        // bucketName → meta
-	objects          map[string]map[string]ObjectMeta // bucketName → key → meta
-	uploads          map[string]multipartUpload       // uploadID → upload
+	buckets          map[string]map[string]any          // bucketName → meta
+	objects          map[string]map[string]ObjectMeta   // bucketName → key → meta
+	uploads          map[string]multipartUpload         // uploadID → upload
 	versions         map[string]map[string][]ObjectMeta // bucket → key → versions (newest first)
 	versioningStatus map[string]string                  // bucket → "" | "Enabled" | "Suspended"
 }
@@ -488,11 +488,11 @@ func (s *MemoryS3ObjectMetaStore) Reset(ctx context.Context) {
 // ─── Snapshotter ─────────────────────────────────────────────────────────────
 
 type s3MultipartSnap struct {
-	Bucket    string             `json:"bucket"`
-	Key       string             `json:"key"`
-	Meta      map[string]any     `json:"meta"`
+	Bucket    string              `json:"bucket"`
+	Key       string              `json:"key"`
+	Meta      map[string]any      `json:"meta"`
 	Parts     map[string]PartMeta `json:"parts"`
-	Initiated time.Time          `json:"initiated"`
+	Initiated time.Time           `json:"initiated"`
 }
 
 type s3MemSnap struct {

@@ -34,59 +34,59 @@ func New(resources store.ResourceStore) *IAMProvider {
 func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Roles
-		"IAM.CreateRole":                p.CreateRole,
-		"IAM.GetRole":                   p.GetRole,
-		"IAM.DeleteRole":                p.DeleteRole,
-		"IAM.ListRoles":                 p.ListRoles,
-		"IAM.UpdateAssumeRolePolicy":    p.UpdateAssumeRolePolicy,
+		"IAM.CreateRole":             p.CreateRole,
+		"IAM.GetRole":                p.GetRole,
+		"IAM.DeleteRole":             p.DeleteRole,
+		"IAM.ListRoles":              p.ListRoles,
+		"IAM.UpdateAssumeRolePolicy": p.UpdateAssumeRolePolicy,
 		// Policies
-		"IAM.CreatePolicy":              p.CreatePolicy,
-		"IAM.GetPolicy":                 p.GetPolicy,
-		"IAM.DeletePolicy":              p.DeletePolicy,
-		"IAM.ListPolicies":              p.ListPolicies,
+		"IAM.CreatePolicy": p.CreatePolicy,
+		"IAM.GetPolicy":    p.GetPolicy,
+		"IAM.DeletePolicy": p.DeletePolicy,
+		"IAM.ListPolicies": p.ListPolicies,
 		// Role-policy attachments
-		"IAM.AttachRolePolicy":          p.AttachRolePolicy,
-		"IAM.DetachRolePolicy":          p.DetachRolePolicy,
-		"IAM.ListAttachedRolePolicies":  p.ListAttachedRolePolicies,
-		"IAM.PutRolePolicy":             p.PutRolePolicy,
-		"IAM.GetRolePolicy":             p.GetRolePolicy,
-		"IAM.DeleteRolePolicy":          p.DeleteRolePolicy,
-		"IAM.ListRolePolicies":          p.ListRolePolicies,
+		"IAM.AttachRolePolicy":         p.AttachRolePolicy,
+		"IAM.DetachRolePolicy":         p.DetachRolePolicy,
+		"IAM.ListAttachedRolePolicies": p.ListAttachedRolePolicies,
+		"IAM.PutRolePolicy":            p.PutRolePolicy,
+		"IAM.GetRolePolicy":            p.GetRolePolicy,
+		"IAM.DeleteRolePolicy":         p.DeleteRolePolicy,
+		"IAM.ListRolePolicies":         p.ListRolePolicies,
 		// Users
-		"IAM.CreateUser":                p.CreateUser,
-		"IAM.GetUser":                   p.GetUser,
-		"IAM.DeleteUser":                p.DeleteUser,
-		"IAM.ListUsers":                 p.ListUsers,
-		"IAM.UpdateUser":                p.UpdateUser,
+		"IAM.CreateUser": p.CreateUser,
+		"IAM.GetUser":    p.GetUser,
+		"IAM.DeleteUser": p.DeleteUser,
+		"IAM.ListUsers":  p.ListUsers,
+		"IAM.UpdateUser": p.UpdateUser,
 		// User policy attachments
-		"IAM.AttachUserPolicy":          p.AttachUserPolicy,
-		"IAM.DetachUserPolicy":          p.DetachUserPolicy,
-		"IAM.ListAttachedUserPolicies":  p.ListAttachedUserPolicies,
-		"IAM.PutUserPolicy":             p.PutUserPolicy,
-		"IAM.GetUserPolicy":             p.GetUserPolicy,
-		"IAM.DeleteUserPolicy":          p.DeleteUserPolicy,
-		"IAM.ListUserPolicies":          p.ListUserPolicies,
+		"IAM.AttachUserPolicy":         p.AttachUserPolicy,
+		"IAM.DetachUserPolicy":         p.DetachUserPolicy,
+		"IAM.ListAttachedUserPolicies": p.ListAttachedUserPolicies,
+		"IAM.PutUserPolicy":            p.PutUserPolicy,
+		"IAM.GetUserPolicy":            p.GetUserPolicy,
+		"IAM.DeleteUserPolicy":         p.DeleteUserPolicy,
+		"IAM.ListUserPolicies":         p.ListUserPolicies,
 		// User tags
-		"IAM.TagUser":                   p.TagUser,
-		"IAM.UntagUser":                 p.UntagUser,
-		"IAM.ListUserTags":              p.ListUserTags,
+		"IAM.TagUser":      p.TagUser,
+		"IAM.UntagUser":    p.UntagUser,
+		"IAM.ListUserTags": p.ListUserTags,
 		// Access keys
-		"IAM.CreateAccessKey":           p.CreateAccessKey,
-		"IAM.DeleteAccessKey":           p.DeleteAccessKey,
-		"IAM.ListAccessKeys":            p.ListAccessKeys,
-		"IAM.UpdateAccessKey":           p.UpdateAccessKey,
+		"IAM.CreateAccessKey": p.CreateAccessKey,
+		"IAM.DeleteAccessKey": p.DeleteAccessKey,
+		"IAM.ListAccessKeys":  p.ListAccessKeys,
+		"IAM.UpdateAccessKey": p.UpdateAccessKey,
 		// Tags
-		"IAM.TagRole":                   p.TagRole,
-		"IAM.UntagRole":                 p.UntagRole,
-		"IAM.ListRoleTags":              p.ListRoleTags,
+		"IAM.TagRole":      p.TagRole,
+		"IAM.UntagRole":    p.UntagRole,
+		"IAM.ListRoleTags": p.ListRoleTags,
 		// Groups
-		"IAM.CreateGroup":               p.CreateGroup,
-		"IAM.GetGroup":                  p.GetGroup,
-		"IAM.DeleteGroup":               p.DeleteGroup,
-		"IAM.ListGroups":                p.ListGroups,
-		"IAM.AddUserToGroup":            p.AddUserToGroup,
-		"IAM.RemoveUserFromGroup":       p.RemoveUserFromGroup,
-		"IAM.ListGroupsForUser":         p.ListGroupsForUser,
+		"IAM.CreateGroup":         p.CreateGroup,
+		"IAM.GetGroup":            p.GetGroup,
+		"IAM.DeleteGroup":         p.DeleteGroup,
+		"IAM.ListGroups":          p.ListGroups,
+		"IAM.AddUserToGroup":      p.AddUserToGroup,
+		"IAM.RemoveUserFromGroup": p.RemoveUserFromGroup,
+		"IAM.ListGroupsForUser":   p.ListGroupsForUser,
 		// Instance profiles
 		"IAM.CreateInstanceProfile":         p.CreateInstanceProfile,
 		"IAM.GetInstanceProfile":            p.GetInstanceProfile,
@@ -95,12 +95,12 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		"IAM.RemoveRoleFromInstanceProfile": p.RemoveRoleFromInstanceProfile,
 		"IAM.ListInstanceProfiles":          p.ListInstanceProfiles,
 		// Policy simulation
-		"IAM.SimulatePrincipalPolicy":   p.SimulatePrincipalPolicy,
-		"IAM.SimulateCustomPolicy":      p.SimulateCustomPolicy,
+		"IAM.SimulatePrincipalPolicy": p.SimulatePrincipalPolicy,
+		"IAM.SimulateCustomPolicy":    p.SimulateCustomPolicy,
 		// Service-linked roles
-		"IAM.CreateServiceLinkedRole":              p.CreateServiceLinkedRole,
-		"IAM.DeleteServiceLinkedRole":              p.DeleteServiceLinkedRole,
-		"IAM.GetServiceLinkedRoleDeletionStatus":   p.GetServiceLinkedRoleDeletionStatus,
+		"IAM.CreateServiceLinkedRole":            p.CreateServiceLinkedRole,
+		"IAM.DeleteServiceLinkedRole":            p.DeleteServiceLinkedRole,
+		"IAM.GetServiceLinkedRoleDeletionStatus": p.GetServiceLinkedRoleDeletionStatus,
 		// Policy versioning (14.9)
 		"IAM.CreatePolicyVersion":     p.CreatePolicyVersion,
 		"IAM.GetPolicyVersion":        p.GetPolicyVersion,
@@ -108,16 +108,16 @@ func (p *IAMProvider) Routes() map[string]provider.HandlerFunc {
 		"IAM.ListPolicyVersions":      p.ListPolicyVersions,
 		"IAM.SetDefaultPolicyVersion": p.SetDefaultPolicyVersion,
 		// OIDC providers (14.10)
-		"IAM.CreateOpenIDConnectProvider":                   p.CreateOpenIDConnectProvider,
-		"IAM.GetOpenIDConnectProvider":                      p.GetOpenIDConnectProvider,
-		"IAM.ListOpenIDConnectProviders":                    p.ListOpenIDConnectProviders,
-		"IAM.DeleteOpenIDConnectProvider":                   p.DeleteOpenIDConnectProvider,
-		"IAM.UpdateOpenIDConnectProviderThumbprint":         p.UpdateOpenIDConnectProviderThumbprint,
-		"IAM.AddClientIDToOpenIDConnectProvider":            p.AddClientIDToOpenIDConnectProvider,
-		"IAM.RemoveClientIDFromOpenIDConnectProvider":       p.RemoveClientIDFromOpenIDConnectProvider,
-		"IAM.TagOpenIDConnectProvider":                      p.TagOpenIDConnectProvider,
-		"IAM.UntagOpenIDConnectProvider":                    p.UntagOpenIDConnectProvider,
-		"IAM.ListOpenIDConnectProviderTags":                 p.ListOpenIDConnectProviderTags,
+		"IAM.CreateOpenIDConnectProvider":             p.CreateOpenIDConnectProvider,
+		"IAM.GetOpenIDConnectProvider":                p.GetOpenIDConnectProvider,
+		"IAM.ListOpenIDConnectProviders":              p.ListOpenIDConnectProviders,
+		"IAM.DeleteOpenIDConnectProvider":             p.DeleteOpenIDConnectProvider,
+		"IAM.UpdateOpenIDConnectProviderThumbprint":   p.UpdateOpenIDConnectProviderThumbprint,
+		"IAM.AddClientIDToOpenIDConnectProvider":      p.AddClientIDToOpenIDConnectProvider,
+		"IAM.RemoveClientIDFromOpenIDConnectProvider": p.RemoveClientIDFromOpenIDConnectProvider,
+		"IAM.TagOpenIDConnectProvider":                p.TagOpenIDConnectProvider,
+		"IAM.UntagOpenIDConnectProvider":              p.UntagOpenIDConnectProvider,
+		"IAM.ListOpenIDConnectProviderTags":           p.ListOpenIDConnectProviderTags,
 	}
 }
 
@@ -166,7 +166,6 @@ func loadEntry(ctx context.Context, rs store.ResourceStore, account, resType, id
 	}
 	return json.Unmarshal(e.Data, out)
 }
-
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
 
@@ -317,15 +316,15 @@ func roleMap(r roleData) map[string]any {
 // ─── Policies ────────────────────────────────────────────────────────────────
 
 type policyData struct {
-	PolicyName     string    `json:"PolicyName"`
-	PolicyID       string    `json:"PolicyId"`
-	Arn            string    `json:"Arn"`
-	Path           string    `json:"Path"`
-	Description    string    `json:"Description"`
-	Document       string    `json:"Document"`
-	CreateDate     time.Time `json:"CreateDate"`
-	UpdateDate     time.Time `json:"UpdateDate"`
-	AttachmentCount int      `json:"AttachmentCount"`
+	PolicyName      string    `json:"PolicyName"`
+	PolicyID        string    `json:"PolicyId"`
+	Arn             string    `json:"Arn"`
+	Path            string    `json:"Path"`
+	Description     string    `json:"Description"`
+	Document        string    `json:"Document"`
+	CreateDate      time.Time `json:"CreateDate"`
+	UpdateDate      time.Time `json:"UpdateDate"`
+	AttachmentCount int       `json:"AttachmentCount"`
 }
 
 func (p *IAMProvider) CreatePolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

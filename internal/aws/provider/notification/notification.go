@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/events/pattern"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // FunctionInvoker is the narrow interface SNS uses to invoke Lambda functions.
@@ -103,12 +103,12 @@ func (p *SNSProvider) Routes() map[string]provider.HandlerFunc {
 		"Notification.DeleteEndpoint":                     p.DeleteEndpoint,
 		"Notification.ListEndpointsByPlatformApplication": p.ListEndpointsByPlatformApplication,
 		// SMS
-		"Notification.SetSMSAttributes":              p.SetSMSAttributes,
-		"Notification.GetSMSAttributes":              p.GetSMSAttributes,
-		"Notification.OptInPhoneNumber":              p.OptInPhoneNumber,
-		"Notification.CheckIfPhoneNumberIsOptedOut":  p.CheckIfPhoneNumberIsOptedOut,
-		"Notification.ListPhoneNumbersOptedOut":      p.ListPhoneNumbersOptedOut,
-		"Notification.ListOriginationNumbers":        p.ListOriginationNumbers,
+		"Notification.SetSMSAttributes":             p.SetSMSAttributes,
+		"Notification.GetSMSAttributes":             p.GetSMSAttributes,
+		"Notification.OptInPhoneNumber":             p.OptInPhoneNumber,
+		"Notification.CheckIfPhoneNumberIsOptedOut": p.CheckIfPhoneNumberIsOptedOut,
+		"Notification.ListPhoneNumbersOptedOut":     p.ListPhoneNumbersOptedOut,
+		"Notification.ListOriginationNumbers":       p.ListOriginationNumbers,
 		// Data protection
 		"Notification.PutDataProtectionPolicy": p.PutDataProtectionPolicy,
 		"Notification.GetDataProtectionPolicy": p.GetDataProtectionPolicy,
@@ -184,12 +184,12 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 
 	isFIFO := strings.HasSuffix(name, ".fifo")
 	attrs := map[string]string{
-		"TopicArn":                 arn,
-		"DisplayName":              name,
-		"SubscriptionsConfirmed":   "0",
-		"SubscriptionsPending":     "0",
-		"SubscriptionsDeleted":     "0",
-		"EffectiveDeliveryPolicy":  `{"defaultHealthyRetryPolicy":{"numRetries":3}}`,
+		"TopicArn":                arn,
+		"DisplayName":             name,
+		"SubscriptionsConfirmed":  "0",
+		"SubscriptionsPending":    "0",
+		"SubscriptionsDeleted":    "0",
+		"EffectiveDeliveryPolicy": `{"defaultHealthyRetryPolicy":{"numRetries":3}}`,
 	}
 	if isFIFO {
 		attrs["FifoTopic"] = "true"
@@ -204,10 +204,10 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 	}
 
 	td := topicData{
-		TopicArn:  arn,
+		TopicArn:   arn,
 		Attributes: attrs,
-		Tags:      map[string]string{},
-		CreatedAt: time.Now().UTC(),
+		Tags:       map[string]string{},
+		CreatedAt:  time.Now().UTC(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td); err != nil {
 		return nil, err
@@ -609,7 +609,7 @@ func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, message
 			"SignatureVersion":  "1",
 			"Signature":         "EXAMPLE",
 			"SigningCertUrl":    "EXAMPLE",
-			"UnsubscribeUrl":   "EXAMPLE",
+			"UnsubscribeUrl":    "EXAMPLE",
 			"MessageAttributes": msgAttrs,
 		},
 	}

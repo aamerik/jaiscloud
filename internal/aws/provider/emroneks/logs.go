@@ -31,8 +31,8 @@ func (p *EMRContainersProvider) SetLogsIngestor(i logstream.Ingestor) {
 // bufferingWriter is an io.Writer that buffers log lines in memory so they can
 // be flushed to CloudWatch Logs or S3 after the job completes.
 type bufferingWriter struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
 func (w *bufferingWriter) Write(p []byte) (int, error) {

@@ -99,11 +99,11 @@ func WithServiceAccountName(sa string) Option {
 func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *EMRContainersProvider {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &EMRContainersProvider{
-		resources:  resources,
-		bus:        bus,
-		ctx:        ctx,
-		cancel:     cancel,
-		sparkImage: "spark-emr-eks-7.9.0:devbox",
+		resources:     resources,
+		bus:           bus,
+		ctx:           ctx,
+		cancel:        cancel,
+		sparkImage:    "spark-emr-eks-7.9.0:devbox",
 		cancels:       make(map[string]context.CancelFunc),
 		cancelClaimed: make(map[string]bool),
 	}
@@ -151,10 +151,10 @@ func (p *EMRContainersProvider) Routes() map[string]provider.HandlerFunc {
 		"EMRContainers.UntagResource":       p.UntagResource,
 		"EMRContainers.ListTagsForResource": p.ListTagsForResource,
 		// Security configurations (13.3)
-		"EMRContainers.CreateSecurityConfiguration":  p.CreateSecurityConfiguration,
+		"EMRContainers.CreateSecurityConfiguration":   p.CreateSecurityConfiguration,
 		"EMRContainers.DescribeSecurityConfiguration": p.DescribeSecurityConfiguration,
-		"EMRContainers.DeleteSecurityConfiguration":  p.DeleteSecurityConfiguration,
-		"EMRContainers.ListSecurityConfigurations":   p.ListSecurityConfigurations,
+		"EMRContainers.DeleteSecurityConfiguration":   p.DeleteSecurityConfiguration,
+		"EMRContainers.ListSecurityConfigurations":    p.ListSecurityConfigurations,
 		// Session credentials (13.4)
 		"EMRContainers.GetManagedEndpointSessionCredentials": p.GetManagedEndpointSessionCredentials,
 		// Job templates (§3.10.4)

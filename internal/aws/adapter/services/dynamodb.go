@@ -79,7 +79,7 @@ func (c *DynamoDBCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Pro
 }
 
 var dynamoErrorCodeMap = map[string]string{
-	"NotFound":             "ResourceNotFoundException",
-	"AlreadyExists":        "ResourceInUseException",
-	"ValidationException":  "ValidationException",
+	"NotFound":            "ResourceNotFoundException",
+	"AlreadyExists":       "ResourceInUseException",
+	"ValidationException": "ValidationException",
 }

@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	rtRecorder      = "config_recorder"
-	rtRecorderStatus = "config_recorder_status"
+	rtRecorder        = "config_recorder"
+	rtRecorderStatus  = "config_recorder_status"
 	rtDeliveryChannel = "config_delivery_channel"
-	rtConfigRule    = "config_rule"
+	rtConfigRule      = "config_rule"
 )
 
 // Provider handles AWS Config operations.
@@ -33,31 +33,31 @@ func New(resources store.ResourceStore) *Provider {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Configuration Recorders
-		"Config.PutConfigurationRecorder":         p.PutConfigurationRecorder,
-		"Config.DescribeConfigurationRecorders":   p.DescribeConfigurationRecorders,
-		"Config.StartConfigurationRecorder":       p.StartConfigurationRecorder,
-		"Config.StopConfigurationRecorder":        p.StopConfigurationRecorder,
+		"Config.PutConfigurationRecorder":            p.PutConfigurationRecorder,
+		"Config.DescribeConfigurationRecorders":      p.DescribeConfigurationRecorders,
+		"Config.StartConfigurationRecorder":          p.StartConfigurationRecorder,
+		"Config.StopConfigurationRecorder":           p.StopConfigurationRecorder,
 		"Config.DescribeConfigurationRecorderStatus": p.DescribeConfigurationRecorderStatus,
 		// Delivery Channels
 		"Config.PutDeliveryChannel":       p.PutDeliveryChannel,
 		"Config.DescribeDeliveryChannels": p.DescribeDeliveryChannels,
 		// Config Rules
-		"Config.PutConfigRule":                         p.PutConfigRule,
-		"Config.DescribeConfigRules":                   p.DescribeConfigRules,
-		"Config.DeleteConfigRule":                      p.DeleteConfigRule,
-		"Config.GetComplianceDetailsByConfigRule":       p.GetComplianceDetailsByConfigRule,
-		"Config.DescribeConfigRuleEvaluationStatus":    p.DescribeConfigRuleEvaluationStatus,
+		"Config.PutConfigRule":                      p.PutConfigRule,
+		"Config.DescribeConfigRules":                p.DescribeConfigRules,
+		"Config.DeleteConfigRule":                   p.DeleteConfigRule,
+		"Config.GetComplianceDetailsByConfigRule":   p.GetComplianceDetailsByConfigRule,
+		"Config.DescribeConfigRuleEvaluationStatus": p.DescribeConfigRuleEvaluationStatus,
 		// Delivery Channel status
-		"Config.DescribeDeliveryChannelStatus":         p.DescribeDeliveryChannelStatus,
+		"Config.DescribeDeliveryChannelStatus": p.DescribeDeliveryChannelStatus,
 	}
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type configurationRecorder struct {
-	Name           string            `json:"name"`
-	RoleARN        string            `json:"roleARN"`
-	RecordingGroup map[string]any    `json:"recordingGroup"`
+	Name           string         `json:"name"`
+	RoleARN        string         `json:"roleARN"`
+	RecordingGroup map[string]any `json:"recordingGroup"`
 }
 
 type recorderStatus struct {
@@ -159,8 +159,8 @@ func (p *Provider) StopConfigurationRecorder(ctx context.Context, nr *model.Norm
 
 func (p *Provider) setRecorderStatus(ctx context.Context, account, region, name string, recording bool) (*model.ProviderResponse, error) {
 	st := recorderStatus{
-		Name:      name,
-		Recording: recording,
+		Name:       name,
+		Recording:  recording,
 		LastStatus: "SUCCESS",
 	}
 	if recording {
@@ -315,8 +315,8 @@ func (p *Provider) DescribeDeliveryChannelStatus(ctx context.Context, nr *model.
 		var ch deliveryChannel
 		json.Unmarshal(e.Data, &ch)
 		statuses = append(statuses, map[string]any{
-			"name":                      ch.Name,
-			"configHistoryDeliveryInfo": map[string]any{"lastStatus": "SUCCESS"},
+			"name":                       ch.Name,
+			"configHistoryDeliveryInfo":  map[string]any{"lastStatus": "SUCCESS"},
 			"configSnapshotDeliveryInfo": map[string]any{"lastStatus": "SUCCESS"},
 		})
 	}
@@ -355,11 +355,11 @@ func recorderToWire(rec configurationRecorder) map[string]any {
 
 func recorderStatusToWire(st recorderStatus) map[string]any {
 	return map[string]any{
-		"name":             st.Name,
-		"recording":        st.Recording,
-		"lastStatus":       st.LastStatus,
-		"lastStartTime":    st.LastStartTime,
-		"lastStopTime":     st.LastStopTime,
+		"name":          st.Name,
+		"recording":     st.Recording,
+		"lastStatus":    st.LastStatus,
+		"lastStartTime": st.LastStartTime,
+		"lastStopTime":  st.LastStopTime,
 	}
 }
 

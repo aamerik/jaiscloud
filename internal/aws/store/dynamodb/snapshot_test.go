@@ -232,7 +232,7 @@ func TestMemoryDynamoDBItemStore_Snapshot_LSIQueryAfterRestore(t *testing.T) {
 	schema := dynamostore.TableSchema{
 		TableName: "scores",
 		PKAttr:    "game", PKType: "S",
-		SKAttr:    "player", SKType: "S",
+		SKAttr: "player", SKType: "S",
 		LSIs: []dynamostore.IndexDef{{
 			IndexName:  "score-index",
 			PKAttr:     "game",

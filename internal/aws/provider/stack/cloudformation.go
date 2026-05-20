@@ -872,4 +872,3 @@ func (p *StackProvider) stackConditions(doc map[string]any, s cfStack) map[strin
 	rc.evaluateConditions(condsDef)
 	return rc.conditions
 }
-

@@ -14,19 +14,19 @@ import (
 )
 
 type eksNodegroup struct {
-	ClusterName   string            `json:"clusterName"`
-	NodegroupName string            `json:"nodegroupName"`
-	Arn           string            `json:"nodegroupArn"`
-	Status        string            `json:"status"`
-	NodeRole      string            `json:"nodeRole"`
-	Subnets       []string          `json:"subnets"`
-	InstanceTypes []string          `json:"instanceTypes"`
-	AmiType       string            `json:"amiType"`
-	ReleaseVersion string           `json:"releaseVersion"`
-	Labels        map[string]string `json:"labels"`
-	ScalingConfig map[string]int    `json:"scalingConfig"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	ModifiedAt    time.Time         `json:"modifiedAt"`
+	ClusterName    string            `json:"clusterName"`
+	NodegroupName  string            `json:"nodegroupName"`
+	Arn            string            `json:"nodegroupArn"`
+	Status         string            `json:"status"`
+	NodeRole       string            `json:"nodeRole"`
+	Subnets        []string          `json:"subnets"`
+	InstanceTypes  []string          `json:"instanceTypes"`
+	AmiType        string            `json:"amiType"`
+	ReleaseVersion string            `json:"releaseVersion"`
+	Labels         map[string]string `json:"labels"`
+	ScalingConfig  map[string]int    `json:"scalingConfig"`
+	CreatedAt      time.Time         `json:"createdAt"`
+	ModifiedAt     time.Time         `json:"modifiedAt"`
 }
 
 func nodegroupKey(clusterName, nodegroupName string) string {

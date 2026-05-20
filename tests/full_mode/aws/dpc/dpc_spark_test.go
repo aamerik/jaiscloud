@@ -48,11 +48,11 @@ func TestDPC_EMR_EC2_SparkPi(t *testing.T) {
 
 	// Create EMR cluster.
 	runOut, err := emrClient.RunJobFlow(context.Background(), &awsemr.RunJobFlowInput{
-		Name:            aws.String("DPC-EC2-SparkPi"),
-		ReleaseLabel:    aws.String("emr-6.10.0"),
-		ServiceRole:     aws.String("EMR_DefaultRole"),
-		JobFlowRole:     aws.String("EMR_EC2_DefaultRole"),
-		LogUri:          aws.String("s3://dpc-logs/"),
+		Name:         aws.String("DPC-EC2-SparkPi"),
+		ReleaseLabel: aws.String("emr-6.10.0"),
+		ServiceRole:  aws.String("EMR_DefaultRole"),
+		JobFlowRole:  aws.String("EMR_EC2_DefaultRole"),
+		LogUri:       aws.String("s3://dpc-logs/"),
 		Instances: &emrtypes.JobFlowInstancesConfig{
 			MasterInstanceType:          aws.String("m5.xlarge"),
 			SlaveInstanceType:           aws.String("m5.xlarge"),

@@ -25,7 +25,7 @@ func TestSecretsManager_RotateSecret_CreatesPendingVersion(t *testing.T) {
 
 	// RotateImmediately=false: should create AWSPENDING but not promote.
 	_, err = c.RotateSecret(ctx, &awssm.RotateSecretInput{
-		SecretId:         aws.String("rotate-test"),
+		SecretId:          aws.String("rotate-test"),
 		RotateImmediately: aws.Bool(false),
 	})
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestSecretsManager_RotateSecret_RotateImmediately_PromotesToCurrent(t *test
 	require.NoError(t, err)
 
 	_, err = c.RotateSecret(ctx, &awssm.RotateSecretInput{
-		SecretId:         aws.String("rotate-immediate"),
+		SecretId:          aws.String("rotate-immediate"),
 		RotateImmediately: aws.Bool(true),
 	})
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestSecretsManager_CancelRotateSecret_RemovesPending(t *testing.T) {
 
 	// Create a pending rotation.
 	_, err = c.RotateSecret(ctx, &awssm.RotateSecretInput{
-		SecretId:         aws.String("cancel-rotate"),
+		SecretId:          aws.String("cancel-rotate"),
 		RotateImmediately: aws.Bool(false),
 	})
 	require.NoError(t, err)

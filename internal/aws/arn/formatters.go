@@ -166,10 +166,10 @@ var formatters = map[string]func(region, accountID, name string) string{
 		return fmt.Sprintf("arn:aws:cloudfront::%s:distribution/%s", a, n)
 	},
 	// Athena
-	"athena-workgroup":        func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
-	"athena-query-execution":  func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
+	"athena-workgroup":       func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
+	"athena-query-execution": func(r, a, n string) string { return fmt.Sprintf("arn:aws:athena:%s:%s:workgroup/%s", r, a, n) },
 	// Redshift
-	"redshift-cluster":    func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
+	"redshift-cluster": func(r, a, n string) string { return fmt.Sprintf("arn:aws:redshift:%s:%s:cluster:%s", r, a, n) },
 	"redshift-subnetgroup": func(r, a, n string) string {
 		return fmt.Sprintf("arn:aws:redshift:%s:%s:subnetgroup:%s", r, a, n)
 	},

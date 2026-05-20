@@ -33,22 +33,22 @@ func New(resources store.ResourceStore) *Provider {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Query execution
-		"Athena.StartQueryExecution":     p.StartQueryExecution,
-		"Athena.GetQueryExecution":       p.GetQueryExecution,
-		"Athena.GetQueryResults":         p.GetQueryResults,
-		"Athena.StopQueryExecution":      p.StopQueryExecution,
-		"Athena.ListQueryExecutions":     p.ListQueryExecutions,
-		"Athena.BatchGetQueryExecution":  p.BatchGetQueryExecution,
+		"Athena.StartQueryExecution":    p.StartQueryExecution,
+		"Athena.GetQueryExecution":      p.GetQueryExecution,
+		"Athena.GetQueryResults":        p.GetQueryResults,
+		"Athena.StopQueryExecution":     p.StopQueryExecution,
+		"Athena.ListQueryExecutions":    p.ListQueryExecutions,
+		"Athena.BatchGetQueryExecution": p.BatchGetQueryExecution,
 		// WorkGroups
-		"Athena.CreateWorkGroup":         p.CreateWorkGroup,
-		"Athena.GetWorkGroup":            p.GetWorkGroup,
-		"Athena.UpdateWorkGroup":         p.UpdateWorkGroup,
-		"Athena.DeleteWorkGroup":         p.DeleteWorkGroup,
-		"Athena.ListWorkGroups":          p.ListWorkGroups,
+		"Athena.CreateWorkGroup": p.CreateWorkGroup,
+		"Athena.GetWorkGroup":    p.GetWorkGroup,
+		"Athena.UpdateWorkGroup": p.UpdateWorkGroup,
+		"Athena.DeleteWorkGroup": p.DeleteWorkGroup,
+		"Athena.ListWorkGroups":  p.ListWorkGroups,
 		// Tagging
-		"Athena.TagResource":             p.TagResource,
-		"Athena.UntagResource":           p.UntagResource,
-		"Athena.ListTagsForResource":     p.ListTagsForResource,
+		"Athena.TagResource":         p.TagResource,
+		"Athena.UntagResource":       p.UntagResource,
+		"Athena.ListTagsForResource": p.ListTagsForResource,
 	}
 }
 
@@ -158,7 +158,7 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	}
 	return provider.OK(map[string]any{
 		"ResultSet": map[string]any{
-			"Rows":             []any{},
+			"Rows":              []any{},
 			"ResultSetMetadata": map[string]any{"ColumnInfo": []any{}},
 		},
 	}), nil

@@ -13,10 +13,10 @@ import (
 
 // MemoryECRStore is the default in-memory ECR store.
 type MemoryECRStore struct {
-	mu           sync.RWMutex
-	repos        map[string]*Repository           // repoKey(registryID, name) → repo
-	arnToKey     map[string]string                // ARN → repoKey
-	ptcRules     map[string]*PullThroughCacheRule // prefix → rule
+	mu                sync.RWMutex
+	repos             map[string]*Repository           // repoKey(registryID, name) → repo
+	arnToKey          map[string]string                // ARN → repoKey
+	ptcRules          map[string]*PullThroughCacheRule // prefix → rule
 	registryPolicy    string
 	replicationConfig string
 }
@@ -494,10 +494,10 @@ func (s *MemoryECRStore) Reset(ctx context.Context) {
 }
 
 type ecrSnapshot struct {
-	Repos             map[string]*Repository          `json:"repos"`
+	Repos             map[string]*Repository           `json:"repos"`
 	PTCRules          map[string]*PullThroughCacheRule `json:"ptc_rules"`
-	RegistryPolicy    string                          `json:"registry_policy"`
-	ReplicationConfig string                          `json:"replication_config"`
+	RegistryPolicy    string                           `json:"registry_policy"`
+	ReplicationConfig string                           `json:"replication_config"`
 }
 
 func (s *MemoryECRStore) IsEmpty(_ context.Context) (bool, error) {

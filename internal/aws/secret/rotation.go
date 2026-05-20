@@ -22,8 +22,8 @@ func (p *SecretProvider) runRotationLambda(ctx context.Context, secretID, secret
 	steps := []string{"createSecret", "setSecret", "testSecret", "finishSecret"}
 	for _, step := range steps {
 		payload, _ := json.Marshal(map[string]any{
-			"Step":              step,
-			"SecretId":          secretARN,
+			"Step":               step,
+			"SecretId":           secretARN,
 			"ClientRequestToken": pendingVersionID,
 		})
 		if err := p.invoker.InternalInvokeRaw(ctx, lambdaARN, payload); err != nil {

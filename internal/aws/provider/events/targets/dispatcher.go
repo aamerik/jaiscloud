@@ -29,11 +29,11 @@ type EventBusSender interface {
 
 // Target mirrors the AWS EventBridge target fields.
 type Target struct {
-	ID              string
-	Arn             string
-	RoleArn         string
-	Input           string
-	InputPath       string
+	ID               string
+	Arn              string
+	RoleArn          string
+	Input            string
+	InputPath        string
 	InputTransformer *transform.InputTransformer
 	DeadLetterConfig struct {
 		Arn string
@@ -43,19 +43,19 @@ type Target struct {
 
 // HttpParameters for API Gateway / API Destination targets.
 type HttpParameters struct {
-	HeaderParameters    map[string]string
+	HeaderParameters      map[string]string
 	QueryStringParameters map[string]string
-	PathParameterValues []string
+	PathParameterValues   []string
 }
 
 // Dispatcher routes events to the correct AWS service.
 type Dispatcher struct {
-	sqs   queue.InternalSendAPI
-	sns   notifprovider.InternalPublisher
-	fn    fnprovider.InternalInvoker
-	logs  LogsWriter
-	eb    EventBusSender
-	http  *http.Client
+	sqs  queue.InternalSendAPI
+	sns  notifprovider.InternalPublisher
+	fn   fnprovider.InternalInvoker
+	logs LogsWriter
+	eb   EventBusSender
+	http *http.Client
 }
 
 // New constructs a Dispatcher wired with the provided providers.

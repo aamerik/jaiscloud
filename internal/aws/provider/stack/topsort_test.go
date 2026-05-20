@@ -26,8 +26,8 @@ func TestTopoSort_ExplicitDependsOn(t *testing.T) {
 			"Properties": map[string]any{},
 		},
 		"Topic": map[string]any{
-			"Type":      "AWS::SNS::Topic",
-			"DependsOn": "Queue",
+			"Type":       "AWS::SNS::Topic",
+			"DependsOn":  "Queue",
 			"Properties": map[string]any{},
 		},
 	}
@@ -43,8 +43,8 @@ func TestTopoSort_ExplicitDependsOnList(t *testing.T) {
 		"A": map[string]any{"Type": "AWS::SQS::Queue", "Properties": map[string]any{}},
 		"B": map[string]any{"Type": "AWS::SQS::Queue", "Properties": map[string]any{}},
 		"C": map[string]any{
-			"Type":      "AWS::SNS::Topic",
-			"DependsOn": []any{"A", "B"},
+			"Type":       "AWS::SNS::Topic",
+			"DependsOn":  []any{"A", "B"},
 			"Properties": map[string]any{},
 		},
 	}
@@ -110,13 +110,13 @@ func TestTopoSort_ChainDependency(t *testing.T) {
 	resources := map[string]any{
 		"A": map[string]any{"Type": "AWS::SQS::Queue", "Properties": map[string]any{}},
 		"B": map[string]any{
-			"Type":      "AWS::SNS::Topic",
-			"DependsOn": "A",
+			"Type":       "AWS::SNS::Topic",
+			"DependsOn":  "A",
 			"Properties": map[string]any{},
 		},
 		"C": map[string]any{
-			"Type":      "AWS::Lambda::Function",
-			"DependsOn": "B",
+			"Type":       "AWS::Lambda::Function",
+			"DependsOn":  "B",
 			"Properties": map[string]any{},
 		},
 	}
@@ -146,13 +146,13 @@ func TestTopoSort_Empty(t *testing.T) {
 func TestTopoSort_CycleDetected(t *testing.T) {
 	resources := map[string]any{
 		"A": map[string]any{
-			"Type":      "AWS::SQS::Queue",
-			"DependsOn": "B",
+			"Type":       "AWS::SQS::Queue",
+			"DependsOn":  "B",
 			"Properties": map[string]any{},
 		},
 		"B": map[string]any{
-			"Type":      "AWS::SNS::Topic",
-			"DependsOn": "A",
+			"Type":       "AWS::SNS::Topic",
+			"DependsOn":  "A",
 			"Properties": map[string]any{},
 		},
 	}

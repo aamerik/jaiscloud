@@ -44,8 +44,8 @@ type ResourceProfile struct {
 
 // ClientModeJob is the input to SubmitClientMode.
 type ClientModeJob struct {
-	JobID             string
-	Namespace         string
+	JobID     string
+	Namespace string
 	// Image is the container image for the spark-submit driver pod. Required —
 	// no sensible default exists (EMR and EMR-on-EKS use different images).
 	Image             string
@@ -58,12 +58,12 @@ type ClientModeJob struct {
 	// CallerDriverPodTpl is a YAML PodTemplateSpec merged onto the spark-submit pod.
 	CallerDriverPodTpl []byte
 	// CallerExecutorPodTpl is a YAML PodTemplateSpec merged into the executor pod template ConfigMap.
-	CallerExecutorPodTpl []byte
-	Labels              map[string]string
-	Annotations         map[string]string
-	OwnerHint           *k8shelpers.OwnerRefHint
-	LogSink             io.Writer
-	IdentityMutator     k8shelpers.IdentityMutator
+	CallerExecutorPodTpl    []byte
+	Labels                  map[string]string
+	Annotations             map[string]string
+	OwnerHint               *k8shelpers.OwnerRefHint
+	LogSink                 io.Writer
+	IdentityMutator         k8shelpers.IdentityMutator
 	TTLSecondsAfterFinished *int32
 	// SparkSubmitPath overrides the spark-submit binary path (default: "spark-submit").
 	SparkSubmitPath string
@@ -74,7 +74,7 @@ type ClientModeJob struct {
 	// ExtraSparkConfs are spark-submit flag tokens (already paired as "--conf",
 	// "key=value") prepended before the caller's SparkSubmitArgs so caller
 	// confs win via Spark's last-value-wins semantics.
-	ExtraSparkConfs []string
+	ExtraSparkConfs    []string
 	ServiceAccountName string
 }
 

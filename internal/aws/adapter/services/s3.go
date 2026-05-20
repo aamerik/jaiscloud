@@ -311,10 +311,10 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 	if action == "PutBucketNotificationConfiguration" && len(body) > 0 {
 		var notifReq struct {
 			QueueConfigurations []struct {
-				Id       string   `xml:"Id"`
-				Queue    string   `xml:"Queue"`
-				Events   []string `xml:"Event"`
-				Filter   struct {
+				Id     string   `xml:"Id"`
+				Queue  string   `xml:"Queue"`
+				Events []string `xml:"Event"`
+				Filter struct {
 					S3Key struct {
 						FilterRules []struct {
 							Name  string `xml:"Name"`
@@ -337,10 +337,10 @@ func (c *S3Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest
 				} `xml:"Filter"`
 			} `xml:"TopicConfiguration"`
 			LambdaConfigurations []struct {
-				Id                string   `xml:"Id"`
-				CloudFunction     string   `xml:"CloudFunction"`
-				Events            []string `xml:"Event"`
-				Filter            struct {
+				Id            string   `xml:"Id"`
+				CloudFunction string   `xml:"CloudFunction"`
+				Events        []string `xml:"Event"`
+				Filter        struct {
 					S3Key struct {
 						FilterRules []struct {
 							Name  string `xml:"Name"`

@@ -33,16 +33,16 @@ type DLQEvent struct {
 // EMRStepStateEvent is emitted when an EMR step transitions state.
 // Extended to match real AWS "EMR Step Status Change" EventBridge schema.
 type EMRStepStateEvent struct {
-	JobFlowID         string    // → detail.clusterId
-	StepID            string    // → detail.stepId
-	Name              string    // → detail.name
-	State             string    // → detail.state
-	ActionOnFailure   string    // CONTINUE | CANCEL_AND_WAIT | TERMINATE_CLUSTER
-	Message           string    // human-readable transition message
-	StateChangeCode   string    // e.g. "USER_REQUEST", "STEP_FAILURE"
-	StateChangeReason string    // free-form (becomes detail.stateChangeReason JSON {code,message})
-	FailureReason     string    // kept for backward compat; feeds detail.message for FAILED
-	Severity          string    // INFO | WARN | ERROR (derived if empty)
+	JobFlowID         string // → detail.clusterId
+	StepID            string // → detail.stepId
+	Name              string // → detail.name
+	State             string // → detail.state
+	ActionOnFailure   string // CONTINUE | CANCEL_AND_WAIT | TERMINATE_CLUSTER
+	Message           string // human-readable transition message
+	StateChangeCode   string // e.g. "USER_REQUEST", "STEP_FAILURE"
+	StateChangeReason string // free-form (becomes detail.stateChangeReason JSON {code,message})
+	FailureReason     string // kept for backward compat; feeds detail.message for FAILED
+	Severity          string // INFO | WARN | ERROR (derived if empty)
 	Region            string
 	AccountID         string
 	Cloud             model.Cloud

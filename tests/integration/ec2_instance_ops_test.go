@@ -23,12 +23,12 @@ func TestEC2RunInstancesWithParams(t *testing.T) {
 	userData := base64.StdEncoding.EncodeToString([]byte("#!/bin/bash\necho hello"))
 
 	runOut, err := client.RunInstances(ctx, &awsec2.RunInstancesInput{
-		ImageId:      aws.String("ami-0abcdef1234567890"),
-		InstanceType: types.InstanceTypeT3Micro,
-		MinCount:     aws.Int32(2),
-		MaxCount:     aws.Int32(2),
+		ImageId:          aws.String("ami-0abcdef1234567890"),
+		InstanceType:     types.InstanceTypeT3Micro,
+		MinCount:         aws.Int32(2),
+		MaxCount:         aws.Int32(2),
 		SecurityGroupIds: []string{"sg-aabbccdd", "sg-11223344"},
-		UserData:     aws.String(userData),
+		UserData:         aws.String(userData),
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeInstance,

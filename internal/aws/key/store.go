@@ -7,11 +7,11 @@ import (
 )
 
 var (
-	ErrKeyNotFound    = errors.New("key not found")
-	ErrAliasNotFound  = errors.New("alias not found")
-	ErrGrantNotFound  = errors.New("grant not found")
-	ErrKeyDisabled    = errors.New("key is disabled")
-	ErrAlreadyExists  = errors.New("already exists")
+	ErrKeyNotFound   = errors.New("key not found")
+	ErrAliasNotFound = errors.New("alias not found")
+	ErrGrantNotFound = errors.New("grant not found")
+	ErrKeyDisabled   = errors.New("key is disabled")
+	ErrAlreadyExists = errors.New("already exists")
 )
 
 // KeyEntry holds the persisted state of a KMS key.
@@ -59,18 +59,18 @@ type AliasEntry struct {
 
 // GrantEntry records a KMS grant.
 type GrantEntry struct {
-	AccountID        string
-	Region           string
-	GrantID          string
-	KeyID            string
-	KeyArn           string
-	GranteeARN       string
+	AccountID         string
+	Region            string
+	GrantID           string
+	KeyID             string
+	KeyArn            string
+	GranteeARN        string
 	RetiringPrincipal string
-	Name             string
-	Operations       []string
-	Token            string
-	IssuingAccount   string
-	CreationDate     time.Time
+	Name              string
+	Operations        []string
+	Token             string
+	IssuingAccount    string
+	CreationDate      time.Time
 }
 
 // KeyStore is the persistence interface for KMS key metadata.
@@ -97,7 +97,7 @@ type KeyStore interface {
 	ListGrants(ctx context.Context, keyID string) ([]GrantEntry, error)
 
 	// DEK bootstrap (one row per instance)
-	LoadDEK(ctx context.Context) ([]byte, error)  // returns raw blob; ErrKeyNotFound if absent
+	LoadDEK(ctx context.Context) ([]byte, error) // returns raw blob; ErrKeyNotFound if absent
 	StoreDEK(ctx context.Context, blob []byte) error
 
 	// Reset wipes all state (used by admin reset).

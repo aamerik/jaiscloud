@@ -38,11 +38,11 @@ type entry struct {
 
 type minHeap []*entry
 
-func (h minHeap) Len() int            { return len(h) }
-func (h minHeap) Less(i, j int) bool  { return h[i].nextFire.Before(h[j].nextFire) }
-func (h minHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i]; h[i].index = i; h[j].index = j }
-func (h *minHeap) Push(x any)         { e := x.(*entry); e.index = len(*h); *h = append(*h, e) }
-func (h *minHeap) Pop() any           { old := *h; n := len(old); e := old[n-1]; *h = old[:n-1]; return e }
+func (h minHeap) Len() int           { return len(h) }
+func (h minHeap) Less(i, j int) bool { return h[i].nextFire.Before(h[j].nextFire) }
+func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].index = i; h[j].index = j }
+func (h *minHeap) Push(x any)        { e := x.(*entry); e.index = len(*h); *h = append(*h, e) }
+func (h *minHeap) Pop() any          { old := *h; n := len(old); e := old[n-1]; *h = old[:n-1]; return e }
 
 // Dispatcher is the interface used by the scheduler to deliver events.
 type Dispatcher interface {

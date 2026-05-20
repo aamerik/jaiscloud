@@ -388,4 +388,3 @@ func TestFirehose_PutRecordBatch_MultipleRecords(t *testing.T) {
 		assert.NotEmpty(t, aws.ToString(rr.RecordId), "record %d missing RecordId", i)
 	}
 }
-

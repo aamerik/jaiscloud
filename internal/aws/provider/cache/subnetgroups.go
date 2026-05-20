@@ -30,7 +30,7 @@ func (g cacheSubnetGroup) toWire() map[string]any {
 	subnets := make([]map[string]any, 0, len(g.SubnetIds))
 	for _, id := range g.SubnetIds {
 		subnets = append(subnets, map[string]any{
-			"SubnetIdentifier": id,
+			"SubnetIdentifier":       id,
 			"SubnetAvailabilityZone": map[string]any{"Name": "us-east-1a"},
 		})
 	}

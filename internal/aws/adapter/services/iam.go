@@ -92,9 +92,9 @@ func (c *IAMCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 }
 
 var iamErrorCodeMap = map[string]string{
-	"NoSuchEntity":     "NoSuchEntity",
+	"NoSuchEntity":        "NoSuchEntity",
 	"EntityAlreadyExists": "EntityAlreadyExists",
-	"ValidationError":  "ValidationError",
+	"ValidationError":     "ValidationError",
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

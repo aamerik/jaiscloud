@@ -4,8 +4,8 @@ import "strings"
 
 // ParameterFilter represents a single DescribeParameters filter.
 type ParameterFilter struct {
-	Key    string   // "Name" | "Type" | "Path" | "KeyId" | "Tier" | "Label"
-	Option string   // "Equals" | "BeginsWith" | "Contains" | "Recursive" | "OneLevel"
+	Key    string // "Name" | "Type" | "Path" | "KeyId" | "Tier" | "Label"
+	Option string // "Equals" | "BeginsWith" | "Contains" | "Recursive" | "OneLevel"
 	Values []string
 }
 

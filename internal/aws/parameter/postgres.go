@@ -173,7 +173,9 @@ func (s *PostgresParameterStore) GetParameterHistory(ctx context.Context, accoun
 		if err := rows.Scan(&h.Name, &h.Version, &data, &h.Value, &h.CreatedAt); err != nil {
 			return nil, err
 		}
-		var meta struct{ Type string `json:"type"` }
+		var meta struct {
+			Type string `json:"type"`
+		}
 		_ = json.Unmarshal(data, &meta)
 		h.Type = meta.Type
 		out = append(out, h)
@@ -234,9 +236,9 @@ func isPgUnique(err error) bool {
 // ─── Snapshotter ──────────────────────────────────────────────────────────────
 
 type pgSSMSnap struct {
-	Parameters []pgSSMParamRow  `json:"parameters"`
-	History    []pgSSMHistRow   `json:"history"`
-	Labels     []pgSSMLabelRow  `json:"labels"`
+	Parameters []pgSSMParamRow `json:"parameters"`
+	History    []pgSSMHistRow  `json:"history"`
+	Labels     []pgSSMLabelRow `json:"labels"`
 }
 
 type pgSSMParamRow struct {

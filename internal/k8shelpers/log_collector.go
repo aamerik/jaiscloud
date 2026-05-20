@@ -121,8 +121,8 @@ func copyWithPrefix(dst io.Writer, src io.Reader, prefix string) error {
 
 func tailAllContainers(ctx context.Context, k8s kubernetes.Interface, pod *corev1.Pod, sink io.Writer) error {
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
+		wg       sync.WaitGroup
+		mu       sync.Mutex
 		firstErr error
 	)
 	wrappedSink := &lockedWriter{mu: &mu, w: sink}

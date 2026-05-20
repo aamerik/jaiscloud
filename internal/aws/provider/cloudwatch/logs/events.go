@@ -390,14 +390,14 @@ func (p *Provider) FilterLogEvents(_ context.Context, nr *model.NormalizedReques
 	searchedStreams := make([]any, 0, len(targetStreams))
 	for _, sName := range targetStreams {
 		searchedStreams = append(searchedStreams, map[string]any{
-			"logStreamName":     sName,
+			"logStreamName":      sName,
 			"searchedCompletely": true,
 		})
 	}
 
 	// Generate next token if more events remain
 	result := map[string]any{
-		"events":            outEvents,
+		"events":             outEvents,
 		"searchedLogStreams": searchedStreams,
 	}
 	if len(allEvents) > limit {

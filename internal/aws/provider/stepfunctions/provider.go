@@ -12,9 +12,9 @@ import (
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 var nameRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
@@ -49,26 +49,26 @@ func (p *Provider) SetEngine(eng *engine.ExecutionEngine) {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// State machine CRUD
-		"StepFunctions.CreateStateMachine":              p.CreateStateMachine,
-		"StepFunctions.DescribeStateMachine":            p.DescribeStateMachine,
-		"StepFunctions.UpdateStateMachine":              p.UpdateStateMachine,
-		"StepFunctions.DeleteStateMachine":              p.DeleteStateMachine,
-		"StepFunctions.ListStateMachines":               p.ListStateMachines,
-		"StepFunctions.ValidateStateMachineDefinition":  p.ValidateStateMachineDefinition,
+		"StepFunctions.CreateStateMachine":             p.CreateStateMachine,
+		"StepFunctions.DescribeStateMachine":           p.DescribeStateMachine,
+		"StepFunctions.UpdateStateMachine":             p.UpdateStateMachine,
+		"StepFunctions.DeleteStateMachine":             p.DeleteStateMachine,
+		"StepFunctions.ListStateMachines":              p.ListStateMachines,
+		"StepFunctions.ValidateStateMachineDefinition": p.ValidateStateMachineDefinition,
 
 		// Executions
-		"StepFunctions.StartExecution":        p.StartExecution,
-		"StepFunctions.StartSyncExecution":    p.StartSyncExecution,
-		"StepFunctions.StopExecution":         p.StopExecution,
-		"StepFunctions.DescribeExecution":     p.DescribeExecution,
-		"StepFunctions.ListExecutions":        p.ListExecutions,
-		"StepFunctions.GetExecutionHistory":   p.GetExecutionHistory,
-		"StepFunctions.RedriveExecution":      p.RedriveExecution,
+		"StepFunctions.StartExecution":      p.StartExecution,
+		"StepFunctions.StartSyncExecution":  p.StartSyncExecution,
+		"StepFunctions.StopExecution":       p.StopExecution,
+		"StepFunctions.DescribeExecution":   p.DescribeExecution,
+		"StepFunctions.ListExecutions":      p.ListExecutions,
+		"StepFunctions.GetExecutionHistory": p.GetExecutionHistory,
+		"StepFunctions.RedriveExecution":    p.RedriveExecution,
 
 		// Versions
-		"StepFunctions.PublishStateMachineVersion":   p.PublishStateMachineVersion,
-		"StepFunctions.DeleteStateMachineVersion":    p.DeleteStateMachineVersion,
-		"StepFunctions.ListStateMachineVersions":     p.ListStateMachineVersions,
+		"StepFunctions.PublishStateMachineVersion":       p.PublishStateMachineVersion,
+		"StepFunctions.DeleteStateMachineVersion":        p.DeleteStateMachineVersion,
+		"StepFunctions.ListStateMachineVersions":         p.ListStateMachineVersions,
 		"StepFunctions.DescribeStateMachineForExecution": p.DescribeStateMachineForExecution,
 
 		// Aliases
@@ -79,18 +79,18 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"StepFunctions.ListStateMachineAliases":   p.ListStateMachineAliases,
 
 		// Activities
-		"StepFunctions.CreateActivity":     p.CreateActivity,
-		"StepFunctions.DeleteActivity":     p.DeleteActivity,
-		"StepFunctions.DescribeActivity":   p.DescribeActivity,
-		"StepFunctions.ListActivities":     p.ListActivities,
-		"StepFunctions.GetActivityTask":    p.GetActivityTask,
-		"StepFunctions.SendTaskSuccess":    p.SendTaskSuccess,
-		"StepFunctions.SendTaskFailure":    p.SendTaskFailure,
+		"StepFunctions.CreateActivity":    p.CreateActivity,
+		"StepFunctions.DeleteActivity":    p.DeleteActivity,
+		"StepFunctions.DescribeActivity":  p.DescribeActivity,
+		"StepFunctions.ListActivities":    p.ListActivities,
+		"StepFunctions.GetActivityTask":   p.GetActivityTask,
+		"StepFunctions.SendTaskSuccess":   p.SendTaskSuccess,
+		"StepFunctions.SendTaskFailure":   p.SendTaskFailure,
 		"StepFunctions.SendTaskHeartbeat": p.SendTaskHeartbeat,
 
 		// Tags
-		"StepFunctions.TagResource":        p.TagResource,
-		"StepFunctions.UntagResource":      p.UntagResource,
+		"StepFunctions.TagResource":         p.TagResource,
+		"StepFunctions.UntagResource":       p.UntagResource,
 		"StepFunctions.ListTagsForResource": p.ListTagsForResource,
 	}
 }
@@ -388,15 +388,15 @@ func (p *Provider) StartSyncExecution(ctx context.Context, nr *model.NormalizedR
 	t := time.Now().UTC()
 
 	return provider.OK(map[string]any{
-		"executionArn":          execARN,
-		"stateMachineArn":       smARN,
-		"name":                  execName,
-		"startDate":             t.Unix(),
-		"stopDate":              t.Unix(),
-		"status":                "SUCCEEDED",
-		"input":                 input,
-		"output":                input,
-		"billedDuration":        0,
+		"executionArn":         execARN,
+		"stateMachineArn":      smARN,
+		"name":                 execName,
+		"startDate":            t.Unix(),
+		"stopDate":             t.Unix(),
+		"status":               "SUCCEEDED",
+		"input":                input,
+		"output":               input,
+		"billedDuration":       0,
 		"billedMemoryUsedInMB": 64,
 	}), nil
 }
@@ -955,12 +955,12 @@ func aliasToMap(a *sfnstore.StateMachineAlias) map[string]any {
 		}
 	}
 	return map[string]any{
-		"stateMachineAliasArn":  a.ARN,
-		"name":                  a.Name,
-		"description":           a.Description,
-		"routingConfiguration":  routing,
-		"creationDate":          a.CreationDate.Unix(),
-		"updateDate":            a.UpdateDate.Unix(),
+		"stateMachineAliasArn": a.ARN,
+		"name":                 a.Name,
+		"description":          a.Description,
+		"routingConfiguration": routing,
+		"creationDate":         a.CreationDate.Unix(),
+		"updateDate":           a.UpdateDate.Unix(),
 	}
 }
 

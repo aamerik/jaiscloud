@@ -22,10 +22,10 @@ import (
 // StreamRoutes returns the DynamoDB Streams routes to register under "Streams.*".
 func (p *TableProvider) StreamRoutes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Streams.ListStreams":        p.ListStreams,
-		"Streams.DescribeStream":     p.DescribeStream,
-		"Streams.GetShardIterator":   p.GetShardIterator,
-		"Streams.GetRecords":         p.GetRecords,
+		"Streams.ListStreams":      p.ListStreams,
+		"Streams.DescribeStream":   p.DescribeStream,
+		"Streams.GetShardIterator": p.GetShardIterator,
+		"Streams.GetRecords":       p.GetRecords,
 	}
 }
 
@@ -64,11 +64,11 @@ func (p *TableProvider) DescribeStream(ctx context.Context, nr *model.Normalized
 	shardId := "shardId-00000000000000000001-" + tableName
 	return provider.OK(map[string]any{
 		"StreamDescription": map[string]any{
-			"StreamArn":         info.StreamArn,
-			"StreamLabel":       info.StreamLabel,
-			"StreamStatus":      "ENABLED",
-			"StreamViewType":    "NEW_AND_OLD_IMAGES",
-			"TableName":         tableName,
+			"StreamArn":               info.StreamArn,
+			"StreamLabel":             info.StreamLabel,
+			"StreamStatus":            "ENABLED",
+			"StreamViewType":          "NEW_AND_OLD_IMAGES",
+			"TableName":               tableName,
 			"CreationRequestDateTime": time.Now().Unix(),
 			"Shards": []map[string]any{
 				{

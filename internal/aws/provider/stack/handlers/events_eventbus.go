@@ -3,8 +3,8 @@ package handlers
 import (
 	"context"
 
-	stackprovider "jaiscloud/internal/aws/provider/stack"
 	eventsprovider "jaiscloud/internal/aws/provider/events"
+	stackprovider "jaiscloud/internal/aws/provider/stack"
 	"jaiscloud/internal/model"
 )
 

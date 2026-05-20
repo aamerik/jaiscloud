@@ -119,12 +119,12 @@ func (p *ObjectProvider) GetAccessPoint(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	return provider.OK(map[string]any{
-		"Name":                    ap.Name,
-		"Bucket":                  ap.Bucket,
-		"AccessPointArn":          ap.ARN,
-		"Alias":                   ap.Alias,
-		"NetworkOrigin":           ap.NetworkOrigin,
-		"CreationDate":            ap.CreationDate.UTC().Format(time.RFC3339),
+		"Name":           ap.Name,
+		"Bucket":         ap.Bucket,
+		"AccessPointArn": ap.ARN,
+		"Alias":          ap.Alias,
+		"NetworkOrigin":  ap.NetworkOrigin,
+		"CreationDate":   ap.CreationDate.UTC().Format(time.RFC3339),
 		"PublicAccessBlockConfiguration": map[string]any{
 			"BlockPublicAcls":       true,
 			"IgnorePublicAcls":      true,

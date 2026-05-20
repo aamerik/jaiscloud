@@ -50,8 +50,10 @@ type mockScopedResetter struct {
 	resetScopeCalls   [][2]string
 }
 
-func (m *mockScopedResetter) Reset(ctx context.Context)                           { m.resetCalled = true }
-func (m *mockScopedResetter) ResetAccount(account string)      { m.resetAccountCalls = append(m.resetAccountCalls, account) }
+func (m *mockScopedResetter) Reset(ctx context.Context) { m.resetCalled = true }
+func (m *mockScopedResetter) ResetAccount(account string) {
+	m.resetAccountCalls = append(m.resetAccountCalls, account)
+}
 func (m *mockScopedResetter) ResetScope(account, region string) {
 	m.resetScopeCalls = append(m.resetScopeCalls, [2]string{account, region})
 }
@@ -565,9 +567,9 @@ func TestHandler_Import_KMSMaterial_NewInstance_Empty(t *testing.T) {
 // blockingSnapshotter is a Snapshotter whose Restore blocks until ready is closed
 // or ctx is cancelled. Used to test context cancellation mid-restore.
 type blockingSnapshotter struct {
-	ready   chan struct{}
-	failErr error
-	isEmpty bool
+	ready    chan struct{}
+	failErr  error
+	isEmpty  bool
 	restored atomic.Bool
 }
 

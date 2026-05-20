@@ -554,9 +554,9 @@ func TestCWLogs_SubscriptionFilter_CRUD(t *testing.T) {
 	const destARN = "arn:aws:lambda:us-east-1:000000000000:function:my-processor"
 
 	_, err = c.PutSubscriptionFilter(ctx, &awscwl.PutSubscriptionFilterInput{
-		LogGroupName:  aws.String(group),
-		FilterName:    aws.String(filterName),
-		FilterPattern: aws.String("ERROR"),
+		LogGroupName:   aws.String(group),
+		FilterName:     aws.String(filterName),
+		FilterPattern:  aws.String("ERROR"),
 		DestinationArn: aws.String(destARN),
 	})
 	require.NoError(t, err)

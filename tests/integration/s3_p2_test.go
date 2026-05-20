@@ -870,9 +870,9 @@ func TestS3_CopyObject_TaggingDirective(t *testing.T) {
 
 	// COPY directive — tags must be preserved on destination
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
-		Bucket:          aws.String("copy-tag-dst"),
-		Key:             aws.String("dst"),
-		CopySource:      aws.String("copy-tag-src/src"),
+		Bucket:           aws.String("copy-tag-dst"),
+		Key:              aws.String("dst"),
+		CopySource:       aws.String("copy-tag-src/src"),
 		TaggingDirective: types.TaggingDirectiveCopy,
 	})
 	require.NoError(t, err)
@@ -907,11 +907,11 @@ func TestS3_CopyObject_ReplaceDirective_ClearsSourceTags(t *testing.T) {
 
 	// REPLACE directive with new tags
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
-		Bucket:          aws.String("rep-tag-dst"),
-		Key:             aws.String("dst"),
-		CopySource:      aws.String("rep-tag-src/src"),
+		Bucket:           aws.String("rep-tag-dst"),
+		Key:              aws.String("dst"),
+		CopySource:       aws.String("rep-tag-src/src"),
 		TaggingDirective: types.TaggingDirectiveReplace,
-		Tagging:         aws.String("env=staging"),
+		Tagging:          aws.String("env=staging"),
 	})
 	require.NoError(t, err)
 

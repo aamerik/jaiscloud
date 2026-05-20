@@ -9,37 +9,37 @@ import (
 
 // ObjectMeta holds metadata for a single stored object.
 type ObjectMeta struct {
-	Key          string            `json:"key"`
-	ETag         string            `json:"etag"`
+	Key  string `json:"key"`
+	ETag string `json:"etag"`
 	// CRC32 is the base64-encoded IEEE CRC32 checksum of the object body.
-	CRC32              string            `json:"crc32"`
+	CRC32 string `json:"crc32"`
 	// ChecksumAlgorithm is the algorithm specified by the client at upload time
 	// (e.g. "CRC32", "CRC32C", "SHA1", "SHA256"). Empty means CRC32 (legacy).
-	ChecksumAlgorithm  string            `json:"checksum_algorithm,omitempty"`
+	ChecksumAlgorithm string `json:"checksum_algorithm,omitempty"`
 	// ChecksumValue is the base64-encoded checksum matching ChecksumAlgorithm.
-	ChecksumValue      string            `json:"checksum_value,omitempty"`
-	Size            int64             `json:"size"`
-	ContentType     string            `json:"content_type"`
-	LastModified    time.Time         `json:"last_modified"`
-	Metadata        map[string]string `json:"metadata"`
-	StorageClass    string            `json:"storage_class"`
-	VersionID       string            `json:"version_id"`
+	ChecksumValue string            `json:"checksum_value,omitempty"`
+	Size          int64             `json:"size"`
+	ContentType   string            `json:"content_type"`
+	LastModified  time.Time         `json:"last_modified"`
+	Metadata      map[string]string `json:"metadata"`
+	StorageClass  string            `json:"storage_class"`
+	VersionID     string            `json:"version_id"`
 	// Tagging
-	Tags            map[string]string `json:"tags,omitempty"`
+	Tags map[string]string `json:"tags,omitempty"`
 	// Encryption
-	Encryption      string            `json:"encryption,omitempty"`
-	KMSKeyID        string            `json:"kms_key_id,omitempty"`
-	SSECAlgorithm   string            `json:"ssec_algorithm,omitempty"`
-	SSECKeyMD5      string            `json:"ssec_key_md5,omitempty"`
+	Encryption    string `json:"encryption,omitempty"`
+	KMSKeyID      string `json:"kms_key_id,omitempty"`
+	SSECAlgorithm string `json:"ssec_algorithm,omitempty"`
+	SSECKeyMD5    string `json:"ssec_key_md5,omitempty"`
 	// Versioning
-	IsDeleteMarker  bool              `json:"is_delete_marker,omitempty"`
-	IsLatest        bool              `json:"is_latest,omitempty"`
+	IsDeleteMarker bool `json:"is_delete_marker,omitempty"`
+	IsLatest       bool `json:"is_latest,omitempty"`
 	// Object Lock
-	LockMode        string            `json:"lock_mode,omitempty"`
-	LockRetainUntil *time.Time        `json:"lock_retain_until,omitempty"`
-	LegalHoldStatus string            `json:"legal_hold_status,omitempty"`
+	LockMode        string     `json:"lock_mode,omitempty"`
+	LockRetainUntil *time.Time `json:"lock_retain_until,omitempty"`
+	LegalHoldStatus string     `json:"legal_hold_status,omitempty"`
 	// ACL
-	ACL             string            `json:"acl,omitempty"`
+	ACL string `json:"acl,omitempty"`
 }
 
 // PartMeta holds metadata for a single multipart upload part.

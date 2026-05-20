@@ -16,10 +16,10 @@ import (
 
 // fakeK8s is a minimal fake Kubernetes API server for unit tests.
 type fakeK8s struct {
-	mu       sync.Mutex
-	pods     []string // pod names created
-	svcs     []string // service names created
-	deleted  []string // names deleted (pods and services)
+	mu      sync.Mutex
+	pods    []string // pod names created
+	svcs    []string // service names created
+	deleted []string // names deleted (pods and services)
 }
 
 func newFakeK8sServer(f *fakeK8s) *httptest.Server {

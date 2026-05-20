@@ -168,9 +168,9 @@ func TestSecretProvider_DeleteSecret_MutualExclusivity(t *testing.T) {
 	callSecret(t, routes, "CreateSecret", map[string]any{"Name": "mutex"})
 
 	_, err := routes["Secret.DeleteSecret"](context.Background(), snr(map[string]any{
-		"SecretId":                  "mutex",
+		"SecretId":                   "mutex",
 		"ForceDeleteWithoutRecovery": true,
-		"RecoveryWindowInDays":      float64(7),
+		"RecoveryWindowInDays":       float64(7),
 	}))
 	require.Error(t, err)
 }

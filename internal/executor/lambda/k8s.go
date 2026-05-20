@@ -356,11 +356,11 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 			EmptyDir: &k8stypes.EmptyDirVol{},
 		})
 		podSpec.InitContainers = []k8stypes.Container{{
-			Name:    "code-fetch",
-			Image:   e.cfg.InitImage,
-			Command: []string{"/bin/sh", "-c"},
-			Args:    []string{fmt.Sprintf("wget -qO /tmp/code.zip %s && unzip /tmp/code.zip -d /var/task", codeURL)},
-			Env:     []k8stypes.EnvVar{{Name: "JAISCLOUD_LAMBDA_CODE_URL", Value: codeURL}},
+			Name:         "code-fetch",
+			Image:        e.cfg.InitImage,
+			Command:      []string{"/bin/sh", "-c"},
+			Args:         []string{fmt.Sprintf("wget -qO /tmp/code.zip %s && unzip /tmp/code.zip -d /var/task", codeURL)},
+			Env:          []k8stypes.EnvVar{{Name: "JAISCLOUD_LAMBDA_CODE_URL", Value: codeURL}},
 			VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: "/var/task"}},
 		}}
 		podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts,

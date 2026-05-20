@@ -26,46 +26,46 @@ func New(resources store.ResourceStore) *RelationalProvider {
 
 func (p *RelationalProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"RDS.CreateDBInstance":      p.CreateDBInstance,
-		"RDS.DescribeDBInstances":   p.DescribeDBInstances,
-		"RDS.ModifyDBInstance":      p.ModifyDBInstance,
-		"RDS.DeleteDBInstance":      p.DeleteDBInstance,
-		"RDS.CreateDBCluster":       p.CreateDBCluster,
-		"RDS.DescribeDBClusters":    p.DescribeDBClusters,
-		"RDS.ModifyDBCluster":       p.ModifyDBCluster,
-		"RDS.DeleteDBCluster":       p.DeleteDBCluster,
+		"RDS.CreateDBInstance":       p.CreateDBInstance,
+		"RDS.DescribeDBInstances":    p.DescribeDBInstances,
+		"RDS.ModifyDBInstance":       p.ModifyDBInstance,
+		"RDS.DeleteDBInstance":       p.DeleteDBInstance,
+		"RDS.CreateDBCluster":        p.CreateDBCluster,
+		"RDS.DescribeDBClusters":     p.DescribeDBClusters,
+		"RDS.ModifyDBCluster":        p.ModifyDBCluster,
+		"RDS.DeleteDBCluster":        p.DeleteDBCluster,
 		"RDS.CreateDBSubnetGroup":    p.CreateDBSubnetGroup,
 		"RDS.DescribeDBSubnetGroups": p.DescribeDBSubnetGroups,
 		"RDS.DeleteDBSubnetGroup":    p.DeleteDBSubnetGroup,
 		// Snapshots (14.7)
-		"RDS.CreateDBSnapshot":   p.CreateDBSnapshot,
+		"RDS.CreateDBSnapshot":    p.CreateDBSnapshot,
 		"RDS.DescribeDBSnapshots": p.DescribeDBSnapshots,
-		"RDS.DeleteDBSnapshot":   p.DeleteDBSnapshot,
-		"RDS.CopyDBSnapshot":     p.CopyDBSnapshot,
+		"RDS.DeleteDBSnapshot":    p.DeleteDBSnapshot,
+		"RDS.CopyDBSnapshot":      p.CopyDBSnapshot,
 		// Tagging (14.7)
 		"RDS.AddTagsToResource":      p.AddTagsToResource,
 		"RDS.RemoveTagsFromResource": p.RemoveTagsFromResource,
 		"RDS.ListTagsForResource":    p.ListTagsForResource,
 		// Parameter Groups
-		"RDS.CreateDBParameterGroup":   p.CreateDBParameterGroup,
+		"RDS.CreateDBParameterGroup":    p.CreateDBParameterGroup,
 		"RDS.DescribeDBParameterGroups": p.DescribeDBParameterGroups,
-		"RDS.DeleteDBParameterGroup":   p.DeleteDBParameterGroup,
+		"RDS.DeleteDBParameterGroup":    p.DeleteDBParameterGroup,
 		// Restore
 		"RDS.RestoreDBInstanceFromDBSnapshot": p.RestoreDBInstanceFromDBSnapshot,
 		// Lifecycle
-		"RDS.RebootDBInstance":              p.RebootDBInstance,
-		"RDS.StartDBInstance":               p.StartDBInstance,
-		"RDS.StopDBInstance":                p.StopDBInstance,
-		"RDS.PromoteReadReplica":            p.PromoteReadReplica,
-		"RDS.CreateDBInstanceReadReplica":   p.CreateDBInstanceReadReplica,
+		"RDS.RebootDBInstance":            p.RebootDBInstance,
+		"RDS.StartDBInstance":             p.StartDBInstance,
+		"RDS.StopDBInstance":              p.StopDBInstance,
+		"RDS.PromoteReadReplica":          p.PromoteReadReplica,
+		"RDS.CreateDBInstanceReadReplica": p.CreateDBInstanceReadReplica,
 	}
 }
 
 const (
-	rtDBInstance        = "rds_db_instance"
-	rtDBCluster         = "rds_db_cluster"
-	rtDBSubnetGroup     = "rds_db_subnet_group"
-	rtDBParameterGroup  = "rds_db_parameter_group"
+	rtDBInstance       = "rds_db_instance"
+	rtDBCluster        = "rds_db_cluster"
+	rtDBSubnetGroup    = "rds_db_subnet_group"
+	rtDBParameterGroup = "rds_db_parameter_group"
 )
 
 func newID() string {
@@ -103,19 +103,19 @@ func (d dbInstance) toWire() map[string]any {
 		port = defaultPort(d.Engine)
 	}
 	w := map[string]any{
-		"DBInstanceIdentifier": d.DBInstanceIdentifier,
-		"DBInstanceClass":      d.DBInstanceClass,
-		"Engine":               d.Engine,
-		"DBInstanceStatus":     d.DBInstanceStatus,
-		"MasterUsername":       d.MasterUsername,
-		"DBName":               d.DBName,
-		"AllocatedStorage":     fmt.Sprintf("%d", d.AllocatedStorage),
-		"MultiAZ":              fmt.Sprintf("%v", d.MultiAZ),
-		"EngineVersion":        d.EngineVersion,
-		"PubliclyAccessible":   fmt.Sprintf("%v", d.PubliclyAccessible),
-		"DBInstanceArn":        d.DBInstanceArn,
-		"DBSubnetGroupName":    d.DBSubnetGroupName,
-		"DBParameterGroupName": d.DBParameterGroupName,
+		"DBInstanceIdentifier":  d.DBInstanceIdentifier,
+		"DBInstanceClass":       d.DBInstanceClass,
+		"Engine":                d.Engine,
+		"DBInstanceStatus":      d.DBInstanceStatus,
+		"MasterUsername":        d.MasterUsername,
+		"DBName":                d.DBName,
+		"AllocatedStorage":      fmt.Sprintf("%d", d.AllocatedStorage),
+		"MultiAZ":               fmt.Sprintf("%v", d.MultiAZ),
+		"EngineVersion":         d.EngineVersion,
+		"PubliclyAccessible":    fmt.Sprintf("%v", d.PubliclyAccessible),
+		"DBInstanceArn":         d.DBInstanceArn,
+		"DBSubnetGroupName":     d.DBSubnetGroupName,
+		"DBParameterGroupName":  d.DBParameterGroupName,
 		"BackupRetentionPeriod": fmt.Sprintf("%d", d.BackupRetentionPeriod),
 		"Endpoint": map[string]any{
 			"Address": d.endpointAddress(),

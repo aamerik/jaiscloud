@@ -24,44 +24,44 @@ func New() *Provider {
 // Routes returns all CloudWatch Logs handler registrations.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"CloudWatchLogs.CreateLogGroup":              p.CreateLogGroup,
-		"CloudWatchLogs.DeleteLogGroup":              p.DeleteLogGroup,
-		"CloudWatchLogs.DescribeLogGroups":           p.DescribeLogGroups,
-		"CloudWatchLogs.CreateLogStream":             p.CreateLogStream,
-		"CloudWatchLogs.DeleteLogStream":             p.DeleteLogStream,
-		"CloudWatchLogs.DescribeLogStreams":          p.DescribeLogStreams,
-		"CloudWatchLogs.PutLogEvents":                p.PutLogEvents,
-		"CloudWatchLogs.GetLogEvents":                p.GetLogEvents,
-		"CloudWatchLogs.FilterLogEvents":             p.FilterLogEvents,
-		"CloudWatchLogs.TagLogGroup":                 p.TagLogGroup,
-		"CloudWatchLogs.UntagLogGroup":               p.UntagLogGroup,
-		"CloudWatchLogs.ListTagsLogGroup":            p.ListTagsLogGroup,
-		"CloudWatchLogs.PutRetentionPolicy":          p.PutRetentionPolicy,
-		"CloudWatchLogs.DeleteRetentionPolicy":       p.DeleteRetentionPolicy,
+		"CloudWatchLogs.CreateLogGroup":        p.CreateLogGroup,
+		"CloudWatchLogs.DeleteLogGroup":        p.DeleteLogGroup,
+		"CloudWatchLogs.DescribeLogGroups":     p.DescribeLogGroups,
+		"CloudWatchLogs.CreateLogStream":       p.CreateLogStream,
+		"CloudWatchLogs.DeleteLogStream":       p.DeleteLogStream,
+		"CloudWatchLogs.DescribeLogStreams":    p.DescribeLogStreams,
+		"CloudWatchLogs.PutLogEvents":          p.PutLogEvents,
+		"CloudWatchLogs.GetLogEvents":          p.GetLogEvents,
+		"CloudWatchLogs.FilterLogEvents":       p.FilterLogEvents,
+		"CloudWatchLogs.TagLogGroup":           p.TagLogGroup,
+		"CloudWatchLogs.UntagLogGroup":         p.UntagLogGroup,
+		"CloudWatchLogs.ListTagsLogGroup":      p.ListTagsLogGroup,
+		"CloudWatchLogs.PutRetentionPolicy":    p.PutRetentionPolicy,
+		"CloudWatchLogs.DeleteRetentionPolicy": p.DeleteRetentionPolicy,
 		// ARN-based tagging (4.11)
-		"CloudWatchLogs.TagResource":                 p.TagResource,
-		"CloudWatchLogs.UntagResource":               p.UntagResource,
-		"CloudWatchLogs.ListTagsForResource":         p.ListTagsForResource,
+		"CloudWatchLogs.TagResource":         p.TagResource,
+		"CloudWatchLogs.UntagResource":       p.UntagResource,
+		"CloudWatchLogs.ListTagsForResource": p.ListTagsForResource,
 		// Subscription filters (4.12)
 		"CloudWatchLogs.PutSubscriptionFilter":       p.PutSubscriptionFilter,
 		"CloudWatchLogs.DescribeSubscriptionFilters": p.DescribeSubscriptionFilters,
 		"CloudWatchLogs.DeleteSubscriptionFilter":    p.DeleteSubscriptionFilter,
 		// Query CRUD (13.10)
-		"CloudWatchLogs.StartQuery":                  p.StartQuery,
-		"CloudWatchLogs.GetQueryResults":             p.GetQueryResults,
-		"CloudWatchLogs.StopQuery":                   p.StopQuery,
-		"CloudWatchLogs.PutQueryDefinition":          p.PutQueryDefinition,
-		"CloudWatchLogs.DescribeQueryDefinitions":    p.DescribeQueryDefinitions,
-		"CloudWatchLogs.DeleteQueryDefinition":       p.DeleteQueryDefinition,
+		"CloudWatchLogs.StartQuery":               p.StartQuery,
+		"CloudWatchLogs.GetQueryResults":          p.GetQueryResults,
+		"CloudWatchLogs.StopQuery":                p.StopQuery,
+		"CloudWatchLogs.PutQueryDefinition":       p.PutQueryDefinition,
+		"CloudWatchLogs.DescribeQueryDefinitions": p.DescribeQueryDefinitions,
+		"CloudWatchLogs.DeleteQueryDefinition":    p.DeleteQueryDefinition,
 		// Export tasks (13.11)
 		"CloudWatchLogs.CreateExportTask":    p.CreateExportTask,
 		"CloudWatchLogs.DescribeExportTasks": p.DescribeExportTasks,
 		"CloudWatchLogs.CancelExportTask":    p.CancelExportTask,
 		// Metric filters
-		"CloudWatchLogs.PutMetricFilter":        p.PutMetricFilter,
-		"CloudWatchLogs.DescribeMetricFilters":  p.DescribeMetricFilters,
-		"CloudWatchLogs.DeleteMetricFilter":     p.DeleteMetricFilter,
-		"CloudWatchLogs.TestMetricFilter":       p.TestMetricFilter,
+		"CloudWatchLogs.PutMetricFilter":       p.PutMetricFilter,
+		"CloudWatchLogs.DescribeMetricFilters": p.DescribeMetricFilters,
+		"CloudWatchLogs.DeleteMetricFilter":    p.DeleteMetricFilter,
+		"CloudWatchLogs.TestMetricFilter":      p.TestMetricFilter,
 	}
 }
 
@@ -104,4 +104,3 @@ func (p *Provider) verifyGroupExists(name string) (*LogGroup, error) {
 	}
 	return g, nil
 }
-

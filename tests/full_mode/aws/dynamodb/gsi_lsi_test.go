@@ -62,9 +62,9 @@ func TestGSI_QueryByIndex(t *testing.T) {
 
 	// Query by GSI: all pending orders.
 	out, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Orders"),
-		IndexName:              aws.String("StatusIndex"),
-		KeyConditionExpression: aws.String("#s = :status"),
+		TableName:                 aws.String("Orders"),
+		IndexName:                 aws.String("StatusIndex"),
+		KeyConditionExpression:    aws.String("#s = :status"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":status": strAttr("pending")},
 	})
@@ -79,9 +79,9 @@ func TestGSI_QueryByIndex(t *testing.T) {
 
 	// Query for shipped orders — should return exactly one.
 	outShipped, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Orders"),
-		IndexName:              aws.String("StatusIndex"),
-		KeyConditionExpression: aws.String("#s = :status"),
+		TableName:                 aws.String("Orders"),
+		IndexName:                 aws.String("StatusIndex"),
+		KeyConditionExpression:    aws.String("#s = :status"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":status": strAttr("shipped")},
 	})
@@ -134,10 +134,10 @@ func TestGSI_QueryWithSKCondition(t *testing.T) {
 
 	// BETWEEN filter on GSI SK.
 	out, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Events"),
-		IndexName:              aws.String("CategoryIndex"),
-		KeyConditionExpression: aws.String("Category = :cat AND #ts BETWEEN :lo AND :hi"),
-		ExpressionAttributeNames:  map[string]string{"#ts": "Timestamp"},
+		TableName:                aws.String("Events"),
+		IndexName:                aws.String("CategoryIndex"),
+		KeyConditionExpression:   aws.String("Category = :cat AND #ts BETWEEN :lo AND :hi"),
+		ExpressionAttributeNames: map[string]string{"#ts": "Timestamp"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":cat": strAttr("click"),
 			":lo":  strAttr("2024-01-01"),
@@ -149,10 +149,10 @@ func TestGSI_QueryWithSKCondition(t *testing.T) {
 
 	// begins_with filter on GSI SK.
 	outBW, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Events"),
-		IndexName:              aws.String("CategoryIndex"),
-		KeyConditionExpression: aws.String("Category = :cat AND begins_with(#ts, :prefix)"),
-		ExpressionAttributeNames:  map[string]string{"#ts": "Timestamp"},
+		TableName:                aws.String("Events"),
+		IndexName:                aws.String("CategoryIndex"),
+		KeyConditionExpression:   aws.String("Category = :cat AND begins_with(#ts, :prefix)"),
+		ExpressionAttributeNames: map[string]string{"#ts": "Timestamp"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":cat":    strAttr("click"),
 			":prefix": strAttr("2024"),
@@ -344,9 +344,9 @@ func TestGSI_UpdateItemReflectsInIndex(t *testing.T) {
 
 	// Query before update.
 	outBefore, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Tasks"),
-		IndexName:              aws.String("StatusIndex"),
-		KeyConditionExpression: aws.String("#s = :s"),
+		TableName:                 aws.String("Tasks"),
+		IndexName:                 aws.String("StatusIndex"),
+		KeyConditionExpression:    aws.String("#s = :s"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":s": strAttr("open")},
 	})
@@ -355,8 +355,8 @@ func TestGSI_UpdateItemReflectsInIndex(t *testing.T) {
 
 	// Update Status to done.
 	_, err = client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String("Tasks"),
-		Key:       map[string]types.AttributeValue{"TaskId": strAttr("t1")},
+		TableName:                 aws.String("Tasks"),
+		Key:                       map[string]types.AttributeValue{"TaskId": strAttr("t1")},
 		UpdateExpression:          aws.String("SET #s = :done"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":done": strAttr("done")},
@@ -365,9 +365,9 @@ func TestGSI_UpdateItemReflectsInIndex(t *testing.T) {
 
 	// After update, open partition must be empty.
 	outOpen, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Tasks"),
-		IndexName:              aws.String("StatusIndex"),
-		KeyConditionExpression: aws.String("#s = :s"),
+		TableName:                 aws.String("Tasks"),
+		IndexName:                 aws.String("StatusIndex"),
+		KeyConditionExpression:    aws.String("#s = :s"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":s": strAttr("open")},
 	})
@@ -376,9 +376,9 @@ func TestGSI_UpdateItemReflectsInIndex(t *testing.T) {
 
 	// done partition must contain t1.
 	outDone, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Tasks"),
-		IndexName:              aws.String("StatusIndex"),
-		KeyConditionExpression: aws.String("#s = :s"),
+		TableName:                 aws.String("Tasks"),
+		IndexName:                 aws.String("StatusIndex"),
+		KeyConditionExpression:    aws.String("#s = :s"),
 		ExpressionAttributeNames:  map[string]string{"#s": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":s": strAttr("done")},
 	})
@@ -426,9 +426,9 @@ func TestGSI_DeleteItemRemovesFromIndex(t *testing.T) {
 
 	// Confirm item is in the GSI.
 	outBefore, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Sessions"),
-		IndexName:              aws.String("UserIndex"),
-		KeyConditionExpression: aws.String("UserId = :uid"),
+		TableName:                 aws.String("Sessions"),
+		IndexName:                 aws.String("UserIndex"),
+		KeyConditionExpression:    aws.String("UserId = :uid"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{":uid": strAttr("user42")},
 	})
 	require.NoError(t, err)
@@ -443,9 +443,9 @@ func TestGSI_DeleteItemRemovesFromIndex(t *testing.T) {
 
 	// GSI partition must now be empty.
 	outAfter, err := client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String("Sessions"),
-		IndexName:              aws.String("UserIndex"),
-		KeyConditionExpression: aws.String("UserId = :uid"),
+		TableName:                 aws.String("Sessions"),
+		IndexName:                 aws.String("UserIndex"),
+		KeyConditionExpression:    aws.String("UserId = :uid"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{":uid": strAttr("user42")},
 	})
 	require.NoError(t, err)

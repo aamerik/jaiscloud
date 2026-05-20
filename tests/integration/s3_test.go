@@ -570,9 +570,9 @@ func TestS3_Streaming_RangeRead(t *testing.T) {
 	require.NoError(t, err)
 
 	cases := []struct {
-		name       string
-		rangeHdr   string
-		wantSlice  []byte
+		name      string
+		rangeHdr  string
+		wantSlice []byte
 	}{
 		{"first 1KB", "bytes=0-1023", payload[:1024]},
 		{"middle 4KB", "bytes=4096-8191", payload[4096:8192]},

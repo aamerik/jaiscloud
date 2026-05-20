@@ -41,46 +41,46 @@ func New(store KeyStore, rm *resourcemgr.Manager, serverDEK []byte) *KeyProvider
 // Routes returns all KMS handler registrations.
 func (p *KeyProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Key.CreateKey":         p.CreateKey,
-		"Key.DescribeKey":       p.DescribeKey,
-		"Key.EnableKey":         p.EnableKey,
-		"Key.DisableKey":        p.DisableKey,
-		"Key.ScheduleKeyDeletion": p.ScheduleKeyDeletion,
-		"Key.CancelKeyDeletion":   p.CancelKeyDeletion,
-		"Key.ListKeys":          p.ListKeys,
-		"Key.TagResource":       p.TagResource,
-		"Key.UntagResource":     p.UntagResource,
-		"Key.ListResourceTags":  p.ListResourceTags,
-		"Key.CreateAlias":       p.CreateAlias,
-		"Key.DeleteAlias":       p.DeleteAlias,
-		"Key.ListAliases":       p.ListAliases,
-		"Key.UpdateAlias":       p.UpdateAlias,
-		"Key.CreateGrant":            p.CreateGrant,
-		"Key.RevokeGrant":            p.RevokeGrant,
-		"Key.RetireGrant":            p.RetireGrant,
-		"Key.ListGrants":             p.ListGrants,
-		"Key.ListRetirableGrants":    p.ListRetirableGrants,
-		"Key.ListKeyPolicies":        p.ListKeyPolicies,
-		"Key.DeriveSharedSecret":     p.DeriveSharedSecret,
-		"Key.Encrypt":           p.Encrypt,
-		"Key.Decrypt":           p.Decrypt,
-		"Key.GenerateDataKey":   p.GenerateDataKey,
-		"Key.GenerateDataKeyWithoutPlaintext": p.GenerateDataKeyWithoutPlaintext,
-		"Key.ReEncrypt":         p.ReEncrypt,
-		"Key.GetKeyPolicy":      p.GetKeyPolicy,
-		"Key.PutKeyPolicy":      p.PutKeyPolicy,
-		"Key.GetKeyRotationStatus": p.GetKeyRotationStatus,
-		"Key.EnableKeyRotation":    p.EnableKeyRotation,
-		"Key.DisableKeyRotation":   p.DisableKeyRotation,
-		"Key.Sign":                 p.Sign,
-		"Key.Verify":               p.Verify,
-		"Key.GetPublicKey":         p.GetPublicKey,
-		"Key.RotateKeyOnDemand":    p.RotateKeyOnDemand,
-		"Key.GenerateDataKeyPair":                p.GenerateDataKeyPair,
+		"Key.CreateKey":                           p.CreateKey,
+		"Key.DescribeKey":                         p.DescribeKey,
+		"Key.EnableKey":                           p.EnableKey,
+		"Key.DisableKey":                          p.DisableKey,
+		"Key.ScheduleKeyDeletion":                 p.ScheduleKeyDeletion,
+		"Key.CancelKeyDeletion":                   p.CancelKeyDeletion,
+		"Key.ListKeys":                            p.ListKeys,
+		"Key.TagResource":                         p.TagResource,
+		"Key.UntagResource":                       p.UntagResource,
+		"Key.ListResourceTags":                    p.ListResourceTags,
+		"Key.CreateAlias":                         p.CreateAlias,
+		"Key.DeleteAlias":                         p.DeleteAlias,
+		"Key.ListAliases":                         p.ListAliases,
+		"Key.UpdateAlias":                         p.UpdateAlias,
+		"Key.CreateGrant":                         p.CreateGrant,
+		"Key.RevokeGrant":                         p.RevokeGrant,
+		"Key.RetireGrant":                         p.RetireGrant,
+		"Key.ListGrants":                          p.ListGrants,
+		"Key.ListRetirableGrants":                 p.ListRetirableGrants,
+		"Key.ListKeyPolicies":                     p.ListKeyPolicies,
+		"Key.DeriveSharedSecret":                  p.DeriveSharedSecret,
+		"Key.Encrypt":                             p.Encrypt,
+		"Key.Decrypt":                             p.Decrypt,
+		"Key.GenerateDataKey":                     p.GenerateDataKey,
+		"Key.GenerateDataKeyWithoutPlaintext":     p.GenerateDataKeyWithoutPlaintext,
+		"Key.ReEncrypt":                           p.ReEncrypt,
+		"Key.GetKeyPolicy":                        p.GetKeyPolicy,
+		"Key.PutKeyPolicy":                        p.PutKeyPolicy,
+		"Key.GetKeyRotationStatus":                p.GetKeyRotationStatus,
+		"Key.EnableKeyRotation":                   p.EnableKeyRotation,
+		"Key.DisableKeyRotation":                  p.DisableKeyRotation,
+		"Key.Sign":                                p.Sign,
+		"Key.Verify":                              p.Verify,
+		"Key.GetPublicKey":                        p.GetPublicKey,
+		"Key.RotateKeyOnDemand":                   p.RotateKeyOnDemand,
+		"Key.GenerateDataKeyPair":                 p.GenerateDataKeyPair,
 		"Key.GenerateDataKeyPairWithoutPlaintext": p.GenerateDataKeyPairWithoutPlaintext,
-		"Key.GenerateMac":   p.GenerateMac,
-		"Key.VerifyMac":     p.VerifyMac,
-		"Key.GenerateRandom": p.GenerateRandom,
+		"Key.GenerateMac":                         p.GenerateMac,
+		"Key.VerifyMac":                           p.VerifyMac,
+		"Key.GenerateRandom":                      p.GenerateRandom,
 		// Key import (stub)
 		"Key.GetParametersForImport":    p.GetParametersForImport,
 		"Key.ImportKeyMaterial":         p.ImportKeyMaterial,
@@ -486,12 +486,12 @@ func (p *KeyProvider) GetParametersForImport(ctx context.Context, nr *model.Norm
 	token := make([]byte, 32)
 	io.ReadFull(rand.Reader, token)
 	return provider.OK(map[string]any{
-		"KeyId":              keyID,
-		"PublicKey":          base64.StdEncoding.EncodeToString(dummyKey),
-		"ImportToken":        base64.StdEncoding.EncodeToString(token),
-		"ParametersValidTo":  time.Now().Add(24 * time.Hour).Unix(),
-		"KeySpec":            "RSA_2048",
-		"WrappingAlgorithm":  "RSAES_OAEP_SHA_256",
+		"KeyId":             keyID,
+		"PublicKey":         base64.StdEncoding.EncodeToString(dummyKey),
+		"ImportToken":       base64.StdEncoding.EncodeToString(token),
+		"ParametersValidTo": time.Now().Add(24 * time.Hour).Unix(),
+		"KeySpec":           "RSA_2048",
+		"WrappingAlgorithm": "RSAES_OAEP_SHA_256",
 	}), nil
 }
 
@@ -885,10 +885,10 @@ func (p *KeyProvider) GenerateDataKey(ctx context.Context, nr *model.NormalizedR
 	}
 	blob := buildCiphertextBlob(keyID, nr.AccountID, nr.Region, ct)
 	return provider.OK(map[string]any{
-		"KeyId":                 nr.ResourceID(model.RTKMSKey, keyID),
-		"Plaintext":             base64.StdEncoding.EncodeToString(dataKey),
-		"CiphertextBlob":        base64.StdEncoding.EncodeToString(blob),
-		"EncryptionAlgorithm":   "SYMMETRIC_DEFAULT",
+		"KeyId":               nr.ResourceID(model.RTKMSKey, keyID),
+		"Plaintext":           base64.StdEncoding.EncodeToString(dataKey),
+		"CiphertextBlob":      base64.StdEncoding.EncodeToString(blob),
+		"EncryptionAlgorithm": "SYMMETRIC_DEFAULT",
 	}), nil
 }
 
@@ -984,7 +984,7 @@ func (p *KeyProvider) checkKeyPolicy(ctx context.Context, keyID, accountID, regi
 	if policy == "" {
 		policy = defaultKeyPolicy
 	}
-	caller := fmt.Sprintf("arn:aws:iam::%s:root", accountID)         //nolint:hardcoded-arn dynamic account
+	caller := fmt.Sprintf("arn:aws:iam::%s:root", accountID) //nolint:hardcoded-arn dynamic account
 	if !evalKeyPolicy(policy, caller, action) {
 		resource := fmt.Sprintf("arn:aws:kms:%s:%s:key/%s", region, accountID, keyID) //nolint:hardcoded-arn dynamic account+region
 		return model.NewProviderError("AccessDeniedException",
@@ -1862,8 +1862,8 @@ func (p *KeyProvider) DeriveSharedSecret(ctx context.Context, nr *model.Normaliz
 		return nil, model.NewProviderError("InvalidKeyUsageException", "ECDH key agreement failed: "+err.Error(), 400)
 	}
 	return provider.OK(map[string]any{
-		"KeyId":                nr.ResourceID(model.RTKMSKey, keyID),
-		"SharedSecret":         base64.StdEncoding.EncodeToString(shared),
+		"KeyId":                 nr.ResourceID(model.RTKMSKey, keyID),
+		"SharedSecret":          base64.StdEncoding.EncodeToString(shared),
 		"KeyAgreementAlgorithm": "ECDH",
 	}), nil
 }

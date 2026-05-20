@@ -102,11 +102,11 @@ func TestParse_NoPanic(t *testing.T) {
 
 func TestResolveAccountRegion(t *testing.T) {
 	cases := []struct {
-		arnStr        string
-		callerAcct    string
-		callerRegion  string
-		wantAccount   string
-		wantRegion    string
+		arnStr       string
+		callerAcct   string
+		callerRegion string
+		wantAccount  string
+		wantRegion   string
 	}{
 		// ARN provides both
 		{

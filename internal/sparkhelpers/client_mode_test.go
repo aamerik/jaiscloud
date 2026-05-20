@@ -90,8 +90,8 @@ func TestBuildClientModeArgs_Python(t *testing.T) {
 // TestBuildClientModeArgs_R verifies argv for an R entry point.
 func TestBuildClientModeArgs_R(t *testing.T) {
 	job := ClientModeJob{
-		JobID:     "r-job",
-		Namespace: "spark",
+		JobID:      "r-job",
+		Namespace:  "spark",
 		EntryPoint: REntryPoint{MainRFile: "analysis.R"},
 	}
 
@@ -261,9 +261,9 @@ func TestBuildClientModeArgs_ClientConfPrecedence(t *testing.T) {
 	const userEndpoint = "http://my-custom-minio:9000"
 
 	job := ClientModeJob{
-		JobID:     "j",
-		Namespace: "ns",
-		Image:     "img:1",
+		JobID:      "j",
+		Namespace:  "ns",
+		Image:      "img:1",
 		EntryPoint: JarEntryPoint{JarURI: "app.jar"},
 		// JaisCloud injects its own s3a endpoint via ExtraSparkConfs.
 		ExtraSparkConfs: []string{

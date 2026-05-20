@@ -620,9 +620,9 @@ func TestSQSSetQueueAttributes_KMS(t *testing.T) {
 	_, err = c.SetQueueAttributes(ctx, &sqs.SetQueueAttributesInput{
 		QueueUrl: out.QueueUrl,
 		Attributes: map[string]string{
-			"KmsMasterKeyId":             "alias/my-key",
+			"KmsMasterKeyId":               "alias/my-key",
 			"KmsDataKeyReusePeriodSeconds": "300",
-			"SqsManagedSseEnabled":        "false",
+			"SqsManagedSseEnabled":         "false",
 		},
 	})
 	require.NoError(t, err)

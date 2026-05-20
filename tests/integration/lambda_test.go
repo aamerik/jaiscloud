@@ -310,4 +310,3 @@ func TestLambdaLayerMountMock(t *testing.T) {
 	assert.EqualValues(t, 200, invokeOut.StatusCode)
 	assert.Equal(t, payload, invokeOut.Payload)
 }
-

@@ -56,12 +56,12 @@ func (p *ObjectProvider) SetFanout(cfg S3FanoutConfig) {
 func buildS3EventRecord(bucket, key, eventName, etag string, size int64, region, accountID, configID string, now time.Time) []byte {
 	seq := fmt.Sprintf("%016x", rand.Int63())
 	record := map[string]any{
-		"eventVersion": "2.1",
-		"eventSource":  "aws:s3",
-		"awsRegion":    region,
-		"eventTime":    now.UTC().Format(time.RFC3339),
-		"eventName":    eventName,
-		"userIdentity": map[string]any{"principalId": "EXAMPLE"},
+		"eventVersion":      "2.1",
+		"eventSource":       "aws:s3",
+		"awsRegion":         region,
+		"eventTime":         now.UTC().Format(time.RFC3339),
+		"eventName":         eventName,
+		"userIdentity":      map[string]any{"principalId": "EXAMPLE"},
 		"requestParameters": map[string]any{"sourceIPAddress": "127.0.0.1"},
 		"responseElements": map[string]any{
 			"x-amz-request-id": fmt.Sprintf("%016x", rand.Int63()),

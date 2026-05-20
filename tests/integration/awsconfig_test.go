@@ -70,7 +70,7 @@ func TestConfig_PutConfigRule(t *testing.T) {
 		ConfigRule: &configtypes.ConfigRule{
 			ConfigRuleName: aws.String("my-config-rule"),
 			Source: &configtypes.Source{
-				Owner: configtypes.OwnerAws,
+				Owner:            configtypes.OwnerAws,
 				SourceIdentifier: aws.String("RESTRICTED_SSH"),
 			},
 		},
@@ -89,7 +89,7 @@ func TestConfig_PutConfigRule(t *testing.T) {
 		ConfigRule: &configtypes.ConfigRule{
 			ConfigRuleName: aws.String("another-rule"),
 			Source: &configtypes.Source{
-				Owner: configtypes.OwnerAws,
+				Owner:            configtypes.OwnerAws,
 				SourceIdentifier: aws.String("CLOUD_TRAIL_ENABLED"),
 			},
 		},

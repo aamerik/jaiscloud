@@ -6,22 +6,22 @@ import (
 	"sync"
 	"time"
 
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // messageMoveTask tracks a single in-progress or completed move task.
 type messageMoveTask struct {
-	taskHandle        string
-	sourceArn         string
-	destinationArn    string
+	taskHandle         string
+	sourceArn          string
+	destinationArn     string
 	maxNumberPerSecond int
-	startedAt         time.Time
-	status            string // RUNNING, COMPLETED, CANCELLING, CANCELLED, FAILED
-	messagesMoved     int
+	startedAt          time.Time
+	status             string // RUNNING, COMPLETED, CANCELLING, CANCELLED, FAILED
+	messagesMoved      int
 	approxMessageCount int
-	cancelFn          context.CancelFunc
+	cancelFn           context.CancelFunc
 }
 
 // moveTasks holds all message move tasks indexed by task handle.
@@ -40,8 +40,8 @@ func newMoveTasks() *moveTasks {
 // resources, or fall back to a package-level map protected by a mutex.
 // For simplicity we keep a package-level registry; it is reset on provider Reset().
 var (
-	globalMoveTasks     = newMoveTasks()
-	globalMoveTasksMu   sync.Mutex
+	globalMoveTasks   = newMoveTasks()
+	globalMoveTasksMu sync.Mutex
 )
 
 func resetMoveTasks() {
@@ -157,7 +157,7 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 				VisibleAt:         time.Time{},
 				DelayUntil:        time.Time{},
 			}
-			p.messages.Send(ctx, dstAccount, dstRegion, moved)     //nolint:errcheck
+			p.messages.Send(ctx, dstAccount, dstRegion, moved)                                //nolint:errcheck
 			p.messages.Delete(ctx, sourceAccount, sourceRegion, sourceURL, msg.ReceiptHandle) //nolint:errcheck
 			globalMoveTasks.mu.Lock()
 			task.messagesMoved++

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
+	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/provider"
-	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 )
 
 // ExecutionEngine runs ASL state machine executions.
@@ -27,8 +27,8 @@ type ExecutionEngine struct {
 	running map[string]context.CancelFunc // execARN → cancel
 
 	// task tokens: token → channel that unblocks when SendTaskSuccess/Failure called
-	tokenMu  sync.Mutex
-	tokens   map[string]chan taskCallback
+	tokenMu sync.Mutex
+	tokens  map[string]chan taskCallback
 
 	wg sync.WaitGroup
 }

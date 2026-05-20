@@ -12,9 +12,9 @@ import (
 const rtCapacityProvider = "ecs_capacity_provider"
 
 type capacityProvider struct {
-	Name   string         `json:"name"`
-	Arn    string         `json:"capacityProviderArn"`
-	Status string         `json:"status"`
+	Name   string           `json:"name"`
+	Arn    string           `json:"capacityProviderArn"`
+	Status string           `json:"status"`
 	Tags   []map[string]any `json:"tags,omitempty"`
 	Extra  map[string]any   `json:"extra,omitempty"`
 }

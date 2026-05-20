@@ -14,9 +14,9 @@ import (
 	"regexp"
 	"time"
 
+	ecrstore "jaiscloud/internal/aws/store/ecr"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	ecrstore "jaiscloud/internal/aws/store/ecr"
 )
 
 // validManifestMediaTypes are the only accepted mediaType values for PutImage.
@@ -82,25 +82,25 @@ func (p *Provider) OCIHandler() func(http.ResponseWriter, *http.Request) {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Repository CRUD
-		"ECR.CreateRepository":   p.CreateRepository,
-		"ECR.DeleteRepository":   p.DeleteRepository,
+		"ECR.CreateRepository":     p.CreateRepository,
+		"ECR.DeleteRepository":     p.DeleteRepository,
 		"ECR.DescribeRepositories": p.DescribeRepositories,
 
 		// Image operations
-		"ECR.PutImage":                   p.PutImage,
-		"ECR.BatchGetImage":              p.BatchGetImage,
-		"ECR.BatchDeleteImage":           p.BatchDeleteImage,
-		"ECR.ListImages":                 p.ListImages,
-		"ECR.DescribeImages":             p.DescribeImages,
+		"ECR.PutImage":                    p.PutImage,
+		"ECR.BatchGetImage":               p.BatchGetImage,
+		"ECR.BatchDeleteImage":            p.BatchDeleteImage,
+		"ECR.ListImages":                  p.ListImages,
+		"ECR.DescribeImages":              p.DescribeImages,
 		"ECR.BatchCheckLayerAvailability": p.BatchCheckLayerAvailability,
 
 		// Auth
 		"ECR.GetAuthorizationToken": p.GetAuthorizationToken,
 
 		// Lifecycle policy
-		"ECR.PutLifecyclePolicy":    p.PutLifecyclePolicy,
-		"ECR.GetLifecyclePolicy":    p.GetLifecyclePolicy,
-		"ECR.DeleteLifecyclePolicy": p.DeleteLifecyclePolicy,
+		"ECR.PutLifecyclePolicy":          p.PutLifecyclePolicy,
+		"ECR.GetLifecyclePolicy":          p.GetLifecyclePolicy,
+		"ECR.DeleteLifecyclePolicy":       p.DeleteLifecyclePolicy,
 		"ECR.StartLifecyclePolicyPreview": p.StartLifecyclePolicyPreview,
 		"ECR.GetLifecyclePolicyPreview":   p.GetLifecyclePolicyPreview,
 
@@ -110,25 +110,25 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ECR.DeleteRepositoryPolicy": p.DeleteRepositoryPolicy,
 
 		// Tags
-		"ECR.TagResource":        p.TagResource,
-		"ECR.UntagResource":      p.UntagResource,
+		"ECR.TagResource":         p.TagResource,
+		"ECR.UntagResource":       p.UntagResource,
 		"ECR.ListTagsForResource": p.ListTagsForResource,
 
 		// Scanning stubs
-		"ECR.StartImageScan":             p.StartImageScan,
-		"ECR.DescribeImageScanFindings":  p.DescribeImageScanFindings,
+		"ECR.StartImageScan":            p.StartImageScan,
+		"ECR.DescribeImageScanFindings": p.DescribeImageScanFindings,
 
 		// Pull-through cache
-		"ECR.CreatePullThroughCacheRule":   p.CreatePullThroughCacheRule,
+		"ECR.CreatePullThroughCacheRule":    p.CreatePullThroughCacheRule,
 		"ECR.DescribePullThroughCacheRules": p.DescribePullThroughCacheRules,
-		"ECR.DeletePullThroughCacheRule":   p.DeletePullThroughCacheRule,
+		"ECR.DeletePullThroughCacheRule":    p.DeletePullThroughCacheRule,
 
 		// Registry-level
-		"ECR.PutRegistryPolicy":         p.PutRegistryPolicy,
-		"ECR.GetRegistryPolicy":         p.GetRegistryPolicy,
-		"ECR.DeleteRegistryPolicy":      p.DeleteRegistryPolicy,
-		"ECR.DescribeRegistry":          p.DescribeRegistry,
-		"ECR.PutReplicationConfiguration": p.PutReplicationConfiguration,
+		"ECR.PutRegistryPolicy":                  p.PutRegistryPolicy,
+		"ECR.GetRegistryPolicy":                  p.GetRegistryPolicy,
+		"ECR.DeleteRegistryPolicy":               p.DeleteRegistryPolicy,
+		"ECR.DescribeRegistry":                   p.DescribeRegistry,
+		"ECR.PutReplicationConfiguration":        p.PutReplicationConfiguration,
 		"ECR.DescribeRepositoriesForReplication": p.DescribeRepositoriesForReplication,
 	}
 }
@@ -170,16 +170,16 @@ func (p *Provider) CreateRepository(ctx context.Context, nr *model.NormalizedReq
 	inputTags := parseTags(nr.Params["tags"])
 
 	repo := &ecrstore.Repository{
-		RegistryID:         nr.AccountID,
-		Name:               name,
-		ARN:                arn,
-		URI:                uri,
-		CreatedAt:          time.Now(),
-		ImageTagMutability: mutability,
+		RegistryID:          nr.AccountID,
+		Name:                name,
+		ARN:                 arn,
+		URI:                 uri,
+		CreatedAt:           time.Now(),
+		ImageTagMutability:  mutability,
 		ImageScanningConfig: ecrstore.ImageScanningConfig{ScanOnPush: scanOnPush},
 		EncryptionConfig:    ecrstore.EncryptionConfig{EncryptionType: encType, KMSKey: kmsKey},
-		Images:             make(map[string]*ecrstore.Image),
-		Tags:               inputTags,
+		Images:              make(map[string]*ecrstore.Image),
+		Tags:                inputTags,
 	}
 
 	if err := p.store.CreateRepository(repo); err != nil {
@@ -448,14 +448,14 @@ func (p *Provider) BatchCheckLayerAvailability(ctx context.Context, nr *model.No
 			status = "AVAILABLE"
 		}
 		layers = append(layers, map[string]any{
-			"layerDigest":      digest,
+			"layerDigest":       digest,
 			"layerAvailability": status,
 		})
 	}
 
 	return provider.OK(map[string]any{
-		"layers":     layers,
-		"failures":   []any{},
+		"layers":   layers,
+		"failures": []any{},
 	}), nil
 }
 
@@ -787,7 +787,7 @@ func (p *Provider) DescribeImageScanFindings(ctx context.Context, nr *model.Norm
 		"imageScanFindings": map[string]any{
 			"imageScanCompletedAt":         now,
 			"vulnerabilitySourceUpdatedAt": now,
-			"findings":                    []any{},
+			"findings":                     []any{},
 			"findingSeverityCounts":        map[string]int{},
 		},
 	}), nil
@@ -919,12 +919,12 @@ func storeErrToProvider(err error) *model.ProviderError {
 
 func repoToMap(r *ecrstore.Repository) map[string]any {
 	return map[string]any{
-		"repositoryArn":          r.ARN,
-		"registryId":             r.RegistryID,
-		"repositoryName":         r.Name,
-		"repositoryUri":          r.URI,
-		"createdAt":              r.CreatedAt.Unix(),
-		"imageTagMutability":     r.ImageTagMutability,
+		"repositoryArn":      r.ARN,
+		"registryId":         r.RegistryID,
+		"repositoryName":     r.Name,
+		"repositoryUri":      r.URI,
+		"createdAt":          r.CreatedAt.Unix(),
+		"imageTagMutability": r.ImageTagMutability,
 		"imageScanningConfiguration": map[string]any{
 			"scanOnPush": r.ImageScanningConfig.ScanOnPush,
 		},

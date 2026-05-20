@@ -204,13 +204,13 @@ func TestFirehose_AccountIsolation(t *testing.T) {
 	}
 
 	_, err := fhA.CreateDeliveryStream(ctx, &firehose.CreateDeliveryStreamInput{
-		DeliveryStreamName:                  aws.String("shared-stream"),
-		ExtendedS3DestinationConfiguration:  s3Dest,
+		DeliveryStreamName:                 aws.String("shared-stream"),
+		ExtendedS3DestinationConfiguration: s3Dest,
 	})
 	require.NoError(t, err)
 	_, err = fhB.CreateDeliveryStream(ctx, &firehose.CreateDeliveryStreamInput{
-		DeliveryStreamName:                  aws.String("shared-stream"),
-		ExtendedS3DestinationConfiguration:  s3DestB,
+		DeliveryStreamName:                 aws.String("shared-stream"),
+		ExtendedS3DestinationConfiguration: s3DestB,
 	})
 	require.NoError(t, err)
 
@@ -370,14 +370,14 @@ func TestRoute53_HostedZoneIsolation(t *testing.T) {
 	r53B := newRoute53For(t, AcctB)
 
 	_, err := r53A.CreateHostedZone(ctx, &route53.CreateHostedZoneInput{
-		Name:            aws.String("shared.example.com."),
-		CallerReference: aws.String("ref-A-1"),
+		Name:             aws.String("shared.example.com."),
+		CallerReference:  aws.String("ref-A-1"),
 		HostedZoneConfig: &r53types.HostedZoneConfig{PrivateZone: false},
 	})
 	require.NoError(t, err)
 	_, err = r53B.CreateHostedZone(ctx, &route53.CreateHostedZoneInput{
-		Name:            aws.String("shared.example.com."),
-		CallerReference: aws.String("ref-B-1"),
+		Name:             aws.String("shared.example.com."),
+		CallerReference:  aws.String("ref-B-1"),
 		HostedZoneConfig: &r53types.HostedZoneConfig{PrivateZone: false},
 	})
 	require.NoError(t, err)

@@ -110,8 +110,8 @@ func TestElastiCache_ModifyCacheCluster(t *testing.T) {
 	require.NoError(t, err)
 
 	modOut, err := client.ModifyCacheCluster(ctx, &awselasticache.ModifyCacheClusterInput{
-		CacheClusterId: aws.String("my-cluster"),
-		CacheNodeType:  aws.String("cache.t3.small"),
+		CacheClusterId:   aws.String("my-cluster"),
+		CacheNodeType:    aws.String("cache.t3.small"),
 		ApplyImmediately: aws.Bool(true),
 	})
 	require.NoError(t, err)

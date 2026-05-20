@@ -16,12 +16,12 @@ import (
 	"sync"
 	"time"
 
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // QueueProvider implements all SQS operations.
@@ -69,16 +69,16 @@ func (p *QueueProvider) Routes() map[string]provider.HandlerFunc {
 		"Queue.SetQueueAttributes": p.SetQueueAttributes,
 
 		// Data plane
-		"Queue.SendMessage":    p.SendMessage,
-		"Queue.ReceiveMessage": p.ReceiveMessage,
-		"Queue.DeleteMessage":  p.DeleteMessage,
+		"Queue.SendMessage":             p.SendMessage,
+		"Queue.ReceiveMessage":          p.ReceiveMessage,
+		"Queue.DeleteMessage":           p.DeleteMessage,
 		"Queue.ChangeMessageVisibility": p.ChangeMessageVisibility,
-		"Queue.PurgeQueue":     p.PurgeQueue,
+		"Queue.PurgeQueue":              p.PurgeQueue,
 
 		// Batch operations
-		"Queue.SendMessageBatch":              p.SendMessageBatch,
-		"Queue.DeleteMessageBatch":            p.DeleteMessageBatch,
-		"Queue.ChangeMessageVisibilityBatch":  p.ChangeMessageVisibilityBatch,
+		"Queue.SendMessageBatch":             p.SendMessageBatch,
+		"Queue.DeleteMessageBatch":           p.DeleteMessageBatch,
+		"Queue.ChangeMessageVisibilityBatch": p.ChangeMessageVisibilityBatch,
 
 		// Tags
 		"Queue.TagQueue":      p.TagQueue,
@@ -102,7 +102,10 @@ func (p *QueueProvider) Routes() map[string]provider.HandlerFunc {
 var validQueueNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func validateQueueAttrs(attrs map[string]string) error {
-	type rangeCheck struct{ key string; min, max int }
+	type rangeCheck struct {
+		key      string
+		min, max int
+	}
 	checks := []rangeCheck{
 		{"VisibilityTimeout", 0, 43200},
 		{"DelaySeconds", 0, 900},
@@ -1113,17 +1116,17 @@ func toInt(v any) int {
 
 func buildAttributes(state map[string]any, visible, notVisible, delayed int) map[string]string {
 	a := map[string]string{
-		"QueueArn":                      str(state["QueueArn"]),
-		"CreatedTimestamp":               str(state["CreatedTimestamp"]),
-		"LastModifiedTimestamp":          str(state["LastModifiedTimestamp"]),
-		"VisibilityTimeout":              str(state["VisibilityTimeout"]),
-		"DelaySeconds":                   str(state["DelaySeconds"]),
-		"MaximumMessageSize":             str(state["MaximumMessageSize"]),
-		"MessageRetentionPeriod":         str(state["MessageRetentionPeriod"]),
-		"ReceiveMessageWaitTimeSeconds":  str(state["ReceiveMessageWaitTimeSeconds"]),
-		"ApproximateNumberOfMessages":                    strconv.Itoa(visible),
-		"ApproximateNumberOfMessagesNotVisible":          strconv.Itoa(notVisible),
-		"ApproximateNumberOfMessagesDelayed":             strconv.Itoa(delayed),
+		"QueueArn":                              str(state["QueueArn"]),
+		"CreatedTimestamp":                      str(state["CreatedTimestamp"]),
+		"LastModifiedTimestamp":                 str(state["LastModifiedTimestamp"]),
+		"VisibilityTimeout":                     str(state["VisibilityTimeout"]),
+		"DelaySeconds":                          str(state["DelaySeconds"]),
+		"MaximumMessageSize":                    str(state["MaximumMessageSize"]),
+		"MessageRetentionPeriod":                str(state["MessageRetentionPeriod"]),
+		"ReceiveMessageWaitTimeSeconds":         str(state["ReceiveMessageWaitTimeSeconds"]),
+		"ApproximateNumberOfMessages":           strconv.Itoa(visible),
+		"ApproximateNumberOfMessagesNotVisible": strconv.Itoa(notVisible),
+		"ApproximateNumberOfMessagesDelayed":    strconv.Itoa(delayed),
 	}
 	if rp, ok := state["RedrivePolicy"]; ok {
 		a["RedrivePolicy"] = str(rp)
@@ -1155,9 +1158,9 @@ func buildAttributes(state map[string]any, visible, notVisible, delayed int) map
 
 func buildSysAttributes(m sqsstore.SQSMessage) map[string]string {
 	a := map[string]string{
-		"SenderId":                      "000000000000",
-		"SentTimestamp":                 strconv.FormatInt(m.SentAt.UnixMilli(), 10),
-		"ApproximateReceiveCount":       strconv.Itoa(m.ReceiveCount),
+		"SenderId":                         "000000000000",
+		"SentTimestamp":                    strconv.FormatInt(m.SentAt.UnixMilli(), 10),
+		"ApproximateReceiveCount":          strconv.Itoa(m.ReceiveCount),
 		"ApproximateFirstReceiveTimestamp": "0",
 	}
 	if m.FirstReceivedAt != nil {

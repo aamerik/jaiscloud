@@ -615,26 +615,26 @@ type pgS3BucketRow struct {
 }
 
 type pgS3ObjectRow struct {
-	Bucket              string          `json:"bucket"`
-	Key                 string          `json:"key"`
-	ETag                string          `json:"etag"`
-	CRC32               string          `json:"crc32"`
-	Size                int64           `json:"size"`
-	ContentType         string          `json:"content_type"`
-	LastModified        time.Time       `json:"last_modified"`
-	Metadata            json.RawMessage `json:"metadata"`
-	StorageClass        string          `json:"storage_class"`
-	VersionID           string          `json:"version_id"`
-	Tags                json.RawMessage `json:"tags"`
-	Encryption          string          `json:"encryption"`
-	KMSKeyID            string          `json:"kms_key_id"`
-	SSECKeyMD5          string          `json:"ssec_key_md5"`
-	LockMode            string          `json:"lock_mode"`
-	LockRetainUntil     *time.Time      `json:"lock_retain_until"`
-	LegalHoldStatus     string          `json:"legal_hold_status"`
-	ACL                 string          `json:"acl"`
-	ChecksumAlgorithm   string          `json:"checksum_algorithm"`
-	ChecksumValue       string          `json:"checksum_value"`
+	Bucket            string          `json:"bucket"`
+	Key               string          `json:"key"`
+	ETag              string          `json:"etag"`
+	CRC32             string          `json:"crc32"`
+	Size              int64           `json:"size"`
+	ContentType       string          `json:"content_type"`
+	LastModified      time.Time       `json:"last_modified"`
+	Metadata          json.RawMessage `json:"metadata"`
+	StorageClass      string          `json:"storage_class"`
+	VersionID         string          `json:"version_id"`
+	Tags              json.RawMessage `json:"tags"`
+	Encryption        string          `json:"encryption"`
+	KMSKeyID          string          `json:"kms_key_id"`
+	SSECKeyMD5        string          `json:"ssec_key_md5"`
+	LockMode          string          `json:"lock_mode"`
+	LockRetainUntil   *time.Time      `json:"lock_retain_until"`
+	LegalHoldStatus   string          `json:"legal_hold_status"`
+	ACL               string          `json:"acl"`
+	ChecksumAlgorithm string          `json:"checksum_algorithm"`
+	ChecksumValue     string          `json:"checksum_value"`
 }
 
 type pgS3VersionRow struct {
@@ -677,11 +677,11 @@ type pgS3PartRow struct {
 }
 
 type pgS3Snap struct {
-	Buckets []pgS3BucketRow  `json:"buckets"`
-	Objects []pgS3ObjectRow  `json:"objects"`
+	Buckets  []pgS3BucketRow  `json:"buckets"`
+	Objects  []pgS3ObjectRow  `json:"objects"`
 	Versions []pgS3VersionRow `json:"versions"`
-	Uploads []pgS3UploadRow  `json:"uploads"`
-	Parts   []pgS3PartRow    `json:"parts"`
+	Uploads  []pgS3UploadRow  `json:"uploads"`
+	Parts    []pgS3PartRow    `json:"parts"`
 }
 
 func (s *PostgresS3ObjectMetaStore) IsEmpty(ctx context.Context) (bool, error) {

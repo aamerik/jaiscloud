@@ -15,6 +15,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/k8shelpers"
@@ -22,7 +23,6 @@ import (
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
-	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
@@ -75,7 +75,7 @@ type EMRProvider struct {
 	instanceID         string
 	serviceAccountName string
 	// objectProvider is used for LogUri S3 log upload. Wired via SetObjectProvider.
-	objectProvider     s3LogUploader
+	objectProvider s3LogUploader
 	// ctx is the provider lifecycle context. runStep goroutines inherit it so
 	// they are cancelled on Shutdown(), enabling graceful drain.
 	ctx         context.Context
@@ -156,47 +156,46 @@ func New(resources store.ResourceStore, bus *events.EventBus, opts ...Option) *E
 	return p
 }
 
-
 func (p *EMRProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Cluster management
-		"EMR.RunJobFlow":                        p.RunJobFlow,
-		"EMR.DescribeCluster":                   p.DescribeCluster,
-		"EMR.ListClusters":                      p.ListClusters,
-		"EMR.TerminateJobFlows":                 p.TerminateJobFlows,
-		"EMR.ModifyCluster":                     p.ModifyCluster,
-		"EMR.SetTerminationProtection":          p.SetTerminationProtection,
-		"EMR.SetVisibleToAllUsers":              p.SetVisibleToAllUsers,
+		"EMR.RunJobFlow":               p.RunJobFlow,
+		"EMR.DescribeCluster":          p.DescribeCluster,
+		"EMR.ListClusters":             p.ListClusters,
+		"EMR.TerminateJobFlows":        p.TerminateJobFlows,
+		"EMR.ModifyCluster":            p.ModifyCluster,
+		"EMR.SetTerminationProtection": p.SetTerminationProtection,
+		"EMR.SetVisibleToAllUsers":     p.SetVisibleToAllUsers,
 		// Steps
-		"EMR.AddJobFlowSteps":                   p.AddJobFlowSteps,
-		"EMR.DescribeStep":                      p.DescribeStep,
-		"EMR.ListSteps":                         p.ListSteps,
-		"EMR.CancelSteps":                       p.CancelSteps,
+		"EMR.AddJobFlowSteps": p.AddJobFlowSteps,
+		"EMR.DescribeStep":    p.DescribeStep,
+		"EMR.ListSteps":       p.ListSteps,
+		"EMR.CancelSteps":     p.CancelSteps,
 		// Instance fleets
-		"EMR.AddInstanceFleet":                  p.AddInstanceFleet,
-		"EMR.ListInstanceFleets":                p.ListInstanceFleets,
-		"EMR.ModifyInstanceFleet":               p.ModifyInstanceFleet,
+		"EMR.AddInstanceFleet":    p.AddInstanceFleet,
+		"EMR.ListInstanceFleets":  p.ListInstanceFleets,
+		"EMR.ModifyInstanceFleet": p.ModifyInstanceFleet,
 		// Instance groups
-		"EMR.AddInstanceGroups":                 p.AddInstanceGroups,
-		"EMR.ListInstanceGroups":                p.ListInstanceGroups,
-		"EMR.ModifyInstanceGroups":              p.ModifyInstanceGroups,
+		"EMR.AddInstanceGroups":    p.AddInstanceGroups,
+		"EMR.ListInstanceGroups":   p.ListInstanceGroups,
+		"EMR.ModifyInstanceGroups": p.ModifyInstanceGroups,
 		// Bootstrap
-		"EMR.ListBootstrapActions":              p.ListBootstrapActions,
+		"EMR.ListBootstrapActions": p.ListBootstrapActions,
 		// Tags
-		"EMR.AddTags":                           p.AddTags,
-		"EMR.RemoveTags":                        p.RemoveTags,
+		"EMR.AddTags":    p.AddTags,
+		"EMR.RemoveTags": p.RemoveTags,
 		// Block public access
 		"EMR.GetBlockPublicAccessConfiguration": p.GetBlockPublicAccessConfiguration,
 		"EMR.PutBlockPublicAccessConfiguration": p.PutBlockPublicAccessConfiguration,
 		// Managed scaling
-		"EMR.PutManagedScalingPolicy":           p.PutManagedScalingPolicy,
-		"EMR.GetManagedScalingPolicy":           p.GetManagedScalingPolicy,
-		"EMR.RemoveManagedScalingPolicy":        p.RemoveManagedScalingPolicy,
+		"EMR.PutManagedScalingPolicy":    p.PutManagedScalingPolicy,
+		"EMR.GetManagedScalingPolicy":    p.GetManagedScalingPolicy,
+		"EMR.RemoveManagedScalingPolicy": p.RemoveManagedScalingPolicy,
 		// Security configurations (13.1)
-		"EMR.CreateSecurityConfiguration":  p.CreateSecurityConfiguration,
+		"EMR.CreateSecurityConfiguration":   p.CreateSecurityConfiguration,
 		"EMR.DescribeSecurityConfiguration": p.DescribeSecurityConfiguration,
-		"EMR.DeleteSecurityConfiguration":  p.DeleteSecurityConfiguration,
-		"EMR.ListSecurityConfigurations":   p.ListSecurityConfigurations,
+		"EMR.DeleteSecurityConfiguration":   p.DeleteSecurityConfiguration,
+		"EMR.ListSecurityConfigurations":    p.ListSecurityConfigurations,
 		// Auto-scaling policies (13.2)
 		"EMR.PutAutoScalingPolicy":    p.PutAutoScalingPolicy,
 		"EMR.RemoveAutoScalingPolicy": p.RemoveAutoScalingPolicy,
@@ -204,10 +203,10 @@ func (p *EMRProvider) Routes() map[string]provider.HandlerFunc {
 }
 
 const (
-	rtCluster            = "emr_cluster"
-	rtBlockPublicAccess  = "emr_block_public_access"
-	rtSecurityConfig     = "emr_security_config"
-	bpaID                = "singleton"
+	rtCluster           = "emr_cluster"
+	rtBlockPublicAccess = "emr_block_public_access"
+	rtSecurityConfig    = "emr_security_config"
+	bpaID               = "singleton"
 )
 
 // ─── Security configurations (13.1) ──────────────────────────────────────────
@@ -351,29 +350,29 @@ func (p *EMRProvider) RemoveAutoScalingPolicy(ctx context.Context, nr *model.Nor
 // emrCluster is the full stored record.  It mirrors ministack's shape so that
 // toWire() can return the record directly without field-by-field mapping.
 type emrCluster struct {
-	Id                    string           `json:"Id"`
-	Name                  string           `json:"Name"`
-	ClusterArn            string           `json:"ClusterArn"`
-	Status                clusterStatus    `json:"Status"`
-	Ec2InstanceAttributes map[string]any   `json:"Ec2InstanceAttributes"`
-	InstanceCollectionType string          `json:"InstanceCollectionType"`
-	LogUri                string           `json:"LogUri"`
-	ReleaseLabel          string           `json:"ReleaseLabel"`
-	AutoTerminate         bool             `json:"AutoTerminate"`
-	TerminationProtected  bool             `json:"TerminationProtected"`
-	VisibleToAllUsers     bool             `json:"VisibleToAllUsers"`
-	Applications          []map[string]any `json:"Applications"`
-	Tags                  []map[string]any `json:"Tags"` // [{Key, Value}]
-	ServiceRole           string           `json:"ServiceRole"`
-	JobFlowRole           string           `json:"JobFlowRole"`
-	NormalizedInstanceHours int            `json:"NormalizedInstanceHours"`
-	MasterPublicDnsName   string           `json:"MasterPublicDnsName"`
-	StepConcurrencyLevel  int              `json:"StepConcurrencyLevel"`
-	BootstrapActions      []map[string]any `json:"BootstrapActions"`
-	InstanceFleets        []map[string]any `json:"InstanceFleets"`
-	InstanceGroups        []map[string]any `json:"InstanceGroups"`
-	Steps                 []map[string]any `json:"Steps"`
-	ManagedScalingPolicy  map[string]any   `json:"ManagedScalingPolicy,omitempty"`
+	Id                      string           `json:"Id"`
+	Name                    string           `json:"Name"`
+	ClusterArn              string           `json:"ClusterArn"`
+	Status                  clusterStatus    `json:"Status"`
+	Ec2InstanceAttributes   map[string]any   `json:"Ec2InstanceAttributes"`
+	InstanceCollectionType  string           `json:"InstanceCollectionType"`
+	LogUri                  string           `json:"LogUri"`
+	ReleaseLabel            string           `json:"ReleaseLabel"`
+	AutoTerminate           bool             `json:"AutoTerminate"`
+	TerminationProtected    bool             `json:"TerminationProtected"`
+	VisibleToAllUsers       bool             `json:"VisibleToAllUsers"`
+	Applications            []map[string]any `json:"Applications"`
+	Tags                    []map[string]any `json:"Tags"` // [{Key, Value}]
+	ServiceRole             string           `json:"ServiceRole"`
+	JobFlowRole             string           `json:"JobFlowRole"`
+	NormalizedInstanceHours int              `json:"NormalizedInstanceHours"`
+	MasterPublicDnsName     string           `json:"MasterPublicDnsName"`
+	StepConcurrencyLevel    int              `json:"StepConcurrencyLevel"`
+	BootstrapActions        []map[string]any `json:"BootstrapActions"`
+	InstanceFleets          []map[string]any `json:"InstanceFleets"`
+	InstanceGroups          []map[string]any `json:"InstanceGroups"`
+	Steps                   []map[string]any `json:"Steps"`
+	ManagedScalingPolicy    map[string]any   `json:"ManagedScalingPolicy,omitempty"`
 	// Configurations holds the EMR Configurations[] parsed from RunJobFlow.
 	// Classification "spark-defaults" properties are translated to --conf k=v flags
 	// when submitting Spark steps.
@@ -479,12 +478,12 @@ func (p *EMRProvider) RunJobFlow(ctx context.Context, nr *model.NormalizedReques
 	// Ec2InstanceAttributes
 	jobFlowRole := strParam(nr.Params, "JobFlowRole")
 	ec2Attrs := map[string]any{
-		"Ec2KeyName":                     strParamFromMap(instances, "Ec2KeyName"),
-		"Ec2SubnetId":                    strParamFromMap(instances, "Ec2SubnetId"),
-		"Ec2AvailabilityZone":            region + "a",
-		"IamInstanceProfile":             jobFlowRole,
-		"EmrManagedMasterSecurityGroup":  strParamFromMap(instances, "EmrManagedMasterSecurityGroup"),
-		"EmrManagedSlaveSecurityGroup":   strParamFromMap(instances, "EmrManagedSlaveSecurityGroup"),
+		"Ec2KeyName":                    strParamFromMap(instances, "Ec2KeyName"),
+		"Ec2SubnetId":                   strParamFromMap(instances, "Ec2SubnetId"),
+		"Ec2AvailabilityZone":           region + "a",
+		"IamInstanceProfile":            jobFlowRole,
+		"EmrManagedMasterSecurityGroup": strParamFromMap(instances, "EmrManagedMasterSecurityGroup"),
+		"EmrManagedSlaveSecurityGroup":  strParamFromMap(instances, "EmrManagedSlaveSecurityGroup"),
 	}
 
 	concurrency := 1
@@ -1642,4 +1641,3 @@ func rewriteYARNToK8s(args []string) ([]string, bool) {
 	}
 	return out, rewrote
 }
-

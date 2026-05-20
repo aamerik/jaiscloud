@@ -130,12 +130,12 @@ func EvalParameters(params any, input any, contextObj any) (any, error) {
 type tokenKind int
 
 const (
-	tokField     tokenKind = iota // .fieldName
-	tokIndex                      // [N]
-	tokSlice                      // [N:M]
-	tokWildcard                   // [*] or .*
-	tokRecurse                    // ..
-	tokFilter                     // [?(...)]
+	tokField    tokenKind = iota // .fieldName
+	tokIndex                     // [N]
+	tokSlice                     // [N:M]
+	tokWildcard                  // [*] or .*
+	tokRecurse                   // ..
+	tokFilter                    // [?(...)]
 )
 
 type token struct {

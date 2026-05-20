@@ -29,18 +29,18 @@ func TestS3_ConditionalPut_IfNoneMatch(t *testing.T) {
 
 	// First PutObject — object does not exist yet, If-None-Match: * should succeed.
 	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte("initial")),
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte("initial")),
 		IfNoneMatch: aws.String("*"),
 	})
 	require.NoError(t, err, "PutObject with If-None-Match:* should succeed when object is absent")
 
 	// Second PutObject with If-None-Match: * — object now exists, should fail.
 	_, err = c.PutObject(ctx, &awss3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte("updated")),
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte("updated")),
 		IfNoneMatch: aws.String("*"),
 	})
 	require.Error(t, err, "PutObject with If-None-Match:* should fail when object exists")
@@ -1092,10 +1092,10 @@ func TestS3CopyObjectIfUnmodifiedSinceFuture(t *testing.T) {
 
 	future := time.Now().Add(24 * time.Hour)
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
-		Bucket:                        aws.String(bucket),
-		Key:                           aws.String("dst"),
-		CopySource:                    aws.String(bucket + "/src"),
-		CopySourceIfUnmodifiedSince:   aws.Time(future),
+		Bucket:                      aws.String(bucket),
+		Key:                         aws.String("dst"),
+		CopySource:                  aws.String(bucket + "/src"),
+		CopySourceIfUnmodifiedSince: aws.Time(future),
 	})
 	require.NoError(t, err, "CopyObject with future IfUnmodifiedSince should succeed")
 }
@@ -1119,10 +1119,10 @@ func TestS3CopyObjectIfModifiedSinceOld(t *testing.T) {
 
 	past := time.Now().Add(-2 * time.Hour)
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
-		Bucket:                      aws.String(bucket),
-		Key:                         aws.String("dst"),
-		CopySource:                  aws.String(bucket + "/src"),
-		CopySourceIfModifiedSince:   aws.Time(past),
+		Bucket:                    aws.String(bucket),
+		Key:                       aws.String("dst"),
+		CopySource:                aws.String(bucket + "/src"),
+		CopySourceIfModifiedSince: aws.Time(past),
 	})
 	require.NoError(t, err, "CopyObject with past IfModifiedSince should succeed")
 }

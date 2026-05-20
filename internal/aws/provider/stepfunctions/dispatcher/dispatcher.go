@@ -16,10 +16,10 @@ import (
 // RegistryDispatcher implements provider.ServiceDispatcher using the JaisCloud
 // provider registry. It bypasses HTTP and calls handlers directly.
 type RegistryDispatcher struct {
-	registry  *provider.Registry
-	cloud     model.Cloud
-	region    string
-	accountID string
+	registry   *provider.Registry
+	cloud      model.Cloud
+	region     string
+	accountID  string
 	resourceID func(string, string) string
 }
 

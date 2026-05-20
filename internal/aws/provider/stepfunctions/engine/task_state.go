@@ -189,25 +189,26 @@ type taskResourceEntry struct {
 }
 
 var taskResourceMap = map[string]taskResourceEntry{
-	"lambda:invoke":          {"Function", "InvokeFunction"},
-	"dynamodb:putItem":       {"Table", "PutItem"},
-	"dynamodb:getItem":       {"Table", "GetItem"},
-	"dynamodb:updateItem":    {"Table", "UpdateItem"},
-	"dynamodb:deleteItem":    {"Table", "DeleteItem"},
-	"sqs:sendMessage":        {"Queue", "SendMessage"},
-	"sns:publish":            {"Notification", "Publish"},
-	"states:startExecution":  {"StepFunctions", "StartExecution"},
-	"events:putEvents":       {"EventBridge", "PutEvents"},
-	"glue:startJobRun":       {"Glue", "StartJobRun"},
-	"ecs:runTask":            {"ECS", "RunTask"},
+	"lambda:invoke":         {"Function", "InvokeFunction"},
+	"dynamodb:putItem":      {"Table", "PutItem"},
+	"dynamodb:getItem":      {"Table", "GetItem"},
+	"dynamodb:updateItem":   {"Table", "UpdateItem"},
+	"dynamodb:deleteItem":   {"Table", "DeleteItem"},
+	"sqs:sendMessage":       {"Queue", "SendMessage"},
+	"sns:publish":           {"Notification", "Publish"},
+	"states:startExecution": {"StepFunctions", "StartExecution"},
+	"events:putEvents":      {"EventBridge", "PutEvents"},
+	"glue:startJobRun":      {"Glue", "StartJobRun"},
+	"ecs:runTask":           {"ECS", "RunTask"},
 }
 
 // parseTaskResource parses a Task Resource ARN into (key, modifier, error).
 // Examples:
-//   "arn:aws:states:::lambda:invoke"          → ("lambda:invoke", "", nil)
-//   "arn:aws:states:::lambda:invoke.sync"     → ("lambda:invoke", "sync", nil)
-//   "arn:aws:states:::lambda:invoke.waitForTaskToken" → ("lambda:invoke", "waitForTaskToken", nil)
-//   "arn:aws:lambda:us-east-1:000:function:Fn" → ("lambda:invoke", "", nil)  [legacy]
+//
+//	"arn:aws:states:::lambda:invoke"          → ("lambda:invoke", "", nil)
+//	"arn:aws:states:::lambda:invoke.sync"     → ("lambda:invoke", "sync", nil)
+//	"arn:aws:states:::lambda:invoke.waitForTaskToken" → ("lambda:invoke", "waitForTaskToken", nil)
+//	"arn:aws:lambda:us-east-1:000:function:Fn" → ("lambda:invoke", "", nil)  [legacy]
 func parseTaskResource(arn string) (key, modifier string, err error) {
 	// Legacy Lambda ARN: arn:aws:lambda:...:function:Name
 	if strings.Contains(arn, ":function:") && !strings.Contains(arn, ":::") {

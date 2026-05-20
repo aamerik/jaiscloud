@@ -65,4 +65,3 @@ func (p *FunctionProvider) GetFunctionCodeZip(ctx context.Context, account, func
 func (p *FunctionProvider) GetLayerCodeZip(ctx context.Context, account, layerName string, version int64) ([]byte, error) {
 	return p.loadLayerCode(ctx, account, layerName, version)
 }
-

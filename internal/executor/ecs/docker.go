@@ -77,10 +77,10 @@ func (e *dockerExecutor) Run(ctx context.Context, spec TaskSpec) (TaskHandle, er
 		}
 
 		body, _ := json.Marshal(map[string]any{
-			"Image":   cs.Image,
-			"Env":     env,
-			"Cmd":     cs.Cmd,
-			"Labels":  labels,
+			"Image":      cs.Image,
+			"Env":        env,
+			"Cmd":        cs.Cmd,
+			"Labels":     labels,
 			"HostConfig": hostCfg,
 		})
 

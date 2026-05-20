@@ -117,4 +117,3 @@ func lastErrorLine(lines []string) string {
 	}
 	return ""
 }
-

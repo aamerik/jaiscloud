@@ -196,8 +196,8 @@ func TestDynamoDBStreams_ModifyEvent(t *testing.T) {
 		Key: map[string]dyntype.AttributeValue{
 			"pk": &dyntype.AttributeValueMemberS{Value: "x"},
 		},
-		UpdateExpression: aws.String("SET #v = :two"),
-		ExpressionAttributeNames:  map[string]string{"#v": "value"},
+		UpdateExpression:         aws.String("SET #v = :two"),
+		ExpressionAttributeNames: map[string]string{"#v": "value"},
 		ExpressionAttributeValues: map[string]dyntype.AttributeValue{
 			":two": &dyntype.AttributeValueMemberN{Value: "2"},
 		},

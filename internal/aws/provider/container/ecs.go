@@ -60,38 +60,38 @@ func (p *ContainerProvider) Shutdown() {
 
 func (p *ContainerProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"ECS.CreateCluster":             p.CreateCluster,
-		"ECS.DescribeClusters":          p.DescribeClusters,
-		"ECS.DeleteCluster":             p.DeleteCluster,
-		"ECS.ListClusters":              p.ListClusters,
-		"ECS.RegisterTaskDefinition":    p.RegisterTaskDefinition,
-		"ECS.DescribeTaskDefinition":    p.DescribeTaskDefinition,
-		"ECS.DeregisterTaskDefinition":  p.DeregisterTaskDefinition,
-		"ECS.ListTaskDefinitions":       p.ListTaskDefinitions,
-		"ECS.CreateService":             p.CreateService,
-		"ECS.DescribeServices":          p.DescribeServices,
-		"ECS.UpdateService":             p.UpdateService,
-		"ECS.DeleteService":             p.DeleteService,
-		"ECS.ListServices":              p.ListServices,
-		"ECS.RunTask":                   p.RunTask,
-		"ECS.DescribeTasks":             p.DescribeTasks,
-		"ECS.StopTask":                  p.StopTask,
-		"ECS.ListTasks":                 p.ListTasks,
+		"ECS.CreateCluster":            p.CreateCluster,
+		"ECS.DescribeClusters":         p.DescribeClusters,
+		"ECS.DeleteCluster":            p.DeleteCluster,
+		"ECS.ListClusters":             p.ListClusters,
+		"ECS.RegisterTaskDefinition":   p.RegisterTaskDefinition,
+		"ECS.DescribeTaskDefinition":   p.DescribeTaskDefinition,
+		"ECS.DeregisterTaskDefinition": p.DeregisterTaskDefinition,
+		"ECS.ListTaskDefinitions":      p.ListTaskDefinitions,
+		"ECS.CreateService":            p.CreateService,
+		"ECS.DescribeServices":         p.DescribeServices,
+		"ECS.UpdateService":            p.UpdateService,
+		"ECS.DeleteService":            p.DeleteService,
+		"ECS.ListServices":             p.ListServices,
+		"ECS.RunTask":                  p.RunTask,
+		"ECS.DescribeTasks":            p.DescribeTasks,
+		"ECS.StopTask":                 p.StopTask,
+		"ECS.ListTasks":                p.ListTasks,
 		// Tagging (14.1)
-		"ECS.TagResource":               p.TagResource,
-		"ECS.UntagResource":             p.UntagResource,
-		"ECS.ListTagsForResource":       p.ListTagsForResource,
+		"ECS.TagResource":         p.TagResource,
+		"ECS.UntagResource":       p.UntagResource,
+		"ECS.ListTagsForResource": p.ListTagsForResource,
 		// ExecuteCommand stub (14.1)
-		"ECS.ExecuteCommand":            p.ExecuteCommand,
+		"ECS.ExecuteCommand": p.ExecuteCommand,
 		// UpdateCluster / StartTask
 		"ECS.UpdateCluster": p.UpdateCluster,
 		"ECS.StartTask":     p.StartTask,
 		// TaskSet CRUD
-		"ECS.CreateTaskSet":                p.CreateTaskSet,
-		"ECS.DescribeTaskSets":             p.DescribeTaskSets,
-		"ECS.UpdateTaskSet":                p.UpdateTaskSet,
-		"ECS.DeleteTaskSet":                p.DeleteTaskSet,
-		"ECS.UpdateServicePrimaryTaskSet":  p.UpdateServicePrimaryTaskSet,
+		"ECS.CreateTaskSet":               p.CreateTaskSet,
+		"ECS.DescribeTaskSets":            p.DescribeTaskSets,
+		"ECS.UpdateTaskSet":               p.UpdateTaskSet,
+		"ECS.DeleteTaskSet":               p.DeleteTaskSet,
+		"ECS.UpdateServicePrimaryTaskSet": p.UpdateServicePrimaryTaskSet,
 		// ContainerInstance
 		"ECS.RegisterContainerInstance":     p.RegisterContainerInstance,
 		"ECS.DeregisterContainerInstance":   p.DeregisterContainerInstance,
@@ -100,11 +100,11 @@ func (p *ContainerProvider) Routes() map[string]provider.HandlerFunc {
 		"ECS.UpdateContainerInstancesState": p.UpdateContainerInstancesState,
 		"ECS.UpdateContainerAgent":          p.UpdateContainerAgent,
 		// CapacityProvider
-		"ECS.CreateCapacityProvider":        p.CreateCapacityProvider,
-		"ECS.DescribeCapacityProviders":     p.DescribeCapacityProviders,
-		"ECS.DeleteCapacityProvider":        p.DeleteCapacityProvider,
-		"ECS.PutClusterCapacityProviders":   p.PutClusterCapacityProviders,
-		"ECS.UpdateCapacityProvider":        p.UpdateCapacityProvider,
+		"ECS.CreateCapacityProvider":      p.CreateCapacityProvider,
+		"ECS.DescribeCapacityProviders":   p.DescribeCapacityProviders,
+		"ECS.DeleteCapacityProvider":      p.DeleteCapacityProvider,
+		"ECS.PutClusterCapacityProviders": p.PutClusterCapacityProviders,
+		"ECS.UpdateCapacityProvider":      p.UpdateCapacityProvider,
 	}
 }
 
@@ -125,23 +125,23 @@ func newID() string {
 // ─── Clusters ─────────────────────────────────────────────────────────────────
 
 type cluster struct {
-	ClusterName              string `json:"clusterName"`
-	ClusterArn               string `json:"clusterArn"`
-	Status                   string `json:"status"`
-	RunningTasksCount        int    `json:"runningTasksCount"`
-	PendingTasksCount        int    `json:"pendingTasksCount"`
-	ActiveServicesCount      int    `json:"activeServicesCount"`
-	RegisteredContainerInstancesCount int `json:"registeredContainerInstancesCount"`
+	ClusterName                       string `json:"clusterName"`
+	ClusterArn                        string `json:"clusterArn"`
+	Status                            string `json:"status"`
+	RunningTasksCount                 int    `json:"runningTasksCount"`
+	PendingTasksCount                 int    `json:"pendingTasksCount"`
+	ActiveServicesCount               int    `json:"activeServicesCount"`
+	RegisteredContainerInstancesCount int    `json:"registeredContainerInstancesCount"`
 }
 
 func (c cluster) toWire() map[string]any {
 	return map[string]any{
-		"clusterName":              c.ClusterName,
-		"clusterArn":               c.ClusterArn,
-		"status":                   c.Status,
-		"runningTasksCount":        c.RunningTasksCount,
-		"pendingTasksCount":        c.PendingTasksCount,
-		"activeServicesCount":      c.ActiveServicesCount,
+		"clusterName":                       c.ClusterName,
+		"clusterArn":                        c.ClusterArn,
+		"status":                            c.Status,
+		"runningTasksCount":                 c.RunningTasksCount,
+		"pendingTasksCount":                 c.PendingTasksCount,
+		"activeServicesCount":               c.ActiveServicesCount,
 		"registeredContainerInstancesCount": c.RegisteredContainerInstancesCount,
 	}
 }
@@ -263,27 +263,27 @@ func (p *ContainerProvider) ListClusters(ctx context.Context, nr *model.Normaliz
 // ─── Task Definitions ─────────────────────────────────────────────────────────
 
 type taskDefinition struct {
-	Family               string         `json:"family"`
-	Revision             int            `json:"revision"`
-	TaskDefinitionArn    string         `json:"taskDefinitionArn"`
-	Status               string         `json:"status"`
-	ContainerDefinitions []map[string]any `json:"containerDefinitions"`
-	Cpu                  string         `json:"cpu"`
-	Memory               string         `json:"memory"`
-	NetworkMode          string         `json:"networkMode"`
-	RequiresCompatibilities []string    `json:"requiresCompatibilities"`
+	Family                  string           `json:"family"`
+	Revision                int              `json:"revision"`
+	TaskDefinitionArn       string           `json:"taskDefinitionArn"`
+	Status                  string           `json:"status"`
+	ContainerDefinitions    []map[string]any `json:"containerDefinitions"`
+	Cpu                     string           `json:"cpu"`
+	Memory                  string           `json:"memory"`
+	NetworkMode             string           `json:"networkMode"`
+	RequiresCompatibilities []string         `json:"requiresCompatibilities"`
 }
 
 func (td taskDefinition) toWire() map[string]any {
 	return map[string]any{
-		"family":               td.Family,
-		"revision":             td.Revision,
-		"taskDefinitionArn":    td.TaskDefinitionArn,
-		"status":               td.Status,
-		"containerDefinitions": td.ContainerDefinitions,
-		"cpu":                  td.Cpu,
-		"memory":               td.Memory,
-		"networkMode":          td.NetworkMode,
+		"family":                  td.Family,
+		"revision":                td.Revision,
+		"taskDefinitionArn":       td.TaskDefinitionArn,
+		"status":                  td.Status,
+		"containerDefinitions":    td.ContainerDefinitions,
+		"cpu":                     td.Cpu,
+		"memory":                  td.Memory,
+		"networkMode":             td.NetworkMode,
 		"requiresCompatibilities": td.RequiresCompatibilities,
 	}
 }
@@ -384,14 +384,14 @@ func (p *ContainerProvider) RegisterTaskDefinition(ctx context.Context, nr *mode
 	}
 
 	td := taskDefinition{
-		Family:               family,
-		Revision:             revision,
-		TaskDefinitionArn:    nr.ResourceID("ecs-task-definition", fmt.Sprintf("%s:%d", family, revision)),
-		Status:               "ACTIVE",
-		ContainerDefinitions: containers,
-		Cpu:                  cpu,
-		Memory:               memory,
-		NetworkMode:          networkMode,
+		Family:                  family,
+		Revision:                revision,
+		TaskDefinitionArn:       nr.ResourceID("ecs-task-definition", fmt.Sprintf("%s:%d", family, revision)),
+		Status:                  "ACTIVE",
+		ContainerDefinitions:    containers,
+		Cpu:                     cpu,
+		Memory:                  memory,
+		NetworkMode:             networkMode,
 		RequiresCompatibilities: compat,
 	}
 	data, _ := json.Marshal(td)

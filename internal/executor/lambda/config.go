@@ -104,19 +104,19 @@ func int64Env(name string, def int64) int64 {
 
 // runtimeImages maps Lambda runtime identifiers to their default public ECR images.
 var runtimeImages = map[string]string{
-	"python3.12":    "public.ecr.aws/lambda/python:3.12",
-	"python3.11":    "public.ecr.aws/lambda/python:3.11",
-	"python3.10":    "public.ecr.aws/lambda/python:3.10",
-	"python3.9":     "public.ecr.aws/lambda/python:3.9",
-	"nodejs20.x":    "public.ecr.aws/lambda/nodejs:20",
-	"nodejs18.x":    "public.ecr.aws/lambda/nodejs:18",
-	"java21":        "public.ecr.aws/lambda/java:21",
-	"java17":        "public.ecr.aws/lambda/java:17",
-	"java11":        "public.ecr.aws/lambda/java:11",
-	"dotnet8":       "public.ecr.aws/lambda/dotnet:8",
-	"dotnet6":       "public.ecr.aws/lambda/dotnet:6",
-	"go1.x":         "public.ecr.aws/lambda/provided:al2",
-	"provided.al2":  "public.ecr.aws/lambda/provided:al2",
+	"python3.12":      "public.ecr.aws/lambda/python:3.12",
+	"python3.11":      "public.ecr.aws/lambda/python:3.11",
+	"python3.10":      "public.ecr.aws/lambda/python:3.10",
+	"python3.9":       "public.ecr.aws/lambda/python:3.9",
+	"nodejs20.x":      "public.ecr.aws/lambda/nodejs:20",
+	"nodejs18.x":      "public.ecr.aws/lambda/nodejs:18",
+	"java21":          "public.ecr.aws/lambda/java:21",
+	"java17":          "public.ecr.aws/lambda/java:17",
+	"java11":          "public.ecr.aws/lambda/java:11",
+	"dotnet8":         "public.ecr.aws/lambda/dotnet:8",
+	"dotnet6":         "public.ecr.aws/lambda/dotnet:6",
+	"go1.x":           "public.ecr.aws/lambda/provided:al2",
+	"provided.al2":    "public.ecr.aws/lambda/provided:al2",
 	"provided.al2023": "public.ecr.aws/lambda/provided:al2023",
 }
 

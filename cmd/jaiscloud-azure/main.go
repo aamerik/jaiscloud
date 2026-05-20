@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"os"
 
-	azureadapter "jaiscloud/internal/azure/adapter"
 	"jaiscloud/internal/admin"
+	azureadapter "jaiscloud/internal/azure/adapter"
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"

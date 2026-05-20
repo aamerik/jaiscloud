@@ -183,19 +183,25 @@ var awsServices = []ServiceDescriptor{
 		SigV4Name:      "cognito-idp",
 		TargetPrefix:   "AWSCognitoIdentityProviderService.",
 		ProviderPrefix: "Cognito",
-		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "cognito-idp", TargetPrefix: "AWSCognitoIdentityProviderService."} },
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "cognito-idp", TargetPrefix: "AWSCognitoIdentityProviderService."}
+		},
 	},
 	{
 		SigV4Name:      "cognito-identity",
 		TargetPrefix:   "AWSCognitoIdentityService.",
 		ProviderPrefix: "CognitoIdentity",
-		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "cognito-identity", TargetPrefix: "AWSCognitoIdentityService."} },
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "cognito-identity", TargetPrefix: "AWSCognitoIdentityService."}
+		},
 	},
 	{
 		SigV4Name:      "acm",
 		TargetPrefix:   "CertificateManager.",
 		ProviderPrefix: "ACM",
-		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "acm", TargetPrefix: "CertificateManager."} },
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "acm", TargetPrefix: "CertificateManager."}
+		},
 	},
 	{
 		SigV4Name:      "email",
@@ -212,7 +218,9 @@ var awsServices = []ServiceDescriptor{
 		SigV4Name:      "firehose",
 		TargetPrefix:   "Firehose_20150804.",
 		ProviderPrefix: "Firehose",
-		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "firehose", TargetPrefix: "Firehose_20150804."} },
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "firehose", TargetPrefix: "Firehose_20150804."}
+		},
 	},
 	{
 		SigV4Name:      "cloudfront",
@@ -223,7 +231,9 @@ var awsServices = []ServiceDescriptor{
 		SigV4Name:      "athena",
 		TargetPrefix:   "AmazonAthena.",
 		ProviderPrefix: "Athena",
-		Codec:          func() adapter.Codec { return &services.GenericJSONTargetCodec{Service: "athena", TargetPrefix: "AmazonAthena."} },
+		Codec: func() adapter.Codec {
+			return &services.GenericJSONTargetCodec{Service: "athena", TargetPrefix: "AmazonAthena."}
+		},
 	},
 	{
 		SigV4Name:      "redshift",

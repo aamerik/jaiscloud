@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func boolPtr(b bool) *bool   { return &b }
+func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(i int64) *int64 { return &i }
 
 func TestEnvVar_PlainValue_RoundTrip(t *testing.T) {

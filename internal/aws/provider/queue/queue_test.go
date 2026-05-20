@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/aws/provider/queue"
+	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/aws/provider/queue"
 	"jaiscloud/internal/store"
-	sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 func setup(t *testing.T) (*queue.QueueProvider, store.ResourceStore, sqsstore.SQSMessageStore) {
@@ -202,7 +202,7 @@ func TestReceiveMax10(t *testing.T) {
 
 	for i := 0; i < 15; i++ {
 		routes["Queue.SendMessage"](ctx, nr(map[string]any{
-			"QueueUrl": testQueueURL,
+			"QueueUrl":    testQueueURL,
 			"MessageBody": json.RawMessage(`"body"`),
 		}))
 	}
@@ -359,9 +359,9 @@ func TestFIFOQueue(t *testing.T) {
 
 	for _, body := range []string{"first", "second", "third"} {
 		routes["Queue.SendMessage"](ctx, nr(map[string]any{
-			"QueueUrl":       fifoURL,
-			"MessageBody":    body,
-			"MessageGroupId": "g1",
+			"QueueUrl":               fifoURL,
+			"MessageBody":            body,
+			"MessageGroupId":         "g1",
 			"MessageDeduplicationId": body,
 		}))
 	}

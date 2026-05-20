@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	s3store "jaiscloud/internal/aws/store/s3"
 	objectstore "jaiscloud/internal/aws/store/object"
+	s3store "jaiscloud/internal/aws/store/s3"
 )
 
 func roundTripMemoryS3(t *testing.T, s *s3store.MemoryS3ObjectMetaStore) *s3store.MemoryS3ObjectMetaStore {
@@ -93,13 +93,13 @@ func TestMemoryS3ObjectMetaStore_Snapshot_ObjectMetaSurvives(t *testing.T) {
 	s.CreateBucket(ctx, "snap-bucket", nil)
 
 	obj := objectstore.ObjectMeta{
-		Key:         "data/file.txt",
-		ETag:        "abc123",
-		Size:        1024,
-		ContentType: "text/plain",
+		Key:          "data/file.txt",
+		ETag:         "abc123",
+		Size:         1024,
+		ContentType:  "text/plain",
 		LastModified: time.Now().Truncate(time.Second),
-		Metadata:    map[string]string{"x-custom": "value"},
-		Tags:        map[string]string{"env": "test", "owner": "alice"},
+		Metadata:     map[string]string{"x-custom": "value"},
+		Tags:         map[string]string{"env": "test", "owner": "alice"},
 		StorageClass: "STANDARD",
 	}
 	if err := s.PutObjectMeta(ctx, "snap-bucket", "data/file.txt", obj); err != nil {
@@ -137,7 +137,7 @@ func TestMemoryS3ObjectMetaStore_Snapshot_MultipleObjectsSurvive(t *testing.T) {
 	keys := []string{"a.txt", "b.txt", "c.txt"}
 	for i, k := range keys {
 		s.PutObjectMeta(ctx, "multi-bucket", k, objectstore.ObjectMeta{
-			Key: k, ETag: string(rune('a'+i)), Size: int64(i + 1), LastModified: time.Now(),
+			Key: k, ETag: string(rune('a' + i)), Size: int64(i + 1), LastModified: time.Now(),
 		})
 	}
 

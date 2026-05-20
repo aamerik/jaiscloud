@@ -10,11 +10,11 @@ import (
 // JobHandle uniquely identifies a submitted k8s Job and its pod.
 // Returned by SubmitJob; consumed by WaitTerminal, TailLogs, Cancel.
 type JobHandle struct {
-	JobID     string    // provider-owned job id
+	JobID     string // provider-owned job id
 	Namespace string
-	JobName   string    // k8s Job object name
+	JobName   string // k8s Job object name
 	JobUID    types.UID
-	PodName   string    // populated after pod is scheduled
+	PodName   string // populated after pod is scheduled
 	PodUID    types.UID
 	CreatedAt time.Time
 }
@@ -36,7 +36,7 @@ type Final struct {
 type LogKind int
 
 const (
-	LogKindInit    LogKind = iota
+	LogKindInit LogKind = iota
 	LogKindMain
 	LogKindSidecar
 	LogKindAll
@@ -46,7 +46,7 @@ const (
 // so Describe-style APIs answer correctly after the k8s Job is GC'd.
 type Snapshot struct {
 	JobID      string
-	State      string            // provider-specific state string
+	State      string // provider-specific state string
 	Reason     string
 	Message    string
 	StartTime  time.Time

@@ -19,9 +19,9 @@ func createWaitingCluster(t *testing.T, client *awsemr.Client, name string) stri
 		Name:         aws.String(name),
 		ReleaseLabel: aws.String("emr-6.10.0"),
 		Instances: &types.JobFlowInstancesConfig{
-			MasterInstanceType:         aws.String("m5.xlarge"),
-			SlaveInstanceType:          aws.String("m5.xlarge"),
-			InstanceCount:              aws.Int32(3),
+			MasterInstanceType:          aws.String("m5.xlarge"),
+			SlaveInstanceType:           aws.String("m5.xlarge"),
+			InstanceCount:               aws.Int32(3),
 			KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
 		},
 		ServiceRole: aws.String("EMR_DefaultRole"),
@@ -68,8 +68,8 @@ func TestEMR_AutoTerminateState(t *testing.T) {
 		Name:         aws.String("auto-terminate"),
 		ReleaseLabel: aws.String("emr-6.10.0"),
 		Instances: &types.JobFlowInstancesConfig{
-			MasterInstanceType:         aws.String("m5.xlarge"),
-			InstanceCount:              aws.Int32(1),
+			MasterInstanceType:          aws.String("m5.xlarge"),
+			InstanceCount:               aws.Int32(1),
 			KeepJobFlowAliveWhenNoSteps: aws.Bool(false),
 		},
 		ServiceRole: aws.String("EMR_DefaultRole"),
@@ -93,8 +93,8 @@ func TestEMR_TerminationProtection(t *testing.T) {
 		Name:         aws.String("protected"),
 		ReleaseLabel: aws.String("emr-6.10.0"),
 		Instances: &types.JobFlowInstancesConfig{
-			MasterInstanceType:         aws.String("m5.xlarge"),
-			InstanceCount:              aws.Int32(1),
+			MasterInstanceType:          aws.String("m5.xlarge"),
+			InstanceCount:               aws.Int32(1),
 			KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
 			TerminationProtected:        aws.Bool(true),
 		},
@@ -274,9 +274,9 @@ func TestEMR_InstanceFleets(t *testing.T) {
 			KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
 			InstanceFleets: []types.InstanceFleetConfig{
 				{
-					InstanceFleetType:        types.InstanceFleetTypeMaster,
-					Name:                     aws.String("master-fleet"),
-					TargetOnDemandCapacity:   aws.Int32(1),
+					InstanceFleetType:      types.InstanceFleetTypeMaster,
+					Name:                   aws.String("master-fleet"),
+					TargetOnDemandCapacity: aws.Int32(1),
 					InstanceTypeConfigs: []types.InstanceTypeConfig{
 						{InstanceType: aws.String("m5.xlarge")},
 					},
@@ -325,8 +325,8 @@ func TestEMR_Tags(t *testing.T) {
 		Name:         aws.String("tagged-cluster"),
 		ReleaseLabel: aws.String("emr-6.10.0"),
 		Instances: &types.JobFlowInstancesConfig{
-			MasterInstanceType:         aws.String("m5.xlarge"),
-			InstanceCount:              aws.Int32(1),
+			MasterInstanceType:          aws.String("m5.xlarge"),
+			InstanceCount:               aws.Int32(1),
 			KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
 		},
 		Tags:        []types.Tag{{Key: aws.String("env"), Value: aws.String("test")}},

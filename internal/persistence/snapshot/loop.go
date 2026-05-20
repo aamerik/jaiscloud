@@ -30,11 +30,11 @@ type SnapshotLoopConfig struct {
 // SnapshotLoop periodically persists all registered store state to
 // <DataDir>/state.json using atomic writes.
 type SnapshotLoop struct {
-	cfg     SnapshotLoopConfig
-	saving  atomic.Bool
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	mu      sync.Mutex
+	cfg    SnapshotLoopConfig
+	saving atomic.Bool
+	stopCh chan struct{}
+	doneCh chan struct{}
+	mu     sync.Mutex
 }
 
 // NewSnapshotLoop creates a new SnapshotLoop. Call Start to begin periodic saves.

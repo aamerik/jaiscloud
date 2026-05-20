@@ -43,7 +43,7 @@ type Manager struct {
 	lock      *DeletionLock
 	rules     []DeleteGuardRule
 	ruleIdx   map[string][]int // parentType → indices into rules slice
-	mu        sync.RWMutex    // guards lock.Acquire atomically with CheckParent reads
+	mu        sync.RWMutex     // guards lock.Acquire atomically with CheckParent reads
 }
 
 // New creates a Manager with the given rules.
@@ -81,8 +81,9 @@ func (m *Manager) RegisterRules(rules []DeleteGuardRule) {
 // ─── Check 1: parent must exist and must not be deleting ──────────────────────
 
 // CheckParent verifies:
-//   (a) the named parent instance exists in the resource store
-//   (b) the parent is not currently being deleted
+//
+//	(a) the named parent instance exists in the resource store
+//	(b) the parent is not currently being deleted
 //
 // Holds m.mu.RLock() for the duration of both checks so that a concurrent
 // AcquireDelete cannot set IsDeleting between the Exists and IsDeleting checks.

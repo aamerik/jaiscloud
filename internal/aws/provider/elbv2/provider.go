@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	rtLoadBalancer    = "elbv2_loadbalancer"
-	rtTargetGroup     = "elbv2_targetgroup"
-	rtListener        = "elbv2_listener"
-	rtTargets         = "elbv2_targets"
-	rtLBAttributes    = "elbv2_lb_attributes"
-	rtTags            = "elbv2_tags"
+	rtLoadBalancer = "elbv2_loadbalancer"
+	rtTargetGroup  = "elbv2_targetgroup"
+	rtListener     = "elbv2_listener"
+	rtTargets      = "elbv2_targets"
+	rtLBAttributes = "elbv2_lb_attributes"
+	rtTags         = "elbv2_tags"
 )
 
 // ELBv2Provider handles metadata-only ELBv2 operations.
@@ -36,18 +36,18 @@ func New(resources store.ResourceStore) *ELBv2Provider {
 func (p *ELBv2Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Load Balancers
-		"ELBv2.CreateLoadBalancer":            p.CreateLoadBalancer,
-		"ELBv2.DeleteLoadBalancer":            p.DeleteLoadBalancer,
-		"ELBv2.DescribeLoadBalancers":         p.DescribeLoadBalancers,
-		"ELBv2.ModifyLoadBalancerAttributes":  p.ModifyLoadBalancerAttributes,
+		"ELBv2.CreateLoadBalancer":             p.CreateLoadBalancer,
+		"ELBv2.DeleteLoadBalancer":             p.DeleteLoadBalancer,
+		"ELBv2.DescribeLoadBalancers":          p.DescribeLoadBalancers,
+		"ELBv2.ModifyLoadBalancerAttributes":   p.ModifyLoadBalancerAttributes,
 		"ELBv2.DescribeLoadBalancerAttributes": p.DescribeLoadBalancerAttributes,
 		// Target Groups
-		"ELBv2.CreateTargetGroup":   p.CreateTargetGroup,
-		"ELBv2.DeleteTargetGroup":   p.DeleteTargetGroup,
+		"ELBv2.CreateTargetGroup":    p.CreateTargetGroup,
+		"ELBv2.DeleteTargetGroup":    p.DeleteTargetGroup,
 		"ELBv2.DescribeTargetGroups": p.DescribeTargetGroups,
 		// Targets
-		"ELBv2.RegisterTargets":     p.RegisterTargets,
-		"ELBv2.DeregisterTargets":   p.DeregisterTargets,
+		"ELBv2.RegisterTargets":      p.RegisterTargets,
+		"ELBv2.DeregisterTargets":    p.DeregisterTargets,
 		"ELBv2.DescribeTargetHealth": p.DescribeTargetHealth,
 		// Listeners
 		"ELBv2.CreateListener":    p.CreateListener,
@@ -84,11 +84,11 @@ type targetGroup struct {
 }
 
 type listener struct {
-	ListenerArn     string   `json:"ListenerArn"`
-	LoadBalancerArn string   `json:"LoadBalancerArn"`
-	Protocol        string   `json:"Protocol"`
-	Port            string   `json:"Port"`
-	DefaultActions  []any    `json:"DefaultActions"`
+	ListenerArn     string `json:"ListenerArn"`
+	LoadBalancerArn string `json:"LoadBalancerArn"`
+	Protocol        string `json:"Protocol"`
+	Port            string `json:"Port"`
+	DefaultActions  []any  `json:"DefaultActions"`
 }
 
 type targetEntry struct {
@@ -355,9 +355,9 @@ func (p *ELBv2Provider) DescribeTargetHealth(ctx context.Context, nr *model.Norm
 	var healthDescriptions []any
 	for _, id := range existing.TargetIDs {
 		healthDescriptions = append(healthDescriptions, map[string]any{
-			"Target":            map[string]any{"Id": id},
-			"HealthCheckPort":   "traffic-port",
-			"TargetHealth":      map[string]any{"State": "healthy"},
+			"Target":          map[string]any{"Id": id},
+			"HealthCheckPort": "traffic-port",
+			"TargetHealth":    map[string]any{"State": "healthy"},
 		})
 	}
 	if healthDescriptions == nil {

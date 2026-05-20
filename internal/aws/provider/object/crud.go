@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ─── Objects ──────────────────────────────────────────────────────────────────
@@ -235,7 +235,7 @@ func (p *ObjectProvider) GetObject(ctx context.Context, nr *model.NormalizedRequ
 	blobKey := key
 
 	var m objectstore.ObjectMeta
-	if (vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended) {
+	if vStatus == objectstore.VersioningEnabled || vStatus == objectstore.VersioningSuspended {
 		if requestedVersionID != "" {
 			var err error
 			m, err = p.meta.GetObjectVersion(ctx, bucket, key, requestedVersionID)

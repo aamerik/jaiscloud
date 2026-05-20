@@ -84,7 +84,7 @@ func (s *BundledSQSStore) SetQueueRetention(ctx context.Context, account, region
 	return st.SetQueueRetention(ctx, account, region, queueURL, retentionSecs)
 }
 
-func (s *BundledSQSStore) Reset(ctx context.Context)                            { s.b.Reset(ctx) }
+func (s *BundledSQSStore) Reset(ctx context.Context)         { s.b.Reset(ctx) }
 func (s *BundledSQSStore) ResetScope(account, region string) { s.b.ResetScope(account, region) }
 func (s *BundledSQSStore) ResetAccount(account string)       { s.b.ResetAccount(account) }
 

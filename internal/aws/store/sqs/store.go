@@ -12,14 +12,14 @@ type SQSMessage struct {
 	QueueURL          string
 	Body              string
 	MD5OfBody         string
-	Attributes        map[string]string          // system attributes
+	Attributes        map[string]string           // system attributes
 	MessageAttributes map[string]MessageAttribute // user-defined attributes
 	GroupID           string                      // FIFO: MessageGroupId
 	DeduplicationID   string                      // FIFO: MessageDeduplicationId
 	DedupScope        string                      // FIFO: "" (queue) or "messageGroup"
 	VisibleAt         time.Time                   // when the message becomes visible again
 	SentAt            time.Time
-	DelayUntil        time.Time  // for delayed messages
+	DelayUntil        time.Time // for delayed messages
 	ReceiveCount      int
 	FirstReceivedAt   *time.Time
 	SequenceNumber    string // FIFO sequence

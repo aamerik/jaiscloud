@@ -18,7 +18,7 @@ import (
 // PodSpecInput is the base spec a provider wants; BuildPodSpec layers
 // platform overlay and (optionally) a caller-supplied pod template on top.
 type PodSpecInput struct {
-	MainContainer corev1.Container  // image, command, args, resources, env (caller-specific)
+	MainContainer corev1.Container // image, command, args, resources, env (caller-specific)
 	Namespace     string
 	Labels        map[string]string
 	Annotations   map[string]string

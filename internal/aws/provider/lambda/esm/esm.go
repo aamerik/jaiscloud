@@ -35,17 +35,17 @@ type esmPoller struct {
 
 // Provider handles ESM CRUD operations and manages background pollers.
 type Provider struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	logger       *slog.Logger
-	resources    store.ResourceStore
-	invoker      FunctionInvoker
-	queueAPI     QueueInternalAPI
-	sqsSender    SQSSenderAPI
-	streamStore  StreamStoreAPI
-	esmMu        sync.Mutex
-	esmPollers   map[string]*esmPoller
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	logger      *slog.Logger
+	resources   store.ResourceStore
+	invoker     FunctionInvoker
+	queueAPI    QueueInternalAPI
+	sqsSender   SQSSenderAPI
+	streamStore StreamStoreAPI
+	esmMu       sync.Mutex
+	esmPollers  map[string]*esmPoller
 }
 
 // New constructs an ESM Provider.

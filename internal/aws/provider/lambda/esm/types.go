@@ -15,14 +15,14 @@ const (
 	ESMStateDisabling = "Disabling"
 	ESMStateDeleting  = "Deleting"
 
-	ESMSourceSQS            = "sqs"
+	ESMSourceSQS             = "sqs"
 	ESMSourceDynamoDBStreams = "dynamodb-streams"
 )
 
 // DestinationConfig holds the failure/success destination configuration for an ESM.
 type DestinationConfig struct {
-	OnFailure  DestinationDetail `json:"OnFailure,omitempty"`
-	OnSuccess  DestinationDetail `json:"OnSuccess,omitempty"`
+	OnFailure DestinationDetail `json:"OnFailure,omitempty"`
+	OnSuccess DestinationDetail `json:"OnSuccess,omitempty"`
 }
 
 // DestinationDetail holds the ARN of the failure/success destination.

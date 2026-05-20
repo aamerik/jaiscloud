@@ -7,14 +7,14 @@ import (
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func strAttr(s string) map[string]any    { return map[string]any{"S": s} }
-func numAttr(n string) map[string]any    { return map[string]any{"N": n} }
-func boolAttr(b bool) map[string]any     { return map[string]any{"BOOL": b} }
-func nullAttr() map[string]any           { return map[string]any{"NULL": true} }
-func listAttr(items ...any) map[string]any { return map[string]any{"L": items} }
+func strAttr(s string) map[string]any         { return map[string]any{"S": s} }
+func numAttr(n string) map[string]any         { return map[string]any{"N": n} }
+func boolAttr(b bool) map[string]any          { return map[string]any{"BOOL": b} }
+func nullAttr() map[string]any                { return map[string]any{"NULL": true} }
+func listAttr(items ...any) map[string]any    { return map[string]any{"L": items} }
 func mapAttr(m map[string]any) map[string]any { return map[string]any{"M": m} }
-func ssAttr(vals ...any) map[string]any  { return map[string]any{"SS": vals} }
-func nsAttr(vals ...any) map[string]any  { return map[string]any{"NS": vals} }
+func ssAttr(vals ...any) map[string]any       { return map[string]any{"SS": vals} }
+func nsAttr(vals ...any) map[string]any       { return map[string]any{"NS": vals} }
 
 // evalOK is a test-helper that calls EvalFilter and fails if err != nil.
 func evalOK(t *testing.T, item map[string]any, expr string, names map[string]string, values map[string]any) bool {
@@ -675,11 +675,11 @@ func TestContains(t *testing.T) {
 
 func TestSize(t *testing.T) {
 	item := map[string]any{
-		"name":  strAttr("hello"),      // len 5
-		"empty": strAttr(""),           // len 0
+		"name":  strAttr("hello"),                                   // len 5
+		"empty": strAttr(""),                                        // len 0
 		"list":  listAttr(strAttr("a"), strAttr("b"), strAttr("c")), // len 3
-		"num":   numAttr("123"),        // len 3 (string length of "123")
-		"ss":    ssAttr("x", "y"),      // len 2
+		"num":   numAttr("123"),                                     // len 3 (string length of "123")
+		"ss":    ssAttr("x", "y"),                                   // len 2
 	}
 
 	t.Run("size_string_eq", func(t *testing.T) {
@@ -994,11 +994,11 @@ func TestMixedNestedPaths(t *testing.T) {
 	item := map[string]any{
 		"orders": listAttr(
 			mapAttr(map[string]any{
-				"id": strAttr("ord-1"),
+				"id":   strAttr("ord-1"),
 				"tags": listAttr(strAttr("urgent"), strAttr("new")),
 			}),
 			mapAttr(map[string]any{
-				"id": strAttr("ord-2"),
+				"id":   strAttr("ord-2"),
 				"tags": listAttr(strAttr("normal")),
 			}),
 		),

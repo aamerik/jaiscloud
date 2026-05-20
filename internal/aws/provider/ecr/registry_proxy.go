@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	registryImage     = "registry:2.8"
-	registryPort      = 5000
-	registryName      = "registry"
-	registryLabel     = "jaiscloud-registry"
+	registryImage = "registry:2.8"
+	registryPort  = 5000
+	registryName  = "registry"
+	registryLabel = "jaiscloud-registry"
 )
 
 // RegistryProxy manages a real Docker registry:2 Deployment in K8s and

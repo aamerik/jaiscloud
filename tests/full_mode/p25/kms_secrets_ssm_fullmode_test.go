@@ -172,10 +172,10 @@ func TestSSM_SecureString_KMSEncryption(t *testing.T) {
 	keyID := aws.ToString(keyOut.KeyMetadata.KeyId)
 
 	_, err = ssmClient.PutParameter(ctx, &awsssm.PutParameterInput{
-		Name:     aws.String("/prod/db/password"),
-		Value:    aws.String("s3cr3tP@ss"),
-		Type:     ssmtypes.ParameterTypeSecureString,
-		KeyId:    aws.String(keyID),
+		Name:      aws.String("/prod/db/password"),
+		Value:     aws.String("s3cr3tP@ss"),
+		Type:      ssmtypes.ParameterTypeSecureString,
+		KeyId:     aws.String(keyID),
 		Overwrite: aws.Bool(false),
 	})
 	require.NoError(t, err)
@@ -209,9 +209,9 @@ func TestSSM_PathHierarchy_RecursiveVsNonRecursive(t *testing.T) {
 	}
 	for _, p := range params {
 		_, err := ssmClient.PutParameter(ctx, &awsssm.PutParameterInput{
-			Name:     aws.String(p.name),
-			Value:    aws.String(p.value),
-			Type:     ssmtypes.ParameterTypeString,
+			Name:      aws.String(p.name),
+			Value:     aws.String(p.value),
+			Type:      ssmtypes.ParameterTypeString,
 			Overwrite: aws.Bool(false),
 		})
 		require.NoError(t, err, "put %s", p.name)
@@ -245,9 +245,9 @@ func TestSSM_PathPrefix_NoFalseMatch(t *testing.T) {
 
 	for _, p := range []string{"/app/real", "/appname/wrong"} {
 		_, err := ssmClient.PutParameter(ctx, &awsssm.PutParameterInput{
-			Name:     aws.String(p),
-			Value:    aws.String("v"),
-			Type:     ssmtypes.ParameterTypeString,
+			Name:      aws.String(p),
+			Value:     aws.String("v"),
+			Type:      ssmtypes.ParameterTypeString,
 			Overwrite: aws.Bool(false),
 		})
 		require.NoError(t, err)
@@ -271,17 +271,17 @@ func TestSSM_ParameterHistory(t *testing.T) {
 	ssmClient := newSSMClient(t)
 
 	_, err := ssmClient.PutParameter(ctx, &awsssm.PutParameterInput{
-		Name:     aws.String("/svc/config"),
-		Value:    aws.String("v1"),
-		Type:     ssmtypes.ParameterTypeString,
+		Name:      aws.String("/svc/config"),
+		Value:     aws.String("v1"),
+		Type:      ssmtypes.ParameterTypeString,
 		Overwrite: aws.Bool(false),
 	})
 	require.NoError(t, err)
 
 	_, err = ssmClient.PutParameter(ctx, &awsssm.PutParameterInput{
-		Name:     aws.String("/svc/config"),
-		Value:    aws.String("v2"),
-		Type:     ssmtypes.ParameterTypeString,
+		Name:      aws.String("/svc/config"),
+		Value:     aws.String("v2"),
+		Type:      ssmtypes.ParameterTypeString,
 		Overwrite: aws.Bool(true),
 	})
 	require.NoError(t, err)

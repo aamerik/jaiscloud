@@ -168,9 +168,9 @@ func TestSQS_MessageAttributes(t *testing.T) {
 	})
 
 	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:               out.QueueUrl,
-		MaxNumberOfMessages:    1,
-		MessageAttributeNames:  []string{"All"},
+		QueueUrl:              out.QueueUrl,
+		MaxNumberOfMessages:   1,
+		MessageAttributeNames: []string{"All"},
 	})
 	require.NoError(t, err)
 	require.Len(t, recv.Messages, 1)
@@ -543,9 +543,9 @@ func TestSQS_SystemAttributes(t *testing.T) {
 	client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: out.QueueUrl, MessageBody: aws.String("sysattr-test")})
 
 	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:        out.QueueUrl,
+		QueueUrl:            out.QueueUrl,
 		MaxNumberOfMessages: 1,
-		AttributeNames:  []types.QueueAttributeName{"ApproximateReceiveCount"},
+		AttributeNames:      []types.QueueAttributeName{"ApproximateReceiveCount"},
 	})
 	require.NoError(t, err)
 	require.Len(t, recv.Messages, 1)
@@ -559,9 +559,9 @@ func TestSQS_SystemAttributes(t *testing.T) {
 	})
 
 	recv2, _ := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:        out.QueueUrl,
+		QueueUrl:            out.QueueUrl,
 		MaxNumberOfMessages: 1,
-		AttributeNames:  []types.QueueAttributeName{"ApproximateReceiveCount"},
+		AttributeNames:      []types.QueueAttributeName{"ApproximateReceiveCount"},
 	})
 	require.Len(t, recv2.Messages, 1)
 	assert.Equal(t, "2", recv2.Messages[0].Attributes["ApproximateReceiveCount"])
@@ -999,9 +999,9 @@ func TestSQS_FIFO_SystemAttributesIncludeGroupAndSeq(t *testing.T) {
 	require.NoError(t, err)
 
 	recv, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:              out.QueueUrl,
-		AttributeNames:        []types.QueueAttributeName{"All"},
-		MaxNumberOfMessages:   1,
+		QueueUrl:            out.QueueUrl,
+		AttributeNames:      []types.QueueAttributeName{"All"},
+		MaxNumberOfMessages: 1,
 	})
 	require.NoError(t, err)
 	require.Len(t, recv.Messages, 1)
@@ -1061,7 +1061,7 @@ func TestSQS_FIFO_AcceptsDedupId(t *testing.T) {
 	client := newSQSClient(t)
 
 	out, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
-		QueueName: aws.String("with-dedup.fifo"),
+		QueueName:  aws.String("with-dedup.fifo"),
 		Attributes: map[string]string{"FifoQueue": "true"},
 	})
 	require.NoError(t, err)

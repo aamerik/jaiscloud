@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	objectstore "jaiscloud/internal/aws/store/object"
+	s3impl "jaiscloud/internal/aws/store/s3"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
-	s3impl "jaiscloud/internal/aws/store/s3"
-	objectstore "jaiscloud/internal/aws/store/object"
 )
 
 // ─── stubs ────────────────────────────────────────────────────────────────────
@@ -512,9 +512,9 @@ func TestPutObject_SSE_S3_DefaultEncryption(t *testing.T) {
 
 	nr := &model.NormalizedRequest{
 		Params: map[string]any{
-			"_bucket":                  "b",
-			"_key":                     "k",
-			"_server_side_encryption":  "AES256",
+			"_bucket":                 "b",
+			"_key":                    "k",
+			"_server_side_encryption": "AES256",
 		},
 	}
 	resp, err := p.PutObject(ctx, nr)
@@ -534,9 +534,9 @@ func TestPutObject_SSE_KMS_KeyId(t *testing.T) {
 
 	nr := &model.NormalizedRequest{
 		Params: map[string]any{
-			"_bucket":                              "b",
-			"_key":                                 "k",
-			"_server_side_encryption":              "aws:kms",
+			"_bucket":                                "b",
+			"_key":                                   "k",
+			"_server_side_encryption":                "aws:kms",
 			"_server_side_encryption_aws_kms_key_id": "arn:aws:kms:us-east-1:000:key/my-key",
 		},
 	}

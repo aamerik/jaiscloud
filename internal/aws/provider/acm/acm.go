@@ -27,15 +27,15 @@ func New(resources store.ResourceStore) *Provider {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"ACM.RequestCertificate":      p.RequestCertificate,
-		"ACM.DescribeCertificate":     p.DescribeCertificate,
-		"ACM.ListCertificates":        p.ListCertificates,
-		"ACM.DeleteCertificate":       p.DeleteCertificate,
-		"ACM.ImportCertificate":       p.ImportCertificate,
-		"ACM.ListTagsForCertificate":  p.ListTagsForCertificate,
-		"ACM.AddTagsToCertificate":    p.AddTagsToCertificate,
+		"ACM.RequestCertificate":        p.RequestCertificate,
+		"ACM.DescribeCertificate":       p.DescribeCertificate,
+		"ACM.ListCertificates":          p.ListCertificates,
+		"ACM.DeleteCertificate":         p.DeleteCertificate,
+		"ACM.ImportCertificate":         p.ImportCertificate,
+		"ACM.ListTagsForCertificate":    p.ListTagsForCertificate,
+		"ACM.AddTagsToCertificate":      p.AddTagsToCertificate,
 		"ACM.RemoveTagsFromCertificate": p.RemoveTagsFromCertificate,
-		"ACM.RenewCertificate":        p.RenewCertificate,
+		"ACM.RenewCertificate":          p.RenewCertificate,
 	}
 }
 

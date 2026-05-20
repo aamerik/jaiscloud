@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	lambdaexec "jaiscloud/internal/executor/lambda"
-	"jaiscloud/internal/clock"
-	"jaiscloud/internal/model"
 	"jaiscloud/internal/aws/provider/lambda"
+	"jaiscloud/internal/clock"
+	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
 	"github.com/stretchr/testify/assert"
@@ -54,8 +54,8 @@ func (b *blockingExecutor) Invoke(ctx context.Context, _ lambdaexec.InvokeReques
 	return lambdaexec.InvokeResult{}, ctx.Err()
 }
 func (b *blockingExecutor) DeleteFunction(_ context.Context, _ string) {}
-func (b *blockingExecutor) Reset(_ context.Context)                     {}
-func (b *blockingExecutor) Close() error                                { return nil }
+func (b *blockingExecutor) Reset(_ context.Context)                    {}
+func (b *blockingExecutor) Close() error                               { return nil }
 
 // ─── Timeout validation ───────────────────────────────────────────────────────
 
@@ -116,9 +116,9 @@ func TestInvokeFunction_TimeoutReturnsAWSEnvelope(t *testing.T) {
 	createFn(t, p, "slow", 1) // 1-second timeout
 
 	nr := newRequest(map[string]any{
-		"_function_name":    "slow",
-		"_invocation_type":  "RequestResponse",
-		"_payload":          []byte(`{}`),
+		"_function_name":   "slow",
+		"_invocation_type": "RequestResponse",
+		"_payload":         []byte(`{}`),
 	})
 	resp, err := p.InvokeFunction(context.Background(), nr)
 	require.NoError(t, err)
