@@ -26,17 +26,26 @@ func NewRegistry() *Registry {
 	}
 }
 
-// RegisterAll bulk-registers a provider's route map.
-func (r *Registry) RegisterAll(routes map[string]HandlerFunc) {
+// RegisterAll bulk-registers a route map. Returns the registry for chaining.
+func (r *Registry) RegisterAll(routes map[string]HandlerFunc) *Registry {
 	for k, v := range routes {
 		r.handlers[k] = v
 	}
+	return r
 }
 
-// Register registers all routes returned by p.Routes().
-// Prefer this over RegisterAll when the caller already has the provider value.
-func (r *Registry) Register(p Provider) {
-	r.RegisterAll(p.Routes())
+// Register registers all routes returned by p.Routes(). Returns the registry
+// for chaining so callers can write:
+//
+//	registry := provider.NewRegistry().
+//	    Register(keyProv).
+//	    Register(funcP).
+//	    Register(queueP)
+//
+// Use RegisterAll directly only when registering a bare route map that is not
+// the primary Routes() return of a provider (e.g., tableProvider.StreamRoutes()).
+func (r *Registry) Register(p Provider) *Registry {
+	return r.RegisterAll(p.Routes())
 }
 
 // RegisterPlugin registers a plugin as the wildcard handler for a provider prefix.

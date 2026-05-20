@@ -695,47 +695,24 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	prevCleanup2 := cleanup
 	cleanup = func() { esmProvider.Shutdown(ctx); funcP.Shutdown(ctx); prevCleanup2() }
 
-	registry := provider.NewRegistry()
-	registry.Register(keyProv)
-	registry.Register(secretProv)
-	registry.Register(paramProv)
-	registry.Register(funcP)
-	registry.Register(esmProvider)
-	registry.Register(queueP)
-	registry.Register(iamP)
-	registry.Register(stsP)
-	registry.Register(kinesisP)
-	registry.Register(ecrP)
+	// ── Construct providers that need cross-service wiring before registration ──
 	sfnP := sfnprovider.New(s.sfn)
-	registry.Register(sfnP)
-	registry.Register(notifP)
-	registry.Register(tableProvider)
-	registry.RegisterAll(tableProvider.StreamRoutes())
-	registry.Register(objectP)
 	glueP := catalog.New(s.resources)
 	glueP.SetObjectProvider(objectP)
-	registry.Register(glueP)
 	// TODO: seedDefaultVPC runs at construction time, before any request arrives,
 	// so there is no NormalizedRequest to supply account/region. Refactor to lazy
 	// seeding (seed on first DescribeVpcs per account+region) to remove this coupling
 	// and support multi-account EC2 correctly.
 	computeP := compute.New(s.resources, cfg.AccountID, cfg.Region)
-	registry.Register(computeP)
 	ecsP := containerprovider.New(s.resources)
-	registry.Register(stackP)
 	emrP.SetObjectProvider(objectP)
-	registry.Register(emrP)
 	emrcP.SetObjectProvider(objectP)
-	registry.Register(emrcP)
 	eventsP := eventsprovider.New(s.resources, s.messages, bus).WithPort(cfg.Port)
-	registry.Register(eventsP)
 	apigwP := apigwprovider.New(s.resources)
-	registry.Register(apigwP)
 	cwP := cloudwatchprovider.New(s.resources, bus)
-	registry.Register(cwP)
 	logsProvider := cwlogs.New()
-	registry.Register(logsProvider)
-	registerStatelessProviders(registry, s.resources)
+	sesP := sesprovider.New(s.resources)
+	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(objectP)
 
 	// Wire code loader and CW Logs ingestor into real Lambda executors.
 	if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
@@ -762,13 +739,41 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	if cfg.AWSEmulatorEndpoint != "" {
 		ecsP.SetJaisCloudEndpoint(cfg.AWSEmulatorEndpoint)
 	}
-	registry.Register(ecsP)
 
-	sesP := sesprovider.New(s.resources)
-	registry.Register(sesP)
-	firehoseP := firehoseprovider.New(s.resources).WithS3Meta(s.s3Meta).WithS3Writer(objectP)
-	registry.Register(firehoseP)
 	firehoseP.Start()
+
+	// ── Register all providers via the builder chain ──────────────────────────
+	// All providers are fully constructed and wired above; registration is a
+	// single declarative block. Adding a new service requires one Register call.
+	registry := provider.NewRegistry().
+		Register(keyProv).
+		Register(secretProv).
+		Register(paramProv).
+		Register(funcP).
+		Register(esmProvider).
+		Register(queueP).
+		Register(iamP).
+		Register(stsP).
+		Register(kinesisP).
+		Register(ecrP).
+		Register(sfnP).
+		Register(notifP).
+		Register(tableProvider).
+		RegisterAll(tableProvider.StreamRoutes()). // StreamRoutes is a second route set on the same provider
+		Register(objectP).
+		Register(glueP).
+		Register(computeP).
+		Register(ecsP).
+		Register(stackP).
+		Register(emrP).
+		Register(emrcP).
+		Register(eventsP).
+		Register(apigwP).
+		Register(cwP).
+		Register(logsProvider).
+		Register(sesP).
+		Register(firehoseP)
+	registerStatelessProviders(registry, s.resources)
 
 	// Second-pass cross-service wiring.
 	objectP.SetFanout(objectprovider.S3FanoutConfig{
@@ -831,9 +836,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	}
 }
 
-// registerStatelessProviders registers providers that only need a ResourceStore and
-// have no cross-service wiring. Adding a new AWS service with no dependencies
-// requires one line here rather than touching the buildRegistry body.
+// registerStatelessProviders registers providers whose only constructor dependency
+// is a ResourceStore and that require no post-construction Set* wiring calls.
+// Adding a new AWS service with no cross-service dependencies requires one line
+// here rather than touching the buildRegistry body.
+//
+// Invariant: every provider listed here must have a New(store.ResourceStore)
+// constructor and must NOT require any post-construction Set* calls. If a provider
+// grows cross-service dependencies, move it into buildRegistry with explicit wiring.
 func registerStatelessProviders(reg *provider.Registry, res store.ResourceStore) {
 	reg.Register(dns.New(res))
 	reg.Register(rdsprovider.New(res))
