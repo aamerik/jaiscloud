@@ -320,8 +320,7 @@ func (s *PostgresSQSMessageStore) SetQueueRetention(_ context.Context, _, _, _ s
 	return nil
 }
 
-func (s *PostgresSQSMessageStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresSQSMessageStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_messages`)
 	s.pool.Exec(ctx, `DELETE FROM jc_sqs_dedup`)
 }

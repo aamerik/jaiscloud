@@ -43,8 +43,8 @@ func New(resources store.ResourceStore) *StackProvider {
 }
 
 // Reset wipes all in-memory CloudFormation state (stacks, changesets, exports).
-func (p *StackProvider) Reset() {
-	p.exports.Reset()
+func (p *StackProvider) Reset(ctx context.Context) {
+	p.exports.Reset(ctx)
 }
 
 // RegisterHandler registers a provisioning handler for an AWS resource type.

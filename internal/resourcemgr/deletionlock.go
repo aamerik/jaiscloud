@@ -1,6 +1,7 @@
 package resourcemgr
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -74,7 +75,7 @@ func (l *DeletionLock) SweepStale(ttl time.Duration, logf func(string, ...any)) 
 
 // Reset clears all locks. Safe to call from /_jaiscloud/reset.
 // Any DeletionHandle.Release() calls after Reset are no-ops (deleting a missing key is safe).
-func (l *DeletionLock) Reset() {
+func (l *DeletionLock) Reset(ctx context.Context) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = make(map[string]lockEntry)

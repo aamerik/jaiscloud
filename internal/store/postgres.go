@@ -210,8 +210,7 @@ func (s *PostgresResourceStore) Purge(ctx context.Context, account, region, reso
 	return wrapPgError("Purge", err)
 }
 
-func (s *PostgresResourceStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresResourceStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_resources`)
 }
 

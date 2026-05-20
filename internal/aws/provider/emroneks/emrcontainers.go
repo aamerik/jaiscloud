@@ -863,7 +863,7 @@ func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context
 // ─── Provider lifecycle ───────────────────────────────────────────────────────
 
 // Reset is a no-op — state lives in the resource store, not in-memory maps.
-func (p *EMRContainersProvider) Reset() {}
+func (p *EMRContainersProvider) Reset(ctx context.Context) {}
 
 // Shutdown cancels the provider context, signalling all in-flight runJobRun
 // goroutines to stop after their current K8s operation completes, then

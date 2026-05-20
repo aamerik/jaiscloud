@@ -558,8 +558,7 @@ func (s *PostgresS3ObjectMetaStore) ListObjectVersions(ctx context.Context, buck
 	return result, false, rows.Err()
 }
 
-func (s *PostgresS3ObjectMetaStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresS3ObjectMetaStore) Reset(ctx context.Context) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		slog.Warn("s3 reset: begin transaction failed", "err", err)

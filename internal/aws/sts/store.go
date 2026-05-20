@@ -34,7 +34,7 @@ type SessionStore interface {
 	GetSession(accessKeyID string) (SessionConfig, bool)
 	DeleteSession(accessKeyID string)
 
-	Reset()
+	Reset(ctx context.Context)
 	Snapshot(ctx context.Context, w io.Writer) error
 	Restore(ctx context.Context, r io.Reader) error
 	IsEmpty(ctx context.Context) (bool, error)
@@ -70,7 +70,7 @@ func (s *MemorySessionStore) DeleteSession(accessKeyID string) {
 	s.mu.Unlock()
 }
 
-func (s *MemorySessionStore) Reset() {
+func (s *MemorySessionStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	s.sessions = make(map[string]SessionConfig)
 	s.mu.Unlock()

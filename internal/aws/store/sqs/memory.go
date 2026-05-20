@@ -271,7 +271,7 @@ func (s *MemoryMessageStore) SetQueueRetention(_ context.Context, _, _, queueURL
 	return nil
 }
 
-func (s *MemoryMessageStore) Reset() {
+func (s *MemoryMessageStore) Reset(ctx context.Context) {
 	s.cancel()
 	s.wg.Wait()
 

@@ -475,7 +475,7 @@ func (s *MemoryS3ObjectMetaStore) ListActiveUploads(_ context.Context, bucket st
 	return result, nil
 }
 
-func (s *MemoryS3ObjectMetaStore) Reset() {
+func (s *MemoryS3ObjectMetaStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buckets = make(map[string]map[string]any)

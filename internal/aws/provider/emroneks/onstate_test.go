@@ -1,6 +1,7 @@
 package emroneks
 
 import (
+	"context"
 	"testing"
 
 	"jaiscloud/internal/store"
@@ -14,7 +15,7 @@ func newMinimalEMRCProvider() *EMRContainersProvider {
 // TestEMRContainersProvider_Reset_IsNoOp verifies Reset does not panic.
 func TestEMRContainersProvider_Reset_IsNoOp(t *testing.T) {
 	p := newMinimalEMRCProvider()
-	p.Reset() // must not panic
+	p.Reset(context.Background()) // must not panic
 }
 
 // TestEMRContainersProvider_Shutdown_IsNoOp verifies Shutdown does not panic.

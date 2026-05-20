@@ -1,6 +1,7 @@
 package resourcemgr
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestDeletionLock_Reset(t *testing.T) {
 	l := newDeletionLock()
 	l.Acquire("cluster", "c1")
 	l.Acquire("cluster", "c2")
-	l.Reset()
+	l.Reset(context.Background())
 
 	if l.IsDeleting("cluster", "c1") || l.IsDeleting("cluster", "c2") {
 		t.Fatal("Reset should clear all locks")

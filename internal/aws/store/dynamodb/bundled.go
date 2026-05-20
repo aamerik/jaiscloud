@@ -131,7 +131,7 @@ func (s *BundledDynamoDBItemStore) DeleteGSI(ctx context.Context, account, regio
 	return st.DeleteGSI(ctx, account, region, tableName, schema, indexName)
 }
 
-func (s *BundledDynamoDBItemStore) Reset() { s.b.Reset() }
+func (s *BundledDynamoDBItemStore) Reset(ctx context.Context) { s.b.Reset(ctx) }
 
 // ─── Snapshotter ──────────────────────────────────────────────────────────────
 

@@ -96,7 +96,7 @@ func TestMemoryParameterStore_Reset(t *testing.T) {
 	ctx := context.Background()
 	s := newParamStore()
 	s.PutParameter(ctx, &parameter.ParameterEntry{Name: "/p", Type: "String"}, false)
-	s.Reset()
+	s.Reset(context.Background())
 	results, _ := s.ListParameters(ctx, "", "", true)
 	assert.Empty(t, results)
 }

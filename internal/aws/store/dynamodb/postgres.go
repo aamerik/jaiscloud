@@ -462,8 +462,7 @@ func (s *PostgresDynamoDBItemStore) TransactWriteItems(ctx context.Context, acco
 	return nil, nil
 }
 
-func (s *PostgresDynamoDBItemStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresDynamoDBItemStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_dynamodb_items`)
 	// Drop all per-table index tables created by CreateTableSchema.
 	rows, err := s.pool.Query(ctx, `

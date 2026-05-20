@@ -53,7 +53,7 @@ func (w *Waiters) Notify(queueURL string) {
 }
 
 // Reset drains all channels and wipes the waiter map (used by admin reset).
-func (w *Waiters) Reset() {
+func (w *Waiters) Reset(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.waiters = make(map[string][]chan struct{})

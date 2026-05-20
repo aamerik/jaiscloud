@@ -21,7 +21,7 @@ type Snapshotter interface {
 
 // Resetter is implemented by any store that can wipe its state.
 type Resetter interface {
-	Reset()
+	Reset(ctx context.Context)
 }
 
 // PostRestoreHook is called after all stores have been restored from a snapshot.

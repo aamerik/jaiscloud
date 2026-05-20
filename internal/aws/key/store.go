@@ -101,5 +101,5 @@ type KeyStore interface {
 	StoreDEK(ctx context.Context, blob []byte) error
 
 	// Reset wipes all state (used by admin reset).
-	Reset()
+	Reset(ctx context.Context)
 }

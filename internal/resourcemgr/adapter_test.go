@@ -73,7 +73,7 @@ func (m *memStore) Purge(_ context.Context, _, _, t string) error {
 	return nil
 }
 
-func (m *memStore) Reset() {
+func (m *memStore) Reset(ctx context.Context) {
 	m.entries = make(map[string]store.ResourceEntry)
 }
 
@@ -225,4 +225,4 @@ func (s *errStore) List(_ context.Context, _, _, _, _ string) ([]store.ResourceE
 	return nil, s.err
 }
 func (s *errStore) Purge(_ context.Context, _, _, _ string) error { return s.err }
-func (s *errStore) Reset()                                         {}
+func (s *errStore) Reset(ctx context.Context)                                         {}

@@ -95,7 +95,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	}
 }
 
-func (p *Provider) Reset() { p.store.Reset() }
+func (p *Provider) Reset(ctx context.Context) { p.store.Reset(ctx) }
 
 // ─── State Machine CRUD ───────────────────────────────────────────────────────
 

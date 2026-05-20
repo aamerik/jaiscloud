@@ -1,6 +1,7 @@
 package emr
 
 import (
+	"context"
 	"testing"
 
 	"jaiscloud/internal/store"
@@ -14,7 +15,7 @@ func newMinimalEMRProvider() *EMRProvider {
 // TestEMRProvider_Reset_IsNoOp verifies Reset does not panic.
 func TestEMRProvider_Reset_IsNoOp(t *testing.T) {
 	p := newMinimalEMRProvider()
-	p.Reset() // must not panic
+	p.Reset(context.Background()) // must not panic
 }
 
 // TestEMRProvider_Shutdown_IsNoOp verifies Shutdown does not panic.

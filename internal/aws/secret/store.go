@@ -69,5 +69,5 @@ type SecretStore interface {
 	// DeleteVersionsByIDs hard-deletes the specified versions (used for pruning).
 	DeleteVersionsByIDs(ctx context.Context, secretID string, versionIDs []string) error
 
-	Reset()
+	Reset(ctx context.Context)
 }

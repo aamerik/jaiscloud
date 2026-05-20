@@ -51,5 +51,5 @@ type SQSMessageStore interface {
 	SetQueueRetention(ctx context.Context, account, region, queueURL string, retentionSecs int) error
 
 	// Reset wipes all messages across all queues.
-	Reset()
+	Reset(ctx context.Context)
 }

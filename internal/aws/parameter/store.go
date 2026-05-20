@@ -52,5 +52,5 @@ type ParameterStore interface {
 	UnlabelParameterVersion(ctx context.Context, accountID, name string, version int64, labels []string) error
 	GetLabelsByVersion(ctx context.Context, accountID, name string, version int64) ([]string, error)
 
-	Reset()
+	Reset(ctx context.Context)
 }

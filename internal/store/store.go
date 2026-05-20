@@ -44,5 +44,5 @@ type ResourceStore interface {
 	Purge(ctx context.Context, account, region, resourceType string) error
 
 	// Reset wipes all state — used by the admin reset endpoint.
-	Reset()
+	Reset(ctx context.Context)
 }

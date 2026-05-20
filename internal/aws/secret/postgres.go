@@ -248,8 +248,7 @@ func (s *PostgresSecretStore) DeleteVersionsByIDs(ctx context.Context, secretID 
 	return nil
 }
 
-func (s *PostgresSecretStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresSecretStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_sm_versions`)
 	s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets`)
 }

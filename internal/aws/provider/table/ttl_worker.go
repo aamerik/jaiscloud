@@ -73,7 +73,7 @@ func (w *TTLWorker) Shutdown() {
 }
 
 // Reset satisfies admin.Resetter; state is owned by the store, not the worker.
-func (w *TTLWorker) Reset() {}
+func (w *TTLWorker) Reset(ctx context.Context) {}
 
 func (w *TTLWorker) sweep(ctx context.Context) {
 	entries, err := w.resources.List(ctx, "", "", "dynamodb_tables", "")

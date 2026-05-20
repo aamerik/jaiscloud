@@ -478,7 +478,7 @@ func TestManager_Reset(t *testing.T) {
 	h, _ := mgr.AcquireDelete(context.Background(), "000000000000", "", "cluster", "c1")
 	_ = h // intentionally not released
 
-	mgr.Reset()
+	mgr.Reset(context.Background())
 	if mgr.lock.IsDeleting("cluster", "c1") {
 		t.Error("Reset should clear all deletion locks")
 	}

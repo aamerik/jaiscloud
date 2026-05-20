@@ -40,7 +40,7 @@ type LambdaExecutor interface {
 	// DeleteFunction tears down any warm container or pod for the named function.
 	DeleteFunction(ctx context.Context, functionName string)
 	// Reset tears down all warm containers or pods (called on /_jaiscloud/reset).
-	Reset()
+	Reset(ctx context.Context)
 	// Close releases all resources held by the executor (containers, goroutines).
 	Close() error
 }

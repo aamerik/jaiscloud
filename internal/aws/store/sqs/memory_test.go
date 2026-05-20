@@ -240,7 +240,7 @@ func TestMemoryMessageStore_Reset(t *testing.T) {
 	now := time.Now()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("x"))
-	s.Reset()
+	s.Reset(context.Background())
 
 	msgs, _ := s.Receive(ctx, "000000000000", "us-east-1", testQueue, 10, now)
 	if len(msgs) != 0 {

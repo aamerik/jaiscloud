@@ -64,8 +64,8 @@ func (p *STSProvider) Routes() map[string]provider.HandlerFunc {
 }
 
 // Reset wipes all session state. Implements admin.Resetter.
-func (p *STSProvider) Reset() {
-	p.store.Reset()
+func (p *STSProvider) Reset(ctx context.Context) {
+	p.store.Reset(ctx)
 }
 
 // ─── handlers ─────────────────────────────────────────────────────────────────

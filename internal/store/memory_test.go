@@ -77,7 +77,7 @@ func TestMemoryResourceStore_Reset(t *testing.T) {
 	ctx := context.Background()
 	s := store.NewMemoryResourceStore()
 	s.Create(ctx, "000000000000", "us-east-1", store.ResourceEntry{Type: "sqs_queues", ID: "q1", Data: json.RawMessage(`{}`)})
-	s.Reset()
+	s.Reset(context.Background())
 	all, _ := s.List(ctx, "000000000000", "us-east-1", "sqs_queues", "")
 	if len(all) != 0 {
 		t.Fatalf("expected empty after reset, got %d", len(all))

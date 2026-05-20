@@ -157,7 +157,7 @@ func (s *MemoryResourceStore) Purge(ctx context.Context, account, region, resour
 	return nil
 }
 
-func (s *MemoryResourceStore) Reset() {
+func (s *MemoryResourceStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = make(map[string]ResourceEntry)

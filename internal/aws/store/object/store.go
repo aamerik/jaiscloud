@@ -108,5 +108,5 @@ type ObjectMetaStore interface {
 	DeleteObjectVersion(ctx context.Context, bucket, key, versionID string) error
 	ListObjectVersions(ctx context.Context, bucket, prefix, keyMarker, versionIDMarker string, maxKeys int) (versions []ObjectMeta, truncated bool, err error)
 
-	Reset()
+	Reset(ctx context.Context)
 }

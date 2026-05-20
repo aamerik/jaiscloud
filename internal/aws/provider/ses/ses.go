@@ -48,7 +48,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 }
 
 // Reset clears sent emails (implements admin.Resetter indirectly via store).
-func (p *Provider) Reset() {
+func (p *Provider) Reset(ctx context.Context) {
 	p.mu.Lock()
 	p.sentEmails = nil
 	p.mu.Unlock()

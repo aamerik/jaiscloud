@@ -453,7 +453,7 @@ func (e *DockerExecutor) DeleteFunction(_ context.Context, name string) {
 // Reset tears down all warm containers without stopping the GC goroutine.
 // After the map pass it sweeps by instance prefix to catch containers that
 // are live on the daemon but missing from the in-memory map (LG5).
-func (e *DockerExecutor) Reset() {
+func (e *DockerExecutor) Reset(_ context.Context) {
 	e.mu.Lock()
 	names := make([]string, 0, len(e.containers))
 	for name := range e.containers {

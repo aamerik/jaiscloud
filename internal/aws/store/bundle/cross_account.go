@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 )
@@ -34,12 +35,12 @@ func (b *CrossAccountBundle[T]) Get() *T {
 }
 
 // Reset wipes the global store IN PLACE if T implements Resetter.
-func (b *CrossAccountBundle[T]) Reset() {
+func (b *CrossAccountBundle[T]) Reset(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.store != nil {
 		if r, ok := any(b.store).(Resetter); ok {
-			r.Reset()
+			r.Reset(ctx)
 		}
 	}
 }

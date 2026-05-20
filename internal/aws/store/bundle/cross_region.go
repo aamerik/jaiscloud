@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 )
@@ -69,12 +70,12 @@ func (b *CrossRegionBundle[T]) Iter(fn func(account string, store *T)) {
 }
 
 // Reset wipes every account's store IN PLACE if T implements Resetter.
-func (b *CrossRegionBundle[T]) Reset() {
+func (b *CrossRegionBundle[T]) Reset(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, st := range b.stores {
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(ctx)
 		}
 	}
 }
@@ -85,7 +86,7 @@ func (b *CrossRegionBundle[T]) ResetAccount(account string) {
 	defer b.mu.Unlock()
 	if st, ok := b.stores[account]; ok {
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(context.Background())
 		}
 	}
 }

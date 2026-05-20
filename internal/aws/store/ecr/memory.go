@@ -483,7 +483,7 @@ func (s *MemoryECRStore) GetReplicationConfiguration() string {
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
-func (s *MemoryECRStore) Reset() {
+func (s *MemoryECRStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	s.repos = make(map[string]*Repository)
 	s.arnToKey = make(map[string]string)

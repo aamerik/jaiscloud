@@ -4,6 +4,7 @@
 package bundle
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -119,12 +120,12 @@ func (b *LocalBundle[T]) Iter(fn func(account, region string, store *T)) {
 
 // Reset wipes every store IN PLACE if T implements Resetter, preserving *T
 // identity so goroutines holding a reference see empty state.
-func (b *LocalBundle[T]) Reset() {
+func (b *LocalBundle[T]) Reset(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, st := range b.stores {
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(ctx)
 		}
 	}
 }
@@ -133,9 +134,10 @@ func (b *LocalBundle[T]) Reset() {
 func (b *LocalBundle[T]) ResetAndDiscard() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	ctx := context.Background()
 	for _, st := range b.stores {
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(ctx)
 		}
 	}
 	b.stores = make(map[localKey]*T)
@@ -148,7 +150,7 @@ func (b *LocalBundle[T]) ResetScope(account, region string) {
 	k := localKey{account, region}
 	if st, ok := b.stores[k]; ok {
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(context.Background())
 		}
 	}
 }
@@ -162,7 +164,7 @@ func (b *LocalBundle[T]) ResetAccount(account string) {
 			continue
 		}
 		if r, ok := any(st).(Resetter); ok {
-			r.Reset()
+			r.Reset(context.Background())
 		}
 	}
 }

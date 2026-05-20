@@ -181,8 +181,7 @@ func (s *PostgresParameterStore) GetParameterHistory(ctx context.Context, accoun
 	return out, rows.Err()
 }
 
-func (s *PostgresParameterStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresParameterStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_ssm_param_history`)
 	s.pool.Exec(ctx, `DELETE FROM jc_ssm_parameters`)
 }

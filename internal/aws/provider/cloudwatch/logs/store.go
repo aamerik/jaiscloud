@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -179,7 +180,7 @@ func (s *memStore) reset() {
 }
 
 // Reset wipes all state (called on POST /_jaiscloud/reset).
-func (s *memStore) Reset() {
+func (s *memStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reset()

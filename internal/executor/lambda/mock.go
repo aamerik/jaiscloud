@@ -11,5 +11,5 @@ func (e *MockExecutor) Invoke(_ context.Context, req InvokeRequest) (InvokeResul
 }
 
 func (e *MockExecutor) DeleteFunction(_ context.Context, _ string) {}
-func (e *MockExecutor) Reset()                                     {}
+func (e *MockExecutor) Reset(_ context.Context)                                     {}
 func (e *MockExecutor) Close() error                               { return nil }

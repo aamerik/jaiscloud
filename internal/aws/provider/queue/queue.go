@@ -49,8 +49,8 @@ func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, clk c
 }
 
 // Reset clears in-memory waiter state; satisfies admin.Resetter.
-func (p *QueueProvider) Reset() {
-	p.waiters.Reset()
+func (p *QueueProvider) Reset(ctx context.Context) {
+	p.waiters.Reset(ctx)
 	resetMoveTasks()
 	p.rdMu.Lock()
 	p.recentDeletes = make(map[string]time.Time)

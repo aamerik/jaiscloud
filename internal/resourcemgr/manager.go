@@ -227,6 +227,6 @@ func (m *Manager) AcquireDelete(ctx context.Context, account, region, resourceTy
 }
 
 // Reset clears all deletion locks. Called from POST /_jaiscloud/reset.
-func (m *Manager) Reset() {
-	m.lock.Reset()
+func (m *Manager) Reset(ctx context.Context) {
+	m.lock.Reset(ctx)
 }

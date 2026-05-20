@@ -1,6 +1,7 @@
 package bundle_test
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,7 @@ func (s *simpleStore) Get(k string) (string, bool) {
 	return v, ok
 }
 
-func (s *simpleStore) Reset() {
+func (s *simpleStore) Reset(ctx context.Context) {
 	s.mu.Lock(); defer s.mu.Unlock()
 	s.Data = make(map[string]string)
 }
@@ -75,7 +76,7 @@ func TestLocalBundle_Reset_PreservesIdentity(t *testing.T) {
 	s, _ := b.Get("000000000000", "us-east-1")
 	s.Set("key", "val")
 
-	b.Reset()
+	b.Reset(context.Background())
 
 	sAfter, _ := b.Get("000000000000", "us-east-1")
 	if sAfter != s {
@@ -256,7 +257,7 @@ func TestCrossRegionBundle_Reset_PreservesIdentity(t *testing.T) {
 	b := bundle.NewCrossRegion(newSimpleStoreAccount)
 	s, _ := b.Get("000000000000")
 	s.Set("key", "val")
-	b.Reset()
+	b.Reset(context.Background())
 	sAfter, _ := b.Get("000000000000")
 	if sAfter != s {
 		t.Fatal("Reset must preserve *T pointer")
@@ -368,7 +369,7 @@ func TestCrossAccountBundle_Snapshot_RoundTrip(t *testing.T) {
 func TestCrossAccountBundle_Reset(t *testing.T) {
 	b := bundle.NewCrossAccount(newSimpleStoreGlobal)
 	b.Get().Set("k", "v")
-	b.Reset()
+	b.Reset(context.Background())
 	if _, ok := b.Get().Get("k"); ok {
 		t.Error("data must be cleared after Reset")
 	}

@@ -54,7 +54,7 @@ func (b *blockingExecutor) Invoke(ctx context.Context, _ lambdaexec.InvokeReques
 	return lambdaexec.InvokeResult{}, ctx.Err()
 }
 func (b *blockingExecutor) DeleteFunction(_ context.Context, _ string) {}
-func (b *blockingExecutor) Reset()                                      {}
+func (b *blockingExecutor) Reset(_ context.Context)                     {}
 func (b *blockingExecutor) Close() error                                { return nil }
 
 // ─── Timeout validation ───────────────────────────────────────────────────────

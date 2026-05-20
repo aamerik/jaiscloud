@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -59,7 +60,7 @@ func (t *ExportTable) DeleteStack(stackARN string) error {
 	return nil
 }
 
-func (t *ExportTable) Reset() {
+func (t *ExportTable) Reset(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.entries = make(map[string]*exportEntry)

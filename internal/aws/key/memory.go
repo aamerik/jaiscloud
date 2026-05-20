@@ -203,7 +203,7 @@ func (s *MemoryKeyStore) StoreDEK(_ context.Context, blob []byte) error {
 	return nil
 }
 
-func (s *MemoryKeyStore) Reset() {
+func (s *MemoryKeyStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keys = make(map[string]KeyEntry)

@@ -148,9 +148,9 @@ func (h *Handler) SetBarrier(b *snapshot.Barrier) {
 
 // resetNoBarrier resets all stores without acquiring the barrier.
 // Must be called while the write lock is already held (inside WriteBegin).
-func (h *Handler) resetNoBarrier() {
+func (h *Handler) resetNoBarrier(ctx context.Context) {
 	for _, rs := range h.resetters {
-		rs.Reset()
+		rs.Reset(ctx)
 	}
 }
 
@@ -254,9 +254,10 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
+	ctx := r.Context()
 	for _, rs := range resetters {
 		if account == "" {
-			rs.Reset()
+			rs.Reset(ctx)
 			continue
 		}
 		if sr, ok := rs.(ScopedResetter); ok {
@@ -267,7 +268,7 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Non-scoped resetter: over-wipe (acceptable — no per-account state).
-			rs.Reset()
+			rs.Reset(ctx)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -572,6 +573,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Restore all stores; on any failure, rollback by resetting all stores.
+	rollbackCtx := r.Context()
 	var restoreErr error
 	defer func() {
 		if restoreErr != nil {
@@ -580,7 +582,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 			copy(resetters, h.resetters)
 			h.mu.Unlock()
 			for _, rs := range resetters {
-				rs.Reset()
+				rs.Reset(rollbackCtx)
 			}
 		}
 	}()

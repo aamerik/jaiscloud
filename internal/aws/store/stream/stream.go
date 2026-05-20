@@ -148,7 +148,7 @@ func (s *MemoryStreamStore) ListStreams() []StreamInfo {
 	return out
 }
 
-func (s *MemoryStreamStore) Reset() {
+func (s *MemoryStreamStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.streams = make(map[string]*tableStream)

@@ -142,7 +142,7 @@ func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 }
 
 // Reset wipes all state. In persistent mode, restarts kinesis-mock subprocess.
-func (p *Provider) Reset() {
+func (p *Provider) Reset(ctx context.Context) {
 	if p.fullMode && p.mockServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -152,7 +152,7 @@ func (p *Provider) Reset() {
 		}
 		return
 	}
-	p.store.Reset()
+	p.store.Reset(ctx)
 }
 
 // Shutdown stops the kinesis-mock subprocess if running.

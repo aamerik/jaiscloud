@@ -138,7 +138,7 @@ type DynamoDBItemStore interface {
 	// TransactWriteItems evaluates all conditions then applies all writes atomically.
 	// Returns (nil, nil) on success; (reasons, nil) if any condition failed (caller wraps in TransactionCanceledException).
 	TransactWriteItems(ctx context.Context, account, region string, ops []TransactWriteOp) ([]CancellationReason, error)
-	Reset()
+	Reset(ctx context.Context)
 
 	// ── Table-lifecycle methods ──────────────────────────────────────────────
 

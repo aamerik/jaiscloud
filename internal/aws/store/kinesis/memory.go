@@ -800,7 +800,7 @@ func max64(a, b uint64) uint64 {
 // ─── admin ────────────────────────────────────────────────────────────────────
 
 // Reset wipes all state.
-func (s *MemoryKinesisStore) Reset() {
+func (s *MemoryKinesisStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	s.streams = make(map[string]*streamState)
 	s.nameScope = make(map[string]string)

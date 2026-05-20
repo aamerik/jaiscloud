@@ -291,8 +291,7 @@ func (s *PostgresKeyStore) StoreDEK(ctx context.Context, blob []byte) error {
 	return nil
 }
 
-func (s *PostgresKeyStore) Reset() {
-	ctx := context.Background()
+func (s *PostgresKeyStore) Reset(ctx context.Context) {
 	s.pool.Exec(ctx, `DELETE FROM jc_kms_grants`)
 	s.pool.Exec(ctx, `DELETE FROM jc_kms_aliases`)
 	s.pool.Exec(ctx, `DELETE FROM jc_kms_keys`)

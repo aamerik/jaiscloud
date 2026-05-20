@@ -153,7 +153,7 @@ func TestMemorySecretStore_Reset(t *testing.T) {
 	ctx := context.Background()
 	s := newSecretStore()
 	s.CreateSecret(ctx, secret.SecretEntry{SecretID: "s1", Name: "n1"})
-	s.Reset()
+	s.Reset(context.Background())
 	secrets, _ := s.ListSecrets(ctx, "")
 	assert.Empty(t, secrets)
 }

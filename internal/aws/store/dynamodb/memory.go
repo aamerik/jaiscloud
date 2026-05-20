@@ -581,7 +581,7 @@ func (s *MemoryDynamoDBItemStore) TransactWriteItems(_ context.Context, _, _ str
 	return nil, nil
 }
 
-func (s *MemoryDynamoDBItemStore) Reset() {
+func (s *MemoryDynamoDBItemStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schemas = make(map[string]TableSchema)

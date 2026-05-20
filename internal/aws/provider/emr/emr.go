@@ -1328,7 +1328,7 @@ func (p *EMRProvider) cascadeOnStepFailure(ctx context.Context, h handlerCtx,
 }
 
 // Reset wipes the resource store state (no executor to reset).
-func (p *EMRProvider) Reset() {}
+func (p *EMRProvider) Reset(ctx context.Context) {}
 
 // Shutdown cancels the provider context, signalling all in-flight runStep
 // goroutines to stop after their current K8s operation completes, then

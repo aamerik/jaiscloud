@@ -41,7 +41,7 @@ func (m *mockSnapshotter) IsEmpty(_ context.Context) (bool, error) {
 	return m.isEmpty, nil
 }
 
-func (m *mockSnapshotter) Reset() { m.data = nil; m.isEmpty = true }
+func (m *mockSnapshotter) Reset(ctx context.Context) { m.data = nil; m.isEmpty = true }
 
 // mockScopedResetter tracks which Reset variant was called.
 type mockScopedResetter struct {
@@ -50,7 +50,7 @@ type mockScopedResetter struct {
 	resetScopeCalls   [][2]string
 }
 
-func (m *mockScopedResetter) Reset()                           { m.resetCalled = true }
+func (m *mockScopedResetter) Reset(ctx context.Context)                           { m.resetCalled = true }
 func (m *mockScopedResetter) ResetAccount(account string)      { m.resetAccountCalls = append(m.resetAccountCalls, account) }
 func (m *mockScopedResetter) ResetScope(account, region string) {
 	m.resetScopeCalls = append(m.resetScopeCalls, [2]string{account, region})
@@ -585,7 +585,7 @@ func (b *blockingSnapshotter) Restore(ctx context.Context, _ io.Reader) error {
 
 func (b *blockingSnapshotter) IsEmpty(_ context.Context) (bool, error) { return b.isEmpty, nil }
 
-func (b *blockingSnapshotter) Reset() { b.isEmpty = true }
+func (b *blockingSnapshotter) Reset(ctx context.Context) { b.isEmpty = true }
 
 // TestImport_ContextCancel_MidRestore verifies that when the request context is
 // already cancelled before Import runs, the handler does not return 200 and

@@ -84,7 +84,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context, accountID, region 
 }
 
 // Reset implements admin.Resetter — reseeds the default VPC after a store wipe.
-func (p *ComputeProvider) Reset() {
+func (p *ComputeProvider) Reset(ctx context.Context) {
 	p.seedDefaultVPC(context.Background(), p.accountID, p.region)
 }
 

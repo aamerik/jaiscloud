@@ -755,7 +755,7 @@ func (p *Provider) writeAlarmHistory(ctx context.Context, account, region, alarm
 	_ = p.resources.Create(ctx, account, region, store.ResourceEntry{Type: "cloudwatch_alarm_history", ID: id, Data: data})
 }
 
-func (p *Provider) Reset() {
+func (p *Provider) Reset(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.metrics = make(map[string]*metricRing)

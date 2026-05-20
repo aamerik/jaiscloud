@@ -221,7 +221,7 @@ func (h *Handler) SnapshotRevert(w http.ResponseWriter, r *http.Request) {
 			}
 			defer release()
 		}
-		h.resetNoBarrier()
+		h.resetNoBarrier(r.Context())
 	}
 
 	// Re-use the Import handler logic by forwarding as a POST with the tarball body.

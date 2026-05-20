@@ -233,7 +233,7 @@ func (s *MemorySecretStore) DeleteVersionsByIDs(_ context.Context, secretID stri
 	return nil
 }
 
-func (s *MemorySecretStore) Reset() {
+func (s *MemorySecretStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.secrets = make(map[string]SecretEntry)

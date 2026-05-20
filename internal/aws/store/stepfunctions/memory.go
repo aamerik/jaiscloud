@@ -563,7 +563,7 @@ func (s *MemoryStepFunctionsStore) resourceExists(arn string) bool {
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
-func (s *MemoryStepFunctionsStore) Reset() {
+func (s *MemoryStepFunctionsStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	s.machines = make(map[string]*StateMachine)
 	s.nameToARN = make(map[string]string)

@@ -30,7 +30,7 @@ type BlobStore interface {
 	GetStream(ctx context.Context, bucket, key string, offset, length int64) (io.ReadCloser, error)
 	Delete(ctx context.Context, bucket, key string) error
 	List(ctx context.Context, bucket, prefix string) ([]string, error)
-	Reset()
+	Reset(ctx context.Context)
 }
 
 // limitReadCloser wraps an io.Reader with a separate io.Closer so that
@@ -131,7 +131,7 @@ func (s *MemoryBlobStore) GetStream(_ context.Context, bucket, key string, offse
 	return io.NopCloser(bytes.NewReader(cp)), nil
 }
 
-func (s *MemoryBlobStore) Reset() {
+func (s *MemoryBlobStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = make(map[string][]byte)
@@ -520,7 +520,7 @@ func (s *LocalFSBlobStore) GetStream(_ context.Context, bucket, key string, offs
 	return f, nil
 }
 
-func (s *LocalFSBlobStore) Reset() {
+func (s *LocalFSBlobStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_ = os.RemoveAll(s.baseDir)

@@ -111,7 +111,7 @@ func TestMemoryKeyStore_Reset(t *testing.T) {
 	s.CreateKey(ctx, key.KeyEntry{KeyID: "k1", Enabled: true})
 	s.StoreDEK(ctx, []byte{1, 2, 3})
 
-	s.Reset()
+	s.Reset(context.Background())
 
 	keys, _ := s.ListKeys(ctx, "")
 	assert.Empty(t, keys)

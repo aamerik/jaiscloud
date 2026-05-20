@@ -209,7 +209,7 @@ func (e *K8sExecutor) DeleteFunction(ctx context.Context, name string) {
 // Reset destroys all warm pods (called on /_jaiscloud/reset).
 // After clearing the in-memory map it performs a label-filtered sweep to
 // catch any pods that are live on the cluster but missing from the map (LG5).
-func (e *K8sExecutor) Reset() {
+func (e *K8sExecutor) Reset(_ context.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	e.mu.Lock()
@@ -236,7 +236,7 @@ func (e *K8sExecutor) Reset() {
 func (e *K8sExecutor) Close() error {
 	close(e.done)
 	e.wg.Wait()
-	e.Reset()
+	e.Reset(context.Background())
 	return nil
 }
 

@@ -185,7 +185,7 @@ func (s *MemoryParameterStore) GetLabelsByVersion(_ context.Context, accountID, 
 	return out, nil
 }
 
-func (s *MemoryParameterStore) Reset() {
+func (s *MemoryParameterStore) Reset(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.params = make(map[string]ParameterEntry)
