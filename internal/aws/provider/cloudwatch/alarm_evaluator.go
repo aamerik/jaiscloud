@@ -158,7 +158,7 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 		map[string]any{"version": "1.0", "oldState": map[string]any{"stateValue": current}, "newState": map[string]any{"stateValue": newState, "stateReason": reason}},
 		now)
 
-	go e.p.fireAlarmActions(context.Background(), alarm, newState)
+	go e.p.fireAlarmActions(ctx, alarm, newState)
 }
 
 // computeStat computes the requested CloudWatch statistic over a slice of values.
