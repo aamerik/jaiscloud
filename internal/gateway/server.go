@@ -397,7 +397,13 @@ func (s *Server) ListenAndServe() error {
 	defer stop()
 
 	go func() {
-		slog.Info("jaiscloud started", "port", s.cfg.Port, "mode", s.cfg.Mode)
+		mode := "memory+saves"
+		if s.cfg.Ephemeral {
+			mode = "ephemeral"
+		} else if s.cfg.DSN != "" {
+			mode = "postgres"
+		}
+		slog.Info("jaiscloud started", "port", s.cfg.Port, "mode", mode)
 		if serveErr := srv.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
 			slog.Error("server error", "err", serveErr)
 		}

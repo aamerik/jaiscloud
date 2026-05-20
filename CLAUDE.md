@@ -209,25 +209,32 @@ Defined once in `internal/aws/adapter/services.go` — no switch statement anywh
 
 ---
 
-## Backend resources by mode
+## Storage model
+
+Storage is determined by two flags — no `--mode` flag exists.
+
+| Invocation | Storage | Survives restart? |
+|---|---|---|
+| `./jaiscloud-aws start` | Memory + periodic state.json saves | Yes (soft) |
+| `./jaiscloud-aws start --dsn "postgres://..."` | PostgreSQL | Yes (durable) |
+| `./jaiscloud-aws start --ephemeral` | Memory only, no disk writes | No |
+| `--ephemeral` + `--dsn` | Startup error: mutually exclusive | — |
 
 `JAISCLOUD_EXECUTOR_MODE`: `""` / `mock` / `docker` / `k8s` — applies to both Spark (EMR) and Lambda.
 
-| Service | Memory (default) | Persistent (`--mode persistent`) | `docker` executor | `k8s` executor |
+| Service | Default (memory+saves) | `--dsn` (PostgreSQL) | `docker` executor | `k8s` executor |
 |---|---|---|---|---|
-| SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory | PostgreSQL | PostgreSQL | PostgreSQL |
-| DynamoDB + Streams | In-memory | PostgreSQL | PostgreSQL | PostgreSQL |
-| S3 | In-memory + MemoryBlobStore | PostgreSQL + LocalFSBlobStore (`~/.jaiscloud/blobs`) | same | same |
+| SQS / SNS / IAM / STS / KMS / SecretsManager / SSM | In-memory + state.json | PostgreSQL | PostgreSQL | PostgreSQL |
+| DynamoDB + Streams | In-memory + state.json | PostgreSQL | PostgreSQL | PostgreSQL |
+| S3 | In-memory + session blob dir | PostgreSQL + LocalFSBlobStore (`~/.jaiscloud/blobs`) | same | same |
 | Lambda | Echo (mock) | Echo (mock) | Docker container per function (warm pool) | K8s Pod + Service per function |
 | EMR on EC2 steps | Instant COMPLETED | Instant COMPLETED | Docker container per step | K8s batch/v1 Job per step |
 | EMR on EKS job runs | Instant COMPLETED | Instant COMPLETED | Docker container per job | K8s batch/v1 Job per job |
 | CloudWatch | In-memory ring + alarms | In-memory ring + PostgreSQL alarms | — | — |
 | EC2 / Route53 / EKS / RDS / ElastiCache / ECS | Metadata only | Metadata only | — | — |
-| API Gateway | In-memory | PostgreSQL | — | — |
+| API Gateway | In-memory + state.json | PostgreSQL | — | — |
 | CloudFormation | In-memory + real dispatch | PostgreSQL + real dispatch | — | — |
-| Glue / EventBridge | In-memory | PostgreSQL | — | — |
-
-> **Mode names:** `memory` (default, formerly `lite`) and `persistent` (formerly `full`). The old names `lite` / `full` are rejected with a migration error at startup.
+| Glue / EventBridge | In-memory + state.json | PostgreSQL | — | — |
 
 ---
 
@@ -240,27 +247,30 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 # Build all cloud binaries
 make build-all   # → jaiscloud-aws, jaiscloud-azure, jaiscloud-gcp
 
-# Memory mode (default, port 4566)
+# Default: state saved to ~/.jaiscloud/jaiscloud-aws/state.json, survives restarts
 ./jaiscloud-aws start
 
-# Memory mode with data-dir (enables snapshots + periodic state.json saves)
-./jaiscloud-aws start --data-dir ~/.jaiscloud
+# Explicit data directory for state.json saves and named snapshots
+./jaiscloud-aws start --data-dir /var/lib/jaiscloud
 
-# Persistent mode (PostgreSQL persistence)
-./jaiscloud-aws start --mode persistent --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+# PostgreSQL backend
+./jaiscloud-aws start --dsn "postgres://user:pass@localhost:5433/jaiscloud"
 
-# Persistent mode with data-dir (enables named snapshots on disk)
-./jaiscloud-aws start --mode persistent --dsn "postgres://..." --data-dir /var/lib/jaiscloud
+# PostgreSQL + named snapshots on disk
+./jaiscloud-aws start --dsn "postgres://..." --data-dir /var/lib/jaiscloud
+
+# Ephemeral: no persistence, clean slate on every start (CI / tests)
+./jaiscloud-aws start --ephemeral
 
 # Docker-compose (postgres on 5433, jaiscloud-aws on 4566)
 make up-docker
 make down-docker
 
 # K8s executors (Spark + Lambda)
-JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start --mode persistent --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=k8s ./jaiscloud-aws start --dsn "postgres://..."
 
 # Docker executors
-JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode persistent --dsn "postgres://..."
+JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --dsn "postgres://..."
 
 # Prometheus metrics (at /metrics)
 ./jaiscloud-aws start --metrics
@@ -270,8 +280,8 @@ JAISCLOUD_EXECUTOR_MODE=docker ./jaiscloud-aws start --mode persistent --dsn "po
 
 ```bash
 JAISCLOUD_PORT=4566
-JAISCLOUD_MODE=memory                # or "persistent" (formerly "lite"/"full" — rejected)
-JAISCLOUD_DSN=                       # optional; if set with MODE=persistent, enables Postgres-backed stores; if unset, uses file-backed stores (state.json)
+JAISCLOUD_EPHEMERAL=false            # true = no persistence (CI/tests); mutually exclusive with JAISCLOUD_DSN
+JAISCLOUD_DSN=                       # PostgreSQL DSN; when set all state is stored in PostgreSQL
 JAISCLOUD_REGION=us-east-1
 JAISCLOUD_ACCOUNT_ID=000000000000
 JAISCLOUD_LOG_LEVEL=info
@@ -286,7 +296,7 @@ JAISCLOUD_SPARK_K8S_CLUSTER_MODE=auto   # auto | always | never
 JAISCLOUD_INSTANCE_ID=               # override auto-generated instance UUID
 
 # Snapshot / persistence env vars
-JAISCLOUD_DATA_DIR=                  # path for snapshots + state.json (optional in memory mode)
+JAISCLOUD_DATA_DIR=                  # path for state.json saves and named snapshots (default: ~/.jaiscloud/jaiscloud-aws)
 JAISCLOUD_FRESH_START=false          # if true, skip loading state.json on startup
 JAISCLOUD_SNAPSHOT_INTERVAL=5m      # how often SnapshotLoop saves state.json (default 5m)
 JAISCLOUD_SNAPSHOT_SAVE_TIMEOUT=30s # per-save context deadline (default 30s)

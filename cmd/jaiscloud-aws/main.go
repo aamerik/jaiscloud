@@ -236,10 +236,9 @@ func startCmd() *cobra.Command {
 				}))
 			}
 
-			// File-backend: resolve DataDir, load state on startup, start snapshot loop.
+			// Resolve DataDir for admin endpoints (snapshot commands, export/import).
 			dataDir := cfg.DataDir
 			if dataDir == "" {
-				// Default to ~/.jaiscloud/jaiscloud-aws
 				if home, err := os.UserHomeDir(); err == nil {
 					dataDir = filepath.Join(home, ".jaiscloud", "jaiscloud-aws")
 				} else {
@@ -248,53 +247,53 @@ func startCmd() *cobra.Command {
 			}
 			adminHandler.SetDataDir(dataDir)
 
-			// Wire snapshot loop for memory mode.
-			// Also attempt to restore state.json from a previous run.
-			adminSnaps := adminHandler.Snapshotters()
-			loopStores := make(map[string]snapshottypes.Snapshotter, len(adminSnaps))
-			for k, v := range adminSnaps {
-				loopStores[k] = v
-			}
-
-			// Try to restore state from a previous snapshot (file-backend startup load).
-			stateFile := filepath.Join(dataDir, "state.json")
-			if stateData, readErr := os.ReadFile(stateFile); readErr == nil {
-				var env snapversion.Envelope
-				if parseErr := json.Unmarshal(stateData, &env); parseErr != nil {
-					slog.Warn("startup: state.json parse failed; starting fresh", "err", parseErr)
-				} else if versionErr := snapversion.CheckSnapshotVersion(env.SchemaVersion); versionErr != nil {
-					return fmt.Errorf("startup: state.json version check failed: %w\nRun with --fresh-start to wipe state", versionErr)
-				} else if env.Cloud != "" && env.Cloud != string(cfg.Cloud) {
-					return fmt.Errorf("startup: state.json cloud mismatch: stored=%q running=%q", env.Cloud, cfg.Cloud)
-				} else {
-					// Restore each store.
-					for name, s := range loopStores {
-						data, ok := env.Stores[name]
-						if !ok {
-							continue
-						}
-						if restoreErr := s.Restore(ctx, bytes.NewReader(data)); restoreErr != nil {
-							slog.Warn("startup: restore store failed; skipping", "store", name, "err", restoreErr)
-						}
-					}
-					slog.Info("startup: state restored from snapshot", "path", stateFile, "stores", len(env.Stores))
+			// Wire snapshot loop unless running in ephemeral mode.
+			// Attempts to restore state.json from a previous run, then starts periodic saves.
+			if !cfg.Ephemeral {
+				adminSnaps := adminHandler.Snapshotters()
+				loopStores := make(map[string]snapshottypes.Snapshotter, len(adminSnaps))
+				for k, v := range adminSnaps {
+					loopStores[k] = v
 				}
-			}
 
-			loopCfg := snapshot.SnapshotLoopConfig{
-				Barrier:     barrier,
-				Stores:      loopStores,
-				BlobStore:   s.localBlobs,
-				DataDir:     dataDir,
-				Interval:    cfg.SnapshotInterval,
-				Clock:       cfg.Clock,
-				SaveTimeout: 10 * time.Second,
+				stateFile := filepath.Join(dataDir, "state.json")
+				if stateData, readErr := os.ReadFile(stateFile); readErr == nil {
+					var env snapversion.Envelope
+					if parseErr := json.Unmarshal(stateData, &env); parseErr != nil {
+						slog.Warn("startup: state.json parse failed; starting fresh", "err", parseErr)
+					} else if versionErr := snapversion.CheckSnapshotVersion(env.SchemaVersion); versionErr != nil {
+						return fmt.Errorf("startup: state.json version check failed: %w\nRun with --fresh-start to wipe state", versionErr)
+					} else if env.Cloud != "" && env.Cloud != string(cfg.Cloud) {
+						return fmt.Errorf("startup: state.json cloud mismatch: stored=%q running=%q", env.Cloud, cfg.Cloud)
+					} else {
+						for name, s := range loopStores {
+							data, ok := env.Stores[name]
+							if !ok {
+								continue
+							}
+							if restoreErr := s.Restore(ctx, bytes.NewReader(data)); restoreErr != nil {
+								slog.Warn("startup: restore store failed; skipping", "store", name, "err", restoreErr)
+							}
+						}
+						slog.Info("startup: state restored from snapshot", "path", stateFile, "stores", len(env.Stores))
+					}
+				}
+
+				loopCfg := snapshot.SnapshotLoopConfig{
+					Barrier:     barrier,
+					Stores:      loopStores,
+					BlobStore:   s.localBlobs,
+					DataDir:     dataDir,
+					Interval:    cfg.SnapshotInterval,
+					Clock:       cfg.Clock,
+					SaveTimeout: 10 * time.Second,
+				}
+				loop := snapshot.NewSnapshotLoop(loopCfg)
+				loopCtx, loopCancel := context.WithCancel(ctx)
+				loop.Start(loopCtx)
+				prevCleanup4 := cleanup
+				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 			}
-			loop := snapshot.NewSnapshotLoop(loopCfg)
-			loopCtx, loopCancel := context.WithCancel(ctx)
-			loop.Start(loopCtx)
-			prevCleanup4 := cleanup
-			cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
 
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
 			_ = app.Bus
@@ -303,9 +302,12 @@ func startCmd() *cobra.Command {
 	}
 
 	cmd.Flags().Int("port", 4566, "Listen port")
-	cmd.Flags().String("mode", "memory", "Mode: memory or persistent")
-	cmd.Flags().String("dsn", "", `PostgreSQL connection string (optional; enables Postgres-backed persistence when --mode persistent).
-	If omitted with --mode persistent, state is kept in memory and saved periodically to state.json in --data-dir.
+	cmd.Flags().Bool("ephemeral", false, `Run with purely in-memory state — no periodic saves to disk.
+	Use for CI, unit tests, and throw-away runs where a clean slate on every start is desired.
+	Mutually exclusive with --dsn.
+	Env var: JAISCLOUD_EPHEMERAL`)
+	cmd.Flags().String("dsn", "", `PostgreSQL connection string. When set, all state is stored in PostgreSQL.
+	Mutually exclusive with --ephemeral.
 	Format:  postgres://USER:PASSWORD@HOST:PORT/DBNAME
 	Example: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
 	Env var: JAISCLOUD_DSN`)
@@ -361,7 +363,7 @@ func startCmd() *cobra.Command {
 // them up. Must be called at the start of RunE, after flag parsing is complete.
 func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("port", cmd.Flags().Lookup("port"))
-	viper.BindPFlag("mode", cmd.Flags().Lookup("mode"))
+	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("fresh_start", cmd.Flags().Lookup("fresh-start"))
@@ -429,11 +431,14 @@ type appStores struct {
 	sfn        *sfnstore.MemoryStepFunctionsStore
 }
 
-// initStores constructs the store layer for the chosen mode (memory or persistent).
-// instanceID is used to create a session-scoped blob directory in memory mode.
+// initStores constructs the store layer based on configuration:
+//   - DSN set → PostgreSQL-backed stores
+//   - Ephemeral → pure in-memory stores, no disk writes
+//   - Default → in-memory stores with session blob dir; snapshot loop (wired in startCmd)
+//     saves state to data-dir/state.json periodically and restores it on startup
 func initStores(ctx context.Context, cfg *config.Config, instanceID string) (appStores, error) {
-	if cfg.Mode == config.ModePersistent && cfg.DSN != "" {
-		slog.Info("starting in persistent mode (postgres)", "dsn", cfg.DSN)
+	if cfg.DSN != "" {
+		slog.Info("starting with postgres backend", "dsn", cfg.DSN)
 		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, string(cfg.Cloud))
 		if err != nil {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
@@ -461,14 +466,25 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 		}, nil
 	}
 
-	// File-backed persistent mode or memory mode.
-	// In both cases stores are in-memory; the snapshot loop (wired in startCmd) periodically
-	// saves state to data-dir/state.json and restores it on startup.
-	if cfg.Mode == config.ModePersistent {
-		slog.Info("starting in persistent mode (file-backed): state will be saved to state.json")
-	} else {
-		slog.Info("starting in memory mode")
+	if cfg.Ephemeral {
+		slog.Info("starting in ephemeral mode: state will not be persisted")
+		return appStores{
+			resources:  store.NewMemoryResourceStore(),
+			messages:   sqsstore.NewBundledSQSStore(),
+			dynamo:     dynamostore.NewBundledDynamoDBItemStore(),
+			s3Meta:     s3store.NewMemoryS3ObjectMetaStore(),
+			blobs:      blobfs.NewMemoryBlobStore(),
+			secrets:    secretprovider.NewMemorySecretStore(),
+			parameters: paramprovider.NewMemoryParameterStore(),
+			stsSession: stsprovider.NewMemorySessionStore(),
+			kinesis:    kinesisstore.NewMemoryKinesisStore(),
+			ecr:        ecrstore.NewMemoryECRStore(),
+			sfn:        sfnstore.NewMemoryStepFunctionsStore(),
+		}, nil
 	}
+
+	// Default: memory stores + session blob dir; snapshot loop saves state.json periodically.
+	slog.Info("starting with memory stores: state will be saved periodically to state.json")
 	sessionBlobs, err := blobfs.NewSessionBlobStore(instanceID)
 	if err != nil {
 		slog.Warn("session blob store unavailable, falling back to MemoryBlobStore", "err", err)
@@ -504,14 +520,11 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 }
 
 // bootstrapDEK loads or creates the server data-encryption key.
-// In persistent mode it is persisted in PostgreSQL (wrapped by KMSMasterKey if set).
-// In lite mode a fresh ephemeral key is generated each startup.
+// With a DSN (Postgres backend) the DEK is persisted in PostgreSQL, wrapped by KMSMasterKey if set.
+// Otherwise a fresh ephemeral key is generated each startup.
 func bootstrapDEK(ctx context.Context, cfg *config.Config, s appStores) ([]byte, error) {
-	if cfg.Mode == config.ModePersistent {
-		pgStore, ok := s.resources.(*store.PostgresResourceStore)
-		if !ok {
-			return nil, fmt.Errorf("kms bootstrap: expected *store.PostgresResourceStore in persistent mode")
-		}
+	if cfg.DSN != "" {
+		pgStore := s.resources.(*store.PostgresResourceStore)
 		keyStore := keyprovider.NewPostgresKeyStore(pgStore.Pool(), nil)
 		dek, err := keyprovider.LoadOrCreateDEK(ctx, keyStore, cfg.KMSMasterKey)
 		if err != nil {
@@ -636,7 +649,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	tableProvider := table.NewWithStreams(s.resources, s.dynamo, streams)
 
 	var keyStore keyprovider.KeyStore
-	if cfg.Mode == config.ModePersistent {
+	if cfg.DSN != "" {
 		pgStore := s.resources.(*store.PostgresResourceStore)
 		keyStore = keyprovider.NewPostgresKeyStore(pgStore.Pool(), dek)
 	} else {
@@ -1065,7 +1078,7 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 // ─── ecr provider factory ─────────────────────────────────────────────────────
 
 func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecrprovider.Provider {
-	if cfg.Mode == config.ModePersistent && cfg.ExecutorMode == "k8s" {
+	if cfg.DSN != "" && cfg.ExecutorMode == "k8s" {
 		k8sNS := cfg.K8sNamespace
 		if k8sNS == "" {
 			k8sNS = "jaiscloud"
@@ -1089,7 +1102,7 @@ func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecr
 // ─── kinesis provider factory ─────────────────────────────────────────────────
 
 func buildKinesisProvider(ctx context.Context, cfg *config.Config, s appStores) *kinesisprovider.Provider {
-	if cfg.Mode == config.ModePersistent {
+	if cfg.DSN != "" {
 		dataDir := filepath.Join(cfg.BlobDir, "kinesis")
 		mock, err := kinesisprovider.NewMockServer(cfg.AccountID, dataDir)
 		if err != nil {
@@ -1130,7 +1143,12 @@ func envCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("JAISCLOUD_PORT=%d\n", cfg.Port)
-			fmt.Printf("JAISCLOUD_MODE=%s\n", cfg.Mode)
+			if cfg.Ephemeral {
+				fmt.Printf("JAISCLOUD_EPHEMERAL=true\n")
+			}
+			if cfg.DSN != "" {
+				fmt.Printf("JAISCLOUD_DSN=%s\n", cfg.DSN)
+			}
 			fmt.Printf("JAISCLOUD_CLOUD=aws\n")
 			fmt.Printf("JAISCLOUD_REGION=%s\n", cfg.Region)
 			fmt.Printf("JAISCLOUD_ACCOUNT_ID=%s\n", cfg.AccountID)

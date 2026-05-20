@@ -54,7 +54,7 @@ curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaisclo
 sudo dpkg -i jaiscloud-aws_linux_amd64.deb
 ```
 
-Once installed, start the emulator in memory mode (in-memory, no dependencies):
+Once installed, start the emulator (state is saved to `~/.jaiscloud/jaiscloud-aws/state.json` by default):
 
 ```bash
 jaiscloud-aws start
@@ -82,13 +82,13 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 
 ### Setup matrix
 
-| Goal | Mode | Pre-built binary | Docker / K8s | From source |
+| Goal | Storage | Pre-built binary | Docker / K8s | From source |
 |---|---|---|---|---|
-| Run unit tests / CI pipelines | **memory** (in-memory) | ✅ | ✅ | ✅ |
-| Build and test AWS integrations locally | **memory** or **persistent** | ✅ (memory only) | ✅ | ✅ |
-| State survives server restarts | **persistent** (file-backed or PostgreSQL) | ✅ | ✅ | ✅ |
-| Run EMR/Spark API calls that return mock results instantly | **persistent + Mock executor** | ✅ | ✅ | ✅ |
-| Actually run a Spark job end-to-end | **persistent + K8s executor** | — | ✅ | ✅ |
+| Run unit tests / CI pipelines | `--ephemeral` (no disk writes) | ✅ | ✅ | ✅ |
+| Build and test AWS integrations locally | Default (state.json) or `--dsn` | ✅ | ✅ | ✅ |
+| State survives server restarts | Default (state.json) or `--dsn` | ✅ | ✅ | ✅ |
+| Run EMR/Spark API calls that return mock results instantly | Any storage + mock executor | ✅ | ✅ | ✅ |
+| Actually run a Spark job end-to-end | `--dsn` + K8s executor | — | ✅ | ✅ |
 
 ---
 
@@ -100,9 +100,10 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
   - [Building from source](#building-from-source-requires-go-126)
 - [Service Reference](#service-reference)
 - [Prerequisites](#prerequisites)
-- [Mode 1 — Memory (in-memory, no dependencies)](#mode-1--memory-in-memory-no-dependencies)
-- [Mode 2 — Persistent (file-backed or PostgreSQL)](#mode-2--persistent-file-backed-or-postgresql)
-- [Mode 3 — JaisCloud on Kubernetes](#mode-3--jaiscloud-on-kubernetes)
+- [Storage Model](#storage-model)
+- [Setup 1 — Default (memory + periodic saves)](#setup-1--default-memory--periodic-saves)
+- [Setup 2 — PostgreSQL backend](#setup-2--postgresql-backend)
+- [Setup 3 — JaisCloud on Kubernetes](#setup-3--jaiscloud-on-kubernetes)
 - [EMR Spark — Mock Mode (instant results)](#emr-spark--mock-mode-instant-results)
 - [EMR Spark — Kubernetes Executor (real Spark jobs)](#emr-spark--kubernetes-executor-real-spark-jobs)
 - [Multi-Account Support](#multi-account-support)
@@ -116,9 +117,9 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
   - [Spark driver pod credentials](#spark-driver-pod-credentials)
 - [Running Tests](#running-tests)
   - [Unit tests](#unit-tests-no-server-needed)
-  - [Integration tests (memory mode)](#integration-tests)
+  - [Integration tests](#integration-tests)
   - [Multi-account integration tests](#multi-account-integration-tests)
-  - [Persistent mode integration tests](#full-mode-integration-tests)
+  - [Postgres backend integration tests](#postgres-backend-integration-tests)
   - [Spark e2e tests](#spark-e2e-tests-spark_e2e-build-tag)
   - [Lambda e2e tests](#lambda-e2e-tests-lambda_e2e-build-tag)
     - [Lambda Docker mode](#lambda-docker-mode)
@@ -160,13 +161,13 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 
 | Tier | Meaning |
 |---|---|
-| ✅ Full | Real business logic. Passes the AWS SDK integration test suite. State persists in Postgres in persistent mode. |
+| ✅ Full | Real business logic. Passes the AWS SDK integration test suite. State persists in Postgres when `--dsn` is set. |
 | ⚙️ Metadata-only | Wire protocol + resource CRUD (create, describe, delete, tag). No execution engine — instances don't run, clusters don't provision VMs. |
 | 🔌 Stub | Endpoint exists, returns plausible responses. Limited operation coverage. |
 
 ### Service implementation matrix
 
-| Service | Tier | Memory-mode storage | Persistent-mode storage | Integration tests |
+| Service | Tier | Default storage | Postgres storage (`--dsn`) | Integration tests |
 |---|---|---|---|---|
 | Amazon S3 | ✅ Full | In-memory + MemoryBlobStore | PostgreSQL + LocalFS blobs | `tests/integration/s3_*.go` |
 | Amazon SQS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sqs_*.go` |
@@ -299,9 +300,9 @@ go version
 
 If Go is not installed or out of date: https://go.dev/dl/
 
-### Required for persistent mode (PostgreSQL) and Spark
+### Required for PostgreSQL backend and Spark
 
-**Docker** — needed to run PostgreSQL (persistent mode) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud-aws:latest`.
+**Docker** — needed to run PostgreSQL (`--dsn`) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `ghcr.io/jaisrajms/jaiscloud-aws:latest`.
 
 ```bash
 docker version
@@ -317,7 +318,7 @@ kubectl version --client
 # Expected: Client Version: v1.28.x or higher
 ```
 
-**A Kubernetes cluster** — Docker Desktop (easiest), kind, or minikube. See [Mode 3](#mode-3--jaiscloud-on-kubernetes) for setup.
+**A Kubernetes cluster** — Docker Desktop (easiest), kind, or minikube. See [Setup 3](#setup-3--jaiscloud-on-kubernetes) for setup.
 
 ### Optional (for smoke testing only)
 
@@ -330,9 +331,22 @@ aws --version
 
 ---
 
-## Mode 1 — Memory (in-memory, no dependencies)
+## Storage Model
 
-**What it is:** JaisCloud keeps all state in RAM. No database, no Docker, no external services. Everything resets when the server stops. This is the right choice for unit tests, CI, and first-time setup.
+JaisCloud has three storage configurations — no `--mode` flag. Two flags drive the decision: `--dsn` and `--ephemeral`.
+
+| Invocation | Storage | Survives restart? | When to use |
+|---|---|---|---|
+| `./jaiscloud-aws start` | Memory + periodic `state.json` saves | Yes (soft) | Local dev, team environments without Postgres |
+| `./jaiscloud-aws start --dsn "postgres://..."` | PostgreSQL | Yes (durable) | Shared deployments, production-grade persistence |
+| `./jaiscloud-aws start --ephemeral` | Memory only, no disk writes | No | CI pipelines, unit tests, guaranteed clean state |
+| `--ephemeral` + `--dsn` | — | — | **Startup error: mutually exclusive** |
+
+---
+
+## Setup 1 — Default (memory + periodic saves)
+
+**What it is:** JaisCloud keeps all state in memory and saves a `state.json` snapshot to `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws/`) every 30 seconds. State is restored from `state.json` on the next startup — no database needed.
 
 **What you need:** Go only (or the pre-built binary — no Go required).
 
@@ -355,7 +369,7 @@ This produces a `jaiscloud-aws` binary in the current directory. You must rebuil
 Expected output:
 ```
 INFO  executor  lambda=mock  spark=mock
-INFO  jaiscloud started  port=4566  mode=memory
+INFO  jaiscloud started  port=4566  mode=memory+saves
 ```
 
 The server is now listening on port 4566. Leave this terminal open, or run it in the background with `./jaiscloud-aws start &`.
@@ -422,24 +436,19 @@ This wipes all in-memory state. Useful between test runs without restarting the 
 | `--port 9000` | Listen on a different port |
 | `--region eu-west-1` | Change the region reported in responses |
 | `--account-id 123456789012` | Set a custom default account ID in ARNs |
-| `--data-dir ~/.jaiscloud` | Save state periodically to `state.json` (survives restarts) |
+| `--data-dir /var/lib/jaiscloud` | Override the directory used for `state.json` and named snapshots |
 | `--fresh-start` | Skip loading existing `state.json` on startup (start clean) |
+| `--ephemeral` | Disable all saves — state is lost on exit (CI / unit tests) |
 | `--log-level debug` | Print every request and response (very verbose) |
 | `--metrics` | Enable Prometheus metrics at `http://localhost:4566/metrics` |
 
 ---
 
-## Mode 2 — Persistent (file-backed or PostgreSQL)
+## Setup 2 — PostgreSQL backend
 
-**What it is:** JaisCloud state survives server restarts. Use this when you need a persistent dev environment, shared team setup, or you are testing restart behaviour.
+**What it is:** all resource state is stored in PostgreSQL. Use this for shared team environments, multi-instance deployments, or when you need full ACID durability.
 
-**What you need:** Go (or the pre-built binary). Docker is only required if you want PostgreSQL-backed persistence.
-
-**What is different from memory mode:** the only difference is where data lives. All AWS APIs work identically.
-
-There are two sub-modes:
-- **File-backed** (no `--dsn`): stores stay in memory but are saved periodically to `state.json` in `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws`). On the next startup, state is restored automatically. No external dependencies.
-- **PostgreSQL-backed** (`--dsn` set): all store state is persisted in PostgreSQL. Use this for shared team environments or when you need full ACID durability.
+**What you need:** Go (or the pre-built binary) and Docker (to run PostgreSQL).
 
 ### Step 1 — Start PostgreSQL
 
@@ -488,12 +497,11 @@ docker exec jaiscloud-pg pg_isready -U jaiscloud
 # /var/run/postgresql:5432 - accepting connections
 ```
 
-### Step 2 — Start JaisCloud in persistent mode
+### Step 2 — Start JaisCloud with the PostgreSQL backend
 
 ```bash
 go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 ./jaiscloud-aws start \
-  --mode persistent \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
@@ -501,10 +509,10 @@ Expected output:
 ```
 INFO  executor      lambda=mock  spark=mock
 INFO  blob storage  dir=/Users/yourname/.jaiscloud/blobs
-INFO  jaiscloud started  port=4566  mode=persistent
+INFO  jaiscloud started  port=4566  mode=postgres
 ```
 
-> **Where do S3 blobs go?** In PostgreSQL-backed persistent mode, S3 object *bodies* are written to a local `LocalFSBlobStore` under `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws`). They survive server restarts. S3 *metadata* (bucket names, keys, sizes, ETags) goes into PostgreSQL. In memory mode, blobs are held in a session-scoped temporary directory and included in snapshot exports.
+> **Where do S3 blobs go?** With `--dsn` (PostgreSQL backend), S3 object *bodies* are written to a `LocalFSBlobStore` under `--data-dir` (default: `~/.jaiscloud/jaiscloud-aws`). They survive server restarts. S3 *metadata* (bucket names, keys, sizes, ETags) goes into PostgreSQL. Without `--dsn`, blobs are held in a session-scoped temporary directory and included in snapshot exports.
 
 JaisCloud runs SQL migrations automatically on every startup — no manual schema setup is needed.
 
@@ -517,8 +525,8 @@ Create a resource, restart the server, and confirm it is still there:
 aws --endpoint-url http://localhost:4566 --region us-east-1 \
     sqs create-queue --queue-name persist-test
 
-# Stop and restart the server (Ctrl+C then restart, or kill & restart if running in background)
-./jaiscloud-aws start --mode persistent --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
+# Stop and restart the server (Ctrl+C then restart)
+./jaiscloud-aws start --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 
 # Queue should still be there
 aws --endpoint-url http://localhost:4566 --region us-east-1 \
@@ -526,38 +534,19 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
 # {"QueueUrl":"http://localhost:4566/000000000000/persist-test"}
 ```
 
-### Useful env vars for persistent mode
-
-You can use environment variables instead of flags:
+### Using environment variables
 
 ```bash
-export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 ./jaiscloud-aws start
 ```
 
-### File-backed persistent mode (no PostgreSQL)
-
-If you omit `--dsn`, JaisCloud uses in-memory stores and saves state periodically to `state.json`:
-
-```bash
-# Persistent mode, file-backed — state saved to ~/.jaiscloud/jaiscloud-aws/state.json
-./jaiscloud-aws start --mode persistent
-
-# Explicit data directory
-./jaiscloud-aws start --mode persistent --data-dir /var/lib/jaiscloud
-
-# Start fresh, ignoring any previous state.json
-./jaiscloud-aws start --mode persistent --fresh-start
-```
-
-Relevant env vars for file-backed mode:
+### Relevant env vars
 
 | Env var | Default | Description |
 |---|---|---|
-| `JAISCLOUD_DATA_DIR` | `~/.jaiscloud/jaiscloud-aws` | Directory where `state.json` and named snapshots are stored |
-| `JAISCLOUD_SNAPSHOT_INTERVAL` | `30s` | How often the snapshot loop saves `state.json` |
-| `JAISCLOUD_FRESH_START` | `false` | Skip loading previous `state.json` on startup |
+| `JAISCLOUD_DSN` | — | PostgreSQL connection string |
+| `JAISCLOUD_DATA_DIR` | `~/.jaiscloud/jaiscloud-aws` | Directory for named snapshots on disk |
 
 ---
 
@@ -577,7 +566,7 @@ postgres://<user>:<password>@<host>:<port>/<database>
 
 ---
 
-## Mode 3 — JaisCloud on Kubernetes
+## Setup 3 — JaisCloud on Kubernetes
 
 **What this is:** running the JaisCloud server itself inside a Kubernetes cluster. This is separate from running Spark jobs on K8s (covered in [EMR Spark — Kubernetes Executor](#emr-spark--kubernetes-executor-real-spark-jobs)).
 
@@ -621,7 +610,7 @@ This runs in order:
 2. Applies `deploy/k8s/namespace.yaml` — creates the `jaiscloud` namespace
 3. Applies `deploy/k8s/rbac.yaml` — grants JaisCloud permission to create Spark Jobs and Lambda Pods
 4. Applies `deploy/k8s/postgres.yaml` — starts a PostgreSQL pod
-5. Applies `deploy/k8s/jaiscloud.yaml` — starts JaisCloud in persistent mode, wired to the postgres pod
+5. Applies `deploy/k8s/jaiscloud.yaml` — starts JaisCloud with the PostgreSQL backend, wired to the postgres pod
 
 Wait for both pods to be running:
 ```bash
@@ -680,7 +669,7 @@ kubectl logs -n jaiscloud deployment/postgres -f
 
 **When to use this:** whenever you need the EMR API to work (your code creates clusters, submits steps, polls status) but you do not need to execute real Spark code. This covers most unit tests and integration tests.
 
-**What you need:** JaisCloud running in memory or persistent mode.
+**What you need:** JaisCloud running (any storage configuration).
 
 ### How to enable
 
@@ -778,8 +767,8 @@ aws --endpoint-url http://localhost:4566 \
 **When to use this:** end-to-end testing of actual Spark logic — reading from S3, writing Parquet, running transformations. Not needed just to test EMR API calls.
 
 **What you need:**
-- JaisCloud running (memory or persistent mode)
-- A Kubernetes cluster (Docker Desktop, kind, or minikube — see [Mode 3](#mode-3--jaiscloud-on-kubernetes))
+- JaisCloud running (any storage configuration)
+- A Kubernetes cluster (Docker Desktop, kind, or minikube — see [Setup 3](#setup-3--jaiscloud-on-kubernetes))
 - A Spark Docker image accessible from the cluster
 
 ### How it works
@@ -853,7 +842,7 @@ export JAISCLOUD_K8S_NAMESPACE=jaiscloud
 export JAISCLOUD_K8S_SA=spark-driver              # SA for the spark-submit pod
 export JAISCLOUD_K8S_SPARK_SA=spark-driver         # SA for executor pods
 
-./jaiscloud-aws start --mode persistent \
+./jaiscloud-aws start \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
@@ -861,7 +850,7 @@ Expected output:
 ```
 INFO  executor      lambda=k8s  spark=k8s
 INFO  blob storage  dir=/home/yourname/.jaiscloud/blobs
-INFO  jaiscloud started  port=4566  mode=persistent
+INFO  jaiscloud started  port=4566  mode=postgres
 ```
 
 > **Why two service accounts?** `JAISCLOUD_K8S_SA` is the service account the Spark *driver pod* runs as — it needs permission to create executor pods. `JAISCLOUD_K8S_SPARK_SA` is forwarded to Spark as the service account for *executor pods*. They can be the same SA (as above) or different ones if you want finer-grained RBAC. See [JAISCLOUD_K8S_SA vs JAISCLOUD_K8S_SPARK_SA](#jaiscloud_k8s_sa-vs-jaiscloud_k8s_spark_sa) for details.
@@ -1153,7 +1142,7 @@ When Spark jobs run in K8s mode, the driver pod needs to reach JaisCloud's S3 en
 ```bash
 export JAISCLOUD_AWS_EMULATOR_ENDPOINT=http://jaiscloud.jaiscloud.svc:4566
 export JAISCLOUD_EXECUTOR_MODE=k8s
-./jaiscloud-aws start --mode persistent --dsn "postgres://..."
+./jaiscloud-aws start --dsn "postgres://..."
 ```
 
 JaisCloud then injects the following into every spark-submit pod:
@@ -1545,9 +1534,9 @@ go test -race -run TestExport ./tests/integration/multiaccount/
 
 ---
 
-### Persistent mode integration tests
+### Postgres backend integration tests
 
-Persistent mode tests require a running PostgreSQL instance and a JaisCloud server started with `--mode persistent`. They share the same test files as memory mode integration tests (`tests/integration/`) but run against a persistent store.
+Postgres backend tests require a running PostgreSQL instance and a JaisCloud server started with `--dsn`. They share the same test files as the standard integration tests (`tests/integration/`) but run against a PostgreSQL store.
 
 #### Prerequisites
 
@@ -1571,18 +1560,17 @@ docker run -d \
 docker exec jaiscloud-pg pg_isready -U jaiscloud
 ```
 
-#### 2. Build and start JaisCloud in persistent mode
+#### 2. Build and start JaisCloud with the PostgreSQL backend
 
 ```bash
 go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 ./jaiscloud-aws start \
-  --mode persistent \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 ```
 
 Migrations run automatically on startup. You should see:
 ```
-INFO jaiscloud started port=4566 mode=persistent
+INFO jaiscloud started port=4566 mode=postgres
 ```
 
 #### 3. Run the integration tests
@@ -1602,7 +1590,7 @@ aws --endpoint-url http://localhost:4566 --region us-east-1 \
 
 # Kill and restart the server
 kill %1
-./jaiscloud-aws start --mode persistent \
+./jaiscloud-aws start \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" &
 
 # Queue should still be there
@@ -1630,7 +1618,7 @@ The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notific
 | Go | 1.26 | Test runner |
 | Docker | 20+ | Required for Docker mode; used by K8s mode to build images |
 | PostgreSQL | 14+ | JaisCloud full-mode store |
-| JaisCloud server | latest | Running in `--mode persistent` |
+| JaisCloud server | latest | Running with `--dsn` (PostgreSQL backend) |
 
 Use the Makefile to start the server and run tests:
 
@@ -1983,13 +1971,16 @@ Iceberg tests run a real Spark SQL job via Docker, write Iceberg tables to JaisC
 | Go | 1.26 | Test runner |
 | Docker | 20+ | Runs Spark SQL container |
 | curl | any | JAR download script |
-| JaisCloud (persistent mode) | latest | S3, Glue, DynamoDB store |
+| JaisCloud | latest | S3, Glue, DynamoDB store |
 
-JaisCloud must be running in persistent mode (memory mode works too — Glue, S3, and DynamoDB are all in-memory):
+Start JaisCloud (any storage configuration works — Glue, S3, and DynamoDB are all in-memory by default):
 
 ```bash
-./jaiscloud-aws start --mode persistent \
-  --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
+# Default (memory + periodic saves)
+./jaiscloud-aws start
+
+# Or with PostgreSQL
+./jaiscloud-aws start --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud"
 ```
 
 #### 1. Download Iceberg JARs
@@ -2310,9 +2301,8 @@ No extra configuration needed. This is the default when `JAISCLOUD_EXECUTOR_MODE
 # Minimal — everything defaults to in-memory mock
 ./jaiscloud-aws start
 
-# Explicit mock with full persistence
+# Explicit mock with PostgreSQL backend
 ./jaiscloud-aws start \
-  --mode persistent \
   --dsn "postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud" \
   --executor-mode mock
 ```
@@ -2328,7 +2318,6 @@ Requires a running Docker daemon. Each Lambda function gets a warm Docker contai
 ```bash
 # ── Core ──────────────────────────────────────────────────────────────────────
 export JAISCLOUD_EXECUTOR_MODE=docker
-export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 
 # ── Lambda ────────────────────────────────────────────────────────────────────
@@ -2382,7 +2371,6 @@ Requires a reachable Kubernetes cluster. Each Lambda function gets a warm Pod + 
 ```bash
 # ── Core ──────────────────────────────────────────────────────────────────────
 export JAISCLOUD_EXECUTOR_MODE=k8s
-export JAISCLOUD_MODE=persistent
 export JAISCLOUD_DSN=postgres://jaiscloud:jaiscloud@localhost:5433/jaiscloud
 
 # ── Kubernetes API server ─────────────────────────────────────────────────────
@@ -2464,7 +2452,7 @@ export JAISCLOUD_PLATFORM_TLS_CA_SOURCES='[
   {"name":"azure-ca","source":{"kind":"configMap","name":"azure-ca-bundle","key":"ca.crt"}}
 ]'
 
-./jaiscloud-azure start --mode persistent --dsn "postgres://..."
+./jaiscloud-azure start --dsn "postgres://..."
 ```
 
 **GCP (K8s executor, Secret-based SA key):**
@@ -2479,7 +2467,7 @@ export JAISCLOUD_GCP_SA_SECRET=my-gcp-sa-key-secret   # K8s Secret in the execut
 
 export JAISCLOUD_PLATFORM_TLS_ENABLED=false   # GCP root CAs already trusted by default JVM
 
-./jaiscloud-gcp start --mode persistent --dsn "postgres://..."
+./jaiscloud-gcp start --dsn "postgres://..."
 ```
 
 ---

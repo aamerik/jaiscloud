@@ -14,26 +14,19 @@ import (
 	"github.com/spf13/viper"
 )
 
-type Mode string
-
-const (
-	// ModeMemory is the default mode: all state is in-memory (no PostgreSQL required).
-	ModeMemory Mode = "memory"
-	// ModePersistent uses PostgreSQL for durable storage across restarts.
-	ModePersistent Mode = "persistent"
-)
-
 type Config struct {
 	Port      int
-	Mode      Mode
+	// Ephemeral disables all state persistence. State is lost on process exit.
+	// Mutually exclusive with DSN. Intended for CI, unit tests, and throw-away runs.
+	Ephemeral bool
 	Cloud     model.Cloud // Cloud provider to emulate: aws (default), azure, gcp
 	LogLevel  string
 	Region    string
 	AccountID string
-	DSN       string // PostgreSQL DSN (optional; if set with Mode==persistent, enables Postgres-backed stores)
+	DSN       string // PostgreSQL DSN; when set all state is stored in PostgreSQL
 	// BlobDir is deprecated; use DataDir instead. Kept for backward compatibility.
 	BlobDir string // Deprecated: use DataDir
-	DataDir string // Root data directory for persistent-file backend (default: ~/.jaiscloud/<binary>)
+	DataDir string // Root data directory for state.json saves and named snapshots (default: ~/.jaiscloud/<binary>)
 	// FreshStart wipes existing state on startup before initializing stores.
 	FreshStart bool
 	// SnapshotInterval controls how often the file-backend snapshot loop saves state (default: 30s).
@@ -126,7 +119,7 @@ func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
 
 func Load() (*Config, error) {
 	viper.SetDefault("port", 4566)
-	viper.SetDefault("mode", "memory")
+	viper.SetDefault("ephemeral", false)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("region", "us-east-1")
 	viper.SetDefault("account_id", "000000000000")
@@ -175,7 +168,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Port:                viper.GetInt("port"),
-		Mode:                Mode(viper.GetString("mode")),
+		Ephemeral:           viper.GetBool("ephemeral"),
 		LogLevel:            viper.GetString("log_level"),
 		Region:              viper.GetString("region"),
 		AccountID:           viper.GetString("account_id"),
@@ -206,14 +199,8 @@ func Load() (*Config, error) {
 		OIDCIssuers:         nil, // populated below from oidc_issuers
 	}
 
-	// DSN must not be set for memory mode.
-	// Detect via the env var since viper cannot distinguish between default from explicit for flags.
-	if cfg.Mode == ModeMemory && cfg.DSN != "" && os.Getenv("JAISCLOUD_DSN") != string(ModeMemory) {
-		return nil, fmt.Errorf("JAISCLOUD_DSN is set but mode is memory: either unset JAISCLOUD_DSN or set mode to persistent")
-	}
-
-	if cfg.Mode != ModeMemory && cfg.Mode != ModePersistent {
-		return nil, fmt.Errorf("invalid mode %q: must be memory or persistent", cfg.Mode)
+	if cfg.Ephemeral && cfg.DSN != "" {
+		return nil, fmt.Errorf("--ephemeral and --dsn are mutually exclusive: ephemeral mode runs with no persistence, a DSN implies PostgreSQL storage")
 	}
 
 	// Parse OIDC_ISSUERS: "issuer1=jwks_url1,issuer2=jwks_url2"

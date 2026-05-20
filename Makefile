@@ -30,12 +30,12 @@ JAISCLOUD_DSN  ?= postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
 JAISCLOUD_PORT ?= 4566
 JAISCLOUD_HOST ?= http://localhost:$(JAISCLOUD_PORT)
 
-# Per-mode ports for test-integration — allows memory and persistent suites to run in parallel
-JAISCLOUD_PORT_MEMORY     ?= 4566
-JAISCLOUD_PORT_PERSISTENT ?= 4566
-_INTEGRATION_MODE         := $(shell printf '%s' '$(MODE)' | tr '[:upper:]' '[:lower:]')
-_INTEGRATION_PORT         := $(if $(filter persistent,$(_INTEGRATION_MODE)),$(JAISCLOUD_PORT_PERSISTENT),$(JAISCLOUD_PORT_MEMORY))
-_INTEGRATION_HOST         := http://localhost:$(_INTEGRATION_PORT)
+# Per-mode ports for test-integration — allows ephemeral and postgres suites to run in parallel
+JAISCLOUD_PORT_EPHEMERAL ?= 4566
+JAISCLOUD_PORT_POSTGRES  ?= 4566
+_INTEGRATION_MODE        := $(shell printf '%s' '$(MODE)' | tr '[:upper:]' '[:lower:]')
+_INTEGRATION_PORT        := $(if $(filter postgres,$(_INTEGRATION_MODE)),$(JAISCLOUD_PORT_POSTGRES),$(JAISCLOUD_PORT_EPHEMERAL))
+_INTEGRATION_HOST        := http://localhost:$(_INTEGRATION_PORT)
 
 # ─── Local Postgres container ─────────────────────────────────────────────────
 PG_CONTAINER ?= jaiscloud-postgres
@@ -54,7 +54,7 @@ IMAGE             := jaiscloud-aws
 JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
 
 .PHONY: lint lint-pagination help build test docker clean \
-        server-memory server-persistent server-docker server-k8s server-persistent-all \
+        server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
         test-integration \
@@ -141,13 +141,17 @@ test: ## Run all unit tests with the race detector  (no server needed)
 
 ##@ Server — foreground (Ctrl-C to stop)
 
-server-memory: build ## In-memory stores, mock executors — no postgres required
+server-memory: build ## Default mode: memory stores + periodic state.json saves, mock executors
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start
 
-server-persistent: build ## Postgres stores, mock executors — requires JAISCLOUD_DSN
+server-ephemeral: build ## Ephemeral mode: no persistence, clean slate on every start (CI/tests)
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
-	  ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)"
+	  ./jaiscloud-aws start --ephemeral
+
+server-postgres: build ## Postgres backend, mock executors — requires JAISCLOUD_DSN
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-aws start --dsn "$(JAISCLOUD_DSN)"
 
 server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
@@ -158,7 +162,7 @@ server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda
 server-k8s: _check-k8s-prereq up-k8s ## Persistent mode + Spark and Lambda via K8s  (requires docker-desktop K8s)
 	kubectl port-forward -n jaiscloud svc/jaiscloud $(JAISCLOUD_PORT):4566
 
-server-persistent-all: server-k8s ## Alias for server-k8s (persistent mode, all executors via K8s)
+server-postgres-all: server-k8s ## Alias for server-k8s (postgres backend, all executors via K8s)
 
 stop-server: ## Stop background jaiscloud-aws process and clean up Lambda/Spark resources
 	@pkill -f "jaiscloud-aws start" 2>/dev/null && echo "jaiscloud-aws stopped" || echo "jaiscloud-aws was not running"
@@ -226,27 +230,27 @@ postgres-down: ## Stop and remove the local Postgres container  (volume is kept 
 
 ##@ Integration tests
 
-# MODE controls the store backend. The value is case-insensitive (persistent/Persistent/PERSISTENT all work).
+# MODE controls the store backend. The value is case-insensitive (postgres/Postgres/POSTGRES all work).
 # Note: the variable NAME must be uppercase MODE — Make variable names are case-sensitive.
 
-test-integration: ## Run tests/integration/ — MODE=memory|persistent required; TEST_RUN=TestSQS to target one service
+test-integration: ## Run tests/integration/ — MODE=ephemeral|postgres required; TEST_RUN=TestSQS to target one service
 	@if [ -z "$(MODE)" ]; then \
 	  printf "\n\033[1mUsage:\033[0m\n"; \
-	  printf "  make test-integration \033[36mMODE=memory\033[0m               run against in-memory stores (no postgres)\n"; \
-	  printf "  make test-integration \033[36mMODE=persistent\033[0m               run against postgres (resets data)\n"; \
-	  printf "  make test-integration \033[36mMODE=persistent TEST_RUN=TestS3\033[0m  target a single service\n\n"; \
+	  printf "  make test-integration \033[36mMODE=ephemeral\033[0m               run against ephemeral in-memory stores (no postgres)\n"; \
+	  printf "  make test-integration \033[36mMODE=postgres\033[0m                run against postgres (resets data)\n"; \
+	  printf "  make test-integration \033[36mMODE=postgres TEST_RUN=TestS3\033[0m  target a single service\n\n"; \
 	  printf "\033[33mMODE is required.\033[0m\n\n"; \
 	  exit 1; \
 	fi
 	@_mode=$$(printf '%s' "$(MODE)" | tr '[:upper:]' '[:lower:]'); \
-	if [ "$$_mode" != "memory" ] && [ "$$_mode" != "persistent" ]; then \
-	  printf "\033[31mERROR: MODE must be 'memory' or 'persistent', got '$(MODE)'\033[0m\n"; \
+	if [ "$$_mode" != "ephemeral" ] && [ "$$_mode" != "postgres" ]; then \
+	  printf "\033[31mERROR: MODE must be 'ephemeral' or 'postgres', got '$(MODE)'\033[0m\n"; \
 	  exit 1; \
 	fi; \
-	if [ "$$_mode" = "persistent" ]; then \
+	if [ "$$_mode" = "postgres" ]; then \
 	  docker info > /dev/null 2>&1 || { printf "\033[31mERROR: Docker is not running\033[0m\n"; exit 1; }; \
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
-	  printf   "\033[1m│   JaisCloud Integration Suite — Persistent Mode (Postgres)  │\033[0m\n"; \
+	  printf   "\033[1m│   JaisCloud Integration Suite — Postgres Backend     │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
 	  printf "\033[1m[1/4]\033[0m Stopping any running jaiscloud-aws on port $(_INTEGRATION_PORT)...\n"; \
 	  lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
@@ -262,24 +266,24 @@ test-integration: ## Run tests/integration/ — MODE=memory|persistent required;
 	    printf "  Postgres not running — starting\n"; \
 	    $(MAKE) postgres-up; \
 	  fi; \
-	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws in persistent mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start --mode persistent --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
+	  printf "\033[1m[4/4]\033[0m Starting jaiscloud-aws with postgres backend...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start --dsn \"$(JAISCLOUD_DSN)\"\033[0m\n"; \
 	  JAISCLOUD_PORT=$(_INTEGRATION_PORT) \
-	    ./jaiscloud-aws start --mode persistent --dsn "$(JAISCLOUD_DSN)" \
-	    > /tmp/jaiscloud-persistent.log 2>&1 & \
+	    ./jaiscloud-aws start --dsn "$(JAISCLOUD_DSN)" \
+	    > /tmp/jaiscloud-postgres.log 2>&1 & \
 	  n=0; until curl -sf $(_INTEGRATION_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-persistent.log\033[0m\n"; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-postgres.log\033[0m\n"; \
 	      lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
 	  done; \
-	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-persistent.log)\033[0m\n"; \
+	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-postgres.log)\033[0m\n"; \
 	else \
 	  printf "\n\033[1m┌──────────────────────────────────────────────────────┐\033[0m\n"; \
-	  printf   "\033[1m│  JaisCloud Integration Suite — Memory Mode (in-memory)  │\033[0m\n"; \
+	  printf   "\033[1m│  JaisCloud Integration Suite — Ephemeral (in-memory) │\033[0m\n"; \
 	  printf   "\033[1m└──────────────────────────────────────────────────────┘\033[0m\n\n"; \
 	  printf "\033[1m[1/3]\033[0m Stopping any running jaiscloud-aws on port $(_INTEGRATION_PORT)...\n"; \
 	  lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
@@ -287,21 +291,21 @@ test-integration: ## Run tests/integration/ — MODE=memory|persistent required;
 	  go build -o jaiscloud-aws ./cmd/jaiscloud-aws/ \
 	    && printf "\033[32m✓ OK\033[0m\n" \
 	    || { printf "\033[31m✗ build failed\033[0m\n"; exit 1; }; \
-	  printf "\033[1m[3/3]\033[0m Starting jaiscloud-aws in memory mode...\n"; \
-	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start\033[0m\n"; \
+	  printf "\033[1m[3/3]\033[0m Starting jaiscloud-aws in ephemeral mode...\n"; \
+	  printf "  \033[2m$ JAISCLOUD_PORT=$(_INTEGRATION_PORT) ./jaiscloud-aws start --ephemeral\033[0m\n"; \
 	  JAISCLOUD_PORT=$(_INTEGRATION_PORT) \
-	    ./jaiscloud-aws start \
-	    > /tmp/jaiscloud-memory.log 2>&1 & \
+	    ./jaiscloud-aws start --ephemeral \
+	    > /tmp/jaiscloud-ephemeral.log 2>&1 & \
 	  n=0; until curl -sf $(_INTEGRATION_HOST)/_jaiscloud/health > /dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 30 ]; then \
-	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-memory.log\033[0m\n"; \
+	      printf "\033[31m  ✗ jaiscloud-aws not healthy — check /tmp/jaiscloud-ephemeral.log\033[0m\n"; \
 	      lsof -ti tcp:$(_INTEGRATION_PORT) | xargs kill 2>/dev/null || true; \
 	      exit 1; \
 	    fi; \
 	    sleep 1; \
 	  done; \
-	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-memory.log)\033[0m\n"; \
+	  printf "\033[32m  ✓ Ready → $(_INTEGRATION_HOST)  (log: /tmp/jaiscloud-ephemeral.log)\033[0m\n"; \
 	fi
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
 	@go clean -testcache

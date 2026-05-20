@@ -26,8 +26,8 @@ JaisCloud is a free, open-source cloud emulator that lets developers test cloud-
 | | JaisCloud | LocalStack (Community) | Moto |
 |---|---|---|---|
 | **Single static binary** | ✅ | ❌ (Python + Docker) | ❌ (Python library) |
-| **Zero runtime deps (memory mode)** | ✅ | ❌ | ❌ |
-| **Postgres persistence (persistent mode)** | ✅ | 💰 Pro | ❌ |
+| **Zero runtime deps** | ✅ | ❌ | ❌ |
+| **Postgres persistence** | ✅ | 💰 Pro | ❌ |
 | **Exact AWS wire protocol** | ✅ | ✅ | Partial |
 | **Kubernetes-native** | ✅ | Partial | ❌ |
 | **State export / import** | ✅ | ❌ | ❌ |
@@ -38,6 +38,94 @@ JaisCloud is a free, open-source cloud emulator that lets developers test cloud-
 | **Multi-account isolation** | ✅ | Partial | ❌ |
 | **Multi Cloud** | &#x231B; | Partial | ❌ |
 | **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
+
+---
+
+## Key Features
+
+### Portable State Snapshots
+
+JaisCloud can export its complete state to a single gzip tarball and restore it on any other instance — a colleague's laptop, a CI runner, a staging environment — in milliseconds. Every account, every region, every resource type in one file.
+
+**For development teams:**
+- Capture a production-like baseline once and share the tarball across the team — no per-developer setup scripts
+- Reproduce a bug exactly: export the state right before the failure, attach the file to the ticket, and anyone can reproduce it with one command
+- Seed fresh environments from a known-good snapshot instead of running fixture scripts from scratch
+
+**For CI/CD pipelines:**
+- Import a pre-seeded snapshot at pipeline start instead of rebuilding state on every run — test setup that used to take minutes drops to under a second
+- Use named snapshots to revert to a clean baseline between test suites without restarting the emulator
+- Snapshot files travel with your repo or as CI artifacts — no shared state server required
+
+```bash
+# Capture full emulator state
+jaiscloud-aws export -o baseline.tar.gz
+
+# Restore on any machine in any environment
+jaiscloud-aws import -i baseline.tar.gz
+
+# Named snapshots for fine-grained test control
+jaiscloud-aws snapshot create --name before-migration
+# ... run tests that mutate state ...
+jaiscloud-aws snapshot revert before-migration
+```
+
+The snapshot format is an open versioned JSON envelope inside a standard gzip tarball — no proprietary format, no lock-in. Works in every mode: memory, file-backed, and PostgreSQL. **No subscription, no license key, no usage limit.**
+
+---
+
+### Real Spark / EMR Execution
+
+Most cloud emulators simulate compute: they accept the API call and immediately return "job completed." JaisCloud actually runs the Spark job.
+
+In Kubernetes or Docker executor mode, submitting an EMR job causes JaisCloud to:
+
+1. Build the Spark driver and executor spec using the same topology as AWS EMR on EKS
+2. Submit a real `batch/v1 Job` to your local Kubernetes cluster (Docker Desktop, Minikube, or any cluster), or a Docker container in Docker mode
+3. Stream logs and propagate real state transitions — `PENDING → RUNNING → COMPLETED / FAILED` — at the same granularity as AWS
+
+**What this unlocks:**
+- Run the exact PySpark or Scala job you'd submit to AWS EMR against a local cluster — catch serialization bugs, memory pressure, and dependency conflicts before they reach CI
+- Write Functional Integration Tests that exercise the full Spark execution path, not a mock, and run them in any environment with a container runtime
+- The JaisCloud endpoint is injected into the Spark driver pod at submission time, so jobs that read from S3 or write to DynamoDB work against the local emulator with zero code changes
+
+```bash
+# Start with Kubernetes executor
+JAISCLOUD_EXECUTOR_MODE=k8s jaiscloud-aws start
+
+# Submit an EMR on EKS job — JaisCloud submits a real K8s Job
+aws emr-containers start-job-run \
+  --virtual-cluster-id my-cluster \
+  --execution-role-arn arn:aws:iam::000000000000:role/emr-role \
+  --release-label emr-6.10.0-latest \
+  --job-driver '{"sparkSubmitJobDriver":{"entryPoint":"s3://my-bucket/job.py","entryPointArguments":["--input","s3://my-bucket/data"]}}'
+
+# Start with Docker executor (no Kubernetes required)
+JAISCLOUD_EXECUTOR_MODE=docker jaiscloud-aws start
+```
+
+LocalStack does not offer real Spark execution at any price tier. **JaisCloud's executor is open-source and free.**
+
+---
+
+### Everything Free — No Subscription Required
+
+Features that comparable tools restrict to paid tiers ship in every JaisCloud build:
+
+| Feature | JaisCloud | LocalStack Community | LocalStack Pro |
+|---|---|---|---|
+| PostgreSQL persistence | Free | — | Paid |
+| State export / import | Free | — | — |
+| Named snapshots | Free | — | — |
+| Multi-account isolation | Free | Partial | Paid |
+| Prometheus metrics | Free | — | Paid |
+| Browser UI Console | Free (coming) | — | Paid |
+| Spark / EMR execution | Free | — | — |
+| Apache Iceberg (Glue) | Free | — | — |
+| Kubernetes-native executor | Free | Partial | Paid |
+| Single static binary | Free | — | — |
+
+JaisCloud has no tiers, no license keys, and no usage limits. Every feature in this table is Apache-2.0 open-source.
 
 ---
 
@@ -345,33 +433,33 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--port` | `JAISCLOUD_PORT` | `4566` | Listen port |
-| `--mode` | `JAISCLOUD_MODE` | `memory` | `memory` (in-memory, no external deps) or `persistent` (PostgreSQL) |
-| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN (optional; enables Postgres-backed stores when `--mode persistent`) |
-| `--data-dir` | `JAISCLOUD_DATA_DIR` | — | Directory for snapshots and periodic state saves |
+| `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN; when set all state is stored in PostgreSQL |
+| `--ephemeral` | `JAISCLOUD_EPHEMERAL` | `false` | Disable all persistence — state is lost on exit (CI / unit tests) |
+| `--data-dir` | `JAISCLOUD_DATA_DIR` | `~/.jaiscloud/jaiscloud-aws` | Directory for state.json saves and named snapshots |
 | `--region` | `JAISCLOUD_REGION` | `us-east-1` | AWS region reported in responses |
 | `--account-id` | `JAISCLOUD_ACCOUNT_ID` | `000000000000` | Default AWS account ID in ARNs |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | `JAISCLOUD_METRICS` | `false` | Expose Prometheus metrics at `/metrics` |
 | `--executor-mode` | `JAISCLOUD_EXECUTOR_MODE` | — | `mock` / `docker` / `k8s` for Lambda and EMR |
 
-**Memory mode** (default) — all state lives in memory. Zero external dependencies. State is lost on restart. Ideal for unit tests and CI.
+**Default (no flags)** — state lives in memory and is saved periodically to `state.json` in `--data-dir`. Survives restarts. No external dependencies.
 
-**Persistent mode** — state survives restarts. Two sub-modes depending on whether `--dsn` is provided:
-- **File-backed** (no `--dsn`): stores are in-memory, state is saved periodically to `state.json` in `--data-dir`.
-- **Postgres-backed** (`--dsn` set): stores are backed by PostgreSQL.
+**`--dsn`** — all state is stored in PostgreSQL. Required for multi-instance or production deployments. `--data-dir` is still used for named snapshots.
+
+**`--ephemeral`** — purely in-memory with no disk writes. State is lost on exit. Intended for CI pipelines, unit tests, and throw-away runs. Mutually exclusive with `--dsn`.
 
 ```bash
-# Memory mode (default — state lost on restart)
+# Default: state saved to ~/.jaiscloud/jaiscloud-aws/state.json, survives restarts
 jaiscloud-aws start
 
-# Persistent mode, file-backed (state saved to ~/.jaiscloud/jaiscloud-aws/state.json)
-jaiscloud-aws start --mode persistent
+# Explicit data directory for state.json saves and named snapshots
+jaiscloud-aws start --data-dir /var/lib/jaiscloud
 
-# Persistent mode, file-backed with explicit data directory
-jaiscloud-aws start --mode persistent --data-dir ~/.jaiscloud
+# Postgres-backed: all state in PostgreSQL
+jaiscloud-aws start --dsn "postgres://user:pass@localhost:5433/jaiscloud"
 
-# Persistent mode, Postgres-backed
-jaiscloud-aws start --mode persistent --dsn "postgres://user:pass@localhost:5433/jaiscloud"
+# Ephemeral: no persistence, clean slate on every start (CI / tests)
+jaiscloud-aws start --ephemeral
 ```
 
 For the full configuration reference including Kubernetes, Spark, and platform options see the [Developer Guide](DEVELOPER_GUIDE.md).
@@ -422,16 +510,19 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 
 ## UI Console
 
-> **Coming Soon** — The JaisCloud UI Console is currently under active development and will be released in an upcoming version.
+> **Coming Soon** — Under active development; shipping in an upcoming release. **Free and open-source.**
 
-The UI Console will provide a browser-based interface for interacting with the emulator without the CLI or SDK. Planned features include:
+The JaisCloud UI Console is a browser-based interface that mirrors the AWS Management Console experience — without the AWS bill. It ships as part of the single binary: no separate server, no external service, no subscription.
 
-- **Resource browser** — view and manage all emulated resources (queues, tables, buckets, functions, etc.) across accounts and regions
-- **State management** — trigger reset, export, import, and named snapshot operations from the UI
-- **Multi-account switcher** — toggle between emulated accounts and see per-account resource scopes
-- **Metrics dashboard** — visualise request throughput and error rates without a separate Prometheus setup
+**Planned capabilities:**
 
-Watch the [GitHub releases page](https://github.com/jaisrajms/jaiscloud/releases) for announcements.
+- **Resource browser** — list, inspect, create, update, and delete any emulated resource (queues, tables, buckets, Lambda functions, secrets, parameters, and more) across all accounts and regions from a single view
+- **Multi-account switcher** — toggle between emulated AWS accounts and see per-account ARN scopes, exactly as you would in the AWS Console
+- **State management** — trigger reset, export, import, and named snapshot operations from the UI instead of the CLI; share snapshots directly from the browser
+- **CloudWatch dashboard** — visualise metric data, alarm states, and log groups without configuring a separate Prometheus or Grafana instance
+
+
+Watch the [GitHub releases page](https://github.com/jaisrajms/jaiscloud/releases) for the announcement.
 
 ---
 
