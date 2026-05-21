@@ -38,6 +38,7 @@ import (
 	sfnprovider "jaiscloud/internal/aws/provider/stepfunctions"
 	sfndispatcher "jaiscloud/internal/aws/provider/stepfunctions/dispatcher"
 	sfnengine "jaiscloud/internal/aws/provider/stepfunctions/engine"
+	awsstore "jaiscloud/internal/aws/store"
 	ecrstore "jaiscloud/internal/aws/store/ecr"
 	kinesisstore "jaiscloud/internal/aws/store/kinesis"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
@@ -442,6 +443,10 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (app
 		pgStore, err := store.NewPostgresResourceStore(ctx, cfg.DSN, string(cfg.Cloud))
 		if err != nil {
 			return appStores{}, fmt.Errorf("postgres: %w", err)
+		}
+		if err := store.RunMigrations(ctx, pgStore.Pool(), string(cfg.Cloud), awsstore.MigrationFS, "aws"); err != nil {
+			pgStore.Close()
+			return appStores{}, fmt.Errorf("aws migrations: %w", err)
 		}
 		pool := pgStore.Pool()
 		blobs, err := blobfs.NewLocalFSBlobStore(cfg.BlobDir)

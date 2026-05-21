@@ -13,11 +13,6 @@ const (
 	// CodeSnapshotVersion is the envelope schema version this binary writes and accepts.
 	// No MinUpgradableFrom — pre-release, no backward compatibility needed.
 	CodeSnapshotVersion = 3
-
-	// CodeDBSchemaVersion equals the number of SQL migration files embedded in
-	// internal/store/migrations/. Update this constant whenever a new migration
-	// file is added. The RunMigrations function verifies the applied count matches.
-	CodeDBSchemaVersion = 15
 )
 
 var (

@@ -86,7 +86,7 @@ func NewPostgresResourceStore(ctx context.Context, dsn, cloud string) (*Postgres
 		}
 	}
 
-	if err := RunMigrations(ctx, pool, cloud); err != nil {
+	if err := RunMigrations(ctx, pool, cloud, SharedMigrationFS, "shared"); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrations: %w", err)
 	}
