@@ -154,7 +154,7 @@ func TestSFN_StopExecution_Running_Aborted(t *testing.T) {
 	ctx := context.Background()
 	name := sfnName(t)
 
-	// In lite mode executions are instantly SUCCEEDED; we need to test StopExecution
+	// In memory mode executions are instantly SUCCEEDED; we need to test StopExecution
 	// on a SUCCEEDED execution and verify it's a no-op (status stays SUCCEEDED),
 	// but to test the ABORTED path we need to verify the store.StopExecution only
 	// sets status to ABORTED for RUNNING executions.
@@ -179,13 +179,13 @@ func TestSFN_StopExecution_Running_Aborted(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// In lite mode the execution was instantly SUCCEEDED, so StopExecution is a no-op
+	// In memory mode the execution was instantly SUCCEEDED, so StopExecution is a no-op
 	// and status should remain SUCCEEDED (not ABORTED).
 	desc, err := c.DescribeExecution(ctx, &awssfn.DescribeExecutionInput{
 		ExecutionArn: startOut.ExecutionArn,
 	})
 	require.NoError(t, err)
-	// The status is SUCCEEDED because lite mode executes instantly and StopExecution
+	// The status is SUCCEEDED because memory mode executes instantly and StopExecution
 	// is a no-op on terminal executions per the store contract.
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, desc.Status)
 }
@@ -204,7 +204,7 @@ func TestSFN_ListExecutions_FilterByStatus_Succeeded(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Start 3 executions; in lite mode all complete as SUCCEEDED
+	// Start 3 executions; in memory mode all complete as SUCCEEDED
 	for i := 0; i < 3; i++ {
 		_, err := c.StartExecution(ctx, &awssfn.StartExecutionInput{
 			StateMachineArn: createOut.StateMachineArn,
@@ -238,7 +238,7 @@ func TestSFN_ListExecutions_FilterByStatus_Aborted(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// In lite mode executions are instantly SUCCEEDED; filter by ABORTED returns empty
+	// In memory mode executions are instantly SUCCEEDED; filter by ABORTED returns empty
 	for i := 0; i < 2; i++ {
 		_, err := c.StartExecution(ctx, &awssfn.StartExecutionInput{
 			StateMachineArn: createOut.StateMachineArn,
@@ -687,7 +687,7 @@ func TestSFN_SendTaskSuccess_NoOp(t *testing.T) {
 	c := sfnClient(t)
 	ctx := context.Background()
 
-	// In lite mode (no engine), SendTaskSuccess is a no-op and returns success.
+	// In memory mode (no engine), SendTaskSuccess is a no-op and returns success.
 	// In persistent mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskSuccess(ctx, &awssfn.SendTaskSuccessInput{
 		TaskToken: aws.String("fake-token-success"),
@@ -704,7 +704,7 @@ func TestSFN_SendTaskFailure_NoOp(t *testing.T) {
 	c := sfnClient(t)
 	ctx := context.Background()
 
-	// In lite mode (no engine), SendTaskFailure is a no-op and returns success.
+	// In memory mode (no engine), SendTaskFailure is a no-op and returns success.
 	// In persistent mode with a fake token, returns TaskDoesNotExist.
 	_, err := c.SendTaskFailure(ctx, &awssfn.SendTaskFailureInput{
 		TaskToken: aws.String("fake-token-failure"),

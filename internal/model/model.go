@@ -25,7 +25,7 @@ type KeyEncryptor interface {
 	GenerateDataKey(ctx context.Context, keyID string, bits int) (ptDEK, ctDEK []byte, err error)
 }
 
-// NoopKeyEncryptor is a pass-through KeyEncryptor used in lite mode (no real KMS).
+// NoopKeyEncryptor is a pass-through KeyEncryptor used in memory mode (no real KMS).
 // Encrypt returns the plaintext unchanged; Decrypt returns ciphertext unchanged.
 // This is intentional for development — not production use.
 type NoopKeyEncryptor struct{}

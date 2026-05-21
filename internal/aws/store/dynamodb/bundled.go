@@ -10,7 +10,7 @@ import (
 )
 
 // BundledDynamoDBItemStore wraps LocalBundle[MemoryDynamoDBItemStore] to provide
-// per-(account,region) isolation. It implements DynamoDBItemStore and is used in lite mode.
+// per-(account,region) isolation. It implements DynamoDBItemStore and is used in memory mode.
 type BundledDynamoDBItemStore struct {
 	b *bundle.LocalBundle[MemoryDynamoDBItemStore]
 }

@@ -341,7 +341,7 @@ func TestElastiCache_AddTagsToCluster(t *testing.T) {
 		ResourceName: aws.String(arn),
 		Tags:         []ecachetypes.Tag{{Key: aws.String("env"), Value: aws.String("test")}},
 	})
-	_ = err // tags may not be supported in lite mode
+	_ = err // tags may not be supported in memory mode
 }
 
 func TestElastiCache_CreateSubnetGroup_CRUD(t *testing.T) {
@@ -403,7 +403,7 @@ func TestElastiCache_DescribeEngineVersions(t *testing.T) {
 		Engine: aws.String("redis"),
 	})
 	require.NoError(t, err)
-	// May return empty in lite mode
+	// May return empty in memory mode
 	_ = out
 }
 

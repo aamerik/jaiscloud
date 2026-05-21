@@ -3,7 +3,7 @@ package certstore
 import "context"
 
 // MemoryCertStore never persists anything. Load always returns ErrNotFound so
-// the server regenerates a fresh certificate on every startup. Used in lite mode.
+// the server regenerates a fresh certificate on every startup. Used in memory mode.
 type MemoryCertStore struct{}
 
 func NewMemoryCertStore() *MemoryCertStore { return &MemoryCertStore{} }

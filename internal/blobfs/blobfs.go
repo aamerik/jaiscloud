@@ -1,5 +1,5 @@
 // Package blobfs provides blob (binary large object) storage used by S3 and Lambda.
-// Two implementations are available: MemoryBlobStore (lite mode) and
+// Two implementations are available: MemoryBlobStore (memory mode) and
 // LocalFSBlobStore (persistent mode, persists to disk).
 package blobfs
 
@@ -44,7 +44,7 @@ func (l *limitReadCloser) Close() error { return l.closer.Close() }
 
 // -- MemoryBlobStore --
 
-// MemoryBlobStore is an in-memory BlobStore for lite mode.
+// MemoryBlobStore is an in-memory BlobStore for memory mode.
 type MemoryBlobStore struct {
 	mu   sync.RWMutex
 	data map[string][]byte // key: bucket + "\x00" + key

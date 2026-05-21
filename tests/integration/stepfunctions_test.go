@@ -886,7 +886,7 @@ func TestSFN_ParallelState(t *testing.T) {
 }
 
 // TestSFN_TaskState_Lambda tests a state machine with a Task state backed by a
-// Lambda function ARN. In lite mode the engine uses passthrough; with dispatcher
+// Lambda function ARN. In memory mode the engine uses passthrough; with dispatcher
 // it calls the Lambda echo mock. Both paths must produce SUCCEEDED.
 func TestSFN_TaskState_Lambda(t *testing.T) {
 	resetState(t)
@@ -924,14 +924,14 @@ func TestSFN_TaskState_Lambda(t *testing.T) {
 	require.NoError(t, err)
 
 	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
-	// In lite mode (dispatcher == nil) the Task passes input through — SUCCEEDED.
+	// In memory mode (dispatcher == nil) the Task passes input through — SUCCEEDED.
 	// With dispatcher the Lambda echo mock echoes the payload — also SUCCEEDED.
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
 	assert.NotEmpty(t, aws.ToString(descOut.Output), "Task state output must be non-empty")
 }
 
 // TestSFN_ErrorHandling_Retry tests a state machine with a Task state that
-// has Retry configuration. In lite mode the task passes through without error,
+// has Retry configuration. In memory mode the task passes through without error,
 // so the execution completes SUCCEEDED without retrying.
 func TestSFN_ErrorHandling_Retry(t *testing.T) {
 	resetState(t)
@@ -974,12 +974,12 @@ func TestSFN_ErrorHandling_Retry(t *testing.T) {
 	require.NoError(t, err)
 
 	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 15*time.Second)
-	// In lite mode, task is a passthrough — no error occurs, so SUCCEEDED without retrying.
+	// In memory mode, task is a passthrough — no error occurs, so SUCCEEDED without retrying.
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
 }
 
 // TestSFN_ErrorHandling_Catch tests a state machine with a Task state and a
-// Catch clause. In lite mode the task passes through without error, so the
+// Catch clause. In memory mode the task passes through without error, so the
 // Catch clause is never triggered and the execution completes SUCCEEDED directly.
 func TestSFN_ErrorHandling_Catch(t *testing.T) {
 	resetState(t)
@@ -1024,7 +1024,7 @@ func TestSFN_ErrorHandling_Catch(t *testing.T) {
 	require.NoError(t, err)
 
 	descOut := pollUntilTerminal(t, client, *startOut.ExecutionArn, 10*time.Second)
-	// In lite mode, task is a passthrough — SUCCEEDED via CatchTask directly.
+	// In memory mode, task is a passthrough — SUCCEEDED via CatchTask directly.
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, descOut.Status)
 	assert.NotEmpty(t, aws.ToString(descOut.Output), "execution output must be non-empty")
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // BundledSQSStore wraps LocalBundle[MemoryMessageStore] to provide per-(account,region)
-// isolation. It implements SQSMessageStore and is used in lite mode.
+// isolation. It implements SQSMessageStore and is used in memory mode.
 type BundledSQSStore struct {
 	b *bundle.LocalBundle[MemoryMessageStore]
 }

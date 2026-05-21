@@ -1,4 +1,4 @@
-// Package stepfunctions implements the AWS Step Functions provider in lite mode.
+// Package stepfunctions implements the AWS Step Functions provider in memory mode.
 // All executions complete instantly with SUCCEEDED status — no real ASL engine.
 package stepfunctions
 
@@ -21,7 +21,7 @@ var nameRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
 
 type Provider struct {
 	store  *sfnstore.MemoryStepFunctionsStore
-	engine *engine.ExecutionEngine // nil in lite mode
+	engine *engine.ExecutionEngine // nil in memory mode
 }
 
 // Option is a functional option for the Provider.
@@ -328,7 +328,7 @@ func (p *Provider) StartExecution(ctx context.Context, nr *model.NormalizedReque
 		}
 		p.engine.Start(execARN, def, input)
 	} else {
-		// Lite mode: instant SUCCEEDED
+		// Memory Mode: instant SUCCEEDED
 		stopTime := t
 		exec := &sfnstore.Execution{
 			Name:            execName,
@@ -507,7 +507,7 @@ func (p *Provider) GetExecutionHistory(ctx context.Context, nr *model.Normalized
 }
 
 func (p *Provider) RedriveExecution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// Lite mode stub — return the current execution state
+	// Memory Mode stub — return the current execution state
 	execARN, _ := nr.Params["executionArn"].(string)
 	_, err := p.store.GetExecution(execARN)
 	if err != nil {
@@ -723,7 +723,7 @@ func (p *Provider) ListActivities(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(resp), nil
 }
 
-// GetActivityTask, SendTask* are stubs (no real task workers in lite mode).
+// GetActivityTask, SendTask* are stubs (no real task workers in memory mode).
 
 func (p *Provider) GetActivityTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return provider.OK(map[string]any{"taskToken": "", "input": ""}), nil

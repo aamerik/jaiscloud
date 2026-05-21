@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// MemorySecretStore is an in-process SecretStore used in lite mode.
+// MemorySecretStore is an in-process SecretStore used in memory mode.
 type MemorySecretStore struct {
 	mu       sync.RWMutex
 	secrets  map[string]SecretEntry    // keyed by secretID

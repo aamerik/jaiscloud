@@ -484,7 +484,7 @@ func TestCWLogs_FilterPattern_JSONField(t *testing.T) {
 		FilterPattern: aws.String(`{ $.level = "error" }`),
 	})
 	require.NoError(t, err)
-	// In lite mode the filter may be treated as a substring match or a JSON match;
+	// In memory mode the filter may be treated as a substring match or a JSON match;
 	// either way the "error" message must be in the results.
 	assert.NotEmpty(t, out.Events, "JSON field filter must return at least 1 event")
 	for _, ev := range out.Events {

@@ -62,7 +62,7 @@ func TestCWL_GetQueryResults_AfterStart(t *testing.T) {
 		QueryId: startOut.QueryId,
 	})
 	require.NoError(t, err)
-	// In lite mode, results are empty but status should be Complete or Running
+	// In memory mode, results are empty but status should be Complete or Running
 	assert.NotNil(t, out.Status)
 }
 

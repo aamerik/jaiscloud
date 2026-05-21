@@ -43,7 +43,7 @@ type SecretProvider struct {
 }
 
 // New constructs a SecretProvider.
-// kms may be nil, in which case secret values are stored unencrypted (dev/lite mode).
+// kms may be nil, in which case secret values are stored unencrypted (dev/memory mode).
 func New(store SecretStore, kms model.KeyEncryptor) *SecretProvider {
 	return &SecretProvider{store: store, kms: kms}
 }

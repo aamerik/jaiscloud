@@ -18,7 +18,7 @@ func labelKey(accountID, name string, version int64) string {
 	return fmt.Sprintf("%s:%s\x00%d", accountID, name, version)
 }
 
-// MemoryParameterStore is an in-process ParameterStore used in lite mode.
+// MemoryParameterStore is an in-process ParameterStore used in memory mode.
 type MemoryParameterStore struct {
 	mu      sync.RWMutex
 	params  map[string]ParameterEntry

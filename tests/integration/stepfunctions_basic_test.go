@@ -53,7 +53,7 @@ func TestSFN_StartAndDescribeExecution_Basic(t *testing.T) {
 		ExecutionArn: startOut.ExecutionArn,
 	})
 	require.NoError(t, err)
-	// In lite mode the execution completes immediately; status must be terminal or RUNNING.
+	// In memory mode the execution completes immediately; status must be terminal or RUNNING.
 	validStatuses := []sfntypes.ExecutionStatus{
 		sfntypes.ExecutionStatusRunning,
 		sfntypes.ExecutionStatusSucceeded,

@@ -116,7 +116,7 @@ func (e *ExecutionEngine) evalTask(ctx context.Context, execARN, stateName strin
 // dispatchTask routes a Task Resource ARN to the correct service.
 func (e *ExecutionEngine) dispatchTask(ctx context.Context, execARN, resource string, input any, timeoutSec int) (any, error) {
 	if e.dispatcher == nil {
-		// Lite mode: return input as output (passthrough)
+		// Memory Mode: return input as output (passthrough)
 		return input, nil
 	}
 

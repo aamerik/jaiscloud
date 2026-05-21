@@ -20,7 +20,7 @@ import (
 var streamNameRE = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+$`)
 
 // Provider handles Kinesis API operations.
-// In lite mode it uses the in-memory store; in persistent mode it proxies to kinesis-mock.
+// In memory mode it uses the in-memory store; in persistent mode it proxies to kinesis-mock.
 type Provider struct {
 	store      *kinesisstore.MemoryKinesisStore
 	mockServer *MockServer
@@ -28,7 +28,7 @@ type Provider struct {
 	fullMode   bool
 }
 
-// New constructs a Provider in lite mode.
+// New constructs a Provider in memory mode.
 func New(store *kinesisstore.MemoryKinesisStore) *Provider {
 	return &Provider{store: store, httpClient: &http.Client{Timeout: 30 * time.Second}}
 }
@@ -98,7 +98,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return routes
 }
 
-// liteRoutes returns the in-memory handler map used in lite mode.
+// liteRoutes returns the in-memory handler map used in memory mode.
 func (p *Provider) liteRoutes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		// Stream lifecycle
@@ -582,7 +582,7 @@ func (p *Provider) DescribeStreamConsumer(_ context.Context, nr *model.Normalize
 }
 
 func (p *Provider) SubscribeToShard(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	// HTTP/2 server-push not implemented in lite mode — return empty event stream stub
+	// HTTP/2 server-push not implemented in memory mode — return empty event stream stub
 	return provider.OK(map[string]any{}), nil
 }
 

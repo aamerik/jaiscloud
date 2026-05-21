@@ -595,7 +595,7 @@ func TestSFN_FailState(t *testing.T) {
 // ─── Error handling — multiple retry rules ────────────────────────────────────
 
 // TestSFN_ErrorHandling_MultipleRetryRules verifies that a Task state with two
-// distinct Retry rules is accepted and the execution completes (in lite mode the
+// distinct Retry rules is accepted and the execution completes (in memory mode the
 // task passthrough always succeeds, so we confirm SUCCEEDED without errors).
 func TestSFN_ErrorHandling_MultipleRetryRules(t *testing.T) {
 	resetState(t)
@@ -629,7 +629,7 @@ func TestSFN_ErrorHandling_MultipleRetryRules(t *testing.T) {
 	}`
 
 	desc := startAndWait(t, client, name, definition, `{"attempt": 1}`)
-	// In lite mode the task passthrough always succeeds — no retry triggered.
+	// In memory mode the task passthrough always succeeds — no retry triggered.
 	assert.Equal(t, sfntypes.ExecutionStatusSucceeded, desc.Status)
 	assert.NotEmpty(t, aws.ToString(desc.Output))
 }
@@ -645,7 +645,7 @@ func TestSFN_ErrorHandling_CatchAll(t *testing.T) {
 	name := sfnName(t)
 
 	// The Catch clause uses ResultPath "$.errorInfo" so even when catch is
-	// triggered the execution ends SUCCEEDED (via HandleError). In lite mode
+	// triggered the execution ends SUCCEEDED (via HandleError). In memory mode
 	// the task always succeeds so catch is never triggered, but the machine
 	// definition must parse correctly and produce SUCCEEDED.
 	definition := `{
@@ -812,7 +812,7 @@ func TestSFN_GetExecutionHistory_HasStateEvents(t *testing.T) {
 
 // TestSFN_ListExecutions_StatusFilter_Running starts two executions using a
 // Wait state so they stay RUNNING, then filters by RUNNING and expects to see
-// both. In lite mode the Wait state runs asynchronously in a goroutine so the
+// both. In memory mode the Wait state runs asynchronously in a goroutine so the
 // executions remain RUNNING for several seconds.
 func TestSFN_ListExecutions_StatusFilter_Running(t *testing.T) {
 	resetState(t)

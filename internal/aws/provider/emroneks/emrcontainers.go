@@ -846,7 +846,7 @@ func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context
 	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtVirtualCluster, vcID); err != nil {
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: fmt.Sprintf("Virtual cluster '%s' not found.", vcID), HTTPStatus: 400}
 	}
-	_ = endpointID // not validated further in lite mode
+	_ = endpointID // not validated further in memory mode
 	sessionID := shortID()
 	expiresAt := time.Now().Add(time.Duration(duration) * time.Second)
 	token := fmt.Sprintf("synthetic-emr-token-%s-%d", sessionID, expiresAt.Unix())

@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// MemoryKeyStore is an in-process KeyStore used in lite mode.
+// MemoryKeyStore is an in-process KeyStore used in memory mode.
 // All state is lost on restart.
 type MemoryKeyStore struct {
 	mu      sync.RWMutex

@@ -143,7 +143,7 @@ func startCmd() *cobra.Command {
 			ctx := context.Background()
 
 			// Resolve instance ID before initStores so it can be used for the
-			// session blob store directory name in lite mode.
+			// session blob store directory name in memory mode.
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
@@ -1090,12 +1090,12 @@ func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecr
 		}
 		k8sClient, err := buildK8sClient()
 		if err != nil {
-			slog.Warn("ecr: cannot reach k8s, falling back to lite mode", "err", err)
+			slog.Warn("ecr: cannot reach k8s, falling back to memory mode", "err", err)
 			return ecrprovider.New(s.ecr)
 		}
 		proxy := ecrprovider.NewRegistryProxy(k8sClient, k8sNS, s.ecr)
 		if err := proxy.Start(ctx); err != nil {
-			slog.Warn("ecr: registry:2 failed to start, falling back to lite mode", "err", err)
+			slog.Warn("ecr: registry:2 failed to start, falling back to memory mode", "err", err)
 			return ecrprovider.New(s.ecr)
 		}
 		slog.Info("ecr persistent mode: registry:2 proxy ready")
@@ -1111,11 +1111,11 @@ func buildKinesisProvider(ctx context.Context, cfg *config.Config, s appStores) 
 		dataDir := filepath.Join(cfg.BlobDir, "kinesis")
 		mock, err := kinesisprovider.NewMockServer(cfg.AccountID, dataDir)
 		if err != nil {
-			slog.Warn("kinesis-mock unavailable, falling back to lite mode", "err", err)
+			slog.Warn("kinesis-mock unavailable, falling back to memory mode", "err", err)
 			return kinesisprovider.New(s.kinesis)
 		}
 		if err := mock.Start(ctx); err != nil {
-			slog.Warn("kinesis-mock failed to start, falling back to lite mode", "err", err)
+			slog.Warn("kinesis-mock failed to start, falling back to memory mode", "err", err)
 			return kinesisprovider.New(s.kinesis)
 		}
 		slog.Info("kinesis persistent mode: using kinesis-mock subprocess", "port", mock.Port())

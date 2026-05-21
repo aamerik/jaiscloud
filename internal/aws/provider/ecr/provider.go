@@ -1,4 +1,4 @@
-// Package ecr implements the AWS ECR provider (Elastic Container Registry) in lite mode.
+// Package ecr implements the AWS ECR provider (Elastic Container Registry) in memory mode.
 // All operations are metadata-only; no real image layer storage or Docker push/pull.
 package ecr
 
@@ -71,7 +71,7 @@ func NewFull(store *ecrstore.MemoryECRStore, proxy *RegistryProxy) *Provider {
 }
 
 // OCIHandler returns the HTTP handler for OCI Distribution v2 requests, or nil
-// in lite mode (no real registry).
+// in memory mode (no real registry).
 func (p *Provider) OCIHandler() func(http.ResponseWriter, *http.Request) {
 	if !p.fullMode || p.proxy == nil {
 		return nil
