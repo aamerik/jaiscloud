@@ -3,11 +3,14 @@ package emroneks
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/sparkhelpers"
 )
+
+const tailLogsTimeout = 60 * time.Second
 
 // runJobRun executes a StartJobRun via sparkhelpers.SubmitClientMode.
 // Runs in a goroutine; publishes state transitions via emitJobRunStateChange.
@@ -109,7 +112,7 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
-		flushLogs()
+		// No K8s job was created - nothing to tail.
 		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		return
 	}
@@ -135,9 +138,21 @@ func (p *EMRContainersProvider) runJobRun(ctx context.Context, h handlerCtx,
 			k8shelpers.BuildSnapshotFromError(err)); snapErr != nil {
 			slog.Error("emroneks: PersistTerminalSnapshot failed", "prefix", "emroneks/jobruns", "id", jrID, "err", snapErr)
 		}
+		tailCtx, tailCancel := context.WithTimeout(ctx, tailLogsTimeout)
+		defer tailCancel()
+		if tailErr := k8shelpers.TailLogs(tailCtx, p.k8sClient, handle, k8shelpers.LogKindMain, logSink); tailErr != nil {
+			slog.Warn("emroneks: TailLogs failed", "jobRun", jrID, "err", tailErr)
+		}
 		flushLogs()
 		p.emitJobRunStateChange(h, vcID, jrID, "FAILED", err.Error())
 		return
+	}
+
+	// collect driver pod logs into logSink for CloudWatch/S3 upload.
+	tailCtx, tailCancel := context.WithTimeout(ctx, tailLogsTimeout)
+	defer tailCancel()
+	if tailErr := k8shelpers.TailLogs(tailCtx, p.k8sClient, handle, k8shelpers.LogKindMain, logSink); tailErr != nil {
+		slog.Warn("emroneks: TailLogs failed", "jobRun", jrID, "err", tailErr)
 	}
 
 	state := finalToJobRunState(final)

@@ -41,7 +41,7 @@ func (p *EMRProvider) LogSinkForStep(clusterID, stepID, _ string) io.Writer {
 }
 
 // flushStepLogs uploads captured step log bytes to S3 under LogUri if set.
-// The sink must be the *logBuffer returned by LogSinkForStep.
+// Real EMR on EC2 ships step logs to S3 only - there is no CW Logs ingestion.
 func (p *EMRProvider) flushStepLogs(ctx context.Context, clusterID, stepID string, sink io.Writer) {
 	lb, ok := sink.(*logBuffer)
 	if !ok || lb.buf.Len() == 0 {
@@ -50,7 +50,6 @@ func (p *EMRProvider) flushStepLogs(ctx context.Context, clusterID, stepID strin
 	if p.objectProvider == nil {
 		return
 	}
-	// Load cluster to get LogUri.
 	c, err := p.loadCluster(ctx, "", "", clusterID)
 	if err != nil || c.LogUri == "" {
 		return
@@ -60,7 +59,6 @@ func (p *EMRProvider) flushStepLogs(ctx context.Context, clusterID, stepID strin
 		slog.Warn("emr: flushStepLogs: invalid LogUri", "logUri", c.LogUri, "err", err)
 		return
 	}
-	// Gzip the log content.
 	gz, err := gzipBytes(lb.buf.Bytes())
 	if err != nil {
 		slog.Warn("emr: flushStepLogs: gzip failed", "err", err)

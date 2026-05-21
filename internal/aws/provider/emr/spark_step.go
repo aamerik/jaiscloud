@@ -140,6 +140,12 @@ func (p *EMRProvider) runSparkSubmitStep(ctx context.Context, h handlerCtx, clus
 		return
 	}
 
+	// Collect driver pod logs into sink for S3 upload.
+	if err := k8shelpers.TailLogs(ctx, p.k8sClient, handle, k8shelpers.LogKindMain, sink); err != nil {
+		slog.Warn("emr: TailLogs failed", "step", stepID, "err", err)
+		// proceed anyway; logs best-effort
+	}
+
 	state := finalToStepState(final)
 	reason := ""
 	if state == "FAILED" {

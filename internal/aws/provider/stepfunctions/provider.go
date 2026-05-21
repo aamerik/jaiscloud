@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -20,8 +22,9 @@ import (
 var nameRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
 
 type Provider struct {
-	store  *sfnstore.MemoryStepFunctionsStore
-	engine *engine.ExecutionEngine // nil in memory mode
+	store       *sfnstore.MemoryStepFunctionsStore
+	engine      *engine.ExecutionEngine // nil in memory mode
+	logIngestor engine.LogIngestor
 }
 
 // Option is a functional option for the Provider.
@@ -44,6 +47,17 @@ func New(store *sfnstore.MemoryStepFunctionsStore, opts ...Option) *Provider {
 // to break the registry→engine→registry circular dependency).
 func (p *Provider) SetEngine(eng *engine.ExecutionEngine) {
 	p.engine = eng
+	if p.logIngestor != nil {
+		p.engine.SetLogsIngestor(p.logIngestor)
+	}
+}
+
+// SetLogsIngestor wires a CloudWatch Logs ingestor for execution log forwarding.
+func (p *Provider) SetLogsIngestor(ingestor engine.LogIngestor) {
+	p.logIngestor = ingestor
+	if p.engine != nil {
+		p.engine.SetLogsIngestor(ingestor)
+	}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -355,6 +369,7 @@ func (p *Provider) StartExecution(ctx context.Context, nr *model.NormalizedReque
 			Timestamp: t, Type: "ExecutionSucceeded",
 			ExecutionSucceededEventDetails: &sfnstore.ExecutionSucceededEventDetails{Output: input},
 		})
+		p.emitExecutionLogs(ctx, sm, execARN, input, input, "Succeeded")
 	}
 
 	return provider.OK(map[string]any{
@@ -1037,4 +1052,57 @@ func hasErrors(diags []asl.ValidationDiagnostic) bool {
 		}
 	}
 	return false
+}
+
+// emitExecutionLogs forwards execution start/end events to the CW log group
+// declared in the state machine's LoggingConfiguration, if any.
+func (p *Provider) emitExecutionLogs(ctx context.Context, sm *sfnstore.StateMachine, execARN, input, output, status string) {
+	if p.logIngestor == nil || sm.LoggingConfiguration == nil {
+		return
+	}
+	if sm.LoggingConfiguration.Level == "OFF" {
+		return
+	}
+	logGroupArn := ""
+	for _, d := range sm.LoggingConfiguration.Destinations {
+		if d.CloudWatchLogsLogGroup.LogGroupArn != "" {
+			logGroupArn = d.CloudWatchLogsLogGroup.LogGroupArn
+			break
+		}
+	}
+	if logGroupArn == "" {
+		return
+	}
+	// Derive log group name from ARN: arn:aws:logs:region:account:log-group:groupName
+	logGroupName := logGroupArn
+	if idx := strings.LastIndex(logGroupArn, ":log-group:"); idx >= 0 {
+		logGroupName = logGroupArn[idx+len(":log-group:"):]
+	}
+
+	// Log stream name is the execution name (last segment of the execution ARN).
+	// Using the full ARN is invalid - log stream names can not contain ":".
+	execName := execARN
+	if idx := strings.LastIndex(execARN, ":"); idx >= 0 {
+		execName = execARN[idx+1:]
+	}
+	_ = p.logIngestor.InternalCreateLogGroup(ctx, logGroupName)
+	now := time.Now().UnixMilli()
+	startDetails := map[string]any{
+		"input":        input,
+		"inputDetails": map[string]any{"included": true, "truncated": false},
+	}
+	endDetails := map[string]any{
+		"output":        output,
+		"outputDetails": map[string]any{"included": true, "truncated": false},
+	}
+	events := []logstream.Event{
+		{Timestamp: now, Message: buildSFNLogEvent("ExecutionStarted", startDetails)},
+		{Timestamp: now, Message: buildSFNLogEvent("Execution"+status, endDetails)},
+	}
+	_ = p.logIngestor.InternalPutEvents(ctx, logGroupName, execName, events)
+}
+
+func buildSFNLogEvent(eventType string, details map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"type": eventType, "details": details})
+	return string(b)
 }

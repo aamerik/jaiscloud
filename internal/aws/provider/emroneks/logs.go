@@ -109,7 +109,7 @@ func (p *EMRContainersProvider) flushJobRunLogs(
 		if bucket == "" {
 			slog.Warn("emroneks: flushJobRunLogs: s3MonitoringConfiguration missing logUri")
 		} else {
-			key := fmt.Sprintf("%s%s/%s/stdout.gz", prefix, virtualClusterID, jobRunID)
+			key := fmt.Sprintf("%sjobs%s/containers/spark-%s-driver/stdout.gz", prefix, jobRunID, jobRunID)
 			compressed, gzErr := gzipBytes(data)
 			if gzErr != nil {
 				slog.Warn("emroneks: flushJobRunLogs: gzip failed", "err", gzErr)

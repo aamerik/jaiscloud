@@ -804,6 +804,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	logsProvider.SetSubscriptionDispatcher(funcP)
 	logsProvider.SetMetricDataPutter(&cwMetricAdapter{cwP})
 	emrcP.SetLogsIngestor(logsProvider)
+	sfnP.SetLogsIngestor(logsProvider)
 	secretProv.SetInvoker(funcP)
 	paramProv.SetEventPublisher(eventsP)
 	paramProv.SetSecretGetter(secretProv)

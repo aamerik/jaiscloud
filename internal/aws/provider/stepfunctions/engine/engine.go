@@ -14,14 +14,22 @@ import (
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/provider"
 )
 
+// LogIngestor is the minimal interface the engine needs to forward logs to CloudWatch Logs.
+type LogIngestor interface {
+	InternalPutEvents(ctx context.Context, logGroupName, logStreamName string, events []logstream.Event) error
+	InternalCreateLogGroup(ctx context.Context, logGroupName string) error
+}
+
 // ExecutionEngine runs ASL state machine executions.
 type ExecutionEngine struct {
-	store      *sfnstore.MemoryStepFunctionsStore
-	dispatcher provider.ServiceDispatcher
-	clock      clock.Clock
+	store       *sfnstore.MemoryStepFunctionsStore
+	dispatcher  provider.ServiceDispatcher
+	clock       clock.Clock
+	logIngestor LogIngestor
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc // execARN → cancel
@@ -31,6 +39,11 @@ type ExecutionEngine struct {
 	tokens  map[string]chan taskCallback
 
 	wg sync.WaitGroup
+}
+
+// SetLogsIngestor wires a CloudWatch Logs ingestor for task log forwarding.
+func (e *ExecutionEngine) SetLogsIngestor(ingestor LogIngestor) {
+	e.logIngestor = ingestor
 }
 
 type taskCallback struct {
@@ -219,6 +232,7 @@ func (e *ExecutionEngine) runExecution(ctx context.Context, execARN string, def 
 			Output: outputJSON,
 		},
 	})
+	e.emitExecutionLogs(execARN, input, outputJSON, "Succeeded")
 }
 
 // evaluateState dispatches to the appropriate state evaluator.
@@ -334,6 +348,79 @@ func (e *ExecutionEngine) failExecution(execARN, errCode, cause string) {
 			Cause: cause,
 		},
 	})
+	e.emitExecutionLogs(execARN, "", "", "Failed")
+}
+
+// emitExecutionLogs forwards execution start/end events to the CW log group
+// declared in the state machine's LoggingConfiguration, if any.
+func (e *ExecutionEngine) emitExecutionLogs(execARN, input, output, status string) {
+	if e.logIngestor == nil {
+		return
+	}
+	exec, err := e.store.GetExecution(execARN)
+	if err != nil {
+		return
+	}
+	sm, err := e.store.GetStateMachine(exec.StateMachineARN)
+	if err != nil {
+		return
+	}
+	if sm.LoggingConfiguration == nil || sm.LoggingConfiguration.Level == "OFF" {
+		return
+	}
+	logGroupName := ""
+	for _, d := range sm.LoggingConfiguration.Destinations {
+		if d.CloudWatchLogsLogGroup.LogGroupArn != "" {
+			arn := d.CloudWatchLogsLogGroup.LogGroupArn
+			if idx := strings.LastIndex(arn, ":log-group:"); idx >= 0 {
+				logGroupName = arn[idx+len(":log-group:"):]
+			} else {
+				logGroupName = arn
+			}
+			break
+		}
+	}
+	if logGroupName == "" {
+		return
+	}
+	// Log stream name is the execution name (last segment of the execution ARN).
+	// Using the full ARN is invalid - log stream names can not contain ":".
+	execName := execARN
+	if idx := strings.LastIndex(execARN, ":"); idx >= 0 {
+		execName = execARN[idx+1:]
+	}
+	ctx := context.Background()
+	_ = e.logIngestor.InternalCreateLogGroup(ctx, logGroupName)
+
+	startMs := exec.StartDate.UnixMilli()
+	endMs := time.Now().UnixMilli()
+	if exec.StopDate != nil {
+		endMs = exec.StopDate.UnixMilli()
+	}
+
+	startDetails := map[string]any{
+		"input":        input,
+		"inputDetails": map[string]any{"included": true, "truncated": false},
+	}
+	var endDetails map[string]any
+	if status == "Succeeded" {
+		endDetails = map[string]any{
+			"output":        output,
+			"outputDetails": map[string]any{"included": true, "truncated": false},
+		}
+	} else {
+		endDetails = map[string]any{"error": exec.Error, "cause": exec.Cause}
+	}
+	events := []logstream.Event{
+		{Timestamp: startMs, Message: buildSFNLogEvent("ExecutionStarted", startDetails)},
+		{Timestamp: endMs, Message: buildSFNLogEvent("Execution"+status, endDetails)},
+	}
+	_ = e.logIngestor.InternalPutEvents(ctx, logGroupName, execName, events)
+}
+
+func buildSFNLogEvent(eventType string, details map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"type": eventType, "details": details})
+	return string(b)
 }
 
 // ─── Pass state ───────────────────────────────────────────────────────────────

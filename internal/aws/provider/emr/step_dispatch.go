@@ -8,24 +8,20 @@ import (
 
 // runStep dispatches a single step to the appropriate runner.
 // Called in a goroutine from AddJobFlowSteps.
+// argv[0] is the authoritative dispatch signal — command-runner.jar is just a
+// launcher wrapper, so the same argv-first logic handles both jar forms.
 func (p *EMRProvider) runStep(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
 	jar, _, _ := extractHadoopJarStep(stepCfg)
 	argv := extractStepArgv(stepCfg)
 
 	switch {
-	case isCommandRunnerJar(jar):
-		p.runCommandRunnerStep(ctx, h, clusterID, stepID, stepCfg)
 	case isSparkSubmitStep(argv):
 		p.runSparkSubmitStep(ctx, h, clusterID, stepID, stepCfg)
+	case isCommandRunnerJar(jar):
+		p.runCommandRunnerStub(ctx, h, clusterID, stepID, stepCfg)
 	default:
 		p.runGenericStepStub(ctx, h, clusterID, stepID, stepCfg)
 	}
-}
-
-// isCommandRunnerJar returns true when the step uses command-runner.jar, which
-// is the EMR mechanism for running shell commands (aws-cli, s3-dist-cp, etc.).
-func isCommandRunnerJar(jar string) bool {
-	return jar == "command-runner.jar"
 }
 
 // isSparkSubmitStep returns true when the step's first arg is spark-submit
@@ -39,15 +35,16 @@ func isSparkSubmitStep(argv []string) bool {
 	return base == "spark-submit" || strings.HasSuffix(base, "/spark-submit")
 }
 
-// runCommandRunnerStep handles command-runner.jar steps.
-// In mock mode (no k8s client): marks the step COMPLETED immediately.
-// In k8s/docker mode: the step would run args[0] in a busybox container;
-// that is deferred — for now it also completes instantly in all executor modes.
-func (p *EMRProvider) runCommandRunnerStep(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
+// isCommandRunnerJar returns true when the step uses command-runner.jar.
+func isCommandRunnerJar(jar string) bool {
+	return jar == "command-runner.jar"
+}
+
+// runCommandRunnerStub stubs non-spark command-runner.jar steps (s3-dist-cp,
+// hive, aws cli, etc.) as instant COMPLETED — real execution is not supported.
+func (p *EMRProvider) runCommandRunnerStub(ctx context.Context, h handlerCtx, clusterID, stepID string, stepCfg map[string]any) {
 	sink := p.LogSinkForStep(clusterID, stepID, "")
 	p.emitStepStateChange(h, clusterID, stepID, "RUNNING", "")
-	// Mock mode: instant completion.
-	// TODO(future k8s): run HadoopJarStep.Args[0] in a busybox pod.
 	fmt.Fprintf(sink, "Step %s (command-runner.jar): COMPLETED\n", stepID)
 	p.emitStepStateChange(h, clusterID, stepID, "COMPLETED", "")
 	p.flushStepLogs(ctx, clusterID, stepID, sink)
