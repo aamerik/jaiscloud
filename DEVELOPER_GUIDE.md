@@ -174,19 +174,19 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 | Amazon DynamoDB | ✅ Full | In-memory | PostgreSQL | `tests/integration/dynamo_*.go` |
 | Amazon DynamoDB Streams | ✅ Full | In-memory stream store | In-memory stream store | — |
 | Amazon SNS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sns_test.go` |
-| Amazon EventBridge | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/eventbridge/` |
+| Amazon EventBridge | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/eventbridge/` |
 | AWS IAM | ✅ Full | In-memory | PostgreSQL | `tests/integration/iam_test.go` |
 | AWS STS | ✅ Full | In-memory | PostgreSQL | `tests/integration/sts_test.go` |
-| AWS Lambda | ✅ Full | In-memory | PostgreSQL | `tests/integration/lambda_*.go`, `tests/full_mode/aws/lambda/` |
-| AWS Glue Data Catalog | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/iceberg/` |
-| Amazon Kinesis | ✅ Full | In-memory | In-memory | `tests/integration/kinesis_*.go`, `tests/full_mode/aws/kinesis/` |
-| Amazon EMR (on EC2) | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emr/` |
-| Amazon EMR on EKS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/emrcontainers/` |
-| AWS KMS | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/kms/` |
-| AWS Secrets Manager | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/kms/` |
+| AWS Lambda | ✅ Full | In-memory | PostgreSQL | `tests/integration/lambda_*.go`, `tests/persistent_mode/aws/lambda/` |
+| AWS Glue Data Catalog | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/iceberg/` |
+| Amazon Kinesis | ✅ Full | In-memory | In-memory | `tests/integration/kinesis_*.go`, `tests/persistent_mode/aws/kinesis/` |
+| Amazon EMR (on EC2) | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/emr/` |
+| Amazon EMR on EKS | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/emrcontainers/` |
+| AWS KMS | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/kms/` |
+| AWS Secrets Manager | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/kms/` |
 | AWS SSM Parameter Store | ✅ Full | In-memory | PostgreSQL (labels: in-memory only) | `tests/integration/ssm_*.go` |
 | AWS API Gateway (REST) | ✅ Full | In-memory | PostgreSQL | `tests/integration/apigw_test.go` |
-| AWS CloudFormation | ✅ Full | In-memory | PostgreSQL | `tests/full_mode/aws/cloudformation/` |
+| AWS CloudFormation | ✅ Full | In-memory | PostgreSQL | `tests/persistent_mode/aws/cloudformation/` |
 | Amazon CloudWatch | ✅ Full | In-memory ring | In-memory ring + PostgreSQL alarms | `tests/integration/cloudwatch_test.go` |
 | Amazon CloudWatch Logs | ✅ Full | In-memory | In-memory | `tests/integration/cloudwatchlogs_test.go` |
 | AWS Step Functions | ✅ Full | In-memory | In-memory | `tests/integration/stepfunctions_test.go` |
@@ -1609,7 +1609,7 @@ JAISCLOUD_HOST=http://my-remote-host:4566 go test -race -count=1 ./tests/integra
 
 ### Spark e2e tests (`spark_e2e` build tag)
 
-The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notification lifecycle. They live under `tests/full_mode/aws/emr/`, `tests/full_mode/aws/emrcontainers/`, and `tests/full_mode/aws/eventbridge/`, and are **excluded from normal CI runs** by the `//go:build spark_e2e` tag. Use the Makefile targets which handle server lifecycle via docker-compose or K8s.
+The Spark end-to-end tests cover the full EMR + EMR-on-EKS + EventBridge notification lifecycle. They live under `tests/persistent_mode/aws/emr/`, `tests/persistent_mode/aws/emrcontainers/`, and `tests/persistent_mode/aws/eventbridge/`, and are **excluded from normal CI runs** by the `//go:build spark_e2e` tag. Use the Makefile targets which handle server lifecycle via docker-compose or K8s.
 
 #### Prerequisites (both modes)
 
@@ -1646,7 +1646,7 @@ make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_K8S_SPARK_IMAGE=apache/s
 
 # Run tests
 SPARK_E2E_DOCKER_IMAGE=apache/spark:3.5.0 JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags spark_e2e -timeout 10m ./tests/full_mode/aws/emr/
+  go test -v -tags spark_e2e -timeout 10m ./tests/persistent_mode/aws/emr/
 
 make down-docker
 ```
@@ -1667,7 +1667,7 @@ make up-k8s
 # Run EMR Containers tests
 SPARK_E2E_SPARK_IMAGE=apache/spark:3.5.0 SPARK_E2E_K8S_NAMESPACE=jaiscloud \
   JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags spark_e2e -timeout 15m ./tests/full_mode/aws/emrcontainers/
+  go test -v -tags spark_e2e -timeout 15m ./tests/persistent_mode/aws/emrcontainers/
 
 make down-k8s
 ```
@@ -1687,7 +1687,7 @@ make test-e2e-eventbridge
 # or manually:
 make up-docker JAISCLOUD_EXECUTOR_MODE=mock
 JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags spark_e2e -timeout 10m ./tests/full_mode/aws/eventbridge/
+  go test -v -tags spark_e2e -timeout 10m ./tests/persistent_mode/aws/eventbridge/
 make down-docker
 ```
 
@@ -1695,7 +1695,7 @@ make down-docker
 
 ### Lambda e2e tests (`lambda_e2e` build tag)
 
-Lambda e2e tests live under `tests/full_mode/aws/lambda/` and are **excluded from normal CI** by the `//go:build lambda_e2e` tag. Use the Makefile targets which start the server via docker-compose or K8s:
+Lambda e2e tests live under `tests/persistent_mode/aws/lambda/` and are **excluded from normal CI** by the `//go:build lambda_e2e` tag. Use the Makefile targets which start the server via docker-compose or K8s:
 
 ```bash
 make test-e2e-lambda-docker   # Docker warm-pool executor
@@ -1738,7 +1738,7 @@ make test-e2e-lambda-docker LAMBDA_IMAGE=jaiscloud-lambda-echo
 # or manually:
 make up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_LAMBDA_IMAGE=jaiscloud-lambda-echo
 LAMBDA_E2E_DOCKER_IMAGE=jaiscloud-lambda-echo JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags lambda_e2e -timeout 10m ./tests/full_mode/aws/lambda/
+  go test -v -tags lambda_e2e -timeout 10m ./tests/persistent_mode/aws/lambda/
 make down-docker
 ```
 
@@ -1803,7 +1803,7 @@ make test-e2e-lambda-k8s LAMBDA_IMAGE=jaiscloud-lambda-echo
 # or manually:
 make up-k8s
 LAMBDA_E2E_K8S_IMAGE=jaiscloud-lambda-echo JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags lambda_e2e -timeout 15m ./tests/full_mode/aws/lambda/
+  go test -v -tags lambda_e2e -timeout 15m ./tests/persistent_mode/aws/lambda/
 make down-k8s
 ```
 
@@ -1858,14 +1858,14 @@ K8s cold start includes image pull + pod scheduling. Increase `LAMBDA_E2E_INVOKE
 
 ### KMS · SecretsManager · SSM e2e tests (`kms_fullmode` build tag)
 
-These tests live under `tests/full_mode/aws/kms/` and verify cross-service integration between KMS, SecretsManager, and SSM Parameter Store. They do **not** require Docker or Kubernetes.
+These tests live under `tests/persistent_mode/aws/kms/` and verify cross-service integration between KMS, SecretsManager, and SSM Parameter Store. They do **not** require Docker or Kubernetes.
 
 ```bash
 make test-e2e-kms
 # or manually:
 make up-docker JAISCLOUD_EXECUTOR_MODE=mock
 JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags kms_fullmode -timeout 10m ./tests/full_mode/aws/kms/
+  go test -v -tags kms_fullmode -timeout 10m ./tests/persistent_mode/aws/kms/
 make down-docker
 ```
 
@@ -1886,14 +1886,14 @@ No environment variables beyond `JAISCLOUD_HOST` are required for this group.
 
 ### CloudFormation e2e tests (`cfn_fullmode` build tag)
 
-These tests live under `tests/full_mode/aws/cloudformation/` and verify that CloudFormation stacks provision, update, and delete real downstream resources (SQS queues, Lambda functions, KMS keys, SecretsManager secrets). They do **not** require Docker or Kubernetes.
+These tests live under `tests/persistent_mode/aws/cloudformation/` and verify that CloudFormation stacks provision, update, and delete real downstream resources (SQS queues, Lambda functions, KMS keys, SecretsManager secrets). They do **not** require Docker or Kubernetes.
 
 ```bash
 make test-e2e-cloudformation
 # or manually:
 make up-docker JAISCLOUD_EXECUTOR_MODE=mock
 JAISCLOUD_HOST=http://localhost:4566 \
-  go test -v -tags cfn_fullmode -timeout 10m ./tests/full_mode/aws/cloudformation/
+  go test -v -tags cfn_fullmode -timeout 10m ./tests/persistent_mode/aws/cloudformation/
 make down-docker
 ```
 
@@ -1925,11 +1925,11 @@ The tests use inline templates. Key patterns covered:
 
 ### Kinesis e2e tests (`kinesis_fullmode` build tag)
 
-These tests live under `tests/full_mode/aws/kinesis/` and verify record persistence across shard iterators. No Docker required.
+These tests live under `tests/persistent_mode/aws/kinesis/` and verify record persistence across shard iterators. No Docker required.
 
 ```bash
 ./jaiscloud-aws start &
-go test -v -tags kinesis_fullmode ./tests/full_mode/aws/kinesis/
+go test -v -tags kinesis_fullmode ./tests/persistent_mode/aws/kinesis/
 ```
 
 | Test | What it verifies |
@@ -1988,7 +1988,7 @@ Start JaisCloud (any storage configuration works — Glue, S3, and DynamoDB are 
 The Spark container needs Iceberg and AWS connector JARs that are not included in the base image. Download them once from Maven Central:
 
 ```bash
-cd tests/full_mode/aws/iceberg/spark-iceberg
+cd tests/persistent_mode/aws/iceberg/spark-iceberg
 bash download-jars.sh
 ```
 
@@ -2004,7 +2004,7 @@ This creates a `jars/` directory containing:
 #### 2. Build the Spark Iceberg Docker image
 
 ```bash
-# Still inside tests/full_mode/iceberg/spark-iceberg/
+# Still inside tests/persistent_mode/iceberg/spark-iceberg/
 docker build -t spark-iceberg-test .
 cd ../../../..    # back to repo root
 ```
@@ -2018,7 +2018,7 @@ export SPARK_E2E_ICEBERG_IMAGE=spark-iceberg-test
 
 go test -v -tags iceberg_e2e \
   -timeout 30m \
-  ./tests/full_mode/aws/iceberg/
+  ./tests/persistent_mode/aws/iceberg/
 ```
 
 `TestMain` runs first and creates the shared infrastructure once for the entire suite:
@@ -2037,7 +2037,7 @@ After all tests complete, `TestMain` deletes the Glue database and DynamoDB tabl
 go test -v -tags iceberg_e2e \
   -run TestIceberg_GlueCatalog_WriteAndRead \
   -timeout 15m \
-  ./tests/full_mode/aws/iceberg/
+  ./tests/persistent_mode/aws/iceberg/
 ```
 
 #### Environment variable reference

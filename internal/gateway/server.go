@@ -283,10 +283,18 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	resp, dispatchErr := s.registry.Dispatch(r.Context(), providerKey, nr)
 	if dispatchErr != nil {
 		if pe, ok := dispatchErr.(*model.ProviderError); ok {
-			slog.Error("provider error",
+			logFn := slog.Error
+			if pe.HTTPStatus < 500 {
+				logFn = slog.Warn
+			}
+			logFn("provider error",
 				"code", pe.Code,
+				"message", pe.Message,
 				"status", pe.HTTPStatus,
-				"key", providerKey,
+				"service", nr.Service,
+				"action", nr.Action,
+				"account", nr.AccountID,
+				"region", nr.Region,
 				"request_id", middleware.GetRequestID(r.Context()),
 			)
 			status, headers, respBody := codec.EncodeError(nr, pe)
@@ -295,6 +303,10 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("dispatch error",
 			"key", providerKey,
+			"service", nr.Service,
+			"action", nr.Action,
+			"account", nr.AccountID,
+			"region", nr.Region,
 			"err", dispatchErr,
 			"request_id", middleware.GetRequestID(r.Context()),
 		)

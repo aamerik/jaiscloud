@@ -4,7 +4,7 @@
 // These tests use the mock Spark executor (no real Docker/K8s needed) to validate
 // the full EventBridge rule → SQS target delivery path.
 //
-// Run: go test -v -tags spark_e2e ./tests/full_mode/eventbridge/ -run TestSparkJob_EventBridge -timeout 5m
+// Run: go test -v -tags spark_e2e ./tests/persistent_mode/eventbridge/ -run TestSparkJob_EventBridge -timeout 5m
 
 package eventbridge_test
 

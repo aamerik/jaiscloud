@@ -113,7 +113,7 @@ internal/
 
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2 (SQS, IAM, SNS, DynamoDB, S3, Lambda)
-  full_mode/aws/        # Full-mode e2e tests (build-tagged): lambda, cfn, kms, emr, emrcontainers,
+  persistent_mode/aws/  # Persistent-mode e2e tests (build-tagged): lambda, cfn, kms, emr, emrcontainers,
                         # eventbridge, dpc, iceberg
 ```
 
@@ -349,7 +349,7 @@ make test-e2e-eventbridge        # tag: spark_e2e
 make test-e2e-iceberg            # tag: iceberg_e2e
 ```
 
-Full-mode e2e tests live under `tests/full_mode/aws/{lambda,cloudformation,kms,emr,emrcontainers,eventbridge,dpc,iceberg}/`.
+Persistent-mode e2e tests live under `tests/persistent_mode/aws/{lambda,cloudformation,kms,emr,emrcontainers,eventbridge,dpc,iceberg}/`.
 
 Integration tests call `POST /_jaiscloud/reset` between each test via `resetState(t)`.
 

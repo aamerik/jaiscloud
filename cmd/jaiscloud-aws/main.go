@@ -248,9 +248,9 @@ func startCmd() *cobra.Command {
 			}
 			adminHandler.SetDataDir(dataDir)
 
-			// Wire snapshot loop unless running in ephemeral mode.
+			// Wire snapshot loop unless running in ephemeral mode or memory mode.
 			// Attempts to restore state.json from a previous run, then starts periodic saves.
-			if !cfg.Ephemeral {
+			if !cfg.Ephemeral && cfg.DSN == "" {
 				adminSnaps := adminHandler.Snapshotters()
 				loopStores := make(map[string]snapshottypes.Snapshotter, len(adminSnaps))
 				for k, v := range adminSnaps {

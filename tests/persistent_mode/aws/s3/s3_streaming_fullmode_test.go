@@ -8,7 +8,7 @@
 // or manually:
 //
 //	JAISCLOUD_HOST=http://localhost:4566 \
-//	  go test -v -tags s3_fullmode ./tests/full_mode/aws/s3/
+//	  go test -v -tags s3_fullmode ./tests/persistent_mode/aws/s3/
 package s3_test
 
 import (

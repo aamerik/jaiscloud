@@ -408,7 +408,7 @@ func findS3JSON(t *testing.T, s3Client *awss3.Client, bucket, prefix string) map
 // ─── persistence server helpers ──────────────────────────────────────────────
 
 // jaiscloudBin returns the path to the jaiscloud binary.
-// Tests run with working directory = tests/full_mode/iceberg/, so the project
+// Tests run with working directory = tests/persistent_mode/iceberg/, so the project
 // root binary is three levels up.
 func jaiscloudBin() string {
 	if b := os.Getenv("JAISCLOUD_BIN"); b != "" {

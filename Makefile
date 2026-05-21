@@ -338,16 +338,16 @@ test-integration: ## Run tests/integration/ — MODE=ephemeral|postgres required
 	lsof -ti tcp:$(_INTEGRATION_PORT) 2>/dev/null | xargs kill 2>/dev/null || true; \
 	exit $$(cat /tmp/integration-exit.txt)
 
-##@ Full-mode e2e tests  (start server, run suite, stop server)
+##@ Persistent-mode e2e tests  (start server, run suite, stop server)
 
-test-e2e-emr-docker: _check-docker-prereq ## EMR Docker Spark tests — tests/full_mode/aws/emr/ (tag: spark_e2e)
+test-e2e-emr-docker: _check-docker-prereq ## EMR Docker Spark tests — tests/persistent_mode/aws/emr/ (tag: spark_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE)
 	go clean -testcache
 	SPARK_E2E_DOCKER_IMAGE=$(SPARK_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/emr/
+	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/emr/
 	$(MAKE) down-docker
 
-test-e2e-emrcontainers-k8s: _check-k8s-prereq ## EMR Containers K8s tests — tests/full_mode/aws/emrcontainers/ (tag: spark_e2e)
+test-e2e-emrcontainers-k8s: _check-k8s-prereq ## EMR Containers K8s tests — tests/persistent_mode/aws/emrcontainers/ (tag: spark_e2e)
 	# Individual tests via TEST_RUN:
 	#   TestSparkJob_K8s_StartJobRun_And_Complete
 	#   TestSparkJob_K8s_CancelJobRun
@@ -356,103 +356,103 @@ test-e2e-emrcontainers-k8s: _check-k8s-prereq ## EMR Containers K8s tests — te
 	$(MAKE) _start-k8s
 	go clean -testcache
 	SPARK_E2E_SPARK_IMAGE=$(SPARK_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/emrcontainers/
+	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/emrcontainers/
 	$(MAKE) _stop-k8s
 
-test-e2e-eventbridge: ## EventBridge notification tests — tests/full_mode/aws/eventbridge/ (no Docker/K8s)
+test-e2e-eventbridge: ## EventBridge notification tests — tests/persistent_mode/aws/eventbridge/ (no Docker/K8s)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/eventbridge/
+	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/eventbridge/
 	$(MAKE) down-docker
 
-test-e2e-dpc-docker: _check-docker-prereq ## DPC Spark tests via Docker — tests/full_mode/aws/dpc/ (tag: spark_e2e)
+test-e2e-dpc-docker: _check-docker-prereq ## DPC Spark tests via Docker — tests/persistent_mode/aws/dpc/ (tag: spark_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE)
 	go clean -testcache
 	SPARK_E2E_DOCKER_IMAGE=$(SPARK_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/dpc/
+	  go test -v -tags spark_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/dpc/
 	$(MAKE) down-docker
 
-test-e2e-dpc-k8s: _check-k8s-prereq ## DPC Spark tests via K8s — tests/full_mode/aws/dpc/ (tag: spark_e2e)
+test-e2e-dpc-k8s: _check-k8s-prereq ## DPC Spark tests via K8s — tests/persistent_mode/aws/dpc/ (tag: spark_e2e)
 	$(MAKE) _start-k8s
 	go clean -testcache
 	SPARK_E2E_SPARK_IMAGE=$(SPARK_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/dpc/
+	  go test -v -tags spark_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/dpc/
 	$(MAKE) _stop-k8s
 
-test-e2e-lambda-docker: _check-docker-prereq ## Lambda Docker tests — tests/full_mode/aws/lambda/ (tag: lambda_e2e)
+test-e2e-lambda-docker: _check-docker-prereq ## Lambda Docker tests — tests/persistent_mode/aws/lambda/ (tag: lambda_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_LAMBDA_IMAGE=$(LAMBDA_IMAGE)
 	go clean -testcache
 	LAMBDA_E2E_DOCKER_IMAGE=$(LAMBDA_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags lambda_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/lambda/
+	  go test -v -tags lambda_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/lambda/
 	$(MAKE) down-docker
 
-test-e2e-lambda-k8s: _check-k8s-prereq ## Lambda K8s tests — tests/full_mode/aws/lambda/ (tag: lambda_e2e)
+test-e2e-lambda-k8s: _check-k8s-prereq ## Lambda K8s tests — tests/persistent_mode/aws/lambda/ (tag: lambda_e2e)
 	$(MAKE) _start-k8s
 	go clean -testcache
 	LAMBDA_E2E_K8S_IMAGE=$(LAMBDA_IMAGE) SPARK_E2E_K8S_NAMESPACE=$(K8S_NAMESPACE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags lambda_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/lambda/
+	  go test -v -tags lambda_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/lambda/
 	$(MAKE) _stop-k8s
 
-test-e2e-cloudformation: ## CloudFormation e2e tests — tests/full_mode/aws/cloudformation/ (tag: cfn_fullmode)
+test-e2e-cloudformation: ## CloudFormation e2e tests — tests/persistent_mode/aws/cloudformation/ (tag: cfn_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags cfn_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/cloudformation/
+	  go test -v -tags cfn_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/cloudformation/
 	$(MAKE) down-docker
 
-test-e2e-dynamodb: ## DynamoDB GSI/LSI e2e tests — tests/full_mode/aws/dynamodb/ (tag: dynamo_fullmode)
+test-e2e-dynamodb: ## DynamoDB GSI/LSI e2e tests — tests/persistent_mode/aws/dynamodb/ (tag: dynamo_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags dynamo_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/dynamodb/
+	  go test -v -tags dynamo_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/dynamodb/
 	$(MAKE) down-docker
 
-test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/full_mode/aws/kms/ (tag: kms_fullmode)
+test-e2e-kms: ## KMS/SecretsManager/SSM e2e tests — tests/persistent_mode/aws/kms/ (tag: kms_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags kms_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kms/
+	  go test -v -tags kms_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/kms/
 	$(MAKE) down-docker
 
-test-e2e-ssm: ## SSM label persistence e2e tests — tests/full_mode/aws/ssm/ (tag: ssm_fullmode)
+test-e2e-ssm: ## SSM label persistence e2e tests — tests/persistent_mode/aws/ssm/ (tag: ssm_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags ssm_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/ssm/
+	  go test -v -tags ssm_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/ssm/
 	$(MAKE) down-docker
 
-test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/full_mode/aws/s3/ (tag: s3_fullmode)
+test-e2e-s3-streaming: ## S3 streaming upload/download e2e tests — tests/persistent_mode/aws/s3/ (tag: s3_fullmode)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags s3_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/s3/
+	  go test -v -tags s3_fullmode -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/s3/
 	$(MAKE) down-docker
 
-test-e2e-kinesis: ## Kinesis persistent mode e2e tests — tests/full_mode/aws/kinesis/ (tag: kinesis_e2e, requires kinesis-mock binary)
+test-e2e-kinesis: ## Kinesis persistent mode e2e tests — tests/persistent_mode/aws/kinesis/ (tag: kinesis_e2e, requires kinesis-mock binary)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags kinesis_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/full_mode/aws/kinesis/
+	  go test -v -tags kinesis_e2e -timeout 10m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/kinesis/
 	$(MAKE) down-docker
 
-test-e2e-ecr: ## ECR persistent mode e2e tests — tests/full_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
+test-e2e-ecr: ## ECR persistent mode e2e tests — tests/persistent_mode/aws/ecr/ (tag: ecr_e2e, requires K8s cluster + crane)
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/full_mode/aws/ecr/
+	  go test -race -tags ecr_e2e -timeout 15m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/ecr/
 
-test-e2e-sfn: ## Step Functions persistent mode e2e tests — tests/full_mode/aws/stepfunctions/ (tag: sfn_e2e)
+test-e2e-sfn: ## Step Functions persistent mode e2e tests — tests/persistent_mode/aws/stepfunctions/ (tag: sfn_e2e)
 	go clean -testcache
 	JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/full_mode/aws/stepfunctions/
+	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/stepfunctions/
 
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
 
-test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/full_mode/aws/iceberg/ (tag: iceberg_e2e)
+test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
 	SPARK_E2E_ICEBERG_IMAGE=$(SPARK_E2E_ICEBERG_IMAGE) JAISCLOUD_HOST=$(JAISCLOUD_HOST) \
-	  go test -v -tags iceberg_e2e -timeout 30m ./tests/full_mode/aws/iceberg/
+	  go test -v -tags iceberg_e2e -timeout 30m ./tests/persistent_mode/aws/iceberg/
 	$(MAKE) down-docker
 
 ##@ Aggregate test targets
