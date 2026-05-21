@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/aws/arn"
@@ -53,7 +54,9 @@ func (a *AWSAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 			"method", r.Method,
 			"path", r.URL.Path,
 			"x_amz_target", r.Header.Get("X-Amz-Target"),
-			"authorization_prefix", authPrefix(r.Header.Get("Authorization")),
+			"sigv4_service", sigv4Service(r.Header.Get("Authorization")),
+			"auth_prefix", authPrefix(r.Header.Get("Authorization")),
+			"content_type", r.Header.Get("Content-Type"),
 		)
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target AWS service", 400)
 	}
@@ -96,4 +99,28 @@ func authPrefix(auth string) string {
 		return auth[:40] + "..."
 	}
 	return auth
+}
+
+// sigv4Service extract service name from a sigV4 authorization header.
+// returns "" if the header is not in the expected format.
+// Format: AWS4-HMAC-SHA256 Credential=<key>/<date>/<region>/<service>/aws4_request, SignedHeaders=..., Signature=...
+func sigv4Service(auth string) string {
+	// SigV4 Authorization header format is:
+	// "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/service/aws4_request, SignedHeaders=host;range;x-amz-date, Signature=..."
+	// We want to extract the "service" segment from the Credential scope.
+	const prefix = "Credential="
+	idx := strings.Index(auth, prefix)
+	if idx < 0 {
+		return ""
+	}
+	cred := auth[idx+len(prefix):]
+	if end := strings.Index(cred, ","); end >= 0 {
+		cred = cred[:end]
+	}
+	// cred = <access_key>/<date>/<region>/<service>/aws4_request
+	parts := strings.Split(cred, "/")
+	if len(parts) >= 4 {
+		return parts[3]
+	}
+	return ""
 }
