@@ -256,14 +256,14 @@ func assertNoFile(t *testing.T, path string) {
 
 func hasPrefix(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
 
-// ── WriteTarball / ReadTarball ────────────────────────────────────────────────
+// ── CreateSnapshot / RestoreSnapshot ────────────────────────────────────────────────
 
-func TestLocalFSBlobStore_WriteTarball_Empty(t *testing.T) {
+func TestLocalFSBlobStore_CreateSnapshot_Empty(t *testing.T) {
 	s := mustNew(t)
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := s.WriteTarball(context.Background(), tw); err != nil {
-		t.Fatalf("WriteTarball: %v", err)
+	if err := s.CreateSnapshot(context.Background(), tw); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
 	}
 	tw.Close()
 
@@ -302,16 +302,16 @@ func TestLocalFSBlobStore_Tarball_RoundTrip(t *testing.T) {
 	// Export to tarball.
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := src.WriteTarball(ctx, tw); err != nil {
-		t.Fatalf("WriteTarball: %v", err)
+	if err := src.CreateSnapshot(ctx, tw); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
 	}
 	tw.Close()
 
 	// Import into a fresh store.
 	dst := mustNew(t)
 	tr := tar.NewReader(&buf)
-	if err := dst.ReadTarball(ctx, tr); err != nil {
-		t.Fatalf("ReadTarball: %v", err)
+	if err := dst.RestoreSnapshot(ctx, tr); err != nil {
+		t.Fatalf("RestoreSnapshot: %v", err)
 	}
 
 	// Verify contents.
@@ -319,9 +319,9 @@ func TestLocalFSBlobStore_Tarball_RoundTrip(t *testing.T) {
 	assertGet(t, dst, "s3", "nested/key2", "value2")
 }
 
-// TestLocalFSBlobStore_WriteTarball_PathSanitised verifies that ReadTarball
+// TestLocalFSBlobStore_CreateSnapshot_PathSanitised verifies that RestoreSnapshot
 // rejects tarball entries that contain path-traversal sequences ("../").
-func TestLocalFSBlobStore_WriteTarball_PathSanitised(t *testing.T) {
+func TestLocalFSBlobStore_CreateSnapshot_PathSanitised(t *testing.T) {
 	s := mustNew(t)
 
 	// Build a malicious tarball with a path-traversal entry.
@@ -339,7 +339,7 @@ func TestLocalFSBlobStore_WriteTarball_PathSanitised(t *testing.T) {
 	tw.Close()
 
 	tr := tar.NewReader(&buf)
-	err := s.ReadTarball(context.Background(), tr)
+	err := s.RestoreSnapshot(context.Background(), tr)
 	if err == nil {
 		t.Fatal("expected error for path traversal, got nil")
 	}
@@ -349,10 +349,10 @@ func TestLocalFSBlobStore_WriteTarball_PathSanitised(t *testing.T) {
 	}
 }
 
-// TestLocalFSBlobStore_WriteTarball_NonRegularEntry verifies that ReadTarball
+// TestLocalFSBlobStore_CreateSnapshot_NonRegularEntry verifies that RestoreSnapshot
 // silently skips non-regular entries (e.g. symlinks) without returning an error
 // and without writing any file for that entry.
-func TestLocalFSBlobStore_WriteTarball_NonRegularEntry(t *testing.T) {
+func TestLocalFSBlobStore_CreateSnapshot_NonRegularEntry(t *testing.T) {
 	s := mustNew(t)
 
 	// Build a tarball that contains a symlink entry.
@@ -367,7 +367,7 @@ func TestLocalFSBlobStore_WriteTarball_NonRegularEntry(t *testing.T) {
 	tw.Close()
 
 	tr := tar.NewReader(&buf)
-	if err := s.ReadTarball(context.Background(), tr); err != nil {
+	if err := s.RestoreSnapshot(context.Background(), tr); err != nil {
 		t.Fatalf("expected nil error for symlink entry, got: %v", err)
 	}
 
@@ -424,8 +424,8 @@ func TestLocalFSBlobStore_Tarball_BlobsSortedByPath(t *testing.T) {
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := s.WriteTarball(ctx, tw); err != nil {
-		t.Fatalf("WriteTarball: %v", err)
+	if err := s.CreateSnapshot(ctx, tw); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
 	}
 	tw.Close()
 
