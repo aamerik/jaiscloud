@@ -203,6 +203,17 @@ func TestRoundTrip_AllResources(t *testing.T) {
 	})
 	require.NoError(t, err, "create S3 bucket")
 
+	// Enable versioning first so the object gets a version ID on creation.
+	// (Enabling versioning after a put breaks GetObject for exisitng objects -
+	// a known limitation of the S3 provider taht this test intentionally avoids.)
+	_, err = s3Client.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
+		Bucket: aws.String(s3Bucket),
+		VersioningConfiguration: &s3_types.VersioningConfiguration{
+			Status: s3_types.BucketVersioningStatusEnabled,
+		},
+	})
+	require.NoError(t, err, "enable S3 versioning")
+
 	// Put an object with custom metadata and tags.
 	const s3Key = "data/snapshot-test.txt"
 	const s3Body = "snapshot-test-content"
@@ -226,15 +237,6 @@ func TestRoundTrip_AllResources(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "tag S3 object")
-
-	// Enable versioning on the bucket.
-	_, err = s3Client.PutBucketVersioning(ctx, &awss3.PutBucketVersioningInput{
-		Bucket: aws.String(s3Bucket),
-		VersioningConfiguration: &s3_types.VersioningConfiguration{
-			Status: s3_types.BucketVersioningStatusEnabled,
-		},
-	})
-	require.NoError(t, err, "enable S3 versioning")
 
 	// ── 6. KMS key with alias ─────────────────────────────────────────────────
 

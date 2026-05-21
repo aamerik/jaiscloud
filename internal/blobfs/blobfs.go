@@ -137,6 +137,94 @@ func (s *MemoryBlobStore) Reset(ctx context.Context) {
 	s.data = make(map[string][]byte)
 }
 
+// CreateSnapshot writes all in-memory blobs as tar enteries with paths of the form
+// "blobs/{bucket}/{key}". Entries are written in sorted order for deterministic output.
+func (s *MemoryBlobStore) CreateSnapshot(_ context.Context, tw *tar.Writer) error {
+	s.mu.RLock()
+	keys := make([]string, 0, len(s.data))
+	for k := range s.data {
+		keys = append(keys, k)
+	}
+	s.mu.RUnlock()
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		s.mu.RLock()
+		data := s.data[k]
+		s.mu.RUnlock()
+
+		// k is "bucket\x00key"
+		sep := strings.IndexByte(k, '\x00')
+		if sep < 0 {
+			continue
+		}
+		bucket, objKey := k[:sep], k[sep+1:]
+		entryPath := fmt.Sprintf("blobs/%s/%s", bucket, objKey)
+
+		hdr := &tar.Header{
+			Name:     entryPath,
+			Typeflag: tar.TypeReg,
+			Size:     int64(len(data)),
+			Mode:     0600,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("blobfs memory CreateSnapshot header %s: %w", entryPath, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return fmt.Errorf("blobfs memory CreateSnapshot write %s: %w", entryPath, err)
+		}
+	}
+	return nil
+}
+
+// RestoreSnapshot restores blobs from tar entries whose name starts with "blobs/".
+// Path sanitization rejects entries with ".." or absolute paths.
+func (s *MemoryBlobStore) RestoreSnapshot(_ context.Context, tr *tar.Reader) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("blobfs memory RestoreSnapshot next: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		if !strings.HasPrefix(hdr.Name, "blobs/") {
+			continue
+		}
+		rel := hdr.Name[len("blobs/"):]
+		if rel == "" {
+			continue
+		}
+		clean := filepath.Clean("/" + rel)
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+			return fmt.Errorf("blobfs memory RestoreSnapshot: unssafe path %q", hdr.Name)
+		}
+		// Split on first "/" to separate bucket from key.
+		slashIdx := strings.IndexByte(rel, '/')
+		if slashIdx < 0 {
+			continue
+		}
+		bucket, objKey := rel[:slashIdx], rel[slashIdx+1:]
+		if bucket == "" || objKey == "" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return fmt.Errorf("blobfs memory RestoreSnapshot read %s: %w", hdr.Name, err)
+		}
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		s.data[blobKey(bucket, objKey)] = cp
+	}
+	return nil
+}
+
 // -- LocalFSBlobStore --
 
 // LocalFSBlobStore is a filesystem-backed BlobStore for persistent mode.
@@ -527,10 +615,10 @@ func (s *LocalFSBlobStore) Reset(ctx context.Context) {
 	_ = os.MkdirAll(s.baseDir, 0o755)
 }
 
-// WriteTarball walks s.baseDir recursively and writes each regular file as a
+// CreateSnapshot walks s.baseDir recursively and writes each regular file as a
 // tar entry with a path of the form "blobs/<relative-path>". Entries are
 // written in sorted order so the tarball is deterministic.
-func (s *LocalFSBlobStore) WriteTarball(ctx context.Context, tw *tar.Writer) error {
+func (s *LocalFSBlobStore) CreateSnapshot(ctx context.Context, tw *tar.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -558,7 +646,7 @@ func (s *LocalFSBlobStore) WriteTarball(ctx context.Context, tw *tar.Writer) err
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("blobfs WriteTarball walk: %w", err)
+		return fmt.Errorf("blobfs CreateSnapshot walk: %w", err)
 	}
 	sort.Strings(relPaths)
 
@@ -569,7 +657,7 @@ func (s *LocalFSBlobStore) WriteTarball(ctx context.Context, tw *tar.Writer) err
 			if os.IsNotExist(err) {
 				continue // deleted between walk and read
 			}
-			return fmt.Errorf("blobfs WriteTarball read %s: %w", rel, err)
+			return fmt.Errorf("blobfs CreateSnapshot read %s: %w", rel, err)
 		}
 		hdr := &tar.Header{
 			Name:     "blobs/" + rel,
@@ -578,18 +666,18 @@ func (s *LocalFSBlobStore) WriteTarball(ctx context.Context, tw *tar.Writer) err
 			Mode:     0600,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
-			return fmt.Errorf("blobfs WriteTarball header %s: %w", rel, err)
+			return fmt.Errorf("blobfs CreateSnapshot header %s: %w", rel, err)
 		}
 		if _, err := tw.Write(data); err != nil {
-			return fmt.Errorf("blobfs WriteTarball write %s: %w", rel, err)
+			return fmt.Errorf("blobfs CreateSnapshot write %s: %w", rel, err)
 		}
 	}
 	return nil
 }
 
-// ReadTarball extracts tar entries whose name starts with "blobs/" into s.baseDir.
+// RestoreSnapshot extracts tar entries whose name starts with "blobs/" into s.baseDir.
 // Path sanitisation: rejects entries with ".." components or absolute paths.
-func (s *LocalFSBlobStore) ReadTarball(ctx context.Context, tr *tar.Reader) error {
+func (s *LocalFSBlobStore) RestoreSnapshot(ctx context.Context, tr *tar.Reader) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -599,7 +687,7 @@ func (s *LocalFSBlobStore) ReadTarball(ctx context.Context, tr *tar.Reader) erro
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("blobfs ReadTarball next: %w", err)
+			return fmt.Errorf("blobfs RestoreSnapshot next: %w", err)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
@@ -615,23 +703,23 @@ func (s *LocalFSBlobStore) ReadTarball(ctx context.Context, tr *tar.Reader) erro
 		// Security: reject absolute paths and ".." components.
 		clean := filepath.Clean(rel)
 		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-			return fmt.Errorf("blobfs ReadTarball: unsafe path %q", hdr.Name)
+			return fmt.Errorf("blobfs RestoreSnapshot: unsafe path %q", hdr.Name)
 		}
 
 		dst := filepath.Join(s.baseDir, clean)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return fmt.Errorf("blobfs ReadTarball mkdir %s: %w", filepath.Dir(dst), err)
+			return fmt.Errorf("blobfs RestoreSnapshot mkdir %s: %w", filepath.Dir(dst), err)
 		}
 		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
-			return fmt.Errorf("blobfs ReadTarball create %s: %w", dst, err)
+			return fmt.Errorf("blobfs RestoreSnapshot create %s: %w", dst, err)
 		}
 		if _, err := io.Copy(f, tr); err != nil {
 			f.Close()
-			return fmt.Errorf("blobfs ReadTarball copy %s: %w", dst, err)
+			return fmt.Errorf("blobfs RestoreSnapshot copy %s: %w", dst, err)
 		}
 		if err := f.Close(); err != nil {
-			return fmt.Errorf("blobfs ReadTarball close %s: %w", dst, err)
+			return fmt.Errorf("blobfs RestoreSnapshot close %s: %w", dst, err)
 		}
 	}
 	return nil

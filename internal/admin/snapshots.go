@@ -116,7 +116,7 @@ func (h *Handler) SnapshotCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if blobStore != nil {
-		if err := blobStore.WriteTarball(r.Context(), tw); err != nil {
+		if err := blobStore.CreateSnapshot(r.Context(), tw); err != nil {
 			f.Close()
 			http.Error(w, "write blobs: "+err.Error(), http.StatusInternalServerError)
 			return

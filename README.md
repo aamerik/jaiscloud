@@ -104,8 +104,6 @@ aws emr-containers start-job-run \
 JAISCLOUD_EXECUTOR_MODE=docker jaiscloud-aws start
 ```
 
-LocalStack does not offer real Spark execution at any price tier. **JaisCloud's executor is open-source and free.**
-
 ---
 
 ### Everything Free — No Subscription Required
@@ -569,7 +567,7 @@ See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for build setup, test matrix, and a
 
 ## Author
 
-**Raj Jaiswal** — [jaisraj@gmail.com](mailto:jaisraj@gmail.com)
+[Raj Jaiswal](https://www.linkedin.com/in/jaisraj/)
 
 ---
 

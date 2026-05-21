@@ -47,11 +47,13 @@ func exportSnapshot(t *testing.T) []byte {
 	return body
 }
 
-// importSnapshot POSTs body to /_jaiscloud/import and returns the status code.
+// importSnapshot POSTs body to /_jaiscloud/import?reset_first=true and returns the status code.
+// reset_first=true ensures provider-seeded resources (e.g. EC2 default VPC) don't trigger the
+// non-empty guard afer a resetState call.
 func importSnapshot(t *testing.T, body []byte) int {
 	t.Helper()
 	resp, err := http.Post(
-		jaiscloudEndpoint+"/_jaiscloud/import",
+		jaiscloudEndpoint+"/_jaiscloud/import?reset_first=true",
 		"application/octet-stream",
 		bytes.NewReader(body),
 	)

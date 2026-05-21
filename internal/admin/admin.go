@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/persistence/snapshot"
 	"jaiscloud/internal/persistence/version"
@@ -77,6 +76,12 @@ type HandlerMeta struct {
 // exportSoftLimitDefault is the default soft-warn threshold for export size (2 GiB).
 const exportSoftLimitDefault = 2 * 1024 * 1024 * 1024
 
+// SnapshotBlobStore is implemented by any blob store that supports export/import via tar archives.
+type SnapshotBlobStore interface {
+	CreateSnapshot(ctx context.Context, tw *tar.Writer) error
+	RestoreSnapshot(ctx context.Context, tr *tar.Reader) error
+}
+
 // PostRestoreHook is called after all stores are successfully restored from a snapshot.
 type PostRestoreHook interface {
 	Name() string
@@ -93,7 +98,7 @@ type Handler struct {
 	lambdaCode       LambdaCodeFetcher
 	firehoseFlusher  FirehoseFlusher
 	cwAlarmEvaluator CWAlarmEvaluator
-	blobStore        *blobfs.LocalFSBlobStore
+	blobStore        SnapshotBlobStore
 	kekFingerprint   string
 	dataDir          string
 	exportSoftLimit  int64
@@ -107,9 +112,9 @@ func NewHandler() *Handler {
 	}
 }
 
-// RegisterBlobStore wires a LocalFSBlobStore into the handler so that
+// RegisterBlobStore wires a blob store into the handler so that
 // Export includes blob data and Import restores it.
-func (h *Handler) RegisterBlobStore(b *blobfs.LocalFSBlobStore) {
+func (h *Handler) RegisterBlobStore(b SnapshotBlobStore) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.blobStore = b
@@ -355,7 +360,7 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 
 	// Write blob data if a blobStore is registered.
 	if blobStore != nil {
-		if err := blobStore.WriteTarball(r.Context(), tw); err != nil {
+		if err := blobStore.CreateSnapshot(r.Context(), tw); err != nil {
 			slog.Warn("admin: export write blobs", "err", err)
 			return
 		}
@@ -404,9 +409,10 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	var stores map[string]json.RawMessage
 	var envCloud, envInstanceID, envKEKFP string
 
+	var blobData []byte
 	if isTarball {
 		var parsed version.Envelope
-		parsed, stores, err = h.parseTarball(body)
+		parsed, stores, blobData, err = h.parseTarball(body)
 		if err != nil {
 			http.Error(w, "parse tarball: "+err.Error(), http.StatusBadRequest)
 			return
@@ -545,31 +551,52 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
-	// Non-empty guard: refuse import if any store already has state.
-	var nonEmpty []string
-	for name, s := range snapshotters {
-		empty, err := s.IsEmpty(r.Context())
-		if err != nil {
-			http.Error(w, "isempty "+name+": "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !empty {
-			nonEmpty = append(nonEmpty, name)
+	// ?reset_first=true clears all state before improting (analogous to snapshot revert).
+	resetFirst := r.URL.Query().Get("reset_first") == "true"
+	if resetFirst {
+		h.mu.Lock()
+		resetters := make([]Resetter, len(h.resetters))
+		copy(resetters, h.resetters)
+		h.mu.Unlock()
+		for _, rs := range resetters {
+			rs.Reset(r.Context())
 		}
 	}
-	if len(nonEmpty) > 0 {
-		sort.Strings(nonEmpty)
-		resp := &NonEmptyStateError{
-			Code:           "non_empty_state",
-			Message:        "existing state found in stores: " + fmt.Sprintf("%v", nonEmpty) + ". Clear state first using one of:\n  1. POST /_jaiscloud/reset (then retry import)\n  2. Restart the server with --fresh-start\n  3. Start a new instance with --data-dir <empty-path>",
-			NonEmptyStores: nonEmpty,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			slog.Warn("admin: import non-empty encode failed", "err", err)
-		}
+
+	// Restore blobs after any reset so reset_first doesn't deelte just restored blob data.
+	if err := h.restoreBlobs(r.Context(), blobData); err != nil {
+		http.Error(w, "restore blobs: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Non-empty guard: refuse import if any store already has state.
+	// Skipped when reset_first=true since the instance is already being wiped.
+	if !resetFirst {
+		var nonEmpty []string
+		for name, s := range snapshotters {
+			empty, err := s.IsEmpty(r.Context())
+			if err != nil {
+				http.Error(w, "isempty "+name+": "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !empty {
+				nonEmpty = append(nonEmpty, name)
+			}
+		}
+		if len(nonEmpty) > 0 {
+			sort.Strings(nonEmpty)
+			resp := &NonEmptyStateError{
+				Code:           "non_empty_state",
+				Message:        "existing state found in stores: " + fmt.Sprintf("%v", nonEmpty) + ". Clear state first using one of:\n  1. POST /_jaiscloud/import?reset_first=true\n  2. POST /_jaiscloud/reset (then retry import)\n  3. Restart the server with --fresh-start",
+				NonEmptyStores: nonEmpty,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				slog.Warn("admin: import non-empty encode failed", "err", err)
+			}
+			return
+		}
 	}
 
 	// Restore all stores; on any failure, rollback by resetting all stores.
@@ -621,13 +648,14 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseTarball decompresses a gzip tarball, extracts envelope.json, and returns
-// the parsed Envelope along with its stores map. Blob entries (blobs/*) are
-// passed to the registered blobStore if one is set; otherwise they are ignored.
-func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.RawMessage, error) {
+// parseTarball decompresses a gzip tarball and returns the parsed envelope,
+// its stores map, and a prebuilt tar archieve containing only blob entries.
+// Blob restoreation is deferred so callers can reset state first before calling
+// restoreBlobs - this prevents reset_first from deleting just-restored blobs.
+func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.RawMessage, []byte, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
-		return version.Envelope{}, nil, fmt.Errorf("gzip open: %w", err)
+		return version.Envelope{}, nil, nil, fmt.Errorf("gzip open: %w", err)
 	}
 	defer gz.Close()
 
@@ -636,8 +664,12 @@ func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.R
 	var env version.Envelope
 	gotEnvelope := false
 
+	// Buffer blob enteries for deferred restoration.
+	var blobBuf bytes.Buffer
+	blobTW := tar.NewWriter(&blobBuf)
+
 	h.mu.Lock()
-	blobStore := h.blobStore
+	hasBlobStore := h.blobStore != nil
 	h.mu.Unlock()
 
 	for {
@@ -646,7 +678,7 @@ func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.R
 			break
 		}
 		if err != nil {
-			return version.Envelope{}, nil, fmt.Errorf("tar next: %w", err)
+			return version.Envelope{}, nil, nil, fmt.Errorf("tar next: %w", err)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
@@ -655,47 +687,55 @@ func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.R
 		case hdr.Name == "envelope.json":
 			data, err := io.ReadAll(tr)
 			if err != nil {
-				return version.Envelope{}, nil, fmt.Errorf("read envelope.json: %w", err)
+				return version.Envelope{}, nil, nil, fmt.Errorf("read envelope.json: %w", err)
 			}
 			if err := json.Unmarshal(data, &env); err != nil {
-				return version.Envelope{}, nil, fmt.Errorf("parse envelope.json: %w", err)
+				return version.Envelope{}, nil, nil, fmt.Errorf("parse envelope.json: %w", err)
 			}
 			gotEnvelope = true
 
-		case len(hdr.Name) > len("blobs/") && hdr.Name[:len("blobs/")] == "blobs/":
-			if blobStore != nil {
-				// Feed this single entry to ReadTarball by reconstructing a minimal reader.
-				// We re-use the existing ReadTarball by building a tar with just this entry.
-				var entryBuf bytes.Buffer
-				innerTW := tar.NewWriter(&entryBuf)
-				data, err := io.ReadAll(tr)
-				if err != nil {
-					return version.Envelope{}, nil, fmt.Errorf("read blob %s: %w", hdr.Name, err)
-				}
-				entryHdr := *hdr
-				entryHdr.Size = int64(len(data))
-				if err := innerTW.WriteHeader(&entryHdr); err != nil {
-					return version.Envelope{}, nil, fmt.Errorf("re-header blob %s: %w", hdr.Name, err)
-				}
-				if _, err := innerTW.Write(data); err != nil {
-					return version.Envelope{}, nil, fmt.Errorf("re-write blob %s: %w", hdr.Name, err)
-				}
-				innerTW.Close()
-				innerTR := tar.NewReader(&entryBuf)
-				if err := blobStore.ReadTarball(context.Background(), innerTR); err != nil {
-					return version.Envelope{}, nil, fmt.Errorf("restore blob %s: %w", hdr.Name, err)
-				}
+		case hasBlobStore && len(hdr.Name) > len("blobs/") && hdr.Name[:len("blobs/")] == "blobs/":
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return version.Envelope{}, nil, nil, fmt.Errorf("read blob %s: %w", hdr.Name, err)
 			}
+			entryHdr := *hdr
+			entryHdr.Size = int64(len(data))
+			if err := blobTW.WriteHeader(&entryHdr); err != nil {
+				return version.Envelope{}, nil, nil, fmt.Errorf("buffer blob header %s: %w", hdr.Name, err)
+			}
+			if _, err := blobTW.Write(data); err != nil {
+				return version.Envelope{}, nil, nil, fmt.Errorf("buffer blob data %s: %w", hdr.Name, err)
+			}
+
 		}
 	}
+	blobTW.Close()
 
 	if !gotEnvelope {
-		return version.Envelope{}, nil, fmt.Errorf("tarball missing envelope.json")
+		return version.Envelope{}, nil, nil, fmt.Errorf("tarball missing envelope.json")
 	}
 	if env.Stores == nil {
 		env.Stores = make(map[string]json.RawMessage)
 	}
-	return env, env.Stores, nil
+	return env, env.Stores, blobBuf.Bytes(), nil
+}
+
+// restoreBlobs restores blob data from the given tar archive bytes.
+func (h *Handler) restoreBlobs(ctx context.Context, blobData []byte) error {
+	if len(blobData) == 0 {
+		return nil
+	}
+
+	h.mu.Lock()
+	blobStore := h.blobStore
+	h.mu.Unlock()
+
+	if blobStore == nil {
+		return nil // no blob store registered; skip restoration
+	}
+	tr := tar.NewReader(bytes.NewReader(blobData))
+	return blobStore.RestoreSnapshot(ctx, tr)
 }
 
 // snapshotHasKMSMaterial returns true if the stores map contains a non-empty

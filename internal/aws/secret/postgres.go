@@ -50,7 +50,11 @@ func (s *PostgresSecretStore) GetSecretByName(ctx context.Context, accountID, na
 	row := s.pool.QueryRow(ctx, `
 		SELECT account_id, region, secret_id, name, secret_data, deleted_at, created_at, updated_at
 		FROM jc_sm_secrets WHERE account_id=$1 AND name=$2`, accountID, name)
-	return scanSecretRow(row)
+	e, err := scanSecretRow(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SecretEntry{}, ErrSecretNotFound
+	}
+	return e, err
 }
 
 func (s *PostgresSecretStore) UpdateSecret(ctx context.Context, e SecretEntry) error {
