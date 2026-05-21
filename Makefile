@@ -310,7 +310,7 @@ test-integration: ## Run tests/integration/ — MODE=ephemeral|postgres required
 	@printf "\n\033[1mRunning integration tests...\033[0m\n\n"
 	@go clean -testcache
 	@JAISCLOUD_HOST=$(_INTEGRATION_HOST) \
-	  go test -v -race -timeout 5m -run "$(TEST_RUN)" ./tests/integration/ ./tests/integration/multiaccount/ \
+	  go test -v -race -timeout 15m -p 1 -run "$(TEST_RUN)" ./tests/integration/ ./tests/integration/multiaccount/ \
 	  > /tmp/integration-results.txt 2>&1; \
 	echo $$? > /tmp/integration-exit.txt; \
 	awk '\

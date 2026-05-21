@@ -23,6 +23,7 @@ type ResourceEntry struct {
 	Type      string          // e.g. "sqs_queues"
 	ID        string          // unique within Type (e.g. queue URL)
 	Data      json.RawMessage // serialised resource state (JSONB in Postgres mode)
+	Seeded    bool            // true if this entry was created by a provider seed (vs. user action)
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	// Account and Region are populated by List when doing a cross-scope scan

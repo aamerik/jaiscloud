@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"time"
@@ -104,9 +105,9 @@ func (s *PostgresResourceStore) Create(ctx context.Context, account, region stri
 	}
 	now := time.Now()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
+		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now, entry.Seeded)
 	return wrapPgError("Create", err)
 }
 
@@ -116,11 +117,11 @@ func (s *PostgresResourceStore) Upsert(ctx context.Context, account, region stri
 	}
 	now := time.Now()
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (account_id, region, resource_type, id)
-		DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at
-	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now)
+		DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at, seeded = EXCLUDED.seeded
+	`, account, region, entry.Type, entry.ID, json.RawMessage(entry.Data), now, now, entry.Seeded)
 	return wrapPgError("Upsert", err)
 }
 
@@ -128,10 +129,10 @@ func (s *PostgresResourceStore) Get(ctx context.Context, account, region, resour
 	var e ResourceEntry
 	var data []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT resource_type, id, data, created_at, updated_at
+		SELECT resource_type, id, data, created_at, updated_at, seeded
 		FROM jc_resources
 		WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND id=$4
-	`, account, region, resourceType, id).Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt)
+	`, account, region, resourceType, id).Scan(&e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt, &e.Seeded)
 	if err != nil {
 		return ResourceEntry{}, wrapPgError("Get", err)
 	}
@@ -174,14 +175,14 @@ func (s *PostgresResourceStore) List(ctx context.Context, account, region, resou
 		// Cross-scope scan: match all accounts/regions for this resource type.
 		// Mirrors MemoryResourceStore behaviour when both account and region are "".
 		rows, err = s.pool.Query(ctx, `
-			SELECT account_id, region, resource_type, id, data, created_at, updated_at
+			SELECT account_id, region, resource_type, id, data, seeded, created_at, updated_at
 			FROM jc_resources
 			WHERE resource_type=$1 AND ($2 = '' OR id LIKE '%' || $2 || '%')
 			ORDER BY created_at
 		`, resourceType, prefix)
 	} else {
 		rows, err = s.pool.Query(ctx, `
-			SELECT account_id, region, resource_type, id, data, created_at, updated_at
+			SELECT account_id, region, resource_type, id, data, seeded, created_at, updated_at
 			FROM jc_resources
 			WHERE account_id=$1 AND region=$2 AND resource_type=$3 AND ($4 = '' OR id LIKE '%' || $4 || '%')
 			ORDER BY created_at
@@ -196,7 +197,7 @@ func (s *PostgresResourceStore) List(ctx context.Context, account, region, resou
 	for rows.Next() {
 		var e ResourceEntry
 		var data []byte
-		if err := rows.Scan(&e.Account, &e.Region, &e.Type, &e.ID, &data, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.Account, &e.Region, &e.Type, &e.ID, &data, &e.Seeded, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, wrapPgError("List scan", err)
 		}
 		e.Data = json.RawMessage(data)
@@ -222,6 +223,65 @@ func (s *PostgresResourceStore) ResetScope(account, region string) {
 func (s *PostgresResourceStore) ResetAccount(account string) {
 	ctx := context.Background()
 	s.pool.Exec(ctx, `DELETE FROM jc_resources WHERE account_id=$1`, account)
+}
+
+func (s *PostgresResourceStore) IsEmpty(ctx context.Context) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM jc_resources WHERE seeded = false`).Scan(&count)
+	return count == 0, err
+
+}
+
+func (s *PostgresResourceStore) Snapshot(ctx context.Context, w io.Writer) error {
+	rows, err := s.pool.Query(ctx,
+		`SELECT account_id, region, resource_type, id, data, seeded, created_at, updated_at
+		FROM jc_resources ORDER BY account_id, region, resource_type, id
+		`)
+	if err != nil {
+		return wrapPgError("PostgresResourceStore.Snapshot query: %w", err)
+	}
+	defer rows.Close()
+	entries := make(map[string]ResourceEntry)
+	for rows.Next() {
+		var e ResourceEntry
+		var data []byte
+		if err := rows.Scan(&e.Account, &e.Region, &e.Type, &e.ID, &data, &e.Seeded, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return wrapPgError("PostgresResourceStore.Snapshot scan: %w", err)
+		}
+		e.Data = json.RawMessage(data)
+		entries[e.Account+":"+e.Region+":"+e.Type+":"+e.ID] = e
+	}
+	if err := rows.Err(); err != nil {
+		return wrapPgError("PostgresResourceStore.Snapshot rows: %w", err)
+	}
+
+	return json.NewEncoder(w).Encode(entries)
+}
+
+func (s *PostgresResourceStore) Restore(ctx context.Context, r io.Reader) error {
+	var entries map[string]ResourceEntry
+	if err := json.NewDecoder(r).Decode(&entries); err != nil {
+		return fmt.Errorf("PostgresResourceStore.Restore decode: %w", err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("PostgresResourceStore.Restore begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for _, e := range entries {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (account_id, region, resource_type, id)
+			DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at, seeded = EXCLUDED.seeded
+		`, e.Account, e.Region, e.Type, e.ID, json.RawMessage(e.Data), e.CreatedAt, e.UpdatedAt, e.Seeded)
+		if err != nil {
+			return fmt.Errorf("PostgresResourceStore.Restore insert %s/%s/%s/%s: %w", e.Account, e.Region, e.Type, e.ID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // wrapPgError classifies a pgx error:

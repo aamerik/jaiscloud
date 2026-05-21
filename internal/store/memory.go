@@ -196,7 +196,12 @@ func (s *MemoryResourceStore) Snapshot(_ context.Context, w io.Writer) error {
 func (s *MemoryResourceStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries) == 0, nil
+	for _, e := range s.entries {
+		if !e.Seeded {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *MemoryResourceStore) Restore(_ context.Context, r io.Reader) error {

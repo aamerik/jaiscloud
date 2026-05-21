@@ -58,7 +58,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context, accountID, region 
 		EnableDnsHostnames: true,
 	}
 	data, _ := json.Marshal(vpc)
-	_ = p.resources.Create(ctx, accountID, region, store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data})
+	_ = p.resources.Create(ctx, accountID, region, store.ResourceEntry{Type: rtVpc, ID: vpcId, Data: data, Seeded: true})
 
 	// Seed three default subnets in different AZs.
 	azCidrs := [][2]string{
@@ -79,7 +79,7 @@ func (p *ComputeProvider) seedDefaultVPC(ctx context.Context, accountID, region 
 			MapPublicIpOnLaunch:     true,
 		}
 		sdata, _ := json.Marshal(subnet)
-		_ = p.resources.Create(ctx, accountID, region, store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata})
+		_ = p.resources.Create(ctx, accountID, region, store.ResourceEntry{Type: rtSubnet, ID: subnetId, Data: sdata, Seeded: true})
 	}
 }
 

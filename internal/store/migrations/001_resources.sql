@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS jc_resources (
     resource_type TEXT        NOT NULL,
     id            TEXT        NOT NULL,
     data          JSONB       NOT NULL DEFAULT '{}',
+    seeded        BOOLEAN     NOT NULL DEFAULT false, -- true if created by provider seeding
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (account_id, region, resource_type, id)
