@@ -201,9 +201,9 @@ func (s *MemoryBlobStore) RestoreSnapshot(_ context.Context, tr *tar.Reader) err
 		if rel == "" {
 			continue
 		}
-		clean := filepath.Clean("/" + rel)
+		clean := filepath.Clean(rel)
 		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-			return fmt.Errorf("blobfs memory RestoreSnapshot: unssafe path %q", hdr.Name)
+			return fmt.Errorf("blobfs memory RestoreSnapshot: unsafe path %q", hdr.Name)
 		}
 		// Split on first "/" to separate bucket from key.
 		slashIdx := strings.IndexByte(rel, '/')

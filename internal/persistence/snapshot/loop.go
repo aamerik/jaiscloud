@@ -101,6 +101,10 @@ func (loop *SnapshotLoop) Stop() {
 // SaveNow performs a single snapshot save, blocking until any in-progress
 // reset/import releases the write lock. If a save is already in progress,
 // it returns nil immediately (at-most-once semantics).
+//
+// ctx must carry a deadline or be cancellable by the caller, since SaveNow
+// may block indefinitely if the barrier is held by a long-running reset,
+// import or context.Background() is used.
 func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 	if loop.cfg.DataDir == "" {
 		return fmt.Errorf("snapshot loop: DataDir not set")
