@@ -67,7 +67,7 @@ func (loop *SnapshotLoop) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				saveCtx, cancel := context.WithTimeout(ctx, loop.cfg.SaveTimeout)
-				if err := loop.SaveNow(saveCtx); err != nil {
+				if err := loop.periodicSave(saveCtx); err != nil {
 					slog.Warn("snapshot loop: periodic save failed", "err", err)
 				}
 				cancel()
@@ -98,7 +98,8 @@ func (loop *SnapshotLoop) Stop() {
 	}
 }
 
-// SaveNow performs a single snapshot save. If a save is already in progress,
+// SaveNow performs a single snapshot save, blocking until any in-progress
+// reset/import releases the write lock. If a save is already in progress,
 // it returns nil immediately (at-most-once semantics).
 func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 	if !loop.saving.CompareAndSwap(false, true) {
@@ -110,9 +111,31 @@ func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 		return fmt.Errorf("snapshot loop: DataDir not set")
 	}
 
-	// Acquire shared read lock so imports/resets don't race with our read.
-	// Use non-blocking TryReadBegin: if a reset/import holds the write lock,
-	// skip this tick — the state is about to change anyway.
+	// Block until any in-progress reset/import finishes.
+	if loop.cfg.Barrier != nil {
+		release, err := loop.cfg.Barrier.ReadBegin(ctx)
+		if err != nil {
+			return fmt.Errorf("snapshot loop: acquire barrier: %w", err)
+		}
+		defer release()
+	}
+
+	return loop.doSave(ctx)
+}
+
+// periodicSave is called from the ticker goroutine. It uses non-blocking
+// TryReadBegin so that ticks are skipped rather than queued when a reset or
+// import holds the write lock — the state is about to change anyway.
+func (loop *SnapshotLoop) periodicSave(ctx context.Context) error {
+	if !loop.saving.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer loop.saving.Store(false)
+
+	if loop.cfg.DataDir == "" {
+		return fmt.Errorf("snapshot loop: DataDir not set")
+	}
+
 	if loop.cfg.Barrier != nil {
 		release, ok := loop.cfg.Barrier.TryReadBegin()
 		if !ok {
@@ -122,6 +145,12 @@ func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 		defer release()
 	}
 
+	return loop.doSave(ctx)
+}
+
+// doSave snapshots all stores and writes state.json atomically.
+// The caller is responsible for holding any necessary barrier lock.
+func (loop *SnapshotLoop) doSave(ctx context.Context) error {
 	// Snapshot all stores.
 	stores := make(map[string]json.RawMessage, len(loop.cfg.Stores))
 	for name, s := range loop.cfg.Stores {
