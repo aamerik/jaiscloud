@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -308,7 +310,19 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	blobStore := h.blobStore
 	kekFP := h.kekFingerprint
 	softLimit := h.exportSoftLimit
+	barrier := h.barrier
 	h.mu.Unlock()
+
+	// Acquire shared read lock so a concurrent reset/import cannot modify stores
+	// while we are reading them. Multiple concurrent exports coexist fine.
+	if barrier != nil {
+		release, err := barrier.ReadBegin(r.Context())
+		if err != nil {
+			http.Error(w, "export: acquire barrier: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer release()
+	}
 
 	stores := make(map[string]json.RawMessage, len(snapshots))
 	for name, s := range snapshots {
@@ -410,6 +424,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	var envCloud, envInstanceID, envKEKFP string
 
 	var blobData []byte
+	var envSchemaVersion int
 	if isTarball {
 		var parsed version.Envelope
 		parsed, stores, blobData, err = h.parseTarball(body)
@@ -420,6 +435,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		envCloud = parsed.Cloud
 		envInstanceID = parsed.InstanceID
 		envKEKFP = parsed.KEKFingerprint
+		envSchemaVersion = parsed.SchemaVersion
 	} else {
 		// Legacy plain JSON path.
 		var env SnapshotEnvelope
@@ -430,9 +446,21 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		stores = env.Stores
 		envCloud = env.Cloud
 		envInstanceID = env.InstanceID
+		envSchemaVersion = env.SchemaVersion
 	}
 
-	// Step 1: Cloud identity check — must match running binary.
+	// Step 1: Schema version check — reject snapshots this binary cannot handle.
+	if err := version.CheckSnapshotVersion(envSchemaVersion); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "schema_version_mismatch",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Step 2: Cloud identity check — must match running binary.
 	h.mu.Lock()
 	cloud := h.meta.Cloud
 	kekFP := h.kekFingerprint
@@ -453,7 +481,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: KEK fingerprint check (tarball path only).
+	// Step 3: KEK fingerprint check (tarball path only).
 	if isTarball && envKEKFP != "" {
 		if err := version.CheckKEKFingerprint(envKEKFP, kekFP); err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -694,7 +722,15 @@ func (h *Handler) parseTarball(body []byte) (version.Envelope, map[string]json.R
 			}
 			gotEnvelope = true
 
-		case hasBlobStore && len(hdr.Name) > len("blobs/") && hdr.Name[:len("blobs/")] == "blobs/":
+		case strings.HasPrefix(hdr.Name, "blobs/") && len(hdr.Name) > len("blobs/"):
+			rel := hdr.Name[len("blobs/"):]
+			clean := filepath.Clean(rel)
+			if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+				return version.Envelope{}, nil, nil, fmt.Errorf("tarball: unsafe blob path %q", hdr.Name)
+			}
+			if !hasBlobStore {
+				continue
+			}
 			data, err := io.ReadAll(tr)
 			if err != nil {
 				return version.Envelope{}, nil, nil, fmt.Errorf("read blob %s: %w", hdr.Name, err)

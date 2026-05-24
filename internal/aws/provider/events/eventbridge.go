@@ -83,6 +83,43 @@ func (p *EventBridgeProvider) SetScheduler(s *scheduler.Scheduler) {
 	p.scheduler = s
 }
 
+// Name implements admin.Resetter.
+func (p *EventBridgeProvider) Name() string { return "eventbridge" }
+
+// Reset implements admin.Resetter — clears all in-memory state and the scheduler heap.
+func (p *EventBridgeProvider) Reset(ctx context.Context) {
+	p.patternMu.Lock()
+	p.patternCache = make(map[string]*pattern.Pattern)
+	p.patternMu.Unlock()
+
+	p.archiveMu.Lock()
+	p.archiveEvents = make(map[string][]map[string]any)
+	p.archiveMu.Unlock()
+
+	if p.scheduler != nil {
+		p.scheduler.Reset()
+	}
+}
+
+// OnRestore implements admin.PostRestoreHook — rehydrates the scheduler from
+// all ENABLED rules with a ScheduleExpression that are now in the ResourceStore.
+func (p *EventBridgeProvider) OnRestore(ctx context.Context) error {
+	if p.scheduler == nil {
+		return nil
+	}
+	// Cross-scope scan: account="" region="" populates e.Account and e.Region on each entry.
+	entries, _ := p.resources.List(ctx, "", "", resTypeRule, "")
+	for _, e := range entries {
+		var rule ruleData
+		if json.Unmarshal(e.Data, &rule) != nil || rule.ScheduleExpr == "" || rule.State != "ENABLED" {
+			continue
+		}
+		hctx := scheduler.HandlerCtx{Region: e.Region, AccountID: e.Account}
+		_ = p.scheduler.Add(rule.Arn, rule.ScheduleExpr, hctx, nil)
+	}
+	return nil
+}
+
 // InternalPutEvents delivers events into the rule-matching pipeline from other services.
 func (p *EventBridgeProvider) InternalPutEvents(ctx context.Context, entries []map[string]any) error {
 	for _, em := range entries {

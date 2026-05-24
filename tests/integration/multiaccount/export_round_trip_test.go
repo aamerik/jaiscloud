@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,4 +117,70 @@ func TestExportImport_RoundTrip(t *testing.T) {
 		}
 	}
 	assert.True(t, foundB, "B's queue should be restored after import")
+}
+
+// TestExportImport_ESMRoundTrip verifies that an ESM created before export is
+// restored and its poller restarted after an import, so GetEventSourceMapping
+// returns the mapping and it is still in an enabled state.
+func TestExportImport_ESMRoundTrip(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+
+	lambdaC := newLambdaFor(t, AcctA)
+
+	// Create the function and queue the ESM will reference.
+	_, err := lambdaC.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("esm-export-fn"),
+		Runtime:      lambdatypes.RuntimeNodejs18x,
+		Role:         aws.String("arn:aws:iam::" + AcctA + ":role/lambda-role"),
+		Handler:      aws.String("index.handler"),
+		Code:         &lambdatypes.FunctionCode{ZipFile: []byte("fake-zip")},
+	})
+	require.NoError(t, err)
+
+	sqsC := newSQSFor(t, AcctA)
+	_, err = sqsC.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("esm-export-queue")})
+	require.NoError(t, err)
+
+	queueARN := "arn:aws:sqs:us-east-1:" + AcctA + ":esm-export-queue"
+	createOut, err := lambdaC.CreateEventSourceMapping(ctx, &awslambda.CreateEventSourceMappingInput{
+		FunctionName:   aws.String("esm-export-fn"),
+		EventSourceArn: aws.String(queueARN),
+		BatchSize:      aws.Int32(5),
+	})
+	require.NoError(t, err)
+	esmUUID := aws.ToString(createOut.UUID)
+	require.NotEmpty(t, esmUUID)
+
+	// Export state.
+	exportResp, err := http.Get(endpoint + "/_jaiscloud/export")
+	require.NoError(t, err)
+	snapshot, err := io.ReadAll(exportResp.Body)
+	exportResp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, exportResp.StatusCode)
+
+	// Wipe all state.
+	resetState(t)
+
+	// Confirm the ESM is gone.
+	_, err = lambdaC.GetEventSourceMapping(ctx, &awslambda.GetEventSourceMappingInput{UUID: aws.String(esmUUID)})
+	require.Error(t, err, "ESM should not exist after reset")
+
+	// Import the snapshot.
+	importResp, err := http.Post(endpoint+"/_jaiscloud/import", "application/octet-stream",
+		bytes.NewReader(snapshot))
+	require.NoError(t, err)
+	importResp.Body.Close()
+	require.Equal(t, http.StatusOK, importResp.StatusCode)
+
+	// ESM record should be restored.
+	getOut, err := lambdaC.GetEventSourceMapping(ctx, &awslambda.GetEventSourceMappingInput{
+		UUID: aws.String(esmUUID),
+	})
+	require.NoError(t, err, "ESM should be restored after import")
+	assert.Equal(t, esmUUID, aws.ToString(getOut.UUID))
+	assert.Equal(t, queueARN, aws.ToString(getOut.EventSourceArn))
+	assert.Contains(t, aws.ToString(getOut.FunctionArn), "esm-export-fn")
+	assert.NotEqual(t, "Disabled", aws.ToString(getOut.State), "ESM should not be disabled after restore")
 }

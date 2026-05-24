@@ -181,7 +181,7 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := buildAWSAdapter(cfg.S3VirtualHostBases)
-			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
+			adminHandler := buildAdminHandler(s, app.StreamStore, app.KeyStore, app.SecretStore, app.ParamStore, app.LambdaResetter, app.ESMProvider, app.EventsProvider, app.QueueP, app.LogsP, app.CWP, app.ComputeP)
 			adminHandler.SetLambdaCodeFetcher(app.FuncP)
 			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
 			adminHandler.SetFirehoseFlusher(app.FirehoseP)
@@ -196,6 +196,8 @@ func startCmd() *cobra.Command {
 			// SetDataDir is called below after dataDir is resolved.
 			if s.localBlobs != nil {
 				adminHandler.RegisterBlobStore(s.localBlobs)
+			} else if sb, ok := s.blobs.(admin.SnapshotBlobStore); ok {
+				adminHandler.RegisterBlobStore(sb)
 			}
 			if cfg.KMSMasterKey != "" {
 				// FingerprintKEK expects raw bytes; KMSMasterKey is a 32-byte hex string.
@@ -402,6 +404,8 @@ type AppContext struct {
 	SecretStore    secretprovider.SecretStore
 	ParamStore     paramprovider.ParameterStore
 	LambdaResetter admin.Resetter
+	ESMProvider    admin.Resetter
+	EventsProvider admin.Resetter
 	Cleanup        func()
 	ObjectP        *objectprovider.ObjectProvider
 	QueueP         *queue.QueueProvider
@@ -843,6 +847,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		SecretStore:    s.secrets,
 		ParamStore:     s.parameters,
 		LambdaResetter: lambdaExec,
+		ESMProvider:    esmProvider,
+		EventsProvider: eventsP,
 		Cleanup:        cleanup,
 		ObjectP:        objectP,
 		QueueP:         queueP,
@@ -1048,8 +1054,12 @@ func buildAdminHandler(s appStores, streams *streamstore.MemoryStreamStore, keyS
 	h.RegisterResetter(s.ecr)
 	h.RegisterResetter(s.sfn)
 	for _, r := range extra {
-		if r != nil {
-			h.RegisterResetter(r)
+		if r == nil {
+			continue
+		}
+		h.RegisterResetter(r)
+		if hook, ok := r.(admin.PostRestoreHook); ok {
+			h.RegisterPostRestoreHook(hook)
 		}
 	}
 	if snap, ok := s.resources.(admin.Snapshotter); ok {

@@ -95,6 +95,26 @@ func (p *Provider) Shutdown(ctx context.Context) {
 	p.wg.Wait()
 }
 
+// Reset cancels all running pollers and clears the ESM poller map.
+// The underlying resource store is reset separately by the admin handler.
+func (p *Provider) Reset(ctx context.Context) {
+	p.esmMu.Lock()
+	for _, poller := range p.esmPollers {
+		poller.cancel()
+	}
+	p.esmPollers = make(map[string]*esmPoller)
+	p.esmMu.Unlock()
+}
+
+// Name satisfies admin.PostRestoreHook.
+func (p *Provider) Name() string { return "esm" }
+
+// OnRestore restarts pollers from the newly-restored resource store after an import.
+func (p *Provider) OnRestore(ctx context.Context) error {
+	p.RehydratePollers(ctx)
+	return nil
+}
+
 // CreateEventSourceMapping is the exported entry point used by CFN handlers.
 func (p *Provider) CreateEventSourceMapping(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.handleCreateESM(ctx, nr)

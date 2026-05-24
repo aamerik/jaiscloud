@@ -408,27 +408,26 @@ func (s *Server) ListenAndServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go func() {
-		mode := "memory+saves"
-		if s.cfg.Ephemeral {
-			mode = "ephemeral"
-		} else if s.cfg.DSN != "" {
-			mode = "postgres"
-		}
-		slog.Info("jaiscloud started", "port", s.cfg.Port, "mode", mode)
-		if serveErr := srv.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
-			slog.Error("server error", "err", serveErr)
-		}
-	}()
+	mode := "memory+saves"
+	if s.cfg.Ephemeral {
+		mode = "ephemeral"
+	} else if s.cfg.DSN != "" {
+		mode = "postgres"
+	}
 
 	// Start HTTPS listener on :443.
+	// httpsBound is closed exactly once: after a successful net.Listen on :443,
+	// before ServeTLS blocks. The fallback goroutine uses it to decide whether
+	// to emit an HTTP-only startup line.
 	var tlsSrv *http.Server
+	httpsBound := make(chan struct{})
 	go func() {
 		cert, tlsErr := tls.LoadX509KeyPair("/etc/tls/tls.crt", "/etc/tls/tls.key")
 		if tlsErr != nil {
 			cert, tlsErr = s.loadOrGenerateCert(ctx)
 			if tlsErr != nil {
 				slog.Warn("https: could not generate TLS cert, HTTPS disabled", "err", tlsErr)
+				close(httpsBound)
 				return
 			}
 		}
@@ -443,11 +442,29 @@ func (s *Server) ListenAndServe() error {
 		tlsLn, listenErr := net.Listen("tcp", ":443")
 		if listenErr != nil {
 			slog.Warn("https: could not bind :443, HTTPS disabled", "err", listenErr)
+			close(httpsBound)
 			return
 		}
-		slog.Info("jaiscloud https started", "port", 443)
+		// HTTPS is bound — log both ports and unblock the fallback goroutine.
+		close(httpsBound)
+		slog.Info("jaiscloud started", "http_port", s.cfg.Port, "https_port", 443, "mode", mode)
 		if serveErr := tlsSrv.ServeTLS(tlsLn, "", ""); serveErr != nil && serveErr != http.ErrServerClosed {
 			slog.Warn("https server error", "err", serveErr)
+		}
+	}()
+
+	go func() {
+		<-httpsBound
+		// Only log HTTP-only if HTTPS did not bind (cert/port failure closed the channel early).
+		// If HTTPS bound successfully it already logged both ports above.
+		if tlsSrv == nil {
+			slog.Info("jaiscloud started", "http_port", s.cfg.Port, "mode", mode)
+		}
+	}()
+
+	go func() {
+		if serveErr := srv.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
+			slog.Error("server error", "err", serveErr)
 		}
 	}()
 

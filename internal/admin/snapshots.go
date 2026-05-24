@@ -43,6 +43,7 @@ func (h *Handler) SnapshotCreate(w http.ResponseWriter, r *http.Request) {
 		snapshots[k] = v
 	}
 	blobStore := h.blobStore
+	barrier := h.barrier
 	h.mu.Unlock()
 
 	if dataDir == "" {
@@ -50,7 +51,19 @@ func (h *Handler) SnapshotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build envelope.
+	// Acquire shared read lock so a concurrent reset/import cannot modify stores
+	// or blobs while we are snapshotting them. Multiple concurrent snapshots
+	// coexist fine; only a pending reset/import is deferred until we finish.
+	if barrier != nil {
+		release, err := barrier.ReadBegin(r.Context())
+		if err != nil {
+			http.Error(w, "snapshot: acquire barrier: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer release()
+	}
+
+	// Build envelope — all store reads happen under the read lock.
 	stores := make(map[string]json.RawMessage, len(snapshots))
 	storeCounts := make(map[string]int, len(snapshots))
 	for name, s := range snapshots {
@@ -84,7 +97,8 @@ func (h *Handler) SnapshotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the tarball.
+	// Write the tarball — blobs are read from the store and written to disk
+	// while the read lock is still held, keeping store + blob data consistent.
 	tarPath := snapshotTarball(dataDir, req.Name)
 	if err := os.MkdirAll(snapshotDir(dataDir, req.Name), 0o700); err != nil {
 		http.Error(w, "mkdir: "+err.Error(), http.StatusInternalServerError)
@@ -207,25 +221,15 @@ func (h *Handler) SnapshotRevert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resetFirst := r.URL.Query().Get("reset_first") == "true"
+
+	// Delegate entirely to Import, letting it acquire the barrier and handle
+	// reset_first atomically. SnapshotRevert must NOT acquire the write lock here
+	// because Import also acquires it — re-entrant Lock() on RWMutex deadlocks.
+	importURL := "/_jaiscloud/import"
 	if resetFirst {
-		// Acquire write lock and reset before restore.
-		h.mu.Lock()
-		barrier := h.barrier
-		h.mu.Unlock()
-
-		if barrier != nil {
-			release, err := barrier.WriteBegin(r.Context())
-			if err != nil {
-				http.Error(w, "acquire barrier: "+err.Error(), http.StatusServiceUnavailable)
-				return
-			}
-			defer release()
-		}
-		h.resetNoBarrier(r.Context())
+		importURL += "?reset_first=true"
 	}
-
-	// Re-use the Import handler logic by forwarding as a POST with the tarball body.
-	proxyReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "/_jaiscloud/import", bytes.NewReader(data))
+	proxyReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, importURL, bytes.NewReader(data))
 	proxyReq.Header.Set("Content-Type", "application/x-tar")
 	h.Import(w, proxyReq)
 }

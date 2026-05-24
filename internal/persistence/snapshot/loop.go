@@ -111,19 +111,16 @@ func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 	}
 
 	// Acquire shared read lock so imports/resets don't race with our read.
-	var releaseFn func()
+	// Use non-blocking TryReadBegin: if a reset/import holds the write lock,
+	// skip this tick — the state is about to change anyway.
 	if loop.cfg.Barrier != nil {
-		release, err := loop.cfg.Barrier.ReadBegin(ctx)
-		if err != nil {
-			return fmt.Errorf("snapshot loop: acquire barrier: %w", err)
+		release, ok := loop.cfg.Barrier.TryReadBegin()
+		if !ok {
+			slog.Warn("snapshot loop: skipping periodic save, reset/import in progress")
+			return nil
 		}
-		releaseFn = release
+		defer release()
 	}
-	defer func() {
-		if releaseFn != nil {
-			releaseFn()
-		}
-	}()
 
 	// Snapshot all stores.
 	stores := make(map[string]json.RawMessage, len(loop.cfg.Stores))
@@ -149,6 +146,6 @@ func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 	if err := WriteAtomic(dst, data); err != nil {
 		return fmt.Errorf("snapshot loop: write %s: %w", dst, err)
 	}
-	slog.Debug("snapshot loop: state saved", "path", dst, "stores", len(stores))
+	slog.Info("snapshot loop: state saved", "path", dst, "stores", len(stores))
 	return nil
 }

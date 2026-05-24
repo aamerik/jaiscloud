@@ -2,7 +2,10 @@ package esm
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"jaiscloud/internal/store"
 )
 
 const (
@@ -28,6 +31,10 @@ func (p *Provider) runSQSPoller(poller *esmPoller, esm EventSourceMapping) {
 		// Reload ESM to check if still enabled
 		current, err := p.loadESM(poller.ctx, esm.UUID)
 		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				logger.Info("esm: SQS poller stopping - ESM deleted")
+				return
+			}
 			logger.Warn("esm: failed to load ESM state", "err", err)
 			if !sleepCtx(poller.ctx, sqsEmptyPollDelay) {
 				return
@@ -168,6 +175,10 @@ func (p *Provider) runDynamoDBStreamsPoller(poller *esmPoller, esm EventSourceMa
 		// Reload ESM to check if still enabled
 		current, err := p.loadESM(poller.ctx, esm.UUID)
 		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				logger.Info("esm: DynamoDB Streams poller stopping - ESM deleted")
+				return
+			}
 			logger.Warn("esm: failed to load ESM state", "err", err)
 			if !sleepCtx(poller.ctx, sqsEmptyPollDelay) {
 				return

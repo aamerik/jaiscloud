@@ -98,6 +98,15 @@ func (s *Scheduler) Add(ruleARN, expr string, hctx HandlerCtx, tgts []targets.Ta
 	return nil
 }
 
+// Reset clears all scheduled entries, stopping any pending fires.
+func (s *Scheduler) Reset() {
+	s.mu.Lock()
+	s.entries = make(map[string]*entry)
+	s.heap = nil
+	s.mu.Unlock()
+	s.notify()
+}
+
 // Remove deregisters a scheduled rule.
 func (s *Scheduler) Remove(ruleARN string) {
 	s.mu.Lock()
