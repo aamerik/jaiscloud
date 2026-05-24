@@ -102,14 +102,13 @@ func (loop *SnapshotLoop) Stop() {
 // reset/import releases the write lock. If a save is already in progress,
 // it returns nil immediately (at-most-once semantics).
 func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
+	if loop.cfg.DataDir == "" {
+		return fmt.Errorf("snapshot loop: DataDir not set")
+	}
 	if !loop.saving.CompareAndSwap(false, true) {
 		return nil // another save already in progress
 	}
 	defer loop.saving.Store(false)
-
-	if loop.cfg.DataDir == "" {
-		return fmt.Errorf("snapshot loop: DataDir not set")
-	}
 
 	// Block until any in-progress reset/import finishes.
 	if loop.cfg.Barrier != nil {
@@ -127,14 +126,13 @@ func (loop *SnapshotLoop) SaveNow(ctx context.Context) error {
 // TryReadBegin so that ticks are skipped rather than queued when a reset or
 // import holds the write lock — the state is about to change anyway.
 func (loop *SnapshotLoop) periodicSave(ctx context.Context) error {
+	if loop.cfg.DataDir == "" {
+		return fmt.Errorf("snapshot loop: DataDir not set")
+	}
 	if !loop.saving.CompareAndSwap(false, true) {
 		return nil
 	}
 	defer loop.saving.Store(false)
-
-	if loop.cfg.DataDir == "" {
-		return fmt.Errorf("snapshot loop: DataDir not set")
-	}
 
 	if loop.cfg.Barrier != nil {
 		release, ok := loop.cfg.Barrier.TryReadBegin()
@@ -149,7 +147,7 @@ func (loop *SnapshotLoop) periodicSave(ctx context.Context) error {
 }
 
 // doSave snapshots all stores and writes state.json atomically.
-// The caller is responsible for holding any necessary barrier lock.
+// Callers must check DataDir and hold any necessary barrier lock before calling.
 func (loop *SnapshotLoop) doSave(ctx context.Context) error {
 	// Snapshot all stores.
 	stores := make(map[string]json.RawMessage, len(loop.cfg.Stores))
