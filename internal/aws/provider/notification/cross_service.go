@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // MessageAttribute is a simplified SNS message attribute for internal cross-service use.
@@ -64,5 +65,5 @@ func (p *SNSProvider) InternalPublishRaw(ctx context.Context, topicARN string, m
 
 // internalMsgID generates a message ID for internal use.
 func internalMsgID() string {
-	return fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), time.Now().UnixNano())
+	return fmt.Sprintf("%x-%x-%x", rand.Int31(), rand.Int31(), clock.Now().UnixNano())
 }

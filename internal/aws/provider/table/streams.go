@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	streamstore "jaiscloud/internal/aws/store/stream"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -69,7 +69,7 @@ func (p *TableProvider) DescribeStream(ctx context.Context, nr *model.Normalized
 			"StreamStatus":            "ENABLED",
 			"StreamViewType":          "NEW_AND_OLD_IMAGES",
 			"TableName":               tableName,
-			"CreationRequestDateTime": time.Now().Unix(),
+			"CreationRequestDateTime": clock.Now().Unix(),
 			"Shards": []map[string]any{
 				{
 					"ShardId": shardId,

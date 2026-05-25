@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 const (
@@ -60,7 +62,7 @@ func (q *AsyncQueue) Enqueue(job asyncInvokeJob) {
 		job.maxAttempts = defaultMaxAttempts
 	}
 	if job.createdAt.IsZero() {
-		job.createdAt = time.Now()
+		job.createdAt = clock.Now()
 	}
 	select {
 	case q.jobs <- job:
@@ -148,7 +150,7 @@ func (q *AsyncQueue) sendDLQ(ctx context.Context, job asyncInvokeJob, invokeErr 
 	}
 	rec := asyncDLQRecord{
 		Version:   "1.0",
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: clock.Now().Format(time.RFC3339),
 		RequestContext: asyncDLQRequestContext{
 			FunctionARN:      job.funcARN,
 			Condition:        "RetriesExhausted",

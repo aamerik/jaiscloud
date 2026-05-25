@@ -14,7 +14,8 @@ import (
 	"sync"
 	"time"
 
-	objectstore "jaiscloud/internal/aws/store/object"
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -65,6 +66,10 @@ func (p *Provider) Start() {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		// Real wall time: background flush ticker fires on real elapsed time.
+		// Firehose buffering is a delivery-infrastructure concern, not a business
+		// timestamp — it must run on actual wall time so buffers are flushed even
+		// when the emulated clock is frozen.
 		ticker := time.NewTicker(flushInterval)
 		defer ticker.Stop()
 		for {
@@ -278,7 +283,7 @@ func (p *Provider) CreateDeliveryStream(ctx context.Context, nr *model.Normalize
 		Type:            streamType,
 		VersionID:       "1",
 		Tags:            map[string]string{},
-		CreateTimestamp: time.Now().UTC(),
+		CreateTimestamp: clock.Now(),
 		Destinations:    extractDestinations(nr.Params),
 		S3Bucket:        bucket,
 		S3Prefix:        prefix,
@@ -357,7 +362,7 @@ func (p *Provider) bufferRecord(ctx context.Context, account, region, streamName
 
 // s3KeyForStream builds a time-stamped S3 key with optional prefix.
 func s3KeyForStream(prefix string) string {
-	now := time.Now().UTC()
+	now := clock.Now()
 	datePart := fmt.Sprintf("%04d/%02d/%02d/%02d", now.Year(), now.Month(), now.Day(), now.Hour())
 	uuidBytes := make([]byte, 16)
 	rand.Read(uuidBytes)

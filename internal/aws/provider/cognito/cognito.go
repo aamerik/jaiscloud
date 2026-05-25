@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -205,7 +206,7 @@ func (p *Provider) CreateUserPool(ctx context.Context, nr *model.NormalizedReque
 	if region == "" {
 		region = "us-east-1"
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	pool := cognitoUserPool{
 		ID:               newPoolID(region),
 		Name:             name,
@@ -272,7 +273,7 @@ func (p *Provider) UpdateUserPool(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	pool.LastModifiedDate = time.Now().UTC()
+	pool.LastModifiedDate = clock.Now()
 	_ = p.savePool(ctx, nr.AccountID, nr.Region, pool)
 	return provider.OK(map[string]any{}), nil
 }
@@ -297,7 +298,7 @@ func (p *Provider) CreateUserPoolClient(ctx context.Context, nr *model.Normalize
 		UserPoolID:   poolID,
 		ClientID:     clientID,
 		ClientName:   clientName,
-		CreationDate: time.Now().UTC(),
+		CreationDate: clock.Now(),
 	}
 	if genSecret {
 		c.ClientSecret = newClientSecret()
@@ -398,7 +399,7 @@ func (p *Provider) AdminCreateUser(ctx context.Context, nr *model.NormalizedRequ
 	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, rtPoolUser, key); err == nil {
 		return nil, cognErr("UsernameExistsException", "User "+username+" already exists", http.StatusBadRequest)
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	u := cognitoUser{
 		UserPoolID:           poolID,
 		Username:             username,
@@ -461,7 +462,7 @@ func (p *Provider) AdminUpdateUserAttributes(ctx context.Context, nr *model.Norm
 			u.Attributes = append(u.Attributes, na)
 		}
 	}
-	u.UserLastModifiedDate = time.Now().UTC()
+	u.UserLastModifiedDate = clock.Now()
 	data, _ := json.Marshal(u)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	return provider.OK(map[string]any{}), nil
@@ -478,7 +479,7 @@ func (p *Provider) AdminConfirmSignUp(ctx context.Context, nr *model.NormalizedR
 	var u cognitoUser
 	_ = json.Unmarshal(e.Data, &u)
 	u.UserStatus = "CONFIRMED"
-	u.UserLastModifiedDate = time.Now().UTC()
+	u.UserLastModifiedDate = clock.Now()
 	data, _ := json.Marshal(u)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	return provider.OK(map[string]any{}), nil
@@ -561,7 +562,7 @@ func findAttr(attrs []map[string]string, name string) string {
 
 func buildMockJWT(userID, username, poolID, tokenType string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	exp := time.Now().Add(time.Hour).Unix()
+	exp := clock.Now().Add(time.Hour).Unix()
 	payload := fmt.Sprintf(`{"sub":%q,"email":%q,"iss":"https://cognito-idp.us-east-1.amazonaws.com/%s","token_use":%q,"exp":%d}`,
 		userID, username, poolID, tokenType, exp)
 	claims := base64.RawURLEncoding.EncodeToString([]byte(payload))
@@ -620,7 +621,7 @@ func (p *Provider) SignUp(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, cognErr("UsernameExistsException", "User "+username+" already exists", http.StatusBadRequest)
 	}
 
-	now := time.Now().UTC()
+	now := clock.Now()
 	u := cognitoUser{
 		UserPoolID:           poolID,
 		Username:             username,
@@ -674,7 +675,7 @@ func (p *Provider) ConfirmSignUp(ctx context.Context, nr *model.NormalizedReques
 	var u cognitoUser
 	_ = json.Unmarshal(e.Data, &u)
 	u.UserStatus = "CONFIRMED"
-	u.UserLastModifiedDate = time.Now().UTC()
+	u.UserLastModifiedDate = clock.Now()
 	data, _ := json.Marshal(u)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtPoolUser, ID: key, Data: data})
 	_ = p.resources.Delete(ctx, nr.AccountID, nr.Region, rtConfirmCode, key)
@@ -748,7 +749,7 @@ func (p *Provider) RespondToAuthChallenge(ctx context.Context, nr *model.Normali
 			u.Password = newPw
 		}
 		u.UserStatus = "CONFIRMED"
-		u.UserLastModifiedDate = time.Now().UTC()
+		u.UserLastModifiedDate = clock.Now()
 		_ = p.saveUser(ctx, nr.AccountID, nr.Region, u)
 	}
 
@@ -806,7 +807,7 @@ func (p *Provider) ConfirmForgotPassword(ctx context.Context, nr *model.Normaliz
 		u.Password = newPassword
 	}
 	u.UserStatus = "CONFIRMED"
-	u.UserLastModifiedDate = time.Now().UTC()
+	u.UserLastModifiedDate = clock.Now()
 	_ = p.saveUser(ctx, nr.AccountID, nr.Region, u)
 	return provider.OK(map[string]any{}), nil
 }

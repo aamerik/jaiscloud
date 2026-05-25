@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/provider/events/pattern"
 )
 
@@ -83,7 +84,7 @@ func buildDLQRecord(functionARN string, msgs []InternalMessage, invokeErr error)
 		},
 		ResponseContext: dlqResponseContext{StatusCode: 200},
 		Version:         "1.0",
-		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		Timestamp:       clock.Now().Format(time.RFC3339),
 		SqsBatchInfo:    &dlqSQSBatchInfo{Messages: items},
 	}
 }

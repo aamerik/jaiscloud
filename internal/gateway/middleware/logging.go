@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
@@ -52,7 +54,7 @@ func Logging(level string) func(http.Handler) http.Handler {
 			holder := &labelsHolder{}
 			r = r.WithContext(context.WithValue(r.Context(), labelsHolderKey{}, holder))
 
-			start := time.Now()
+			start := clock.RealNow()
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
 

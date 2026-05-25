@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 )
 
@@ -54,7 +54,7 @@ type LogStreamer struct {
 
 // NewLogStreamer constructs a LogStreamer for the given function invocation.
 func NewLogStreamer(logsAPI LogsIngestor, funcName, invocationID string) *LogStreamer {
-	date := time.Now().UTC().Format("2006/01/02")
+	date := clock.RealNow().Format("2006/01/02")
 	return &LogStreamer{
 		logsAPI:       logsAPI,
 		ring:          newRingBuffer(4096),
@@ -75,7 +75,7 @@ func (s *LogStreamer) Stream(ctx context.Context, src io.Reader) {
 		line := scanner.Text()
 		s.ring.Write([]byte(line + "\n"))
 		if s.logsAPI != nil {
-			batch = append(batch, logstream.Event{Timestamp: time.Now().UnixMilli(), Message: line})
+			batch = append(batch, logstream.Event{Timestamp: clock.RealNow().UnixMilli(), Message: line})
 			if len(batch) >= 10 {
 				_ = s.logsAPI.InternalPutEvents(ctx, s.logGroupName, s.logStreamName, batch)
 				batch = batch[:0]

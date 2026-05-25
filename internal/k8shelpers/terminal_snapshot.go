@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/store"
 )
 
@@ -38,8 +38,8 @@ func PersistTerminalSnapshot(ctx context.Context, s TerminalStore, account, regi
 		Type:      snapshotResourceType,
 		ID:        key,
 		Data:      data,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: clock.RealNow(),
+		UpdatedAt: clock.RealNow(),
 	})
 	if errors.Is(err, store.ErrAlreadyExists) {
 		slog.Warn("k8shelpers: terminal snapshot already exists, keeping first write", "key", key)
@@ -84,6 +84,6 @@ func BuildSnapshotFromError(err error) Snapshot {
 	return Snapshot{
 		State:   "FAILED",
 		Reason:  err.Error(),
-		EndTime: time.Now(),
+		EndTime: clock.RealNow(),
 	}
 }

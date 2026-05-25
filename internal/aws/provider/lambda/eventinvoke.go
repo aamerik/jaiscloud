@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -40,7 +41,7 @@ func (p *FunctionProvider) PutFunctionEventInvokeConfig(ctx context.Context, nr 
 	cfg := eventInvokeConfig{
 		FunctionName: funcName,
 		Qualifier:    qualifier,
-		LastModified: time.Now().UTC(),
+		LastModified: clock.Now(),
 	}
 	if v, ok := nr.Params["MaximumRetryAttempts"].(float64); ok {
 		cfg.MaximumRetryAttempts = int(v)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -66,7 +67,7 @@ func (p *EKSProvider) CreateCluster(ctx context.Context, nr *model.NormalizedReq
 		Name:      name,
 		Status:    "ACTIVE",
 		Arn:       nr.ResourceID("eks-cluster", name),
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: clock.Now(),
 	}
 	data, _ := json.Marshal(c)
 	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtCluster, ID: name, Data: data}); err != nil {

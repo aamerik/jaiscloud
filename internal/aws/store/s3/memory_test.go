@@ -3,9 +3,9 @@ package s3
 import (
 	"context"
 	"testing"
-	"time"
 
-	objectstore "jaiscloud/internal/aws/store/object"
+	"jaiscloud/internal/clock"
+		objectstore "jaiscloud/internal/aws/store/object"
 )
 
 func setupBucketWithObjects(t *testing.T, store objectstore.ObjectMetaStore, bucket string, keys []string) {
@@ -19,7 +19,7 @@ func setupBucketWithObjects(t *testing.T, store objectstore.ObjectMetaStore, buc
 			Key:          k,
 			ETag:         "etag",
 			Size:         int64(i + 1),
-			LastModified: time.Now().UTC(),
+			LastModified: clock.RealNow(),
 		})
 		if err != nil {
 			t.Fatalf("PutObjectMeta %q: %v", k, err)

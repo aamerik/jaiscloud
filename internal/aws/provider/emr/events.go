@@ -3,8 +3,8 @@ package emr
 import (
 	"context"
 	"log/slog"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 )
@@ -93,7 +93,7 @@ func (p *EMRProvider) emitStepStateChange(h handlerCtx, clusterID, stepID, state
 			Region:            h.region,
 			AccountID:         h.accountID,
 			Cloud:             h.cloud,
-			OccurredAt:        time.Now().UTC(),
+			OccurredAt:        clock.Now(),
 		},
 	})
 }
@@ -152,7 +152,7 @@ func (p *EMRProvider) cancelStepIfPending(ctx context.Context, h handlerCtx, clu
 			Region:            h.region,
 			AccountID:         h.accountID,
 			Cloud:             h.cloud,
-			OccurredAt:        time.Now().UTC(),
+			OccurredAt:        clock.Now(),
 		},
 	})
 }
@@ -172,7 +172,7 @@ func (p *EMRProvider) emitClusterStateChange(h handlerCtx, clusterID, name, stat
 			Region:            h.region,
 			AccountID:         h.accountID,
 			Cloud:             h.cloud,
-			OccurredAt:        time.Now().UTC(),
+			OccurredAt:        clock.Now(),
 		},
 	})
 }

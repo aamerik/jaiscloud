@@ -8,8 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 )
 
@@ -123,7 +123,7 @@ func (p *EMRContainersProvider) flushJobRunLogs(
 
 // bytesToLogEvents converts raw log bytes into logstream.Events, splitting on newlines.
 func bytesToLogEvents(data []byte) []logstream.Event {
-	now := time.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	lines := bytes.Split(data, []byte("\n"))
 	events := make([]logstream.Event, 0, len(lines))
 	for _, line := range lines {

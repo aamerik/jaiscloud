@@ -14,7 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"jaiscloud/internal/k8shelpers"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/store"
 )
 
@@ -71,8 +72,8 @@ func makeOOMPod(name, ns, jobName string) *corev1.Pod {
 					Terminated: &corev1.ContainerStateTerminated{
 						ExitCode:   137,
 						Reason:     "OOMKilled",
-						StartedAt:  metav1.NewTime(time.Now().Add(-5 * time.Second)),
-						FinishedAt: metav1.NewTime(time.Now()),
+						StartedAt:  metav1.NewTime(clock.RealNow().Add(-5 * time.Second)),
+						FinishedAt: metav1.NewTime(clock.RealNow()),
 					},
 				},
 			}},
@@ -226,8 +227,8 @@ func TestDescribeStepAfterTTL(t *testing.T) {
 	snap := k8shelpers.Snapshot{
 		State:     "COMPLETED",
 		Reason:    "finished",
-		StartTime: time.Now().Add(-30 * time.Second),
-		EndTime:   time.Now(),
+		StartTime: clock.RealNow().Add(-30 * time.Second),
+		EndTime:   clock.RealNow(),
 		ExitCode:  0,
 	}
 

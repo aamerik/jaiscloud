@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kinesis/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -41,8 +43,8 @@ func newFullModeKinesisClient(t *testing.T) *awskinesis.Client {
 func waitForStreamReady(t *testing.T, client *awskinesis.Client, name string) {
 	t.Helper()
 	ctx := context.Background()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		desc, err := client.DescribeStreamSummary(ctx, &awskinesis.DescribeStreamSummaryInput{
 			StreamName: aws.String(name),
 		})

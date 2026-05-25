@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -158,7 +159,7 @@ func changeInfo() map[string]any {
 	return map[string]any{
 		"Id":          fmt.Sprintf("/change/%s", newChangeID()),
 		"Status":      "INSYNC",
-		"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+		"SubmittedAt": clock.Now().Format(time.RFC3339),
 	}
 }
 

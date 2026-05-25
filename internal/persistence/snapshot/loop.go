@@ -165,7 +165,7 @@ func (loop *SnapshotLoop) doSave(ctx context.Context) error {
 
 	env := version.Envelope{
 		SchemaVersion: version.CodeSnapshotVersion,
-		CreatedAt:     time.Now().UTC(),
+		CreatedAt:     clock.RealNow(),
 		Stores:        stores,
 	}
 	data, err := json.Marshal(env)

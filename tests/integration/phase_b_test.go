@@ -24,6 +24,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── §2.1 EventBridge ─────────────────────────────────────────────────────────
@@ -650,7 +652,7 @@ func TestPhaseB_CWLogs_PutLogEvents_Ingested(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = cwlC.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String("/pb/stream"),
 		LogStreamName: aws.String("stream-1"),

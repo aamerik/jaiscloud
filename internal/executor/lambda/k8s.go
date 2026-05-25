@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/platform"
 )
@@ -191,7 +192,7 @@ func (e *K8sExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeResu
 
 		e.mu.Lock()
 		if p, ok := e.pods[req.FunctionName]; ok {
-			p.lastUsed = time.Now()
+			p.lastUsed = clock.RealNow()
 		}
 		e.mu.Unlock()
 		return InvokeResult{Payload: payload}, nil
@@ -431,14 +432,14 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 		podName:  podName,
 		svcName:  svcName,
 		endpoint: endpoint,
-		lastUsed: time.Now(),
+		lastUsed: clock.RealNow(),
 	}, nil
 }
 
 func (e *K8sExecutor) waitReady(ctx context.Context, ns, podName string) error {
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := clock.RealNow().Add(90 * time.Second)
 	for {
-		if time.Now().After(deadline) {
+		if clock.RealNow().After(deadline) {
 			return fmt.Errorf("timed out waiting for pod %s to be ready", podName)
 		}
 		select {
@@ -513,7 +514,7 @@ func (e *K8sExecutor) gcOnce() {
 	if keepalive == 0 {
 		keepalive = 300 * time.Second
 	}
-	now := time.Now()
+	now := clock.RealNow()
 	e.mu.Lock()
 	var toRemove []string
 	for name, p := range e.pods {
@@ -668,7 +669,7 @@ func sanitizePodName(name string) string {
 func shortID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%08x", time.Now().UnixNano()&0xffffffff)
+		return fmt.Sprintf("%08x", clock.RealNow().UnixNano()&0xffffffff)
 	}
 	return hex.EncodeToString(b)
 }

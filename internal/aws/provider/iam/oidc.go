@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -55,7 +56,7 @@ func (p *IAMProvider) CreateOpenIDConnectProvider(ctx context.Context, nr *model
 		ClientIDs:   extractStrList(nr.Params, "ClientIDList"),
 		Thumbprints: extractStrList(nr.Params, "ThumbprintList"),
 		Tags:        map[string]string{},
-		CreateDate:  time.Now().UTC(),
+		CreateDate:  clock.Now(),
 	}
 	data, _ := json.Marshal(op)
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtOIDCProvider, ID: arn, Data: data}); err != nil {

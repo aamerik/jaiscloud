@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestCWL_CreateAndDeleteLogGroup verifies basic create/delete lifecycle including
@@ -144,7 +145,7 @@ func TestCWL_CreateLogStream_And_PutGetEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	messages := []string{"first event", "second event", "third event"}
 	events := []types.InputLogEvent{
 		{Timestamp: aws.Int64(now - 2000), Message: aws.String(messages[0])},
@@ -199,7 +200,7 @@ func TestCWL_FilterLogEvents_SubstringMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),
 		LogStreamName: aws.String(stream),
@@ -394,7 +395,7 @@ func TestCWLogs_FilterPattern_LiteralMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),
 		LogStreamName: aws.String(stream),
@@ -431,7 +432,7 @@ func TestCWLogs_FilterPattern_NoMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),
 		LogStreamName: aws.String(stream),
@@ -467,7 +468,7 @@ func TestCWLogs_FilterPattern_JSONField(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),
 		LogStreamName: aws.String(stream),
@@ -600,7 +601,7 @@ func TestCWLogs_GetLogEvents_Pagination(t *testing.T) {
 	require.NoError(t, err)
 
 	const total = 20
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	events := make([]types.InputLogEvent, total)
 	for i := 0; i < total; i++ {
 		events[i] = types.InputLogEvent{
@@ -664,7 +665,7 @@ func TestCWLogs_FilterLogEvents_Pagination(t *testing.T) {
 	require.NoError(t, err)
 
 	const total = 15
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	events := make([]types.InputLogEvent, total)
 	for i := 0; i < total; i++ {
 		events[i] = types.InputLogEvent{
@@ -717,7 +718,7 @@ func TestCWLogs_PutLogEvents_SequenceToken(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 
 	// First batch — no sequence token needed.
 	put1, err := c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
@@ -764,7 +765,7 @@ func TestCWLogs_CreateExportTask(t *testing.T) {
 	_, err := c.CreateLogGroup(ctx, &awscwl.CreateLogGroupInput{LogGroupName: aws.String(group)})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	out, err := c.CreateExportTask(ctx, &awscwl.CreateExportTaskInput{
 		LogGroupName: aws.String(group),
 		Destination:  aws.String("my-export-bucket"),

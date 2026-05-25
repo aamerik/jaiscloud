@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"jaiscloud/internal/aws/provider/stepfunctions/asl"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
-	"jaiscloud/internal/clock"
 )
 
 // mockDispatcher is a no-op dispatcher that echoes params as output.
@@ -39,7 +39,7 @@ func newTestEngine(t *testing.T) (*engine.ExecutionEngine, *sfnstore.MemoryStepF
 	t.Helper()
 	store := sfnstore.NewMemoryStepFunctionsStore()
 	disp := &mockDispatcher{}
-	eng := engine.New(store, disp, clock.RealClock{})
+	eng := engine.New(store, disp)
 	return eng, store, disp
 }
 
@@ -49,7 +49,7 @@ func startExec(t *testing.T, store *sfnstore.MemoryStepFunctionsStore, eng *engi
 	exec := &sfnstore.Execution{
 		Name: t.Name(), ARN: execARN,
 		StateMachineARN: smARN, Status: sfnstore.ExecutionStatusRunning,
-		StartDate: time.Now().UTC(), Input: input, History: []sfnstore.HistoryEvent{},
+		StartDate: clock.RealNow(), Input: input, History: []sfnstore.HistoryEvent{},
 	}
 	if err := store.StartExecution(exec); err != nil {
 		t.Fatalf("StartExecution: %v", err)
@@ -64,8 +64,8 @@ func startExec(t *testing.T, store *sfnstore.MemoryStepFunctionsStore, eng *engi
 
 func waitTerminal(t *testing.T, store *sfnstore.MemoryStepFunctionsStore, execARN string, timeout time.Duration) *sfnstore.Execution {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		exec, err := store.GetExecution(execARN)
 		if err != nil {
 			t.Fatalf("GetExecution: %v", err)

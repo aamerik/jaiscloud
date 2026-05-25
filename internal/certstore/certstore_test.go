@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func TestMemoryCertStore(t *testing.T) {
@@ -18,7 +20,7 @@ func TestMemoryCertStore(t *testing.T) {
 	require.NoError(t, s.Save(ctx, &StoredCert{
 		CertPEM:  []byte("cert"),
 		KeyPEM:   []byte("key"),
-		NotAfter: time.Now().Add(time.Hour),
+		NotAfter: clock.RealNow().Add(time.Hour),
 	}))
 
 	// Memory store never persists — Load still returns ErrNotFound.
@@ -27,12 +29,12 @@ func TestMemoryCertStore(t *testing.T) {
 }
 
 func TestStoredCertNeedsRenewal(t *testing.T) {
-	c := &StoredCert{NotAfter: time.Now().Add(10 * 365 * 24 * time.Hour)}
+	c := &StoredCert{NotAfter: clock.RealNow().Add(10 * 365 * 24 * time.Hour)}
 	require.False(t, c.NeedsRenewal())
 
-	expiring := &StoredCert{NotAfter: time.Now().Add(29 * 24 * time.Hour)}
+	expiring := &StoredCert{NotAfter: clock.RealNow().Add(29 * 24 * time.Hour)}
 	require.True(t, expiring.NeedsRenewal())
 
-	past := &StoredCert{NotAfter: time.Now().Add(-time.Hour)}
+	past := &StoredCert{NotAfter: clock.RealNow().Add(-time.Hour)}
 	require.True(t, past.NeedsRenewal())
 }

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // selfSignedCert generates a minimal self-signed cert + key PEM pair for tests.
@@ -26,7 +28,7 @@ func selfSignedCert(t *testing.T, notAfter time.Time) (certPEM, keyPEM []byte) {
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Minute),
+		NotBefore:    clock.RealNow().Add(-time.Minute),
 		NotAfter:     notAfter,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
@@ -53,7 +55,7 @@ func TestFilesystemCertStore_SaveAndLoad(t *testing.T) {
 	s, err := NewFilesystemCertStore(dir)
 	require.NoError(t, err)
 
-	expiry := time.Now().Add(10 * 365 * 24 * time.Hour).Truncate(time.Second)
+	expiry := clock.RealNow().Add(10 * 365 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, keyPEM := selfSignedCert(t, expiry)
 
 	ctx := context.Background()
@@ -71,7 +73,7 @@ func TestFilesystemCertStore_AtomicWrite_NoTmpFileAfterSuccess(t *testing.T) {
 	s, err := NewFilesystemCertStore(dir)
 	require.NoError(t, err)
 
-	expiry := time.Now().Add(time.Hour)
+	expiry := clock.RealNow().Add(time.Hour)
 	certPEM, keyPEM := selfSignedCert(t, expiry)
 
 	require.NoError(t, s.Save(context.Background(), &StoredCert{CertPEM: certPEM, KeyPEM: keyPEM, NotAfter: expiry}))
@@ -101,7 +103,7 @@ func TestFilesystemCertStore_DirPermissions(t *testing.T) {
 	require.Equal(t, os.FileMode(0o700), info.Mode().Perm(), "state dir must be 0700")
 
 	// Save a cert and check file permissions.
-	expiry := time.Now().Add(time.Hour)
+	expiry := clock.RealNow().Add(time.Hour)
 	certPEM, keyPEM := selfSignedCert(t, expiry)
 	require.NoError(t, s.Save(context.Background(), &StoredCert{CertPEM: certPEM, KeyPEM: keyPEM, NotAfter: expiry}))
 

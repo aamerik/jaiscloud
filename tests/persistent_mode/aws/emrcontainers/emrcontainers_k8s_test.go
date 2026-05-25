@@ -14,6 +14,8 @@ import (
 	emrctypes "github.com/aws/aws-sdk-go-v2/service/emrcontainers/types"
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestSparkJob_K8s_StartJobRun_And_Complete verifies the full virtual cluster + job run lifecycle
@@ -122,8 +124,8 @@ func TestSparkJob_K8s_CancelJobRun(t *testing.T) {
 	jobRunID := *jobOut.Id
 
 	// Wait briefly for the K8s Job to reach RUNNING before cancelling.
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		out, err := emrcClient.DescribeJobRun(context.Background(), &awsemrc.DescribeJobRunInput{
 			VirtualClusterId: aws.String(vcID),
 			Id:               aws.String(jobRunID),

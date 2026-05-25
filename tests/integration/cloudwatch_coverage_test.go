@@ -15,6 +15,8 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func newCWClient(t *testing.T) *awscw.Client {
@@ -42,7 +44,7 @@ func TestCW_PutMetricData_Success(t *testing.T) {
 			MetricName: aws.String("RequestCount"),
 			Value:      aws.Float64(42),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)
@@ -60,7 +62,7 @@ func TestCW_PutMetricData_MultipleNamespaces(t *testing.T) {
 				MetricName: aws.String("Latency"),
 				Value:      aws.Float64(10),
 				Unit:       cwtypes.StandardUnitMilliseconds,
-				Timestamp:  aws.Time(time.Now()),
+				Timestamp:  aws.Time(clock.RealNow()),
 			}},
 		})
 		require.NoError(t, err)
@@ -81,7 +83,7 @@ func TestCW_GetMetricStatistics_Sum(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	for _, v := range []float64{10, 20, 30} {
 		_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 			Namespace: aws.String("MyApp/Test"),
@@ -113,7 +115,7 @@ func TestCW_GetMetricStatistics_Average(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	for _, v := range []float64{10, 20, 30} {
 		_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 			Namespace: aws.String("MyApp/Avg"),
@@ -145,7 +147,7 @@ func TestCW_GetMetricStatistics_Maximum(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	for _, v := range []float64{5, 15, 25} {
 		_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 			Namespace: aws.String("MyApp/Max"),
@@ -177,7 +179,7 @@ func TestCW_GetMetricStatistics_NoData_Empty(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	out, err := c.GetMetricStatistics(ctx, &awscw.GetMetricStatisticsInput{
 		Namespace:  aws.String("NonExistent/Namespace"),
 		MetricName: aws.String("GhostMetric"),
@@ -201,7 +203,7 @@ func TestCW_ListMetrics_AfterPut(t *testing.T) {
 			MetricName: aws.String("Requests"),
 			Value:      aws.Float64(1),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)
@@ -231,7 +233,7 @@ func TestCW_ListMetrics_ByNamespace(t *testing.T) {
 				MetricName: aws.String("SomeMetric"),
 				Value:      aws.Float64(1),
 				Unit:       cwtypes.StandardUnitCount,
-				Timestamp:  aws.Time(time.Now()),
+				Timestamp:  aws.Time(clock.RealNow()),
 			}},
 		})
 		require.NoError(t, err)
@@ -259,7 +261,7 @@ func TestCW_ListMetrics_ByMetricName(t *testing.T) {
 				MetricName: aws.String(name),
 				Value:      aws.Float64(1),
 				Unit:       cwtypes.StandardUnitCount,
-				Timestamp:  aws.Time(time.Now()),
+				Timestamp:  aws.Time(clock.RealNow()),
 			}},
 		})
 		require.NoError(t, err)
@@ -286,7 +288,7 @@ func TestCW_PutMetricData_WithDimensions(t *testing.T) {
 			MetricName: aws.String("ErrorRate"),
 			Value:      aws.Float64(5),
 			Unit:       cwtypes.StandardUnitPercent,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 			Dimensions: []cwtypes.Dimension{
 				{Name: aws.String("Service"), Value: aws.String("auth")},
 				{Name: aws.String("Env"), Value: aws.String("prod")},
@@ -308,7 +310,7 @@ func TestCW_ListMetrics_FilterByDimension(t *testing.T) {
 			MetricName: aws.String("ErrorRate"),
 			Value:      aws.Float64(5),
 			Unit:       cwtypes.StandardUnitPercent,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 			Dimensions: []cwtypes.Dimension{
 				{Name: aws.String("Service"), Value: aws.String("auth")},
 			},
@@ -323,7 +325,7 @@ func TestCW_ListMetrics_FilterByDimension(t *testing.T) {
 			MetricName: aws.String("ErrorRate"),
 			Value:      aws.Float64(1),
 			Unit:       cwtypes.StandardUnitPercent,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)
@@ -351,7 +353,7 @@ func TestCW_PutMetricData_InvalidNamespace_Error(t *testing.T) {
 			MetricName: aws.String("RequestCount"),
 			Value:      aws.Float64(1),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.Error(t, err, "empty namespace must return an error")
@@ -362,7 +364,7 @@ func TestCW_GetMetricStatistics_FutureTime_Empty(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	// First, publish a datapoint.
 	_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 		Namespace: aws.String("MyApp/Future"),
@@ -393,7 +395,7 @@ func TestCW_PutMetricData_ZeroValue(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 		Namespace: aws.String("MyApp/Zero"),
 		MetricData: []cwtypes.MetricDatum{{
@@ -424,7 +426,7 @@ func TestCW_PutMetricData_BatchMultipleMetrics(t *testing.T) {
 	ctx := context.Background()
 	c := newCWClient(t)
 
-	now := time.Now()
+	now := clock.RealNow()
 	_, err := c.PutMetricData(ctx, &awscw.PutMetricDataInput{
 		Namespace: aws.String("MyApp/Batch"),
 		MetricData: []cwtypes.MetricDatum{
@@ -880,7 +882,7 @@ func TestCloudWatchAlarmEvaluatorTransition(t *testing.T) {
 		MetricData: []cwtypes.MetricDatum{{
 			MetricName: aws.String("Value"),
 			Value:      aws.Float64(20.0),
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)

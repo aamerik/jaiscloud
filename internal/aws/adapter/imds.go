@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"jaiscloud/internal/clock"
 )
 
 const imdsStaticToken = "jaiscloud-imds-token"
@@ -63,7 +65,7 @@ func RegisterIMDSRoutes(r chi.Router, cfg IMDSConfig) {
 			"privateIp":               "10.0.0.1",
 			"architecture":            "x86_64",
 			"imageId":                 "ami-00000000000000001",
-			"pendingTime":             time.Now().UTC().Format(time.RFC3339),
+			"pendingTime":             clock.Now().Format(time.RFC3339),
 			"devpayProductCodes":      nil,
 			"billingProducts":         nil,
 			"marketplaceProductCodes": nil,
@@ -86,12 +88,12 @@ func RegisterIMDSRoutes(r chi.Router, cfg IMDSConfig) {
 		}
 		writeIMDSJSON(w, map[string]any{
 			"Code":            "Success",
-			"LastUpdated":     time.Now().UTC().Format(time.RFC3339),
+			"LastUpdated":     clock.Now().Format(time.RFC3339),
 			"Type":            "AWS-HMAC",
 			"AccessKeyId":     akid,
 			"SecretAccessKey": sak,
 			"Token":           cfg.SessionToken,
-			"Expiration":      time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
+			"Expiration":      clock.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
 		})
 	})
 

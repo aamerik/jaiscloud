@@ -9,6 +9,7 @@ import (
 	dynamostore "jaiscloud/internal/aws/store/dynamodb"
 	streamstore "jaiscloud/internal/aws/store/stream"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/store"
 )
 
@@ -75,12 +76,16 @@ func (w *TTLWorker) Shutdown() {
 // Reset satisfies admin.Resetter; state is owned by the store, not the worker.
 func (w *TTLWorker) Reset(ctx context.Context) {}
 
+// SweepNow synchronously runs one TTL sweep against the current clock.Now().
+// Used by POST /_jaiscloud/ttl-sweep for deterministic testing.
+func (w *TTLWorker) SweepNow(ctx context.Context) { w.sweep(ctx) }
+
 func (w *TTLWorker) sweep(ctx context.Context) {
 	entries, err := w.resources.List(ctx, "", "", "dynamodb_tables", "")
 	if err != nil {
 		return
 	}
-	nowUnix := time.Now().Unix()
+	nowUnix := clock.Now().Unix()
 	for _, e := range entries {
 		var ts tableSchema
 		if err := json.Unmarshal(e.Data, &ts); err != nil {
@@ -116,7 +121,7 @@ func (w *TTLWorker) expireTable(ctx context.Context, ts tableSchema, nowUnix int
 				EventName:                   "REMOVE",
 				Keys:                        item,
 				OldImage:                    item,
-				ApproximateCreationDateTime: time.Now(),
+				ApproximateCreationDateTime: clock.Now(),
 				UserIdentity:                &streamstore.UserIdentity{Type: "Service", PrincipalId: "dynamodb.amazonaws.com"},
 			})
 		}

@@ -3,6 +3,8 @@ package dynamodb
 import (
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 type tokenBucket struct {
@@ -18,7 +20,9 @@ func newTokenBucket(capacity int, refillRate float64) *tokenBucket {
 		capacity:   capacity,
 		tokens:     float64(capacity),
 		refillRate: refillRate,
-		last:       time.Now(),
+		// simulated time. A frozen clock would make elapsed=0 on every call,
+		// preventing token refill and throttling all DynamoDB operations.
+		last: clock.RealNow(),
 	}
 }
 
@@ -26,7 +30,7 @@ func newTokenBucket(capacity int, refillRate float64) *tokenBucket {
 func (b *tokenBucket) TryConsume(n int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	now := time.Now()
+	now := clock.RealNow()
 	elapsed := now.Sub(b.last).Seconds()
 	b.last = now
 	cap := float64(b.capacity)

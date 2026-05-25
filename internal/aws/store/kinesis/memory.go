@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── internal stream state ────────────────────────────────────────────────────
@@ -271,7 +273,7 @@ func (s *MemoryKinesisStore) PutRecordInScope(account, region, name string, data
 	seq := seqNum(shard.NextSeq)
 	rec := Record{
 		SequenceNumber:         seq,
-		ApproximateArrivalTime: time.Now().UTC(),
+		ApproximateArrivalTime: clock.Now(),
 		Data:                   data,
 		PartitionKey:           partitionKey,
 		EncryptionType:         st.Stream.EncryptionType,
@@ -331,7 +333,7 @@ func (s *MemoryKinesisStore) CreateIteratorInScope(account, region, streamName, 
 		StreamARN: arn,
 		ShardID:   shardID,
 		Position:  pos,
-		CreatedAt: time.Now(),
+		CreatedAt: clock.Now(),
 	}
 	return id, nil
 }
@@ -590,7 +592,7 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 	if !ok {
 		return nil, "", 0, &KinesisError{Code: "InvalidArgumentException", Message: "Invalid shard iterator", Status: 400}
 	}
-	if time.Since(iter.CreatedAt) > 5*time.Minute {
+	if clock.Now().Sub(iter.CreatedAt) > 5*time.Minute {
 		delete(s.iterators, iteratorID)
 		return nil, "", 0, &KinesisError{Code: "ExpiredIteratorException", Message: "Shard iterator has expired", Status: 400}
 	}
@@ -613,7 +615,7 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 	}
 
 	retention := time.Duration(st.Stream.RetentionPeriodHours) * time.Hour
-	cutoff := time.Now().UTC().Add(-retention)
+	cutoff := clock.Now().Add(-retention)
 
 	pos := iter.Position
 	if pos < 0 {
@@ -648,7 +650,7 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 				millisBehind = d.Milliseconds()
 			}
 		} else {
-			millisBehind = time.Since(latest).Milliseconds()
+			millisBehind = clock.Now().Sub(latest).Milliseconds()
 		}
 	}
 
@@ -661,7 +663,7 @@ func (s *MemoryKinesisStore) GetRecords(iteratorID string, limit int) ([]Record,
 			StreamARN: iter.StreamARN,
 			ShardID:   iter.ShardID,
 			Position:  newPos,
-			CreatedAt: time.Now(),
+			CreatedAt: clock.Now(),
 		}
 	}
 
@@ -691,7 +693,7 @@ func (s *MemoryKinesisStore) RegisterConsumer(streamARN, consumerName, consumerA
 		ARN:       consumerARN,
 		StreamARN: streamARN,
 		Status:    "ACTIVE",
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: clock.Now(),
 	}
 	st.Consumers[consumerARN] = c
 	return c, nil

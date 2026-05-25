@@ -57,8 +57,8 @@ func TestSnapshotLoop_PeriodicSave(t *testing.T) {
 	loop.Start(ctx)
 
 	// Wait for at least one save.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(2 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		if snap.snapCnt.Load() > 0 {
 			break
 		}

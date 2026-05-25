@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -95,7 +96,7 @@ func (p *GlueProvider) WriteTableVersion(ctx context.Context, t glueTable) {
 		TableName:    t.Name,
 		VersionId:    versionID,
 		Table:        tableToWire(t),
-		CreatedOn:    time.Now(),
+		CreatedOn:    clock.Now(),
 	}
 	p.saveTableVersion(ctx, "", "", v) //nolint:errcheck
 }
@@ -108,7 +109,7 @@ func (p *GlueProvider) WriteTableVersionWithAccount(ctx context.Context, account
 		TableName:    t.Name,
 		VersionId:    versionID,
 		Table:        tableToWire(t),
-		CreatedOn:    time.Now(),
+		CreatedOn:    clock.Now(),
 	}
 	p.saveTableVersion(ctx, account, region, v) //nolint:errcheck
 }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -109,7 +110,7 @@ func (p *GlueProvider) CreateCrawler(ctx context.Context, nr *model.NormalizedRe
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Crawler %s already exists", name), HTTPStatus: http.StatusBadRequest}
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	c := crawlerEntry{
 		Name:         name,
 		Role:         strParam(nr.Params, "Role"),
@@ -144,7 +145,7 @@ func (p *GlueProvider) UpdateCrawler(ctx context.Context, nr *model.NormalizedRe
 	if v, ok := nr.Params["Schedule"].(string); ok {
 		c.Schedule = v
 	}
-	c.LastUpdated = time.Now()
+	c.LastUpdated = clock.Now()
 	if err := p.saveCrawler(ctx, nr.AccountID, nr.Region, c); err != nil {
 		return nil, err
 	}
@@ -250,7 +251,7 @@ func (p *GlueProvider) runCrawlAsync(account, region, crawlerName string) {
 		return
 	}
 
-	startTime := time.Now()
+	startTime := clock.Now()
 
 	// If crawler was stopped before we woke up, honour it
 	if c.State == "STOPPING" {
@@ -258,7 +259,7 @@ func (p *GlueProvider) runCrawlAsync(account, region, crawlerName string) {
 		c.LastCrawl = &crawlStatus{
 			Status:    "SUCCEEDED",
 			StartTime: startTime,
-			EndTime:   time.Now(),
+			EndTime:   clock.Now(),
 		}
 		p.saveCrawler(ctx, account, region, c) //nolint:errcheck
 		return
@@ -286,7 +287,7 @@ func (p *GlueProvider) runCrawlAsync(account, region, crawlerName string) {
 	c.LastCrawl = &crawlStatus{
 		Status:    "SUCCEEDED",
 		StartTime: startTime,
-		EndTime:   time.Now(),
+		EndTime:   clock.Now(),
 	}
 	p.saveCrawler(ctx, account, region, c) //nolint:errcheck
 }
@@ -334,7 +335,7 @@ func (p *GlueProvider) crawlS3Path(ctx context.Context, account, region string, 
 		tableName = "crawled_table"
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	t := glueTable{
 		DatabaseName: c.DatabaseName,
 		Name:         tableName,

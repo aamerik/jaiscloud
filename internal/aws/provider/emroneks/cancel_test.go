@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"jaiscloud/internal/events"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -29,7 +30,7 @@ func seedVC(t *testing.T, p *EMRContainersProvider) virtualCluster {
 	vc := virtualCluster{
 		ID: "vc-test", Name: "test-vc", State: "RUNNING",
 		Namespace: "jaiscloud", ServiceAccountName: "test-sa",
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: clock.RealNow(),
 	}
 	data, _ := json.Marshal(vc)
 	require.NoError(t, p.resources.Create(context.Background(), "000000000000", "us-east-1",
@@ -41,7 +42,7 @@ func seedJobRun(t *testing.T, p *EMRContainersProvider, vcID, state string) jobR
 	t.Helper()
 	jr := jobRun{
 		ID: shortID(), Name: "test-job", VirtualClusterID: vcID,
-		State: state, CreatedAt: time.Now().UTC(),
+		State: state, CreatedAt: clock.RealNow(),
 	}
 	data, _ := json.Marshal(jr)
 	require.NoError(t, p.resources.Create(context.Background(), "000000000000", "us-east-1",

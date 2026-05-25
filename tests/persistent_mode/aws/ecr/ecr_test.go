@@ -18,6 +18,8 @@ import (
 	ecrtypes "github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -40,7 +42,7 @@ func ecrClient(t *testing.T) *awsecr.Client {
 }
 
 func repoName(t *testing.T) string {
-	return fmt.Sprintf("e2e-%s-%d", strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-")), time.Now().UnixNano()%100000)
+	return fmt.Sprintf("e2e-%s-%d", strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-")), clock.RealNow().UnixNano()%100000)
 }
 
 func TestMain(m *testing.M) {

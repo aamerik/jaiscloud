@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -144,7 +145,7 @@ func (p *GatewayProvider) CreateRestApi(ctx context.Context, nr *model.Normalize
 		ID:          apiID,
 		Name:        name,
 		Description: strParam(nr.Params, "description"),
-		CreatedDate: time.Now().UTC(),
+		CreatedDate: clock.Now(),
 	}
 	if err := p.save(ctx, nr.AccountID, nr.Region, rtAPI, apiID, api); err != nil {
 		return nil, fmt.Errorf("apigw: create api: %w", err)
@@ -448,14 +449,14 @@ func (p *GatewayProvider) CreateDeployment(ctx context.Context, nr *model.Normal
 
 	d := deployment{
 		ID: shortID(), APIID: apiID, Description: desc,
-		CreatedDate: time.Now().UTC(),
+		CreatedDate: clock.Now(),
 	}
 	p.save(ctx, nr.AccountID, nr.Region, rtDeployment, d.ID, d)
 
 	// Auto-create or update the stage if stageName is provided.
 	if stageName != "" {
 		stageKey := apiID + "/" + stageName
-		st := apiStage{Name: stageName, APIID: apiID, DeploymentID: d.ID, CreatedDate: time.Now().UTC()}
+		st := apiStage{Name: stageName, APIID: apiID, DeploymentID: d.ID, CreatedDate: clock.Now()}
 		p.save(ctx, nr.AccountID, nr.Region, rtStage, stageKey, st)
 	}
 	return &model.ProviderResponse{HTTPStatus: 201, Data: map[string]any{
@@ -500,7 +501,7 @@ func (p *GatewayProvider) CreateStage(ctx context.Context, nr *model.NormalizedR
 
 	st := apiStage{
 		Name: stageName, APIID: apiID, DeploymentID: deploymentID,
-		CreatedDate: time.Now().UTC(),
+		CreatedDate: clock.Now(),
 	}
 	stageKey := apiID + "/" + stageName
 	p.save(ctx, nr.AccountID, nr.Region, rtStage, stageKey, st)

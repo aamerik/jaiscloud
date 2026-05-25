@@ -7,6 +7,7 @@ import (
 
 	awsarn "jaiscloud/internal/aws/arn"
 	sqsstore "jaiscloud/internal/aws/store/sqs"
+	"jaiscloud/internal/clock"
 )
 
 // MessageAttribute is a simplified SQS message attribute for internal cross-service use.
@@ -43,7 +44,7 @@ func (p *QueueProvider) InternalSend(ctx context.Context, queueARNorURL string, 
 		MessageID:         newMessageID(),
 		QueueURL:          queueURL,
 		Body:              body,
-		SentAt:            p.clock.Now(),
+		SentAt:            clock.Now(),
 		Attributes:        map[string]string{},
 		MessageAttributes: msgAttrs,
 	}

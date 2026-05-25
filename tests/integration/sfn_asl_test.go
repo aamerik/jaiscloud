@@ -16,14 +16,16 @@ import (
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // waitForExecution polls DescribeExecution until it reaches a terminal state or
 // the timeout elapses. It is safe to call from multiple goroutines.
 func waitForExecution(t *testing.T, client *awssfn.Client, execARN string, timeout time.Duration) *awssfn.DescribeExecutionOutput {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		out, err := client.DescribeExecution(context.Background(), &awssfn.DescribeExecutionInput{
 			ExecutionArn: aws.String(execARN),
 		})

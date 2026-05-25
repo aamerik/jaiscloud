@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 type lockEntry struct {
@@ -37,7 +39,7 @@ func (l *DeletionLock) Acquire(resourceType, id string) bool {
 	if _, exists := l.entries[k]; exists {
 		return false
 	}
-	l.entries[k] = lockEntry{acquiredAt: time.Now()}
+	l.entries[k] = lockEntry{acquiredAt: clock.RealNow()}
 	return true
 }
 
@@ -60,7 +62,7 @@ func (l *DeletionLock) IsDeleting(resourceType, id string) bool {
 // SweepStale releases any lock held longer than ttl, logging a warning per entry.
 // logf must accept (msg string, args ...any) in structured slog style.
 func (l *DeletionLock) SweepStale(ttl time.Duration, logf func(string, ...any)) {
-	cutoff := time.Now().Add(-ttl)
+	cutoff := clock.RealNow().Add(-ttl)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for k, e := range l.entries {

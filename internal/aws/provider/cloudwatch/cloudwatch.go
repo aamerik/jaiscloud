@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
@@ -309,7 +310,7 @@ func (p *Provider) PutMetricAlarm(ctx context.Context, nr *model.NormalizedReque
 		slog.Error("cloudwatch: failed to persist alarm",
 			"alarm", name, "err", err)
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	p.writeAlarmHistory(ctx, nr.AccountID, nr.Region, name, "MetricAlarm", "ConfigurationUpdate",
 		"Alarm created or updated",
 		map[string]any{"version": "1.0", "updatedAlarm": nr.Params},
@@ -412,7 +413,7 @@ func (p *Provider) SetAlarmState(ctx context.Context, nr *model.NormalizedReques
 	oldState, _ := params["StateValue"].(string)
 	params["StateValue"] = stateValue
 	params["StateReason"] = stateReason
-	now := time.Now().UTC()
+	now := clock.Now()
 	params["StateUpdatedTimestamp"] = now.Format(time.RFC3339)
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -481,7 +482,7 @@ func (p *Provider) PutDashboard(ctx context.Context, nr *model.NormalizedRequest
 		DashboardName: name,
 		DashboardBody: body,
 		DashboardArn:  nr.ResourceID("cloudwatch-dashboard", name),
-		LastModified:  time.Now().UTC().Format(time.RFC3339),
+		LastModified:  clock.Now().Format(time.RFC3339),
 	}
 	data, _ := json.Marshal(d)
 	entry := store.ResourceEntry{Type: "cloudwatch_dashboard", ID: name, Data: data}
@@ -620,7 +621,7 @@ func parseTimestamp(raw any) time.Time {
 	switch v := raw.(type) {
 	case string:
 		if v == "" {
-			return time.Now().UTC()
+			return clock.Now()
 		}
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			return t.UTC()
@@ -631,7 +632,7 @@ func parseTimestamp(raw any) time.Time {
 	case float64:
 		return time.Unix(int64(v), 0).UTC()
 	}
-	return time.Now().UTC()
+	return clock.Now()
 }
 
 func toFloat(v any) (float64, bool) {
@@ -672,7 +673,7 @@ func (p *Provider) PutCompositeAlarm(ctx context.Context, nr *model.NormalizedRe
 		ActionsEnabled: true,
 		State:          "OK",
 		ARN:            nr.ResourceID("cloudwatch-alarm", name),
-		CreationDate:   time.Now().UTC(),
+		CreationDate:   clock.Now(),
 	}
 	if v, ok := nr.Params["ActionsEnabled"].(bool); ok {
 		alarm.ActionsEnabled = v
@@ -859,7 +860,7 @@ func (p *Provider) PutMetricStream(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, &model.ProviderError{Code: "InvalidParameterValue", Message: "Name is required", HTTPStatus: 400}
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	ms := metricStream{
 		Name:           name,
 		ARN:            nr.ResourceID("cloudwatch-metric-stream", name),
@@ -949,7 +950,7 @@ func (p *Provider) setMetricStreamState(ctx context.Context, account, region str
 		var ms metricStream
 		json.Unmarshal(e.Data, &ms)
 		ms.State = state
-		ms.LastUpdateDate = time.Now().UTC()
+		ms.LastUpdateDate = clock.Now()
 		data, _ := json.Marshal(ms)
 		_ = p.resources.Update(ctx, account, region, store.ResourceEntry{Type: "cloudwatch_metric_stream", ID: name, Data: data})
 	}

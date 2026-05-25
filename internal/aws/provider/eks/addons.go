@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -53,7 +54,7 @@ func (p *EKSProvider) CreateAddon(ctx context.Context, nr *model.NormalizedReque
 		return nil, &model.ProviderError{Code: "ResourceNotFoundException", Message: "cluster " + clusterName + " not found", HTTPStatus: http.StatusNotFound}
 	}
 
-	now := time.Now().UTC()
+	now := clock.Now()
 	a := eksAddon{
 		ClusterName:           clusterName,
 		AddonName:             addonName,
@@ -150,7 +151,7 @@ func (p *EKSProvider) UpdateAddon(ctx context.Context, nr *model.NormalizedReque
 	if v := strParam(nr.Params, "configurationValues"); v != "" {
 		a.ConfigurationValues = v
 	}
-	a.ModifiedAt = time.Now().UTC()
+	a.ModifiedAt = clock.Now()
 
 	data, _ := json.Marshal(a)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtAddon, ID: key, Data: data})

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sqsstore "jaiscloud/internal/aws/store/sqs"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -90,7 +91,7 @@ func (p *QueueProvider) StartMessageMoveTask(ctx context.Context, nr *model.Norm
 		sourceArn:          sourceArn,
 		destinationArn:     destinationArn,
 		maxNumberPerSecond: maxPerSec,
-		startedAt:          time.Now().UTC(),
+		startedAt:          clock.Now(),
 		status:             "RUNNING",
 		cancelFn:           cancel,
 	}
@@ -130,7 +131,7 @@ func (p *QueueProvider) runMoveTask(ctx context.Context, task *messageMoveTask, 
 			globalMoveTasks.mu.Unlock()
 			return
 		case <-ticker.C:
-			msgs, err := p.messages.Receive(ctx, sourceAccount, sourceRegion, sourceURL, 1, time.Now())
+			msgs, err := p.messages.Receive(ctx, sourceAccount, sourceRegion, sourceURL, 1, clock.Now())
 			if err != nil || len(msgs) == 0 {
 				globalMoveTasks.mu.Lock()
 				task.status = "COMPLETED"

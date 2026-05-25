@@ -11,6 +11,8 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── P3.1: SQS Long Polling ───────────────────────────────────────────────────
@@ -111,7 +113,7 @@ func TestSQS_LongPoll_ZeroWaitTimeReturnsImmediately(t *testing.T) {
 	require.NoError(t, err)
 	qURL := host() + "/000000000000/lp-zero-queue"
 
-	start := time.Now()
+	start := clock.RealNow()
 	out, err := c.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl:        aws.String(qURL),
 		WaitTimeSeconds: 0,

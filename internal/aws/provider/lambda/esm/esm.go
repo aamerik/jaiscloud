@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -199,10 +200,7 @@ func (p *Provider) handleCreateESM(ctx context.Context, nr *model.NormalizedRequ
 		functionArn = nr.ResourceID(model.RTLambdaFunction, functionName)
 	}
 
-	now := time.Now()
-	if nr.Clock != nil {
-		now = nr.Clock.Now()
-	}
+	now := clock.Now()
 
 	id := generateUUID()
 	state := ESMStateEnabled
@@ -348,11 +346,7 @@ func (p *Provider) handleUpdateESM(ctx context.Context, nr *model.NormalizedRequ
 		}
 	}
 
-	now := time.Now()
-	if nr.Clock != nil {
-		now = nr.Clock.Now()
-	}
-	esm.LastModified = now
+	esm.LastModified = clock.Now()
 
 	// Update state based on enabled flag
 	if esm.Enabled && !wasEnabled {
@@ -423,7 +417,7 @@ func (p *Provider) persistESM(ctx context.Context, esm EventSourceMapping) error
 		Type:      esmResourceType,
 		ID:        esm.UUID,
 		Data:      data,
-		UpdatedAt: time.Now(),
+		UpdatedAt: clock.Now(),
 	}
 	return p.resources.Upsert(ctx, esm.AccountID, esm.Region, entry)
 }

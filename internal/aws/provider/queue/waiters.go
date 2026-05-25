@@ -69,22 +69,25 @@ func WaitForMessages(
 	queueURL string,
 	maxMessages int,
 	waitTime time.Duration,
-	clk clock.Clock,
 ) ([]sqsstore.SQSMessage, error) {
-	deadline := clk.Now().Add(waitTime)
+	deadline := clock.Now().Add(waitTime)
 	for {
-		msgs, err := store.Receive(ctx, account, region, queueURL, maxMessages, clk.Now())
+		msgs, err := store.Receive(ctx, account, region, queueURL, maxMessages, clock.Now())
 		if err != nil {
 			return nil, err
 		}
 		if len(msgs) > 0 {
 			return msgs, nil
 		}
-		remaining := deadline.Sub(clk.Now())
+		remaining := deadline.Sub(clock.Now())
 		if remaining <= 0 {
 			return nil, nil
 		}
 		ch, deregister := waiters.Register(queueURL)
+		// Real wall time: the timer fires after actual elapsed time so the caller
+		// genuinely waits for the long-poll window. The deadline itself is derived
+		// from clock.Now() so freeze tests get consistent remaining duration, but
+		// the timer must be real — a frozen clock cannot wake a time.NewTimer.
 		timer := time.NewTimer(remaining)
 		select {
 		case <-ch:

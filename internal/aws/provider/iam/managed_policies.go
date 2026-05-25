@@ -6,7 +6,8 @@ package iam
 
 import (
 	"context"
-	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 type managedPolicyEntry struct {
@@ -40,7 +41,7 @@ var awsManagedPolicies = []managedPolicyEntry{
 
 // seedManagedPolicies is called from New() to pre-populate the top AWS managed policies.
 func (p *IAMProvider) seedManagedPolicies(ctx context.Context) {
-	now := time.Now().UTC()
+	now := clock.Now()
 	for _, mp := range awsManagedPolicies {
 		// Only seed if not already present
 		if _, err := p.resources.Get(ctx, "", "", "iam_policies", mp.ARN); err == nil {

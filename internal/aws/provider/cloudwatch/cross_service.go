@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // MetricDatum is a single metric observation for internal use.
@@ -35,7 +37,7 @@ func (p *Provider) SetLambdaInvoker(inv LambdaInvoker) { p.lambdaInvoker = inv }
 func (p *Provider) InternalPutMetricData(_ context.Context, namespace string, data []MetricDatum) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now().UTC()
+	now := clock.Now()
 	for _, d := range data {
 		key := ringKey(namespace, d.Name, nil)
 		ring, ok := p.metrics[key]
@@ -75,7 +77,7 @@ func (p *Provider) fireAlarmActions(_ context.Context, alarmParams map[string]an
 		"AlarmArn":        alarmARN,
 		"NewStateValue":   newState,
 		"NewStateReason":  alarmParams["StateReason"],
-		"StateChangeTime": time.Now().UTC().Format(time.RFC3339),
+		"StateChangeTime": clock.Now().Format(time.RFC3339),
 	})
 
 	bgCtx := context.Background()

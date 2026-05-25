@@ -17,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // dockerImage returns the test Lambda image URI from LAMBDA_E2E_DOCKER_IMAGE.
@@ -42,7 +44,7 @@ func TestLambdaDocker_ColdStart_ReturnsResponse(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	payload := map[string]any{"hello": "docker", "ts": time.Now().UnixMilli()}
+	payload := map[string]any{"hello": "docker", "ts": clock.RealNow().UnixMilli()}
 	payloadBytes, _ := json.Marshal(payload)
 
 	out, err := c.Invoke(ctx, &awslambda.InvokeInput{
@@ -74,7 +76,7 @@ func TestLambdaDocker_WarmPoolReuse(t *testing.T) {
 	payload := []byte(`{"ping":true}`)
 
 	// Cold start.
-	coldStart := time.Now()
+	coldStart := clock.RealNow()
 	_, err = c.Invoke(ctx, &awslambda.InvokeInput{
 		FunctionName: aws.String("docker-warm-pool"),
 		Payload:      payload,
@@ -83,7 +85,7 @@ func TestLambdaDocker_WarmPoolReuse(t *testing.T) {
 	coldDuration := time.Since(coldStart)
 
 	// Warm invocation — same container reused.
-	warmStart := time.Now()
+	warmStart := clock.RealNow()
 	_, err = c.Invoke(ctx, &awslambda.InvokeInput{
 		FunctionName: aws.String("docker-warm-pool"),
 		Payload:      payload,

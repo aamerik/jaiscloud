@@ -10,14 +10,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // waitForInstanceState polls DescribeInstances until the given instance reaches
 // wantState or the timeout expires.
 func waitForInstanceState(t *testing.T, client *awsec2.Client, instanceID, wantState string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		out, err := client.DescribeInstances(context.Background(), &awsec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
 		})

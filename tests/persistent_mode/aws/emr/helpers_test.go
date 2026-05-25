@@ -19,6 +19,8 @@ import (
 	awsemrc "github.com/aws/aws-sdk-go-v2/service/emrcontainers"
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -117,8 +119,8 @@ func jobTimeout() time.Duration {
 
 func pollEMRStep(t *testing.T, emrClient *awsemr.Client, clusterID, stepID string) string {
 	t.Helper()
-	deadline := time.Now().Add(jobTimeout())
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(jobTimeout())
+	for clock.RealNow().Before(deadline) {
 		out, err := emrClient.DescribeStep(context.Background(), &awsemr.DescribeStepInput{
 			ClusterId: aws.String(clusterID),
 			StepId:    aws.String(stepID),
@@ -149,8 +151,8 @@ func isTerminalStepState(state string) bool {
 
 func pollSQSMessage(t *testing.T, sqsClient *awssqs.Client, queueURL string, maxWait time.Duration) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(maxWait)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(maxWait)
+	for clock.RealNow().Before(deadline) {
 		out, err := sqsClient.ReceiveMessage(context.Background(), &awssqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
 			MaxNumberOfMessages: 1,

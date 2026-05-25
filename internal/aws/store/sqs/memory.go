@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 const defaultRetentionSecs = 345600 // 4 days
@@ -64,6 +66,9 @@ func NewMemoryMessageStore() *MemoryMessageStore {
 
 func (s *MemoryMessageStore) retentionWorker(ctx context.Context) {
 	defer s.wg.Done()
+	// Real wall time: infrastructure cleanup ticker. The sweep interval is a real
+	// duration, not a simulated one — we want it to fire every 10s of actual time
+	// regardless of what the emulated clock says.
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -77,7 +82,7 @@ func (s *MemoryMessageStore) retentionWorker(ctx context.Context) {
 }
 
 func (s *MemoryMessageStore) removeExpiredMessages() {
-	now := time.Now()
+	now := clock.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, q := range s.queues {
@@ -114,10 +119,10 @@ func (s *MemoryMessageStore) Send(ctx context.Context, account, region string, m
 		} else {
 			dedupKey = msg.QueueURL + ":" + msg.DeduplicationID
 		}
-		if entry, ok := s.dedup[dedupKey]; ok && time.Now().Before(entry.expiry) {
+		if entry, ok := s.dedup[dedupKey]; ok && clock.Now().Before(entry.expiry) {
 			return entry.messageID, "", nil // return original MessageID to caller
 		}
-		s.dedup[dedupKey] = dedupEntry{expiry: time.Now().Add(5 * time.Minute), messageID: msg.MessageID}
+		s.dedup[dedupKey] = dedupEntry{expiry: clock.Now().Add(5 * time.Minute), messageID: msg.MessageID}
 	}
 
 	// Assign FIFO sequence number
@@ -132,7 +137,7 @@ func (s *MemoryMessageStore) Send(ctx context.Context, account, region string, m
 	// SQS stamps SentTimestamp on the broker side at accept time; the API
 	// provides no way for callers to set it. Overwrite unconditionally so any
 	// caller-supplied value is ignored, matching AWS semantics.
-	msg.SentAt = time.Now().UTC()
+	msg.SentAt = clock.Now()
 
 	cp := msg // copy to avoid caller mutation
 	q := s.getOrCreateQueue(msg.QueueURL)

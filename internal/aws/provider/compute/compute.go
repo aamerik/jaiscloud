@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -325,7 +326,7 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 			SecurityGroupIds:       sgIds,
 			PrivateIpAddress:       fmt.Sprintf("10.0.%d.%d", i/256, i%256+10),
 			State:                  "pending",
-			LaunchTime:             time.Now(),
+			LaunchTime:             clock.Now(),
 			UserData:               userData,
 			IamInstanceProfileArn:  iamArn,
 			IamInstanceProfileName: iamName,
@@ -338,6 +339,8 @@ func (p *ComputeProvider) RunInstances(ctx context.Context, nr *model.Normalized
 		// Transition pending → running after 2s; skip if instance was deleted (reset).
 		instCopy := inst
 		account, region := nr.AccountID, nr.Region
+		// Real wall time: simulates EC2 state-transition latency with a real 2s delay.
+		// Must use actual wall time — a simulated clock cannot fire a real timer.
 		time.AfterFunc(2*time.Second, func() {
 			loaded, err := p.loadInstance(context.Background(), account, region, instCopy.InstanceId)
 			if err != nil || loaded.State != "pending" {
@@ -502,6 +505,8 @@ func (p *ComputeProvider) TerminateInstances(ctx context.Context, nr *model.Norm
 		p.saveInstance(ctx, account, region, inst)
 		// Transition shutting-down → terminated after 2s; skip if instance was deleted (reset).
 		instCopy := inst
+		// Real wall time: simulates EC2 state-transition latency with a real 2s delay.
+		// Must use actual wall time — a simulated clock cannot fire a real timer.
 		time.AfterFunc(2*time.Second, func() {
 			loaded, err := p.loadInstance(context.Background(), account, region, instCopy.InstanceId)
 			if err != nil || loaded.State != "shutting-down" {
@@ -553,6 +558,8 @@ func (p *ComputeProvider) StopInstances(ctx context.Context, nr *model.Normalize
 		p.saveInstance(ctx, account, region, inst)
 		// Transition stopping → stopped after 2s.
 		instCopy := inst
+		// Real wall time: simulates EC2 state-transition latency with a real 2s delay.
+		// Must use actual wall time — a simulated clock cannot fire a real timer.
 		time.AfterFunc(2*time.Second, func() {
 			instCopy.State = "stopped"
 			p.saveInstance(context.Background(), account, region, instCopy)
@@ -573,7 +580,7 @@ func (p *ComputeProvider) RebootInstances(ctx context.Context, nr *model.Normali
 		if err != nil {
 			return nil, err
 		}
-		inst.LastRebootTime = time.Now().UTC().Format(time.RFC3339)
+		inst.LastRebootTime = clock.Now().Format(time.RFC3339)
 		p.saveInstance(ctx, nr.AccountID, nr.Region, inst)
 	}
 	return provider.OK(nil), nil
@@ -1454,7 +1461,7 @@ func (p *ComputeProvider) CreateNatGateway(ctx context.Context, nr *model.Normal
 		NatGatewayId: newID("nat"),
 		SubnetId:     subnetId,
 		State:        "available",
-		CreateTime:   time.Now(),
+		CreateTime:   clock.Now(),
 	}
 	// Look up VPC from subnet
 	entries, _ := p.resources.List(ctx, nr.AccountID, nr.Region, rtSubnet, "")

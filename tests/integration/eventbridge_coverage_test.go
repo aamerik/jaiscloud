@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awseb "github.com/aws/aws-sdk-go-v2/service/eventbridge"
@@ -12,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── Custom Event Buses ───────────────────────────────────────────────────────
@@ -388,7 +389,7 @@ func TestEventBridge_PutEvents_NonExistentBus_Error(t *testing.T) {
 			Source:       aws.String("myapp"),
 			DetailType:   aws.String("test"),
 			Detail:       aws.String(`{}`),
-			Time:         aws.Time(time.Now()),
+			Time:         aws.Time(clock.RealNow()),
 		}},
 	})
 	// Non-existent bus either errors or returns FailedEntryCount > 0

@@ -7,7 +7,8 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // paramKey returns the account-scoped map key for a parameter.
@@ -38,7 +39,7 @@ func NewMemoryParameterStore() *MemoryParameterStore {
 func (s *MemoryParameterStore) PutParameter(_ context.Context, e *ParameterEntry, overwrite bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
+	now := clock.Now()
 	pk := paramKey(e.AccountID, e.Name)
 	if existing, ok := s.params[pk]; ok {
 		if !overwrite {

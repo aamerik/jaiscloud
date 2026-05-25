@@ -4,13 +4,14 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscw "github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // triggerCWEvaluate calls the test-only admin endpoint that runs one synchronous
@@ -50,7 +51,7 @@ func TestAlarmEvaluatorTransitionsToAlarm(t *testing.T) {
 			MetricName: aws.String("EvalTestMetric"),
 			Value:      aws.Float64(20),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestAlarmEvaluatorTransitionsToOK(t *testing.T) {
 			MetricName: aws.String("OKTestMetric"),
 			Value:      aws.Float64(5),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)
@@ -231,7 +232,7 @@ func TestAlarmHistoryEvaluatorRecorded(t *testing.T) {
 			MetricName: aws.String("EvalHistoryMetric"),
 			Value:      aws.Float64(50),
 			Unit:       cwtypes.StandardUnitCount,
-			Timestamp:  aws.Time(time.Now()),
+			Timestamp:  aws.Time(clock.RealNow()),
 		}},
 	})
 	require.NoError(t, err)

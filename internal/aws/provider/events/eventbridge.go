@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/events/pattern"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/provider/events/scheduler"
 	"jaiscloud/internal/aws/provider/events/targets"
 	"jaiscloud/internal/aws/provider/events/transform"
@@ -138,7 +139,7 @@ func (p *EventBridgeProvider) InternalPutEvents(ctx context.Context, entries []m
 			"detail":      detail,
 			"account":     "",
 			"region":      "",
-			"time":        time.Now().UTC().Format(time.RFC3339),
+			"time":        clock.Now().Format(time.RFC3339),
 		}
 		p.deliverEvent(ctx, envelope)
 	}
@@ -596,7 +597,7 @@ func (p *EventBridgeProvider) PutEvents(ctx context.Context, nr *model.Normalize
 			"detail":      detail,
 			"account":     nr.AccountID,
 			"region":      nr.Region,
-			"time":        time.Now().UTC().Format(time.RFC3339),
+			"time":        clock.Now().Format(time.RFC3339),
 		}
 		p.deliverEvent(ctx, envelope)
 		results = append(results, map[string]any{"EventId": envelope["id"]})
@@ -799,7 +800,7 @@ func buildEMRStepEnvelope(ev events.EMRStepStateEvent) map[string]any {
 	}
 	eventTime := ev.OccurredAt
 	if eventTime.IsZero() {
-		eventTime = time.Now().UTC()
+		eventTime = clock.Now()
 	}
 	return map[string]any{
 		"version":     "0",
@@ -849,7 +850,7 @@ func buildEMRJobRunEnvelope(ev events.EMRJobRunStateEvent) map[string]any {
 	}
 	eventTime := ev.UpdatedAt
 	if eventTime.IsZero() {
-		eventTime = time.Now().UTC()
+		eventTime = clock.Now()
 	}
 	return map[string]any{
 		"version":     "0",
@@ -881,7 +882,7 @@ func buildEMRClusterEnvelope(ev events.EMRClusterStateEvent) map[string]any {
 	}
 	eventTime := ev.OccurredAt
 	if eventTime.IsZero() {
-		eventTime = time.Now().UTC()
+		eventTime = clock.Now()
 	}
 	return map[string]any{
 		"version":     "0",
@@ -1149,7 +1150,7 @@ func (p *EventBridgeProvider) CreateArchive(ctx context.Context, nr *model.Norma
 		Description:    strParam(nr.Params, "Description"),
 		EventPattern:   strParam(nr.Params, "EventPattern"),
 		State:          "ENABLED",
-		CreationTime:   time.Now().UTC(),
+		CreationTime:   clock.Now(),
 	}
 	if d, ok := nr.Params["RetentionDays"].(float64); ok {
 		arch.RetentionDays = int(d)
@@ -1274,7 +1275,7 @@ func (p *EventBridgeProvider) StartReplay(ctx context.Context, nr *model.Normali
 		FilterARNs:      filterARNs,
 		Description:     strParam(nr.Params, "Description"),
 		State:           "RUNNING",
-		ReplayStartTime: time.Now().UTC(),
+		ReplayStartTime: clock.Now(),
 	}
 	data, _ := json.Marshal(replay)
 	entry := store.ResourceEntry{Type: resTypeReplay, ID: name, Data: data}
@@ -1319,7 +1320,7 @@ func (p *EventBridgeProvider) replayArchive(ctx context.Context, replayName, arc
 		}
 	}
 
-	now := time.Now().UTC()
+	now := clock.Now()
 	e, err := p.resources.Get(ctx, "", "", resTypeReplay, replayName)
 	if err != nil {
 		return
@@ -1430,8 +1431,7 @@ func ebConnID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 8)
 	for i := range b {
-		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
-		time.Sleep(0)
+		b[i] = chars[clock.Now().UnixNano()%int64(len(chars))]
 	}
 	return string(b)
 }
@@ -1444,7 +1444,7 @@ func (p *EventBridgeProvider) CreateConnection(ctx context.Context, nr *model.No
 	if _, err := p.resources.Get(ctx, nr.AccountID, nr.Region, resTypeConnection, name); err == nil {
 		return nil, &model.ProviderError{Code: "ResourceAlreadyExistsException", Message: "Connection already exists: " + name, HTTPStatus: http.StatusBadRequest}
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	conn := ebConnection{
 		Name:               name,
 		ARN:                nr.ResourceID("events-connection", name),
@@ -1503,7 +1503,7 @@ func (p *EventBridgeProvider) UpdateConnection(ctx context.Context, nr *model.No
 	if ap, ok := nr.Params["AuthParameters"].(map[string]any); ok {
 		conn.AuthParameters = ap
 	}
-	conn.LastModifiedTime = time.Now().UTC()
+	conn.LastModifiedTime = clock.Now()
 	data, _ := json.Marshal(conn)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix(), "LastModifiedTime": conn.LastModifiedTime.Unix()}), nil
@@ -1556,7 +1556,7 @@ func (p *EventBridgeProvider) DeauthorizeConnection(ctx context.Context, nr *mod
 	var conn ebConnection
 	json.Unmarshal(e.Data, &conn)
 	conn.State = "DEAUTHORIZED"
-	conn.LastModifiedTime = time.Now().UTC()
+	conn.LastModifiedTime = clock.Now()
 	data, _ := json.Marshal(conn)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeConnection, ID: name, Data: data})
 	return provider.OK(map[string]any{"ConnectionArn": conn.ARN, "ConnectionState": conn.State, "CreationTime": conn.CreationTime.Unix()}), nil
@@ -1576,7 +1576,7 @@ func (p *EventBridgeProvider) CreateApiDestination(ctx context.Context, nr *mode
 	if v, ok := nr.Params["InvocationRateLimitPerSecond"].(float64); ok && v > 0 {
 		rateLimit = int(v)
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	dest := ebApiDestination{
 		Name:                         name,
 		ARN:                          nr.ResourceID("events-api-destination", name),
@@ -1642,7 +1642,7 @@ func (p *EventBridgeProvider) UpdateApiDestination(ctx context.Context, nr *mode
 	if v, ok := nr.Params["InvocationRateLimitPerSecond"].(float64); ok && v > 0 {
 		dest.InvocationRateLimitPerSecond = int(v)
 	}
-	dest.LastModifiedTime = time.Now().UTC()
+	dest.LastModifiedTime = clock.Now()
 	data, _ := json.Marshal(dest)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeApiDestination, ID: name, Data: data})
 	return provider.OK(map[string]any{"ApiDestinationArn": dest.ARN, "ApiDestinationState": dest.State, "CreationTime": dest.CreationTime.Unix(), "LastModifiedTime": dest.LastModifiedTime.Unix()}), nil

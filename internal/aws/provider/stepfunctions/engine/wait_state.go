@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
+	"jaiscloud/internal/clock"
 )
 
 func (e *ExecutionEngine) evalWait(ctx context.Context, state *asl.WaitState, input any) (any, error) {
@@ -30,7 +31,7 @@ func (e *ExecutionEngine) evalWait(ctx context.Context, state *asl.WaitState, in
 		if err != nil {
 			return nil, fmt.Errorf("States.Runtime: invalid Timestamp %q: %w", state.Timestamp, err)
 		}
-		waitDuration = time.Until(t)
+		waitDuration = t.Sub(clock.Now())
 	case state.TimestampPath != "":
 		v, err := asl.EvalPath(effective, state.TimestampPath)
 		if err != nil {
@@ -44,7 +45,7 @@ func (e *ExecutionEngine) evalWait(ctx context.Context, state *asl.WaitState, in
 		if err != nil {
 			return nil, fmt.Errorf("States.Runtime: invalid timestamp %q: %w", s, err)
 		}
-		waitDuration = time.Until(t)
+		waitDuration = t.Sub(clock.Now())
 	}
 
 	if waitDuration < 0 {

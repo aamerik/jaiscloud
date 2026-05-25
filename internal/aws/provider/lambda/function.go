@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/clock"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
@@ -421,7 +422,7 @@ func (p *FunctionProvider) CreateFunction(ctx context.Context, nr *model.Normali
 		Timeout:      timeout,
 		MemorySize:   memSize,
 		State:        "Active",
-		LastModified: time.Now().UTC().Format(time.RFC3339),
+		LastModified: clock.Now().Format(time.RFC3339),
 		RevisionId:   "1",
 		Environment:  parseEnvVars(nr.Params),
 		Tags:         tags,
@@ -553,7 +554,7 @@ func (p *FunctionProvider) UpdateFunctionConfiguration(ctx context.Context, nr *
 		}
 		cfg.Timeout = newTimeout
 	}
-	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
+	cfg.LastModified = clock.Now().Format(time.RFC3339)
 	if err := p.saveConfig(ctx, nr.AccountID, nr.Region, cfg); err != nil {
 		return nil, err
 	}
@@ -566,7 +567,7 @@ func (p *FunctionProvider) UpdateFunctionCode(ctx context.Context, nr *model.Nor
 	if err != nil {
 		return nil, provider.StoreNotFoundError(err, "ResourceNotFoundException", "Function not found: "+name)
 	}
-	cfg.LastModified = time.Now().UTC().Format(time.RFC3339)
+	cfg.LastModified = clock.Now().Format(time.RFC3339)
 	var zipBytes []byte
 	if zf, ok := nr.Params["ZipFile"].(string); ok {
 		zipBytes, _ = base64.StdEncoding.DecodeString(zf)
@@ -733,7 +734,7 @@ func (p *FunctionProvider) InvokeFunction(ctx context.Context, nr *model.Normali
 			}
 			body := map[string]any{
 				"errorMessage": fmt.Sprintf("%s %s Task timed out after %.2f seconds",
-					nr.Clock.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+					clock.Now().Format("2006-01-02T15:04:05.000Z"),
 					reqID,
 					timeout.Seconds()),
 				"errorType": "Runtime.TimeoutError",
@@ -1042,7 +1043,7 @@ func (p *FunctionProvider) PublishLayerVersion(ctx context.Context, nr *model.No
 		Description:        strParam(nr.Params, "Description"),
 		LicenseInfo:        strParam(nr.Params, "LicenseInfo"),
 		CompatibleRuntimes: runtimes,
-		CreatedDate:        time.Now().UTC().Format(time.RFC3339),
+		CreatedDate:        clock.Now().Format(time.RFC3339),
 	}
 	if zf, ok := nr.Params["Content"].(map[string]any); ok {
 		if b64, ok := zf["ZipFile"].(string); ok {
@@ -1354,7 +1355,7 @@ func (p *FunctionProvider) CreateFunctionUrlConfig(ctx context.Context, nr *mode
 	if authType == "" {
 		authType = "NONE"
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := clock.Now().Format(time.RFC3339)
 	uc := urlConfig{
 		FunctionArn:      p.functionARN(nr, name),
 		FunctionUrl:      fmt.Sprintf("https://%s.lambda-url.us-east-1.on.aws/", name),
@@ -1386,7 +1387,7 @@ func (p *FunctionProvider) UpdateFunctionUrlConfig(ctx context.Context, nr *mode
 	if a := strParam(nr.Params, "AuthType"); a != "" {
 		uc.AuthType = a
 	}
-	uc.LastModifiedTime = time.Now().UTC().Format(time.RFC3339)
+	uc.LastModifiedTime = clock.Now().Format(time.RFC3339)
 	if err := p.saveURLConfig(ctx, nr.AccountID, nr.Region, name, uc); err != nil {
 		return nil, err
 	}

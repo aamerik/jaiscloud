@@ -8,6 +8,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // UserIdentity identifies who caused a stream event.
@@ -61,7 +63,7 @@ func (s *MemoryStreamStore) Enable(tableName, streamArn string) {
 			info: StreamInfo{
 				StreamArn:   streamArn,
 				TableName:   tableName,
-				StreamLabel: fmt.Sprintf("%d", time.Now().UnixNano()),
+				StreamLabel: fmt.Sprintf("%d", clock.Now().UnixNano()),
 				Enabled:     true,
 			},
 		}
@@ -113,7 +115,7 @@ func (s *MemoryStreamStore) Append(tableName string, record Record) {
 		return
 	}
 	record.SequenceNumber = ts.nextSeq
-	record.ApproximateCreationDateTime = time.Now()
+	record.ApproximateCreationDateTime = clock.Now()
 	ts.records = append(ts.records, record)
 	ts.nextSeq++
 }

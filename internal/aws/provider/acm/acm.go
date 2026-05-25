@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -165,7 +166,7 @@ func (p *Provider) RequestCertificate(ctx context.Context, nr *model.NormalizedR
 			}
 		}
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	arn := nr.ResourceID("acm-certificate", randUUID())
 
 	// Build DomainValidationOptions for main domain + all SANs.
@@ -255,7 +256,7 @@ func (p *Provider) ImportCertificate(ctx context.Context, nr *model.NormalizedRe
 	if domain == "" {
 		domain = "imported.example.com"
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	var arn string
 	if existingARN != "" {
 		arn = existingARN

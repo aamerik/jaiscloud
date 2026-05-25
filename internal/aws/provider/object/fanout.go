@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/provider/queue"
 )
 
@@ -98,7 +99,7 @@ func (p *ObjectProvider) dispatchS3Notification(_ context.Context, bucket, key, 
 	if err := json.Unmarshal([]byte(raw.(string)), &cfg); err != nil {
 		return
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 
 	bgCtx := context.Background()
 

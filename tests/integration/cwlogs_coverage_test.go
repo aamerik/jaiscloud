@@ -11,6 +11,8 @@ import (
 	cwltypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── CW Logs Queries ──────────────────────────────────────────────────────────
@@ -28,8 +30,8 @@ func TestCWL_StartQuery_LiteImmediatelyComplete(t *testing.T) {
 
 	out, err := c.StartQuery(ctx, &awscwl.StartQueryInput{
 		LogGroupName: aws.String("/query/test"),
-		StartTime:    aws.Int64(time.Now().Add(-time.Hour).Unix()),
-		EndTime:      aws.Int64(time.Now().Unix()),
+		StartTime:    aws.Int64(clock.RealNow().Add(-time.Hour).Unix()),
+		EndTime:      aws.Int64(clock.RealNow().Unix()),
 		QueryString:  aws.String("fields @message | limit 10"),
 	})
 	if err != nil {
@@ -50,8 +52,8 @@ func TestCWL_GetQueryResults_AfterStart(t *testing.T) {
 
 	startOut, err := c.StartQuery(ctx, &awscwl.StartQueryInput{
 		LogGroupName: aws.String("/query/results"),
-		StartTime:    aws.Int64(time.Now().Add(-time.Hour).Unix()),
-		EndTime:      aws.Int64(time.Now().Unix()),
+		StartTime:    aws.Int64(clock.RealNow().Add(-time.Hour).Unix()),
+		EndTime:      aws.Int64(clock.RealNow().Unix()),
 		QueryString:  aws.String("fields @message"),
 	})
 	if err != nil {
@@ -216,7 +218,7 @@ func TestCWL_CreateExportTask_Stub(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now()
+	now := clock.RealNow()
 	out, err := c.CreateExportTask(ctx, &awscwl.CreateExportTaskInput{
 		LogGroupName: aws.String("/export/test"),
 		Destination:  aws.String("my-s3-bucket"),
@@ -239,7 +241,7 @@ func TestCWL_DescribeExportTasks_AfterCreate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now()
+	now := clock.RealNow()
 	createOut, err := c.CreateExportTask(ctx, &awscwl.CreateExportTaskInput{
 		LogGroupName: aws.String("/export/desc"),
 		Destination:  aws.String("my-s3-bucket"),

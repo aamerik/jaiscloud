@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -27,7 +28,7 @@ func (p *Provider) PutLogEvents(ctx context.Context, nr *model.NormalizedRequest
 		return nil, logsErr("InvalidParameterException", "logEvents must not contain more than 10000 events", 400)
 	}
 
-	now := nr.Clock.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	events := make([]LogEvent, 0, len(rawEvents))
 	var minTS, maxTS int64
 	for i, raw := range rawEvents {

@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"jaiscloud/internal/clock"
 )
 
 // PostgresParameterStore is a PostgreSQL-backed ParameterStore.
@@ -25,7 +27,7 @@ func NewPostgresParameterStore(pool *pgxpool.Pool) *PostgresParameterStore {
 
 func (s *PostgresParameterStore) PutParameter(ctx context.Context, e *ParameterEntry, overwrite bool) error {
 	data, _ := json.Marshal(paramMeta(*e))
-	now := time.Now()
+	now := clock.Now()
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/aws/provider/events/pattern"
 	sqsstore "jaiscloud/internal/aws/store/sqs"
 	"jaiscloud/internal/events"
@@ -131,7 +132,7 @@ func topicArn(nr *model.NormalizedRequest, name string) string {
 }
 
 func subArn(nr *model.NormalizedRequest, topicName string) string {
-	suffix := fmt.Sprintf("%x", md5.Sum([]byte(topicName+time.Now().String())))
+	suffix := fmt.Sprintf("%x", md5.Sum([]byte(topicName+clock.Now().String())))
 	return nr.ResourceID("sns-subscription", topicName+":"+suffix)
 }
 
@@ -207,7 +208,7 @@ func (p *SNSProvider) CreateTopic(ctx context.Context, nr *model.NormalizedReque
 		TopicArn:   arn,
 		Attributes: attrs,
 		Tags:       map[string]string{},
-		CreatedAt:  time.Now().UTC(),
+		CreatedAt:  clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, nr.Region, "sns_topics", arn, td); err != nil {
 		return nil, err
@@ -301,7 +302,7 @@ func (p *SNSProvider) Subscribe(ctx context.Context, nr *model.NormalizedRequest
 	token := ""
 	confirmed := true
 	if protocol == "http" || protocol == "https" {
-		token = fmt.Sprintf("%x", md5.Sum([]byte(sArn+time.Now().String())))
+		token = fmt.Sprintf("%x", md5.Sum([]byte(sArn+clock.Now().String())))
 		confirmed = true // auto-confirm for local dev
 	}
 
@@ -438,7 +439,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 	tArn := strParam(nr.Params, "TopicArn")
 	message := strParam(nr.Params, "Message")
 	subject := strParam(nr.Params, "Subject")
-	messageID := fmt.Sprintf("%x", md5.Sum([]byte(message+time.Now().String())))
+	messageID := fmt.Sprintf("%x", md5.Sum([]byte(message+clock.Now().String())))
 
 	if tArn == "" {
 		return nil, model.NewProviderError("InvalidParameter", "TopicArn is required", 400)
@@ -458,7 +459,7 @@ func (p *SNSProvider) Publish(ctx context.Context, nr *model.NormalizedRequest) 
 				dedupID = fmt.Sprintf("%x", md5.Sum([]byte(message)))
 			}
 			if dedupID != "" {
-				now := time.Now().Unix()
+				now := clock.Now().Unix()
 				if td.DedupCache == nil {
 					td.DedupCache = make(map[string]int64)
 				}
@@ -580,7 +581,7 @@ func (p *SNSProvider) deliverToSQS(ctx context.Context, queueURL, tArn, messageI
 		MessageID: sqsMsgID,
 		QueueURL:  queueURL,
 		Body:      bodyStr,
-		SentAt:    time.Now(),
+		SentAt:    clock.Now(),
 	}
 	_, _, err := p.messages.Send(ctx, "", "", msg)
 	return err
@@ -605,7 +606,7 @@ func (p *SNSProvider) deliverToLambda(ctx context.Context, subArn, tArn, message
 			"TopicArn":          tArn,
 			"Subject":           subject,
 			"Message":           message,
-			"Timestamp":         time.Now().UTC().Format(time.RFC3339),
+			"Timestamp":         clock.Now().Format(time.RFC3339),
 			"SignatureVersion":  "1",
 			"Signature":         "EXAMPLE",
 			"SigningCertUrl":    "EXAMPLE",
@@ -625,7 +626,7 @@ func (p *SNSProvider) deliverToHTTP(tArn, messageID, message, subject, endpoint 
 		"TopicArn":         tArn,
 		"Subject":          subject,
 		"Message":          message,
-		"Timestamp":        time.Now().UTC().Format(time.RFC3339),
+		"Timestamp":        clock.Now().Format(time.RFC3339),
 		"SignatureVersion": "1",
 		"Signature":        "EXAMPLE",
 		"SigningCertURL":   "EXAMPLE",

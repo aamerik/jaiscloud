@@ -8,7 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // MemoryResourceStore is an in-memory ResourceStore backed by a sync.RWMutex map.
@@ -38,7 +39,7 @@ func (s *MemoryResourceStore) Create(ctx context.Context, account, region string
 	if _, exists := s.entries[k]; exists {
 		return ErrAlreadyExists
 	}
-	now := time.Now()
+	now := clock.Now()
 	entry.CreatedAt = now
 	entry.UpdatedAt = now
 	s.entries[k] = entry
@@ -52,7 +53,7 @@ func (s *MemoryResourceStore) Upsert(ctx context.Context, account, region string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := key(account, region, entry.Type, entry.ID)
-	now := time.Now()
+	now := clock.Now()
 	if existing, exists := s.entries[k]; exists {
 		entry.CreatedAt = existing.CreatedAt
 	} else {
@@ -82,7 +83,7 @@ func (s *MemoryResourceStore) Update(ctx context.Context, account, region string
 		return ErrNotFound
 	}
 	entry.CreatedAt = existing.CreatedAt
-	entry.UpdatedAt = time.Now()
+	entry.UpdatedAt = clock.Now()
 	s.entries[k] = entry
 	return nil
 }

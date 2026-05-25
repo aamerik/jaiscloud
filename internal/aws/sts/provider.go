@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	awsarn "jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/aws/identity"
 	"jaiscloud/internal/model"
@@ -135,7 +136,7 @@ func (p *STSProvider) AssumeRole(_ context.Context, nr *model.NormalizedRequest)
 	}
 	secretKey := randBase64(30)
 	sessionToken := randBase64(36)
-	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+	expiry := clock.Now().Add(time.Duration(durationSecs) * time.Second)
 
 	// Resolve transitive tags from the caller's existing session.
 	callerKey := nr.AccessKey
@@ -245,7 +246,7 @@ func (p *STSProvider) AssumeRoleWithWebIdentity(_ context.Context, nr *model.Nor
 	if err != nil {
 		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
-	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+	expiry := clock.Now().Add(time.Duration(durationSecs) * time.Second)
 	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", targetAccount, roleName, sessionName)
 	_ = p.store.StoreSession(accessKey, SessionConfig{
 		Account:         targetAccount,
@@ -282,7 +283,7 @@ func (p *STSProvider) AssumeRoleWithSAML(_ context.Context, nr *model.Normalized
 	if err != nil {
 		return nil, stsErr("InternalError", "credential mint failed: "+err.Error(), 500)
 	}
-	expiry := time.Now().UTC().Add(time.Duration(durationSecs) * time.Second)
+	expiry := clock.Now().Add(time.Duration(durationSecs) * time.Second)
 	assumedArn := fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/saml-session", targetAccount, roleName)
 	_ = p.store.StoreSession(accessKey, SessionConfig{
 		Account:         targetAccount,
@@ -374,7 +375,7 @@ func generateCredentials(durationSeconds int) credentials {
 		AccessKeyId:     "ASIA" + randAlphaNum(16),
 		SecretAccessKey: randBase64(30),
 		SessionToken:    randBase64(268), // 356-char base64 encoded
-		Expiration:      time.Now().UTC().Add(time.Duration(durationSeconds) * time.Second),
+		Expiration:      clock.Now().Add(time.Duration(durationSeconds) * time.Second),
 	}
 }
 
@@ -544,7 +545,7 @@ func extractJWTSubject(token string) (string, error) {
 		case json.Number:
 			expUnix, _ = v.Int64()
 		}
-		if expUnix > 0 && expUnix < time.Now().Unix() {
+		if expUnix > 0 && expUnix < clock.Now().Unix() {
 			return "", model.NewProviderError("ExpiredTokenException", "Token has expired", 400)
 		}
 	}

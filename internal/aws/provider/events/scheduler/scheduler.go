@@ -55,16 +55,14 @@ type Scheduler struct {
 	entries    map[string]*entry
 	heap       minHeap
 	dispatcher Dispatcher
-	clk        clock.Clock
 	changed    chan struct{}
 }
 
 // New constructs a Scheduler.
-func New(dispatcher Dispatcher, clk clock.Clock) *Scheduler {
+func New(dispatcher Dispatcher) *Scheduler {
 	return &Scheduler{
 		entries:    make(map[string]*entry),
 		dispatcher: dispatcher,
-		clk:        clk,
 		changed:    make(chan struct{}, 1),
 	}
 }
@@ -75,7 +73,7 @@ func (s *Scheduler) Add(ruleARN, expr string, hctx HandlerCtx, tgts []targets.Ta
 	if err != nil {
 		return err
 	}
-	now := s.clk.Now()
+	now := clock.Now()
 	refs := make([]targetRef, len(tgts))
 	for i, t := range tgts {
 		refs[i] = targetRef{Target: t}
@@ -97,6 +95,10 @@ func (s *Scheduler) Add(ruleARN, expr string, hctx HandlerCtx, tgts []targets.Ta
 	s.notify()
 	return nil
 }
+
+// TickNow synchronously evaluates all pending rules against clock.Now() and
+// fires any that are overdue. Used by POST /_jaiscloud/eb-tick for deterministic testing.
+func (s *Scheduler) TickNow(ctx context.Context) { s.fire(ctx) }
 
 // Reset clears all scheduled entries, stopping any pending fires.
 func (s *Scheduler) Reset() {
@@ -133,7 +135,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		if len(s.heap) == 0 {
 			delay = time.Hour
 		} else {
-			delay = time.Until(s.heap[0].nextFire)
+			delay = s.heap[0].nextFire.Sub(clock.Now())
 		}
 		s.mu.Unlock()
 
@@ -155,7 +157,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 func (s *Scheduler) fire(ctx context.Context) {
-	now := s.clk.Now()
+	now := clock.Now()
 	for {
 		s.mu.Lock()
 		if len(s.heap) == 0 || s.heap[0].nextFire.After(now) {

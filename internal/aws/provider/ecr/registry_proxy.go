@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	ecrstore "jaiscloud/internal/aws/store/ecr"
+	"jaiscloud/internal/clock"
 )
 
 const (
@@ -251,8 +252,9 @@ func (p *RegistryProxy) buildService() *corev1.Service {
 }
 
 func (p *RegistryProxy) waitReady(ctx context.Context, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	// healthy. Must use actual elapsed time, not the simulated clock.
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

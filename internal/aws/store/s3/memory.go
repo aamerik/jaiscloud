@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // MemoryS3ObjectMetaStore is an in-memory S3ObjectMetaStore.
@@ -96,7 +98,7 @@ func (s *MemoryS3ObjectMetaStore) PutObjectVersion(_ context.Context, bucket, ke
 	meta.Key = key
 	meta.VersionID = vID
 	if meta.LastModified.IsZero() {
-		meta.LastModified = time.Now().UTC()
+		meta.LastModified = clock.Now()
 	}
 	// Mark all existing versions as not-latest.
 	existing := s.versions[bucket][key]
@@ -186,7 +188,7 @@ func (s *MemoryS3ObjectMetaStore) CreateBucket(_ context.Context, bucket string,
 		meta = map[string]any{}
 	}
 	meta["Name"] = bucket
-	meta["CreationDate"] = time.Now().UTC().Format(time.RFC3339)
+	meta["CreationDate"] = clock.Now().Format(time.RFC3339)
 	s.buckets[bucket] = meta
 	s.objects[bucket] = make(map[string]ObjectMeta)
 	return nil
@@ -241,7 +243,7 @@ func (s *MemoryS3ObjectMetaStore) PutObjectMeta(_ context.Context, bucket, key s
 	}
 	meta.Key = key
 	if meta.LastModified.IsZero() {
-		meta.LastModified = time.Now().UTC()
+		meta.LastModified = clock.Now()
 	}
 	s.objects[bucket][key] = meta
 	return nil
@@ -377,7 +379,7 @@ func (s *MemoryS3ObjectMetaStore) InitMultipart(_ context.Context, bucket, key, 
 	s.uploads[uploadID] = multipartUpload{
 		Bucket: bucket, Key: key, Meta: meta,
 		Parts:     make(map[int]PartMeta),
-		Initiated: time.Now().UTC(),
+		Initiated: clock.Now(),
 	}
 	return nil
 }

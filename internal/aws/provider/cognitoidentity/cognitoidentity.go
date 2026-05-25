@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -179,7 +180,7 @@ func (p *Provider) GetId(ctx context.Context, nr *model.NormalizedRequest) (*mod
 		IdentityID:     identityID,
 		IdentityPoolID: poolID,
 		Logins:         map[string]string{},
-		CreationDate:   time.Now().UTC(),
+		CreationDate:   clock.Now(),
 	}
 	data, _ := json.Marshal(ident)
 	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtIdentity, ID: identityID, Data: data})
@@ -188,7 +189,7 @@ func (p *Provider) GetId(ctx context.Context, nr *model.NormalizedRequest) (*mod
 
 func (p *Provider) GetCredentialsForIdentity(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	identityID := str(nr.Params, "IdentityId")
-	expiry := time.Now().Add(time.Hour).Unix()
+	expiry := clock.Now().Add(time.Hour).Unix()
 	return provider.OK(map[string]any{
 		"IdentityId": identityID,
 		"Credentials": map[string]any{

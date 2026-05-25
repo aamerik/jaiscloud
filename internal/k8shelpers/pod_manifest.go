@@ -3,8 +3,8 @@ package k8shelpers
 import (
 	"context"
 	"fmt"
+	"jaiscloud/internal/clock"
 	"strings"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -100,4 +100,4 @@ func isNotFound(err error) bool {
 }
 
 // now is a variable for test injection.
-var now = time.Now
+var now = clock.RealNow()

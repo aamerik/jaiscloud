@@ -13,6 +13,7 @@ import (
 	"time"
 
 	kinesisstore "jaiscloud/internal/aws/store/kinesis"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -186,7 +187,7 @@ func (p *Provider) CreateStream(_ context.Context, nr *model.NormalizedRequest) 
 		ARN:       arn,
 		Status:    kinesisstore.StreamStatusActive,
 		Mode:      mode,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: clock.Now(),
 	}
 	if err := p.store.CreateStream(stream, shardCount); err != nil {
 		return nil, providerErr(err)
@@ -535,7 +536,7 @@ func (p *Provider) RegisterStreamConsumer(_ context.Context, nr *model.Normalize
 		return nil, providerErr(err)
 	}
 
-	ts := time.Now().UTC().Unix()
+	ts := clock.Now().Unix()
 	// ARN: arn:aws:kinesis:region:account:stream/name/consumer/consumerName:timestamp
 	consumerARN := fmt.Sprintf("%s/consumer/%s:%d", streamARN, consumerName, ts)
 	_ = stream

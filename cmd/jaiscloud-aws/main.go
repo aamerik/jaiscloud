@@ -59,6 +59,7 @@ import (
 	// G-PENDING new providers
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
+	"jaiscloud/internal/clock"
 	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
 	elbv2provider "jaiscloud/internal/aws/provider/elbv2"
 	resourcegroupsprovider "jaiscloud/internal/aws/provider/resourcegroups"
@@ -139,6 +140,7 @@ func startCmd() *cobra.Command {
 				return err
 			}
 			cfg.Cloud = model.CloudAWS
+			clock.SetGlobalClock(cfg.Clock)
 
 			ctx := context.Background()
 
@@ -170,7 +172,7 @@ func startCmd() *cobra.Command {
 
 			// Wire Step Functions execution engine — provides real ASL execution.
 			sfnDisp := sfndispatcher.New(app.Registry, cfg)
-			sfnEng := sfnengine.New(s.sfn, sfnDisp, cfg.Clock)
+			sfnEng := sfnengine.New(s.sfn, sfnDisp)
 			app.SfnP.SetEngine(sfnEng)
 			prevCleanup := cleanup
 			cleanup = func() {
@@ -185,6 +187,10 @@ func startCmd() *cobra.Command {
 			adminHandler.SetLambdaCodeFetcher(app.FuncP)
 			adminHandler.SetCWAlarmEvaluator(app.CWP.Evaluator())
 			adminHandler.SetFirehoseFlusher(app.FirehoseP)
+			if app.TableP.TTLWorker() != nil {
+				adminHandler.RegisterTTLSweeper(app.TableP.TTLWorker())
+			}
+			adminHandler.RegisterEBScheduler(app.Sched)
 			adminHandler.SetMeta(admin.HandlerMeta{
 				InstanceID: instanceID,
 				Cloud:      "aws",
@@ -415,6 +421,8 @@ type AppContext struct {
 	FuncP          *functionprovider.FunctionProvider
 	FirehoseP      *firehoseprovider.Provider
 	ComputeP       *compute.ComputeProvider
+	TableP         *table.TableProvider
+	Sched          *ebscheduler.Scheduler
 }
 
 // appStores holds all store instances that the server depends on.
@@ -655,7 +663,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 
 	cleanup := func() {}
 
-	tableProvider := table.NewWithStreams(s.resources, s.dynamo, streams)
+	tableProvider := table.NewWithTTL(s.resources, s.dynamo, streams, string(cfg.Cloud), cfg.Region, cfg.AccountID, time.Hour)
 
 	var keyStore keyprovider.KeyStore
 	if cfg.DSN != "" {
@@ -701,7 +709,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
 
 	funcP := functionprovider.NewWithLimits(s.resources, lambdaExec, lambdaCfg)
-	queueP := queue.New(s.resources, s.messages, cfg.Clock, bus)
+	queueP := queue.New(s.resources, s.messages, bus)
 	iamP := iamprovider.New(s.resources)
 	stsP := stsprovider.NewWithOIDC(s.stsSession, cfg.OIDCIssuers)
 	kinesisP := buildKinesisProvider(ctx, cfg, s)
@@ -816,7 +824,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	// Wire EventBridge target dispatcher and scheduler.
 	tgtDisp := targets.New(queueP, funcP, notifP, &logsWriterAdapter{logsProvider}, eventsP)
 	eventsP.SetTargetDispatcher(tgtDisp)
-	sched := ebscheduler.New(tgtDisp, cfg.Clock)
+	sched := ebscheduler.New(tgtDisp)
 	eventsP.SetScheduler(sched)
 
 	// Wire SQS DLQ sender into the async queue.
@@ -858,6 +866,8 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		FuncP:          funcP,
 		FirehoseP:      firehoseP,
 		ComputeP:       computeP,
+		TableP:         tableProvider,
+		Sched:          sched,
 	}
 }
 
@@ -1519,7 +1529,7 @@ type logsWriterAdapter struct{ p *cwlogs.Provider }
 func (a *logsWriterAdapter) InternalPutLogEvents(ctx context.Context, logGroupName, logStreamName string, events []string) error {
 	_ = a.p.InternalCreateLogGroup(ctx, logGroupName)
 	lsEvents := make([]logstream.Event, len(events))
-	now := time.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	for i, e := range events {
 		lsEvents[i] = logstream.Event{Timestamp: now, Message: e}
 	}

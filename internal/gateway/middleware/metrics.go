@@ -8,6 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"jaiscloud/internal/clock"
 )
 
 // Context key types — unexported to prevent collisions with other packages.
@@ -85,7 +87,7 @@ func (w *metricsResponseWriter) Flush() {
 func Metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mw := &metricsResponseWriter{ResponseWriter: w, status: 200}
-		start := time.Now()
+		start := clock.RealNow()
 		next.ServeHTTP(mw, r)
 		dur := time.Since(start).Seconds()
 

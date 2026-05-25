@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── P2-7: Object Tagging ─────────────────────────────────────────────────────
@@ -501,7 +503,7 @@ func TestS3_ObjectLock_Retention_Governance(t *testing.T) {
 	versionID := putResp.VersionId
 	require.NotNil(t, versionID, "versioned bucket must return a version ID")
 
-	retainUntil := time.Now().UTC().Add(24 * time.Hour)
+	retainUntil := clock.RealNow().Add(24 * time.Hour)
 	_, err = c.PutObjectRetention(ctx, &awss3.PutObjectRetentionInput{
 		Bucket: aws.String("ret-bucket"),
 		Key:    aws.String("doc.txt"),

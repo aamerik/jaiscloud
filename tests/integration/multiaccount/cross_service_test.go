@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestSNS_CrossAccount_TopicAndQueue verifies that an SNS topic in account A
@@ -61,8 +63,8 @@ func TestSNS_CrossAccount_TopicAndQueue(t *testing.T) {
 
 	// Poll B's queue — message should arrive within 3 seconds.
 	var received bool
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(3 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		recv, rErr := sqsB.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(qURL),
 			MaxNumberOfMessages: 1,

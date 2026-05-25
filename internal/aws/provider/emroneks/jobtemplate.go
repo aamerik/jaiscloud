@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -80,7 +81,7 @@ func (p *EMRContainersProvider) CreateJobTemplate(ctx context.Context, nr *model
 		Id:              id,
 		Name:            name,
 		Arn:             arn,
-		CreatedAt:       time.Now().UTC(),
+		CreatedAt:       clock.Now(),
 		Tags:            tags,
 		JobTemplateData: jobTemplateData,
 	}

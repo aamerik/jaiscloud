@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -301,7 +302,7 @@ func (p *StackProvider) CreateStack(ctx context.Context, nr *model.NormalizedReq
 		StackName:    name,
 		StackStatus:  "CREATE_COMPLETE",
 		Description:  strParam(nr.Params, "Description"),
-		CreationTime: time.Now().UTC(),
+		CreationTime: clock.Now(),
 		Parameters:   paramsToSlice(rc.params),
 		Outputs:      outputs,
 		Resources:    created,
@@ -851,7 +852,7 @@ func updateAttributes(old map[string]any, props map[string]any) map[string]any {
 }
 
 func shortID() string {
-	return fmt.Sprintf("%016x", time.Now().UnixNano())
+	return fmt.Sprintf("%016x", clock.Now().UnixNano())
 }
 
 // stackConditions rebuilds the conditions map for a stored stack by re-evaluating

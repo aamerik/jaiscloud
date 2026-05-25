@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -125,7 +126,7 @@ func (p *GlueProvider) CreateJob(ctx context.Context, nr *model.NormalizedReques
 		timeout = int(v)
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	j := jobEntry{
 		Name:             name,
 		Role:             strParam(nr.Params, "Role"),
@@ -167,7 +168,7 @@ func (p *GlueProvider) UpdateJob(ctx context.Context, nr *model.NormalizedReques
 	if v, ok := update["Timeout"].(float64); ok {
 		j.Timeout = int(v)
 	}
-	j.LastModifiedOn = time.Now()
+	j.LastModifiedOn = clock.Now()
 	if err := p.saveJob(ctx, nr.AccountID, nr.Region, j); err != nil {
 		return nil, err
 	}
@@ -228,7 +229,7 @@ func (p *GlueProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	runID := newID()
-	now := time.Now()
+	now := clock.Now()
 	run := jobRunEntry{
 		Id:          runID,
 		JobName:     jobName,
@@ -237,7 +238,7 @@ func (p *GlueProvider) StartJobRun(ctx context.Context, nr *model.NormalizedRequ
 	}
 
 	// Mock mode: immediately mark as SUCCEEDED
-	completedNow := time.Now()
+	completedNow := clock.Now()
 	run.JobRunState = "SUCCEEDED"
 	run.CompletedOn = &completedNow
 
@@ -304,7 +305,7 @@ func (p *GlueProvider) BatchStopJobRun(ctx context.Context, nr *model.Normalized
 		// Only RUNNING jobs can be stopped; others are a no-op
 		if run.JobRunState == "RUNNING" || run.JobRunState == "STARTING" {
 			run.JobRunState = "STOPPED"
-			now := time.Now()
+			now := clock.Now()
 			run.CompletedOn = &now
 			p.saveJobRun(ctx, nr.AccountID, nr.Region, run) //nolint:errcheck
 		}

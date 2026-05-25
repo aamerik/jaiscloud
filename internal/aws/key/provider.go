@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	awsarn "jaiscloud/internal/aws/arn"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -120,7 +121,7 @@ func (p *KeyProvider) CreateKey(ctx context.Context, nr *model.NormalizedRequest
 		KeySpec:     keySpec,
 		Origin:      origin,
 		Tags:        tags,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   clock.Now(),
 	}
 
 	// EXTERNAL origin: create key entry without any key material.
@@ -489,7 +490,7 @@ func (p *KeyProvider) GetParametersForImport(ctx context.Context, nr *model.Norm
 		"KeyId":             keyID,
 		"PublicKey":         base64.StdEncoding.EncodeToString(dummyKey),
 		"ImportToken":       base64.StdEncoding.EncodeToString(token),
-		"ParametersValidTo": time.Now().Add(24 * time.Hour).Unix(),
+		"ParametersValidTo": clock.Now().Add(24 * time.Hour).Unix(),
 		"KeySpec":           "RSA_2048",
 		"WrappingAlgorithm": "RSAES_OAEP_SHA_256",
 	}), nil
@@ -564,7 +565,7 @@ func (p *KeyProvider) CreateGrant(ctx context.Context, nr *model.NormalizedReque
 		Operations:        ops,
 		Token:             token,
 		IssuingAccount:    nr.AccountID,
-		CreationDate:      time.Now(),
+		CreationDate:      clock.Now(),
 	}
 	if err := p.store.CreateGrant(ctx, e); err != nil {
 		return nil, fmt.Errorf("kms: create grant: %w", err)
@@ -1753,7 +1754,7 @@ func extractStringList(params map[string]any, key string) []string {
 func keyMetadata(e KeyEntry, arn, region, accountID string) map[string]any {
 	createdAt := e.CreatedAt
 	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
+		createdAt = clock.Now()
 	}
 	m := map[string]any{
 		"KeyId":        e.KeyID,

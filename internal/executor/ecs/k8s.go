@@ -14,7 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"jaiscloud/internal/k8stypes"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/k8stypes"
 )
 
 const (
@@ -249,8 +250,8 @@ func (e *k8sExecutor) podPhase(ctx context.Context, ns, podName string) (string,
 
 func (e *k8sExecutor) streamPodLogs(ctx context.Context, ns, podName, containerName string, cfg LogConfig, taskID string) {
 	// Wait for container to start before streaming.
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(90 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		url := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s", e.apiServer, ns, podName)
 		body, status, err := e.k8sGet(ctx, url)
 		if err != nil || status >= 300 {

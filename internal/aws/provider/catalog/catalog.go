@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -293,7 +294,7 @@ func (p *GlueProvider) CreateDatabase(ctx context.Context, nr *model.NormalizedR
 		Description:  strParam(inp, "Description"),
 		LocationUri:  strParam(inp, "LocationUri"),
 		Parameters:   strMapParam(inp, "Parameters"),
-		CreateTime:   time.Now(),
+		CreateTime:   clock.Now(),
 	}
 	if err := p.saveDB(ctx, nr.AccountID, nr.Region, db); err != nil {
 		return nil, err
@@ -418,7 +419,7 @@ func (p *GlueProvider) CreateTable(ctx context.Context, nr *model.NormalizedRequ
 		return nil, &model.ProviderError{Code: "AlreadyExists", Message: fmt.Sprintf("Table %s already exists in %s", name, dbName), HTTPStatus: http.StatusBadRequest}
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	t := glueTable{
 		DatabaseName:         strings.ToLower(dbName), // canonical lookup key
 		OriginalDatabaseName: dbName,
@@ -536,7 +537,7 @@ func (p *GlueProvider) UpdateTable(ctx context.Context, nr *model.NormalizedRequ
 	if pk, ok := inp["PartitionKeys"].([]any); ok {
 		t.PartitionKeys = toAnyMapSlice(pk)
 	}
-	t.UpdateTime = time.Now()
+	t.UpdateTime = clock.Now()
 
 	if err := p.saveTable(ctx, nr.AccountID, nr.Region, t); err != nil {
 		return nil, err
@@ -571,7 +572,7 @@ func (p *GlueProvider) CreatePartition(ctx context.Context, nr *model.Normalized
 	}
 	values := strSliceParam(inp, "Values")
 
-	now := time.Now()
+	now := clock.Now()
 	part := gluePartition{
 		DatabaseName:      dbName,
 		TableName:         tableName,
@@ -634,7 +635,7 @@ func (p *GlueProvider) BatchCreatePartition(ctx context.Context, nr *model.Norma
 			continue
 		}
 		values := strSliceParam(inp, "Values")
-		now := time.Now()
+		now := clock.Now()
 		part := gluePartition{
 			DatabaseName:      dbName,
 			TableName:         tableName,

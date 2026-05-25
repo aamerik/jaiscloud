@@ -3,8 +3,8 @@ package emroneks
 import (
 	"context"
 	"log/slog"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
 )
@@ -48,7 +48,7 @@ func (p *EMRContainersProvider) emitJobRunStateChange(h handlerCtx, vcID, jrID, 
 			ExecutionRoleArn: jr.ExecutionRole,
 			FailureReason:    reason,
 			CreatedAt:        jr.CreatedAt,
-			UpdatedAt:        time.Now().UTC(),
+			UpdatedAt:        clock.Now(),
 			Region:           h.region,
 			AccountID:        h.accountID,
 			Cloud:            h.cloud,

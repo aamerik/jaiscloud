@@ -17,6 +17,7 @@ import (
 
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
 	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
@@ -229,7 +230,7 @@ func (p *EMRProvider) CreateSecurityConfiguration(ctx context.Context, nr *model
 	if !json.Valid([]byte(cfgJSON)) {
 		return nil, &model.ProviderError{Code: "InvalidRequestException", Message: "SecurityConfiguration must be valid JSON", HTTPStatus: http.StatusBadRequest}
 	}
-	sc := securityConfiguration{Name: name, SecurityConfiguration: cfgJSON, CreationDateTime: time.Now().UTC()}
+	sc := securityConfiguration{Name: name, SecurityConfiguration: cfgJSON, CreationDateTime: clock.Now()}
 	data, _ := json.Marshal(sc)
 	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtSecurityConfig, ID: name, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
@@ -1613,10 +1614,10 @@ func groupID() string   { return randID("ig-", 13) }
 func fleetID() string   { return randID("if-", 13) }
 
 func nowUnix() float64 {
-	return float64(time.Now().UTC().UnixNano()) / 1e9
+	return float64(clock.Now().UnixNano()) / 1e9
 }
 
-func awsTimestamp() float64 { return float64(time.Now().UTC().UnixNano()) / 1e9 }
+func awsTimestamp() float64 { return float64(clock.Now().UnixNano()) / 1e9 }
 
 // rewriteYARNToK8s substitutes "--master yarn" with "--master k8s://kubernetes.default.svc"
 // in EMR-on-EC2 step args. This is an emulation lie — EMR classic uses YARN but JaisCloud

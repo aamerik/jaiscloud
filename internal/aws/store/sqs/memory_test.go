@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	sqsstore "jaiscloud/internal/aws/store/sqs"
+	"jaiscloud/internal/clock"
+		sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 const testQueue = "http://localhost:4566/000000000000/test-queue"
@@ -15,14 +16,14 @@ func newMsg(body string) sqsstore.SQSMessage {
 		MessageID: body + "-id",
 		QueueURL:  testQueue,
 		Body:      body,
-		SentAt:    time.Now(),
+		SentAt:    clock.RealNow(),
 	}
 }
 
 func TestMemoryMessageStore_SendReceiveDelete(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	if _, _, err := s.Send(ctx, "000000000000", "us-east-1", newMsg("hello")); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -60,7 +61,7 @@ func TestMemoryMessageStore_SendReceiveDelete(t *testing.T) {
 func TestMemoryMessageStore_VisibilityTimeout(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("vis-test"))
 	msgs, _ := s.Receive(ctx, "000000000000", "us-east-1", testQueue, 1, now)
@@ -87,7 +88,7 @@ func TestMemoryMessageStore_VisibilityTimeout(t *testing.T) {
 func TestMemoryMessageStore_ChangeVisibility(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("change-vis"))
 	msgs, _ := s.Receive(ctx, "000000000000", "us-east-1", testQueue, 1, now)
@@ -116,7 +117,7 @@ func TestMemoryMessageStore_ChangeVisibility(t *testing.T) {
 func TestMemoryMessageStore_ChangeVisibilityZero(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("zero-vis"))
 	msgs, _ := s.Receive(ctx, "000000000000", "us-east-1", testQueue, 1, now)
@@ -135,7 +136,7 @@ func TestMemoryMessageStore_ChangeVisibilityZero(t *testing.T) {
 func TestMemoryMessageStore_Purge(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("m1"))
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("m2"))
@@ -150,7 +151,7 @@ func TestMemoryMessageStore_Purge(t *testing.T) {
 func TestMemoryMessageStore_FIFODeduplication(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	fifoQueue := "http://localhost:4566/000000000000/test.fifo"
 	m := sqsstore.SQSMessage{
@@ -174,7 +175,7 @@ func TestMemoryMessageStore_FIFODeduplication(t *testing.T) {
 func TestMemoryMessageStore_DelayedMessage(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	m := sqsstore.SQSMessage{
 		MessageID:  "delayed",
@@ -201,7 +202,7 @@ func TestMemoryMessageStore_DelayedMessage(t *testing.T) {
 func TestMemoryMessageStore_ApproximateCounts(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("m1"))
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("m2"))
@@ -237,7 +238,7 @@ func TestMemoryMessageStore_ApproximateCounts(t *testing.T) {
 func TestMemoryMessageStore_Reset(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	s.Send(ctx, "000000000000", "us-east-1", newMsg("x"))
 	s.Reset(context.Background())

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -147,7 +148,7 @@ func (p *Provider) CreateDistribution(ctx context.Context, nr *model.NormalizedR
 		CallerReference: callerRef,
 		ETag:            newETag(),
 		Tags:            extractTags(nr.Params),
-		LastModified:    time.Now().UTC(),
+		LastModified:    clock.Now(),
 	}
 	if d.HttpVersion == "" {
 		d.HttpVersion = "http2"
@@ -187,7 +188,7 @@ func (p *Provider) UpdateDistribution(ctx context.Context, nr *model.NormalizedR
 		d.Enabled = v != "false"
 	}
 	d.ETag = newETag()
-	d.LastModified = time.Now().UTC()
+	d.LastModified = clock.Now()
 	p.saveDist(ctx, nr.AccountID, "", d)
 	return provider.OK(distToWire(d)), nil
 }

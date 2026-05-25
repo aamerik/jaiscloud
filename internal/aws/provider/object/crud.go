@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -98,7 +99,7 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 		CRC32:        crc32Val,
 		Size:         size,
 		ContentType:  contentType,
-		LastModified: time.Now().UTC(),
+		LastModified: clock.Now(),
 		StorageClass: "STANDARD",
 		Metadata:     extractUserMetadata(nr.Params),
 	}
@@ -162,7 +163,7 @@ func (p *ObjectProvider) PutObject(ctx context.Context, nr *model.NormalizedRequ
 					case int:
 						days = d
 					}
-					t := time.Now().Add(time.Duration(days) * 24 * time.Hour)
+					t := clock.Now().Add(time.Duration(days) * 24 * time.Hour)
 					lockRetainUntil = &t
 				}
 			}
@@ -521,7 +522,7 @@ func (p *ObjectProvider) DeleteObject(ctx context.Context, nr *model.NormalizedR
 		marker := objectstore.ObjectMeta{
 			Key:            key,
 			IsDeleteMarker: true,
-			LastModified:   time.Now().UTC(),
+			LastModified:   clock.Now(),
 			StorageClass:   "STANDARD",
 		}
 		markerID, _ := p.meta.PutObjectVersion(ctx, bucket, key, marker)
@@ -560,7 +561,7 @@ func checkObjectLock(nr *model.NormalizedRequest, m objectstore.ObjectMeta) erro
 	if m.LegalHoldStatus == "ON" {
 		return model.NewProviderError("AccessDenied", "Object protected by legal hold", 403)
 	}
-	if m.LockRetainUntil != nil && time.Now().Before(*m.LockRetainUntil) {
+	if m.LockRetainUntil != nil && clock.Now().Before(*m.LockRetainUntil) {
 		if m.LockMode == "COMPLIANCE" {
 			return model.NewProviderError("AccessDenied", "Object locked in COMPLIANCE mode", 403)
 		}
@@ -611,7 +612,7 @@ func (p *ObjectProvider) CopyObject(ctx context.Context, nr *model.NormalizedReq
 
 	_ = p.blobs.Put(ctx, dstBucket, dstBlobKey, data)
 	etagVal := etag(data)
-	now := time.Now().UTC()
+	now := clock.Now()
 	dstMeta := objectstore.ObjectMeta{
 		Key: dstKey, ETag: etagVal, CRC32: crc32Base64(data), Size: srcMeta.Size,
 		LastModified: now, StorageClass: "STANDARD",

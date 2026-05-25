@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -39,7 +40,7 @@ func (p *FunctionProvider) CreateCodeSigningConfig(ctx context.Context, nr *mode
 		CodeSigningConfigID:  id,
 		CodeSigningConfigArn: arn,
 		Description:          strParam(nr.Params, "Description"),
-		LastModified:         time.Now().UTC().Format(time.RFC3339),
+		LastModified:         clock.Now().Format(time.RFC3339),
 	}
 	if ap, ok := nr.Params["AllowedPublishers"].(map[string]any); ok {
 		csc.AllowedPublishers = ap
@@ -78,7 +79,7 @@ func (p *FunctionProvider) UpdateCodeSigningConfig(ctx context.Context, nr *mode
 	if cp, ok := nr.Params["CodeSigningPolicies"].(map[string]any); ok {
 		csc.CodeSigningPolicies = cp
 	}
-	csc.LastModified = time.Now().UTC().Format(time.RFC3339)
+	csc.LastModified = clock.Now().Format(time.RFC3339)
 	data, _ := json.Marshal(csc)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: resTypeCodeSigning, ID: arn, Data: data})
 	return provider.OK(map[string]any{"CodeSigningConfig": cscToWire(csc)}), nil

@@ -17,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kinesis/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -41,8 +43,8 @@ func kinesisClient(t *testing.T) *awskinesis.Client {
 func waitForStreamActive(t *testing.T, client *awskinesis.Client, name string) {
 	t.Helper()
 	ctx := context.Background()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		desc, err := client.DescribeStreamSummary(ctx, &awskinesis.DescribeStreamSummaryInput{
 			StreamName: aws.String(name),
 		})
@@ -55,7 +57,7 @@ func waitForStreamActive(t *testing.T, client *awskinesis.Client, name string) {
 }
 
 func streamName(t *testing.T) string {
-	return fmt.Sprintf("e2e-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), time.Now().UnixNano()%100000)
+	return fmt.Sprintf("e2e-%s-%d", strings.ReplaceAll(t.Name(), "/", "-"), clock.RealNow().UnixNano()%100000)
 }
 
 func TestMain(m *testing.M) {

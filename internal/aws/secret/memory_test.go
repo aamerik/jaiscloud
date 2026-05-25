@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"jaiscloud/internal/aws/secret"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/aws/secret"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,7 +112,7 @@ func TestSecretEntry_SerializeDeserialize(t *testing.T) {
 	ctx := context.Background()
 	s := newSecretStore()
 
-	now := time.Now().UTC().Truncate(time.Second)
+	now := clock.RealNow().Truncate(time.Second)
 	e := secret.SecretEntry{
 		SecretID:            "s-rt",
 		Name:                "rt/secret",

@@ -365,6 +365,47 @@ Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws
 - `config.awsARNFormatters` — add one entry per new AWS resource type
 - Future Azure/GCP binaries will inject their own formatters; this is the only cross-cutting concern
 
+### Time: NEVER call `time.Now()` directly — use `clock.Now()` or `clock.RealNow()`
+
+This is a hard rule. The `"time"` package must not be imported for time-of-day in provider, store, or worker code. Use `internal/clock` exclusively.
+
+There are exactly two functions:
+
+| Function | When to use |
+|---|---|
+| `clock.Now()` | Business timestamps — anything that appears on the AWS wire or in a resource's metadata. Respects the global clock; tests can freeze or advance it via `POST /_jaiscloud/clock`. Always UTC. |
+| `clock.RealNow()` | Infrastructure wall time — container lifecycle, keepalive timers, GC eviction, request latency, TLS cert windows, rate-limiter token refill. Always real wall clock, always UTC. |
+
+The distinction makes intent explicit at the call site: `clock.RealNow()` means "I deliberately need real elapsed time here."
+
+**Required replacements:**
+
+```go
+// Before                          After
+time.Now()                    →    clock.Now()       // business timestamp
+time.Now()                    →    clock.RealNow()   // infrastructure / real elapsed time
+time.Now().UTC()              →    clock.Now()
+time.Since(x)                 →    clock.Now().Sub(x)
+time.Until(x)                 →    x.Sub(clock.Now())
+```
+
+`clock.RealNow()` is used in (do not convert these to `clock.Now()`):
+- `gateway/middleware/` — request latency measurement
+- `gateway/server.go` — TLS cert validity windows
+- `executor/lambda/`, `executor/ecs/` — container/pod lifecycle waits and keepalive GC
+- `store/postgres.go` retry backoff (`time.After`)
+- Infrastructure cleanup tickers: `store/sqs/memory.go`, `store/sqs/postgres.go`
+- `store/dynamodb/throttle.go` — token-bucket rate limiter; frozen clock → zero elapsed → tokens never refill
+- `config/config.go` — `cfg.TimeStart` server uptime tracking
+- `certstore/certstore.go` — TLS cert expiry check
+- `provider/stepfunctions/engine/retry.go`, `task_state.go` — real retry/timeout delays
+- `provider/compute/compute.go` — EC2 state-transition delays (`time.AfterFunc`)
+- `provider/queue/waiters.go` — SQS long-poll real wait duration
+- `provider/kinesis/mock_server.go` — Kinesis mock container readiness polling
+- `provider/ecr/registry_proxy.go` — ECR registry proxy container readiness polling
+- `k8shelpers/` — Spark job execution wall time tracking
+- `internal/clock/clock.go` — `OffsetClock` and `RealClock` implementations (the clock package itself)
+
 ### DynamoDB x-amz-crc32
 
 Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK v2 validates it; missing → SDK fails to drain body. Set in `DynamoDBCodec.Encode`.
@@ -411,4 +452,8 @@ EMR/EMRContainers providers capture `handlerCtx{cloud, region, accountID}` at ha
 | `/_jaiscloud/snapshot/{name}` | GET | Inspect snapshot metadata |
 | `/_jaiscloud/snapshot/{name}/revert` | POST | Revert to named snapshot (`?reset_first=true` to clear state first) |
 | `/_jaiscloud/snapshot/{name}` | DELETE | Delete named snapshot (`?yes=true` required) |
+| `/_jaiscloud/clock` | GET | Return current clock state `{"mode","time"}` |
+| `/_jaiscloud/clock` | POST | Set clock mode: `{"mode":"fixed","time":"..."}` / `{"mode":"offset","time":"..."}` / `{"mode":"real"}` |
+| `/_jaiscloud/ttl-sweep` | POST | Synchronous DynamoDB TTL sweep (for deterministic tests) |
+| `/_jaiscloud/eb-tick` | POST | Synchronous EventBridge scheduler evaluation (for deterministic tests) |
 | `/metrics` | GET | Prometheus (requires `--metrics`) |

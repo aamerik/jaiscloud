@@ -28,7 +28,6 @@ type LogIngestor interface {
 type ExecutionEngine struct {
 	store       *sfnstore.MemoryStepFunctionsStore
 	dispatcher  provider.ServiceDispatcher
-	clock       clock.Clock
 	logIngestor LogIngestor
 
 	mu      sync.Mutex
@@ -52,11 +51,10 @@ type taskCallback struct {
 }
 
 // New creates an ExecutionEngine.
-func New(store *sfnstore.MemoryStepFunctionsStore, dispatcher provider.ServiceDispatcher, clk clock.Clock) *ExecutionEngine {
+func New(store *sfnstore.MemoryStepFunctionsStore, dispatcher provider.ServiceDispatcher) *ExecutionEngine {
 	return &ExecutionEngine{
 		store:      store,
 		dispatcher: dispatcher,
-		clock:      clk,
 		running:    make(map[string]context.CancelFunc),
 		tokens:     make(map[string]chan taskCallback),
 	}
@@ -393,7 +391,7 @@ func (e *ExecutionEngine) emitExecutionLogs(execARN, input, output, status strin
 	_ = e.logIngestor.InternalCreateLogGroup(ctx, logGroupName)
 
 	startMs := exec.StartDate.UnixMilli()
-	endMs := time.Now().UnixMilli()
+	endMs := clock.Now().UnixMilli()
 	if exec.StopDate != nil {
 		endMs = exec.StopDate.UnixMilli()
 	}

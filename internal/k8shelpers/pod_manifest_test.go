@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+
+	"jaiscloud/internal/clock"
 )
 
 func makeSubmitRequest(name, ns string) SubmitJobRequest {
@@ -230,8 +232,8 @@ func successPod(name, ns, jobName string) *corev1.Pod {
 					Terminated: &corev1.ContainerStateTerminated{
 						ExitCode:   0,
 						Reason:     "Completed",
-						StartedAt:  metav1.NewTime(time.Now().Add(-10 * time.Second)),
-						FinishedAt: metav1.NewTime(time.Now()),
+						StartedAt:  metav1.NewTime(clock.RealNow().Add(-10 * time.Second)),
+						FinishedAt: metav1.NewTime(clock.RealNow()),
 					},
 				},
 			}},
@@ -254,8 +256,8 @@ func oomPod(name, ns, jobName string) *corev1.Pod {
 					Terminated: &corev1.ContainerStateTerminated{
 						ExitCode:   137,
 						Reason:     "OOMKilled",
-						StartedAt:  metav1.NewTime(time.Now().Add(-5 * time.Second)),
-						FinishedAt: metav1.NewTime(time.Now()),
+						StartedAt:  metav1.NewTime(clock.RealNow().Add(-5 * time.Second)),
+						FinishedAt: metav1.NewTime(clock.RealNow()),
 					},
 				},
 			}},

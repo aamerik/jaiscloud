@@ -3,8 +3,8 @@ package logs
 import (
 	"context"
 	"strings"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -41,7 +41,7 @@ func (p *Provider) PutSubscriptionFilter(_ context.Context, nr *model.Normalized
 		FilterPattern:  filterPattern,
 		DestinationArn: destinationArn,
 		Distribution:   distribution,
-		CreationTime:   time.Now().UnixMilli(),
+		CreationTime:   clock.Now().UnixMilli(),
 	}
 	return provider.OK(map[string]any{}), nil
 }

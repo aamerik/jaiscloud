@@ -4,13 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssfn "github.com/aws/aws-sdk-go-v2/service/sfn"
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── State Machine Validation ─────────────────────────────────────────────────
@@ -329,7 +330,7 @@ func TestSFN_DescribeExecution_NonExistent_Error(t *testing.T) {
 	c := sfnClient(t)
 	ctx := context.Background()
 
-	fakeArn := "arn:aws:states:us-east-1:000000000000:execution:no-sm:no-exec-" + time.Now().Format("150405")
+	fakeArn := "arn:aws:states:us-east-1:000000000000:execution:no-sm:no-exec-" + clock.RealNow().Format("150405")
 	_, err := c.DescribeExecution(ctx, &awssfn.DescribeExecutionInput{
 		ExecutionArn: aws.String(fakeArn),
 	})

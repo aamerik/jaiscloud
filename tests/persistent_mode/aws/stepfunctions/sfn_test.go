@@ -16,6 +16,8 @@ import (
 	sfntypes "github.com/aws/aws-sdk-go-v2/service/sfn/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -59,8 +61,8 @@ func createSM(t *testing.T, client *awssfn.Client, name, def string) string {
 
 func pollUntilTerminal(t *testing.T, client *awssfn.Client, execARN string, timeout time.Duration) *awssfn.DescribeExecutionOutput {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		out, err := client.DescribeExecution(context.Background(), &awssfn.DescribeExecutionInput{
 			ExecutionArn: aws.String(execARN),
 		})
@@ -79,7 +81,7 @@ func pollUntilTerminal(t *testing.T, client *awssfn.Client, execARN string, time
 func TestE2E_PassToSucceed(t *testing.T) {
 	client := sfnClient(t)
 	def := `{"StartAt":"P","States":{"P":{"Type":"Pass","Next":"S"},"S":{"Type":"Succeed"}}}`
-	smARN := createSM(t, client, fmt.Sprintf("pass-succeed-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("pass-succeed-%d", clock.RealNow().UnixNano()), def)
 
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN),
@@ -95,7 +97,7 @@ func TestE2E_PassToSucceed(t *testing.T) {
 func TestE2E_FailState(t *testing.T) {
 	client := sfnClient(t)
 	def := `{"StartAt":"F","States":{"F":{"Type":"Fail","Error":"TestError","Cause":"intentional"}}}`
-	smARN := createSM(t, client, fmt.Sprintf("fail-state-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("fail-state-%d", clock.RealNow().UnixNano()), def)
 
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN),
@@ -126,7 +128,7 @@ func TestE2E_ChoiceState_MatchesRule(t *testing.T) {
 			"Stop":{"Type":"Pass","Result":{"result":"stop"},"End":true}
 		}
 	}`
-	smARN := createSM(t, client, fmt.Sprintf("choice-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("choice-%d", clock.RealNow().UnixNano()), def)
 
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN),
@@ -153,7 +155,7 @@ func TestE2E_ParallelBranches(t *testing.T) {
 			}
 		}
 	}`
-	smARN := createSM(t, client, fmt.Sprintf("parallel-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("parallel-%d", clock.RealNow().UnixNano()), def)
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN), Input: aws.String(`{}`),
 	})
@@ -178,7 +180,7 @@ func TestE2E_MapOverArray(t *testing.T) {
 			}
 		}
 	}`
-	smARN := createSM(t, client, fmt.Sprintf("map-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("map-%d", clock.RealNow().UnixNano()), def)
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN),
 		Input:           aws.String(`{"items":["a","b","c"]}`),
@@ -192,7 +194,7 @@ func TestE2E_StopExecution(t *testing.T) {
 	client := sfnClient(t)
 	// Long wait state so it won't finish before we stop it
 	def := `{"StartAt":"W","States":{"W":{"Type":"Wait","Seconds":300,"End":true}}}`
-	smARN := createSM(t, client, fmt.Sprintf("stop-exec-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("stop-exec-%d", clock.RealNow().UnixNano()), def)
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN), Input: aws.String(`{}`),
 	})
@@ -214,7 +216,7 @@ func TestE2E_StopExecution(t *testing.T) {
 func TestE2E_GetExecutionHistory(t *testing.T) {
 	client := sfnClient(t)
 	def := `{"StartAt":"S","States":{"S":{"Type":"Succeed"}}}`
-	smARN := createSM(t, client, fmt.Sprintf("history-%d", time.Now().UnixNano()), def)
+	smARN := createSM(t, client, fmt.Sprintf("history-%d", clock.RealNow().UnixNano()), def)
 	out, err := client.StartExecution(context.Background(), &awssfn.StartExecutionInput{
 		StateMachineArn: aws.String(smARN), Input: aws.String(`{}`),
 	})

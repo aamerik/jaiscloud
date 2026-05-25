@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -139,7 +140,7 @@ func (p *ObjectProvider) CompleteMultipartUpload(ctx context.Context, nr *model.
 	enc, kmsKey, ssecMD5, _ := p.resolveSSE(ctx, nr, bucket)
 	finalMeta := objectstore.ObjectMeta{
 		Key: key, ETag: multipartETag, CRC32: crc32Val, Size: totalSize,
-		ContentType: ct, Metadata: userMeta, LastModified: time.Now().UTC(),
+		ContentType: ct, Metadata: userMeta, LastModified: clock.Now(),
 		StorageClass: "STANDARD", Encryption: enc, KMSKeyID: kmsKey, SSECKeyMD5: ssecMD5,
 	}
 	if err := p.meta.PutObjectMeta(ctx, bucket, key, finalMeta); err != nil {
@@ -246,7 +247,7 @@ func (p *ObjectProvider) UploadPartCopy(ctx context.Context, nr *model.Normalize
 	}); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	return provider.OK(map[string]any{
 		"CopyPartResult": map[string]any{
 			"ETag":         etagVal,

@@ -1,7 +1,9 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,6 +51,8 @@ import (
 	smithyendpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 const jaiscloudEndpoint = "http://localhost:4566"
@@ -369,8 +373,8 @@ func assertAWSError(t *testing.T, err error, expectedCode string) {
 // waitFor polls until check() returns true or timeout is reached.
 func waitFor(t *testing.T, timeout time.Duration, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		if check() {
 			return
 		}
@@ -591,4 +595,83 @@ func newTaggingClient(t *testing.T) *awstagging.Client {
 	return awstagging.NewFromConfig(cfg, func(o *awstagging.Options) {
 		o.BaseEndpoint = aws.String(jaiscloudEndpoint)
 	})
+}
+
+// ── Time-freeze helpers ───────────────────────────────────────────────────────
+
+// FreezeAt freezes the server clock at ts for the duration of the test.
+// t.Cleanup resets to wall time automatically.
+// Always call FreezeAt AFTER resetState — resetState also resets the clock.
+func FreezeAt(t testing.TB, ts time.Time) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"mode": "fixed", "time": ts})
+	resp, err := http.Post(jaiscloudEndpoint+"/_jaiscloud/clock", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("FreezeAt: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("FreezeAt: unexpected status %d", resp.StatusCode)
+	}
+	t.Cleanup(func() { resetClock(t) })
+}
+
+// AdvanceTo moves the frozen clock to a new fixed point. FreezeAt must be called first.
+func AdvanceTo(t testing.TB, ts time.Time) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"mode": "fixed", "time": ts})
+	resp, err := http.Post(jaiscloudEndpoint+"/_jaiscloud/clock", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("AdvanceTo: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("AdvanceTo: unexpected status %d", resp.StatusCode)
+	}
+}
+
+// clockNow returns the current time as seen by the server's global clock.
+// Use this in time-sensitive tests instead of clock.RealNow() for client-side timestamps.
+func clockNow(t testing.TB) time.Time {
+	t.Helper()
+	resp, err := http.Get(jaiscloudEndpoint + "/_jaiscloud/clock")
+	if err != nil {
+		t.Fatalf("clockNow: %v", err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Time time.Time `json:"time"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("clockNow decode: %v", err)
+	}
+	return body.Time
+}
+
+// resetClock restores the server clock to real wall time.
+func resetClock(t testing.TB) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"mode": "real"})
+	resp, err := http.Post(jaiscloudEndpoint+"/_jaiscloud/clock", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("resetClock: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// clockModeFromServer returns the mode string from GET /_jaiscloud/clock.
+func clockModeFromServer(t testing.TB) string {
+	t.Helper()
+	resp, err := http.Get(jaiscloudEndpoint + "/_jaiscloud/clock")
+	if err != nil {
+		t.Fatalf("clockModeFromServer: %v", err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("clockModeFromServer decode: %v", err)
+	}
+	return out.Mode
 }

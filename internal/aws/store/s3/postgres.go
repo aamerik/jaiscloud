@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,7 +32,7 @@ func (s *PostgresS3ObjectMetaStore) CreateBucket(ctx context.Context, bucket str
 		meta = map[string]any{}
 	}
 	meta["Name"] = bucket
-	meta["CreationDate"] = time.Now().UTC().Format(time.RFC3339)
+	meta["CreationDate"] = clock.Now().Format(time.RFC3339)
 	ownerAccountID, _ := meta["AccountID"].(string)
 	bucketRegion, _ := meta["Region"].(string)
 	raw, _ := json.Marshal(meta)
@@ -125,7 +127,7 @@ func (s *PostgresS3ObjectMetaStore) PutObjectMeta(ctx context.Context, bucket, k
 		meta.StorageClass = "STANDARD"
 	}
 	if meta.LastModified.IsZero() {
-		meta.LastModified = time.Now().UTC()
+		meta.LastModified = clock.Now()
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_s3_objects (bucket, key, etag, crc32, size, content_type, last_modified, metadata, storage_class, version_id, tags, encryption, kms_key_id, ssec_key_md5, lock_mode, lock_retain_until, legal_hold_status, acl, checksum_algorithm, checksum_value)
@@ -443,10 +445,10 @@ func (s *PostgresS3ObjectMetaStore) PutObjectVersion(ctx context.Context, bucket
 		meta.StorageClass = "STANDARD"
 	}
 	if meta.LastModified.IsZero() {
-		meta.LastModified = time.Now().UTC()
+		meta.LastModified = clock.Now()
 	}
 	if meta.VersionID == "" {
-		meta.VersionID = fmt.Sprintf("%016x%016x", time.Now().UnixNano(), time.Now().UnixNano()+1)
+		meta.VersionID = fmt.Sprintf("%016x%016x", clock.Now().UnixNano(), clock.Now().UnixNano()+1)
 	}
 	// Mark all existing as not-latest.
 	s.pool.Exec(ctx, `UPDATE jc_s3_object_versions SET is_latest=FALSE WHERE bucket=$1 AND key=$2`, bucket, key)

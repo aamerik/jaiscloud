@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -65,7 +66,7 @@ func (p *IAMProvider) CreatePolicyVersion(ctx context.Context, nr *model.Normali
 	}
 
 	versionId := p.nextVersionId(ctx, arn)
-	now := time.Now().UTC()
+	now := clock.Now()
 
 	if setDefault {
 		// Clear existing default

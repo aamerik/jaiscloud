@@ -21,6 +21,8 @@ import (
 	awsdynamo "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	awsglue "github.com/aws/aws-sdk-go-v2/service/glue"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -455,8 +457,8 @@ func startJaisCloudProcess(t *testing.T, port int, dsn, blobDir string) *exec.Cm
 func waitForHealth(t *testing.T, host string) {
 	t.Helper()
 	client := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		resp, err := client.Get(host + "/_jaiscloud/health")
 		if err == nil {
 			resp.Body.Close()

@@ -11,6 +11,8 @@ import (
 	"net"
 	"time"
 
+	"jaiscloud/internal/clock"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -79,6 +81,8 @@ func NewPostgresResourceStore(ctx context.Context, dsn, cloud string) (*Postgres
 		case <-ctx.Done():
 			pool.Close()
 			return nil, ctx.Err()
+		// Real wall time: connection retry backoff is an actual sleep duration,
+		// not a simulated timestamp — must fire after real elapsed time.
 		case <-time.After(backoff):
 		}
 		if backoff < 8*time.Second {
@@ -103,7 +107,7 @@ func (s *PostgresResourceStore) Create(ctx context.Context, account, region stri
 	if region == "" {
 		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
 	}
-	now := time.Now()
+	now := clock.Now()
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -115,7 +119,7 @@ func (s *PostgresResourceStore) Upsert(ctx context.Context, account, region stri
 	if region == "" {
 		return fmt.Errorf("store: region must not be empty (type=%s id=%s); use store.GlobalRegion for global services", entry.Type, entry.ID)
 	}
-	now := time.Now()
+	now := clock.Now()
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_resources (account_id, region, resource_type, id, data, created_at, updated_at, seeded)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

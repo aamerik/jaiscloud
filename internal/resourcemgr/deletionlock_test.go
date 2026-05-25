@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 func TestDeletionLock_AcquireRelease(t *testing.T) {
@@ -81,8 +83,8 @@ func TestDeletionLock_SweepStale(t *testing.T) {
 
 	// Set acquiredAt in the past by directly manipulating entries
 	l.mu.Lock()
-	l.entries["cluster\x00old"] = lockEntry{acquiredAt: time.Now().Add(-10 * time.Minute)}
-	l.entries["cluster\x00fresh"] = lockEntry{acquiredAt: time.Now()}
+	l.entries["cluster\x00old"] = lockEntry{acquiredAt: clock.RealNow().Add(-10 * time.Minute)}
+	l.entries["cluster\x00fresh"] = lockEntry{acquiredAt: clock.RealNow()}
 	l.mu.Unlock()
 
 	var logged []string

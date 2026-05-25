@@ -222,7 +222,7 @@ func Load() (*Config, error) {
 		}
 		cfg.TimeStart = t
 	} else {
-		cfg.TimeStart = time.Now()
+		cfg.TimeStart = clock.RealNow()
 	}
 
 	// Resolve clock

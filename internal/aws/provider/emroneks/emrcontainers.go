@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	sparkaws "jaiscloud/internal/aws/provider/sparkaws"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/logstream"
@@ -300,7 +301,7 @@ func (p *EMRContainersProvider) CreateVirtualCluster(ctx context.Context, nr *mo
 		EksCluster:         eksCluster,
 		Namespace:          namespace,
 		ServiceAccountName: sa,
-		CreatedAt:          time.Now().UTC(),
+		CreatedAt:          clock.Now(),
 		Tags:               parseTags(nr.Params),
 	}
 	data, _ := json.Marshal(vc)
@@ -391,7 +392,7 @@ func (p *EMRContainersProvider) StartJobRun(ctx context.Context, nr *model.Norma
 		State:            initialState,
 		ReleaseLabel:     strParam(nr.Params, "releaseLabel"),
 		ExecutionRole:    executionRoleArn,
-		CreatedAt:        time.Now().UTC(),
+		CreatedAt:        clock.Now(),
 		Tags:             parseTags(nr.Params),
 	}
 	if jd, ok := nr.Params["jobDriver"].(map[string]any); ok {
@@ -555,7 +556,7 @@ func (p *EMRContainersProvider) CreateManagedEndpoint(ctx context.Context, nr *m
 		ReleaseLabel:     strParam(nr.Params, "releaseLabel"),
 		ExecutionRole:    strParam(nr.Params, "executionRoleArn"),
 		State:            "ACTIVE",
-		CreatedAt:        time.Now().UTC(),
+		CreatedAt:        clock.Now(),
 		Tags:             parseTags(nr.Params),
 	}
 	storeID := vcID + "/" + id
@@ -767,7 +768,7 @@ func (p *EMRContainersProvider) CreateSecurityConfiguration(ctx context.Context,
 		Name:                      name,
 		ARN:                       arn,
 		SecurityConfigurationData: secData,
-		CreatedAt:                 time.Now().UTC(),
+		CreatedAt:                 clock.Now(),
 		Tags:                      tags,
 	}
 	data, _ := json.Marshal(sc)
@@ -848,7 +849,7 @@ func (p *EMRContainersProvider) GetManagedEndpointSessionCredentials(ctx context
 	}
 	_ = endpointID // not validated further in memory mode
 	sessionID := shortID()
-	expiresAt := time.Now().Add(time.Duration(duration) * time.Second)
+	expiresAt := clock.Now().Add(time.Duration(duration) * time.Second)
 	token := fmt.Sprintf("synthetic-emr-token-%s-%d", sessionID, expiresAt.Unix())
 	return provider.OK(map[string]any{
 		"id": sessionID,

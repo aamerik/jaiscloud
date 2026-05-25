@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -103,7 +104,7 @@ func (p *ObjectProvider) CreateAccessPoint(ctx context.Context, nr *model.Normal
 		ARN:           nr.ResourceID("s3-accesspoint", name),
 		Alias:         apAlias(name, account),
 		NetworkOrigin: "Internet",
-		CreationDate:  time.Now().UTC(),
+		CreationDate:  clock.Now(),
 	}
 	_ = p.saveAP(ctx, nr.AccountID, nr.Region, ap)
 	return provider.OK(map[string]any{

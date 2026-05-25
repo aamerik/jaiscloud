@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	sqsstore "jaiscloud/internal/aws/store/sqs"
+	"jaiscloud/internal/clock"
+		sqsstore "jaiscloud/internal/aws/store/sqs"
 )
 
 // snapshotRoundTripSQS snapshots src into a buffer and restores into dst.
@@ -57,7 +58,7 @@ func TestMemoryMessageStore_Snapshot_Empty(t *testing.T) {
 func TestMemoryMessageStore_Snapshot_MessageBodySurvives(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/snap-queue"
 	_, _, err := s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{
@@ -90,7 +91,7 @@ func TestMemoryMessageStore_Snapshot_MessageBodySurvives(t *testing.T) {
 func TestMemoryMessageStore_Snapshot_MultipleQueues(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const q1 = "http://localhost:4566/000000000000/q1"
 	const q2 = "http://localhost:4566/000000000000/q2"
@@ -113,7 +114,7 @@ func TestMemoryMessageStore_Snapshot_MultipleQueues(t *testing.T) {
 func TestMemoryMessageStore_Snapshot_InFlightVisibilityRestored(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/inflight-queue"
 	s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{
@@ -147,7 +148,7 @@ func TestMemoryMessageStore_Snapshot_InFlightVisibilityRestored(t *testing.T) {
 func TestMemoryMessageStore_Snapshot_DelayedMessageSurvives(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/delayed-snap"
 	s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{
@@ -176,7 +177,7 @@ func TestMemoryMessageStore_Snapshot_DelayedMessageSurvives(t *testing.T) {
 func TestMemoryMessageStore_Snapshot_FIFODedupSurvives(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const fifoURL = "http://localhost:4566/000000000000/snap.fifo"
 	m := sqsstore.SQSMessage{
@@ -208,7 +209,7 @@ func TestMemoryMessageStore_Snapshot_RetentionSecsSurvives(t *testing.T) {
 
 	s2 := roundTripMemorySQS(t, s)
 
-	vis, notVis, _, err := s2.GetApproximateCounts(ctx, "000000000000", "us-east-1", qURL, time.Now())
+	vis, notVis, _, err := s2.GetApproximateCounts(ctx, "000000000000", "us-east-1", qURL, clock.RealNow())
 	if err != nil {
 		t.Fatalf("GetApproximateCounts after restore: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestMemoryMessageStore_IsEmpty_NoData(t *testing.T) {
 func TestMemoryMessageStore_IsEmpty_QueueExistsWithNoMessages(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 	const qURL = "http://localhost:4566/000000000000/purge-snap"
 
 	// Send then purge — queue exists but has 0 messages.
@@ -255,7 +256,7 @@ func TestMemoryMessageStore_IsEmpty_QueueExistsWithNoMessages(t *testing.T) {
 func TestMemoryMessageStore_IsEmpty_WithMessages(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewMemoryMessageStore()
-	now := time.Now()
+	now := clock.RealNow()
 	s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{
 		MessageID: "y", QueueURL: testQueue, Body: "y", SentAt: now,
 	})
@@ -301,7 +302,7 @@ func TestBundledSQSStore_Snapshot_Empty(t *testing.T) {
 func TestBundledSQSStore_Snapshot_SingleScope(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewBundledSQSStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/bundled-snap"
 	_, _, err := s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{
@@ -325,7 +326,7 @@ func TestBundledSQSStore_Snapshot_SingleScope(t *testing.T) {
 func TestBundledSQSStore_Snapshot_MultipleScopes(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewBundledSQSStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/multi-scope"
 
@@ -353,7 +354,7 @@ func TestBundledSQSStore_Snapshot_MultipleScopes(t *testing.T) {
 func TestBundledSQSStore_Snapshot_RestoreReplacesExistingState(t *testing.T) {
 	ctx := context.Background()
 	s := sqsstore.NewBundledSQSStore()
-	now := time.Now()
+	now := clock.RealNow()
 
 	const qURL = "http://localhost:4566/000000000000/replace-snap"
 	s.Send(ctx, "000000000000", "us-east-1", sqsstore.SQSMessage{

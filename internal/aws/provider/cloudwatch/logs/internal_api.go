@@ -2,8 +2,8 @@ package logs
 
 import (
 	"context"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 )
 
@@ -25,7 +25,7 @@ func (p *Provider) InternalPutEvents(ctx context.Context, logGroupName, logStrea
 	if _, ok := streams[logStreamName]; !ok {
 		streams[logStreamName] = &LogStream{
 			LogStreamName: logStreamName,
-			CreationTime:  time.Now().UnixMilli(),
+			CreationTime:  clock.Now().UnixMilli(),
 		}
 	}
 
@@ -41,7 +41,7 @@ func (p *Provider) InternalPutEvents(ctx context.Context, logGroupName, logStrea
 	}
 
 	logEvents := make([]LogEvent, 0, len(events))
-	now := time.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	for _, e := range events {
 		logEvents = append(logEvents, LogEvent{
 			Timestamp:     e.Timestamp,
@@ -64,7 +64,7 @@ func (p *Provider) InternalCreateLogGroup(ctx context.Context, logGroupName stri
 	}
 	p.store.groups[logGroupName] = &LogGroup{
 		LogGroupName: logGroupName,
-		CreationTime: time.Now().UnixMilli(),
+		CreationTime: clock.Now().UnixMilli(),
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -41,7 +42,7 @@ func (p *Provider) CreateLogStream(_ context.Context, nr *model.NormalizedReques
 	arn := nr.ResourceID("logs-stream", groupName+":log-stream:"+streamName)
 	streams[streamName] = &LogStream{
 		LogStreamName:       streamName,
-		CreationTime:        nr.Clock.Now().UnixMilli(),
+		CreationTime:        clock.Now().UnixMilli(),
 		UploadSequenceToken: "0",
 		Arn:                 arn,
 	}

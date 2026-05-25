@@ -6,8 +6,8 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -20,7 +20,7 @@ func newQueryID() string {
 	for i := range b {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
-	return string(b) + "-" + fmt.Sprintf("%d", time.Now().UnixNano()%1e9)
+	return string(b) + "-" + fmt.Sprintf("%d", clock.Now().UnixNano()%1e9)
 }
 
 func (p *Provider) StartQuery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -52,7 +52,7 @@ func (p *Provider) StartQuery(_ context.Context, nr *model.NormalizedRequest) (*
 		StartTime:     int64(startTime),
 		EndTime:       int64(endTime),
 		Status:        "Complete",
-		CreatedAt:     time.Now().UTC(),
+		CreatedAt:     clock.Now(),
 		Results:       [][]map[string]string{},
 		Statistics:    map[string]float64{"recordsMatched": 0, "recordsScanned": 0, "bytesScanned": 0},
 	}
@@ -117,7 +117,7 @@ func (p *Provider) PutQueryDefinition(_ context.Context, nr *model.NormalizedReq
 		if qd.Name == name {
 			qd.QueryString = queryStr
 			qd.LogGroupNames = logGroupNames
-			qd.LastModified = time.Now().UTC()
+			qd.LastModified = clock.Now()
 			return provider.OK(map[string]any{"queryDefinitionId": qd.QueryDefinitionID}), nil
 		}
 	}
@@ -127,7 +127,7 @@ func (p *Provider) PutQueryDefinition(_ context.Context, nr *model.NormalizedReq
 		Name:              name,
 		QueryString:       queryStr,
 		LogGroupNames:     logGroupNames,
-		LastModified:      time.Now().UTC(),
+		LastModified:      clock.Now(),
 	}
 	return provider.OK(map[string]any{"queryDefinitionId": qdid}), nil
 }
@@ -169,7 +169,7 @@ func (p *Provider) DeleteQueryDefinition(_ context.Context, nr *model.Normalized
 // ─── Export Tasks (13.11) ─────────────────────────────────────────────────────
 
 func newTaskID() string {
-	return fmt.Sprintf("export-%d", time.Now().UnixNano())
+	return fmt.Sprintf("export-%d", clock.Now().UnixNano())
 }
 
 func (p *Provider) CreateExportTask(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -183,7 +183,7 @@ func (p *Provider) CreateExportTask(_ context.Context, nr *model.NormalizedReque
 	if !groupExists {
 		return nil, logsErr("ResourceNotFoundException", "The specified log group does not exist: "+groupName, http.StatusBadRequest)
 	}
-	now := time.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	taskID := newTaskID()
 	task := &ExportTask{
 		TaskID:            taskID,

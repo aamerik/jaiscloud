@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -139,7 +140,7 @@ func (p *StackProvider) CreateChangeSet(ctx context.Context, nr *model.Normalize
 		Parameters:    params,
 		TemplateBody:  newTemplateBody,
 		Description:   strParam(nr.Params, "Description"),
-		CreationTime:  time.Now().UTC(),
+		CreationTime:  clock.Now(),
 	}
 
 	data, _ := json.Marshal(cs)

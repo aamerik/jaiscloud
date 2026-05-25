@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -66,7 +67,7 @@ func (p *EKSProvider) CreateNodegroup(ctx context.Context, nr *model.NormalizedR
 	labels := strMapParam(nr.Params, "labels")
 	scaling := scalingParam(nr.Params)
 
-	now := time.Now().UTC()
+	now := clock.Now()
 	ng := eksNodegroup{
 		ClusterName:    clusterName,
 		NodegroupName:  nodegroupName,
@@ -177,7 +178,7 @@ func (p *EKSProvider) UpdateNodegroupConfig(ctx context.Context, nr *model.Norma
 			}
 		}
 	}
-	ng.ModifiedAt = time.Now().UTC()
+	ng.ModifiedAt = clock.Now()
 
 	data, _ := json.Marshal(ng)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})
@@ -204,7 +205,7 @@ func (p *EKSProvider) UpdateNodegroupVersion(ctx context.Context, nr *model.Norm
 	if v := strParam(nr.Params, "releaseVersion"); v != "" {
 		ng.ReleaseVersion = v
 	}
-	ng.ModifiedAt = time.Now().UTC()
+	ng.ModifiedAt = clock.Now()
 
 	data, _ := json.Marshal(ng)
 	_ = p.resources.Update(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtNodegroup, ID: key, Data: data})

@@ -9,6 +9,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+
+	"jaiscloud/internal/clock"
 )
 
 const (
@@ -127,7 +129,7 @@ func fillTimes(f *Final, pod *corev1.Pod) {
 	if pod.Status.StartTime != nil {
 		f.StartTime = pod.Status.StartTime.Time
 	}
-	f.EndTime = time.Now()
+	f.EndTime = clock.RealNow()
 }
 
 func fillTermination(f *Final, pod *corev1.Pod) {

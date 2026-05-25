@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
 
 	"github.com/stretchr/testify/require"
@@ -50,7 +51,7 @@ func TestLoadOrGenerateCert_GeneratesWhenMissing(t *testing.T) {
 
 	require.NotNil(t, store.cert)
 	require.NotEmpty(t, store.cert.CertPEM)
-	require.True(t, store.cert.NotAfter.After(time.Now()))
+	require.True(t, store.cert.NotAfter.After(clock.RealNow()))
 }
 
 func TestLoadOrGenerateCert_ReusesValidStored(t *testing.T) {
@@ -88,7 +89,7 @@ func TestLoadOrGenerateCert_RegeneratesExpiring(t *testing.T) {
 	store := &fakeCertStore{cert: &certstore.StoredCert{
 		CertPEM:  pemEncode("CERTIFICATE", generated.Certificate[0]),
 		KeyPEM:   pemEncode("EC PRIVATE KEY", keyDER),
-		NotAfter: time.Now().Add(10 * 24 * time.Hour),
+		NotAfter: clock.RealNow().Add(10 * 24 * time.Hour),
 	}}
 	s := newTestServer(store)
 
@@ -96,6 +97,6 @@ func TestLoadOrGenerateCert_RegeneratesExpiring(t *testing.T) {
 	require.NoError(t, err)
 
 	loaded, _ := x509.ParseCertificate(cert.Certificate[0])
-	require.True(t, loaded.NotAfter.After(time.Now().Add(365*24*time.Hour)),
+	require.True(t, loaded.NotAfter.After(clock.RealNow().Add(365*24*time.Hour)),
 		"regenerated cert should have long validity")
 }

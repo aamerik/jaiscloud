@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -36,7 +37,7 @@ func (p *Provider) CreateLogGroup(_ context.Context, nr *model.NormalizedRequest
 	arn := nr.ResourceID("logs-group", name)
 	g := &LogGroup{
 		LogGroupName: name,
-		CreationTime: nr.Clock.Now().UnixMilli(),
+		CreationTime: clock.Now().UnixMilli(),
 		Arn:          arn,
 	}
 	p.store.groups[name] = g

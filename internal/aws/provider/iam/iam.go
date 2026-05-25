@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -205,7 +206,7 @@ func (p *IAMProvider) CreateRole(ctx context.Context, nr *model.NormalizedReques
 		Description:              strParam(nr.Params, "Description"),
 		MaxSessionDuration:       maxDur,
 		Tags:                     map[string]string{},
-		CreateDate:               time.Now().UTC(),
+		CreateDate:               clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, "iam_roles", arn, r); err != nil {
 		if err == store.ErrAlreadyExists {
@@ -337,7 +338,7 @@ func (p *IAMProvider) CreatePolicy(ctx context.Context, nr *model.NormalizedRequ
 		return nil, model.NewProviderError("MalformedPolicyDocument", err.Error(), 400)
 	}
 	arn := nr.ResourceID("iam-policy", name)
-	now := time.Now().UTC()
+	now := clock.Now()
 	pol := policyData{
 		PolicyName:  name,
 		PolicyID:    "ANPA" + randID(16),
@@ -586,7 +587,7 @@ func (p *IAMProvider) CreateUser(ctx context.Context, nr *model.NormalizedReques
 		Arn:        arn,
 		Path:       "/",
 		Tags:       map[string]string{},
-		CreateDate: time.Now().UTC(),
+		CreateDate: clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, "iam_users", arn, u); err != nil {
 		if err == store.ErrAlreadyExists {
@@ -693,7 +694,7 @@ func (p *IAMProvider) CreateAccessKey(ctx context.Context, nr *model.NormalizedR
 		SecretAccessKey: secret,
 		UserName:        userName,
 		Status:          "Active",
-		CreateDate:      time.Now().UTC(),
+		CreateDate:      clock.Now(),
 	}
 	_ = saveEntry(ctx, p.resources, nr.AccountID, "iam_access_keys", keyID, ak)
 	return provider.OK(map[string]any{"AccessKey": map[string]any{
@@ -1056,7 +1057,7 @@ func (p *IAMProvider) CreateGroup(ctx context.Context, nr *model.NormalizedReque
 		GroupID:    "AGPA" + randID(16),
 		Arn:        arn,
 		Path:       "/",
-		CreateDate: time.Now().UTC(),
+		CreateDate: clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, "iam_groups", arn, g); err != nil {
 		if err == store.ErrAlreadyExists {
@@ -1214,7 +1215,7 @@ func (p *IAMProvider) CreateInstanceProfile(ctx context.Context, nr *model.Norma
 		Arn:                 arn,
 		Path:                "/",
 		RoleNames:           []string{},
-		CreateDate:          time.Now().UTC(),
+		CreateDate:          clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, "iam_instance_profiles", arn, ip); err != nil {
 		if err == store.ErrAlreadyExists {
@@ -1490,7 +1491,7 @@ func (p *IAMProvider) CreateServiceLinkedRole(ctx context.Context, nr *model.Nor
 		Description:              entry.Description,
 		MaxSessionDuration:       3600,
 		Tags:                     map[string]string{},
-		CreateDate:               time.Now().UTC(),
+		CreateDate:               clock.Now(),
 	}
 	if err := saveEntry(ctx, p.resources, nr.AccountID, "iam_roles", arn, r); err != nil && err != store.ErrAlreadyExists {
 		return nil, err

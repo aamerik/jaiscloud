@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/store"
 )
 
@@ -77,7 +78,7 @@ func (e *alarmEvaluator) evaluateAlarm(ctx context.Context, alarm map[string]any
 	}
 
 	window := time.Duration(periodSecs*evalPeriods) * time.Second
-	now := time.Now().UTC()
+	now := clock.Now()
 	startTime := now.Add(-window)
 
 	e.p.mu.Lock()
@@ -128,7 +129,7 @@ func (e *alarmEvaluator) transitionState(ctx context.Context, name string, alarm
 	}
 
 	slog.Debug("cloudwatch: alarm state transition", "alarm", name, "old", current, "new", newState)
-	now := time.Now().UTC()
+	now := clock.Now()
 	alarm["StateValue"] = newState
 	alarm["StateUpdatedTimestamp"] = now.Format(time.RFC3339)
 

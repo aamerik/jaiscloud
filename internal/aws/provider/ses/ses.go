@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -175,20 +176,20 @@ func (p *Provider) SendEmail(ctx context.Context, nr *model.NormalizedRequest) (
 			}
 		}
 	}
-	p.addSent(sentEmail{MessageID: messageID, From: source, Destination: destinations, Subject: subject, Body: body, SentAt: time.Now().UTC()})
+	p.addSent(sentEmail{MessageID: messageID, From: source, Destination: destinations, Subject: subject, Body: body, SentAt: clock.Now()})
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
 func (p *Provider) SendRawEmail(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	messageID := newMessageID()
 	source := str(nr.Params, "Source")
-	p.addSent(sentEmail{MessageID: messageID, From: source, SentAt: time.Now().UTC()})
+	p.addSent(sentEmail{MessageID: messageID, From: source, SentAt: clock.Now()})
 	return provider.OK(map[string]any{"MessageId": messageID}), nil
 }
 
 func (p *Provider) SendBulkTemplatedEmail(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	messageID := newMessageID()
-	p.addSent(sentEmail{MessageID: messageID, SentAt: time.Now().UTC()})
+	p.addSent(sentEmail{MessageID: messageID, SentAt: clock.Now()})
 	return provider.OK(map[string]any{"Status": []map[string]any{{"MessageId": messageID, "Status": "Success"}}}), nil
 }
 

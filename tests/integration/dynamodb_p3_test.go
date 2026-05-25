@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── P3.2: DynamoDB TTL reaper ────────────────────────────────────────────────
@@ -39,7 +41,7 @@ func TestDynamoDB_TTL_ExpiredItemsRemovedByReaper(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert item with expiry in the past.
-	pastEpoch := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
+	pastEpoch := strconv.FormatInt(clock.RealNow().Add(-time.Hour).Unix(), 10)
 	_, err = c.PutItem(ctx, &awsdynamo.PutItemInput{
 		TableName: aws.String("ttl-reaper-tbl"),
 		Item: map[string]types.AttributeValue{
@@ -51,7 +53,7 @@ func TestDynamoDB_TTL_ExpiredItemsRemovedByReaper(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert item with future expiry — must NOT be deleted.
-	futureEpoch := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	futureEpoch := strconv.FormatInt(clock.RealNow().Add(time.Hour).Unix(), 10)
 	_, err = c.PutItem(ctx, &awsdynamo.PutItemInput{
 		TableName: aws.String("ttl-reaper-tbl"),
 		Item: map[string]types.AttributeValue{

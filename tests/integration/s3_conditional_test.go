@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestS3_ConditionalPut_IfNoneMatch verifies that a PutObject with
@@ -70,7 +72,7 @@ func TestS3_ConditionalGet_IfModifiedSince(t *testing.T) {
 	require.NoError(t, err)
 
 	// GetObject with IfModifiedSince set to the future — expect 304 or empty body.
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String(key),
@@ -485,7 +487,7 @@ func TestS3GetObjectIfModifiedSinceOld(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	past := time.Now().Add(-2 * time.Hour)
+	past := clock.RealNow().Add(-2 * time.Hour)
 	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String("obj"),
@@ -512,7 +514,7 @@ func TestS3GetObjectIfModifiedSinceFuture(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	_, err = c.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String("obj"),
@@ -543,7 +545,7 @@ func TestS3HeadObjectIfModifiedSinceOld(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	past := time.Now().Add(-2 * time.Hour)
+	past := clock.RealNow().Add(-2 * time.Hour)
 	headOut, err := c.HeadObject(ctx, &awss3.HeadObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String("obj"),
@@ -573,7 +575,7 @@ func TestS3GetObjectIfUnmodifiedSinceFuture(t *testing.T) {
 	require.NoError(t, err)
 
 	// Condition: object was NOT modified after a future timestamp → true, return object.
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	out, err := c.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket:            aws.String(bucket),
 		Key:               aws.String("obj"),
@@ -602,7 +604,7 @@ func TestS3GetObjectIfUnmodifiedSincePast(t *testing.T) {
 
 	// Condition: object must NOT have been modified since a past timestamp.
 	// The object was just created (after the past timestamp), so condition fails → 412.
-	past := time.Now().Add(-2 * time.Hour)
+	past := clock.RealNow().Add(-2 * time.Hour)
 	_, err = c.GetObject(ctx, &awss3.GetObjectInput{
 		Bucket:            aws.String(bucket),
 		Key:               aws.String("obj"),
@@ -632,7 +634,7 @@ func TestS3HeadObjectIfUnmodifiedSinceFuture(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	headOut, err := c.HeadObject(ctx, &awss3.HeadObjectInput{
 		Bucket:            aws.String(bucket),
 		Key:               aws.String("obj"),
@@ -977,7 +979,7 @@ func TestS3HeadObjectIfModifiedSinceFuture(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	_, err = c.HeadObject(ctx, &awss3.HeadObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String("obj"),
@@ -1009,7 +1011,7 @@ func TestS3HeadObjectIfUnmodifiedSincePast(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	past := time.Now().Add(-2 * time.Hour)
+	past := clock.RealNow().Add(-2 * time.Hour)
 	_, err = c.HeadObject(ctx, &awss3.HeadObjectInput{
 		Bucket:            aws.String(bucket),
 		Key:               aws.String("obj"),
@@ -1090,7 +1092,7 @@ func TestS3CopyObjectIfUnmodifiedSinceFuture(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
 		Bucket:                      aws.String(bucket),
 		Key:                         aws.String("dst"),
@@ -1117,7 +1119,7 @@ func TestS3CopyObjectIfModifiedSinceOld(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	past := time.Now().Add(-2 * time.Hour)
+	past := clock.RealNow().Add(-2 * time.Hour)
 	_, err = c.CopyObject(ctx, &awss3.CopyObjectInput{
 		Bucket:                    aws.String(bucket),
 		Key:                       aws.String("dst"),

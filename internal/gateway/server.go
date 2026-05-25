@@ -21,7 +21,8 @@ import (
 	"syscall"
 	"time"
 
-	"jaiscloud/internal/adapter"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/config"
@@ -110,6 +111,10 @@ func (s *Server) buildRouter() {
 		r.Get("/lambda/layer/{account}/{layer}/{version}", s.adminHandler.LambdaLayerHandler)
 		r.Post("/firehose/flush", s.adminHandler.FirehoseFlushHandler)
 		r.Post("/cw-evaluate", s.adminHandler.CWEvaluateHandler)
+		r.Post("/clock", s.adminHandler.SetClock)
+		r.Get("/clock", s.adminHandler.GetClock)
+		r.Post("/ttl-sweep", s.adminHandler.TTLSweepHandler)
+		r.Post("/eb-tick", s.adminHandler.EBTickHandler)
 		// Managed snapshot endpoints (Phase 10).
 		r.Post("/snapshot", s.adminHandler.SnapshotCreate)
 		r.Get("/snapshots", s.adminHandler.SnapshotList)
@@ -560,8 +565,8 @@ func generateSelfSignedCert(cloud, region string) (tls.Certificate, error) {
 		Subject:      pkix.Name{CommonName: "jaiscloud"},
 		DNSNames:     dnsNames,
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotBefore:    clock.RealNow().Add(-time.Minute),
+		NotAfter:     clock.RealNow().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/persistence/version"
 
 	"github.com/go-chi/chi/v5"
@@ -87,7 +87,7 @@ func (h *Handler) SnapshotCreate(w http.ResponseWriter, r *http.Request) {
 		Cloud:          meta.Cloud,
 		Region:         meta.Region,
 		AccountID:      meta.AccountID,
-		CreatedAt:      time.Now().UTC(),
+		CreatedAt:      clock.RealNow(),
 		KEKFingerprint: kekFP,
 		Stores:         stores,
 	}

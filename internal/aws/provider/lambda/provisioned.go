@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -39,7 +40,7 @@ func (p *FunctionProvider) PutProvisionedConcurrencyConfig(ctx context.Context, 
 		AllocatedProvisionedConcurrentExecutions: requested,
 		AvailableProvisionedConcurrentExecutions: requested,
 		Status:                                   "READY",
-		LastModified:                             time.Now().UTC().Format(time.RFC3339),
+		LastModified:                             clock.Now().Format(time.RFC3339),
 	}
 	data, _ := json.Marshal(pe)
 	entry := store.ResourceEntry{Type: resTypeProvisioned, ID: key, Data: data}

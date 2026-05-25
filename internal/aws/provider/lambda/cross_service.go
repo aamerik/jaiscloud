@@ -3,8 +3,8 @@ package lambda
 import (
 	"context"
 	"fmt"
-	"time"
 
+	"jaiscloud/internal/clock"
 	awsarn "jaiscloud/internal/aws/arn"
 )
 
@@ -57,7 +57,7 @@ func (p *FunctionProvider) InternalInvoke(ctx context.Context, funcARNorName str
 			payload:       payload,
 			maxAttempts:   maxAttempts,
 			dlqARN:        dlqARN,
-			createdAt:     time.Now(),
+			createdAt:     clock.Now(),
 			maxAgeSeconds: maxAge,
 		})
 		return &InvokeResult{StatusCode: 202}, nil

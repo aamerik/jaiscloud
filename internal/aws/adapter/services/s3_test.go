@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"jaiscloud/internal/model"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/model"
 )
 
 // ─── extractVirtualHostedBucket ──────────────────────────────────────────────
@@ -279,7 +280,7 @@ func TestDecode_PutObject_StreamingFlaggedRequest_BodyNotRead(t *testing.T) {
 
 func TestPresigned_ExpiredSigV4_403(t *testing.T) {
 	// X-Amz-Date in the past, expires in 1 second → already expired.
-	past := time.Now().Add(-10 * time.Minute)
+	past := clock.RealNow().Add(-10 * time.Minute)
 	dateStr := past.UTC().Format("20060102T150405Z")
 	rawURL := fmt.Sprintf(
 		"http://localhost:4566/bucket/key?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=%s&X-Amz-Expires=1&X-Amz-Signature=fake",
@@ -293,7 +294,7 @@ func TestPresigned_ExpiredSigV4_403(t *testing.T) {
 
 func TestPresigned_ValidSigV4_Succeeds(t *testing.T) {
 	// X-Amz-Date now, expires in 3600 seconds → still valid.
-	now := time.Now().UTC()
+	now := clock.RealNow()
 	dateStr := now.Format("20060102T150405Z")
 	rawURL := fmt.Sprintf(
 		"http://localhost:4566/bucket/key?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=%s&X-Amz-Expires=3600&X-Amz-Signature=fake",
@@ -308,7 +309,7 @@ func TestPresigned_ValidSigV4_Succeeds(t *testing.T) {
 
 func TestPresigned_ExpiredSigV2_403(t *testing.T) {
 	// Expires is a Unix timestamp in the past.
-	expiredUnix := time.Now().Add(-1 * time.Minute).Unix()
+	expiredUnix := clock.RealNow().Add(-1 * time.Minute).Unix()
 	rawURL := fmt.Sprintf(
 		"http://localhost:4566/bucket/key?AWSAccessKeyId=AKID&Signature=fake&Expires=%d",
 		expiredUnix,

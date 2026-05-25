@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -125,7 +126,7 @@ func (p *Provider) StartQueryExecution(ctx context.Context, nr *model.Normalized
 	if wg == "" {
 		wg = "primary"
 	}
-	now := time.Now().UTC()
+	now := clock.Now()
 	qid := newQueryID()
 	q := queryExecution{
 		QueryExecutionID: qid,
@@ -238,7 +239,7 @@ func (p *Provider) CreateWorkGroup(ctx context.Context, nr *model.NormalizedRequ
 		Name:         name,
 		State:        "ENABLED",
 		Description:  str(nr.Params, "Description"),
-		CreationTime: time.Now().UTC(),
+		CreationTime: clock.Now(),
 	}
 	data, _ := json.Marshal(wg)
 	_ = p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtWorkGroup, ID: name, Data: data})

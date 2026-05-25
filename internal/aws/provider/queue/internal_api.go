@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	lambdaesm "jaiscloud/internal/aws/provider/lambda/esm"
+	"jaiscloud/internal/clock"
 )
 
 // InternalReceive is the ESM-internal SQS receive that bypasses the wire layer.
@@ -16,7 +17,7 @@ func (p *QueueProvider) InternalReceive(ctx context.Context, queueName string, m
 		return nil, err
 	}
 
-	now := p.clock.Now()
+	now := clock.Now()
 	msgs, err := p.messages.Receive(ctx, account, region, queueURL, maxMessages, now)
 	if err != nil {
 		return nil, err

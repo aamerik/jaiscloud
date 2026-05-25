@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // JWKSCache caches JWKS keys per issuer with a 1-hour TTL.
@@ -100,7 +102,7 @@ func (c *JWKSCache) verifyJWT(tokenStr string, trustedIssuers map[string]string)
 		case json.Number:
 			expUnix, _ = v.Int64()
 		}
-		if expUnix > 0 && expUnix < time.Now().Unix() {
+		if expUnix > 0 && expUnix < clock.Now().Unix() {
 			return nil, fmt.Errorf("JWT has expired")
 		}
 	}
@@ -166,7 +168,7 @@ func (c *JWKSCache) fetchKeys(issuer, jwksURL string) ([]jwk, error) {
 	}
 
 	c.mu.Lock()
-	c.entries[issuer] = jwksCacheEntry{keys: jwks.Keys, fetchedAt: time.Now()}
+	c.entries[issuer] = jwksCacheEntry{keys: jwks.Keys, fetchedAt: clock.Now()}
 	c.mu.Unlock()
 
 	return jwks.Keys, nil

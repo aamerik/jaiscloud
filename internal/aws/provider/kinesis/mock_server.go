@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 const (
@@ -167,8 +169,9 @@ func (s *MockServer) buildEnv() []string {
 // ─── readiness poll ───────────────────────────────────────────────────────────
 
 func (s *MockServer) waitReady(ctx context.Context, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	// become healthy. This must use actual elapsed time, not the simulated clock.
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		if s.Healthy() {
 			return nil
 		}

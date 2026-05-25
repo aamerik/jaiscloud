@@ -11,7 +11,8 @@ import (
 
 	objectstore "jaiscloud/internal/aws/store/object"
 	s3impl "jaiscloud/internal/aws/store/s3"
-	"jaiscloud/internal/blobfs"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/model"
 )
 
@@ -856,7 +857,7 @@ func TestObjectLock_DeleteBlockedByCompliance(t *testing.T) {
 	p := New(meta, blob)
 	_ = meta.CreateBucket(ctx, "b", nil)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	_ = meta.PutObjectMeta(ctx, "b", "k", objectstore.ObjectMeta{
 		Key: "k", LockMode: "COMPLIANCE", LockRetainUntil: &future,
 	})
@@ -875,7 +876,7 @@ func TestObjectLock_GovernanceBypassAllowed(t *testing.T) {
 	p := New(meta, blob)
 	_ = meta.CreateBucket(ctx, "b", nil)
 
-	future := time.Now().Add(24 * time.Hour)
+	future := clock.RealNow().Add(24 * time.Hour)
 	_ = meta.PutObjectMeta(ctx, "b", "k", objectstore.ObjectMeta{
 		Key: "k", LockMode: "GOVERNANCE", LockRetainUntil: &future,
 	})
@@ -1071,7 +1072,7 @@ func TestLifecycle_ExpirationHeader(t *testing.T) {
 
 	_ = meta.PutObjectMeta(ctx, "b", "logs/access.log", objectstore.ObjectMeta{
 		Key:          "logs/access.log",
-		LastModified: time.Now().Add(-25 * time.Hour), // 25 hours old
+		LastModified: clock.RealNow().Add(-25 * time.Hour), // 25 hours old
 	})
 	_ = blob.Put(ctx, "b", "logs/access.log", []byte("log data"))
 

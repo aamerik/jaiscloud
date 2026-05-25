@@ -30,18 +30,16 @@ import (
 type QueueProvider struct {
 	resources     store.ResourceStore
 	messages      sqsstore.SQSMessageStore
-	clock         clock.Clock
 	bus           *events.EventBus
 	waiters       *Waiters
 	recentDeletes map[string]time.Time // queueName → deletion time
 	rdMu          sync.Mutex
 }
 
-func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, clk clock.Clock, bus *events.EventBus) *QueueProvider {
+func New(resources store.ResourceStore, messages sqsstore.SQSMessageStore, bus *events.EventBus) *QueueProvider {
 	return &QueueProvider{
 		resources:     resources,
 		messages:      messages,
-		clock:         clk,
 		bus:           bus,
 		waiters:       NewWaiters(),
 		recentDeletes: make(map[string]time.Time),
@@ -141,7 +139,7 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	// §1.5.7: QueueDeletedRecently gate — AWS blocks re-creation for 60s.
 	p.rdMu.Lock()
 	if deletedAt, ok := p.recentDeletes[name]; ok {
-		if time.Since(deletedAt) < 60*time.Second {
+		if clock.Now().Sub(deletedAt) < 60*time.Second {
 			p.rdMu.Unlock()
 			return nil, model.NewProviderError("QueueDeletedRecently",
 				"You must wait 60 seconds after deleting a queue before you can create another with the same name.", 400)
@@ -188,7 +186,7 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 		return provider.OK(map[string]any{"QueueUrl": queueURL}), nil
 	}
 
-	now := p.clock.Now()
+	now := clock.Now()
 	state := map[string]any{
 		"QueueName":                     name,
 		"QueueUrl":                      queueURL,
@@ -246,7 +244,7 @@ func (p *QueueProvider) DeleteQueue(ctx context.Context, nr *model.NormalizedReq
 	// Record deletion for QueueDeletedRecently gate.
 	queueName := queueURL[strings.LastIndex(queueURL, "/")+1:]
 	p.rdMu.Lock()
-	p.recentDeletes[queueName] = time.Now()
+	p.recentDeletes[queueName] = clock.Now()
 	p.rdMu.Unlock()
 	return provider.OK(map[string]any{}), nil
 }
@@ -323,7 +321,7 @@ func (p *QueueProvider) GetQueueAttributes(ctx context.Context, nr *model.Normal
 	var state map[string]any
 	json.Unmarshal(entry.Data, &state)
 
-	now := p.clock.Now()
+	now := clock.Now()
 	vis, notVis, delayed, _ := p.messages.GetApproximateCounts(ctx, nr.AccountID, nr.Region, queueURL, now)
 
 	attrs := buildAttributes(state, vis, notVis, delayed)
@@ -351,7 +349,7 @@ func (p *QueueProvider) SetQueueAttributes(ctx context.Context, nr *model.Normal
 		state[k] = v
 	}
 	state["Attributes"] = existing
-	state["LastModifiedTimestamp"] = strconv.FormatInt(p.clock.Now().Unix(), 10)
+	state["LastModifiedTimestamp"] = strconv.FormatInt(clock.Now().Unix(), 10)
 
 	data, _ := json.Marshal(state)
 	entry.Data = data
@@ -416,7 +414,7 @@ func (p *QueueProvider) SendMessage(ctx context.Context, nr *model.NormalizedReq
 		}
 	}
 
-	now := p.clock.Now()
+	now := clock.Now()
 	msgID := newMessageID()
 	delaySec := intFromState(state, "DelaySeconds", 0)
 	if d, ok := nr.Params["DelaySeconds"]; ok {
@@ -528,10 +526,10 @@ func (p *QueueProvider) ReceiveMessage(ctx context.Context, nr *model.Normalized
 		return nil, model.NewProviderError("InvalidParameterValue", "Value for parameter WaitTimeSeconds is invalid. Reason: Must be >= 0 and <= 20", 400)
 	}
 
-	now := p.clock.Now()
+	now := clock.Now()
 	var msgs []sqsstore.SQSMessage
 	if waitSec > 0 {
-		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, nr.AccountID, nr.Region, queueURL, maxMessages, time.Duration(waitSec)*time.Second, p.clock)
+		msgs, err = WaitForMessages(ctx, p.messages, p.waiters, nr.AccountID, nr.Region, queueURL, maxMessages, time.Duration(waitSec)*time.Second)
 	} else {
 		msgs, err = p.messages.Receive(ctx, nr.AccountID, nr.Region, queueURL, maxMessages, now)
 	}
@@ -621,7 +619,7 @@ func (p *QueueProvider) ChangeMessageVisibility(ctx context.Context, nr *model.N
 	if v, ok := nr.Params["VisibilityTimeout"]; ok {
 		timeout = toInt(v)
 	}
-	now := p.clock.Now()
+	now := clock.Now()
 	// AWS silently succeeds for invalid/expired receipt handles — do not return error.
 	p.messages.ChangeVisibility(ctx, nr.AccountID, nr.Region, queueURL, receiptHandle, timeout, now)
 	return provider.OK(map[string]any{}), nil
@@ -709,7 +707,7 @@ func (p *QueueProvider) SendMessageBatch(ctx context.Context, nr *model.Normaliz
 		}
 		body, _ := e["MessageBody"].(string)
 		msgID := newMessageID()
-		now := p.clock.Now()
+		now := clock.Now()
 
 		// Per-entry FIFO validation
 		if isFIFO {
@@ -864,7 +862,7 @@ func (p *QueueProvider) ChangeMessageVisibilityBatch(ctx context.Context, nr *mo
 		seenIDs[id] = true
 	}
 
-	now := p.clock.Now()
+	now := clock.Now()
 	var successful []map[string]any
 	var failed []map[string]any
 

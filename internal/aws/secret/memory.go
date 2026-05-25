@@ -6,7 +6,8 @@ import (
 	"io"
 	"sort"
 	"sync"
-	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // MemorySecretStore is an in-process SecretStore used in memory mode.
@@ -34,7 +35,7 @@ func (s *MemorySecretStore) CreateSecret(_ context.Context, e SecretEntry) error
 	if _, ok := s.byName[key]; ok {
 		return ErrAlreadyExists
 	}
-	now := time.Now()
+	now := clock.Now()
 	e.CreatedAt = now
 	e.UpdatedAt = now
 	s.secrets[e.SecretID] = e
@@ -68,7 +69,7 @@ func (s *MemorySecretStore) UpdateSecret(_ context.Context, e SecretEntry) error
 	if _, ok := s.secrets[e.SecretID]; !ok {
 		return ErrSecretNotFound
 	}
-	e.UpdatedAt = time.Now()
+	e.UpdatedAt = clock.Now()
 	s.secrets[e.SecretID] = e
 	return nil
 }
@@ -103,7 +104,7 @@ func (s *MemorySecretStore) PutVersion(_ context.Context, v VersionEntry) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v.CreatedAt.IsZero() {
-		v.CreatedAt = time.Now()
+		v.CreatedAt = clock.Now()
 	}
 	// Only demote the old AWSCURRENT→AWSPREVIOUS when this version claims AWSCURRENT.
 	if containsStage(v.Stages, "AWSCURRENT") {

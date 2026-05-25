@@ -19,6 +19,7 @@ import (
 	dynamostore "jaiscloud/internal/aws/store/dynamodb"
 	streamstore "jaiscloud/internal/aws/store/stream"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -61,6 +62,10 @@ func (p *TableProvider) Shutdown() {
 		p.ttlWorker.Shutdown()
 	}
 }
+
+// TTLWorker returns the TTL reaper, or nil if none was configured.
+// Used to wire the worker into the admin handler for POST /_jaiscloud/ttl-sweep.
+func (p *TableProvider) TTLWorker() *TTLWorker { return p.ttlWorker }
 
 func (p *TableProvider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
@@ -230,7 +235,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 		GlobalSecondaryIndexes: gsis,
 		LocalSecondaryIndexes:  lsis,
 		BillingMode:            billing,
-		CreationDateTime:       time.Now().UTC(),
+		CreationDateTime:       clock.Now(),
 		Tags:                   map[string]string{},
 	}
 
@@ -244,7 +249,7 @@ func (p *TableProvider) CreateTable(ctx context.Context, nr *model.NormalizedReq
 		ts.StreamEnabled = enabled
 		ts.StreamViewType = viewType
 		if enabled && p.streams != nil {
-			label := fmt.Sprintf("%d", time.Now().UnixNano())
+			label := fmt.Sprintf("%d", clock.Now().UnixNano())
 			streamArn := streamResourceID(nr, name, label)
 			ts.LatestStreamArn = streamArn
 			p.streams.Enable(name, streamArn)
@@ -330,7 +335,7 @@ func (p *TableProvider) UpdateTable(ctx context.Context, nr *model.NormalizedReq
 		ts.StreamEnabled = enabled
 		ts.StreamViewType = viewType
 		if enabled && p.streams != nil {
-			streamArn := streamResourceID(nr, name, fmt.Sprintf("%d", time.Now().UnixNano()))
+			streamArn := streamResourceID(nr, name, fmt.Sprintf("%d", clock.Now().UnixNano()))
 			ts.LatestStreamArn = streamArn
 			p.streams.Enable(name, streamArn)
 		} else if !enabled && p.streams != nil {
@@ -2010,7 +2015,7 @@ func (p *TableProvider) CreateGlobalTable(ctx context.Context, nr *model.Normali
 	desc := map[string]any{
 		"GlobalTableName":   name,
 		"GlobalTableStatus": "ACTIVE",
-		"CreationDateTime":  time.Now().Unix(),
+		"CreationDateTime":  clock.Now().Unix(),
 		"ReplicationGroup":  replicas,
 	}
 	data, _ := json.Marshal(desc)

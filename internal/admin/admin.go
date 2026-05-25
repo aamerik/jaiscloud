@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/persistence/snapshot"
 	"jaiscloud/internal/persistence/version"
@@ -105,6 +106,9 @@ type Handler struct {
 	dataDir          string
 	exportSoftLimit  int64
 	barrier          *snapshot.Barrier
+	clockMode        string // "real" | "fixed" | "offset"; "" means real
+	ttlSweeper       TTLSweeper
+	ebScheduler      EBSchedulerTicker
 }
 
 func NewHandler() *Handler {
@@ -200,6 +204,56 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// SetClock handles POST /_jaiscloud/clock — replaces the global clock.
+func (h *Handler) SetClock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode string    `json:"mode"`
+		Time time.Time `json:"time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch req.Mode {
+	case "fixed":
+		if req.Time.IsZero() {
+			http.Error(w, "time must not be zero for fixed mode", http.StatusBadRequest)
+			return
+		}
+		clock.SetGlobalClock(clock.FixedClock{T: req.Time})
+	case "offset":
+		if req.Time.IsZero() {
+			http.Error(w, "time must not be zero for offset mode", http.StatusBadRequest)
+			return
+		}
+		clock.SetGlobalClock(clock.NewOffsetClock(req.Time))
+	case "real":
+		clock.SetGlobalClock(clock.RealClock{})
+	default:
+		http.Error(w, "unknown mode: must be fixed, offset, or real", http.StatusBadRequest)
+		return
+	}
+	h.mu.Lock()
+	h.clockMode = req.Mode
+	h.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetClock handles GET /_jaiscloud/clock — returns current clock state.
+func (h *Handler) GetClock(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	mode := h.clockMode
+	h.mu.Unlock()
+	if mode == "" {
+		mode = "real"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"mode": mode,
+		"time": clock.Now().Format(time.RFC3339Nano),
+	})
+}
+
 // Doctor handles GET /_jaiscloud/doctor — extended health check with verbose info.
 // Query param ?verbose=true returns additional fields.
 func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +332,10 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 			rs.Reset(ctx)
 		}
 	}
+	clock.SetGlobalClock(clock.RealClock{})
+	h.mu.Lock()
+	h.clockMode = "real"
+	h.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "reset"}); err != nil {
 		slog.Warn("admin: reset encode failed", "err", err)
@@ -340,7 +398,8 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 		Cloud:          meta.Cloud,
 		Region:         meta.Region,
 		AccountID:      meta.AccountID,
-		CreatedAt:      time.Now().UTC(),
+		// not the emulated service time.
+		CreatedAt:      clock.RealNow(),
 		KEKFingerprint: kekFP,
 		Stores:         stores,
 	}
@@ -667,6 +726,10 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	clock.SetGlobalClock(clock.RealClock{})
+	h.mu.Lock()
+	h.clockMode = "real"
+	h.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"status":          "imported",

@@ -17,6 +17,8 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // sfnCreateLambdaFn creates a minimal Lambda function for use in SFN Task state tests.
@@ -613,8 +615,8 @@ func TestSFN_StartSyncExecution_ExpressOnly(t *testing.T) {
 // terminal state (SUCCEEDED, FAILED, ABORTED, TIMED_OUT) or the timeout elapses.
 func pollUntilTerminal(t *testing.T, client *awssfn.Client, execARN string, timeout time.Duration) *awssfn.DescribeExecutionOutput {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		out, err := client.DescribeExecution(context.Background(), &awssfn.DescribeExecutionInput{
 			ExecutionArn: aws.String(execARN),
 		})

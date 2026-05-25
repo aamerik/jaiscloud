@@ -15,6 +15,7 @@ import (
 	"time"
 
 	ecrstore "jaiscloud/internal/aws/store/ecr"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -174,7 +175,7 @@ func (p *Provider) CreateRepository(ctx context.Context, nr *model.NormalizedReq
 		Name:                name,
 		ARN:                 arn,
 		URI:                 uri,
-		CreatedAt:           time.Now(),
+		CreatedAt:           clock.Now(),
 		ImageTagMutability:  mutability,
 		ImageScanningConfig: ecrstore.ImageScanningConfig{ScanOnPush: scanOnPush},
 		EncryptionConfig:    ecrstore.EncryptionConfig{EncryptionType: encType, KMSKey: kmsKey},
@@ -323,7 +324,7 @@ func (p *Provider) PutImage(ctx context.Context, nr *model.NormalizedRequest) (*
 		Manifest:          manifest,
 		ManifestMediaType: mediaType,
 		Tags:              tags,
-		PushedAt:          time.Now(),
+		PushedAt:          clock.Now(),
 		Size:              int64(len(manifest)),
 		Layers:            layers,
 	}
@@ -531,8 +532,8 @@ func (p *Provider) DescribeImages(ctx context.Context, nr *model.NormalizedReque
 				"description": "",
 			},
 			"imageScanFindingsSummary": map[string]any{
-				"imageScanCompletedAt":         time.Now().Unix(),
-				"vulnerabilitySourceUpdatedAt": time.Now().Unix(),
+				"imageScanCompletedAt":         clock.Now().Unix(),
+				"vulnerabilitySourceUpdatedAt": clock.Now().Unix(),
 				"findingSeverityCounts":        map[string]int{},
 			},
 		}
@@ -560,7 +561,7 @@ func (p *Provider) GetAuthorizationToken(ctx context.Context, nr *model.Normaliz
 		registryIDs = []string{nr.AccountID}
 	}
 
-	expiresAt := time.Now().Add(12 * time.Hour)
+	expiresAt := clock.Now().Add(12 * time.Hour)
 	authData := make([]any, len(registryIDs))
 	for i, id := range registryIDs {
 		authData[i] = map[string]any{
@@ -587,7 +588,7 @@ func (p *Provider) PutLifecyclePolicy(ctx context.Context, nr *model.NormalizedR
 		"registryId":          nr.AccountID,
 		"repositoryName":      repoName,
 		"lifecyclePolicyText": policyText,
-		"lastEvaluatedAt":     time.Now().Unix(),
+		"lastEvaluatedAt":     clock.Now().Unix(),
 	}), nil
 }
 
@@ -603,7 +604,7 @@ func (p *Provider) GetLifecyclePolicy(ctx context.Context, nr *model.NormalizedR
 		"registryId":          nr.AccountID,
 		"repositoryName":      repoName,
 		"lifecyclePolicyText": policy,
-		"lastEvaluatedAt":     time.Now().Unix(),
+		"lastEvaluatedAt":     clock.Now().Unix(),
 	}), nil
 }
 
@@ -623,7 +624,7 @@ func (p *Provider) DeleteLifecyclePolicy(ctx context.Context, nr *model.Normaliz
 		"registryId":          nr.AccountID,
 		"repositoryName":      repoName,
 		"lifecyclePolicyText": policy,
-		"lastEvaluatedAt":     time.Now().Unix(),
+		"lastEvaluatedAt":     clock.Now().Unix(),
 	}), nil
 }
 
@@ -772,7 +773,7 @@ func (p *Provider) DescribeImageScanFindings(ctx context.Context, nr *model.Norm
 		return nil, storeErrToProvider(err)
 	}
 
-	now := time.Now().Unix()
+	now := clock.Now().Unix()
 	return provider.OK(map[string]any{
 		"registryId":     nr.AccountID,
 		"repositoryName": repoName,
@@ -802,7 +803,7 @@ func (p *Provider) CreatePullThroughCacheRule(ctx context.Context, nr *model.Nor
 	rule := &ecrstore.PullThroughCacheRule{
 		EcrRepositoryPrefix: prefix,
 		UpstreamRegistryURL: upstreamURL,
-		CreatedAt:           time.Now(),
+		CreatedAt:           clock.Now(),
 	}
 	if err := p.store.CreatePullThroughCacheRule(rule); err != nil {
 		return nil, storeErrToProvider(err)

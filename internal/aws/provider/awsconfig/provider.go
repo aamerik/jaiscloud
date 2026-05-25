@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -164,9 +164,9 @@ func (p *Provider) setRecorderStatus(ctx context.Context, account, region, name 
 		LastStatus: "SUCCESS",
 	}
 	if recording {
-		st.LastStartTime = float64(time.Now().Unix())
+		st.LastStartTime = float64(clock.Now().Unix())
 	} else {
-		st.LastStopTime = float64(time.Now().Unix())
+		st.LastStopTime = float64(clock.Now().Unix())
 	}
 	data, _ := json.Marshal(st)
 	_ = p.resources.Delete(ctx, account, region, rtRecorderStatus, name)

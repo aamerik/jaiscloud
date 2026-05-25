@@ -14,6 +14,8 @@ import (
 	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── Templates ────────────────────────────────────────────────────────────────
@@ -53,8 +55,8 @@ const changeSetAddSNSTemplate = `{
 // pollChangeSetStatus polls until the changeset reaches a terminal status.
 func pollChangeSetStatus(t *testing.T, cfClient *awscf.Client, stackName, changeSetName string) string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Minute)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(2 * time.Minute)
+	for clock.RealNow().Before(deadline) {
 		out, err := cfClient.DescribeChangeSet(context.Background(), &awscf.DescribeChangeSetInput{
 			StackName:     aws.String(stackName),
 			ChangeSetName: aws.String(changeSetName),

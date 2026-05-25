@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"jaiscloud/internal/store"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/store"
 	memstore "jaiscloud/internal/store"
 )
 
@@ -37,8 +38,8 @@ func TestPersistTerminalSnapshot_RoundTrip(t *testing.T) {
 	snap := Snapshot{
 		State:      "COMPLETED",
 		Reason:     "done",
-		StartTime:  time.Now().Add(-10 * time.Second),
-		EndTime:    time.Now(),
+		StartTime:  clock.RealNow().Add(-10 * time.Second),
+		EndTime:    clock.RealNow(),
 		ExitCode:   0,
 		LogURIs:    map[string]string{"stdout": "s3://bucket/logs/stdout.gz"},
 		CallerMeta: map[string]string{"cluster": "c-123"},

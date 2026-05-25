@@ -11,6 +11,8 @@ import (
 	cwltypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestCWLogs_PutAndGetLogEvents verifies basic PutLogEvents + GetLogEvents roundtrip.
@@ -29,7 +31,7 @@ func TestCWLogs_PutAndGetLogEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	msgs := []string{"alpha", "beta", "gamma"}
 	events := make([]cwltypes.InputLogEvent, len(msgs))
 	for i, m := range msgs {
@@ -75,7 +77,7 @@ func TestCWLogs_FilterLogEvents_Pattern(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),
 		LogStreamName: aws.String(stream),
@@ -116,7 +118,7 @@ func TestCWLogs_FilterLogEvents_TimeRange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Three events: t-60s, t-30s, t (now)
-	now := time.Now()
+	now := clock.RealNow()
 	old := now.Add(-60 * time.Second).UnixMilli()
 	mid := now.Add(-30 * time.Second).UnixMilli()
 	cur := now.UnixMilli()
@@ -217,7 +219,7 @@ func TestCWLogs_MultiStream_FilterByStream(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	now := time.Now().UnixMilli()
+	now := clock.RealNow().UnixMilli()
 	// Put 2 events to stream-1, 1 event to stream-2
 	_, err = c.PutLogEvents(ctx, &awscwl.PutLogEventsInput{
 		LogGroupName:  aws.String(group),

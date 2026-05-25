@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -66,7 +67,7 @@ func (p *RelationalProvider) CreateDBSnapshot(ctx context.Context, nr *model.Nor
 		EngineVersion:        inst.EngineVersion,
 		AllocatedStorage:     inst.AllocatedStorage,
 		ARN:                  nr.ResourceID("rds-snapshot", snapID),
-		SnapshotCreateTime:   time.Now().UTC(),
+		SnapshotCreateTime:   clock.Now(),
 	}
 	data, _ := json.Marshal(snap)
 	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBSnapshot, ID: snapID, Data: data}); err != nil {
@@ -136,7 +137,7 @@ func (p *RelationalProvider) CopyDBSnapshot(ctx context.Context, nr *model.Norma
 		EngineVersion:        src.EngineVersion,
 		AllocatedStorage:     src.AllocatedStorage,
 		ARN:                  nr.ResourceID("rds-snapshot", tgtID),
-		SnapshotCreateTime:   time.Now().UTC(),
+		SnapshotCreateTime:   clock.Now(),
 	}
 	data, _ := json.Marshal(snap)
 	if err := p.resources.Create(ctx, nr.AccountID, nr.Region, store.ResourceEntry{Type: rtDBSnapshot, ID: tgtID, Data: data}); err == store.ErrAlreadyExists {

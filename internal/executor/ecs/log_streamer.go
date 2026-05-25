@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"io"
-	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 )
 
@@ -27,7 +27,7 @@ func StreamLogs(ctx context.Context, logsAPI logstream.Ingestor, cfg LogConfig, 
 	var batch []logstream.Event
 	for scanner.Scan() {
 		line := scanner.Text()
-		batch = append(batch, logstream.Event{Timestamp: time.Now().UnixMilli(), Message: line})
+		batch = append(batch, logstream.Event{Timestamp: clock.RealNow().UnixMilli(), Message: line})
 		if len(batch) >= 10 {
 			_ = logsAPI.InternalPutEvents(ctx, group, streamName, batch)
 			batch = batch[:0]

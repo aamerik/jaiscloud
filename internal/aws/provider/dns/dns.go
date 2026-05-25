@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/pagination"
 	"jaiscloud/internal/provider"
@@ -122,7 +123,7 @@ func (p *DNSProvider) CreateHostedZone(ctx context.Context, nr *model.Normalized
 		Name:                   name,
 		Comment:                strParam(nr.Params, "Comment"),
 		PrivateZone:            privateZone,
-		CreatedAt:              time.Now(),
+		CreatedAt:              clock.Now(),
 		ResourceRecordSetCount: 2, // default SOA + NS
 	}
 	data, _ := json.Marshal(hz)
@@ -192,7 +193,7 @@ func (p *DNSProvider) DeleteHostedZone(ctx context.Context, nr *model.Normalized
 	return provider.OK(map[string]any{
 		"DeleteHostedZoneResponse": true,
 		"Status":                   "INSYNC",
-		"SubmittedAt":              time.Now().UTC().Format(time.RFC3339),
+		"SubmittedAt":              clock.Now().Format(time.RFC3339),
 		"ChangeId":                 newChangeID(),
 	}), nil
 }
@@ -226,7 +227,7 @@ func (p *DNSProvider) ChangeResourceRecordSets(ctx context.Context, nr *model.No
 			return provider.OK(map[string]any{
 				"ChangeInfo":  true,
 				"Status":      "INSYNC",
-				"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+				"SubmittedAt": clock.Now().Format(time.RFC3339),
 				"ChangeId":    changeID,
 			}), nil
 		}
@@ -249,7 +250,7 @@ func (p *DNSProvider) ChangeResourceRecordSets(ctx context.Context, nr *model.No
 	return provider.OK(map[string]any{
 		"ChangeInfo":  true,
 		"Status":      "INSYNC",
-		"SubmittedAt": time.Now().UTC().Format(time.RFC3339),
+		"SubmittedAt": clock.Now().Format(time.RFC3339),
 		"ChangeId":    changeID,
 	}), nil
 }

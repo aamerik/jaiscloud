@@ -21,7 +21,8 @@ import (
 	"sync"
 	"time"
 
-	objectstore "jaiscloud/internal/aws/store/object"
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/model"
@@ -601,7 +602,7 @@ func (p *ObjectProvider) InternalPutObject(ctx context.Context, bucket, key, con
 		CRC32:        crc32Val,
 		Size:         int64(len(body)),
 		ContentType:  contentType,
-		LastModified: time.Now().UTC(),
+		LastModified: clock.Now(),
 		StorageClass: "STANDARD",
 	}
 	return p.meta.PutObjectMeta(ctx, bucket, key, meta)

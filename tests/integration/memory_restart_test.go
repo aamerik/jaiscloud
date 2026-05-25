@@ -61,6 +61,8 @@ import (
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // restartFindBinary returns the path to the jaiscloud-aws binary, or skips the test.
@@ -137,8 +139,8 @@ func restartStopServer(t *testing.T, cmd *exec.Cmd) {
 // restartWaitReady polls the health endpoint until the server responds 200 or times out.
 func restartWaitReady(t *testing.T, endpoint string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
 		resp, err := http.Get(endpoint + "/_jaiscloud/health")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
@@ -422,7 +424,7 @@ func TestMemoryModeRestart(t *testing.T) {
 	})
 	r53Out, err := r53Client.CreateHostedZone(ctx, &route53svc.CreateHostedZoneInput{
 		Name:            aws.String("restart-test.example.com."),
-		CallerReference: aws.String(fmt.Sprintf("restart-test-%d", time.Now().UnixNano())),
+		CallerReference: aws.String(fmt.Sprintf("restart-test-%d", clock.RealNow().UnixNano())),
 		HostedZoneConfig: &route53types.HostedZoneConfig{
 			Comment: aws.String("restart test zone"),
 		},

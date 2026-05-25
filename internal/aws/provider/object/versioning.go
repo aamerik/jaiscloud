@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	objectstore "jaiscloud/internal/aws/store/object"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -442,7 +443,7 @@ func (p *ObjectProvider) PutObjectRetention(ctx context.Context, nr *model.Norma
 			t, _ := time.Parse(time.RFC3339, req.RetainUntilDate)
 			newUntil = &t
 		}
-		if newUntil != nil && time.Now().After(*newUntil) {
+		if newUntil != nil && clock.Now().After(*newUntil) {
 			return nil, model.NewProviderError("InvalidArgument",
 				"The retain until date must be in the future!", 400)
 		}

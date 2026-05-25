@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -499,7 +500,7 @@ func (p *SecretProvider) RotateSecret(ctx context.Context, nr *model.NormalizedR
 		}); err != nil {
 			return nil, fmt.Errorf("sm: promote pending version: %w", err)
 		}
-		now := time.Now()
+		now := clock.Now()
 		e.LastRotatedDate = &now
 	}
 

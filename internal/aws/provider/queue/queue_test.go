@@ -19,8 +19,9 @@ func setup(t *testing.T) (*queue.QueueProvider, store.ResourceStore, sqsstore.SQ
 	rs := store.NewMemoryResourceStore()
 	ms := sqsstore.NewMemoryMessageStore()
 	bus := events.NewEventBus()
-	clk := clock.FixedClock{T: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
-	p := queue.New(rs, ms, clk, bus)
+	clock.SetGlobalClock(clock.FixedClock{T: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+	p := queue.New(rs, ms, bus)
 	return p, rs, ms
 }
 

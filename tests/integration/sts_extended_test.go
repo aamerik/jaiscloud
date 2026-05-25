@@ -11,6 +11,8 @@ import (
 	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // ─── G-PENDING-8: STS Extended Operations ─────────────────────────────────────
@@ -48,7 +50,7 @@ func TestSTS_GetSessionToken_CredentialFields(t *testing.T) {
 	assert.NotEmpty(t, *out.Credentials.SecretAccessKey, "SecretAccessKey must be non-empty")
 	assert.NotEmpty(t, *out.Credentials.SessionToken, "SessionToken must be non-empty")
 	require.NotNil(t, out.Credentials.Expiration, "Expiration must be set")
-	assert.True(t, out.Credentials.Expiration.After(time.Now()), "Expiration must be in the future")
+	assert.True(t, out.Credentials.Expiration.After(clock.RealNow()), "Expiration must be in the future")
 }
 
 // TestSTS_GetSessionToken_DurationSeconds verifies that specifying
@@ -58,7 +60,7 @@ func TestSTS_GetSessionToken_DurationSeconds(t *testing.T) {
 	ctx := context.Background()
 	client := newSTSClient(t)
 
-	before := time.Now()
+	before := clock.RealNow()
 	out, err := client.GetSessionToken(ctx, &awssts.GetSessionTokenInput{
 		DurationSeconds: aws.Int32(3600),
 	})
@@ -197,7 +199,7 @@ func TestSTS_GetSessionToken_ExpirationInFuture(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
 	client := newSTSClient(t)
-	now := time.Now()
+	now := clock.RealNow()
 
 	out, err := client.GetSessionToken(ctx, &awssts.GetSessionTokenInput{})
 	require.NoError(t, err)
@@ -213,7 +215,7 @@ func TestSTS_GetFederationToken_DurationSeconds(t *testing.T) {
 	resetState(t)
 	ctx := context.Background()
 	client := newSTSClient(t)
-	before := time.Now()
+	before := clock.RealNow()
 
 	out, err := client.GetFederationToken(ctx, &awssts.GetFederationTokenInput{
 		Name:            aws.String("feduser"),

@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"jaiscloud/internal/aws/provider/stepfunctions/asl"
 	"jaiscloud/internal/aws/provider/stepfunctions/engine"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -144,7 +144,7 @@ func (p *Provider) CreateStateMachine(ctx context.Context, nr *model.NormalizedR
 		RoleARN:     roleARN,
 		Type:        smType,
 		Status:      sfnstore.StateMachineStatusActive,
-		CreateDate:  time.Now().UTC(),
+		CreateDate:  clock.Now(),
 		Tags:        parseTags(nr.Params["tags"], "key", "value"),
 		Versions:    make(map[int64]*sfnstore.StateMachineVersion),
 		Aliases:     make(map[string]*sfnstore.StateMachineAlias),
@@ -205,7 +205,7 @@ func (p *Provider) UpdateStateMachine(ctx context.Context, nr *model.NormalizedR
 	}
 
 	return provider.OK(map[string]any{
-		"updateDate": time.Now().UTC().Unix(),
+		"updateDate": clock.Now().Unix(),
 		"revisionId": newRevision,
 	}), nil
 }
@@ -317,7 +317,7 @@ func (p *Provider) StartExecution(ctx context.Context, nr *model.NormalizedReque
 	smName := smNameFromARN(sm.ARN)
 	execARN := nr.ResourceID("sfn-execution", smName+"/"+execName)
 
-	t := time.Now().UTC()
+	t := clock.Now()
 
 	if p.engine != nil {
 		// Engine mode: start RUNNING, engine will finalize
@@ -400,7 +400,7 @@ func (p *Provider) StartSyncExecution(ctx context.Context, nr *model.NormalizedR
 
 	smName := smNameFromARN(sm.ARN)
 	execARN := nr.ResourceID("sfn-express-execution", smName+"/"+execName+":"+newUUID())
-	t := time.Now().UTC()
+	t := clock.Now()
 
 	return provider.OK(map[string]any{
 		"executionArn":         execARN,
@@ -430,7 +430,7 @@ func (p *Provider) StopExecution(ctx context.Context, nr *model.NormalizedReques
 	}
 
 	return provider.OK(map[string]any{
-		"stopDate": time.Now().UTC().Unix(),
+		"stopDate": clock.Now().Unix(),
 	}), nil
 }
 
@@ -529,7 +529,7 @@ func (p *Provider) RedriveExecution(ctx context.Context, nr *model.NormalizedReq
 		return nil, storeErr(err)
 	}
 	return provider.OK(map[string]any{
-		"redriveDate": time.Now().UTC().Unix(),
+		"redriveDate": clock.Now().Unix(),
 	}), nil
 }
 
@@ -623,7 +623,7 @@ func (p *Provider) UpdateStateMachineAlias(ctx context.Context, nr *model.Normal
 	}
 
 	return provider.OK(map[string]any{
-		"updateDate": time.Now().UTC().Unix(),
+		"updateDate": clock.Now().Unix(),
 	}), nil
 }
 
@@ -667,7 +667,7 @@ func (p *Provider) CreateActivity(ctx context.Context, nr *model.NormalizedReque
 	act := &sfnstore.Activity{
 		Name:         name,
 		ARN:          arn,
-		CreationDate: time.Now().UTC(),
+		CreationDate: clock.Now(),
 		Tags:         parseTags(nr.Params["tags"], "key", "value"),
 	}
 
@@ -1086,7 +1086,7 @@ func (p *Provider) emitExecutionLogs(ctx context.Context, sm *sfnstore.StateMach
 		execName = execARN[idx+1:]
 	}
 	_ = p.logIngestor.InternalCreateLogGroup(ctx, logGroupName)
-	now := time.Now().UnixMilli()
+	now := clock.Now().UnixMilli()
 	startDetails := map[string]any{
 		"input":        input,
 		"inputDetails": map[string]any{"included": true, "truncated": false},

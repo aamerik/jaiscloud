@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -166,7 +167,7 @@ func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedReques
 			Address: fmt.Sprintf("%s.%s.%s.redshift.amazonaws.com", id, randHex(8), region),
 			Port:    5439,
 		},
-		ClusterCreateTime: time.Now().UTC(),
+		ClusterCreateTime: clock.Now(),
 		Tags:              map[string]string{},
 		ARN:               nr.ResourceID("redshift-cluster", id),
 	}

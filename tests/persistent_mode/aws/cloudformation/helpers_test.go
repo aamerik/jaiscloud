@@ -18,6 +18,8 @@ import (
 	awssm "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
 	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
+
+	"jaiscloud/internal/clock"
 )
 
 func jaiscloudHost() string {
@@ -110,8 +112,8 @@ func pollInterval() time.Duration {
 
 func pollStackStatus(t *testing.T, cfClient *awscf.Client, stackName string) string {
 	t.Helper()
-	deadline := time.Now().Add(invokeTimeout())
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(invokeTimeout())
+	for clock.RealNow().Before(deadline) {
 		out, err := cfClient.DescribeStacks(context.Background(), &awscf.DescribeStacksInput{
 			StackName: aws.String(stackName),
 		})

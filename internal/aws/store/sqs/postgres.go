@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -44,6 +46,8 @@ func (s *PostgresSQSMessageStore) Shutdown() {
 
 func (s *PostgresSQSMessageStore) retentionWorker(ctx context.Context) {
 	defer s.wg.Done()
+	// Real wall time: infrastructure cleanup ticker — fires every 10s of actual
+	// wall time regardless of the emulated clock state.
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -94,7 +98,7 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, account, region stri
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (account_id, region, dedup_key) DO UPDATE
 				SET message_id=$4, expires_at=$5
-		`, account, region, dedupKey, msg.MessageID, time.Now().Add(5*time.Minute))
+		`, account, region, dedupKey, msg.MessageID, clock.Now().Add(5*time.Minute))
 		if err != nil {
 			return "", "", fmt.Errorf("dedup upsert: %w", err)
 		}
@@ -105,7 +109,7 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, account, region stri
 		err = s.pool.QueryRow(ctx, `SELECT nextval('jc_sqs_fifo_seq')`).Scan(&sequenceNumber)
 		if err != nil {
 			// Fallback: use timestamp-based number if sequence not present.
-			sequenceNumber = fmt.Sprintf("%020d", time.Now().UnixNano())
+			sequenceNumber = fmt.Sprintf("%020d", clock.Now().UnixNano())
 		} else {
 			// Format as 20-digit decimal string to match AWS format.
 			var n int64
@@ -121,7 +125,7 @@ func (s *PostgresSQSMessageStore) Send(ctx context.Context, account, region stri
 	// SQS stamps SentTimestamp on the broker side at accept time; the API
 	// provides no way for callers to set it. Overwrite unconditionally so any
 	// caller-supplied value is ignored, matching AWS semantics.
-	msg.SentAt = time.Now().UTC()
+	msg.SentAt = clock.Now()
 
 	var delayUntil *time.Time
 	if !msg.DelayUntil.IsZero() {

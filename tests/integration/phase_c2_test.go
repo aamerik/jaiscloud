@@ -10,14 +10,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 // pollTaskStatus polls DescribeTasks until LastStatus matches wantStatus or the
 // deadline is exceeded. It returns the final observed status.
 func pollTaskStatus(t *testing.T, client *awsecs.Client, clusterName, taskARN, wantStatus string, timeout time.Duration) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := clock.RealNow().Add(timeout)
+	for clock.RealNow().Before(deadline) {
 		out, err := client.DescribeTasks(context.Background(), &awsecs.DescribeTasksInput{
 			Cluster: aws.String(clusterName),
 			Tasks:   []string{taskARN},

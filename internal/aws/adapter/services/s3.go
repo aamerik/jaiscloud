@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 )
 
@@ -1387,7 +1388,7 @@ func checkPresignedExpiration(query url.Values) error {
 		if err != nil {
 			return nil
 		}
-		if time.Now().After(t.Add(time.Duration(expires) * time.Second)) {
+		if clock.Now().After(t.Add(time.Duration(expires) * time.Second)) {
 			return fmt.Errorf("expired")
 		}
 		return nil
@@ -1398,7 +1399,7 @@ func checkPresignedExpiration(query url.Values) error {
 		if err != nil {
 			return nil
 		}
-		if time.Now().Unix() > expiresUnix {
+		if clock.Now().Unix() > expiresUnix {
 			return fmt.Errorf("expired")
 		}
 	}

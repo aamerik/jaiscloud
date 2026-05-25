@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
 	objectstore "jaiscloud/internal/aws/store/object"
 	s3store "jaiscloud/internal/aws/store/s3"
 )
@@ -97,7 +98,7 @@ func TestMemoryS3ObjectMetaStore_Snapshot_ObjectMetaSurvives(t *testing.T) {
 		ETag:         "abc123",
 		Size:         1024,
 		ContentType:  "text/plain",
-		LastModified: time.Now().Truncate(time.Second),
+		LastModified: clock.RealNow().Truncate(time.Second),
 		Metadata:     map[string]string{"x-custom": "value"},
 		Tags:         map[string]string{"env": "test", "owner": "alice"},
 		StorageClass: "STANDARD",
@@ -137,7 +138,7 @@ func TestMemoryS3ObjectMetaStore_Snapshot_MultipleObjectsSurvive(t *testing.T) {
 	keys := []string{"a.txt", "b.txt", "c.txt"}
 	for i, k := range keys {
 		s.PutObjectMeta(ctx, "multi-bucket", k, objectstore.ObjectMeta{
-			Key: k, ETag: string(rune('a' + i)), Size: int64(i + 1), LastModified: time.Now(),
+			Key: k, ETag: string(rune('a' + i)), Size: int64(i + 1), LastModified: clock.RealNow(),
 		})
 	}
 
@@ -180,13 +181,13 @@ func TestMemoryS3ObjectMetaStore_Snapshot_ObjectVersionsSurvive(t *testing.T) {
 
 	// Put two versions of the same key.
 	v1, err := s.PutObjectVersion(ctx, "ver-bucket", "file.txt", objectstore.ObjectMeta{
-		Key: "file.txt", ETag: "etag-v1", Size: 100, LastModified: time.Now(),
+		Key: "file.txt", ETag: "etag-v1", Size: 100, LastModified: clock.RealNow(),
 	})
 	if err != nil {
 		t.Fatalf("PutObjectVersion v1: %v", err)
 	}
 	_, err = s.PutObjectVersion(ctx, "ver-bucket", "file.txt", objectstore.ObjectMeta{
-		Key: "file.txt", ETag: "etag-v2", Size: 200, LastModified: time.Now(),
+		Key: "file.txt", ETag: "etag-v2", Size: 200, LastModified: clock.RealNow(),
 	})
 	if err != nil {
 		t.Fatalf("PutObjectVersion v2: %v", err)
@@ -260,7 +261,7 @@ func TestMemoryS3ObjectMetaStore_Snapshot_MultipleBucketsSurvive(t *testing.T) {
 	for _, bucket := range []string{"bucket-x", "bucket-y", "bucket-z"} {
 		s.CreateBucket(ctx, bucket, map[string]any{"name": bucket, "AccountID": accountID})
 		s.PutObjectMeta(ctx, bucket, "obj.txt", objectstore.ObjectMeta{
-			Key: "obj.txt", ETag: bucket + "-etag", Size: 1, LastModified: time.Now(),
+			Key: "obj.txt", ETag: bucket + "-etag", Size: 1, LastModified: clock.RealNow(),
 		})
 	}
 

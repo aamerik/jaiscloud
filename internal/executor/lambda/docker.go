@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/platform"
 )
 
@@ -129,7 +130,7 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req InvokeRequest) (InvokeR
 
 	e.mu.Lock()
 	if c, ok := e.containers[req.FunctionName]; ok {
-		c.lastUsed = time.Now()
+		c.lastUsed = clock.RealNow()
 	}
 	e.mu.Unlock()
 
@@ -222,7 +223,7 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req InvokeRequest) (*wa
 		return nil, err
 	}
 
-	c := &warmContainer{id: id, hostPort: port, lastUsed: time.Now(), codeDir: codeDir, optDir: optDir}
+	c := &warmContainer{id: id, hostPort: port, lastUsed: clock.RealNow(), codeDir: codeDir, optDir: optDir}
 	e.mu.Lock()
 	e.containers[req.FunctionName] = c
 	e.mu.Unlock()
@@ -406,7 +407,7 @@ func (e *DockerExecutor) gcLoop() {
 
 func (e *DockerExecutor) gcOnce() {
 	keepalive := time.Duration(e.cfg.KeepaliveSecs) * time.Second
-	now := time.Now()
+	now := clock.RealNow()
 	e.mu.Lock()
 	var toRemove []string
 	for name, c := range e.containers {

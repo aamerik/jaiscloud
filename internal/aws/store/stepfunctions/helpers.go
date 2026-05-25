@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 func newUUID() string {
@@ -13,5 +15,5 @@ func newUUID() string {
 }
 
 func now() time.Time {
-	return time.Now().UTC()
+	return clock.Now()
 }

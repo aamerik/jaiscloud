@@ -21,7 +21,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"jaiscloud/internal/admin"
+	"jaiscloud/internal/clock"
+		"jaiscloud/internal/admin"
 	"jaiscloud/internal/persistence/version"
 )
 
@@ -75,7 +76,7 @@ func buildMinimalTarball(t *testing.T, env version.Envelope) []byte {
 		Typeflag: tar.TypeReg,
 		Size:     int64(len(envJSON)),
 		Mode:     0600,
-		ModTime:  time.Now(),
+		ModTime:  clock.RealNow(),
 	}
 	require.NoError(t, tw.WriteHeader(hdr))
 	_, err = tw.Write(envJSON)
@@ -189,7 +190,7 @@ func TestImport_PathTraversal_Rejected(t *testing.T) {
 		Typeflag: tar.TypeReg,
 		Size:     int64(len(envJSON)),
 		Mode:     0600,
-		ModTime:  time.Now(),
+		ModTime:  clock.RealNow(),
 	}
 	require.NoError(t, tw.WriteHeader(envHdr))
 	_, err = tw.Write(envJSON)
@@ -201,7 +202,7 @@ func TestImport_PathTraversal_Rejected(t *testing.T) {
 		Typeflag: tar.TypeReg,
 		Size:     int64(len(traversalContent)),
 		Mode:     0600,
-		ModTime:  time.Now(),
+		ModTime:  clock.RealNow(),
 	}
 	require.NoError(t, tw.WriteHeader(traversalHdr))
 	_, err = tw.Write(traversalContent)

@@ -10,6 +10,8 @@ import (
 	awssts "github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 func TestSTS_GetCallerIdentity_FullFields(t *testing.T) {
@@ -40,7 +42,7 @@ func TestSTS_AssumeRole_ValidInput(t *testing.T) {
 	assert.True(t, strings.HasPrefix(*out.Credentials.AccessKeyId, "ASIA"))
 	assert.NotEmpty(t, *out.Credentials.SecretAccessKey)
 	assert.NotEmpty(t, *out.Credentials.SessionToken)
-	assert.True(t, out.Credentials.Expiration.After(time.Now()))
+	assert.True(t, out.Credentials.Expiration.After(clock.RealNow()))
 	assert.Contains(t, *out.AssumedRoleUser.Arn, "assumed-role/TestRole/test-session")
 }
 
@@ -75,7 +77,7 @@ func TestSTS_AssumeRole_DefaultDuration(t *testing.T) {
 	client := newSTSClient(t)
 	ctx := context.Background()
 
-	before := time.Now()
+	before := clock.RealNow()
 	out, err := client.AssumeRole(ctx, &awssts.AssumeRoleInput{
 		RoleArn:         aws.String("arn:aws:iam::000000000000:role/MyRole"),
 		RoleSessionName: aws.String("sess"),

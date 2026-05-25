@@ -12,6 +12,8 @@ import (
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"jaiscloud/internal/clock"
 )
 
 const (
@@ -109,7 +111,7 @@ func TestSTS_AssumeRole_ExpirationIsInFuture(t *testing.T) {
 	ctx := context.Background()
 
 	roleArn := createSTSCovRole(t, iamClient, "test-role")
-	now := time.Now()
+	now := clock.RealNow()
 
 	out, err := stsClient.AssumeRole(ctx, &awssts.AssumeRoleInput{
 		RoleArn:         aws.String(roleArn),
@@ -151,7 +153,7 @@ func TestSTS_AssumeRole_DurationSeconds_Custom(t *testing.T) {
 	ctx := context.Background()
 
 	roleArn := createSTSCovRole(t, iamClient, "test-role")
-	before := time.Now()
+	before := clock.RealNow()
 
 	out, err := stsClient.AssumeRole(ctx, &awssts.AssumeRoleInput{
 		RoleArn:         aws.String(roleArn),
@@ -265,7 +267,7 @@ func TestSTS_GetSessionToken_DefaultDuration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out.Credentials)
 	require.NotNil(t, out.Credentials.Expiration)
-	oneDayFromNow := time.Now().Add(24 * time.Hour)
+	oneDayFromNow := clock.RealNow().Add(24 * time.Hour)
 	assert.True(t, out.Credentials.Expiration.Before(oneDayFromNow),
 		"default session token expiration %v should be less than 1 day from now", *out.Credentials.Expiration)
 }
