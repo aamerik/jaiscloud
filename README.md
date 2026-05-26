@@ -179,7 +179,7 @@ Three steps: install, start, connect.
 brew tap jaisrajms/homebrew-tap && brew install --cask jaiscloud-aws
 
 # Docker (any platform)
-docker pull jaisrajms/jaiscloud-aws:latest
+docker pull jaisraj/jaiscloud-aws:latest
 
 # Or download a pre-built binary from the Releases page (no Go required)
 ```
@@ -260,7 +260,7 @@ A `checksums.txt` is published alongside every release for verification.
 ### Docker
 
 ```bash
-docker run -p 4566:4566 jaisrajms/jaiscloud-aws:latest
+docker run -p 4566:4566 jaisraj/jaiscloud-aws:latest
 ```
 
 ### Docker Compose (with Postgres persistence)
@@ -356,7 +356,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       jaiscloud:
-        image: jaisrajms/jaiscloud-aws:latest
+        image: jaisraj/jaiscloud-aws:latest
         ports:
           - 4566:4566
         env:
@@ -387,7 +387,7 @@ Add JaisCloud as a dependency in your `docker-compose.yml`:
 ```yaml
 services:
   jaiscloud:
-    image: jaisrajms/jaiscloud-aws:latest
+    image: jaisraj/jaiscloud-aws:latest
     ports:
       - "4566:4566"
     environment:

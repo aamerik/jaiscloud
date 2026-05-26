@@ -64,8 +64,8 @@ curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
 ### Running via Docker (no Go required)
 
 ```bash
-docker pull jaisrajms/jaiscloud-aws:latest
-docker run -p 4566:4566 jaisrajms/jaiscloud-aws:latest
+docker pull jaisraj/jaiscloud-aws:latest
+docker run -p 4566:4566 jaisraj/jaiscloud-aws:latest
 curl http://localhost:4566/_jaiscloud/health   # {"status":"ok"}
 ```
 
@@ -302,7 +302,7 @@ If Go is not installed or out of date: https://go.dev/dl/
 
 ### Required for PostgreSQL backend and Spark
 
-**Docker** — needed to run PostgreSQL (`--dsn`) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `jaisrajms/jaiscloud-aws:latest`.
+**Docker** — needed to run PostgreSQL (`--dsn`) and to load Spark images onto a local K8s cluster. You do **not** need Docker to build the JaisCloud image — the public image is available at `jaisraj/jaiscloud-aws:latest`.
 
 ```bash
 docker version
@@ -460,7 +460,7 @@ The repo includes a Docker Compose file that starts both PostgreSQL and JaisClou
 make up-docker
 ```
 
-This pulls `jaisrajms/jaiscloud-aws:latest`, starts PostgreSQL on port 5433, and starts JaisCloud on port 4566. Skip to the verify step.
+This pulls `jaisraj/jaiscloud-aws:latest`, starts PostgreSQL on port 5433, and starts JaisCloud on port 4566. Skip to the verify step.
 
 > **Using a locally built image?** Run `make docker-aws` first, then pass the image override: `JAISCLOUD_IMAGE=jaiscloud-aws:latest make up-docker`.
 
@@ -606,7 +606,7 @@ make up-k8s
 ```
 
 This runs in order:
-1. Pulls `jaisrajms/jaiscloud-aws:latest` from the GitHub Container Registry
+1. Pulls `jaisraj/jaiscloud-aws:latest` from the GitHub Container Registry
 2. Applies `deploy/k8s/namespace.yaml` — creates the `jaiscloud` namespace
 3. Applies `deploy/k8s/rbac.yaml` — grants JaisCloud permission to create Spark Jobs and Lambda Pods
 4. Applies `deploy/k8s/postgres.yaml` — starts a PostgreSQL pod
