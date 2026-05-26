@@ -103,19 +103,19 @@ nfpms:
 
   # Future: jaiscloud-azure and jaiscloud-gcp nfpm entries go here
 
-brews:
+homebrew_casks:
   - ids: [aws]
     name: jaiscloud-aws
     repository:
       owner: jaisrajms
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: https://github.com/jaisrajms/jaiscloud
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
 
-  # Future: add brews entries for jaiscloud-azure and jaiscloud-gcp
+  # Future: add homebrew_casks entries for jaiscloud-azure and jaiscloud-gcp
 
 scoops:
   - ids: [aws]
@@ -131,56 +131,24 @@ scoops:
   # Future: add scoops entries for jaiscloud-azure and jaiscloud-gcp
 
 # ── DOCKER IMAGES ──────────────────────────────────────────────────────────────
-# Builds per-arch images then combines them into a multi-arch manifest on Docker Hub.
+# Single dockers_v2 entry replaces the old dockers + docker_manifests pair.
+# Buildx handles linux/amd64 and linux/arm64 in one shot via the multi-stage Dockerfile.
 # Requires DOCKERHUB_USERNAME env var (set in release.yml) and prior `docker login`.
-dockers:
-  - id: jaiscloud-aws-amd64
-    ids: [jaiscloud-aws]
-    goos: linux
-    goarch: amd64
-    image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:latest-amd64"
+# TODO: once out of alpha, remove "latest" tag for prereleases by changing it to:
+#   "{{ if not .Prerelease }}latest{{ end }}"
+dockers_v2:
+  - images:
+      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
     dockerfile: Dockerfile.goreleaser
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.title=jaiscloud-aws"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.created={{ .Date }}"
-      - "--label=org.opencontainers.image.revision={{ .Commit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/jaisrajms/jaiscloud"
-
-  - id: jaiscloud-aws-arm64
-    ids: [jaiscloud-aws]
-    goos: linux
-    goarch: arm64
-    image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:{{ .Version }}-arm64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:latest-arm64"
-    dockerfile: Dockerfile.goreleaser
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.title=jaiscloud-aws"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.created={{ .Date }}"
-      - "--label=org.opencontainers.image.revision={{ .Commit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/jaisrajms/jaiscloud"
-
-docker_manifests:
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:{{ .Version }}"
-    image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:{{ .Version }}-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:{{ .Version }}-arm64"
-
-  # TODO: once out of alpha, guard this with skip_push: "{{ if .Prerelease }}true{{ end }}"
-  # so that rc/alpha/beta tags no longer overwrite latest on Docker Hub.
-  # For now we intentionally push latest on every release including prereleases.
-  - name_template: "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:latest"
-    image_templates:
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:latest-amd64"
-      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-aws:latest-arm64"
+    labels:
+      "org.opencontainers.image.title": "jaiscloud-aws"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.revision": "{{ .Commit }}"
+      "org.opencontainers.image.source": "https://github.com/jaisrajms/jaiscloud"
 
 checksum:
   name_template: "checksums.txt"

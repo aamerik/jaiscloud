@@ -1,5 +1,6 @@
 FROM gcr.io/distroless/static:nonroot
-COPY jaiscloud-aws /jaiscloud
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/jaiscloud-aws /jaiscloud
 EXPOSE 4566
 ENTRYPOINT ["/jaiscloud"]
 CMD ["start"]

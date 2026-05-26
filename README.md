@@ -176,7 +176,7 @@ Three steps: install, start, connect.
 
 ```bash
 # macOS
-brew tap jaisrajms/homebrew-tap && brew install jaiscloud-aws
+brew tap jaisrajms/homebrew-tap && brew install --cask jaiscloud-aws
 
 # Docker (any platform)
 docker pull jaisrajms/jaiscloud-aws:latest
@@ -215,7 +215,7 @@ aws dynamodb list-tables
 
 ```bash
 brew tap jaisrajms/homebrew-tap
-brew install jaiscloud-aws
+brew install --cask jaiscloud-aws
 jaiscloud-aws start
 ```
 

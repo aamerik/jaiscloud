@@ -23,7 +23,7 @@ You can run JaisCloud three ways — pick the one that fits your situation:
 **macOS (Homebrew)**
 ```bash
 brew tap jaisrajms/homebrew-tap
-brew install jaiscloud-aws
+brew install --cask jaiscloud-aws
 jaiscloud-aws start
 ```
 
