@@ -2,8 +2,7 @@ name: Build and Publish Images
 
 on:
   push:
-    branches: [main]
-    tags: ['v*.*.*']
+    branches: [main]  # tag releases are handled by GoReleaser in release.yml
 
 permissions:
   contents: read

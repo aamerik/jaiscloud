@@ -51,7 +51,7 @@ TEST_RUN ?= .
 IMAGE             := jaiscloud-aws
 # Public image used by up-docker and up-k8s. Override with a locally built image
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
-JAISCLOUD_IMAGE   ?= ghcr.io/jaisrajms/jaiscloud-aws:latest
+JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
 .PHONY: lint lint-pagination help build test docker clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \

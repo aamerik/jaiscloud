@@ -16,7 +16,7 @@ services:
       - jaiscloud
 
   jaiscloud:
-    image: ${JAISCLOUD_IMAGE:-ghcr.io/jaisrajms/jaiscloud-aws:latest}
+    image: ${JAISCLOUD_IMAGE:-jaisraj/jaiscloud-aws:latest}
     container_name: jaiscloud-server
     depends_on:
       postgres:
