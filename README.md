@@ -176,10 +176,10 @@ Three steps: install, start, connect.
 
 ```bash
 # macOS
-brew tap rjaiswal/tap && brew install jaiscloud-aws
+brew tap jaisrajms/homebrew-tap && brew install jaiscloud-aws
 
 # Docker (any platform)
-docker pull jaisraj/jaiscloud-aws:latest
+docker pull jaisrajms/jaiscloud-aws:latest
 
 # Or download a pre-built binary from the Releases page (no Go required)
 ```
@@ -214,7 +214,7 @@ aws dynamodb list-tables
 ### Homebrew (macOS)
 
 ```bash
-brew tap rjaiswal/tap
+brew tap jaisrajms/homebrew-tap
 brew install jaiscloud-aws
 jaiscloud-aws start
 ```
@@ -241,15 +241,17 @@ Pre-built binaries are published on the [GitHub Releases page](https://github.co
 | Windows arm64 | `jaiscloud-aws_<version>_windows_arm64.zip` |
 
 ```bash
-# macOS arm64
-curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_darwin_arm64.tar.gz
-tar -xzf jaiscloud-aws_darwin_arm64.tar.gz
+# Replace VERSION with the release version (e.g. 0.1.0) from the Releases page above.
+
+# macOS arm64 (Apple Silicon)
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/download/vVERSION/jaiscloud-aws_VERSION_darwin_arm64.tar.gz
+tar -xzf jaiscloud-aws_VERSION_darwin_arm64.tar.gz
 sudo mv jaiscloud-aws /usr/local/bin/
 jaiscloud-aws start
 
 # Linux amd64 (Debian/Ubuntu)
-curl -LO https://github.com/jaisrajms/jaiscloud/releases/latest/download/jaiscloud-aws_linux_amd64.deb
-sudo dpkg -i jaiscloud-aws_linux_amd64.deb
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/download/vVERSION/jaiscloud-aws_VERSION_linux_amd64.deb
+sudo dpkg -i jaiscloud-aws_VERSION_linux_amd64.deb
 jaiscloud-aws start
 ```
 
@@ -258,7 +260,7 @@ A `checksums.txt` is published alongside every release for verification.
 ### Docker
 
 ```bash
-docker run -p 4566:4566 jaisraj/jaiscloud-aws:latest
+docker run -p 4566:4566 jaisrajms/jaiscloud-aws:latest
 ```
 
 ### Docker Compose (with Postgres persistence)
@@ -354,9 +356,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       jaiscloud:
-        image: jaisraj/jaiscloud-aws:latest
+        image: jaisrajms/jaiscloud-aws:latest
         ports:
           - 4566:4566
+        env:
+          JAISCLOUD_EPHEMERAL: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -383,9 +387,11 @@ Add JaisCloud as a dependency in your `docker-compose.yml`:
 ```yaml
 services:
   jaiscloud:
-    image: jaisraj/jaiscloud-aws:latest
+    image: jaisrajms/jaiscloud-aws:latest
     ports:
       - "4566:4566"
+    environment:
+      JAISCLOUD_EPHEMERAL: "true"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4566/_jaiscloud/health"]
       interval: 2s
@@ -502,6 +508,8 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 | `/_jaiscloud/snapshot/{name}` | GET | Inspect snapshot metadata |
 | `/_jaiscloud/snapshot/{name}/revert` | POST | Revert to a named snapshot |
 | `/_jaiscloud/snapshot/{name}` | DELETE | Delete a named snapshot (`?yes=true` required) |
+| `/_jaiscloud/clock` | GET | Return current clock state `{"mode","time"}` |
+| `/_jaiscloud/clock` | POST | Set clock: `{"mode":"fixed","time":"..."}` / `{"mode":"offset","time":"..."}` / `{"mode":"real"}` |
 | `/metrics` | GET | Prometheus metrics (requires `--metrics`) |
 
 ---
@@ -554,6 +562,14 @@ sqsB.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("my-queue")})
 Any other access key (e.g. `"test"`, `"AKIAIOSFODNN7EXAMPLE"`) resolves to the server default account (`JAISCLOUD_ACCOUNT_ID`, default `000000000000`).
 
 For cross-account ARN routing, STS AssumeRole, and LSIA encoding details see the [Developer Guide](DEVELOPER_GUIDE.md).
+
+---
+
+## Star the Repo
+
+If JaisCloud saves you time, please consider **[starring the repository](https://github.com/jaisrajms/jaiscloud)**. Stars help other developers discover the project and show the community it's worth maintaining.
+
+[![GitHub Stars](https://img.shields.io/github/stars/jaisrajms/jaiscloud?style=social)](https://github.com/jaisrajms/jaiscloud)
 
 ---
 
