@@ -114,6 +114,12 @@ homebrew_casks:
     homepage: https://github.com/jaisrajms/jaiscloud
     description: "Local AWS cloud emulator — AWS wire-protocol compatible"
     license: Apache-2.0
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jaiscloud-aws"]
+          end
 
   # Future: add homebrew_casks entries for jaiscloud-azure and jaiscloud-gcp
 
