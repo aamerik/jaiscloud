@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JaisCloud — Free AWS Emulator | LocalStack Alternative</title>
+  <meta name="description" content="JaisCloud is a free, open-source AWS emulator. Single Go binary, zero runtime dependencies. Test S3, SQS, DynamoDB, Lambda, and 20+ AWS services locally. The best LocalStack alternative — Postgres persistence, real Spark/EMR, and Kubernetes support, all free.">
+  <meta name="keywords" content="aws emulator, localstack alternative, aws mock, local aws testing, dynamodb local, s3 emulator, sqs emulator, lambda local, cloud emulator, aws testing tool, go aws emulator, kubernetes aws emulator, free localstack alternative">
+  <meta name="author" content="Raj Jaiswal">
+  <meta name="robots" content="index, follow">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="JaisCloud — Free AWS Emulator | LocalStack Alternative">
+  <meta property="og:description" content="Test AWS apps locally. Single Go binary, zero dependencies. Free alternative to LocalStack with Postgres persistence, real Spark/EMR execution, and Kubernetes-native support.">
+  <meta property="og:url" content="https://jaiscloud.com">
+  <meta property="og:image" content="https://jaiscloud.com/images/jaiscloud-hero.png">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="JaisCloud — Free AWS Emulator">
+  <meta name="twitter:description" content="Single Go binary AWS emulator. No Python, no Docker required. Free LocalStack alternative with Postgres, snapshots, and real Spark/EMR.">
+  <meta name="twitter:image" content="https://jaiscloud.com/images/jaiscloud-hero.png">
+
+  <!-- Canonical -->
+  <link rel="canonical" href="https://jaiscloud.com">
+
+  <!-- JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "JaisCloud",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS, Windows",
+        "description": "Free, open-source AWS emulator. Single Go binary with zero runtime dependencies. Test S3, SQS, DynamoDB, Lambda, and 20+ AWS services locally without touching real AWS infrastructure.",
+        "url": "https://jaiscloud.com",
+        "downloadUrl": "https://github.com/jaisrajms/jaiscloud/releases",
+        "softwareVersion": "latest",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "programmingLanguage": "Go",
+        "codeRepository": "https://github.com/jaisrajms/jaiscloud",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "author": {
+          "@type": "Person",
+          "name": "Raj Jaiswal",
+          "url": "https://www.linkedin.com/in/jaisraj/"
+        },
+        "keywords": "aws emulator, localstack alternative, aws mock, dynamodb local, s3 emulator, sqs emulator, lambda local, cloud emulator"
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is JaisCloud?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "JaisCloud is a free, open-source AWS emulator written in Go. It lets developers test cloud applications locally without touching real AWS infrastructure. It ships as a single static binary with zero runtime dependencies — no Python, no Docker daemon required."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is JaisCloud a free LocalStack alternative?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. JaisCloud is a free LocalStack alternative. Features that LocalStack restricts to its paid Pro tier — Postgres persistence, named snapshots, Prometheus metrics, multi-account isolation — ship free in every JaisCloud build under Apache 2.0."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Which AWS services does JaisCloud emulate?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "JaisCloud supports S3, SQS, DynamoDB, SNS, Lambda, KMS, Secrets Manager, SSM Parameter Store, IAM, STS, EventBridge, CloudFormation, CloudWatch, Glue Data Catalog, EMR, EMR on EKS, API Gateway, Step Functions, Kinesis, EC2, Route53, RDS, ElastiCache, ECS, EKS, ECR, and more."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does JaisCloud require Docker to run?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. JaisCloud is a single static binary — just download and run it. Docker is only needed if you want to execute real Lambda container functions or run actual Spark jobs via Docker executor mode."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; background: #fff; line-height: 1.6; }
+    a { color: #0066cc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .nav { background: #0a0a0a; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; height: 56px; }
+    .nav-logo { color: #fff; font-weight: 700; font-size: 1.1rem; letter-spacing: -0.02em; }
+    .nav-links { display: flex; gap: 2rem; }
+    .nav-links a { color: #ccc; font-size: 0.9rem; }
+    .nav-links a:hover { color: #fff; text-decoration: none; }
+    .nav-cta { background: #f97316; color: #fff !important; padding: 0.4rem 1rem; border-radius: 6px; font-weight: 600; font-size: 0.85rem; }
+    .nav-cta:hover { background: #ea6b0e; text-decoration: none !important; }
+
+    .hero { background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%); color: #fff; padding: 5rem 2rem 4rem; text-align: center; }
+    .hero-badge { display: inline-block; background: rgba(249,115,22,0.15); border: 1px solid rgba(249,115,22,0.4); color: #f97316; font-size: 0.78rem; font-weight: 600; padding: 0.3rem 0.8rem; border-radius: 100px; margin-bottom: 1.5rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .hero h1 { font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 800; line-height: 1.15; letter-spacing: -0.03em; margin-bottom: 1.2rem; }
+    .hero h1 em { font-style: normal; color: #f97316; }
+    .hero p { font-size: 1.15rem; color: #aaa; max-width: 620px; margin: 0 auto 2.5rem; }
+    .hero-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-primary { background: #f97316; color: #fff; padding: 0.75rem 1.75rem; border-radius: 8px; font-weight: 700; font-size: 0.95rem; }
+    .btn-primary:hover { background: #ea6b0e; text-decoration: none; }
+    .btn-secondary { background: rgba(255,255,255,0.08); color: #fff; padding: 0.75rem 1.75rem; border-radius: 8px; font-weight: 600; font-size: 0.95rem; border: 1px solid rgba(255,255,255,0.15); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.14); text-decoration: none; }
+
+    .install-bar { background: #111; border-top: 1px solid #222; padding: 1.2rem 2rem; text-align: center; }
+    .install-bar code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.88rem; color: #7dd3fc; background: #1e293b; padding: 0.5rem 1.2rem; border-radius: 6px; }
+
+    .section { padding: 5rem 2rem; max-width: 1100px; margin: 0 auto; }
+    .section-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #f97316; margin-bottom: 0.75rem; }
+    .section h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; letter-spacing: -0.025em; margin-bottom: 1rem; }
+    .section .lead { font-size: 1.05rem; color: #555; max-width: 680px; margin-bottom: 3rem; }
+
+    .compare-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .compare-table th { background: #f8f8f8; padding: 0.75rem 1rem; text-align: left; font-weight: 700; border-bottom: 2px solid #e5e5e5; }
+    .compare-table th:first-child { width: 36%; }
+    .compare-table td { padding: 0.7rem 1rem; border-bottom: 1px solid #f0f0f0; }
+    .compare-table tr:hover td { background: #fafafa; }
+    .yes { color: #16a34a; font-weight: 700; }
+    .no { color: #9ca3af; }
+    .paid { color: #dc2626; }
+    .col-jaiscloud { background: rgba(249,115,22,0.04); }
+
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+    .feature-card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 1.5rem; }
+    .feature-card:hover { border-color: #f97316; box-shadow: 0 0 0 3px rgba(249,115,22,0.08); }
+    .feature-icon { font-size: 1.5rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .feature-card p { font-size: 0.88rem; color: #555; line-height: 1.55; }
+
+    .services-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.6rem; }
+    .service-tag { background: #f3f4f6; border-radius: 8px; padding: 0.5rem 0.85rem; font-size: 0.82rem; font-weight: 500; color: #374151; }
+    .service-tag.full { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+
+    .quickstart { background: #0a0a0a; color: #e2e8f0; border-radius: 16px; padding: 2rem; overflow-x: auto; }
+    .quickstart pre { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.85rem; line-height: 1.7; white-space: pre; }
+    .comment { color: #6b7280; }
+    .cmd { color: #7dd3fc; }
+    .str { color: #86efac; }
+
+    .faq-list { display: flex; flex-direction: column; gap: 1.2rem; max-width: 760px; }
+    .faq-item { border: 1px solid #e5e5e5; border-radius: 10px; padding: 1.2rem 1.5rem; }
+    .faq-item h3 { font-size: 0.98rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .faq-item p { font-size: 0.88rem; color: #555; line-height: 1.6; }
+
+    .cta-strip { background: linear-gradient(135deg, #f97316, #ea580c); color: #fff; padding: 4rem 2rem; text-align: center; }
+    .cta-strip h2 { font-size: 2rem; font-weight: 800; margin-bottom: 0.75rem; letter-spacing: -0.02em; }
+    .cta-strip p { font-size: 1rem; opacity: 0.85; margin-bottom: 2rem; }
+    .btn-white { background: #fff; color: #ea580c; padding: 0.75rem 1.75rem; border-radius: 8px; font-weight: 700; font-size: 0.95rem; }
+    .btn-white:hover { background: #fef3c7; text-decoration: none; }
+
+    footer { background: #0a0a0a; color: #666; padding: 2rem; text-align: center; font-size: 0.82rem; }
+    footer a { color: #888; }
+
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .compare-table { font-size: 0.78rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav class="nav">
+  <span class="nav-logo">JaisCloud</span>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#services">Services</a>
+    <a href="#compare">vs LocalStack</a>
+    <a href="#quickstart">Quick Start</a>
+    <a href="https://github.com/jaisrajms/jaiscloud/blob/main/DEVELOPER_GUIDE.md">Docs</a>
+  </div>
+  <a href="https://github.com/jaisrajms/jaiscloud" class="nav-cta">GitHub</a>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-badge">Free &amp; Open Source · Apache 2.0</div>
+  <h1>The <em>AWS Emulator</em> that<br>actually runs locally</h1>
+  <p>Single Go binary. Zero runtime dependencies. Test S3, SQS, DynamoDB, Lambda, and 20+ AWS services on your laptop, in CI, or on Kubernetes — without touching real AWS.</p>
+  <div class="hero-actions">
+    <a href="#quickstart" class="btn-primary">Get Started Free</a>
+    <a href="https://github.com/jaisrajms/jaiscloud" class="btn-secondary">View on GitHub</a>
+  </div>
+</section>
+
+<!-- Install bar -->
+<div class="install-bar">
+  <code>brew tap jaisrajms/homebrew-tap &amp;&amp; brew install --cask jaiscloud-aws &amp;&amp; jaiscloud-aws start</code>
+</div>
+
+<!-- Features -->
+<section class="section" id="features">
+  <div class="section-label">Why JaisCloud</div>
+  <h2>Everything you need. Nothing you don't.</h2>
+  <p class="lead">JaisCloud is a free AWS emulator built for developer velocity. One binary. No subscriptions. No dependencies. Real wire protocols so your existing SDK code works unmodified.</p>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">⚡</div>
+      <h3>Single Static Binary</h3>
+      <p>Download one file and start emulating AWS. No Python runtime, no Docker daemon, no pip install. Works on macOS, Linux, and Windows out of the box.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔌</div>
+      <h3>Exact AWS Wire Protocols</h3>
+      <p>Implements the real AWS wire protocols — Query/XML, JSON/Target, REST/XML, REST/JSON — so any AWS SDK points at JaisCloud with zero code changes.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💾</div>
+      <h3>Postgres Persistence (Free)</h3>
+      <p>Durable state in PostgreSQL at no cost. LocalStack charges for this in Pro. Pass <code>--dsn</code> and every resource survives restarts, deployments, and CI re-runs.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📦</div>
+      <h3>State Snapshots</h3>
+      <p>Export full emulator state to a single tarball, import it on any machine in milliseconds. Share a production-like baseline across your team with one file.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔥</div>
+      <h3>Real Spark &amp; EMR Execution</h3>
+      <p>Submit an EMR job and JaisCloud actually runs it — on Kubernetes or Docker. Catch serialization bugs and memory pressure locally before they hit CI.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">☸️</div>
+      <h3>Kubernetes-Native</h3>
+      <p>Lambda functions run as real K8s pods. EMR jobs submit as <code>batch/v1 Jobs</code>. JaisCloud is built for teams that deploy on Kubernetes, not just laptops.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">👥</div>
+      <h3>Multi-Account Isolation</h3>
+      <p>Full per-account resource isolation. Test cross-account IAM policies, STS AssumeRole, and ARN scoping locally — free, no Pro tier required.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Prometheus Metrics</h3>
+      <p>Expose emulator metrics at <code>/metrics</code> with <code>--metrics</code>. Drop into any Grafana dashboard or CI alerting pipeline. Zero config, zero cost.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Comparison -->
+<section class="section" id="compare" style="background: #fafafa; max-width: 100%; padding-left: 2rem; padding-right: 2rem;">
+  <div style="max-width: 1100px; margin: 0 auto;">
+    <div class="section-label">JaisCloud vs LocalStack</div>
+    <h2>Stop paying for features that should be free</h2>
+    <p class="lead">LocalStack Community Edition gates core features behind a paid Pro subscription. JaisCloud ships all of them under Apache 2.0 — no tiers, no license keys, no usage limits.</p>
+
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th class="col-jaiscloud">JaisCloud</th>
+          <th>LocalStack Community</th>
+          <th>LocalStack Pro</th>
+          <th>Moto</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Single static binary</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">❌ Python + Docker</td><td class="no">❌ Python + Docker</td><td class="no">❌ Python library</td></tr>
+        <tr><td><strong>Zero runtime dependencies</strong></td><td class="col-jaiscloud yes">✅</td><td class="no">❌</td><td class="no">❌</td><td class="no">❌</td></tr>
+        <tr><td><strong>Postgres persistence</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
+        <tr><td><strong>State export / import</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
+        <tr><td><strong>Named snapshots</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
+        <tr><td><strong>Multi-account isolation</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">Partial</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
+        <tr><td><strong>Prometheus metrics</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
+        <tr><td><strong>Real Spark / EMR execution</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
+        <tr><td><strong>Apache Iceberg (Glue)</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
+        <tr><td><strong>Kubernetes-native executor</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">Partial</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
+        <tr><td><strong>Exact AWS wire protocol</strong></td><td class="col-jaiscloud yes">✅</td><td class="yes">✅</td><td class="yes">✅</td><td class="no">Partial</td></tr>
+        <tr><td><strong>Written in Go</strong></td><td class="col-jaiscloud yes">✅</td><td class="no">❌</td><td class="no">❌</td><td class="no">❌</td></tr>
+        <tr><td><strong>License</strong></td><td class="col-jaiscloud">Apache-2.0</td><td>Apache-2.0</td><td>Proprietary</td><td>Apache-2.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Services -->
+<section class="section" id="services">
+  <div class="section-label">AWS Services</div>
+  <h2>20+ AWS services, fully emulated</h2>
+  <p class="lead">Full wire protocol implementations with real business logic, tested against the AWS SDK integration suite.</p>
+
+  <h3 style="font-size:0.85rem; font-weight:700; color:#166534; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem;">Full Implementations</h3>
+  <div class="services-grid" style="margin-bottom:2rem;">
+    <span class="service-tag full">Amazon S3</span>
+    <span class="service-tag full">Amazon SQS</span>
+    <span class="service-tag full">Amazon DynamoDB</span>
+    <span class="service-tag full">Amazon SNS</span>
+    <span class="service-tag full">Amazon EventBridge</span>
+    <span class="service-tag full">AWS Lambda</span>
+    <span class="service-tag full">AWS IAM + STS</span>
+    <span class="service-tag full">AWS KMS</span>
+    <span class="service-tag full">AWS Secrets Manager</span>
+    <span class="service-tag full">AWS SSM Parameter Store</span>
+    <span class="service-tag full">AWS API Gateway</span>
+    <span class="service-tag full">AWS CloudFormation</span>
+    <span class="service-tag full">Amazon CloudWatch + Logs</span>
+    <span class="service-tag full">AWS Glue Data Catalog</span>
+    <span class="service-tag full">Amazon EMR on EC2</span>
+    <span class="service-tag full">Amazon EMR on EKS</span>
+    <span class="service-tag full">Amazon Kinesis</span>
+    <span class="service-tag full">AWS Step Functions</span>
+  </div>
+
+  <h3 style="font-size:0.85rem; font-weight:700; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem;">Metadata &amp; CRUD</h3>
+  <div class="services-grid">
+    <span class="service-tag">Amazon EC2</span>
+    <span class="service-tag">Amazon Route 53</span>
+    <span class="service-tag">Amazon RDS</span>
+    <span class="service-tag">Amazon ElastiCache</span>
+    <span class="service-tag">Amazon ECS</span>
+    <span class="service-tag">Amazon EKS</span>
+    <span class="service-tag">Amazon ELBv2</span>
+    <span class="service-tag">Amazon ECR</span>
+    <span class="service-tag">Amazon Redshift</span>
+    <span class="service-tag">Amazon Athena</span>
+    <span class="service-tag">AWS Config</span>
+    <span class="service-tag">Kinesis Firehose</span>
+  </div>
+</section>
+
+<!-- Quick Start -->
+<section class="section" id="quickstart" style="background: #fafafa; max-width:100%; padding-left:2rem; padding-right:2rem;">
+  <div style="max-width:1100px; margin:0 auto;">
+    <div class="section-label">Quick Start</div>
+    <h2>Up and running in 60 seconds</h2>
+    <p class="lead">Install, start, and point your AWS SDK at JaisCloud. No configuration files, no credentials setup beyond a dummy key.</p>
+
+    <div class="quickstart">
+      <pre><span class="comment"># Install on macOS</span>
+<span class="cmd">brew tap</span> jaisrajms/homebrew-tap
+<span class="cmd">brew install</span> --cask jaiscloud-aws
+
+<span class="comment"># Or pull the Docker image</span>
+<span class="cmd">docker run</span> -p 4566:4566 jaisraj/jaiscloud-aws:latest
+
+<span class="comment"># Start the AWS emulator</span>
+<span class="cmd">jaiscloud-aws start</span>
+<span class="comment"># Listening on http://localhost:4566</span>
+
+<span class="comment"># Point any AWS SDK at JaisCloud — set once, all calls route automatically</span>
+<span class="cmd">export</span> AWS_ENDPOINT_URL=http://localhost:4566
+<span class="cmd">export</span> AWS_REGION=us-east-1
+<span class="cmd">export</span> AWS_ACCESS_KEY_ID=test
+<span class="cmd">export</span> AWS_SECRET_ACCESS_KEY=test
+
+<span class="comment"># Use exactly as you would with real AWS</span>
+<span class="cmd">aws s3 mb</span> s3://my-bucket
+<span class="cmd">aws sqs create-queue</span> --queue-name my-queue
+<span class="cmd">aws dynamodb list-tables</span>
+<span class="cmd">aws lambda invoke</span> --function-name my-fn output.json</pre>
+    </div>
+
+    <h3 style="margin-top:2.5rem; margin-bottom:1rem; font-size:1.1rem;">GitHub Actions (CI/CD)</h3>
+    <div class="quickstart">
+      <pre><span class="comment"># .github/workflows/test.yml</span>
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      jaiscloud:
+        image: jaisraj/jaiscloud-aws:latest
+        ports: [<span class="str">"4566:4566"</span>]
+        env:
+          JAISCLOUD_EPHEMERAL: <span class="str">"true"</span>
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for AWS emulator
+        run: until curl -sf http://localhost:4566/_jaiscloud/health; do sleep 1; done
+      - name: Run tests
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: go test ./...</pre>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="section" id="faq">
+  <div class="section-label">FAQ</div>
+  <h2>Frequently asked questions</h2>
+  <div class="faq-list">
+    <div class="faq-item">
+      <h3>Is JaisCloud really free? What's the catch?</h3>
+      <p>No catch. JaisCloud is Apache 2.0 open source. Every feature — Postgres persistence, snapshots, multi-account isolation, Prometheus metrics, Spark/EMR — ships in the free binary. There is no Pro tier, no license key, and no usage limit.</p>
+    </div>
+    <div class="faq-item">
+      <h3>How does JaisCloud compare to LocalStack?</h3>
+      <p>JaisCloud is a free LocalStack alternative built in Go. It ships as a single static binary (no Python, no Docker daemon), implements the actual AWS wire protocols, and includes features LocalStack gates behind its paid Pro tier for free. The key differentiator is real Spark/EMR execution — LocalStack simulates compute, JaisCloud actually runs the job.</p>
+    </div>
+    <div class="faq-item">
+      <h3>Can I use my existing AWS SDK code without changes?</h3>
+      <p>Yes. JaisCloud implements the exact AWS wire protocols, so any AWS SDK — Go, Python (boto3), Java, Node.js, .NET, Rust — works unmodified. Set <code>AWS_ENDPOINT_URL=http://localhost:4566</code> and your code routes to JaisCloud automatically.</p>
+    </div>
+    <div class="faq-item">
+      <h3>Does it work in GitHub Actions and Docker?</h3>
+      <p>Yes. Pull <code>jaisraj/jaiscloud-aws:latest</code> as a service container in GitHub Actions or add it to your <code>docker-compose.yml</code>. The health endpoint <code>/_jaiscloud/health</code> lets you wait for readiness before running tests.</p>
+    </div>
+    <div class="faq-item">
+      <h3>How do I persist state between test runs?</h3>
+      <p>By default JaisCloud saves state to <code>~/.jaiscloud/state.json</code> every 5 minutes and reloads it on startup. For durable persistence, pass <code>--dsn "postgres://..."</code>. For CI where you want a clean slate, use <code>--ephemeral</code> or call <code>POST /_jaiscloud/reset</code> between test suites.</p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-strip">
+  <h2>Start emulating AWS locally today</h2>
+  <p>Free. Open source. One binary. No subscription, no setup scripts, no Docker daemon.</p>
+  <a href="https://github.com/jaisrajms/jaiscloud" class="btn-white">View on GitHub →</a>
+</section>
+
+<!-- Footer -->
+<footer>
+  <p style="margin-bottom:0.5rem;">
+    <a href="https://github.com/jaisrajms/jaiscloud">GitHub</a> ·
+    <a href="https://github.com/jaisrajms/jaiscloud/releases">Releases</a> ·
+    <a href="https://github.com/jaisrajms/jaiscloud/blob/main/DEVELOPER_GUIDE.md">Docs</a> ·
+    <a href="https://github.com/jaisrajms/jaiscloud/issues">Issues</a> ·
+    <a href="https://github.com/jaisrajms/jaiscloud/blob/main/LICENSE">Apache 2.0</a>
+  </p>
+  <p>JaisCloud — Free AWS Emulator. LocalStack alternative. Built with Go.</p>
+</footer>
+
+</body>
+</html>

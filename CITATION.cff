@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use JaisCloud in your research or tooling, please cite it as below."
+type: software
+title: "JaisCloud — Free AWS Emulator"
+abstract: >
+  JaisCloud is a free, open-source AWS emulator written in Go. It implements
+  the exact AWS wire protocols (Query/XML, JSON/Target, REST/XML, REST/JSON)
+  so any AWS SDK points at a local instance without code changes. Key features
+  include a single static binary with zero runtime dependencies, PostgreSQL
+  persistence, state snapshots, real Spark/EMR execution via Kubernetes or
+  Docker, multi-account isolation, and Prometheus metrics — all free under
+  Apache 2.0.
+authors:
+  - family-names: Jaiswal
+    given-names: Raj
+    orcid: ""
+    email: jaisraj@gmail.com
+repository-code: "https://github.com/jaisrajms/jaiscloud"
+url: "https://jaiscloud.com"
+license: Apache-2.0
+keywords:
+  - aws emulator
+  - localstack alternative
+  - aws mock
+  - cloud emulator
+  - aws testing
+  - dynamodb local
+  - s3 emulator
+  - sqs emulator
+  - lambda local
+  - golang
+  - kubernetes

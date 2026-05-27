@@ -1,15 +1,15 @@
 # JaisCloud
 
 <p align="center">
-  <img src="docs/images/jaiscloud-hero.png" alt="JaisCloud — AI Agent to multi-cloud emulation" width="100%"/>
+  <img src="docs/images/jaiscloud-hero.png" alt="JaisCloud — AI Agent to multi-cloud (AWS, Azure, GCP) emulation" width="100%"/>
 </p>
 
 > **Early Development Notice**
 > JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
 
-**JaisCloud — Fast, local cloud emulation for developers and CI. Runs anywhere: laptop, CI, or Kubernetes.**
+**JaisCloud — Free AWS emulator for developers and CI. Single Go binary. Runs anywhere: laptop, CI, or Kubernetes.**
 
-JaisCloud is a free, open-source cloud emulator that lets developers test cloud-dependent applications without touching real cloud infrastructure. It implements the exact wire protocols each cloud uses — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified.
+JaisCloud is a free, open-source AWS emulator that lets developers test AWS applications locally without touching real cloud infrastructure. It implements the exact AWS wire protocols — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified. Use it as a drop-in LocalStack alternative with zero runtime dependencies.
 
 **One binary per cloud.** Each binary is fully self-contained. There is no `--cloud` flag.
 

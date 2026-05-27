@@ -45,3 +45,6 @@ vendor/
 
 #Jar files
 *.jar
+
+# Local SEO / personal notes (not for repo)
+SEO_NEXT_STEPS.md
