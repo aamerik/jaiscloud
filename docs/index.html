@@ -129,15 +129,7 @@
     .section h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; letter-spacing: -0.025em; margin-bottom: 1rem; }
     .section .lead { font-size: 1.05rem; color: #555; max-width: 680px; margin-bottom: 3rem; }
 
-    .compare-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-    .compare-table th { background: #f8f8f8; padding: 0.75rem 1rem; text-align: left; font-weight: 700; border-bottom: 2px solid #e5e5e5; }
-    .compare-table th:first-child { width: 36%; }
-    .compare-table td { padding: 0.7rem 1rem; border-bottom: 1px solid #f0f0f0; }
-    .compare-table tr:hover td { background: #fafafa; }
     .yes { color: #16a34a; font-weight: 700; }
-    .no { color: #9ca3af; }
-    .paid { color: #dc2626; }
-    .col-jaiscloud { background: rgba(249,115,22,0.04); }
 
     .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
     .feature-card { border: 1px solid #e5e5e5; border-radius: 12px; padding: 1.5rem; }
@@ -184,8 +176,7 @@
   <div class="nav-links">
     <a href="#features">Features</a>
     <a href="#services">Services</a>
-    <a href="#compare">vs LocalStack</a>
-    <a href="#quickstart">Quick Start</a>
+<a href="#quickstart">Quick Start</a>
     <a href="https://github.com/jaisrajms/jaiscloud/blob/main/DEVELOPER_GUIDE.md">Docs</a>
   </div>
   <a href="https://github.com/jaisrajms/jaiscloud" class="nav-cta">GitHub</a>
@@ -254,42 +245,6 @@
       <h3>Prometheus Metrics</h3>
       <p>Expose emulator metrics at <code>/metrics</code> with <code>--metrics</code>. Drop into any Grafana dashboard or CI alerting pipeline. Zero config, zero cost.</p>
     </div>
-  </div>
-</section>
-
-<!-- Comparison -->
-<section class="section" id="compare" style="background: #fafafa; max-width: 100%; padding-left: 2rem; padding-right: 2rem;">
-  <div style="max-width: 1100px; margin: 0 auto;">
-    <div class="section-label">JaisCloud vs LocalStack</div>
-    <h2>Stop paying for features that should be free</h2>
-    <p class="lead">LocalStack Community Edition gates core features behind a paid Pro subscription. JaisCloud ships all of them under Apache 2.0 — no tiers, no license keys, no usage limits.</p>
-
-    <table class="compare-table">
-      <thead>
-        <tr>
-          <th>Feature</th>
-          <th class="col-jaiscloud">JaisCloud</th>
-          <th>LocalStack Community</th>
-          <th>LocalStack Pro</th>
-          <th>Moto</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td><strong>Single static binary</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">❌ Python + Docker</td><td class="no">❌ Python + Docker</td><td class="no">❌ Python library</td></tr>
-        <tr><td><strong>Zero runtime dependencies</strong></td><td class="col-jaiscloud yes">✅</td><td class="no">❌</td><td class="no">❌</td><td class="no">❌</td></tr>
-        <tr><td><strong>Postgres persistence</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
-        <tr><td><strong>State export / import</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
-        <tr><td><strong>Named snapshots</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
-        <tr><td><strong>Multi-account isolation</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">Partial</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
-        <tr><td><strong>Prometheus metrics</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
-        <tr><td><strong>Real Spark / EMR execution</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
-        <tr><td><strong>Apache Iceberg (Glue)</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">—</td><td class="no">—</td><td class="no">❌</td></tr>
-        <tr><td><strong>Kubernetes-native executor</strong></td><td class="col-jaiscloud yes">✅ Free</td><td class="no">Partial</td><td class="paid">💰 Paid</td><td class="no">❌</td></tr>
-        <tr><td><strong>Exact AWS wire protocol</strong></td><td class="col-jaiscloud yes">✅</td><td class="yes">✅</td><td class="yes">✅</td><td class="no">Partial</td></tr>
-        <tr><td><strong>Written in Go</strong></td><td class="col-jaiscloud yes">✅</td><td class="no">❌</td><td class="no">❌</td><td class="no">❌</td></tr>
-        <tr><td><strong>License</strong></td><td class="col-jaiscloud">Apache-2.0</td><td>Apache-2.0</td><td>Proprietary</td><td>Apache-2.0</td></tr>
-      </tbody>
-    </table>
   </div>
 </section>
 
