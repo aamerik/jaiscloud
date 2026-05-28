@@ -21,26 +21,6 @@ JaisCloud is a free, open-source AWS emulator that lets developers test AWS appl
 
 ---
 
-## Why JaisCloud?
-
-| | JaisCloud | LocalStack (Community) | Moto |
-|---|---|---|---|
-| **Single static binary** | ✅ | ❌ (Python + Docker) | ❌ (Python library) |
-| **Zero runtime deps** | ✅ | ❌ | ❌ |
-| **Postgres persistence** | ✅ | 💰 Pro | ❌ |
-| **Exact AWS wire protocol** | ✅ | ✅ | Partial |
-| **Kubernetes-native** | ✅ | Partial | ❌ |
-| **State export / import** | ✅ | ❌ | ❌ |
-| **Prometheus metrics** | ✅ | 💰 Pro | ❌ |
-| **Spark / EMR real execution** | ✅ | ❌ | ❌ |
-| **Apache Iceberg (Glue Catalog)** | ✅ | ❌ | ❌ |
-| **Written in Go** | ✅ | ❌ | ❌ |
-| **Multi-account isolation** | ✅ | Partial | ❌ |
-| **Multi Cloud** | &#x231B; | Partial | ❌ |
-| **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 |
-
----
-
 ## Key Features
 
 ### Portable State Snapshots
@@ -107,21 +87,6 @@ JAISCLOUD_EXECUTOR_MODE=docker jaiscloud-aws start
 ---
 
 ### Everything Free — No Subscription Required
-
-Features that comparable tools restrict to paid tiers ship in every JaisCloud build:
-
-| Feature | JaisCloud | LocalStack Community | LocalStack Pro |
-|---|---|---|---|
-| PostgreSQL persistence | Free | — | Paid |
-| State export / import | Free | — | — |
-| Named snapshots | Free | — | — |
-| Multi-account isolation | Free | Partial | Paid |
-| Prometheus metrics | Free | — | Paid |
-| Browser UI Console | Free (coming) | — | Paid |
-| Spark / EMR execution | Free | — | — |
-| Apache Iceberg (Glue) | Free | — | — |
-| Kubernetes-native executor | Free | Partial | Paid |
-| Single static binary | Free | — | — |
 
 JaisCloud has no tiers, no license keys, and no usage limits. Every feature in this table is Apache-2.0 open-source.
 
