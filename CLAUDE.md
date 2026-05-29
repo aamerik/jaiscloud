@@ -15,7 +15,7 @@ Every cloud has its own adapter, its own provider implementations, and its own e
 
 ```
 module jaiscloud   # go.mod
-go 1.26.2
+go 1.26.3
 ```
 
 ---
