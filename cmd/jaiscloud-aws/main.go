@@ -58,7 +58,6 @@ import (
 
 	// G-PENDING new providers
 	"jaiscloud/internal/adapter"
-	ui "jaiscloud/internal/aws/ui"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/clock"
 	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
@@ -304,37 +303,6 @@ func startCmd() *cobra.Command {
 				loop.Start(loopCtx)
 				prevCleanup4 := cleanup
 				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup4() }
-			}
-
-			var uiServer *ui.UIServer
-			if cfg.UIEnabled {
-				uiProviders := &ui.AWSProviders{
-					Queue:    app.QueueP,
-					Function: app.FuncP,
-					Logs:     app.LogsP,
-				}
-				var uiErr error
-				uiServer, uiErr = ui.New(uiProviders, adminHandler, cfg, app.Bus, version)
-				if uiErr != nil {
-					slog.Warn("ui server init failed", "err", uiErr)
-				} else if uiServer != nil {
-					go func() {
-						addr := fmt.Sprintf(":%d", cfg.UIPort)
-						if err := uiServer.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
-							slog.Warn("ui server stopped", "err", err)
-						}
-					}()
-					if cfg.UIOpen {
-						ui.OpenBrowser(fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
-					}
-					prevCleanup5 := cleanup
-					cleanup = func() {
-						shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						defer cancel()
-						_ = uiServer.Shutdown(shutCtx)
-						prevCleanup5()
-					}
-				}
 			}
 
 			srv := gateway.NewServer(cfg, adminHandler, app.Registry, cloudAdapter, certs, gatewayOpts...)
@@ -792,10 +760,6 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		k8sExec.SetCodeLoader(funcP)
 		k8sExec.SetLogsAPI(logsProvider)
 	}
-	// Wire CW Logs ingestor into FunctionProvider so all invocations (including mock)
-	// write START/END/REPORT platform logs to /aws/lambda/{name}.
-	funcP.SetLogsAPI(logsProvider)
-
 	// Wire ECS executor.
 	ecsMode, _ := config.ExecutorMode("ecs", "mock")
 	var ecsExec ecsexec.Executor
