@@ -3,6 +3,7 @@ package gcp
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -61,18 +62,22 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		} else {
 			nr.Action = "BucketsList"
 		}
-		if m := parseJSON(body); m != nil {
-			nr.Params["body"] = m
+		m, err := parseJSON(body)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 		}
+		nr.Params["body"] = m
 	case len(seg) == 2 && seg[0] == "b":
 		// /b/{bucket}
 		nr.Params["bucket"] = seg[1]
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
 			nr.Action = "BucketsUpdate"
-			if m := parseJSON(body); m != nil {
-				nr.Params["body"] = m
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
+			nr.Params["body"] = m
 		case http.MethodDelete:
 			nr.Action = "BucketsDelete"
 		default:
@@ -83,9 +88,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		nr.Params["bucket"] = seg[1]
 		if r.Method == http.MethodPut {
 			nr.Action = "BucketsSetIamPolicy"
-			if m := parseJSON(body); m != nil {
-				nr.Params["body"] = m
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
+			nr.Params["body"] = m
 		} else {
 			nr.Action = "BucketsGetIamPolicy"
 		}
@@ -94,9 +101,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		nr.Params["bucket"] = seg[1]
 		if r.Method == http.MethodPost {
 			nr.Action = "BucketACLInsert"
-			if m := parseJSON(body); m != nil {
-				nr.Params["body"] = m
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
+			nr.Params["body"] = m
 		} else {
 			nr.Action = "BucketACLList"
 		}
@@ -106,9 +115,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		nr.Params["object"] = strings.Join(seg[3:len(seg)-1], "/")
 		if r.Method == http.MethodPost {
 			nr.Action = "ObjectACLInsert"
-			if m := parseJSON(body); m != nil {
-				nr.Params["body"] = m
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
+			nr.Params["body"] = m
 		} else {
 			nr.Action = "ObjectACLList"
 		}
@@ -120,9 +131,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 			// /b/{bucket}/o — object list (GET) or JSON-metadata insert (POST)
 			if r.Method == http.MethodPost {
 				nr.Action = "ObjectsInsert"
-				if m := parseJSON(body); m != nil {
-					nr.Params["body"] = m
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 				}
+				nr.Params["body"] = m
 			} else {
 				nr.Action = "ObjectsList"
 			}
@@ -134,9 +147,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 				nr.Action = "ObjectsDelete"
 			case http.MethodPut, http.MethodPatch, http.MethodPost:
 				nr.Action = "ObjectsUpdate"
-				if m := parseJSON(body); m != nil {
-					nr.Params["body"] = m
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 				}
+				nr.Params["body"] = m
 			default:
 				// alt=media → raw bytes; otherwise JSON metadata
 				if nr.Params["alt"] == "media" {
@@ -173,7 +188,12 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 	switch uploadType {
 	case "media":
 		nr.Action = "ObjectsInsert"
-		nr.Params[wire.MediaKey] = body
+		if body == nil {
+			// Streaming upload — the gateway left r.Body unread.
+			nr.Params[wire.StreamKey] = r.Body
+		} else {
+			nr.Params[wire.MediaKey] = body
+		}
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			nr.Params[wire.ContentTypeKey] = ct
 		}
@@ -191,9 +211,11 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 			}
 		} else {
 			nr.Action = "ObjectsInsertStartResumable"
-			if m := parseJSON(body); m != nil {
-				nr.Params["body"] = m
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
 			}
+			nr.Params["body"] = m
 			// The object content type is declared once at start via the
 			// X-Upload-Content-Type header (the chunk's Content-Type on PUT is
 			// the media type, not the object content type).
@@ -230,6 +252,14 @@ func (c *GCSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 
 	if rng, ok := resp.Data[wire.RangeKey].(string); ok && rng != "" {
 		headers.Set("Range", rng)
+		return status, headers, nil
+	}
+
+	// Streaming download — the gateway will io.Copy the reader; return headers only.
+	if _, ok := resp.Data["_stream"].(io.ReadCloser); ok {
+		if ct, _ := resp.Data[wire.ContentTypeKey].(string); ct != "" {
+			headers.Set("Content-Type", ct)
+		}
 		return status, headers, nil
 	}
 
@@ -282,6 +312,8 @@ func gcpReason(code string) string {
 		return "notFound"
 	case "AlreadyExists":
 		return "alreadyExists"
+	case "bucketNotEmpty":
+		return "bucketNotEmpty"
 	case "Conflict":
 		return "conflict"
 	case "InvalidRequest":
@@ -350,15 +382,15 @@ func queryToParams(r *http.Request, params map[string]any) {
 // parseJSON decodes a JSON body into a map, or returns nil for empty/JSON bodies
 // that are not objects (e.g. media). Never returns an error — decode failures
 // are surfaced by the provider as validation errors.
-func parseJSON(body []byte) map[string]any {
+func parseJSON(body []byte) (map[string]any, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
-		return nil
+		return nil, nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
-		return nil
+		return nil, err
 	}
-	return m
+	return m, nil
 }
 
 // parseMultipart decodes a multipart/related upload body (JSON metadata part
@@ -381,8 +413,12 @@ func parseMultipart(r *http.Request, body []byte, params map[string]any) error {
 		}
 		data := buf.Bytes()
 		if partIdx == 0 {
-			if m := parseJSON(data); m != nil {
-				params["body"] = m
+			m, err := parseJSON(data)
+			if err != nil {
+				return model.NewProviderError("InvalidRequest", "malformed JSON metadata", 400)
+			}
+			params["body"] = m
+			if m != nil {
 				if n, ok := m["name"].(string); ok && n != "" {
 					params["object"] = n
 				}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"net/url"
 	"sort"
 	"strconv"
@@ -37,6 +38,9 @@ const (
 // blobsNamespace is the BlobStore namespace ("bucket") used for GCS object bytes.
 const blobsNamespace = "gcs"
 
+// maxUploadSessions caps concurrent resumable-upload sessions (DoS guard).
+const maxUploadSessions = 1000
+
 // Provider implements the GCS JSON + media API.
 type Provider struct {
 	resources store.ResourceStore
@@ -59,12 +63,38 @@ type uploadSession struct {
 
 // New returns a GCS provider backed by the given metadata and blob stores.
 func New(resources store.ResourceStore, blobs blobfs.BlobStore) *Provider {
-	return &Provider{
+	p := &Provider{
 		resources: resources,
 		blobs:     blobs,
 		uploads:   make(map[string]*uploadSession),
 		gen:       clock.Now().UnixNano(),
 	}
+	p.seedGeneration(context.Background())
+	return p
+}
+
+// seedGeneration bumps the generation counter past the highest stored
+// generation so generations remain monotonic across restarts (--dsn).
+func (p *Provider) seedGeneration(ctx context.Context) {
+	entries, err := p.resources.List(ctx, "", "", rtObject, "")
+	if err != nil {
+		return
+	}
+	var maxGen int64
+	for _, e := range entries {
+		var o objectMeta
+		if json.Unmarshal(e.Data, &o) != nil {
+			continue
+		}
+		if g, err := strconv.ParseInt(o.Generation, 10, 64); err == nil && g > maxGen {
+			maxGen = g
+		}
+	}
+	p.genMu.Lock()
+	if maxGen >= p.gen {
+		p.gen = maxGen
+	}
+	p.genMu.Unlock()
 }
 
 // nextGen returns a unique, monotonically-increasing object generation.
@@ -235,13 +265,17 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
-	// A non-empty bucket cannot be deleted (409), matching real GCS.
+	// A non-empty bucket cannot be deleted (409), matching real GCS. The store's
+	// List prefix is a substring match, so filter to the true "name/" prefix to
+	// avoid counting objects from sibling buckets whose names contain "name/".
 	objects, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtObject, name+"/")
 	if err != nil {
 		return nil, err
 	}
-	if len(objects) > 0 {
-		return nil, model.NewProviderError("Conflict", "bucket is not empty", 409)
+	for _, e := range objects {
+		if strings.HasPrefix(e.ID, name+"/") {
+			return nil, model.NewProviderError("bucketNotEmpty", "bucket is not empty", 409)
+		}
 	}
 	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtBucket, name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -264,6 +298,15 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
+	// The store's List prefix is a substring match; keep only true "bucket/"
+	// prefixed IDs so sibling buckets (e.g. "abkt") don't leak in.
+	filtered := entries[:0]
+	for _, e := range entries {
+		if strings.HasPrefix(e.ID, prefix) {
+			filtered = append(filtered, e)
+		}
+	}
+	entries = filtered
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 
 	pfx, _ := nr.Params["prefix"].(string)
@@ -303,13 +346,13 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	}
 
 	// No delimiter: prefix filter + pagination.
-	filtered := entries[:0]
+	pfxFiltered := entries[:0]
 	for _, e := range entries {
 		if pfx == "" || strings.HasPrefix(strings.TrimPrefix(e.ID, prefix), pfx) {
-			filtered = append(filtered, e)
+			pfxFiltered = append(pfxFiltered, e)
 		}
 	}
-	entries = filtered
+	entries = pfxFiltered
 
 	page, nextToken := paginateEntries(entries, nr.Params)
 	items := make([]any, 0, len(page))
@@ -384,19 +427,37 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 			}
 		}
 	}
-	// md5Hash is present even for zero-length objects; crc32c is CRC32C-Castagnoli.
-	sum := md5.Sum(media)
-	o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
-	crc := crc32.Checksum(media, crc32.MakeTable(crc32.Castagnoli))
-	crcBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(crcBytes, crc)
-	o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
 	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object)
 	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object) + "?alt=media"
-	if err := p.blobs.Put(ctx, blobsNamespace, id, media); err != nil {
-		return nil, err
+
+	if stream, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
+		// Streaming upload: hash on the fly while writing to the blob store, so
+		// large objects never buffer fully in memory.
+		md5h := md5.New()
+		crc32h := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+		tee := io.TeeReader(io.TeeReader(stream, md5h), crc32h)
+		n, err := p.blobs.PutStream(ctx, blobsNamespace, id, tee)
+		if err != nil {
+			return nil, err
+		}
+		o.Size = strconv.FormatInt(n, 10)
+		o.Md5Hash = base64.StdEncoding.EncodeToString(md5h.Sum(nil))
+		crcBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(crcBytes, crc32h.Sum32())
+		o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
+	} else {
+		// md5Hash is present even for zero-length objects; crc32c is CRC32C-Castagnoli.
+		sum := md5.Sum(media)
+		o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
+		crc := crc32.Checksum(media, crc32.MakeTable(crc32.Castagnoli))
+		crcBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(crcBytes, crc)
+		o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
+		if err := p.blobs.Put(ctx, blobsNamespace, id, media); err != nil {
+			return nil, err
+		}
 	}
 
 	data, _ := json.Marshal(o)
@@ -404,6 +465,9 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		if errors.Is(err, store.ErrAlreadyExists) {
 			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data})
 		} else {
+			// Roll back the just-written blob so a failed metadata create does
+			// not leave an orphaned object (metadata absent, blob present).
+			_ = p.blobs.Delete(ctx, blobsNamespace, id)
 			return nil, err
 		}
 	}
@@ -426,7 +490,7 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, err
 	}
-	data, err := p.blobs.Get(ctx, blobsNamespace, id)
+	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
 		return nil, fmt.Errorf("gcs: object metadata present but blob missing: %w", err)
 	}
@@ -435,7 +499,7 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
 		Data: map[string]any{
-			wire.MediaKey:       data,
+			"_stream":           rc,
 			wire.ContentTypeKey: o.ContentType,
 		},
 	}, nil
@@ -789,8 +853,12 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 	}
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
 
-	id := fmt.Sprintf("%d", clock.Now().UnixNano())
+	id := p.nextGen() // atomic + monotonic, collision-free under concurrency
 	p.mu.Lock()
+	if len(p.uploads) >= maxUploadSessions {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
+	}
 	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct}
 	p.mu.Unlock()
 

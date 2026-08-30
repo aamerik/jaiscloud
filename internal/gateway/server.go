@@ -21,10 +21,10 @@ import (
 	"syscall"
 	"time"
 
-	"jaiscloud/internal/clock"
-		"jaiscloud/internal/adapter"
+	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway/middleware"
 	"jaiscloud/internal/model"
@@ -190,6 +190,21 @@ func isS3StreamingUpload(r *http.Request) bool {
 	return idx >= 0 && len(path) > idx+1
 }
 
+// isGCSStreamingUpload returns true for GCS simple media uploads whose body is
+// raw object data that should be streamed, not buffered. Detection is purely
+// from path/method/query so no body is read first. multipart and resumable are
+// intentionally excluded (multipart needs full parsing; a resumable chunk is
+// bounded, and the session accumulation is handled separately).
+func isGCSStreamingUpload(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if !strings.HasPrefix(r.URL.Path, "/upload/storage/v1/") {
+		return false
+	}
+	return r.URL.Query().Get("uploadType") == "media"
+}
+
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	// P2-6: CORS preflight — intercept before DetectAndDecode since OPTIONS
 	// requests have no SigV4 auth and would fail service detection.
@@ -210,7 +225,7 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	streaming := isS3StreamingUpload(r)
+	streaming := isS3StreamingUpload(r) || isGCSStreamingUpload(r)
 
 	// For streaming S3 uploads we intentionally leave r.Body unread here so
 	// the provider can stream directly from it. Always drain+close on exit so

@@ -18,4 +18,8 @@ const (
 	// RangeKey carries the "Range: bytes=0-N" header value for 308 Resume
 	// Incomplete responses (provider → codec).
 	RangeKey = "jaiscloud:range"
+	// StreamKey carries an io.Reader for a streaming upload body (codec →
+	// provider). When present, the provider streams to PutStream instead of
+	// buffering the full body in memory.
+	StreamKey = "jaiscloud:stream"
 )

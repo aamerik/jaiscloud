@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -25,6 +26,7 @@ type MetadataConfig struct {
 // project ID, service-account email, and access token without touching Google.
 func RegisterMetadataRoutes(r chi.Router, cfg MetadataConfig) {
 	r.Route("/computeMetadata/v1", func(rt chi.Router) {
+		rt.Use(requireMetadataFlavor)
 		rt.Get("/project/project-id", func(w http.ResponseWriter, req *http.Request) {
 			writeMetadataText(w, cfg.ProjectID)
 		})
@@ -49,8 +51,21 @@ func RegisterMetadataRoutes(r chi.Router, cfg MetadataConfig) {
 	})
 }
 
+// requireMetadataFlavor enforces the Metadata-Flavor: Google header that real
+// GCE metadata servers require (SSRF protection).
+func requireMetadataFlavor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Metadata-Flavor") != "Google" {
+			http.Error(w, "Metadata-Flavor: Google header is required", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func writeMetadataText(w http.ResponseWriter, s string) {
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Length", strconv.Itoa(len(s)))
 	fmt.Fprint(w, s)
 }
 

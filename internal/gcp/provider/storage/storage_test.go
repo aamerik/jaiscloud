@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -15,6 +16,21 @@ import (
 
 func newTestProvider() *Provider {
 	return New(store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore())
+}
+
+// streamBytes reads the bytes from a "_stream" media response.
+func streamBytes(t *testing.T, resp *model.ProviderResponse) []byte {
+	t.Helper()
+	rc, ok := resp.Data["_stream"].(io.ReadCloser)
+	if !ok {
+		t.Fatal("expected _stream io.ReadCloser in media response")
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	return b
 }
 
 func bucketParams() *model.NormalizedRequest {
@@ -87,8 +103,7 @@ func TestObjectRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get media: %v", err)
 	}
-	got, _ := media.Data[wire.MediaKey].([]byte)
-	if string(got) != "hello world" {
+	if got := string(streamBytes(t, media)); got != "hello world" {
 		t.Errorf("expected media bytes, got %q", got)
 	}
 
@@ -309,7 +324,7 @@ func TestResumableMultiChunkUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get media: %v", err)
 	}
-	if got := string(media.Data[wire.MediaKey].([]byte)); got != "hello world" {
+	if got := string(streamBytes(t, media)); got != "hello world" {
 		t.Fatalf("expected assembled 'hello world', got %q", got)
 	}
 }
