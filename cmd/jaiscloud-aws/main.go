@@ -59,7 +59,6 @@ import (
 	// G-PENDING new providers
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/clock"
 	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
 	elbv2provider "jaiscloud/internal/aws/provider/elbv2"
 	resourcegroupsprovider "jaiscloud/internal/aws/provider/resourcegroups"
@@ -74,6 +73,7 @@ import (
 	streamstore "jaiscloud/internal/aws/store/stream"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
 	ecsexec "jaiscloud/internal/executor/ecs"
@@ -135,11 +135,10 @@ func startCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bindFlags(cmd)
 
-			cfg, err := config.Load()
+			cfg, err := config.Load(model.CloudAWS)
 			if err != nil {
 				return err
 			}
-			cfg.Cloud = model.CloudAWS
 			clock.SetGlobalClock(cfg.Clock)
 
 			ctx := context.Background()
@@ -1170,7 +1169,7 @@ func envCmd() *cobra.Command {
 		Use:   "env",
 		Short: "Print effective configuration as environment variables",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			cfg, err := config.Load(model.CloudAWS)
 			if err != nil {
 				return err
 			}

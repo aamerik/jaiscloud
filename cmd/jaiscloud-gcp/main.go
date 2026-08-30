@@ -45,11 +45,10 @@ func startCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bindFlags(cmd)
 
-			cfg, err := config.Load()
+			cfg, err := config.Load(model.CloudGCP)
 			if err != nil {
 				return err
 			}
-			cfg.Cloud = model.CloudGCP
 			// GCP has no account ID; map the project onto the account scope used
 			// by the shared store. Region defaults to global (GCP services omit
 			// region from most REST paths).
