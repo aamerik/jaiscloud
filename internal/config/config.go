@@ -62,6 +62,17 @@ type Config struct {
 	// service endpoint at JaisCloud.
 	IMDSEnabled bool
 
+	// GCP identity configuration (used by jaiscloud-gcp).
+	// ProjectID is the GCP project used when a request carries no project in
+	// its URL path or bearer token (the analogue of AWS AccountID).
+	ProjectID string
+	// GCPServiceAccount is the default service-account identity returned when
+	// the bearer token carries no recognisable email/sub.
+	GCPServiceAccount string
+	// GCPMetadataEnabled turns on the GCP metadata-server emulator at the
+	// gateway (analogue of AWS IMDS). Requires Cloud == "gcp".
+	GCPMetadataEnabled bool
+
 	// OIDCIssuers maps OIDC issuer URLs to their JWKS endpoint URLs.
 	// Used by AssumeRoleWithWebIdentity to verify JWT signatures.
 	// Env var: JAISCLOUD_OIDC_ISSUERS=issuer1=jwks_url1,issuer2=jwks_url2
@@ -144,6 +155,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("aws_emulator_endpoint", "")
 	viper.SetDefault("s3_virtual_host_bases", "")
 	viper.SetDefault("imds_enabled", false)
+	viper.SetDefault("gcp_project_id", "jaiscloud-project")
+	viper.SetDefault("gcp_service_account", "jaiscloud@example.iam.gserviceaccount.com")
+	viper.SetDefault("gcp_metadata_enabled", false)
 	viper.SetDefault("lambda_image", "")
 	viper.SetDefault("lambda_network", "jaiscloud-net")
 	viper.SetDefault("lambda_keepalive_secs", 300)
@@ -188,6 +202,9 @@ func Load() (*Config, error) {
 		AWSEmulatorEndpoint: viper.GetString("aws_emulator_endpoint"),
 		S3VirtualHostBases:  splitCSV(viper.GetString("s3_virtual_host_bases")),
 		IMDSEnabled:         viper.GetBool("imds_enabled"),
+		ProjectID:           viper.GetString("gcp_project_id"),
+		GCPServiceAccount:   viper.GetString("gcp_service_account"),
+		GCPMetadataEnabled:  viper.GetBool("gcp_metadata_enabled"),
 		LambdaImage:         viper.GetString("lambda_image"),
 		LambdaNetwork:       viper.GetString("lambda_network"),
 		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),
