@@ -28,13 +28,34 @@ type ServiceDescriptor struct {
 }
 
 // gcpServices is the authoritative list of GCP services known to JaisCloud.
-// Add one entry here when wiring in a new service — nothing else needs changing.
+// GCS uses path-prefix detection; the /v1/projects/{project}/... services use
+// segment-based detection (see detectV1Service) since they share the /v1/ prefix.
 var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "storage",
 		PathPrefixes:   []string{"/storage/v1/", "/upload/storage/v1/", "/download/storage/v1/"},
 		ProviderPrefix: "Storage",
 		Codec:          func() adapter.Codec { return &GCSCodec{} },
+	},
+	{
+		ServiceName:    "pubsub",
+		ProviderPrefix: "PubSub",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "pubsub"} },
+	},
+	{
+		ServiceName:    "secretmanager",
+		ProviderPrefix: "Secret",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "secretmanager"} },
+	},
+	{
+		ServiceName:    "kms",
+		ProviderPrefix: "KMS",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "kms"} },
+	},
+	{
+		ServiceName:    "iam",
+		ProviderPrefix: "IAM",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "iam"} },
 	},
 }
 
@@ -60,6 +81,14 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			}
 		}
 	}
+	// /v1/projects/{project}/... services — resolve by resource type. This must
+	// run before the raw-media fallback: a /v1/... path also has two or more
+	// segments and would otherwise be mistaken for a GCS media download.
+	if strings.HasPrefix(p, "/v1/") {
+		if svc := detectV1Service(r.URL.EscapedPath()); svc != "" {
+			return svc, SourcePath
+		}
+	}
 	// GCS media downloads use the "raw" URL form /{bucket}/{object} (no JSON-API
 	// prefix). The storage client derives this base from the emulator endpoint.
 	// Recognise it as a storage media request when no other service prefix
@@ -83,6 +112,33 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	}
 	idx := strings.IndexByte(p, '/')
 	return idx > 0 && idx < len(p)-1
+}
+
+// detectV1Service maps a /v1/projects/{project}/... path to a service name by
+// inspecting the resource-type segment(s) after the project.
+func detectV1Service(path string) string {
+	seg := splitEscaped(path)
+	pi := -1
+	for i, s := range seg {
+		if s == "projects" {
+			pi = i
+			break
+		}
+	}
+	if pi < 0 || pi+2 >= len(seg) {
+		return ""
+	}
+	switch detectResourceType(seg[pi+2:]) {
+	case "topics", "subscriptions":
+		return "pubsub"
+	case "secrets":
+		return "secretmanager"
+	case "keyRings", "cryptoKeys":
+		return "kms"
+	case "serviceAccounts":
+		return "iam"
+	}
+	return ""
 }
 
 // DetectionSource indicates how the service was identified.

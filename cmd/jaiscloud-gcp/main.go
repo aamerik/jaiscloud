@@ -20,6 +20,10 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	iamprovider "jaiscloud/internal/gcp/provider/iam"
+	kmsprovider "jaiscloud/internal/gcp/provider/kms"
+	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
+	secretprovider "jaiscloud/internal/gcp/provider/secret"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
@@ -91,8 +95,17 @@ func startCmd() *cobra.Command {
 			defer closeFn()
 
 			storageP := storageprovider.New(resources, blobs)
+			secretP := secretprovider.New(resources)
+			kmsP := kmsprovider.New(resources)
+			iamP := iamprovider.New(resources)
+			pubsubP := pubsubprovider.New(resources)
 
-			reg := provider.NewRegistry().Register(storageP)
+			reg := provider.NewRegistry().
+				Register(storageP).
+				Register(secretP).
+				Register(kmsP).
+				Register(iamP).
+				Register(pubsubP)
 
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(resources)

@@ -29,13 +29,17 @@ func New() *GCPAdapter {
 	return NewAdapter("")
 }
 
-// NewAdapter returns a GCPAdapter with the default codec set and the given
-// default service-account identity.
+// NewAdapter returns a GCPAdapter with the codecs derived from gcpServices and
+// the given default service-account identity.
 func NewAdapter(serviceAccount string) *GCPAdapter {
+	codecs := make(map[string]adapter.Codec, len(gcpServices))
+	for _, svc := range gcpServices {
+		if svc.Codec != nil {
+			codecs[svc.ServiceName] = svc.Codec()
+		}
+	}
 	return &GCPAdapter{
-		codecs: map[string]adapter.Codec{
-			"storage": &GCSCodec{},
-		},
+		codecs:         codecs,
 		serviceAccount: serviceAccount,
 	}
 }
