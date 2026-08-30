@@ -65,7 +65,7 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	email := accountID + "@" + nr.AccountID + ".iam.gserviceaccount.com"
 	m := serviceAccountMeta{
-		Name:        "projects/" + nr.AccountID + "/serviceAccounts/" + email,
+		Name:        nr.ResourceID("service-account", email),
 		Email:       email,
 		DisplayName: displayName,
 		ProjectID:   nr.AccountID,

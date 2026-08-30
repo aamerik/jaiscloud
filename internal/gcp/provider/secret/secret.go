@@ -55,8 +55,6 @@ type versionMeta struct {
 	Data       string `json:"data"` // base64 payload
 }
 
-func secretName(project, name string) string { return "projects/" + project + "/secrets/" + name }
-
 // parseSecretName splits a relative resource name (e.g. "secrets/foo" or
 // "secrets/foo/versions/2") into the secret ID and version.
 func parseSecretName(name string) (secret, version string) {
@@ -91,7 +89,7 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	m := secretMeta{
-		Name:       secretName(nr.AccountID, id),
+		Name:       nr.ResourceID("secret", id),
 		CreateTime: clock.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
 		NextVer:    1,
 	}
@@ -196,7 +194,7 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSecret, ID: id, Data: sdata})
 
 	v := versionMeta{
-		Name:       secretName(nr.AccountID, id) + "/versions/" + fmt.Sprintf("%d", version),
+		Name:       nr.ResourceID("secret", id) + "/versions/" + fmt.Sprintf("%d", version),
 		State:      "ENABLED",
 		CreateTime: clock.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
 		Data:       payload,

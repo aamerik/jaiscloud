@@ -45,23 +45,19 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	}
 }
 
-func topicName(project, t string) string { return "projects/" + project + "/topics/" + t }
-
-func subName(project, s string) string { return "projects/" + project + "/subscriptions/" + s }
-
 func (p *Provider) TopicCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	t := strings.TrimPrefix(nr.Params["name"].(string), "topics/")
 	if t == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing topic name", 400)
 	}
-	data, _ := json.Marshal(map[string]any{"name": topicName(nr.AccountID, t)})
+	data, _ := json.Marshal(map[string]any{"name": nr.ResourceID("pubsub-topic", t)})
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: t, Data: data}); err != nil {
 		if err == store.ErrAlreadyExists {
 			return nil, model.NewProviderError("AlreadyExists", "topic already exists", 409)
 		}
 		return nil, err
 	}
-	return provider.OK(map[string]any{"name": topicName(nr.AccountID, t)}), nil
+	return provider.OK(map[string]any{"name": nr.ResourceID("pubsub-topic", t)}), nil
 }
 
 func (p *Provider) TopicGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -72,7 +68,7 @@ func (p *Provider) TopicGet(ctx context.Context, nr *model.NormalizedRequest) (*
 		}
 		return nil, err
 	}
-	return provider.OK(map[string]any{"name": topicName(nr.AccountID, t)}), nil
+	return provider.OK(map[string]any{"name": nr.ResourceID("pubsub-topic", t)}), nil
 }
 
 func (p *Provider) TopicDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -93,7 +89,7 @@ func (p *Provider) TopicList(ctx context.Context, nr *model.NormalizedRequest) (
 	}
 	items := make([]any, 0, len(entries))
 	for _, e := range entries {
-		items = append(items, map[string]any{"name": topicName(nr.AccountID, e.ID)})
+		items = append(items, map[string]any{"name": nr.ResourceID("pubsub-topic", e.ID)})
 	}
 	return provider.OK(map[string]any{"topics": items}), nil
 }
@@ -139,7 +135,7 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		ackDeadline = int(ad)
 	}
 	meta := map[string]any{
-		"name":               subName(nr.AccountID, s),
+		"name":               nr.ResourceID("pubsub-subscription", s),
 		"topic":              topic,
 		"ackDeadlineSeconds": ackDeadline,
 	}

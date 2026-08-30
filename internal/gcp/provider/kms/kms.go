@@ -72,14 +72,6 @@ func parseCryptoKey(name string) (loc, kr, key string) {
 	return "", "", ""
 }
 
-func keyRingFullName(project, loc, kr string) string {
-	return "projects/" + project + "/locations/" + loc + "/keyRings/" + kr
-}
-
-func cryptoKeyFullName(project, loc, kr, key string) string {
-	return keyRingFullName(project, loc, kr) + "/cryptoKeys/" + key
-}
-
 func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	loc, _ := nr.Params["location"].(string)
 	kr, _ := nr.Params["keyRingId"].(string)
@@ -94,7 +86,7 @@ func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedReques
 		return nil, model.NewProviderError("InvalidRequest", "missing location or keyRingId", 400)
 	}
 	m := keyRingMeta{
-		Name:       keyRingFullName(nr.AccountID, loc, kr),
+		Name:       nr.ResourceID("kms-keyring", loc+"/"+kr),
 		CreateTime: clock.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
 	}
 	data, _ := json.Marshal(m)
@@ -161,7 +153,7 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 		}
 	}
 	m := cryptoKeyMeta{
-		Name:       cryptoKeyFullName(nr.AccountID, loc, kr, key),
+		Name:       nr.ResourceID("kms-cryptokey", loc+"/"+kr+"/"+key),
 		Purpose:    purpose,
 		CreateTime: clock.Now().UTC().Format("2006-01-02T15:04:05.000000Z"),
 	}

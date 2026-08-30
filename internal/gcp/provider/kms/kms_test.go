@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -12,7 +13,7 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 	if params == nil {
 		params = map[string]any{}
 	}
-	return &model.NormalizedRequest{AccountID: "proj", Params: params}
+	return &model.NormalizedRequest{AccountID: "proj", Params: params, ResourceID: resource.ResourceID("proj")}
 }
 
 func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
