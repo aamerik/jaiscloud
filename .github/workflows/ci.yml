@@ -32,7 +32,7 @@ jobs:
         run: go mod download
 
       - name: Build server
-        run: go build -o jaiscloud ./cmd/jaiscloud/
+        run: go build -o jaiscloud ./cmd/jaiscloud-aws/
 
       - name: Start jaiscloud server (background)
         run: |
@@ -100,3 +100,49 @@ jobs:
           tags: jaiscloud:ci
           cache-from: type=gha,scope=jaiscloud
           cache-to: type=gha,mode=max,scope=jaiscloud
+
+  # ─── GCP integration tests ──────────────────────────────────────────────────
+  # Builds and boots jaiscloud-gcp, then runs the GCP integration suite against it.
+  # GCP unit tests are already covered by the `test` job (go test ./internal/...).
+  test-gcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Build jaiscloud-gcp
+        run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
+      - name: Start jaiscloud-gcp (background)
+        run: |
+          ./jaiscloud-gcp start --port 8080 > gcp-server.log 2>&1 & echo $! > gcp-server.pid
+
+      - name: Wait for GCP server health
+        run: |
+          for i in {1..60}; do
+            if curl -sfS http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; then
+              echo "gcp server healthy"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-server.log
+          exit 1
+
+      - name: Run GCP integration tests
+        run: go test ./tests/integration/gcp/ -v -count=1 -timeout 120s
+
+      - name: Upload GCP server log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-server-log
+          path: gcp-server.log
+
+      - name: Stop GCP server
+        if: always()
+        run: |
+          if [ -f gcp-server.pid ]; then kill $(cat gcp-server.pid) || true; fi
