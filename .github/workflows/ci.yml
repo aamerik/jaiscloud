@@ -114,6 +114,22 @@ jobs:
         with:
           go-version: '1.26'
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-gcp-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-gcp-
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: |
+          go mod download
+          cd tests/integration/gcp/sdk && go mod download
+
       - name: Build jaiscloud-gcp
         run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
 
@@ -133,7 +149,7 @@ jobs:
           exit 1
 
       - name: Run GCP integration tests
-        run: go test ./tests/integration/gcp/ -v -count=1 -timeout 120s
+        run: go test -race ./tests/integration/gcp/ -v -count=1 -timeout 120s
 
       - name: Run GCP SDK integration tests
         working-directory: tests/integration/gcp/sdk
