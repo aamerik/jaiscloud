@@ -3,8 +3,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -13,6 +15,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +35,7 @@ const (
 	rtBucket    = "gcs_bucket"
 	rtObject    = "gcs_object"
 	rtBucketIAM = "gcs_bucket_iam"
+	rtObjectIAM = "gcs_object_iam"
 	rtACL       = "gcs_acl"
 )
 
@@ -40,6 +44,16 @@ const blobsNamespace = "gcs"
 
 // maxUploadSessions caps concurrent resumable-upload sessions (DoS guard).
 const maxUploadSessions = 1000
+
+// resumableSessionTTL bounds how long an inactive resumable session is kept
+// before the periodic sweep removes it (DoS guard; real GCS keeps sessions
+// for about a week).
+const resumableSessionTTL = 24 * time.Hour
+
+// resumableSpillThreshold is the in-memory buffer size beyond which a
+// resumable upload session spills its accumulated bytes to a temp file so that
+// large uploads never buffer fully in memory.
+const resumableSpillThreshold = 4 << 20 // 4 MiB
 
 // Provider implements the GCS JSON + media API.
 type Provider struct {
@@ -58,7 +72,11 @@ type uploadSession struct {
 	Bucket      string
 	Object      string
 	ContentType string
-	buf         []byte // accumulated bytes across chunks
+	buf         []byte    // in-memory bytes up to resumableSpillThreshold
+	tmpPath     string    // spill file path once threshold is exceeded
+	tmpFile     *os.File  // open handle for appending spilled bytes
+	length      int64     // total accumulated bytes across chunks
+	lastAccess  time.Time // last chunk/status-query time, for the TTL sweep
 }
 
 // New returns a GCS provider backed by the given metadata and blob stores.
@@ -110,8 +128,30 @@ func (p *Provider) nextGen() string {
 // so /_jaiscloud/reset does not leak upload state across test runs.
 func (p *Provider) Reset(_ context.Context) {
 	p.mu.Lock()
+	for _, sess := range p.uploads {
+		if sess.tmpFile != nil {
+			sess.tmpFile.Close()
+			os.Remove(sess.tmpPath)
+		}
+	}
 	p.uploads = make(map[string]*uploadSession)
 	p.mu.Unlock()
+}
+
+// sweepSessions removes resumable sessions that have seen no activity for
+// longer than resumableSessionTTL, closing and deleting any spill files.
+// The caller must hold p.mu.
+func (p *Provider) sweepSessions() {
+	now := clock.RealNow()
+	for id, sess := range p.uploads {
+		if now.Sub(sess.lastAccess) > resumableSessionTTL {
+			if sess.tmpFile != nil {
+				sess.tmpFile.Close()
+				os.Remove(sess.tmpPath)
+			}
+			delete(p.uploads, id)
+		}
+	}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -130,6 +170,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.ObjectsGet":                  p.ObjectsGet,
 		"Storage.ObjectsGetMedia":             p.ObjectsGetMedia,
 		"Storage.ObjectsUpdate":               p.ObjectsUpdate,
+		"Storage.ObjectsPatch":                p.ObjectsPatch,
+		"Storage.ObjectsGetIamPolicy":         p.ObjectsGetIamPolicy,
+		"Storage.ObjectsSetIamPolicy":         p.ObjectsSetIamPolicy,
 		"Storage.ObjectsDelete":               p.ObjectsDelete,
 		"Storage.ObjectACLList":               p.ObjectACLList,
 		"Storage.ObjectACLInsert":             p.ObjectACLInsert,
@@ -312,10 +355,16 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	pfx, _ := nr.Params["prefix"].(string)
 	delim, _ := nr.Params["delimiter"].(string)
 
-	// With a delimiter, group objects into common prefixes (folders).
+	// With a delimiter, group objects into common prefixes (folders). The
+	// combined item+prefix result set is paginated with the same cursor
+	// semantics as the plain listing (GCS supports maxResults/pageToken
+	// together with delimiter).
 	if delim != "" {
-		items := make([]any, 0)
-		prefixes := make([]string, 0)
+		type listed struct {
+			name string
+			item map[string]any // non-nil for objects
+		}
+		all := make([]listed, 0)
 		seen := map[string]bool{}
 		for _, e := range entries {
 			name := strings.TrimPrefix(e.ID, prefix)
@@ -327,20 +376,52 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 				common := pfx + rest[:i+len(delim)]
 				if !seen[common] {
 					seen[common] = true
-					prefixes = append(prefixes, common)
+					all = append(all, listed{name: common})
 				}
 				continue
 			}
 			var o objectMeta
 			if json.Unmarshal(e.Data, &o) == nil {
 				o.Kind = "storage#object"
-				items = append(items, toMap(o))
+				all = append(all, listed{name: name, item: toMap(o)})
 			}
 		}
-		sort.Strings(prefixes)
+		sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
+
+		limit := maxResults(nr.Params)
+		start := 0
+		if tok, _ := nr.Params["pageToken"].(string); tok != "" {
+			if cursor := decodeCursor(tok); cursor != "" {
+				for start < len(all) && all[start].name <= cursor {
+					start++
+				}
+			}
+		}
+		end := start + limit
+		if end > len(all) {
+			end = len(all)
+		}
+		page := all[start:end]
+		next := ""
+		if end < len(all) {
+			next = encodeCursor(page[len(page)-1].name)
+		}
+
+		items := make([]any, 0)
+		prefixes := make([]string, 0)
+		for _, l := range page {
+			if l.item != nil {
+				items = append(items, l.item)
+			} else {
+				prefixes = append(prefixes, l.name)
+			}
+		}
 		resp := map[string]any{"kind": "storage#objects", "items": items}
 		if len(prefixes) > 0 {
 			resp["prefixes"] = prefixes
+		}
+		if next != "" {
+			resp["nextPageToken"] = next
 		}
 		return provider.OK(resp), nil
 	}
@@ -492,7 +573,7 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}
 	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
-		return nil, fmt.Errorf("gcs: object metadata present but blob missing: %w", err)
+		return nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
 	}
 	var o objectMeta
 	json.Unmarshal(e.Data, &o)
@@ -505,7 +586,46 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}, nil
 }
 
+// ObjectsUpdate implements objects.update (HTTP PUT). GCS PUT semantics are a
+// strict replacement of the object's writable metadata: fields omitted from
+// the request body are cleared (or reset to defaults), not preserved.
 func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	object, _ := nr.Params["object"].(string)
+	id := bucket + "/" + object
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "object not found", 404)
+		}
+		return nil, err
+	}
+	var o objectMeta
+	json.Unmarshal(e.Data, &o)
+
+	// Strict replace: writable metadata is taken verbatim from the request —
+	// omitted fields are cleared.
+	o.ContentType, _ = bodyString(nr.Params, "contentType")
+	o.Metadata = bodyMetadata(nr.Params)
+	o.StorageClass, _ = bodyString(nr.Params, "storageClass")
+	if o.StorageClass == "" {
+		o.StorageClass = "STANDARD"
+	}
+
+	o.Kind = "storage#object"
+	o.Metageneration = bumpMeta(o.Metageneration)
+	o.Updated = clock.Now().Format(time.RFC3339Nano)
+	data, _ := json.Marshal(o)
+	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data}); err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(o)), nil
+}
+
+// ObjectsPatch implements objects.patch (HTTP PATCH). Patch semantics merge:
+// only the fields present in the request are updated; omitted fields are
+// preserved.
+func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	id := bucket + "/" + object
@@ -524,13 +644,11 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 		if ct, _ := body["contentType"].(string); ct != "" {
 			o.ContentType = ct
 		}
-		if md, ok := body["metadata"].(map[string]any); ok {
-			o.Metadata = make(map[string]string, len(md))
-			for k, v := range md {
-				if s, ok := v.(string); ok {
-					o.Metadata[k] = s
-				}
-			}
+		if sc, _ := body["storageClass"].(string); sc != "" {
+			o.StorageClass = sc
+		}
+		if _, ok := body["metadata"]; ok {
+			o.Metadata = bodyMetadata(nr.Params)
 		}
 	}
 	o.Kind = "storage#object"
@@ -541,6 +659,36 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	return provider.OK(toMap(o)), nil
+}
+
+// bodyString returns the named string field from the request body.
+func bodyString(params map[string]any, key string) (string, bool) {
+	body, ok := params["body"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	s, ok := body[key].(string)
+	return s, ok
+}
+
+// bodyMetadata returns the metadata map from the request body, or nil when the
+// body carries none.
+func bodyMetadata(params map[string]any) map[string]string {
+	body, ok := params["body"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	md, ok := body["metadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(md))
+	for k, v := range md {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // bumpMeta increments a metageneration string ("N" → "N+1"; default "1").
@@ -709,10 +857,79 @@ func (p *Provider) BucketsGetIamPolicy(ctx context.Context, nr *model.Normalized
 	}), nil
 }
 
+// BucketsSetIamPolicy implements buckets.setIamPolicy with optimistic
+// concurrency control: a request carrying an etag that does not match the
+// stored policy is rejected with 409.
 func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
+	return p.setIamPolicy(ctx, nr, rtBucketIAM, bucket, nr.ResourceID("gcs-bucket-policy", bucket))
+}
+
+// ObjectsGetIamPolicy returns the object-level IAM policy (defaulting to the
+// project's legacy bindings when none has been stored).
+func (p *Provider) ObjectsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	object, _ := nr.Params["object"].(string)
+	id := bucket + "/" + object
+	if err := p.requireObject(ctx, nr, id); err != nil {
+		return nil, err
+	}
+	pol := defaultPolicy(id, nr.AccountID, nr.ResourceID("gcs-object-policy", bucket+"/objects/"+object))
+	if e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObjectIAM, id); err == nil {
+		json.Unmarshal(e.Data, &pol)
+	}
+	return provider.OK(map[string]any{
+		"kind":       pol.Kind,
+		"resourceId": pol.ResourceID,
+		"bindings":   pol.Bindings,
+		"etag":       pol.Etag,
+		"version":    pol.Version,
+	}), nil
+}
+
+// ObjectsSetIamPolicy implements objects.setIamPolicy with the same etag-based
+// optimistic concurrency control as the bucket-level method.
+func (p *Provider) ObjectsSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	object, _ := nr.Params["object"].(string)
+	id := bucket + "/" + object
+	if err := p.requireObject(ctx, nr, id); err != nil {
+		return nil, err
+	}
+	return p.setIamPolicy(ctx, nr, rtObjectIAM, id, nr.ResourceID("gcs-object-policy", bucket+"/objects/"+object))
+}
+
+// requireObject returns a 404 ProviderError when the object's metadata is
+// absent, mirroring the GCS JSON API behavior for object-scoped endpoints.
+func (p *Provider) requireObject(ctx context.Context, nr *model.NormalizedRequest, id string) error {
+	if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return model.NewProviderError("NotFound", "object not found", 404)
+		}
+		return err
+	}
+	return nil
+}
+
+// setIamPolicy is the shared setIamPolicy flow: OCC etag check (409 on
+// mismatch), full bindings replacement, a fresh etag, and persist.
+func (p *Provider) setIamPolicy(ctx context.Context, nr *model.NormalizedRequest, rt, id, resourceID string) (*model.ProviderResponse, error) {
 	body, _ := nr.Params["body"].(map[string]any)
-	pol := iamPolicy{Kind: "storage#policy", ResourceID: nr.ResourceID("gcs-bucket-policy", bucket), Etag: "CAE=", Version: 1}
+
+	existing := defaultPolicy(id, nr.AccountID, resourceID)
+	if e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rt, id); err == nil {
+		json.Unmarshal(e.Data, &existing)
+	}
+	// Optimistic concurrency control: reject when the client supplies an etag
+	// that doesn't match the stored policy.
+	if reqEtag, _ := body["etag"].(string); reqEtag != "" && reqEtag != existing.Etag {
+		return nil, model.NewProviderError("Conflict", "etag mismatch: optimistic concurrency control failed", 409)
+	}
+
+	pol := iamPolicy{Kind: "storage#policy", ResourceID: resourceID, Version: 1}
+	if v, ok := body["version"].(float64); ok {
+		pol.Version = int(v)
+	}
 	if bs, ok := body["bindings"].([]any); ok {
 		for _, b := range bs {
 			bm, _ := b.(map[string]any)
@@ -728,8 +945,10 @@ func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.Normalized
 			pol.Bindings = append(pol.Bindings, ib)
 		}
 	}
+	pol.Etag = policyEtag(pol.Bindings)
+
 	data, _ := json.Marshal(pol)
-	_ = p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtBucketIAM, ID: bucket, Data: data})
+	_ = p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rt, ID: id, Data: data})
 	return provider.OK(map[string]any{
 		"kind":       pol.Kind,
 		"resourceId": pol.ResourceID,
@@ -737,6 +956,22 @@ func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.Normalized
 		"etag":       pol.Etag,
 		"version":    pol.Version,
 	}), nil
+}
+
+// policyEtag derives a stable etag from the policy bindings so the etag only
+// changes when the policy changes (matching GCS's optimistic concurrency
+// semantics).
+func policyEtag(bindings []iamBinding) string {
+	h := sha1.New()
+	for _, b := range bindings {
+		io.WriteString(h, b.Role)
+		io.WriteString(h, "\x00")
+		for _, m := range b.Members {
+			io.WriteString(h, m)
+			io.WriteString(h, "\x00")
+		}
+	}
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // ─── ACLs ─────────────────────────────────────────────────────────────────────
@@ -855,14 +1090,19 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 
 	id := p.nextGen() // atomic + monotonic, collision-free under concurrency
 	p.mu.Lock()
+	p.sweepSessions()
 	if len(p.uploads) >= maxUploadSessions {
 		p.mu.Unlock()
 		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
 	}
-	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct}
+	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, lastAccess: clock.RealNow()}
 	p.mu.Unlock()
 
-	loc := fmt.Sprintf("/upload/storage/v1/b/%s/o?uploadType=resumable&upload_id=%s", bucket, id)
+	base, _ := nr.Params[wire.BaseURLKey].(string)
+	if base == "" {
+		base = "http://localhost"
+	}
+	loc := fmt.Sprintf("%s/upload/storage/v1/b/%s/o?uploadType=resumable&upload_id=%s", base, bucket, id)
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{wire.LocationKey: loc}}, nil
 }
 
@@ -877,18 +1117,41 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 		p.mu.Unlock()
 		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
 	}
+	sess.lastAccess = clock.RealNow()
 	if ct, _ := nr.Params[wire.ContentTypeKey].(string); ct != "" {
 		sess.ContentType = ct
 	}
 	start, end, total, hasTotal, isStatus := parseContentRange(cr)
 	complete := false
-	if !isStatus {
+	if isStatus {
+		// Status query (bytes */N): finalize once all N bytes are received, so a
+		// client whose final chunk was sent without a known total can discover
+		// completion and receive the object resource.
+		complete = hasTotal && sess.length >= total
+	} else {
 		// Offset repair: only append a chunk that begins exactly where the
-		// accumulated buffer ends; out-of-order/duplicate chunks are ignored.
-		if int64(len(sess.buf)) == start {
-			sess.buf = append(sess.buf, media...)
+		// accumulated bytes end; out-of-order/duplicate chunks are ignored.
+		if sess.length == start {
+			if sess.tmpFile != nil {
+				if _, err := sess.tmpFile.Write(media); err != nil {
+					p.mu.Unlock()
+					return nil, fmt.Errorf("resumable upload: write spill file: %w", err)
+				}
+			} else if int64(len(sess.buf))+int64(len(media)) > resumableSpillThreshold {
+				if err := spillSession(sess); err != nil {
+					p.mu.Unlock()
+					return nil, err
+				}
+				if _, err := sess.tmpFile.Write(media); err != nil {
+					p.mu.Unlock()
+					return nil, fmt.Errorf("resumable upload: write spill file: %w", err)
+				}
+			} else {
+				sess.buf = append(sess.buf, media...)
+			}
+			sess.length += int64(len(media))
 		}
-		complete = hasTotal && end+1 >= total && int64(len(sess.buf)) >= total
+		complete = hasTotal && end+1 >= total && sess.length >= total
 	}
 	if complete {
 		delete(p.uploads, uploadID)
@@ -896,22 +1159,72 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	bucket := sess.Bucket
 	object := sess.Object
 	contentType := sess.ContentType
-	all := sess.buf
+	length := sess.length
+	var stream io.Reader
+	var closeStream func()
+	if complete {
+		if sess.tmpFile != nil {
+			if _, err := sess.tmpFile.Seek(0, io.SeekStart); err != nil {
+				p.mu.Unlock()
+				return nil, fmt.Errorf("resumable upload: seek spill file: %w", err)
+			}
+			stream = sess.tmpFile
+			tmpPath := sess.tmpPath
+			closeStream = func() {
+				sess.tmpFile.Close()
+				os.Remove(tmpPath)
+			}
+		} else {
+			stream = bytes.NewReader(sess.buf)
+		}
+	}
 	p.mu.Unlock()
 
 	if !complete {
-		rng := fmt.Sprintf("bytes=0-%d", len(all)-1)
-		if len(all) == 0 {
+		rng := fmt.Sprintf("bytes=0-%d", length-1)
+		if length == 0 {
 			rng = "bytes=0-0"
 		}
-		return &model.ProviderResponse{HTTPStatus: 308, Data: map[string]any{wire.RangeKey: rng}}, nil
+		data := map[string]any{wire.RangeKey: rng}
+		status := 308
+		if no308, _ := nr.Params[wire.No308Key].(bool); no308 {
+			// The SDK sets X-GUploader-No-308: yes; signal resume-incomplete
+			// with 200 + X-Http-Status-Code-Override instead of a literal 308.
+			data[wire.StatusOverrideKey] = "308"
+			status = 200
+		}
+		return &model.ProviderResponse{HTTPStatus: status, Data: data}, nil
 	}
+
+	defer func() {
+		if closeStream != nil {
+			closeStream()
+		}
+	}()
 
 	nr.Params["bucket"] = bucket
 	nr.Params["object"] = object
-	nr.Params[wire.MediaKey] = all
+	nr.Params[wire.StreamKey] = stream
 	nr.Params[wire.ContentTypeKey] = contentType
 	return p.ObjectsInsert(ctx, nr)
+}
+
+// spillSession flushes the in-memory buffer to a temp file and switches the
+// session to file-backed accumulation. The caller must hold p.mu.
+func spillSession(sess *uploadSession) error {
+	f, err := os.CreateTemp("", "jaiscloud-gcp-resumable-*")
+	if err != nil {
+		return fmt.Errorf("resumable upload: create spill file: %w", err)
+	}
+	if _, err := f.Write(sess.buf); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return fmt.Errorf("resumable upload: flush spill file: %w", err)
+	}
+	sess.tmpFile = f
+	sess.tmpPath = f.Name()
+	sess.buf = nil
+	return nil
 }
 
 // parseContentRange parses a "bytes <start>-<end>/<total>" header, or a status

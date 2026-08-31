@@ -190,11 +190,12 @@ func isS3StreamingUpload(r *http.Request) bool {
 	return idx >= 0 && len(path) > idx+1
 }
 
-// isGCSStreamingUpload returns true for GCS simple media uploads whose body is
-// raw object data that should be streamed, not buffered. Detection is purely
-// from path/method/query so no body is read first. multipart and resumable are
-// intentionally excluded (multipart needs full parsing; a resumable chunk is
-// bounded, and the session accumulation is handled separately).
+// isGCSStreamingUpload returns true for GCS uploads whose body is raw object
+// data that should be streamed, not buffered. Detection is purely from
+// path/method/query so no body is read first. Both simple media uploads and
+// multipart/related uploads stream (multipart metadata is small and read first;
+// the media part is streamed). Resumable chunks are bounded and excluded here —
+// their accumulation is handled by the provider's spill-to-file session.
 func isGCSStreamingUpload(r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false
@@ -202,7 +203,11 @@ func isGCSStreamingUpload(r *http.Request) bool {
 	if !strings.HasPrefix(r.URL.Path, "/upload/storage/v1/") {
 		return false
 	}
-	return r.URL.Query().Get("uploadType") == "media"
+	switch r.URL.Query().Get("uploadType") {
+	case "media", "multipart":
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {

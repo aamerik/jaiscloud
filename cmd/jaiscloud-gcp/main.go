@@ -1,20 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/certstore"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/persistence/snapshot"
+	snapversion "jaiscloud/internal/persistence/version"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
 
 	"github.com/go-chi/chi/v5"
@@ -24,6 +35,8 @@ import (
 
 const version = "0.2.0"
 
+const defaultHost = "http://localhost:8080"
+
 func main() {
 	root := &cobra.Command{
 		Use:   "jaiscloud-gcp",
@@ -31,7 +44,12 @@ func main() {
 	}
 	root.AddCommand(startCmd())
 	root.AddCommand(versionCmd())
+	root.AddCommand(envCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(resetCmd())
+	root.AddCommand(exportCmd())
+	root.AddCommand(importCmd())
+	root.AddCommand(snapshotCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -59,10 +77,14 @@ func startCmd() *cobra.Command {
 			if !cmd.Flags().Changed("port") && os.Getenv("JAISCLOUD_PORT") == "" {
 				cfg.Port = 8080
 			}
+			clock.SetGlobalClock(cfg.Clock)
 
 			ctx := context.Background()
 
-			resources, blobs, closeFn, err := initStores(ctx, cfg)
+			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
+			instanceID, _ := config.LoadOrCreateInstanceID(stateDir)
+
+			resources, blobs, closeFn, err := initStores(ctx, cfg, instanceID)
 			if err != nil {
 				return err
 			}
@@ -86,12 +108,11 @@ func startCmd() *cobra.Command {
 				Cloud:     "gcp",
 				Region:    cfg.Region,
 				AccountID: cfg.ProjectID,
-				StateDir:  cfg.DataDir,
+				StateDir:  stateDir,
 			})
 
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 
-			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			var certs certstore.CertStore
 			if fsCS, err := certstore.NewFilesystemCertStore(stateDir); err == nil {
 				certs = fsCS
@@ -99,7 +120,11 @@ func startCmd() *cobra.Command {
 				certs = certstore.NewMemoryCertStore()
 			}
 
+			barrier := snapshot.NewBarrier()
+			adminHandler.SetBarrier(barrier)
+
 			var gatewayOpts []func(*gateway.Server)
+			gatewayOpts = append(gatewayOpts, gateway.WithBarrier(barrier))
 			if cfg.GCPMetadataEnabled {
 				metaCfg := gcpadapter.MetadataConfig{
 					ProjectID:      cfg.ProjectID,
@@ -110,6 +135,68 @@ func startCmd() *cobra.Command {
 				}))
 			}
 
+			dataDir := cfg.DataDir
+			if dataDir == "" {
+				if home, err := os.UserHomeDir(); err == nil {
+					dataDir = filepath.Join(home, ".jaiscloud", "jaiscloud-gcp")
+				} else {
+					dataDir = filepath.Join(".jaiscloud", "jaiscloud-gcp")
+				}
+			}
+			adminHandler.SetDataDir(dataDir)
+
+			var cleanup func() = func() {}
+			if !cfg.Ephemeral && cfg.DSN == "" {
+				adminSnaps := adminHandler.Snapshotters()
+				loopStores := make(map[string]snapshottypes.Snapshotter, len(adminSnaps))
+				for k, v := range adminSnaps {
+					loopStores[k] = v
+				}
+
+				stateFile := filepath.Join(dataDir, "state.json")
+				if stateData, readErr := os.ReadFile(stateFile); readErr == nil {
+					var env snapversion.Envelope
+					if parseErr := json.Unmarshal(stateData, &env); parseErr != nil {
+						slog.Warn("startup: state.json parse failed; starting fresh", "err", parseErr)
+					} else if versionErr := snapversion.CheckSnapshotVersion(env.SchemaVersion); versionErr != nil {
+						return fmt.Errorf("startup: state.json version check failed: %w\nRun with --fresh-start to wipe state", versionErr)
+					} else if env.Cloud != "" && env.Cloud != string(cfg.Cloud) {
+						return fmt.Errorf("startup: state.json cloud mismatch: stored=%q running=%q", env.Cloud, cfg.Cloud)
+					} else {
+						for name, s := range loopStores {
+							data, ok := env.Stores[name]
+							if !ok {
+								continue
+							}
+							if restoreErr := s.Restore(ctx, bytes.NewReader(data)); restoreErr != nil {
+								slog.Warn("startup: restore store failed; skipping", "store", name, "err", restoreErr)
+							}
+						}
+						slog.Info("startup: state restored from snapshot", "path", stateFile, "stores", len(env.Stores))
+					}
+				}
+
+				var localBlobs *blobfs.LocalFSBlobStore
+				if lb, ok := blobs.(*blobfs.LocalFSBlobStore); ok {
+					localBlobs = lb
+				}
+				loopCfg := snapshot.SnapshotLoopConfig{
+					Barrier:     barrier,
+					Stores:      loopStores,
+					BlobStore:   localBlobs,
+					DataDir:     dataDir,
+					Interval:    cfg.SnapshotInterval,
+					Clock:       cfg.Clock,
+					SaveTimeout: 10 * time.Second,
+				}
+				loop := snapshot.NewSnapshotLoop(loopCfg)
+				loopCtx, loopCancel := context.WithCancel(ctx)
+				loop.Start(loopCtx)
+				prevCleanup := cleanup
+				cleanup = func() { loopCancel(); loop.Stop(); prevCleanup() }
+			}
+			defer cleanup()
+
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
 			return srv.ListenAndServe()
 		},
@@ -118,8 +205,14 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Bool("ephemeral", false, "Run with purely in-memory state (no persistence)")
 	cmd.Flags().String("dsn", "", "PostgreSQL connection string (postgres://...)")
 	cmd.Flags().String("data-dir", "", "Root data directory for blobs and snapshots")
+	cmd.Flags().Bool("fresh-start", false, "Wipe existing state on startup before initializing stores")
 	cmd.Flags().String("log-level", "info", "Log level: debug/info/warn/error")
 	cmd.Flags().Bool("metrics", false, "Expose Prometheus metrics at /metrics")
+	cmd.Flags().Bool("deterministic", false, "Enable deterministic mode")
+	cmd.Flags().Int64("seed", 0, "Random seed (requires --deterministic)")
+	cmd.Flags().String("time", "", "Base time RFC3339 (requires --deterministic)")
+	cmd.Flags().String("time-mode", "offset", "Time mode: frozen or offset")
+	cmd.Flags().String("blob-dir", "", "Directory for GCS blob bytes (persistent mode only)")
 	cmd.Flags().Bool("gcp-metadata", false, "Enable the GCP metadata-server emulator")
 	return cmd
 }
@@ -129,12 +222,18 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("ephemeral", cmd.Flags().Lookup("ephemeral"))
 	viper.BindPFlag("dsn", cmd.Flags().Lookup("dsn"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
+	viper.BindPFlag("fresh_start", cmd.Flags().Lookup("fresh-start"))
 	viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level"))
 	viper.BindPFlag("metrics", cmd.Flags().Lookup("metrics"))
+	viper.BindPFlag("deterministic", cmd.Flags().Lookup("deterministic"))
+	viper.BindPFlag("seed", cmd.Flags().Lookup("seed"))
+	viper.BindPFlag("time", cmd.Flags().Lookup("time"))
+	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
+	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("gcp_metadata_enabled", cmd.Flags().Lookup("gcp-metadata"))
 }
 
-func initStores(ctx context.Context, cfg *config.Config) (store.ResourceStore, blobfs.BlobStore, func(), error) {
+func initStores(ctx context.Context, cfg *config.Config, instanceID string) (store.ResourceStore, blobfs.BlobStore, func(), error) {
 	if cfg.DSN != "" {
 		pg, err := store.NewPostgresResourceStore(ctx, cfg.DSN, string(cfg.Cloud))
 		if err != nil {
@@ -147,7 +246,14 @@ func initStores(ctx context.Context, cfg *config.Config) (store.ResourceStore, b
 		}
 		return pg, blobs, func() { pg.Close() }, nil
 	}
-	return store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), func() {}, nil
+	if cfg.Ephemeral {
+		return store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), func() {}, nil
+	}
+	blobs, err := blobfs.NewSessionBlobStore(instanceID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("blobfs: %w", err)
+	}
+	return store.NewMemoryResourceStore(), blobs, func() {}, nil
 }
 
 func versionCmd() *cobra.Command {
@@ -156,6 +262,30 @@ func versionCmd() *cobra.Command {
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("jaiscloud-gcp %s\n", version)
+		},
+	}
+}
+
+func envCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "env",
+		Short: "Print effective configuration as environment variables",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(model.CloudGCP)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("JAISCLOUD_PORT=%d\n", cfg.Port)
+			if cfg.Ephemeral {
+				fmt.Printf("JAISCLOUD_EPHEMERAL=true\n")
+			}
+			if cfg.DSN != "" {
+				fmt.Printf("JAISCLOUD_DSN=%s\n", cfg.DSN)
+			}
+			fmt.Printf("JAISCLOUD_CLOUD=gcp\n")
+			fmt.Printf("JAISCLOUD_PROJECT_ID=%s\n", cfg.ProjectID)
+			fmt.Printf("JAISCLOUD_LOG_LEVEL=%s\n", cfg.LogLevel)
+			return nil
 		},
 	}
 }
@@ -180,6 +310,309 @@ func doctorCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("host", "http://localhost:8080", "Emulator host URL")
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	return cmd
+}
+
+func resetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Wipe all emulator state",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			resp, err := http.Post(host+"/_jaiscloud/reset", "application/json", nil)
+			if err != nil {
+				return fmt.Errorf("reset: %w", err)
+			}
+			defer resp.Body.Close()
+			fmt.Println("State reset.")
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	return cmd
+}
+
+func exportCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export emulator state to a snapshot tarball (or stdout)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			output, _ := cmd.Flags().GetString("output")
+
+			resp, err := http.Get(host + "/_jaiscloud/export")
+			if err != nil {
+				return fmt.Errorf("export: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("export failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			}
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return fmt.Errorf("read export: %w", err)
+			}
+
+			if output == "" || output == "-" {
+				_, err = os.Stdout.Write(data)
+				return err
+			}
+			if err := os.WriteFile(output, data, 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", output, err)
+			}
+			sizeMB := float64(len(data)) / (1024 * 1024)
+			fmt.Fprintf(os.Stderr, "Export complete -> %s (%.2f MB)\n", output, sizeMB)
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	cmd.Flags().StringP("output", "o", "-", "Output file (default: stdout)")
+	return cmd
+}
+
+func importCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import emulator state from a snapshot tarball (or stdin)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			input, _ := cmd.Flags().GetString("input")
+			newInstance, _ := cmd.Flags().GetBool("new-instance")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+			var data []byte
+			var err error
+			if input == "" || input == "-" {
+				data, err = io.ReadAll(os.Stdin)
+			} else {
+				data, err = os.ReadFile(input)
+			}
+			if err != nil {
+				return fmt.Errorf("read input: %w", err)
+			}
+
+			importURL := host + "/_jaiscloud/import"
+			sep := "?"
+			if newInstance {
+				importURL += sep + "new_instance=true"
+				sep = "&"
+			}
+			if dryRun {
+				importURL += sep + "dry_run=true"
+			}
+
+			contentType := "application/json"
+			if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+				contentType = "application/x-tar"
+			}
+
+			resp, err := http.Post(importURL, contentType, bytes.NewReader(data))
+			if err != nil {
+				return fmt.Errorf("import: %w", err)
+			}
+			defer resp.Body.Close()
+			respBody, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("import failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+			}
+
+			var result map[string]any
+			if json.Unmarshal(respBody, &result) == nil {
+				if dryRun {
+					if valid, _ := result["dry_run"].(bool); valid {
+						storeCount, _ := result["stores_parseable"].(float64)
+						fmt.Fprintf(os.Stderr, "Dry-run complete: %d stores parseable, no state modified.\n", int(storeCount))
+						return nil
+					}
+				}
+				storeCount, _ := result["stores_restored"].(float64)
+				fmt.Fprintf(os.Stderr, "Import complete (%d stores restored).\n", int(storeCount))
+			} else {
+				fmt.Fprintln(os.Stderr, "Import complete.")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	cmd.Flags().StringP("input", "i", "-", "Input file (default: stdin)")
+	cmd.Flags().Bool("new-instance", false, "Assign a fresh instance ID on import")
+	cmd.Flags().Bool("dry-run", false, "Validate the snapshot without modifying state")
+	return cmd
+}
+
+func snapshotCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Manage named snapshots",
+	}
+	cmd.AddCommand(snapshotCreateCmd())
+	cmd.AddCommand(snapshotListCmd())
+	cmd.AddCommand(snapshotRevertCmd())
+	cmd.AddCommand(snapshotDeleteCmd())
+	cmd.AddCommand(snapshotInspectCmd())
+	return cmd
+}
+
+func snapshotCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a named snapshot of current state",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			name, _ := cmd.Flags().GetString("name")
+			desc, _ := cmd.Flags().GetString("description")
+			if name == "" {
+				return fmt.Errorf("--name is required")
+			}
+			body, _ := json.Marshal(map[string]string{"name": name, "description": desc})
+			resp, err := http.Post(host+"/_jaiscloud/snapshot", "application/json", bytes.NewReader(body))
+			if err != nil {
+				return fmt.Errorf("snapshot create: %w", err)
+			}
+			defer resp.Body.Close()
+			data, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusCreated {
+				return fmt.Errorf("snapshot create failed (HTTP %d): %s", resp.StatusCode, data)
+			}
+			fmt.Fprintf(os.Stderr, "Snapshot %q created.\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	cmd.Flags().String("name", "", "Snapshot name (required)")
+	cmd.Flags().String("description", "", "Optional description")
+	return cmd
+}
+
+func snapshotListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List named snapshots",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			resp, err := http.Get(host + "/_jaiscloud/snapshots")
+			if err != nil {
+				return fmt.Errorf("snapshot list: %w", err)
+			}
+			defer resp.Body.Close()
+			data, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("snapshot list failed (HTTP %d): %s", resp.StatusCode, data)
+			}
+			var metas []map[string]any
+			if err := json.Unmarshal(data, &metas); err != nil {
+				fmt.Println(string(data))
+				return nil
+			}
+			if len(metas) == 0 {
+				fmt.Println("No snapshots found.")
+				return nil
+			}
+			fmt.Printf("%-30s %-25s %s\n", "NAME", "CREATED", "DESCRIPTION")
+			for _, m := range metas {
+				fmt.Printf("%-30s %-25s %s\n",
+					m["name"], m["created_at"], m["description"])
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	return cmd
+}
+
+func snapshotRevertCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "revert <name>",
+		Short: "Revert to a named snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			resetFirst, _ := cmd.Flags().GetBool("reset-first")
+			name := args[0]
+			url := host + "/_jaiscloud/snapshot/" + name + "/revert"
+			if resetFirst {
+				url += "?reset_first=true"
+			}
+			resp, err := http.Post(url, "application/json", nil)
+			if err != nil {
+				return fmt.Errorf("snapshot revert: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("snapshot revert failed (HTTP %d): %s", resp.StatusCode, body)
+			}
+			fmt.Fprintf(os.Stderr, "Reverted to snapshot %q.\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	cmd.Flags().Bool("reset-first", false, "Reset state before reverting")
+	return cmd
+}
+
+func snapshotDeleteCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a named snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			yes, _ := cmd.Flags().GetBool("yes")
+			name := args[0]
+			if !yes {
+				return fmt.Errorf("pass --yes to confirm deletion of snapshot %q", name)
+			}
+			req, _ := http.NewRequest(http.MethodDelete,
+				host+"/_jaiscloud/snapshot/"+name+"?yes=true", nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("snapshot delete: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				return fmt.Errorf("snapshot delete failed (HTTP %d): %s", resp.StatusCode, body)
+			}
+			fmt.Fprintf(os.Stderr, "Snapshot %q deleted.\n", name)
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
+	cmd.Flags().Bool("yes", false, "Confirm deletion")
+	return cmd
+}
+
+func snapshotInspectCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "inspect <name>",
+		Short: "Inspect a named snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			host, _ := cmd.Flags().GetString("host")
+			name := args[0]
+			resp, err := http.Get(host + "/_jaiscloud/snapshot/" + name)
+			if err != nil {
+				return fmt.Errorf("snapshot inspect: %w", err)
+			}
+			defer resp.Body.Close()
+			data, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("snapshot inspect failed (HTTP %d): %s", resp.StatusCode, data)
+			}
+			var pretty json.RawMessage
+			if json.Unmarshal(data, &pretty) == nil {
+				if indented, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+					fmt.Println(string(indented))
+					return nil
+				}
+			}
+			fmt.Println(string(data))
+			return nil
+		},
+	}
+	cmd.Flags().String("host", defaultHost, "Emulator host URL")
 	return cmd
 }

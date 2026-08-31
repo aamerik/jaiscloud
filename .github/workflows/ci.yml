@@ -135,6 +135,12 @@ jobs:
       - name: Run GCP integration tests
         run: go test ./tests/integration/gcp/ -v -count=1 -timeout 120s
 
+      - name: Run GCP SDK integration tests
+        working-directory: tests/integration/gcp/sdk
+        env:
+          STORAGE_EMULATOR_HOST: http://localhost:8080
+        run: go test -race -count=1 -timeout 120s ./...
+
       - name: Upload GCP server log (on failure)
         if: failure()
         uses: actions/upload-artifact@v4

@@ -22,4 +22,16 @@ const (
 	// provider). When present, the provider streams to PutStream instead of
 	// buffering the full body in memory.
 	StreamKey = "jaiscloud:stream"
+	// BaseURLKey carries the request's absolute base URL ("scheme://host") as a
+	// string in NormalizedRequest.Params (codec → provider). Resumable uploads
+	// use it to build the absolute Location header the SDK expects.
+	BaseURLKey = "jaiscloud:baseURL"
+	// No308Key carries a bool in NormalizedRequest.Params (codec → provider)
+	// indicating the client set "X-GUploader-No-308: yes". In that case the
+	// provider signals "resume incomplete" with HTTP 200 + the
+	// X-Http-Status-Code-Override header instead of a literal 308.
+	No308Key = "jaiscloud:no308"
+	// StatusOverrideKey carries the X-Http-Status-Code-Override header value as
+	// a string in ProviderResponse.Data (provider → codec).
+	StatusOverrideKey = "jaiscloud:statusOverride"
 )

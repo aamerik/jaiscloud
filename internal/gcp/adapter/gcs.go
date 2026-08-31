@@ -31,8 +31,29 @@ func (c *GCSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 	case strings.HasPrefix(path, "/storage/v1/"):
 		return c.decodeStorage(r, body, strings.TrimPrefix(path, "/storage/v1/"))
 	default:
+		// Raw media path: /{bucket}/{object...} (GET/HEAD) → media download.
+		return c.decodeRawMedia(r, body)
+	}
+}
+
+// decodeRawMedia handles the raw media URL /{bucket}/{object...} used by the
+// GCS storage client for downloads. The object name's slashes are literal path
+// separators here (unlike the JSON API, where they are percent-encoded).
+func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+	seg := splitEscaped(strings.TrimPrefix(r.URL.EscapedPath(), "/"))
+	if len(seg) < 2 || seg[0] == "" {
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}
+	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
+	queryToParams(r, nr.Params)
+	nr.Params["bucket"] = seg[0]
+	nr.Params["object"] = strings.Join(seg[1:], "/")
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		nr.Action = "ObjectsGetMedia"
+	} else {
+		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+	}
+	return nr, nil
 }
 
 // decodeDownload handles /download/storage/v1/... — always a media download, so
@@ -123,6 +144,20 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		} else {
 			nr.Action = "ObjectACLList"
 		}
+	case len(seg) >= 5 && seg[0] == "b" && seg[2] == "o" && seg[len(seg)-1] == "iam":
+		// /b/{bucket}/o/{object...}/iam — object-level IAM policy.
+		nr.Params["bucket"] = seg[1]
+		nr.Params["object"] = strings.Join(seg[3:len(seg)-1], "/")
+		if r.Method == http.MethodPut {
+			nr.Action = "ObjectsSetIamPolicy"
+			m, err := parseJSON(body)
+			if err != nil {
+				return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+			}
+			nr.Params["body"] = m
+		} else {
+			nr.Action = "ObjectsGetIamPolicy"
+		}
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o":
 		// /b/{bucket}/o[/{object}]
 		nr.Params["bucket"] = seg[1]
@@ -145,7 +180,25 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 			switch r.Method {
 			case http.MethodDelete:
 				nr.Action = "ObjectsDelete"
-			case http.MethodPut, http.MethodPatch, http.MethodPost:
+			case http.MethodPatch:
+				// objects.patch (PATCH) — merge semantics.
+				nr.Action = "ObjectsPatch"
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+				}
+				nr.Params["body"] = m
+			case http.MethodPut:
+				// objects.update (PUT) — strict replacement semantics.
+				nr.Action = "ObjectsUpdate"
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+				}
+				nr.Params["body"] = m
+			case http.MethodPost:
+				// No JSON-API POST method targets an object resource path; keep
+				// the defensive mapping so stray POSTs behave like PUT.
 				nr.Action = "ObjectsUpdate"
 				m, err := parseJSON(body)
 				if err != nil {
@@ -203,11 +256,18 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 			return nil, err
 		}
 	case "resumable":
-		if r.Method == http.MethodPut {
+		// The resumable session is keyed by upload_id, not by method: the Go
+		// storage SDK uploads chunks with POST (not PUT) and queries status with
+		// a "bytes */N" Content-Range. A request carrying upload_id is a chunk
+		// upload or status query; one without is the session start.
+		if id, _ := nr.Params["upload_id"].(string); id != "" {
 			nr.Action = "ObjectsInsertResumable"
 			nr.Params[wire.MediaKey] = body
 			if cr := r.Header.Get("Content-Range"); cr != "" {
 				nr.Params["contentRange"] = cr
+			}
+			if r.Header.Get("X-GUploader-No-308") == "yes" {
+				nr.Params[wire.No308Key] = true
 			}
 		} else {
 			nr.Action = "ObjectsInsertStartResumable"
@@ -222,6 +282,9 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 			if ct := r.Header.Get("X-Upload-Content-Type"); ct != "" {
 				nr.Params[wire.ContentTypeKey] = ct
 			}
+			// The SDK expects an absolute Location header back, so pass the
+			// request base URL down for the provider to build it.
+			nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
 		}
 	default:
 		// No uploadType: treat POST body as raw media (defensive default).
@@ -252,6 +315,9 @@ func (c *GCSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 
 	if rng, ok := resp.Data[wire.RangeKey].(string); ok && rng != "" {
 		headers.Set("Range", rng)
+		if so, ok := resp.Data[wire.StatusOverrideKey].(string); ok && so != "" {
+			headers.Set("X-Http-Status-Code-Override", so)
+		}
 		return status, headers, nil
 	}
 
@@ -370,6 +436,20 @@ func splitEscaped(path string) []string {
 	return out
 }
 
+// baseURLFromRequest returns the request's "scheme://host" base, used to build
+// the absolute Location header for resumable uploads (the SDK does not resolve
+// relative Locations).
+func baseURLFromRequest(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = fwd
+	}
+	return scheme + "://" + r.Host
+}
+
 // queryToParams copies single-valued query parameters into params as strings.
 func queryToParams(r *http.Request, params map[string]any) {
 	for k, vs := range r.URL.Query() {
@@ -394,26 +474,32 @@ func parseJSON(body []byte) (map[string]any, error) {
 }
 
 // parseMultipart decodes a multipart/related upload body (JSON metadata part
-// followed by a media part) into params.
+// followed by a media part) into params. When body is nil the request body is
+// streamed directly: the metadata part is read fully (it is small JSON) and the
+// media part is passed through as wire.StreamKey so large uploads are never
+// buffered in memory.
 func parseMultipart(r *http.Request, body []byte, params map[string]any) error {
 	ct := r.Header.Get("Content-Type")
 	mediaType, p, err := mime.ParseMediaType(ct)
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
 		return model.NewProviderError("InvalidRequest", "expected multipart body", 400)
 	}
-	mr := multipart.NewReader(bytes.NewReader(body), p["boundary"])
+	var src io.Reader = bytes.NewReader(body)
+	if body == nil {
+		src = r.Body
+	}
+	mr := multipart.NewReader(src, p["boundary"])
 	for partIdx := 0; ; partIdx++ {
 		part, err := mr.NextPart()
 		if err != nil {
 			break // io.EOF ends the loop
 		}
-		var buf bytes.Buffer
-		if _, err := buf.ReadFrom(part); err != nil {
-			return model.NewProviderError("InvalidRequest", "malformed multipart body", 400)
-		}
-		data := buf.Bytes()
 		if partIdx == 0 {
-			m, err := parseJSON(data)
+			var buf bytes.Buffer
+			if _, err := buf.ReadFrom(part); err != nil {
+				return model.NewProviderError("InvalidRequest", "malformed multipart body", 400)
+			}
+			m, err := parseJSON(buf.Bytes())
 			if err != nil {
 				return model.NewProviderError("InvalidRequest", "malformed JSON metadata", 400)
 			}
@@ -424,13 +510,15 @@ func parseMultipart(r *http.Request, body []byte, params map[string]any) error {
 				}
 			}
 		} else {
-			params[wire.MediaKey] = data
+			// Media part — stream it through rather than buffering it.
+			params[wire.StreamKey] = part
 			if cth := part.Header.Get("Content-Type"); cth != "" {
 				params[wire.ContentTypeKey] = cth
 			}
+			break
 		}
 	}
-	if params[wire.MediaKey] == nil {
+	if params[wire.MediaKey] == nil && params[wire.StreamKey] == nil {
 		return model.NewProviderError("InvalidRequest", "multipart body missing media part", 400)
 	}
 	return nil

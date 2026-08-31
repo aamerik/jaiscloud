@@ -60,7 +60,29 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			}
 		}
 	}
+	// GCS media downloads use the "raw" URL form /{bucket}/{object} (no JSON-API
+	// prefix). The storage client derives this base from the emulator endpoint.
+	// Recognise it as a storage media request when no other service prefix
+	// matched and the path has at least a bucket and an object segment.
+	if isRawStorageMediaPath(r) {
+		return "storage", SourcePath
+	}
 	return "", SourceUnknown
+}
+
+// isRawStorageMediaPath reports whether r is a GCS raw media download of the
+// form /{bucket}/{object} (GET/HEAD). Admin routes and JSON-API prefixes are
+// handled elsewhere; only genuine object downloads reach this fallback.
+func isRawStorageMediaPath(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	p := strings.TrimPrefix(r.URL.Path, "/")
+	if p == "" || strings.HasPrefix(p, "_jaiscloud") {
+		return false
+	}
+	idx := strings.IndexByte(p, '/')
+	return idx > 0 && idx < len(p)-1
 }
 
 // DetectionSource indicates how the service was identified.
