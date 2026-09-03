@@ -40,7 +40,11 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
-	if m := parseJSON(body); m != nil {
+	m, err := parseJSON(body)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	}
+	if m != nil {
 		nr.Params["body"] = m
 	}
 
