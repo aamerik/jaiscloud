@@ -62,6 +62,17 @@ type Config struct {
 	// service endpoint at JaisCloud.
 	IMDSEnabled bool
 
+	// GCP identity configuration (used by jaiscloud-gcp).
+	// ProjectID is the GCP project used when a request carries no project in
+	// its URL path or bearer token (the analogue of AWS AccountID).
+	ProjectID string
+	// GCPServiceAccount is the default service-account identity returned when
+	// the bearer token carries no recognisable email/sub.
+	GCPServiceAccount string
+	// GCPMetadataEnabled turns on the GCP metadata-server emulator at the
+	// gateway (analogue of AWS IMDS). Requires Cloud == "gcp".
+	GCPMetadataEnabled bool
+
 	// OIDCIssuers maps OIDC issuer URLs to their JWKS endpoint URLs.
 	// Used by AssumeRoleWithWebIdentity to verify JWT signatures.
 	// Env var: JAISCLOUD_OIDC_ISSUERS=issuer1=jwks_url1,issuer2=jwks_url2
@@ -117,7 +128,8 @@ func ExecutorMode(subsystem, defaultMode string) (mode, source string) {
 	return defaultMode, "default"
 }
 
-func Load() (*Config, error) {
+func Load(cloud model.Cloud) (*Config, error) {
+	// ── Common defaults (cloud-neutral) ─────────────────────────────────────
 	viper.SetDefault("port", 4566)
 	viper.SetDefault("ephemeral", false)
 	viper.SetDefault("log_level", "info")
@@ -135,24 +147,35 @@ func Load() (*Config, error) {
 	viper.SetDefault("snapshot_interval", "30s")
 	viper.SetDefault("export_soft_limit", int64(2*1024*1024*1024))
 	viper.SetDefault("executor_mode", "")
-	viper.SetDefault("kms_master_key", "")
-	viper.SetDefault("k8s_namespace", "jaiscloud")
-	viper.SetDefault("k8s_spark_image", "")
-	viper.SetDefault("k8s_spark_sa", "")
-	viper.SetDefault("spark_emr_image", "")
-	viper.SetDefault("spark_emreks_image", "")
-	viper.SetDefault("aws_emulator_endpoint", "")
-	viper.SetDefault("s3_virtual_host_bases", "")
-	viper.SetDefault("imds_enabled", false)
-	viper.SetDefault("lambda_image", "")
-	viper.SetDefault("lambda_network", "jaiscloud-net")
-	viper.SetDefault("lambda_keepalive_secs", 300)
 	viper.SetDefault("metrics", false)
 	viper.SetDefault("tracing", false)
 	viper.SetDefault("deterministic", false)
 	viper.SetDefault("seed", 0)
 	viper.SetDefault("time_mode", "offset")
-	viper.SetDefault("oidc_issuers", "")
+
+	// ── Cloud-specific defaults ─────────────────────────────────────────────
+	// Only the active cloud's keys are registered; the other cloud's
+	// configuration is not supported.
+	switch cloud {
+	case model.CloudAWS:
+		viper.SetDefault("kms_master_key", "")
+		viper.SetDefault("k8s_namespace", "jaiscloud")
+		viper.SetDefault("k8s_spark_image", "")
+		viper.SetDefault("k8s_spark_sa", "")
+		viper.SetDefault("spark_emr_image", "")
+		viper.SetDefault("spark_emreks_image", "")
+		viper.SetDefault("aws_emulator_endpoint", "")
+		viper.SetDefault("s3_virtual_host_bases", "")
+		viper.SetDefault("imds_enabled", false)
+		viper.SetDefault("lambda_image", "")
+		viper.SetDefault("lambda_network", "jaiscloud-net")
+		viper.SetDefault("lambda_keepalive_secs", 300)
+		viper.SetDefault("oidc_issuers", "")
+	case model.CloudGCP:
+		viper.SetDefault("gcp_project_id", "jaiscloud-project")
+		viper.SetDefault("gcp_service_account", "jaiscloud@example.iam.gserviceaccount.com")
+		viper.SetDefault("gcp_metadata_enabled", false)
+	}
 
 	viper.SetEnvPrefix("JAISCLOUD")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -167,51 +190,58 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Port:                viper.GetInt("port"),
-		Ephemeral:           viper.GetBool("ephemeral"),
-		LogLevel:            viper.GetString("log_level"),
-		Region:              viper.GetString("region"),
-		AccountID:           viper.GetString("account_id"),
-		DSN:                 viper.GetString("dsn"),
-		BlobDir:             viper.GetString("blob_dir"),
-		DataDir:             viper.GetString("data_dir"),
-		FreshStart:          viper.GetBool("fresh_start"),
-		SnapshotInterval:    snapshotInterval,
-		ExportSoftLimit:     viper.GetInt64("export_soft_limit"),
-		ExecutorMode:        viper.GetString("executor_mode"),
-		KMSMasterKey:        viper.GetString("kms_master_key"),
-		K8sNamespace:        viper.GetString("k8s_namespace"),
-		K8sSparkImage:       viper.GetString("k8s_spark_image"),
-		K8sSparkSA:          viper.GetString("k8s_spark_sa"),
-		SparkEMRImage:       viper.GetString("spark_emr_image"),
-		SparkEMREKSImage:    viper.GetString("spark_emreks_image"),
-		AWSEmulatorEndpoint: viper.GetString("aws_emulator_endpoint"),
-		S3VirtualHostBases:  splitCSV(viper.GetString("s3_virtual_host_bases")),
-		IMDSEnabled:         viper.GetBool("imds_enabled"),
-		LambdaImage:         viper.GetString("lambda_image"),
-		LambdaNetwork:       viper.GetString("lambda_network"),
-		LambdaKeepaliveSecs: viper.GetInt("lambda_keepalive_secs"),
-		Metrics:             viper.GetBool("metrics"),
-		Tracing:             viper.GetBool("tracing"),
-		Deterministic:       viper.GetBool("deterministic"),
-		Seed:                viper.GetInt64("seed"),
-		TimeMode:            viper.GetString("time_mode"),
-		OIDCIssuers:         nil, // populated below from oidc_issuers
+		Cloud:            cloud,
+		Port:             viper.GetInt("port"),
+		Ephemeral:        viper.GetBool("ephemeral"),
+		LogLevel:         viper.GetString("log_level"),
+		Region:           viper.GetString("region"),
+		AccountID:        viper.GetString("account_id"),
+		DSN:              viper.GetString("dsn"),
+		BlobDir:          viper.GetString("blob_dir"),
+		DataDir:          viper.GetString("data_dir"),
+		FreshStart:       viper.GetBool("fresh_start"),
+		SnapshotInterval: snapshotInterval,
+		ExportSoftLimit:  viper.GetInt64("export_soft_limit"),
+		ExecutorMode:     viper.GetString("executor_mode"),
+		Metrics:          viper.GetBool("metrics"),
+		Tracing:          viper.GetBool("tracing"),
+		Deterministic:    viper.GetBool("deterministic"),
+		Seed:             viper.GetInt64("seed"),
+		TimeMode:         viper.GetString("time_mode"),
+	}
+
+	// Cloud-specific fields — only the active cloud's keys are read.
+	switch cloud {
+	case model.CloudAWS:
+		cfg.KMSMasterKey = viper.GetString("kms_master_key")
+		cfg.K8sNamespace = viper.GetString("k8s_namespace")
+		cfg.K8sSparkImage = viper.GetString("k8s_spark_image")
+		cfg.K8sSparkSA = viper.GetString("k8s_spark_sa")
+		cfg.SparkEMRImage = viper.GetString("spark_emr_image")
+		cfg.SparkEMREKSImage = viper.GetString("spark_emreks_image")
+		cfg.AWSEmulatorEndpoint = viper.GetString("aws_emulator_endpoint")
+		cfg.S3VirtualHostBases = splitCSV(viper.GetString("s3_virtual_host_bases"))
+		cfg.IMDSEnabled = viper.GetBool("imds_enabled")
+		cfg.LambdaImage = viper.GetString("lambda_image")
+		cfg.LambdaNetwork = viper.GetString("lambda_network")
+		cfg.LambdaKeepaliveSecs = viper.GetInt("lambda_keepalive_secs")
+		if raw := viper.GetString("oidc_issuers"); raw != "" {
+			cfg.OIDCIssuers = make(map[string]string)
+			for _, pair := range strings.Split(raw, ",") {
+				pair = strings.TrimSpace(pair)
+				if k, v, ok := strings.Cut(pair, "="); ok {
+					cfg.OIDCIssuers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+			}
+		}
+	case model.CloudGCP:
+		cfg.ProjectID = viper.GetString("gcp_project_id")
+		cfg.GCPServiceAccount = viper.GetString("gcp_service_account")
+		cfg.GCPMetadataEnabled = viper.GetBool("gcp_metadata_enabled")
 	}
 
 	if cfg.Ephemeral && cfg.DSN != "" {
 		return nil, fmt.Errorf("--ephemeral and --dsn are mutually exclusive: ephemeral mode runs with no persistence, a DSN implies PostgreSQL storage")
-	}
-
-	// Parse OIDC_ISSUERS: "issuer1=jwks_url1,issuer2=jwks_url2"
-	if raw := viper.GetString("oidc_issuers"); raw != "" {
-		cfg.OIDCIssuers = make(map[string]string)
-		for _, pair := range strings.Split(raw, ",") {
-			pair = strings.TrimSpace(pair)
-			if k, v, ok := strings.Cut(pair, "="); ok {
-				cfg.OIDCIssuers[strings.TrimSpace(k)] = strings.TrimSpace(v)
-			}
-		}
 	}
 
 	// Parse base time for deterministic mode
