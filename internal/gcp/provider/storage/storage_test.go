@@ -15,13 +15,14 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
 func newTestProvider() *Provider {
-	return New(store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore())
+	return New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore())
 }
 
 // streamBytes reads the bytes from a "_stream" media response.
@@ -41,6 +42,43 @@ func streamBytes(t *testing.T, resp *model.ProviderResponse) []byte {
 
 func bucketParams() *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{}, ResourceID: resource.ResourceID("proj")}
+}
+
+// TestObjectsScopeToBucketProject verifies that object operations scope to the
+// bucket's owning project rather than the request's default project (object
+// requests carry no ?project=). Without this, a bucket created under
+// ?project=proj would be invisible to an object op that falls back to the
+// config default.
+func TestObjectsScopeToBucketProject(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	// Create the bucket under project "proj".
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	// Object op whose request carries a DIFFERENT default project — it must
+	// resolve the bucket's owning project and succeed.
+	nr2 := bucketParams()
+	nr2.AccountID = "other-project"
+	nr2.Params["bucket"] = "bkt"
+	nr2.Params["object"] = "o.txt"
+	nr2.Params[wire.MediaKey] = []byte("hi")
+	if _, err := p.ObjectsInsert(ctx, nr2); err != nil {
+		t.Fatalf("expected object insert to resolve bucket project, got: %v", err)
+	}
+
+	// And a get via a different default project must also find it.
+	nr3 := bucketParams()
+	nr3.AccountID = "other-project"
+	nr3.Params["bucket"] = "bkt"
+	nr3.Params["object"] = "o.txt"
+	if _, err := p.ObjectsGet(ctx, nr3); err != nil {
+		t.Fatalf("expected object get to resolve bucket project, got: %v", err)
+	}
 }
 
 func TestBucketRoundTrip(t *testing.T) {
@@ -1194,9 +1232,9 @@ func TestObjectsUpdateNoBody(t *testing.T) {
 
 func TestGenerationSeededAcrossRestart(t *testing.T) {
 	ctx := context.Background()
-	res := store.NewMemoryResourceStore()
+	objStore := gcs.NewMemoryObjectStore()
 	blobs := blobfs.NewMemoryBlobStore()
-	p1 := New(res, blobs)
+	p1 := New(objStore, store.NewMemoryResourceStore(), blobs)
 
 	nr := bucketParams()
 	nr.Params["body"] = map[string]any{"name": "bkt"}
@@ -1212,9 +1250,9 @@ func TestGenerationSeededAcrossRestart(t *testing.T) {
 		t.Fatalf("insert object: %v", err)
 	}
 
-	// A "restarted" provider over the same store must continue past the
+	// A "restarted" provider over the same object store must continue past the
 	// stored generation (monotonicity across restarts, --dsn parity).
-	p2 := New(res, blobs)
+	p2 := New(objStore, store.NewMemoryResourceStore(), blobs)
 	nr = bucketParams()
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "b.txt"
@@ -1408,7 +1446,11 @@ func TestObjectsGetMediaBlobMissing(t *testing.T) {
 
 	// Delete the blob behind the metadata: media reads must surface 500, not
 	// silently return nothing.
-	if err := p.blobs.Delete(ctx, blobsNamespace, "bkt/obj.txt"); err != nil {
+	meta, err := p.objects.GetObjectMeta(ctx, "bkt", "obj.txt")
+	if err != nil {
+		t.Fatalf("get object meta: %v", err)
+	}
+	if err := p.blobs.Delete(ctx, blobsNamespace, blobKey("bkt", "obj.txt", meta.Generation)); err != nil {
 		t.Fatalf("delete blob: %v", err)
 	}
 	if _, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "obj.txt")); err == nil {

@@ -24,16 +24,16 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
 )
 
-// Resource types used in the ResourceStore.
+// Resource types used in the generic ResourceStore (IAM + ACL; buckets and
+// objects live in the dedicated gcs.ObjectStore).
 const (
-	rtBucket    = "gcs_bucket"
-	rtObject    = "gcs_object"
 	rtBucketIAM = "gcs_bucket_iam"
 	rtObjectIAM = "gcs_object_iam"
 	rtACL       = "gcs_acl"
@@ -57,8 +57,9 @@ const resumableSpillThreshold = 4 << 20 // 4 MiB
 
 // Provider implements the GCS JSON + media API.
 type Provider struct {
-	resources store.ResourceStore
-	blobs     blobfs.BlobStore
+	objects   gcs.ObjectStore     // dedicated store: buckets + objects (jc_gcs_*)
+	resources store.ResourceStore // generic store: IAM + ACL (jc_resources)
+	blobs     blobfs.BlobStore    // object bytes
 
 	mu      sync.Mutex
 	uploads map[string]*uploadSession // resumable upload sessions (in-memory)
@@ -79,9 +80,11 @@ type uploadSession struct {
 	lastAccess  time.Time // last chunk/status-query time, for the TTL sweep
 }
 
-// New returns a GCS provider backed by the given metadata and blob stores.
-func New(resources store.ResourceStore, blobs blobfs.BlobStore) *Provider {
+// New returns a GCS provider backed by the dedicated object store (buckets +
+// objects), the generic resource store (IAM + ACL), and the blob store (bytes).
+func New(objects gcs.ObjectStore, resources store.ResourceStore, blobs blobfs.BlobStore) *Provider {
 	p := &Provider{
+		objects:   objects,
 		resources: resources,
 		blobs:     blobs,
 		uploads:   make(map[string]*uploadSession),
@@ -94,25 +97,28 @@ func New(resources store.ResourceStore, blobs blobfs.BlobStore) *Provider {
 // seedGeneration bumps the generation counter past the highest stored
 // generation so generations remain monotonic across restarts (--dsn).
 func (p *Provider) seedGeneration(ctx context.Context) {
-	entries, err := p.resources.List(ctx, "", "", rtObject, "")
+	maxGenStr, err := p.objects.MaxGeneration(ctx)
 	if err != nil {
 		return
 	}
-	var maxGen int64
-	for _, e := range entries {
-		var o objectMeta
-		if json.Unmarshal(e.Data, &o) != nil {
-			continue
-		}
-		if g, err := strconv.ParseInt(o.Generation, 10, 64); err == nil && g > maxGen {
-			maxGen = g
-		}
+	maxGen, err := strconv.ParseInt(maxGenStr, 10, 64)
+	if err != nil {
+		return
 	}
 	p.genMu.Lock()
 	if maxGen >= p.gen {
 		p.gen = maxGen
 	}
 	p.genMu.Unlock()
+}
+
+// SeedGeneration re-reads the highest stored generation and bumps the in-memory
+// counter past it. In memory mode the state.json restore runs after the
+// provider is constructed, so the construction-time seed (New) alone would miss
+// restored generations under a frozen clock; the startup path calls this again
+// after restore to keep generations monotonic.
+func (p *Provider) SeedGeneration(ctx context.Context) {
+	p.seedGeneration(ctx)
 }
 
 // nextGen returns a unique, monotonically-increasing object generation.
@@ -138,9 +144,8 @@ func (p *Provider) Reset(_ context.Context) {
 	p.mu.Unlock()
 }
 
-// sweepSessions removes resumable sessions that have seen no activity for
-// longer than resumableSessionTTL, closing and deleting any spill files.
-// The caller must hold p.mu.
+// sweepSessions removes stale in-memory resumable sessions, closing and
+// deleting any spill files. The caller must hold p.mu.
 func (p *Provider) sweepSessions() {
 	now := clock.RealNow()
 	for id, sess := range p.uploads {
@@ -151,6 +156,19 @@ func (p *Provider) sweepSessions() {
 			}
 			delete(p.uploads, id)
 		}
+	}
+}
+
+// sweepStaleStore deletes resumable sessions in the durable store whose
+// last_access predates the TTL (best-effort; also catches orphans left behind
+// after a process restart, when the in-memory map is empty).
+func (p *Provider) sweepStaleStore(ctx context.Context) {
+	stale, err := p.objects.ListStaleResumable(ctx, clock.RealNow().Add(-resumableSessionTTL))
+	if err != nil {
+		return
+	}
+	for _, s := range stale {
+		_ = p.objects.DeleteResumable(ctx, s.UploadID)
 	}
 }
 
@@ -184,11 +202,14 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 // ─── metadata types ───────────────────────────────────────────────────────────
 
 type bucketMeta struct {
-	Name         string `json:"name"`
-	Location     string `json:"location,omitempty"`
-	StorageClass string `json:"storageClass,omitempty"`
-	TimeCreated  string `json:"timeCreated,omitempty"`
-	Updated      string `json:"updated,omitempty"`
+	Name            string         `json:"name"`
+	Location        string         `json:"location,omitempty"`
+	StorageClass    string         `json:"storageClass,omitempty"`
+	TimeCreated     string         `json:"timeCreated,omitempty"`
+	Updated         string         `json:"updated,omitempty"`
+	Versioning      map[string]any `json:"versioning,omitempty"`
+	RetentionPolicy map[string]any `json:"retentionPolicy,omitempty"`
+	Lifecycle       map[string]any `json:"lifecycle,omitempty"`
 }
 
 type objectMeta struct {
@@ -209,24 +230,163 @@ type objectMeta struct {
 	StorageClass   string            `json:"storageClass,omitempty"`
 	TimeCreated    string            `json:"timeCreated,omitempty"`
 	Updated        string            `json:"updated,omitempty"`
+	// Retention is the object-level retention policy (Object.retention).
+	Retention *objectRetention `json:"retention,omitempty"`
+	// RetentionExpirationTime is the server-determined expiry (RFC 3339).
+	RetentionExpirationTime string `json:"retentionExpirationTime,omitempty"`
+	TemporaryHold           bool   `json:"temporaryHold,omitempty"`
+	EventBasedHold          bool   `json:"eventBasedHold,omitempty"`
+	// TimeDeleted is set on non-live generations (versioning).
+	TimeDeleted string `json:"timeDeleted,omitempty"`
+}
+
+type objectRetention struct {
+	RetainUntilTime string `json:"retainUntilTime,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+}
+
+// toStoreObject converts the wire objectMeta into the store's ObjectMeta.
+func toStoreObject(o objectMeta) gcs.ObjectMeta {
+	tc, _ := time.Parse(time.RFC3339Nano, o.TimeCreated)
+	up, _ := time.Parse(time.RFC3339Nano, o.Updated)
+	size, _ := strconv.ParseInt(o.Size, 10, 64)
+	m := gcs.ObjectMeta{
+		Bucket:         o.Bucket,
+		Name:           o.Name,
+		Generation:     o.Generation,
+		Metageneration: o.Metageneration,
+		ContentType:    o.ContentType,
+		Size:           size,
+		MD5Hash:        o.Md5Hash,
+		CRC32C:         o.Crc32c,
+		StorageClass:   o.StorageClass,
+		Metadata:       o.Metadata,
+		TimeCreated:    tc,
+		Updated:        up,
+		TemporaryHold:  o.TemporaryHold,
+		EventBasedHold: o.EventBasedHold,
+	}
+	if o.Retention != nil && (o.Retention.Mode != "" || o.Retention.RetainUntilTime != "") {
+		rt, _ := time.Parse(time.RFC3339Nano, o.Retention.RetainUntilTime)
+		m.Retention = &gcs.ObjectRetention{RetainUntilTime: rt, Mode: o.Retention.Mode}
+	}
+	if o.TimeDeleted != "" {
+		if td, err := time.Parse(time.RFC3339Nano, o.TimeDeleted); err == nil {
+			m.TimeDeleted = &td
+		}
+	}
+	return m
+}
+
+// fromStoreObject converts a stored ObjectMeta back into the wire objectMeta,
+// re-deriving the derived fields (kind/id/etag/selfLink/mediaLink).
+func fromStoreObject(m gcs.ObjectMeta) objectMeta {
+	o := objectMeta{
+		Kind:           "storage#object",
+		Name:           m.Name,
+		Bucket:         m.Bucket,
+		Size:           strconv.FormatInt(m.Size, 10),
+		ContentType:    m.ContentType,
+		Md5Hash:        m.MD5Hash,
+		Crc32c:         m.CRC32C,
+		Etag:           "CAE=",
+		Metadata:       m.Metadata,
+		Generation:     m.Generation,
+		Metageneration: m.Metageneration,
+		StorageClass:   m.StorageClass,
+		TemporaryHold:  m.TemporaryHold,
+		EventBasedHold: m.EventBasedHold,
+	}
+	if !m.TimeCreated.IsZero() {
+		o.TimeCreated = m.TimeCreated.Format(time.RFC3339Nano)
+	}
+	if !m.Updated.IsZero() {
+		o.Updated = m.Updated.Format(time.RFC3339Nano)
+	}
+	if m.Retention != nil {
+		o.Retention = &objectRetention{Mode: m.Retention.Mode}
+		if !m.Retention.RetainUntilTime.IsZero() {
+			o.Retention.RetainUntilTime = m.Retention.RetainUntilTime.Format(time.RFC3339Nano)
+			o.RetentionExpirationTime = o.Retention.RetainUntilTime
+		}
+	}
+	if m.TimeDeleted != nil {
+		o.TimeDeleted = m.TimeDeleted.Format(time.RFC3339Nano)
+	}
+	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
+	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + m.Bucket + "/o/" + url.PathEscape(m.Name)
+	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + m.Bucket + "/o/" + url.PathEscape(m.Name) + "?alt=media"
+	return o
+}
+
+// blobKey returns the blob store key for an object generation. Every object
+// (versioned or not) is stored under a generation-specific key so overwriting a
+// versioned object never clobbers a prior generation's bytes.
+func blobKey(bucket, object, generation string) string {
+	return bucket + "/" + object + "/" + generation
 }
 
 // ─── buckets ──────────────────────────────────────────────────────────────────
 
+// bucketToMap converts a bucketMeta into the map stored by the ObjectStore.
+func bucketToMap(b bucketMeta) map[string]any {
+	data, _ := json.Marshal(b)
+	var m map[string]any
+	json.Unmarshal(data, &m)
+	return m
+}
+
+// mapToBucket converts a stored bucket map back into a bucketMeta.
+func mapToBucket(m map[string]any) bucketMeta {
+	data, _ := json.Marshal(m)
+	var b bucketMeta
+	json.Unmarshal(data, &b)
+	return b
+}
+
+// paginateBuckets applies pageToken/maxResults cursor pagination over a
+// name-sorted bucket list.
+func paginateBuckets(buckets []map[string]any, params map[string]any) ([]map[string]any, string) {
+	sort.Slice(buckets, func(i, j int) bool {
+		ni, _ := buckets[i]["name"].(string)
+		nj, _ := buckets[j]["name"].(string)
+		return ni < nj
+	})
+	limit := maxResults(params)
+	start := 0
+	if tok, _ := params["pageToken"].(string); tok != "" {
+		if cursor := decodeCursor(tok); cursor != "" {
+			for start < len(buckets) {
+				n, _ := buckets[start]["name"].(string)
+				if n > cursor {
+					break
+				}
+				start++
+			}
+		}
+	}
+	end := start + limit
+	if end > len(buckets) {
+		end = len(buckets)
+	}
+	page := buckets[start:end]
+	next := ""
+	if end < len(buckets) {
+		n, _ := page[len(page)-1]["name"].(string)
+		next = encodeCursor(n)
+	}
+	return page, next
+}
+
 func (p *Provider) BucketsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtBucket, "")
+	buckets, err := p.objects.ListBuckets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-
-	page, nextToken := paginateEntries(entries, nr.Params)
+	page, nextToken := paginateBuckets(buckets, nr.Params)
 	items := make([]any, 0, len(page))
-	for _, e := range page {
-		var b bucketMeta
-		if json.Unmarshal(e.Data, &b) == nil {
-			items = append(items, toBucketMap(b))
-		}
+	for _, m := range page {
+		items = append(items, toBucketMap(mapToBucket(m)))
 	}
 	resp := map[string]any{"kind": "storage#buckets", "items": items}
 	if nextToken != "" {
@@ -252,12 +412,14 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	} else {
 		b.StorageClass = "STANDARD"
 	}
+	b.Versioning = bodyMap(body, "versioning")
+	b.RetentionPolicy = bodyMap(body, "retentionPolicy")
+	b.Lifecycle = bodyMap(body, "lifecycle")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 
-	data, _ := json.Marshal(b)
-	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtBucket, ID: name, Data: data}); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
+	if err := p.objects.CreateBucket(ctx, nr.AccountID, name, bucketToMap(b)); err != nil {
+		if errors.Is(err, gcs.ErrAlreadyExists) {
 			return nil, model.NewProviderError("Conflict", "bucket already exists", 409)
 		}
 		return nil, err
@@ -267,29 +429,26 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtBucket, name)
+	meta, err := p.objects.GetBucket(ctx, name)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
 		return nil, err
 	}
-	var b bucketMeta
-	json.Unmarshal(e.Data, &b)
-	return provider.OK(toBucketMap(b)), nil
+	return provider.OK(toBucketMap(mapToBucket(meta))), nil
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtBucket, name)
+	meta, err := p.objects.GetBucket(ctx, name)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
 		return nil, err
 	}
-	var b bucketMeta
-	json.Unmarshal(e.Data, &b)
+	b := mapToBucket(meta)
 	// Preserve timeCreated; update only fields present in the request body.
 	body, _ := nr.Params["body"].(map[string]any)
 	if loc, _ := body["location"].(string); loc != "" {
@@ -298,9 +457,20 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	if sc, _ := body["storageClass"].(string); sc != "" {
 		b.StorageClass = sc
 	}
+	if _, ok := body["versioning"]; ok {
+		b.Versioning = bodyMap(body, "versioning")
+	}
+	if _, ok := body["retentionPolicy"]; ok {
+		b.RetentionPolicy = bodyMap(body, "retentionPolicy")
+	}
+	if _, ok := body["lifecycle"]; ok {
+		b.Lifecycle = bodyMap(body, "lifecycle")
+	}
 	b.Updated = clock.Now().Format(time.RFC3339Nano)
-	data, _ := json.Marshal(b)
-	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtBucket, ID: name, Data: data}); err != nil {
+	if err := p.objects.UpdateBucketMeta(ctx, name, bucketToMap(b)); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
 		return nil, err
 	}
 	return provider.OK(toBucketMap(b)), nil
@@ -308,21 +478,12 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
-	// A non-empty bucket cannot be deleted (409), matching real GCS. The store's
-	// List prefix is a substring match, so filter to the true "name/" prefix to
-	// avoid counting objects from sibling buckets whose names contain "name/".
-	objects, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtObject, name+"/")
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range objects {
-		if strings.HasPrefix(e.ID, name+"/") {
-			return nil, model.NewProviderError("bucketNotEmpty", "bucket is not empty", 409)
-		}
-	}
-	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtBucket, name); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+	if err := p.objects.DeleteBucket(ctx, name); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrBucketNotEmpty) {
+			return nil, model.NewProviderError("bucketNotEmpty", "bucket is not empty", 409)
 		}
 		return nil, err
 	}
@@ -331,29 +492,53 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 
 // ─── objects ──────────────────────────────────────────────────────────────────
 
+// scopeToBucket resolves the project that owns the given bucket and sets it as
+// the request's account scope. Buckets/objects live in the dedicated store
+// (keyed by globally-unique bucket name); IAM/ACL live in the generic store,
+// scoped by the bucket's owning project.
+func (p *Provider) scopeToBucket(ctx context.Context, nr *model.NormalizedRequest, bucket string) error {
+	meta, err := p.objects.GetBucket(ctx, bucket)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return store.ErrNotFound
+		}
+		return err
+	}
+	if pid, _ := meta["projectId"].(string); pid != "" {
+		nr.AccountID = pid
+	}
+	return nil
+}
+
 func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
 	}
-	prefix := bucket + "/"
-	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtObject, prefix)
-	if err != nil {
-		return nil, err
-	}
-	// The store's List prefix is a substring match; keep only true "bucket/"
-	// prefixed IDs so sibling buckets (e.g. "abkt") don't leak in.
-	filtered := entries[:0]
-	for _, e := range entries {
-		if strings.HasPrefix(e.ID, prefix) {
-			filtered = append(filtered, e)
+	versions, _ := nr.Params["versions"].(string)
+	var objs []gcs.ObjectMeta
+	var err error
+	if versions == "true" {
+		// ?versions=true lists every generation, including non-live ones.
+		objs, err = p.objects.ListObjectVersions(ctx, bucket)
+	} else {
+		objs, err = p.objects.ListObjects(ctx, bucket)
+		if err == nil {
+			objs = p.filterLifecycle(ctx, bucket, objs)
 		}
 	}
-	entries = filtered
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 
 	pfx, _ := nr.Params["prefix"].(string)
 	delim, _ := nr.Params["delimiter"].(string)
+	if versions == "true" {
+		delim = "" // versions listing does not group prefixes
+	}
 
 	// With a delimiter, group objects into common prefixes (folders). The
 	// combined item+prefix result set is paginated with the same cursor
@@ -366,12 +551,11 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		}
 		all := make([]listed, 0)
 		seen := map[string]bool{}
-		for _, e := range entries {
-			name := strings.TrimPrefix(e.ID, prefix)
-			if !strings.HasPrefix(name, pfx) {
+		for _, m := range objs {
+			if !strings.HasPrefix(m.Name, pfx) {
 				continue
 			}
-			rest := name[len(pfx):]
+			rest := m.Name[len(pfx):]
 			if i := strings.Index(rest, delim); i >= 0 {
 				common := pfx + rest[:i+len(delim)]
 				if !seen[common] {
@@ -380,11 +564,8 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 				}
 				continue
 			}
-			var o objectMeta
-			if json.Unmarshal(e.Data, &o) == nil {
-				o.Kind = "storage#object"
-				all = append(all, listed{name: name, item: toMap(o)})
-			}
+			o := fromStoreObject(m)
+			all = append(all, listed{name: m.Name, item: toMap(o)})
 		}
 		sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
 
@@ -427,26 +608,40 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	}
 
 	// No delimiter: prefix filter + pagination.
-	pfxFiltered := entries[:0]
-	for _, e := range entries {
-		if pfx == "" || strings.HasPrefix(strings.TrimPrefix(e.ID, prefix), pfx) {
-			pfxFiltered = append(pfxFiltered, e)
+	var filtered []gcs.ObjectMeta
+	for _, m := range objs {
+		if pfx == "" || strings.HasPrefix(m.Name, pfx) {
+			filtered = append(filtered, m)
 		}
 	}
-	entries = pfxFiltered
 
-	page, nextToken := paginateEntries(entries, nr.Params)
-	items := make([]any, 0, len(page))
-	for _, e := range page {
-		var o objectMeta
-		if json.Unmarshal(e.Data, &o) == nil {
-			o.Kind = "storage#object"
-			items = append(items, toMap(o))
+	// Cursor pagination over object names.
+	limit := maxResults(nr.Params)
+	start := 0
+	if tok, _ := nr.Params["pageToken"].(string); tok != "" {
+		if cursor := decodeCursor(tok); cursor != "" {
+			for start < len(filtered) && filtered[start].Name <= cursor {
+				start++
+			}
 		}
+	}
+	end := start + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	page := filtered[start:end]
+	next := ""
+	if end < len(filtered) {
+		next = encodeCursor(page[len(page)-1].Name)
+	}
+
+	items := make([]any, 0, len(page))
+	for _, m := range page {
+		items = append(items, toMap(fromStoreObject(m)))
 	}
 	resp := map[string]any{"kind": "storage#objects", "items": items}
-	if nextToken != "" {
-		resp["nextPageToken"] = nextToken
+	if next != "" {
+		resp["nextPageToken"] = next
 	}
 	return provider.OK(resp), nil
 }
@@ -456,7 +651,7 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
 	}
-	if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtBucket, bucket); err != nil {
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
@@ -475,30 +670,57 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 
 	media, _ := nr.Params[wire.MediaKey].([]byte)
 	contentType, _ := nr.Params[wire.ContentTypeKey].(string)
-	if contentType == "" {
-		if body, ok := nr.Params["body"].(map[string]any); ok {
-			contentType, _ = body["contentType"].(string)
-		}
+	body, _ := nr.Params["body"].(map[string]any)
+	if contentType == "" && body != nil {
+		contentType, _ = body["contentType"].(string)
 	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
 	now := clock.Now()
-	id := bucket + "/" + object
+	generation := p.nextGen()
+	id := blobKey(bucket, object, generation)
+
+	// Versioning + retention + holds are all driven by bucket config and the
+	// request body (GCP-native: bucket versioning.enabled, bucket
+	// retentionPolicy.retentionPeriod, object temporaryHold/eventBasedHold).
+	var versioned bool
+	var retention *objectRetention
+	bmeta, _ := p.objects.GetBucket(ctx, bucket)
+	if v, ok := bmeta["versioning"].(map[string]any); ok {
+		if en, _ := v["enabled"].(bool); en {
+			versioned = true
+		}
+	}
+	if rp, ok := bmeta["retentionPolicy"].(map[string]any); ok {
+		if period, _ := rp["retentionPeriod"].(string); period != "" {
+			if d := parseRetentionPeriod(period); d > 0 {
+				retention = &objectRetention{
+					RetainUntilTime: now.Add(d).Format(time.RFC3339Nano),
+					Mode:            "Unlocked",
+				}
+			}
+		}
+	}
+
 	o := objectMeta{
 		Kind:           "storage#object",
 		Name:           object,
 		Bucket:         bucket,
 		Size:           fmt.Sprintf("%d", len(media)),
 		ContentType:    contentType,
-		Generation:     p.nextGen(),
+		Generation:     generation,
 		Metageneration: "1",
 		StorageClass:   "STANDARD",
 		TimeCreated:    now.Format(time.RFC3339Nano),
 		Updated:        now.Format(time.RFC3339Nano),
+		Retention:      retention,
 	}
-	if body, ok := nr.Params["body"].(map[string]any); ok {
+	if retention != nil {
+		o.RetentionExpirationTime = retention.RetainUntilTime
+	}
+	if body != nil {
 		if md, ok := body["metadata"].(map[string]any); ok {
 			o.Metadata = make(map[string]string, len(md))
 			for k, v := range md {
@@ -507,11 +729,26 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 				}
 			}
 		}
+		if h, ok := body["temporaryHold"].(bool); ok {
+			o.TemporaryHold = h
+		}
+		if h, ok := body["eventBasedHold"].(bool); ok {
+			o.EventBasedHold = h
+		}
 	}
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
 	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object)
 	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object) + "?alt=media"
+
+	// Capture the prior live generation's blob key so a non-versioned overwrite
+	// can clean it up after the new generation is durably stored.
+	var priorBlobKey string
+	if !versioned {
+		if prev, err := p.objects.GetObjectMeta(ctx, bucket, object); err == nil && prev.Generation != generation {
+			priorBlobKey = blobKey(bucket, object, prev.Generation)
+		}
+	}
 
 	if stream, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
 		// Streaming upload: hash on the fly while writing to the blob store, so
@@ -541,16 +778,21 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		}
 	}
 
-	data, _ := json.Marshal(o)
-	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data}); err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data})
-		} else {
-			// Roll back the just-written blob so a failed metadata create does
-			// not leave an orphaned object (metadata absent, blob present).
-			_ = p.blobs.Delete(ctx, blobsNamespace, id)
-			return nil, err
-		}
+	storeMeta := toStoreObject(o)
+	var err error
+	if versioned {
+		err = p.objects.PutObjectGeneration(ctx, bucket, object, storeMeta)
+	} else {
+		err = p.objects.PutObjectMeta(ctx, bucket, object, storeMeta)
+	}
+	if err != nil {
+		// Roll back the just-written blob so a failed metadata write does not
+		// leave an orphaned object (metadata absent, blob present).
+		_ = p.blobs.Delete(ctx, blobsNamespace, id)
+		return nil, err
+	}
+	if priorBlobKey != "" {
+		_ = p.blobs.Delete(ctx, blobsNamespace, priorBlobKey)
 	}
 	return provider.OK(toMap(o)), nil
 }
@@ -562,26 +804,21 @@ func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	id := bucket + "/" + object
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 500.
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id)
+	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "object not found", 404)
-		}
 		return nil, err
 	}
+	id := blobKey(bucket, object, meta.Generation)
 	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
 		return nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
 	}
-	var o objectMeta
-	json.Unmarshal(e.Data, &o)
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
 		Data: map[string]any{
 			"_stream":           rc,
-			wire.ContentTypeKey: o.ContentType,
+			wire.ContentTypeKey: meta.ContentType,
 		},
 	}, nil
 }
@@ -592,16 +829,14 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	id := bucket + "/" + object
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id)
+	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		return nil, err
 	}
-	var o objectMeta
-	json.Unmarshal(e.Data, &o)
+	o := fromStoreObject(meta)
 
 	// Strict replace: writable metadata is taken verbatim from the request —
 	// omitted fields are cleared.
@@ -612,11 +847,9 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 		o.StorageClass = "STANDARD"
 	}
 
-	o.Kind = "storage#object"
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	data, _ := json.Marshal(o)
-	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data}); err != nil {
+	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
 		return nil, err
 	}
 	return provider.OK(toMap(o)), nil
@@ -628,18 +861,16 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	id := bucket + "/" + object
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id)
+	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		return nil, err
 	}
 	// Preserve size/md5Hash/generation/storageClass/timeCreated; update only
 	// the fields present in the request and bump metageneration.
-	var o objectMeta
-	json.Unmarshal(e.Data, &o)
+	o := fromStoreObject(meta)
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if ct, _ := body["contentType"].(string); ct != "" {
 			o.ContentType = ct
@@ -651,11 +882,9 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 			o.Metadata = bodyMetadata(nr.Params)
 		}
 	}
-	o.Kind = "storage#object"
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	data, _ := json.Marshal(o)
-	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtObject, ID: id, Data: data}); err != nil {
+	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
 		return nil, err
 	}
 	return provider.OK(toMap(o)), nil
@@ -703,17 +932,96 @@ func bumpMeta(m string) string {
 func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	id := bucket + "/" + object
-	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtObject, id); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+
+	// Retention check first: a held or retention-active object cannot be
+	// deleted (GCS returns PERMISSION_DENIED).
+	if meta, err := p.objects.GetObjectMeta(ctx, bucket, object); err == nil {
+		if objectProtected(meta) {
+			return nil, model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
+		}
+	}
+
+	// Collect every generation's blob key before deleting metadata, so the
+	// bytes can be removed too.
+	var blobKeys []string
+	if gens, err := p.objects.ListObjectVersions(ctx, bucket); err == nil {
+		for _, m := range gens {
+			if m.Name == object {
+				blobKeys = append(blobKeys, blobKey(bucket, object, m.Generation))
+			}
+		}
+	}
+
+	if err := p.objects.DeleteObjectMeta(ctx, bucket, object); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		return nil, err
 	}
-	if err := p.blobs.Delete(ctx, blobsNamespace, id); err != nil {
-		return nil, err
+	for _, id := range blobKeys {
+		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// objectProtected reports whether an object's holds or active retention block
+// deletion. While temporaryHold/eventBasedHold is set, or the object's
+// retention expiration is still in the future, the object cannot be deleted.
+func objectProtected(m gcs.ObjectMeta) bool {
+	if m.TemporaryHold || m.EventBasedHold {
+		return true
+	}
+	if m.Retention != nil && !m.Retention.RetainUntilTime.IsZero() {
+		return clock.Now().Before(m.Retention.RetainUntilTime)
+	}
+	return false
+}
+
+// filterLifecycle lazily applies bucket lifecycle Delete rules: an object whose
+// age (in days) reaches condition.age is dropped from the listing. This is the
+// emulator's analogue of the AWS S3 lazy-retention sweep.
+func (p *Provider) filterLifecycle(ctx context.Context, bucket string, objs []gcs.ObjectMeta) []gcs.ObjectMeta {
+	bmeta, err := p.objects.GetBucket(ctx, bucket)
+	if err != nil {
+		return objs
+	}
+	lc, _ := bmeta["lifecycle"].(map[string]any)
+	if lc == nil {
+		return objs
+	}
+	out := objs[:0]
+	for _, m := range objs {
+		if !objectLifecycleExpired(lc, m.TimeCreated) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// objectLifecycleExpired reports whether a Delete rule's condition.age matches
+// the object's creation time.
+func objectLifecycleExpired(lc map[string]any, created time.Time) bool {
+	rules, _ := lc["rule"].([]any)
+	now := clock.Now()
+	for _, rr := range rules {
+		rule, ok := rr.(map[string]any)
+		if !ok {
+			continue
+		}
+		action, _ := rule["action"].(map[string]any)
+		if actionType, _ := action["type"].(string); actionType != "Delete" {
+			continue
+		}
+		cond, _ := rule["condition"].(map[string]any)
+		ageDays, _ := cond["age"].(float64)
+		if ageDays <= 0 {
+			continue
+		}
+		if now.Sub(created) >= time.Duration(ageDays)*24*time.Hour {
+			return true
+		}
+	}
+	return false
 }
 
 // toMap converts an objectMeta struct into a map for JSON-encoding by the codec.
@@ -726,7 +1034,11 @@ func toMap(o objectMeta) map[string]any {
 
 // toBucketMap converts a bucketMeta struct into a map for JSON-encoding.
 func toBucketMap(b bucketMeta) map[string]any {
-	return map[string]any{
+	versioning := b.Versioning
+	if versioning == nil {
+		versioning = map[string]any{"enabled": false}
+	}
+	out := map[string]any{
 		"kind":           "storage#bucket",
 		"id":             b.Name,
 		"name":           b.Name,
@@ -740,31 +1052,86 @@ func toBucketMap(b bucketMeta) map[string]any {
 		"projectNumber":  "0",
 		"selfLink":       "https://www.googleapis.com/storage/v1/b/" + b.Name,
 		"etag":           "CAE=",
-		"versioning":     map[string]any{"enabled": false},
+		"versioning":     versioning,
 		"iamConfiguration": map[string]any{
 			"uniformBucketLevelAccess": map[string]any{"enabled": false},
 			"bucketPolicyOnly":         map[string]any{"enabled": false},
 			"publicAccessPrevention":   "inherited",
 		},
 	}
+	if b.RetentionPolicy != nil {
+		out["retentionPolicy"] = b.RetentionPolicy
+	}
+	if b.Lifecycle != nil {
+		out["lifecycle"] = b.Lifecycle
+	}
+	return out
+}
+
+// bodyMap returns the named object-valued field from the request body, or nil.
+func bodyMap(body map[string]any, key string) map[string]any {
+	if body == nil {
+		return nil
+	}
+	m, _ := body[key].(map[string]any)
+	return m
+}
+
+// parseRetentionPeriod parses a retentionPeriod string. GCS carries this as a
+// decimal-second string ("86400"), while clients may also send a Go-style
+// duration ("86400s"); both are accepted.
+func parseRetentionPeriod(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		return d
+	}
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return time.Duration(n) * time.Second
+	}
+	return 0
 }
 
 // objectResponse returns the JSON metadata for an object, or 404.
 func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	id := bucket + "/" + object
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id)
+	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "object not found", 404)
-		}
 		return nil, err
 	}
-	var o objectMeta
-	json.Unmarshal(e.Data, &o)
-	o.Kind = "storage#object"
+	o := fromStoreObject(meta)
 	return provider.OK(toMap(o)), nil
+}
+
+// getObjectForRead resolves the object metadata for a read, honouring the
+// ?generation= param (specific generation) or defaulting to the live
+// generation, and applying lazy lifecycle deletion for live reads.
+func (p *Provider) getObjectForRead(ctx context.Context, bucket, object string, params map[string]any) (gcs.ObjectMeta, error) {
+	generation, _ := params["generation"].(string)
+	var meta gcs.ObjectMeta
+	var err error
+	if generation != "" {
+		meta, err = p.objects.GetObjectGeneration(ctx, bucket, object, generation)
+	} else {
+		meta, err = p.objects.GetObjectMeta(ctx, bucket, object)
+	}
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return gcs.ObjectMeta{}, model.NewProviderError("NotFound", "object not found", 404)
+		}
+		return gcs.ObjectMeta{}, err
+	}
+	// Lazy lifecycle: drop a live object whose age exceeds a Delete rule.
+	if generation == "" {
+		if bmeta, berr := p.objects.GetBucket(ctx, bucket); berr == nil {
+			if objectLifecycleExpired(bmeta, meta.TimeCreated) {
+				return gcs.ObjectMeta{}, model.NewProviderError("NotFound", "object not found", 404)
+			}
+		}
+	}
+	return meta, nil
 }
 
 // ─── pagination helpers ────────────────────────────────────────────────────────
@@ -788,30 +1155,6 @@ func maxResults(params map[string]any) int {
 		}
 	}
 	return 1000
-}
-
-// paginateEntries applies the GCS pageToken cursor + maxResults to a sorted
-// entry list. pageToken is an opaque base64 of the last-returned entry ID.
-func paginateEntries(entries []store.ResourceEntry, params map[string]any) ([]store.ResourceEntry, string) {
-	limit := maxResults(params)
-	start := 0
-	if tok, _ := params["pageToken"].(string); tok != "" {
-		if cursor := decodeCursor(tok); cursor != "" {
-			for start < len(entries) && entries[start].ID <= cursor {
-				start++
-			}
-		}
-	}
-	end := start + limit
-	if end > len(entries) {
-		end = len(entries)
-	}
-	page := entries[start:end]
-	next := ""
-	if end < len(entries) {
-		next = encodeCursor(entries[end-1].ID)
-	}
-	return page, next
 }
 
 // ─── IAM policy ───────────────────────────────────────────────────────────────
@@ -844,6 +1187,12 @@ func defaultPolicy(bucket, project, resourceID string) iamPolicy {
 
 func (p *Provider) BucketsGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	pol := defaultPolicy(bucket, nr.AccountID, nr.ResourceID("gcs-bucket-policy", bucket))
 	if e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtBucketIAM, bucket); err == nil {
 		json.Unmarshal(e.Data, &pol)
@@ -862,6 +1211,12 @@ func (p *Provider) BucketsGetIamPolicy(ctx context.Context, nr *model.Normalized
 // stored policy is rejected with 409.
 func (p *Provider) BucketsSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	return p.setIamPolicy(ctx, nr, rtBucketIAM, bucket, nr.ResourceID("gcs-bucket-policy", bucket))
 }
 
@@ -871,6 +1226,12 @@ func (p *Provider) ObjectsGetIamPolicy(ctx context.Context, nr *model.Normalized
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	id := bucket + "/" + object
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	if err := p.requireObject(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -893,6 +1254,12 @@ func (p *Provider) ObjectsSetIamPolicy(ctx context.Context, nr *model.Normalized
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	id := bucket + "/" + object
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	if err := p.requireObject(ctx, nr, id); err != nil {
 		return nil, err
 	}
@@ -902,8 +1269,9 @@ func (p *Provider) ObjectsSetIamPolicy(ctx context.Context, nr *model.Normalized
 // requireObject returns a 404 ProviderError when the object's metadata is
 // absent, mirroring the GCS JSON API behavior for object-scoped endpoints.
 func (p *Provider) requireObject(ctx context.Context, nr *model.NormalizedRequest, id string) error {
-	if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtObject, id); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+	bucket, object, _ := strings.Cut(id, "/")
+	if _, err := p.objects.GetObjectMeta(ctx, bucket, object); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return model.NewProviderError("NotFound", "object not found", 404)
 		}
 		return err
@@ -1053,23 +1421,47 @@ func (p *Provider) insertACL(ctx context.Context, nr *model.NormalizedRequest, b
 
 func (p *Provider) BucketACLList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	return p.listACL(ctx, nr, bucket, "", "storage#bucketAccessControls")
 }
 
 func (p *Provider) BucketACLInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	return p.insertACL(ctx, nr, bucket, "", "storage#bucketAccessControl")
 }
 
 func (p *Provider) ObjectACLList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	return p.listACL(ctx, nr, bucket, object, "storage#objectAccessControls")
 }
 
 func (p *Provider) ObjectACLInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
 	return p.insertACL(ctx, nr, bucket, object, "storage#objectAccessControl")
 }
 
@@ -1089,14 +1481,28 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
 
 	id := p.nextGen() // atomic + monotonic, collision-free under concurrency
+	now := clock.RealNow()
 	p.mu.Lock()
 	p.sweepSessions()
 	if len(p.uploads) >= maxUploadSessions {
 		p.mu.Unlock()
 		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
 	}
-	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, lastAccess: clock.RealNow()}
+	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, lastAccess: now}
 	p.mu.Unlock()
+
+	// Sweep stale sessions from the durable store (may hold orphans from a
+	// prior process restart that are no longer in the in-memory map).
+	p.sweepStaleStore(ctx)
+
+	if err := p.objects.InitResumable(ctx, gcs.ResumableSession{
+		UploadID: id, Bucket: bucket, Name: object, ContentType: ct, LastAccess: now,
+	}); err != nil {
+		p.mu.Lock()
+		delete(p.uploads, id)
+		p.mu.Unlock()
+		return nil, err
+	}
 
 	base, _ := nr.Params[wire.BaseURLKey].(string)
 	if base == "" {
@@ -1160,6 +1566,7 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	object := sess.Object
 	contentType := sess.ContentType
 	length := sess.length
+	tmpPath := sess.tmpPath
 	var stream io.Reader
 	var closeStream func()
 	if complete {
@@ -1169,16 +1576,27 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 				return nil, fmt.Errorf("resumable upload: seek spill file: %w", err)
 			}
 			stream = sess.tmpFile
-			tmpPath := sess.tmpPath
 			closeStream = func() {
 				sess.tmpFile.Close()
-				os.Remove(tmpPath)
+				os.Remove(sess.tmpPath)
 			}
 		} else {
 			stream = bytes.NewReader(sess.buf)
 		}
 	}
 	p.mu.Unlock()
+
+	// Mirror the session metadata to the durable store so the session survives
+	// a process restart (the temp file lives on the local filesystem, matching
+	// the blobfs persistence model).
+	if complete {
+		_ = p.objects.DeleteResumable(ctx, uploadID)
+	} else {
+		_ = p.objects.UpdateResumable(ctx, gcs.ResumableSession{
+			UploadID: uploadID, Bucket: bucket, Name: object, ContentType: contentType,
+			Length: length, TmpPath: tmpPath, LastAccess: clock.RealNow(),
+		})
+	}
 
 	if !complete {
 		rng := fmt.Sprintf("bytes=0-%d", length-1)

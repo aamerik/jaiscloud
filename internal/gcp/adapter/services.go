@@ -1,9 +1,6 @@
 package gcp
 
 import (
-	"net/http"
-	"strings"
-
 	"jaiscloud/internal/adapter"
 )
 
@@ -28,13 +25,34 @@ type ServiceDescriptor struct {
 }
 
 // gcpServices is the authoritative list of GCP services known to JaisCloud.
-// Add one entry here when wiring in a new service — nothing else needs changing.
+// GCS uses path-prefix detection; the /v1/projects/{project}/... services use
+// segment-based detection (see detectV1Service) since they share the /v1/ prefix.
 var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "storage",
 		PathPrefixes:   []string{"/storage/v1/", "/upload/storage/v1/", "/download/storage/v1/"},
 		ProviderPrefix: "Storage",
 		Codec:          func() adapter.Codec { return &GCSCodec{} },
+	},
+	{
+		ServiceName:    "pubsub",
+		ProviderPrefix: "PubSub",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "pubsub"} },
+	},
+	{
+		ServiceName:    "secretmanager",
+		ProviderPrefix: "Secret",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "secretmanager"} },
+	},
+	{
+		ServiceName:    "kms",
+		ProviderPrefix: "KMS",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "kms"} },
+	},
+	{
+		ServiceName:    "iam",
+		ProviderPrefix: "IAM",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "iam"} },
 	},
 }
 
@@ -48,47 +66,3 @@ func init() {
 		serviceProviderMap[svc.ServiceName] = svc.ProviderPrefix
 	}
 }
-
-// DetectService identifies the GCP service from the HTTP request path.
-// GCP has no SigV4 scope; the path is the sole reliable discriminator.
-func DetectService(r *http.Request) (service string, source DetectionSource) {
-	p := r.URL.Path
-	for _, svc := range gcpServices {
-		for _, prefix := range svc.PathPrefixes {
-			if strings.HasPrefix(p, prefix) {
-				return svc.ServiceName, SourcePath
-			}
-		}
-	}
-	// GCS media downloads use the "raw" URL form /{bucket}/{object} (no JSON-API
-	// prefix). The storage client derives this base from the emulator endpoint.
-	// Recognise it as a storage media request when no other service prefix
-	// matched and the path has at least a bucket and an object segment.
-	if isRawStorageMediaPath(r) {
-		return "storage", SourcePath
-	}
-	return "", SourceUnknown
-}
-
-// isRawStorageMediaPath reports whether r is a GCS raw media download of the
-// form /{bucket}/{object} (GET/HEAD). Admin routes and JSON-API prefixes are
-// handled elsewhere; only genuine object downloads reach this fallback.
-func isRawStorageMediaPath(r *http.Request) bool {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return false
-	}
-	p := strings.TrimPrefix(r.URL.Path, "/")
-	if p == "" || strings.HasPrefix(p, "_jaiscloud") {
-		return false
-	}
-	idx := strings.IndexByte(p, '/')
-	return idx > 0 && idx < len(p)-1
-}
-
-// DetectionSource indicates how the service was identified.
-type DetectionSource int
-
-const (
-	SourceUnknown DetectionSource = iota
-	SourcePath                    // URL path prefix matched a service
-)
