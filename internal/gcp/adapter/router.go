@@ -71,7 +71,17 @@ func detectV1Service(path string) string {
 	if pi < 0 || pi+2 >= len(seg) {
 		return ""
 	}
-	switch detectResourceType(seg[pi+2:]) {
+	rest := seg[pi+2:]
+	// Strip a trailing custom-method suffix (":commit", ":runQuery", ...) from
+	// the last segment so "documents:commit" detects as "documents" (mirrors the
+	// JSONCodec.Decode custom-method handling).
+	if len(rest) > 0 {
+		last := rest[len(rest)-1]
+		if i := strings.IndexByte(last, ':'); i >= 0 {
+			rest[len(rest)-1] = last[:i]
+		}
+	}
+	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"
 	case "secrets":
@@ -80,6 +90,8 @@ func detectV1Service(path string) string {
 		return "kms"
 	case "serviceAccounts", "keys":
 		return "iam"
+	case "documents", "indexes":
+		return "firestore"
 	}
 	return ""
 }

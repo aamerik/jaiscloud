@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
 
@@ -37,7 +38,7 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 	}
 	rest := seg[pi+2:]
 
-	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}}
+	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
 	m, err := parseJSON(body)
@@ -90,6 +91,9 @@ func (c *JSONCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResp
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+	if raw, ok := resp.Data[wire.RawJSONKey].(json.RawMessage); ok {
+		return status, headers, raw
+	}
 	out, err := json.Marshal(resp.Data)
 	if err != nil {
 		return http.StatusInternalServerError, headers, []byte(`{"error":{"code":500,"message":"encode failure","status":"INTERNAL"}}`)
@@ -105,11 +109,15 @@ func (c *JSONCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provide
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+	statusStr := perr.Status
+	if statusStr == "" {
+		statusStr = gcpStatusString(status)
+	}
 	env := map[string]any{
 		"error": map[string]any{
 			"code":    status,
 			"message": perr.Message,
-			"status":  gcpStatusString(status),
+			"status":  statusStr,
 		},
 	}
 	out, _ := json.Marshal(env)
@@ -130,6 +138,16 @@ func detectResourceType(segs []string) string {
 			return "subscriptions"
 		case "secrets":
 			return "secrets"
+		case "documents":
+			// Firestore document paths always contain the "documents" marker
+			// after "databases/{db}", so it wins over the generic "keys" /
+			// "serviceAccounts" cases below (a document collection could be
+			// named "keys").
+			return "documents"
+		case "indexes":
+			// Firestore composite-index admin paths
+			// (.../collectionGroups/{cg}/indexes[/{id}]).
+			return "indexes"
 		case "keys":
 			return "keys" // service account keys
 		case "cryptoKeyVersions":
@@ -246,6 +264,27 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			case "signJwt":
 				return "ServiceAccountSignJwt"
 			}
+		case "documents":
+			// Custom methods POSTed to the "documents" collection marker:
+			// documents:commit, documents:runQuery, documents:batchWrite, etc.
+			switch custom {
+			case "commit":
+				return "Commit"
+			case "runQuery":
+				return "RunQuery"
+			case "runAggregationQuery":
+				return "RunAggregationQuery"
+			case "batchWrite":
+				return "BatchWrite"
+			case "batchGet":
+				return "BatchGet"
+			case "beginTransaction":
+				return "BeginTransaction"
+			case "rollback":
+				return "Rollback"
+			case "listCollectionIds":
+				return "ListCollectionIds"
+			}
 		}
 	}
 
@@ -338,6 +377,54 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 		case method == http.MethodDelete:
 			return "ServiceAccountKeyDelete"
 		}
+	case "documents":
+		// Firestore: an even (positive) number of segments after "documents"
+		// is a document; an odd count is a collection. Custom methods
+		// (:commit, :runQuery, :batchWrite, :beginTransaction, :rollback,
+		// :batchGet, :listCollectionIds) are handled by the custom switch
+		// above.
+		segs := segmentsAfterDocuments(name)
+		isDoc := segs > 0 && segs%2 == 0
+		switch {
+		case method == http.MethodPost && !isDoc:
+			return "CreateDocument"
+		case method == http.MethodGet && isDoc:
+			return "GetDocument"
+		case method == http.MethodGet && !isDoc:
+			// documents.list / documents.listDocuments share one wire path
+			// (GET on a collection); both are served by the ListDocuments
+			// handler.
+			return "ListDocuments"
+		case method == http.MethodPatch && isDoc:
+			return "PatchDocument"
+		case method == http.MethodDelete && isDoc:
+			return "DeleteDocument"
+		}
+	case "indexes":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateIndex"
+		case isCollection && method == http.MethodGet:
+			return "ListIndexes"
+		case method == http.MethodGet:
+			return "GetIndex"
+		case method == http.MethodDelete:
+			return "DeleteIndex"
+		}
 	}
 	return ""
+}
+
+// segmentsAfterDocuments returns the number of path segments after the
+// "documents" marker in a Firestore resource name (e.g.
+// "databases/(default)/documents/cities/SF" → 2). An even (positive) count is a
+// document; an odd count is a collection.
+func segmentsAfterDocuments(name string) int {
+	parts := strings.Split(name, "/")
+	for i, p := range parts {
+		if p == "documents" {
+			return len(parts) - i - 1
+		}
+	}
+	return 0
 }

@@ -21,12 +21,14 @@ import (
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	"jaiscloud/internal/gcp/crypto"
+	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	gcpstore "jaiscloud/internal/gcp/store"
+	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
@@ -117,22 +119,26 @@ func startCmd() *cobra.Command {
 			kmsP := kmsprovider.New(stores.keys)
 			iamP := iamprovider.New(stores.resources)
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
+			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
 				Register(kmsP).
 				Register(iamP).
-				Register(pubsubP)
+				Register(pubsubP).
+				Register(firestoreP)
 
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(stores.objects)
 			adminHandler.RegisterResetter(stores.messages)
 			adminHandler.RegisterResetter(stores.secrets)
 			adminHandler.RegisterResetter(stores.keys)
+			adminHandler.RegisterResetter(stores.documents)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
+			adminHandler.RegisterResetter(firestoreP)
 			if snap, ok := stores.resources.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("resources", snap)
 			}
@@ -147,6 +153,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.keys.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("keys", snap)
+			}
+			if snap, ok := stores.documents.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("firestore_documents", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -295,6 +304,7 @@ type stores struct {
 	messages  pubsubstore.Messages
 	secrets   secretmanagerstore.Store
 	keys      kmsstore.Store
+	documents firestorestore.FirestoreStore
 	resources store.ResourceStore
 	blobs     blobfs.BlobStore
 	close     func()
@@ -320,6 +330,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			messages:  pubsubstore.NewPostgresMessages(pg.Pool()),
 			secrets:   secretmanagerstore.NewPostgresStore(pg.Pool()),
 			keys:      kmsstore.NewPostgresStore(pg.Pool()),
+			documents: firestorestore.NewPostgresStore(pg.Pool()),
 			resources: pg,
 			blobs:     blobs,
 			close:     func() { pg.Close() },
@@ -331,6 +342,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			messages:  pubsubstore.NewMemoryMessages(),
 			secrets:   secretmanagerstore.NewMemoryStore(),
 			keys:      kmsstore.NewMemoryStore(),
+			documents: firestorestore.NewMemoryStore(),
 			resources: store.NewMemoryResourceStore(),
 			blobs:     blobfs.NewMemoryBlobStore(),
 			close:     func() {},
@@ -345,6 +357,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		messages:  pubsubstore.NewMemoryMessages(),
 		secrets:   secretmanagerstore.NewMemoryStore(),
 		keys:      kmsstore.NewMemoryStore(),
+		documents: firestorestore.NewMemoryStore(),
 		resources: store.NewMemoryResourceStore(),
 		blobs:     blobs,
 		close:     func() {},

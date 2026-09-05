@@ -41,6 +41,10 @@ var formatters = map[string]func(project, name string) string{
 	},
 	// IAM — service accounts are identified by their email in the full name.
 	"service-account": func(p, n string) string { return fmt.Sprintf("projects/%s/serviceAccounts/%s", p, n) },
+	// Firestore — document names: projects/{p}/databases/{db}/documents/{path}.
+	// The name argument is the relative path after the project, i.e.
+	// "databases/{db}/documents/{path}".
+	"firestore-document": func(p, n string) string { return fmt.Sprintf("projects/%s/%s", p, n) },
 	// Cloud Functions
 	"cloud-function": func(p, n string) string { return fmt.Sprintf("projects/%s/locations/-/functions/%s", p, n) },
 }
