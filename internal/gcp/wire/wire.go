@@ -41,4 +41,9 @@ const (
 	// CSEKKeySHA256 carries the base64 "x-goog-encryption-key-sha256" header
 	// value as a string in NormalizedRequest.Params (codec → provider).
 	CSEKKeySHA256 = "x-goog-encryption-key-sha256"
+	// RawJSONKey carries a json.RawMessage in ProviderResponse.Data that the codec
+	// emits verbatim (used by server-streaming REST methods — Firestore runQuery
+	// and batchGet — whose response body is newline-delimited JSON, one JSON
+	// object per line, not a JSON array or a single object).
+	RawJSONKey = "jaiscloud:rawJSON"
 )

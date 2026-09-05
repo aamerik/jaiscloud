@@ -54,6 +54,11 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "IAM",
 		Codec:          func() adapter.Codec { return &JSONCodec{Service: "iam"} },
 	},
+	{
+		ServiceName:    "firestore",
+		ProviderPrefix: "Firestore",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "firestore"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.
