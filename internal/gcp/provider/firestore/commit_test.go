@@ -78,6 +78,74 @@ func TestTransactionMissingReadAbortsOnConcurrentCreate(t *testing.T) {
 	}
 }
 
+func TestCommitRejectsMalformedTransaction(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	name := "projects/proj/databases/(default)/documents/cities/SF"
+
+	// Malformed transaction token → 400 INVALID_ARGUMENT.
+	badNR := testNR()
+	badNR.Params["body"] = map[string]any{
+		"transaction": "not-base64!!!",
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"b": map[string]any{"integerValue": "2"}},
+				},
+			},
+		},
+	}
+	if _, err := p.Commit(ctx, badNR); err == nil {
+		t.Fatal("expected INVALID_ARGUMENT for malformed transaction")
+	} else {
+		assertInvalidArgumentErr(t, err)
+	}
+
+	// The write must not have been applied (no silent non-transactional commit).
+	if _, err := p.store.GetDocument(ctx, name); err == nil {
+		t.Fatal("expected document to be absent after rejected commit")
+	}
+}
+
+func TestRollbackRejectsMalformedTransaction(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := testNR()
+	nr.Params["body"] = map[string]any{"transaction": "not-base64!!!"}
+	if _, err := p.Rollback(ctx, nr); err == nil {
+		t.Fatal("expected INVALID_ARGUMENT for malformed transaction")
+	} else {
+		assertInvalidArgumentErr(t, err)
+	}
+}
+
+func TestCommitWithoutTransactionSucceeds(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	name := "projects/proj/databases/(default)/documents/cities/SF"
+
+	// Absent transaction → normal non-transactional commit.
+	nr := testNR()
+	nr.Params["body"] = map[string]any{
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"b": map[string]any{"integerValue": "2"}},
+				},
+			},
+		},
+	}
+	if _, err := p.Commit(ctx, nr); err != nil {
+		t.Fatalf("commit without transaction: %v", err)
+	}
+	if _, err := p.store.GetDocument(ctx, name); err != nil {
+		t.Fatalf("expected document to be present after commit, got %v", err)
+	}
+}
+
 func TestDocumentsGetMissingWithoutTransaction(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()

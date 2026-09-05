@@ -1,20 +1,13 @@
 package firestore
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
-	"jaiscloud/internal/clock"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
-	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/provider"
 )
 
 // ─── wire request types (decoded from the JSON body) ──────────────────────────
@@ -82,82 +75,6 @@ type runQueryRequestWire struct {
 	Transaction     string           `json:"transaction,omitempty"`
 }
 
-// ─── transaction state (provider-scoped) ─────────────────────────────────────
-
-// readSet records the documents read within a transaction for optimistic
-// concurrency re-validation at commit.
-type readSet struct {
-	reads map[string]firestorestore.ReadRef
-}
-
-// decodeBody round-trips nr.Params["body"] into a typed struct.
-func decodeBody(nr *model.NormalizedRequest, v any) error {
-	body, _ := nr.Params["body"]
-	if body == nil {
-		body = map[string]any{}
-	}
-	b, err := json.Marshal(body)
-	if err != nil {
-		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
-	}
-	if err := json.Unmarshal(b, v); err != nil {
-		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
-	}
-	return nil
-}
-
-// recordRead registers a document read in a transaction's read-set. Missing
-// documents are recorded with Exists=false so a concurrent create aborts.
-func (p *Provider) recordRead(txnID, name string, doc firestorestore.Document, exists bool) {
-	if txnID == "" {
-		return
-	}
-	p.txnMu.Lock()
-	defer p.txnMu.Unlock()
-	rs := p.readSets[txnID]
-	if rs == nil {
-		return
-	}
-	if rs.reads == nil {
-		rs.reads = make(map[string]firestorestore.ReadRef)
-	}
-	rs.reads[name] = firestorestore.ReadRef{Name: name, Exists: exists, UpdateTime: doc.UpdateTime}
-}
-
-// readSetFor returns the read-set entries for a transaction, or nil.
-func (p *Provider) readSetFor(txnID string) []firestorestore.ReadRef {
-	if txnID == "" {
-		return nil
-	}
-	p.txnMu.Lock()
-	defer p.txnMu.Unlock()
-	rs := p.readSets[txnID]
-	if rs == nil || len(rs.reads) == 0 {
-		return nil
-	}
-	out := make([]firestorestore.ReadRef, 0, len(rs.reads))
-	for _, r := range rs.reads {
-		out = append(out, r)
-	}
-	return out
-}
-
-// clearReadSet removes a transaction's read-set (after commit/rollback).
-func (p *Provider) clearReadSet(txnID string) {
-	p.txnMu.Lock()
-	defer p.txnMu.Unlock()
-	delete(p.readSets, txnID)
-}
-
-// newTxnID returns an opaque base64 transaction ID.
-func newTxnID() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "txn-" + base64.RawURLEncoding.EncodeToString([]byte(time.Now().String()))
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
 // ─── error helpers ────────────────────────────────────────────────────────────
 
 // newPreconditionErr returns a FAILED_PRECONDITION error at HTTP 400 (missing
@@ -183,107 +100,6 @@ func mapCommitError(err error) error {
 	}
 }
 
-// ─── handlers ─────────────────────────────────────────────────────────────────
-
-// BeginTransaction implements documents.beginTransaction.
-func (p *Provider) BeginTransaction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	txnID := newTxnID()
-	p.txnMu.Lock()
-	if p.readSets == nil {
-		p.readSets = make(map[string]*readSet)
-	}
-	p.readSets[txnID] = &readSet{reads: map[string]firestorestore.ReadRef{}}
-	p.txnMu.Unlock()
-	return provider.OK(map[string]any{"transaction": txnID}), nil
-}
-
-// Rollback implements documents.rollback.
-func (p *Provider) Rollback(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	var req rollbackRequestWire
-	if err := decodeBody(nr, &req); err != nil {
-		return nil, err
-	}
-	p.clearReadSet(req.Transaction)
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
-}
-
-// Commit implements documents.commit: an atomic batch of writes with optimistic
-// preconditions and transaction read-set validation.
-func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	var req commitRequestWire
-	if err := decodeBody(nr, &req); err != nil {
-		return nil, err
-	}
-	if len(req.Writes) > maxWriteBatchSize {
-		return nil, model.NewProviderError("InvalidArgument",
-			"a commit may contain at most "+strconv.Itoa(maxWriteBatchSize)+" writes", 400)
-	}
-	if size, err := writeBatchSize(req.Writes); err != nil {
-		return nil, err
-	} else if size > maxTxnBytes {
-		return nil, model.NewProviderError("InvalidArgument", "transaction exceeds the maximum size of 10 MiB", 400)
-	}
-
-	commitTime := clock.Now()
-	writes, results, err := p.buildWrites(ctx, nr, req.Writes, commitTime)
-	if err != nil {
-		return nil, err
-	}
-	reads := p.readSetFor(req.Transaction)
-	if err := p.store.Commit(ctx, reads, writes); err != nil {
-		return nil, mapCommitError(err)
-	}
-	p.clearReadSet(req.Transaction)
-
-	wr := make([]any, 0, len(results))
-	for _, r := range results {
-		wr = append(wr, r)
-	}
-	return provider.OK(map[string]any{
-		"commitTime":   commitTime.Format(time.RFC3339Nano),
-		"writeResults": wr,
-	}), nil
-}
-
-// buildWrites translates wire writes into store writes + write-results,
-// resolving masks and transforms against the current document state.
-func (p *Provider) buildWrites(ctx context.Context, nr *model.NormalizedRequest, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, error) {
-	writes := make([]firestorestore.Write, 0, len(wire))
-	results := make([]map[string]any, 0, len(wire))
-	for _, w := range wire {
-		pre, err := toPrecondition(w.CurrentDocument)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		switch {
-		case w.Delete != "":
-			writes = append(writes, firestorestore.Write{Name: w.Delete, Precondition: pre})
-			results = append(results, map[string]any{}) // no updateTime after delete
-
-		case w.Transform != nil:
-			doc, res, err := p.buildTransform(ctx, w.Transform, pre, now)
-			if err != nil {
-				return nil, nil, err
-			}
-			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
-			results = append(results, res)
-
-		case w.Update != nil:
-			doc, res, err := p.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
-			if err != nil {
-				return nil, nil, err
-			}
-			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
-			results = append(results, res)
-
-		default:
-			return nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
-		}
-	}
-	return writes, results, nil
-}
-
 // toPrecondition converts a wire precondition into a store precondition.
 func toPrecondition(pw *preconditionWire) (*firestorestore.Precondition, error) {
 	if pw == nil {
@@ -301,132 +117,6 @@ func toPrecondition(pw *preconditionWire) (*firestorestore.Precondition, error) 
 		pre.UpdateTime = &t
 	}
 	return pre, nil
-}
-
-// buildUpdate resolves an update (with optional mask + transforms) against the
-// current document.
-func (p *Provider) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, error) {
-	if dw.Name == "" {
-		return firestorestore.Document{}, nil, model.NewProviderError("InvalidArgument", "update document name is required", 400)
-	}
-	if err := validateFields(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, err
-	}
-	if err := checkSize(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, err
-	}
-
-	existing, err := p.store.GetDocument(ctx, dw.Name)
-	exists := err == nil
-	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, err
-	}
-
-	var maskPaths []string
-	if mask != nil {
-		maskPaths = mask.FieldPaths
-	}
-	base := map[string]*firestorestore.Value{}
-	if exists {
-		base = existing.Fields
-	}
-	merged := applyMask(dw.Fields, maskPaths, base)
-
-	// Apply post-update transforms to the merged fields.
-	var transformResults []*firestorestore.Value
-	if len(transforms) > 0 {
-		var res []*firestorestore.Value
-		merged, res, err = applyFieldTransforms(merged, transforms, now)
-		if err != nil {
-			return firestorestore.Document{}, nil, err
-		}
-		transformResults = res
-	}
-	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, nil, err
-	}
-
-	createTime := now
-	if exists {
-		createTime = existing.CreateTime
-	}
-	doc := firestorestore.Document{Name: dw.Name, Fields: merged, CreateTime: createTime, UpdateTime: now}
-	res := map[string]any{"updateTime": now.Format(time.RFC3339Nano)}
-	if len(transformResults) > 0 {
-		tr := make([]any, 0, len(transformResults))
-		for _, r := range transformResults {
-			tr = append(tr, valueWire(r))
-		}
-		res["transformResults"] = tr
-	}
-	return doc, res, nil
-}
-
-// buildTransform resolves a document transform against the current document.
-func (p *Provider) buildTransform(ctx context.Context, tw *documentTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, error) {
-	if tw.Document == "" {
-		return firestorestore.Document{}, nil, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
-	}
-	existing, err := p.store.GetDocument(ctx, tw.Document)
-	exists := err == nil
-	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, err
-	}
-
-	base := map[string]*firestorestore.Value{}
-	createTime := now
-	if exists {
-		base = existing.Fields
-		createTime = existing.CreateTime
-	}
-	fields, transformResults, err := applyFieldTransforms(base, tw.FieldTransforms, now)
-	if err != nil {
-		return firestorestore.Document{}, nil, err
-	}
-	if err := checkSize(fields); err != nil {
-		return firestorestore.Document{}, nil, err
-	}
-
-	doc := firestorestore.Document{Name: tw.Document, Fields: fields, CreateTime: createTime, UpdateTime: now}
-	tr := make([]any, 0, len(transformResults))
-	for _, r := range transformResults {
-		tr = append(tr, valueWire(r))
-	}
-	return doc, map[string]any{"updateTime": now.Format(time.RFC3339Nano), "transformResults": tr}, nil
-}
-
-// BatchWrite implements documents.batchWrite: non-atomic, per-write results.
-func (p *Provider) BatchWrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	var req batchWriteRequestWire
-	if err := decodeBody(nr, &req); err != nil {
-		return nil, err
-	}
-	if len(req.Writes) > maxWriteBatchSize {
-		return nil, model.NewProviderError("InvalidArgument",
-			"a batchWrite may contain at most "+strconv.Itoa(maxWriteBatchSize)+" writes", 400)
-	}
-	now := clock.Now()
-	statuses := make([]any, 0, len(req.Writes))
-	writeResults := make([]any, 0, len(req.Writes))
-	for _, w := range req.Writes {
-		writes, results, err := p.buildWrites(ctx, nr, []*writeWire{w}, now)
-		if err != nil {
-			statuses = append(statuses, statusWire(3, errMsg(err)))
-			writeResults = append(writeResults, map[string]any{})
-			continue
-		}
-		if err := p.store.Commit(ctx, nil, writes); err != nil {
-			statuses = append(statuses, statusWireForError(err))
-			writeResults = append(writeResults, map[string]any{})
-			continue
-		}
-		statuses = append(statuses, statusWire(0, ""))
-		writeResults = append(writeResults, results[0])
-	}
-	return provider.OK(map[string]any{
-		"status":       statuses,
-		"writeResults": writeResults,
-	}), nil
 }
 
 // statusWire renders a google.rpc.Status-style object (code 0 = OK).
@@ -455,45 +145,6 @@ func errMsg(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-// BatchGet implements documents.batchGet. The response body is newline-delimited
-// JSON (server-streaming): one BatchGetDocumentsResponse object per line, each
-// either {"found":{...},"readTime":"..."} or {"missing":"<name>","readTime":"..."},
-// with no trailing done line (BatchGetDocumentsResponse has no done field).
-func (p *Provider) BatchGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	var req batchGetRequestWire
-	if err := decodeBody(nr, &req); err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	readTime := clock.Now()
-	lines := make([]string, 0, len(req.Documents))
-	for _, name := range req.Documents {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		var item map[string]any
-		doc, err := p.store.GetDocument(ctx, name)
-		if err != nil {
-			if errors.Is(err, firestorestore.ErrDocumentNotFound) {
-				p.recordRead(req.Transaction, name, firestorestore.Document{}, false)
-				item = map[string]any{"missing": name, "readTime": readTime.Format(time.RFC3339Nano)}
-			} else {
-				return nil, err
-			}
-		} else {
-			p.recordRead(req.Transaction, name, doc, true)
-			item = map[string]any{"found": documentMap(doc), "readTime": readTime.Format(time.RFC3339Nano)}
-		}
-		b, err := json.Marshal(item)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, string(b))
-	}
-	return provider.OK(map[string]any{wire.RawJSONKey: json.RawMessage(strings.Join(lines, "\n"))}), nil
 }
 
 // ─── field transforms ─────────────────────────────────────────────────────────

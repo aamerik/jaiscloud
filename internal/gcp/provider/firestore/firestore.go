@@ -2,24 +2,26 @@
 // top of the dedicated FirestoreStore. This is the DynamoDB analogue: documents
 // are schemaless, and collections are implicit path segments (no CreateTable/DDL).
 //
-// Slice 1 implements documents.get / createDocument / patch / delete over the
-// REST/JSON surface. runQuery (StructuredQuery), commit/transactions, and
-// composite-index enforcement are TODO(slice-2).
+// The domain logic lives in the transport-agnostic Service (service.go); this
+// file holds the REST adapter (Provider) plus the shared helpers that the
+// Service reuses. A future gRPC handler will call the same Service methods.
 package firestore
 
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -42,27 +44,17 @@ const autoIDAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123
 // reservedNameRe matches reserved field names / document IDs (^__.*__$).
 var reservedNameRe = regexp.MustCompile(`^__.*__$`)
 
-// Provider implements the Firestore documents REST surface.
+// Provider is the Firestore documents REST adapter. It embeds the shared
+// *Service so the REST surface and the future gRPC handler share one document
+// store, resource store, and transaction read-set registry.
 type Provider struct {
-	store firestorestore.FirestoreStore
-	// resources holds the composite-index registry (control plane), scoped by
-	// project (AccountID) and encoded as "firestore_index" ResourceEntries.
-	resources store.ResourceStore
-
-	// txnMu guards readSets: the in-memory transaction read-set registry
-	// (transactions are ephemeral and never persisted).
-	txnMu    sync.Mutex
-	readSets map[string]*readSet
+	*Service
 }
 
 // New returns a Firestore provider backed by the given document store and
 // control-plane resource store (for composite indexes).
 func New(s firestorestore.FirestoreStore, resources store.ResourceStore) *Provider {
-	return &Provider{
-		store:     s,
-		resources: resources,
-		readSets:  make(map[string]*readSet),
-	}
+	return &Provider{Service: newService(s, resources)}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -86,15 +78,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	}
 }
 
-// Reset clears transaction read-sets (document state is reset via the store's
-// own Resetter; index state via the resource store's).
-func (p *Provider) Reset(_ context.Context) {
-	p.txnMu.Lock()
-	p.readSets = make(map[string]*readSet)
-	p.txnMu.Unlock()
-}
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── REST-boundary helpers ────────────────────────────────────────────────────
 
 // relativeName returns the database id and relative document path encoded in
 // nr.Params["name"] ("databases/{db}/documents/{path}").
@@ -107,28 +91,50 @@ func relativeName(nr *model.NormalizedRequest) (database, path string, err error
 	return parts[1], strings.Join(parts[3:], "/"), nil
 }
 
-// fullName builds the full document resource name from the request.
-func fullName(nr *model.NormalizedRequest, database, path string) string {
-	return nr.ResourceID("firestore-document", "databases/"+database+"/documents/"+path)
+// decodeBody round-trips nr.Params["body"] into a typed struct.
+func decodeBody(nr *model.NormalizedRequest, v any) error {
+	body, _ := nr.Params["body"]
+	if body == nil {
+		body = map[string]any{}
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
+	}
+	return nil
 }
 
-// mapStoreError maps store sentinel errors to Firestore GCP error envelopes.
-//
-// TODO(slice-2): surface precondition failures as HTTP 400 FAILED_PRECONDITION
-// and transaction contention as HTTP 409 ABORTED. Those require a per-error
-// RPC-status override on the shared JSONCodec envelope (the envelope currently
-// derives `status` from the HTTP code).
-func mapStoreError(err error) error {
-	switch {
-	case errors.Is(err, firestorestore.ErrDocumentNotFound):
-		return model.NewProviderError("NotFound", "document not found", 404)
-	case errors.Is(err, firestorestore.ErrDocumentExists):
-		return model.NewProviderError("AlreadyExists", "document already exists", 409)
-	case errors.Is(err, firestorestore.ErrInvalidArgument):
-		return model.NewProviderError("InvalidArgument", "invalid document", 400)
-	default:
-		return err
+// encodeTxn standard-base64-encodes transaction bytes for the wire.
+func encodeTxn(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// decodeTxn standard-base64-decodes a wire transaction string to raw bytes.
+// An empty string means "no transaction" and returns (nil, nil). Malformed
+// base64 is rejected with a 400 INVALID_ARGUMENT error (matching real
+// Firestore, which rejects an invalid `transaction` format:byte field).
+func decodeTxn(s string) ([]byte, error) {
+	if s == "" {
+		return nil, nil
 	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "invalid transaction token", 400)
+	}
+	return b, nil
+}
+
+// decodeTxnParam standard-base64-decodes the `transaction` query parameter.
+func decodeTxnParam(nr *model.NormalizedRequest) ([]byte, error) {
+	s, _ := nr.Params["transaction"].(string)
+	return decodeTxn(s)
+}
+
+// pageFromNR extracts cursor-pagination inputs from the request query params.
+func pageFromNR(nr *model.NormalizedRequest) pageParams {
+	token, _ := nr.Params["pageToken"].(string)
+	return pageParams{size: paging.PageSize(nr.Params), token: token}
 }
 
 // extractFields extracts the document fields from a decoded request body.
@@ -149,6 +155,91 @@ func extractFields(body map[string]any) (map[string]*firestorestore.Value, error
 		return nil, model.NewProviderError("InvalidArgument", "malformed field value", 400)
 	}
 	return fields, nil
+}
+
+// documentMap serialises a store Document to its REST wire form.
+func documentMap(d firestorestore.Document) map[string]any {
+	b, _ := json.Marshal(d)
+	var m map[string]any
+	json.Unmarshal(b, &m)
+	return m
+}
+
+// queryFieldPaths returns the field paths for a repeated query parameter (e.g.
+// "mask.fieldPaths", "updateMask.fieldPaths"), honouring repeated and
+// comma-separated values.
+func queryFieldPaths(nr *model.NormalizedRequest, key string) []string {
+	var paths []string
+	add := func(v string) {
+		for _, part := range strings.Split(v, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				paths = append(paths, part)
+			}
+		}
+	}
+	if nr.Raw != nil {
+		for _, v := range nr.Raw.URL.Query()[key] {
+			add(v)
+		}
+	}
+	if len(paths) == 0 {
+		if v, _ := nr.Params[key].(string); v != "" {
+			add(v)
+		}
+	}
+	return paths
+}
+
+// updateMaskPaths returns the updateMask field paths, honouring repeated and
+// comma-separated updateMask.fieldPaths query parameters.
+func updateMaskPaths(nr *model.NormalizedRequest) []string {
+	return queryFieldPaths(nr, "updateMask.fieldPaths")
+}
+
+// maskFieldPaths returns the mask field paths (mask.fieldPaths query parameter).
+func maskFieldPaths(nr *model.NormalizedRequest) []string {
+	return queryFieldPaths(nr, "mask.fieldPaths")
+}
+
+// preconditionFromQuery parses the currentDocument precondition query parameters
+// (currentDocument.exists / currentDocument.updateTime) used by patch/delete.
+// It returns nil when no precondition is set.
+func preconditionFromQuery(nr *model.NormalizedRequest) (*firestorestore.Precondition, error) {
+	pre := &firestorestore.Precondition{}
+	if s, _ := nr.Params["currentDocument.exists"].(string); s != "" {
+		v, err := strconv.ParseBool(s)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidArgument", "invalid currentDocument.exists precondition", 400)
+		}
+		pre.Exists = &v
+	}
+	if s, _ := nr.Params["currentDocument.updateTime"].(string); s != "" {
+		t, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidArgument", "invalid currentDocument.updateTime precondition", 400)
+		}
+		pre.UpdateTime = &t
+	}
+	if pre.Exists == nil && pre.UpdateTime == nil {
+		return nil, nil
+	}
+	return pre, nil
+}
+
+// ─── shared domain helpers (reused by Service and the future gRPC handler) ───
+
+// mapStoreError maps store sentinel errors to Firestore GCP error envelopes.
+func mapStoreError(err error) error {
+	switch {
+	case errors.Is(err, firestorestore.ErrDocumentNotFound):
+		return model.NewProviderError("NotFound", "document not found", 404)
+	case errors.Is(err, firestorestore.ErrDocumentExists):
+		return model.NewProviderError("AlreadyExists", "document already exists", 409)
+	case errors.Is(err, firestorestore.ErrInvalidArgument):
+		return model.NewProviderError("InvalidArgument", "invalid document", 400)
+	default:
+		return err
+	}
 }
 
 // validatePath rejects reserved collection/document IDs (^__.*__$) in a
@@ -300,67 +391,6 @@ func randomID(n int) string {
 	return string(b)
 }
 
-// queryFieldPaths returns the field paths for a repeated query parameter (e.g.
-// "mask.fieldPaths", "updateMask.fieldPaths"), honouring repeated and
-// comma-separated values.
-func queryFieldPaths(nr *model.NormalizedRequest, key string) []string {
-	var paths []string
-	add := func(v string) {
-		for _, part := range strings.Split(v, ",") {
-			if part = strings.TrimSpace(part); part != "" {
-				paths = append(paths, part)
-			}
-		}
-	}
-	if nr.Raw != nil {
-		for _, v := range nr.Raw.URL.Query()[key] {
-			add(v)
-		}
-	}
-	if len(paths) == 0 {
-		if v, _ := nr.Params[key].(string); v != "" {
-			add(v)
-		}
-	}
-	return paths
-}
-
-// updateMaskPaths returns the updateMask field paths, honouring repeated and
-// comma-separated updateMask.fieldPaths query parameters.
-func updateMaskPaths(nr *model.NormalizedRequest) []string {
-	return queryFieldPaths(nr, "updateMask.fieldPaths")
-}
-
-// maskFieldPaths returns the mask field paths (mask.fieldPaths query parameter).
-func maskFieldPaths(nr *model.NormalizedRequest) []string {
-	return queryFieldPaths(nr, "mask.fieldPaths")
-}
-
-// preconditionFromQuery parses the currentDocument precondition query parameters
-// (currentDocument.exists / currentDocument.updateTime) used by patch/delete.
-// It returns nil when no precondition is set.
-func preconditionFromQuery(nr *model.NormalizedRequest) (*firestorestore.Precondition, error) {
-	pre := &firestorestore.Precondition{}
-	if s, _ := nr.Params["currentDocument.exists"].(string); s != "" {
-		v, err := strconv.ParseBool(s)
-		if err != nil {
-			return nil, model.NewProviderError("InvalidArgument", "invalid currentDocument.exists precondition", 400)
-		}
-		pre.Exists = &v
-	}
-	if s, _ := nr.Params["currentDocument.updateTime"].(string); s != "" {
-		t, err := time.Parse(time.RFC3339Nano, s)
-		if err != nil {
-			return nil, model.NewProviderError("InvalidArgument", "invalid currentDocument.updateTime precondition", 400)
-		}
-		pre.UpdateTime = &t
-	}
-	if pre.Exists == nil && pre.UpdateTime == nil {
-		return nil, nil
-	}
-	return pre, nil
-}
-
 // checkPrecondition validates a document precondition against the current state
 // (exists and updateTime). It returns a FAILED_PRECONDITION error on mismatch.
 func checkPrecondition(exists bool, updateTime time.Time, pre *firestorestore.Precondition) error {
@@ -467,15 +497,7 @@ func setFieldPath(fields map[string]*firestorestore.Value, path []string, val *f
 	setFieldPath(cur.MapValue.Fields, path[1:], val)
 }
 
-// documentMap serialises a store Document to its REST wire form.
-func documentMap(d firestorestore.Document) map[string]any {
-	b, _ := json.Marshal(d)
-	var m map[string]any
-	json.Unmarshal(b, &m)
-	return m
-}
-
-// ─── documents methods ────────────────────────────────────────────────────────
+// ─── REST handlers (thin adapters over the Service) ──────────────────────────
 
 // DocumentsGet implements documents.get.
 func (p *Provider) DocumentsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -483,19 +505,14 @@ func (p *Provider) DocumentsGet(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	name := fullName(nr, database, path)
-	doc, err := p.store.GetDocument(ctx, name)
+	name := docName(nr.AccountID, database, path)
+	txn, err := decodeTxnParam(nr)
 	if err != nil {
-		if txnID, _ := nr.Params["transaction"].(string); txnID != "" && errors.Is(err, firestorestore.ErrDocumentNotFound) {
-			p.recordRead(txnID, name, firestorestore.Document{}, false)
-		}
-		return nil, mapStoreError(err)
+		return nil, err
 	}
-	if txnID, _ := nr.Params["transaction"].(string); txnID != "" {
-		p.recordRead(txnID, name, doc, true)
-	}
-	if mask := maskFieldPaths(nr); len(mask) > 0 {
-		doc.Fields = maskFields(doc, mask)
+	doc, err := p.Service.GetDocument(ctx, name, txn, maskFieldPaths(nr))
+	if err != nil {
+		return nil, err
 	}
 	return provider.OK(documentMap(doc)), nil
 }
@@ -508,40 +525,15 @@ func (p *Provider) CreateDocument(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePath(path); err != nil {
-		return nil, err
-	}
-
 	docID, _ := nr.Params["documentId"].(string)
-	if docID == "" {
-		docID = randomID(autoIDLength)
-	} else if err := validateDocumentID(docID); err != nil {
-		return nil, err
-	}
-
-	name := fullName(nr, database, path+"/"+docID)
-
 	body, _ := nr.Params["body"].(map[string]any)
 	fields, err := extractFields(body)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFields(fields); err != nil {
+	doc, err := p.Service.CreateDocument(ctx, nr.AccountID, database, path, docID, fields)
+	if err != nil {
 		return nil, err
-	}
-	if err := checkSize(fields); err != nil {
-		return nil, err
-	}
-
-	now := clock.Now()
-	doc := firestorestore.Document{
-		Name:       name,
-		Fields:     fields,
-		CreateTime: now,
-		UpdateTime: now,
-	}
-	if err := p.store.CreateDocument(ctx, doc); err != nil {
-		return nil, mapStoreError(err)
 	}
 	return provider.OK(documentMap(doc)), nil
 }
@@ -554,20 +546,11 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePath(path); err != nil {
-		return nil, err
-	}
-	name := fullName(nr, database, path)
-
 	body, _ := nr.Params["body"].(map[string]any)
 	fields, err := extractFields(body)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFields(fields); err != nil {
-		return nil, err
-	}
-
 	mask := maskFieldPaths(nr)
 	if len(mask) == 0 {
 		mask = updateMaskPaths(nr)
@@ -576,47 +559,9 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	now := clock.Now()
-
-	existing, err := p.store.GetDocument(ctx, name)
-	exists := err == nil
-	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
+	doc, err := p.Service.PatchDocument(ctx, nr.AccountID, database, path, fields, mask, pre)
+	if err != nil {
 		return nil, err
-	}
-
-	// Optimistic precondition check (currentDocument.exists / updateTime).
-	if exists {
-		if err := checkPrecondition(true, existing.UpdateTime, pre); err != nil {
-			return nil, err
-		}
-	} else if err := checkPrecondition(false, time.Time{}, pre); err != nil {
-		return nil, err
-	}
-
-	var base map[string]*firestorestore.Value
-	createTime := now
-	if exists {
-		base = existing.Fields
-		createTime = existing.CreateTime
-	}
-	merged := applyMask(fields, mask, base)
-	if err := checkSize(merged); err != nil {
-		return nil, err
-	}
-	doc := firestorestore.Document{
-		Name:       name,
-		Fields:     merged,
-		CreateTime: createTime,
-		UpdateTime: now,
-	}
-	if exists {
-		if err := p.store.UpdateDocument(ctx, doc); err != nil {
-			return nil, mapStoreError(err)
-		}
-	} else {
-		if err := p.store.CreateDocument(ctx, doc); err != nil {
-			return nil, mapStoreError(err)
-		}
 	}
 	return provider.OK(documentMap(doc)), nil
 }
@@ -628,29 +573,271 @@ func (p *Provider) DocumentsDelete(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	name := fullName(nr, database, path)
-
 	pre, err := preconditionFromQuery(nr)
 	if err != nil {
 		return nil, err
 	}
-	if pre != nil {
-		existing, err := p.store.GetDocument(ctx, name)
-		exists := err == nil
-		if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-			return nil, err
-		}
-		var updateTime time.Time
-		if exists {
-			updateTime = existing.UpdateTime
-		}
-		if err := checkPrecondition(exists, updateTime, pre); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := p.store.DeleteDocument(ctx, name); err != nil {
-		return nil, mapStoreError(err)
+	if err := p.Service.DeleteDocument(ctx, nr.AccountID, database, path, pre); err != nil {
+		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
+}
+
+// ListDocuments implements documents.list / documents.listDocuments (they share
+// one wire path: GET on a collection).
+func (p *Provider) ListDocuments(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	database, path, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	txn, err := decodeTxnParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), pageFromNR(nr))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(docs))
+	for _, d := range docs {
+		items = append(items, documentMap(d))
+	}
+	resp := map[string]any{"documents": items}
+	if nextToken != "" {
+		resp["nextPageToken"] = nextToken
+	}
+	return provider.OK(resp), nil
+}
+
+// ListCollectionIds implements documents.listCollectionIds: returns the distinct
+// subcollection IDs of a document.
+func (p *Provider) ListCollectionIds(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	database, path, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	ids, nextToken, err := p.Service.ListCollectionIds(ctx, nr.AccountID, database, path, pageFromNR(nr))
+	if err != nil {
+		return nil, err
+	}
+	resp := map[string]any{"collectionIds": ids}
+	if nextToken != "" {
+		resp["nextPageToken"] = nextToken
+	}
+	return provider.OK(resp), nil
+}
+
+// RunQuery implements documents.runQuery over a StructuredQuery. The response
+// is newline-delimited JSON (server-streaming).
+func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req runQueryRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	if req.StructuredQuery == nil {
+		return nil, model.NewProviderError("InvalidArgument", "runQuery requires a structuredQuery", 400)
+	}
+
+	database, path, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+
+	txn, err := decodeTxn(req.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	results, err := p.Service.RunQuery(ctx, nr.AccountID, database, path, req.StructuredQuery, txn)
+	if err != nil {
+		return nil, err
+	}
+
+	readTime := clock.Now()
+	lines := make([]string, 0, len(results)+1)
+	for _, d := range results {
+		item := map[string]any{
+			"document": documentMap(d),
+			"readTime": readTime.Format(time.RFC3339Nano),
+		}
+		b, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(b))
+	}
+	final := map[string]any{"done": true}
+	if req.StructuredQuery.Offset > 0 {
+		final["skippedResults"] = req.StructuredQuery.Offset
+	}
+	b, err := json.Marshal(final)
+	if err != nil {
+		return nil, err
+	}
+	lines = append(lines, string(b))
+	return provider.OK(map[string]any{wire.RawJSONKey: json.RawMessage(strings.Join(lines, "\n"))}), nil
+}
+
+// Commit implements documents.commit: an atomic batch of writes with optimistic
+// preconditions and transaction read-set validation.
+func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req commitRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	txn, err := decodeTxn(req.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	commitTime, results, err := p.Service.Commit(ctx, txn, req.Writes)
+	if err != nil {
+		return nil, err
+	}
+	wr := make([]any, 0, len(results))
+	for _, r := range results {
+		wr = append(wr, r)
+	}
+	return provider.OK(map[string]any{
+		"commitTime":   commitTime.Format(time.RFC3339Nano),
+		"writeResults": wr,
+	}), nil
+}
+
+// BatchWrite implements documents.batchWrite: non-atomic, per-write results.
+func (p *Provider) BatchWrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req batchWriteRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	statuses, writeResults, err := p.Service.BatchWrite(ctx, req.Writes)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"status":       statuses,
+		"writeResults": writeResults,
+	}), nil
+}
+
+// BatchGet implements documents.batchGet. The response body is newline-delimited
+// JSON (server-streaming).
+func (p *Provider) BatchGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req batchGetRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	txn, err := decodeTxn(req.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	items, err := p.Service.BatchGet(ctx, req.Documents, txn)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		b, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(b))
+	}
+	return provider.OK(map[string]any{wire.RawJSONKey: json.RawMessage(strings.Join(lines, "\n"))}), nil
+}
+
+// BeginTransaction implements documents.beginTransaction.
+func (p *Provider) BeginTransaction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	txn, err := p.Service.BeginTransaction(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"transaction": encodeTxn(txn)}), nil
+}
+
+// Rollback implements documents.rollback.
+func (p *Provider) Rollback(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req rollbackRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	txn, err := decodeTxn(req.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Service.Rollback(ctx, txn); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// CreateIndex implements projects.databases.collectionGroups.indexes.create.
+func (p *Provider) CreateIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	database, cg, _, ok := indexPath(name)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument", "invalid index parent path", 400)
+	}
+
+	body, _ := nr.Params["body"].(map[string]any)
+	b, _ := json.Marshal(body)
+	var idx indexDef
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "malformed index definition", 400)
+	}
+
+	resp, err := p.Service.CreateIndex(ctx, nr.AccountID, database, cg, idx)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(resp), nil
+}
+
+// ListIndexes implements projects.databases.collectionGroups.indexes.list.
+func (p *Provider) ListIndexes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	database, cg, _, ok := indexPath(name)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument", "invalid index parent path", 400)
+	}
+	filter, _ := nr.Params["filter"].(string)
+
+	idxs, nextToken, err := p.Service.ListIndexes(ctx, nr.AccountID, database, cg, filter, pageFromNR(nr))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(idxs))
+	for _, idx := range idxs {
+		items = append(items, indexMap(idx))
+	}
+	resp := map[string]any{"indexes": items}
+	if nextToken != "" {
+		resp["nextPageToken"] = nextToken
+	}
+	return provider.OK(resp), nil
+}
+
+// GetIndex implements projects.databases.collectionGroups.indexes.get.
+func (p *Provider) GetIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	database, cg, id, ok := indexPath(name)
+	if !ok || id == "" {
+		return nil, model.NewProviderError("InvalidArgument", "invalid index path", 400)
+	}
+	idx, err := p.Service.GetIndex(ctx, nr.AccountID, database, cg, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(indexMap(idx)), nil
+}
+
+// DeleteIndex implements projects.databases.collectionGroups.indexes.delete.
+func (p *Provider) DeleteIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["name"].(string)
+	database, cg, id, ok := indexPath(name)
+	if !ok || id == "" {
+		return nil, model.NewProviderError("InvalidArgument", "invalid index path", 400)
+	}
+	if err := p.Service.DeleteIndex(ctx, nr.AccountID, database, cg, id); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
