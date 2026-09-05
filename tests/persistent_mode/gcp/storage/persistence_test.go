@@ -14,6 +14,7 @@
 package storage_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -73,6 +74,77 @@ func TestGCSPersistenceAcrossRestart(t *testing.T) {
 	if body != content {
 		t.Fatalf("object content mismatch: got %q, want %q", body, content)
 	}
+}
+
+// TestGCSVersioningPersistenceAcrossRestart exercises the Postgres
+// PutObjectGeneration path (versioning-enabled overwrite) that the memory
+// suite covers but the DSN path previously did not. It uploads two generations
+// of one object, restarts, and asserts both generations remain readable —
+// catching the double-commit bug that made every versioned write fail with
+// pgx.ErrTxClosed.
+func TestGCSVersioningPersistenceAcrossRestart(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
+	}
+
+	port := persistPort()
+	host := fmt.Sprintf("http://localhost:%d", port)
+	blobDir := t.TempDir()
+
+	bucket := fmt.Sprintf("persist-ver-bucket-%d", time.Now().UnixNano())
+	const object = "data/versioned.txt"
+
+	proc1 := startGCPProcess(t, port, dsn, blobDir)
+	waitForHealth(t, host)
+
+	// Versioning-enabled bucket.
+	if code, _ := doRequest(t, host, "POST", "/storage/v1/b?project=proj",
+		`{"name":"`+bucket+`","versioning":{"enabled":true}}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create versioned bucket: got HTTP %d", code)
+	}
+
+	upload := func(content string) string {
+		code, body := doRequest(t, host, "POST",
+			"/upload/storage/v1/b/"+bucket+"/o?uploadType=media&name="+object,
+			content, "text/plain")
+		if code != http.StatusOK {
+			t.Fatalf("upload object: got HTTP %d", code)
+		}
+		var meta struct {
+			Generation string `json:"generation"`
+		}
+		if err := json.Unmarshal([]byte(body), &meta); err != nil || meta.Generation == "" {
+			t.Fatalf("upload response missing generation: %q (%v)", body, err)
+		}
+		return meta.Generation
+	}
+
+	gen1 := upload("one")
+	gen2 := upload("two")
+	if gen1 == gen2 {
+		t.Fatal("expected distinct generations on overwrite")
+	}
+
+	// ── Restart against the same backend ───────────────────────────────────────
+	stopProcess(t, proc1)
+
+	proc2 := startGCPProcess(t, port, dsn, blobDir)
+	defer stopProcess(t, proc2)
+	waitForHealth(t, host)
+
+	readGen := func(gen, want string) {
+		code, body := doRequest(t, host, "GET",
+			"/storage/v1/b/"+bucket+"/o/"+object+"?alt=media&generation="+gen, "", "")
+		if code != http.StatusOK {
+			t.Fatalf("read generation %s after restart: got HTTP %d", gen, code)
+		}
+		if body != want {
+			t.Fatalf("generation %s content = %q, want %q", gen, body, want)
+		}
+	}
+	readGen(gen1, "one")
+	readGen(gen2, "two")
 }
 
 func stopProcess(t *testing.T, cmd *exec.Cmd) {

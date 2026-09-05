@@ -153,6 +153,18 @@ server-postgres: build ## Postgres backend, mock executors — requires JAISCLOU
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start --dsn "$(JAISCLOUD_DSN)"
 
+server-gcp: build-gcp ## GCP default mode: memory stores + periodic state.json saves
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start
+
+server-gcp-ephemeral: build-gcp ## GCP ephemeral mode: no persistence (CI/tests)
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start --ephemeral
+
+server-gcp-postgres: build-gcp ## GCP Postgres backend — requires JAISCLOUD_DSN
+	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
+	  ./jaiscloud-gcp start --dsn "$(JAISCLOUD_DSN)"
+
 server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda via Docker (docker-compose, Ctrl-C to stop)
 	JAISCLOUD_EXECUTOR_MODE=$(or $(JAISCLOUD_EXECUTOR_MODE),docker) \
 	  JAISCLOUD_SPARK_IMAGE=$(SPARK_IMAGE) \
@@ -447,6 +459,10 @@ test-e2e-sfn: ## Step Functions persistent mode e2e tests — tests/persistent_m
 	  go test -race -tags sfn_e2e -timeout 5m -run "$(TEST_RUN)" ./tests/persistent_mode/aws/stepfunctions/
 
 test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + KMS persistence tests
+
+test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence tests (requires Docker for Postgres)
+	JAISCLOUD_DSN=$(JAISCLOUD_DSN) JAISCLOUD_GCP_PERSIST_PORT=8099 \
+	  go test -tags gcp_persistence -count=1 -timeout 5m ./tests/persistent_mode/gcp/...
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock

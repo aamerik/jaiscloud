@@ -48,3 +48,22 @@ func TestProjectFromPath(t *testing.T) {
 		}
 	}
 }
+
+func TestFromRequest_QueryProject(t *testing.T) {
+	r := httptest.NewRequest("POST", "/storage/v1/b?project=proj", nil)
+	got := FromRequest(r)
+	if got.ProjectID != "proj" {
+		t.Errorf("expected project from ?project= query, got %q", got.ProjectID)
+	}
+	if got.Source == SourceDefault {
+		t.Error("expected an explicit (non-default) source when ?project= is present")
+	}
+}
+
+func TestFromRequest_PathWinsOverQuery(t *testing.T) {
+	r := httptest.NewRequest("GET", "/v1/projects/path-proj/topics/t?project=query-proj", nil)
+	got := FromRequest(r)
+	if got.ProjectID != "path-proj" {
+		t.Errorf("expected path project to win, got %q", got.ProjectID)
+	}
+}

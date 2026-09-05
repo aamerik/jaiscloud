@@ -34,4 +34,11 @@ const (
 	// StatusOverrideKey carries the X-Http-Status-Code-Override header value as
 	// a string in ProviderResponse.Data (provider → codec).
 	StatusOverrideKey = "jaiscloud:statusOverride"
+	// CSEKKey carries the base64 "x-goog-encryption-key" header value as a string
+	// in NormalizedRequest.Params (codec → provider) for customer-supplied
+	// encryption keys.
+	CSEKKey = "x-goog-encryption-key"
+	// CSEKKeySHA256 carries the base64 "x-goog-encryption-key-sha256" header
+	// value as a string in NormalizedRequest.Params (codec → provider).
+	CSEKKeySHA256 = "x-goog-encryption-key-sha256"
 )

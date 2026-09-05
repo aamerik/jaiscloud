@@ -46,6 +46,7 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	}
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
+	csekFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[0]
 	nr.Params["object"] = strings.Join(seg[1:], "/")
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
@@ -74,6 +75,7 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 	seg := splitEscaped(rest)
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
+	csekFromHeaders(r, nr.Params)
 
 	switch {
 	case len(seg) == 1 && seg[0] == "b":
@@ -228,6 +230,7 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 	}
 	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
 	queryToParams(r, nr.Params)
+	csekFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[1]
 
 	if len(seg) > 3 {
@@ -456,6 +459,19 @@ func queryToParams(r *http.Request, params map[string]any) {
 		if len(vs) > 0 {
 			params[k] = vs[0]
 		}
+	}
+}
+
+// csekFromHeaders copies the customer-supplied encryption key headers into the
+// request params so the storage provider can validate and use them. The GCS
+// CSEK contract carries the key (base64 AES-256) and its base64 SHA-256 digest
+// in these headers, distinct from CMEK's kmsKeyName query param.
+func csekFromHeaders(r *http.Request, params map[string]any) {
+	if v := r.Header.Get("x-goog-encryption-key"); v != "" {
+		params[wire.CSEKKey] = v
+	}
+	if v := r.Header.Get("x-goog-encryption-key-sha256"); v != "" {
+		params[wire.CSEKKeySHA256] = v
 	}
 }
 
