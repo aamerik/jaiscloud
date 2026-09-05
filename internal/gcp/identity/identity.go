@@ -67,6 +67,17 @@ func FromRequest(r *http.Request) Parsed {
 		hasPath = true
 	}
 
+	// GCS and several other GCP APIs carry the project as a ?project= query
+	// parameter rather than in the URL path (e.g. POST /storage/v1/b?project=p).
+	// Treat it as an explicit source so it is not overridden by the config
+	// default; the path still wins when both are present.
+	if project == "" {
+		if qp := r.URL.Query().Get("project"); qp != "" {
+			project = qp
+			hasPath = true
+		}
+	}
+
 	if t := BearerToken(r.Header.Get("Authorization")); t != "" {
 		token = t
 		hasToken = true

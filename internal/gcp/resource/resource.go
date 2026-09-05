@@ -9,6 +9,7 @@ package resource
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // formatters maps abstract resource types to their GCP resource-name format
@@ -32,6 +33,11 @@ var formatters = map[string]func(project, name string) string{
 	},
 	"kms-cryptokey": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s", p, locOf(n), ringOf(n), keyOf(n))
+	},
+	"kms-cryptokey-version": func(p, n string) string {
+		// callers pass "location/keyRing/cryptoKey/version"
+		loc, kr, k, v := parts4(n)
+		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%s", p, loc, kr, k, v)
 	},
 	// IAM — service accounts are identified by their email in the full name.
 	"service-account": func(p, n string) string { return fmt.Sprintf("projects/%s/serviceAccounts/%s", p, n) },
@@ -92,4 +98,17 @@ func keyOf(name string) string {
 		}
 	}
 	return ""
+}
+
+// parts4 splits a "location/keyRing/cryptoKey/version" name.
+func parts4(name string) (loc, ring, key, ver string) {
+	parts := strings.Split(name, "/")
+	switch len(parts) {
+	case 4:
+		return parts[0], parts[1], parts[2], parts[3]
+	case 3:
+		return parts[0], parts[1], parts[2], ""
+	default:
+		return "global", name, "", ""
+	}
 }

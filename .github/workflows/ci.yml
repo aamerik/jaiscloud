@@ -129,6 +129,7 @@ jobs:
         run: |
           go mod download
           cd tests/integration/gcp/sdk && go mod download
+          cd ../sdkv1 && go mod download
 
       - name: Build jaiscloud-gcp
         run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -155,6 +156,12 @@ jobs:
         working-directory: tests/integration/gcp/sdk
         env:
           STORAGE_EMULATOR_HOST: http://localhost:8080
+        run: go test -race -count=1 -timeout 120s ./...
+
+      - name: Run GCP Phase 1 SDK integration tests
+        working-directory: tests/integration/gcp/sdkv1
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
         run: go test -race -count=1 -timeout 120s ./...
 
       - name: Upload GCP server log (on failure)

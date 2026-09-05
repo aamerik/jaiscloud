@@ -3,6 +3,7 @@ module jaiscloud-gcp-sdk-test
 go 1.26
 
 require (
+	cloud.google.com/go/iam v1.2.2
 	cloud.google.com/go/storage v1.50.0
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/api v0.219.0
@@ -14,7 +15,6 @@ require (
 	cloud.google.com/go/auth v0.14.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.7 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
-	cloud.google.com/go/iam v1.2.2 // indirect
 	cloud.google.com/go/monitoring v1.21.2 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.25.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.48.1 // indirect

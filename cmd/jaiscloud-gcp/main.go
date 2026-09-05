@@ -20,7 +20,16 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	iamprovider "jaiscloud/internal/gcp/provider/iam"
+	kmsprovider "jaiscloud/internal/gcp/provider/kms"
+	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
+	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	gcpstore "jaiscloud/internal/gcp/store"
+	"jaiscloud/internal/gcp/store/gcs"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
+	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
@@ -84,24 +93,61 @@ func startCmd() *cobra.Command {
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			instanceID, _ := config.LoadOrCreateInstanceID(stateDir)
 
-			resources, blobs, closeFn, err := initStores(ctx, cfg, instanceID)
+			stores, err := initStores(ctx, cfg, instanceID)
 			if err != nil {
 				return err
 			}
-			defer closeFn()
+			defer stores.close()
 
-			storageP := storageprovider.New(resources, blobs)
+			// KMS envelope encryption: when a master key (KEK) is configured,
+			// wrap the server DEK at rest (mirrors AWS key bootstrap.LoadOrCreateDEK).
+			if cfg.KMSMasterKey != "" {
+				kek, err := kmsstore.ParseHexKey(cfg.KMSMasterKey)
+				if err != nil {
+					return fmt.Errorf("kms master key: %w", err)
+				}
+				if ps, ok := stores.keys.(*kmsstore.PostgresStore); ok {
+					ps.SetKEK(kek)
+				}
+			}
 
-			reg := provider.NewRegistry().Register(storageP)
+			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs)
+			secretP := secretmanagerprovider.New(stores.secrets, stores.resources)
+			kmsP := kmsprovider.New(stores.keys)
+			iamP := iamprovider.New(stores.resources)
+			pubsubP := pubsubprovider.New(stores.resources, stores.messages)
+
+			reg := provider.NewRegistry().
+				Register(storageP).
+				Register(secretP).
+				Register(kmsP).
+				Register(iamP).
+				Register(pubsubP)
 
 			adminHandler := admin.NewHandler()
-			adminHandler.RegisterResetter(resources)
-			adminHandler.RegisterResetter(blobs)
+			adminHandler.RegisterResetter(stores.objects)
+			adminHandler.RegisterResetter(stores.messages)
+			adminHandler.RegisterResetter(stores.secrets)
+			adminHandler.RegisterResetter(stores.keys)
+			adminHandler.RegisterResetter(stores.resources)
+			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
-			if snap, ok := resources.(admin.Snapshotter); ok {
+			if snap, ok := stores.resources.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("resources", snap)
 			}
-			if sb, ok := blobs.(admin.SnapshotBlobStore); ok {
+			if snap, ok := stores.objects.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("gcs_objects", snap)
+			}
+			if snap, ok := stores.messages.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("pubsub_messages", snap)
+			}
+			if snap, ok := stores.secrets.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("secrets", snap)
+			}
+			if snap, ok := stores.keys.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("keys", snap)
+			}
+			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
 			}
 			adminHandler.SetMeta(admin.HandlerMeta{
@@ -110,6 +156,9 @@ func startCmd() *cobra.Command {
 				AccountID: cfg.ProjectID,
 				StateDir:  stateDir,
 			})
+			if cfg.KMSMasterKey != "" {
+				adminHandler.SetKEKFingerprint(snapversion.FingerprintKEK([]byte(cfg.KMSMasterKey)))
+			}
 
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
 
@@ -175,9 +224,13 @@ func startCmd() *cobra.Command {
 						slog.Info("startup: state restored from snapshot", "path", stateFile, "stores", len(env.Stores))
 					}
 				}
+				// Re-seed the GCS generation counter from the restored store so
+				// generations stay monotonic across restart (memory mode restores
+				// after the provider is constructed).
+				storageP.SeedGeneration(ctx)
 
 				var localBlobs *blobfs.LocalFSBlobStore
-				if lb, ok := blobs.(*blobfs.LocalFSBlobStore); ok {
+				if lb, ok := stores.blobs.(*blobfs.LocalFSBlobStore); ok {
 					localBlobs = lb
 				}
 				loopCfg := snapshot.SnapshotLoopConfig{
@@ -214,6 +267,7 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("time-mode", "offset", "Time mode: frozen or offset")
 	cmd.Flags().String("blob-dir", "", "Directory for GCS blob bytes (persistent mode only)")
 	cmd.Flags().Bool("gcp-metadata", false, "Enable the GCP metadata-server emulator")
+	cmd.Flags().String("kms-master-key", "", "32-byte hex KEK for KMS envelope encryption")
 	return cmd
 }
 
@@ -231,29 +285,69 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("time_mode", cmd.Flags().Lookup("time-mode"))
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("gcp_metadata_enabled", cmd.Flags().Lookup("gcp-metadata"))
+	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
 }
 
-func initStores(ctx context.Context, cfg *config.Config, instanceID string) (store.ResourceStore, blobfs.BlobStore, func(), error) {
+// stores bundles the per-mode store backends constructed by initStores.
+type stores struct {
+	objects   gcs.ObjectStore
+	messages  pubsubstore.Messages
+	secrets   secretmanagerstore.Store
+	keys      kmsstore.Store
+	resources store.ResourceStore
+	blobs     blobfs.BlobStore
+	close     func()
+}
+
+func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*stores, error) {
 	if cfg.DSN != "" {
 		pg, err := store.NewPostgresResourceStore(ctx, cfg.DSN, string(cfg.Cloud))
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("postgres: %w", err)
+			return nil, fmt.Errorf("postgres: %w", err)
+		}
+		if err := store.RunMigrations(ctx, pg.Pool(), string(cfg.Cloud), gcpstore.MigrationFS, "gcp"); err != nil {
+			pg.Close()
+			return nil, fmt.Errorf("gcp migrations: %w", err)
 		}
 		blobs, err := blobfs.NewLocalFSBlobStore(cfg.BlobDir)
 		if err != nil {
 			pg.Close()
-			return nil, nil, nil, fmt.Errorf("blobfs: %w", err)
+			return nil, fmt.Errorf("blobfs: %w", err)
 		}
-		return pg, blobs, func() { pg.Close() }, nil
+		return &stores{
+			objects:   gcs.NewPostgresObjectStore(pg.Pool()),
+			messages:  pubsubstore.NewPostgresMessages(pg.Pool()),
+			secrets:   secretmanagerstore.NewPostgresStore(pg.Pool()),
+			keys:      kmsstore.NewPostgresStore(pg.Pool()),
+			resources: pg,
+			blobs:     blobs,
+			close:     func() { pg.Close() },
+		}, nil
 	}
 	if cfg.Ephemeral {
-		return store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), func() {}, nil
+		return &stores{
+			objects:   gcs.NewMemoryObjectStore(),
+			messages:  pubsubstore.NewMemoryMessages(),
+			secrets:   secretmanagerstore.NewMemoryStore(),
+			keys:      kmsstore.NewMemoryStore(),
+			resources: store.NewMemoryResourceStore(),
+			blobs:     blobfs.NewMemoryBlobStore(),
+			close:     func() {},
+		}, nil
 	}
 	blobs, err := blobfs.NewSessionBlobStore(instanceID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("blobfs: %w", err)
+		return nil, fmt.Errorf("blobfs: %w", err)
 	}
-	return store.NewMemoryResourceStore(), blobs, func() {}, nil
+	return &stores{
+		objects:   gcs.NewMemoryObjectStore(),
+		messages:  pubsubstore.NewMemoryMessages(),
+		secrets:   secretmanagerstore.NewMemoryStore(),
+		keys:      kmsstore.NewMemoryStore(),
+		resources: store.NewMemoryResourceStore(),
+		blobs:     blobs,
+		close:     func() {},
+	}, nil
 }
 
 func versionCmd() *cobra.Command {
