@@ -5,11 +5,17 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/resource"
+	kms "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
+
+func newTestProvider() *Provider {
+	return New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+}
 
 func newNR(params map[string]any) *model.NormalizedRequest {
 	if params == nil {
@@ -20,7 +26,7 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 
 func TestPubSubRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	// Create topic.
 	nr := newNR(map[string]any{"name": "topics/my-topic"})
@@ -74,7 +80,7 @@ func TestPubSubRoundTrip(t *testing.T) {
 // modifyAckDeadline round-trip through the opaque form.
 func TestPubSubOpaqueAckID(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/t"})); err != nil {
 		t.Fatalf("topic create: %v", err)
@@ -140,7 +146,7 @@ func TestPubSubOpaqueAckID(t *testing.T) {
 // stored topic map is returned, not just {"name": ...}).
 func TestTopicGetListFieldFidelity(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	nr := newNR(map[string]any{
 		"name": "topics/with-fields",
@@ -190,5 +196,60 @@ func TestTopicGetListFieldFidelity(t *testing.T) {
 	labels, _ = found["labels"].(map[string]any)
 	if labels["env"] != "test" || labels["team"] != "platform" {
 		t.Errorf("list labels = %v, want env=test team=platform", labels)
+	}
+}
+
+func TestPubSubCMEKRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	kmsStore := kms.NewMemoryStore()
+	enc := crypto.NewEnvelopeEncryptor(kmsStore)
+	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages(), enc)
+
+	projectID := "my-project"
+	location := "global"
+	keyringID := "my-keyring"
+	keyID := "my-key"
+	if err := kmsStore.CreateKeyRing(ctx, projectID, location, keyringID, kms.KeyRing{ID: keyringID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.CreateCryptoKey(ctx, projectID, location, keyringID, keyID, kms.CryptoKey{ID: keyID, Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+		t.Fatal(err)
+	}
+	kmsKeyName := "projects/" + projectID + "/locations/" + location + "/keyRings/" + keyringID + "/cryptoKeys/" + keyID
+
+	// Create a topic with CMEK.
+	nr := newNR(map[string]any{"name": "topics/cmek-topic", "body": map[string]any{"kmsKeyName": kmsKeyName}})
+	nr.AccountID = projectID
+	if _, err := p.TopicCreate(ctx, nr); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+
+	// Publish a message.
+	payload := "aGVsbG8sIHdvcmxk" // base64 "hello, world"
+	nr = newNR(map[string]any{"name": "topics/cmek-topic", "body": map[string]any{"messages": []any{map[string]any{"data": payload}}}})
+	nr.AccountID = projectID
+	if _, err := p.TopicPublish(ctx, nr); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Subscribe and pull; the payload must decrypt back to the original.
+	nr = newNR(map[string]any{"name": "subscriptions/cmek-sub", "body": map[string]any{"topic": "projects/" + projectID + "/topics/cmek-topic"}})
+	nr.AccountID = projectID
+	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+	nr = newNR(map[string]any{"name": "subscriptions/cmek-sub"})
+	nr.AccountID = projectID
+	resp, err := p.SubscriptionPull(ctx, nr)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	received, _ := resp.Data["receivedMessages"].([]any)
+	if len(received) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(received))
+	}
+	data := received[0].(map[string]any)["message"].(map[string]any)["data"].(string)
+	if data != payload {
+		t.Fatalf("expected data %q, got %q", payload, data)
 	}
 }

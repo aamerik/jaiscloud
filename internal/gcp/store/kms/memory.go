@@ -49,6 +49,10 @@ func (s *MemoryStore) dek() ([]byte, error) {
 	return s.serverDEK, nil
 }
 
+func (s *MemoryStore) ServerDEK(ctx context.Context) ([]byte, error) {
+	return s.dek()
+}
+
 func (s *MemoryStore) CreateKeyRing(_ context.Context, projectID, location, id string, kr KeyRing) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

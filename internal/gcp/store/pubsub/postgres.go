@@ -39,17 +39,17 @@ func (s *PostgresMessages) Put(ctx context.Context, m Message) error {
 	}
 	attrs, _ := json.Marshal(m.Attributes)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_pubsub_messages (topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		INSERT INTO jc_pubsub_messages (topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (topic, message_id) DO UPDATE
-			SET data=$3, attributes=$4, publish_time=$5, delivery_attempt=$6, ordering_key=$7, visible_at=$8
-	`, m.Topic, m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt))
+			SET data=$3, attributes=$4, publish_time=$5, delivery_attempt=$6, ordering_key=$7, visible_at=$8, kms_key_name=$9, wrapped_dek=$10
+	`, m.Topic, m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.KmsKeyName, m.WrappedDEK)
 	return err
 }
 
 func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at
+		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek
 		FROM jc_pubsub_messages WHERE topic=$1 ORDER BY publish_time
 	`, topic)
 	if err != nil {
@@ -61,7 +61,7 @@ func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, e
 		var m Message
 		var attrs []byte
 		var visibleAt *time.Time
-		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt); err != nil {
+		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			return nil, err
 		}
 		json.Unmarshal(attrs, &m.Attributes)
@@ -85,7 +85,7 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key
+		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, kms_key_name, wrapped_dek
 		FROM jc_pubsub_messages
 		WHERE topic = $1
 		  AND (visible_at IS NULL OR visible_at <= $2)
@@ -101,7 +101,7 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	for rows.Next() {
 		var m Message
 		var attrs []byte
-		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey); err != nil {
+		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			rows.Close()
 			return nil, err
 		}

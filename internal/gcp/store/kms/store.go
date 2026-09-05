@@ -73,5 +73,8 @@ type Store interface {
 	// PublicKey returns the raw PKIX public DER for an asymmetric version.
 	PublicKey(ctx context.Context, projectID, location, keyringID, keyID, version string) ([]byte, error)
 
+	// ServerDEK returns the global server DEK.
+	ServerDEK(ctx context.Context) ([]byte, error)
+
 	Reset(ctx context.Context)
 }

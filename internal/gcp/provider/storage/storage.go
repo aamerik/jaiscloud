@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -24,7 +25,9 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/store/gcs"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -60,6 +63,7 @@ type Provider struct {
 	objects   gcs.ObjectStore     // dedicated store: buckets + objects (jc_gcs_*)
 	resources store.ResourceStore // generic store: IAM + ACL (jc_resources)
 	blobs     blobfs.BlobStore    // object bytes
+	encryptor crypto.EnvelopeEncryptor
 
 	mu      sync.Mutex
 	uploads map[string]*uploadSession // resumable upload sessions (in-memory)
@@ -81,12 +85,14 @@ type uploadSession struct {
 }
 
 // New returns a GCS provider backed by the dedicated object store (buckets +
-// objects), the generic resource store (IAM + ACL), and the blob store (bytes).
-func New(objects gcs.ObjectStore, resources store.ResourceStore, blobs blobfs.BlobStore) *Provider {
+// objects), the generic resource store (IAM + ACL), the blob store (bytes),
+// and an envelope encryptor (CMEK/CSEK/server-DEK).
+func New(objects gcs.ObjectStore, resources store.ResourceStore, blobs blobfs.BlobStore, encryptor crypto.EnvelopeEncryptor) *Provider {
 	p := &Provider{
 		objects:   objects,
 		resources: resources,
 		blobs:     blobs,
+		encryptor: encryptor,
 		uploads:   make(map[string]*uploadSession),
 		gen:       clock.Now().UnixNano(),
 	}
@@ -210,6 +216,7 @@ type bucketMeta struct {
 	Versioning      map[string]any `json:"versioning,omitempty"`
 	RetentionPolicy map[string]any `json:"retentionPolicy,omitempty"`
 	Lifecycle       map[string]any `json:"lifecycle,omitempty"`
+	Encryption      map[string]any `json:"encryption,omitempty"`
 }
 
 type objectMeta struct {
@@ -238,6 +245,15 @@ type objectMeta struct {
 	EventBasedHold          bool   `json:"eventBasedHold,omitempty"`
 	// TimeDeleted is set on non-live generations (versioning).
 	TimeDeleted string `json:"timeDeleted,omitempty"`
+	// KmsKeyName is the CMEK key name (empty when server-DEK or CSEK encrypted).
+	KmsKeyName string `json:"kmsKeyName,omitempty"`
+	// CustomerEncryption describes a CSEK-encrypted object.
+	CustomerEncryption *customerEncryption `json:"customerEncryption,omitempty"`
+}
+
+type customerEncryption struct {
+	EncryptionAlgorithm string `json:"encryptionAlgorithm,omitempty"`
+	KeySha256           string `json:"keySha256,omitempty"`
 }
 
 type objectRetention struct {
@@ -265,6 +281,10 @@ func toStoreObject(o objectMeta) gcs.ObjectMeta {
 		Updated:        up,
 		TemporaryHold:  o.TemporaryHold,
 		EventBasedHold: o.EventBasedHold,
+		KmsKeyName:     o.KmsKeyName,
+	}
+	if o.CustomerEncryption != nil {
+		m.CSEKeySHA256 = o.CustomerEncryption.KeySha256
 	}
 	if o.Retention != nil && (o.Retention.Mode != "" || o.Retention.RetainUntilTime != "") {
 		rt, _ := time.Parse(time.RFC3339Nano, o.Retention.RetainUntilTime)
@@ -312,6 +332,12 @@ func fromStoreObject(m gcs.ObjectMeta) objectMeta {
 	}
 	if m.TimeDeleted != nil {
 		o.TimeDeleted = m.TimeDeleted.Format(time.RFC3339Nano)
+	}
+	if m.KmsKeyName != "" {
+		o.KmsKeyName = m.KmsKeyName
+	}
+	if m.CSEKeySHA256 != "" {
+		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: m.CSEKeySHA256}
 	}
 	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
 	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + m.Bucket + "/o/" + url.PathEscape(m.Name)
@@ -415,6 +441,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Versioning = bodyMap(body, "versioning")
 	b.RetentionPolicy = bodyMap(body, "retentionPolicy")
 	b.Lifecycle = bodyMap(body, "lifecycle")
+	b.Encryption = bodyMap(body, "encryption")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 
@@ -465,6 +492,9 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	}
 	if _, ok := body["lifecycle"]; ok {
 		b.Lifecycle = bodyMap(body, "lifecycle")
+	}
+	if _, ok := body["encryption"]; ok {
+		b.Encryption = bodyMap(body, "encryption")
 	}
 	b.Updated = clock.Now().Format(time.RFC3339Nano)
 	if err := p.objects.UpdateBucketMeta(ctx, name, bucketToMap(b)); err != nil {
@@ -708,7 +738,6 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		Kind:           "storage#object",
 		Name:           object,
 		Bucket:         bucket,
-		Size:           fmt.Sprintf("%d", len(media)),
 		ContentType:    contentType,
 		Generation:     generation,
 		Metageneration: "1",
@@ -750,36 +779,67 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		}
 	}
 
+	// Resolve the object encryption key: CSEK (header) wins, then CMEK
+	// (per-object kmsKeyName query param, else the bucket's
+	// encryption.defaultKmsKeyName), else the server DEK via Wrap.
+	kmsKeyName, cseKey, cseKeySHA256, err := p.resolveWriteKey(nr, bucket, bmeta)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the raw object bytes. Envelope encryption is applied whole-object
+	// with AES-GCM, so the body is buffered; TODO(streaming-AEAD): stream very
+	// large objects through a streaming AEAD (e.g. Tink StreamingAead) rather
+	// than buffering the full ciphertext in memory.
+	var raw []byte
 	if stream, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
-		// Streaming upload: hash on the fly while writing to the blob store, so
-		// large objects never buffer fully in memory.
-		md5h := md5.New()
-		crc32h := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-		tee := io.TeeReader(io.TeeReader(stream, md5h), crc32h)
-		n, err := p.blobs.PutStream(ctx, blobsNamespace, id, tee)
+		raw, err = io.ReadAll(stream)
 		if err != nil {
 			return nil, err
 		}
-		o.Size = strconv.FormatInt(n, 10)
-		o.Md5Hash = base64.StdEncoding.EncodeToString(md5h.Sum(nil))
-		crcBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(crcBytes, crc32h.Sum32())
-		o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
 	} else {
-		// md5Hash is present even for zero-length objects; crc32c is CRC32C-Castagnoli.
-		sum := md5.Sum(media)
-		o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
-		crc := crc32.Checksum(media, crc32.MakeTable(crc32.Castagnoli))
-		crcBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(crcBytes, crc)
-		o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
-		if err := p.blobs.Put(ctx, blobsNamespace, id, media); err != nil {
+		raw = media
+	}
+
+	// Plaintext checksums/size (GCS reports the logical object, not the
+	// ciphertext).
+	sum := md5.Sum(raw)
+	o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
+	crc := crc32.Checksum(raw, crc32.MakeTable(crc32.Castagnoli))
+	crcBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(crcBytes, crc)
+	o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
+	o.Size = strconv.FormatInt(int64(len(raw)), 10)
+
+	// Encrypt and store the ciphertext blob.
+	var wrappedDEK []byte
+	if cseKey != nil {
+		ciphertext, err := kmsstore.EncryptData(cseKey, raw, nil)
+		if err != nil {
 			return nil, err
 		}
+		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
+			return nil, err
+		}
+		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: cseKeySHA256}
+	} else {
+		rawDEK, wd, err := p.encryptor.Wrap(ctx, nr.AccountID, kmsKeyName)
+		if err != nil {
+			return nil, err
+		}
+		wrappedDEK = wd
+		ciphertext, err := kmsstore.EncryptData(rawDEK, raw, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
+			return nil, err
+		}
+		o.KmsKeyName = kmsKeyName
 	}
 
 	storeMeta := toStoreObject(o)
-	var err error
+	storeMeta.WrappedDEK = wrappedDEK
 	if versioned {
 		err = p.objects.PutObjectGeneration(ctx, bucket, object, storeMeta)
 	} else {
@@ -814,13 +874,77 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
 	}
+	// Decrypt the ciphertext. Buffered AES-GCM (see TODO(streaming-AEAD) in
+	// ObjectsInsert); a CSEK-encrypted object requires the matching key header.
+	ciphertext, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		return nil, err
+	}
+	plain, err := p.decryptObject(ctx, nr, meta, ciphertext)
+	if err != nil {
+		return nil, err
+	}
 	return &model.ProviderResponse{
 		HTTPStatus: 200,
 		Data: map[string]any{
-			"_stream":           rc,
+			"_stream":           io.NopCloser(bytes.NewReader(plain)),
 			wire.ContentTypeKey: meta.ContentType,
 		},
 	}, nil
+}
+
+// resolveWriteKey determines the DEK for an object write: CSEK (header) wins,
+// then CMEK (per-object kmsKeyName query param, else the bucket's
+// encryption.defaultKmsKeyName), else empty (server DEK via Wrap).
+func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, bmeta map[string]any) (kmsKeyName string, cseKey []byte, cseKeySHA256 string, err error) {
+	if keyB64, _ := nr.Params[wire.CSEKKey].(string); keyB64 != "" {
+		key, err := base64.StdEncoding.DecodeString(keyB64)
+		if err != nil || len(key) != 32 {
+			return "", nil, "", model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+		}
+		sum := sha256.Sum256(key)
+		expected := base64.StdEncoding.EncodeToString(sum[:])
+		gotSHA, _ := nr.Params[wire.CSEKKeySHA256].(string)
+		if gotSHA != expected {
+			return "", nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption key hash mismatch", 400)
+		}
+		return "", key, expected, nil
+	}
+	if k, _ := nr.Params["kmsKeyName"].(string); k != "" {
+		return k, nil, "", nil
+	}
+	if enc, ok := bmeta["encryption"].(map[string]any); ok {
+		if dk, _ := enc["defaultKmsKeyName"].(string); dk != "" {
+			return dk, nil, "", nil
+		}
+	}
+	return "", nil, "", nil
+}
+
+// decryptObject returns the plaintext for a stored ciphertext, using the CSEK
+// key (when the object is CSEK-encrypted) or the envelope DEK otherwise.
+func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedRequest, meta gcs.ObjectMeta, ciphertext []byte) ([]byte, error) {
+	if meta.CSEKeySHA256 != "" {
+		keyB64, _ := nr.Params[wire.CSEKKey].(string)
+		if keyB64 == "" {
+			return nil, model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key", 400)
+		}
+		key, err := base64.StdEncoding.DecodeString(keyB64)
+		if err != nil || len(key) != 32 {
+			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+		}
+		sum := sha256.Sum256(key)
+		if base64.StdEncoding.EncodeToString(sum[:]) != meta.CSEKeySHA256 {
+			return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption key mismatch", 400)
+		}
+		return kmsstore.DecryptData(key, ciphertext, nil)
+	}
+	rawDEK, err := p.encryptor.Unwrap(ctx, nr.AccountID, meta.KmsKeyName, meta.WrappedDEK)
+	if err != nil {
+		return nil, err
+	}
+	return kmsstore.DecryptData(rawDEK, ciphertext, nil)
 }
 
 // ObjectsUpdate implements objects.update (HTTP PUT). GCS PUT semantics are a
@@ -1064,6 +1188,9 @@ func toBucketMap(b bucketMeta) map[string]any {
 	}
 	if b.Lifecycle != nil {
 		out["lifecycle"] = b.Lifecycle
+	}
+	if b.Encryption != nil {
+		out["encryption"] = b.Encryption
 	}
 	return out
 }

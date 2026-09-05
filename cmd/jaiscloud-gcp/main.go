@@ -20,6 +20,7 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
+	"jaiscloud/internal/gcp/crypto"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -111,11 +112,11 @@ func startCmd() *cobra.Command {
 				}
 			}
 
-			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs)
-			secretP := secretmanagerprovider.New(stores.secrets, stores.resources)
+			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs, crypto.NewEnvelopeEncryptor(stores.keys))
+			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
 			kmsP := kmsprovider.New(stores.keys)
 			iamP := iamprovider.New(stores.resources)
-			pubsubP := pubsubprovider.New(stores.resources, stores.messages)
+			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 
 			reg := provider.NewRegistry().
 				Register(storageP).

@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -42,10 +44,11 @@ var pushClient = &http.Client{Timeout: 10 * time.Second}
 type Provider struct {
 	resources store.ResourceStore  // topics + subscriptions (control-plane)
 	messages  pubsubstore.Messages // published messages (data plane)
+	encryptor crypto.EnvelopeEncryptor
 }
 
-func New(resources store.ResourceStore, messages pubsubstore.Messages) *Provider {
-	return &Provider{resources: resources, messages: messages}
+func New(resources store.ResourceStore, messages pubsubstore.Messages, encryptor crypto.EnvelopeEncryptor) *Provider {
+	return &Provider{resources: resources, messages: messages, encryptor: encryptor}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -94,6 +97,9 @@ func (p *Provider) TopicCreate(ctx context.Context, nr *model.NormalizedRequest)
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if ret, ok := body["messageRetentionDuration"].(string); ok && ret != "" {
 			meta["messageRetentionDuration"] = ret
+		}
+		if k, ok := body["kmsKeyName"].(string); ok && k != "" {
+			meta["kmsKeyName"] = k
 		}
 		if labels, ok := body["labels"].(map[string]any); ok {
 			lbls := make(map[string]string, len(labels))
@@ -179,16 +185,25 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	t := strings.TrimPrefix(name, "topics/")
-	if _, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtTopic, t); err != nil {
+	topicEntry, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtTopic, t)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "topic not found", 404)
 		}
 		return nil, err
 	}
+	// Resolve the topic's CMEK key (empty → server DEK via Wrap).
+	kmsKeyName := ""
+	var topicMeta map[string]any
+	if json.Unmarshal(topicEntry.Data, &topicMeta) == nil {
+		kmsKeyName, _ = topicMeta["kmsKeyName"].(string)
+	}
+
 	body, _ := nr.Params["body"].(map[string]any)
 	msgs, _ := body["messages"].([]any)
 	ids := make([]string, 0, len(msgs))
 	stored := make([]pubsubstore.Message, 0, len(msgs))
+	plainData := make([]string, 0, len(msgs))
 	publishTime := clock.Now()
 	for _, m := range msgs {
 		mm, _ := m.(map[string]any)
@@ -197,6 +212,23 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 			return nil, err
 		}
 		data, _ := mm["data"].(string)
+
+		// Envelope-encrypt the message payload: base64(data) → AES-GCM with a
+		// fresh DEK, wrapping the DEK under the topic's CMEK key (or the server
+		// DEK when no key is configured).
+		rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, nr.AccountID, kmsKeyName)
+		if err != nil {
+			return nil, err
+		}
+		plain, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			plain = []byte(data)
+		}
+		ciphertext, err := kmsstore.EncryptData(rawDEK, plain, nil)
+		if err != nil {
+			return nil, err
+		}
+
 		attrs := map[string]string{}
 		if a, ok := mm["attributes"].(map[string]any); ok {
 			for k, v := range a {
@@ -205,7 +237,11 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 				}
 			}
 		}
-		msg := pubsubstore.Message{Topic: t, MessageID: id, Data: data, Attributes: attrs, PublishTime: publishTime}
+		msg := pubsubstore.Message{
+			Topic: t, MessageID: id, Data: base64.StdEncoding.EncodeToString(ciphertext),
+			Attributes: attrs, PublishTime: publishTime,
+			KmsKeyName: kmsKeyName, WrappedDEK: wrappedDEK,
+		}
 		if ok, _ := mm["orderingKey"].(string); ok != "" {
 			msg.OrderingKey = ok
 		}
@@ -213,20 +249,22 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 			return nil, err
 		}
 		stored = append(stored, msg)
+		plainData = append(plainData, data)
 		ids = append(ids, id)
 	}
 
-	// Push subscriptions: deliver each message to the push endpoint.
+	// Push subscriptions: deliver each message to the push endpoint with the
+	// plaintext payload (the stored Data is ciphertext).
 	topicFull := nr.ResourceID("pubsub-topic", t)
-	for _, msg := range stored {
-		p.deliverPush(ctx, nr.AccountID, topicFull, msg)
+	for i, msg := range stored {
+		p.deliverPush(ctx, nr.AccountID, topicFull, msg, plainData[i])
 	}
 	return provider.OK(map[string]any{"messageIds": ids}), nil
 }
 
 // deliverPush POSTs a message to every push subscription of the topic (SNS
 // deliverToHTTP analogue).
-func (p *Provider) deliverPush(ctx context.Context, accountID, topicFull string, msg pubsubstore.Message) {
+func (p *Provider) deliverPush(ctx context.Context, accountID, topicFull string, msg pubsubstore.Message, data string) {
 	entries, err := p.resources.List(ctx, accountID, store.GlobalRegion, rtSubscription, "")
 	if err != nil {
 		return
@@ -247,7 +285,7 @@ func (p *Provider) deliverPush(ctx context.Context, accountID, topicFull string,
 		payload := map[string]any{
 			"message": map[string]any{
 				"messageId":   msg.MessageID,
-				"data":        msg.Data,
+				"data":        data,
 				"publishTime": msg.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
 			},
 			"subscription": sub["name"],
@@ -432,12 +470,29 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 			_ = p.messages.Put(ctx, pubsubstore.Message{
 				Topic: dlqTopic, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
 				PublishTime: m.PublishTime, DeliveryAttempt: 0,
+				KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
 			})
 			continue
 		}
+
+		// Decrypt the stored ciphertext back to the plaintext base64 payload.
+		rawDEK, err := p.encryptor.Unwrap(ctx, nr.AccountID, m.KmsKeyName, m.WrappedDEK)
+		if err != nil {
+			return nil, err
+		}
+		ciphertext, err := base64.StdEncoding.DecodeString(m.Data)
+		if err != nil {
+			return nil, err
+		}
+		plain, err := kmsstore.DecryptData(rawDEK, ciphertext, nil)
+		if err != nil {
+			return nil, err
+		}
+		data := base64.StdEncoding.EncodeToString(plain)
+
 		msg := map[string]any{
 			"messageId":   m.MessageID,
-			"data":        m.Data,
+			"data":        data,
 			"publishTime": m.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
 		}
 		if len(m.Attributes) > 0 {

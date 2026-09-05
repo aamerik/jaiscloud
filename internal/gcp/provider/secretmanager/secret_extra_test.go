@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -19,7 +21,7 @@ func errStatus(err error) int {
 
 func TestSecretNegativesAndPagination(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	for _, id := range []string{"a", "b", "c"} {
 		nr := newNR(map[string]any{"secretId": id})
@@ -93,7 +95,7 @@ func TestSecretNegativesAndPagination(t *testing.T) {
 // and are reflected in the returned version state.
 func TestSecretVersionLifecycle(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	nr := newNR(map[string]any{"secretId": "s"})
 	if _, err := p.Create(ctx, nr); err != nil {
@@ -130,7 +132,7 @@ func TestSecretVersionLifecycle(t *testing.T) {
 // distinct version numbers (no lost or colliding versions).
 func TestSecretAddVersionConcurrent(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "s"})); err != nil {
 		t.Fatalf("create: %v", err)
@@ -167,7 +169,7 @@ func TestSecretAddVersionConcurrent(t *testing.T) {
 // TestSecretIamPolicy verifies secret getIamPolicy/setIamPolicy/testIamPermissions.
 func TestSecretIamPolicy(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "s"})); err != nil {
 		t.Fatalf("create: %v", err)
@@ -207,7 +209,7 @@ func TestSecretIamPolicy(t *testing.T) {
 // a new version and advances nextRotationTime.
 func TestSecretRotationAndAliases(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	// Create with aliases (rotation unset).
 	create := newNR(map[string]any{
@@ -259,7 +261,7 @@ func TestSecretRotationAndAliases(t *testing.T) {
 // TestSecretRotationNotDue verifies a future rotation does not create a version.
 func TestSecretRotationNotDue(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	create := newNR(map[string]any{
 		"secretId": "s",
@@ -278,5 +280,89 @@ func TestSecretRotationNotDue(t *testing.T) {
 	}
 	if _, err := p.secrets.GetVersion(ctx, "proj", "s", "2"); err == nil {
 		t.Fatal("expected no rotated version when not due")
+	}
+}
+
+func TestSecretManagerCMEKRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	kmsStore := kms.NewMemoryStore()
+	enc := crypto.NewEnvelopeEncryptor(kmsStore)
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), enc)
+
+	// Create KMS KeyRing & CryptoKey
+	projectID := "my-project"
+	location := "global"
+	keyringID := "my-keyring"
+	keyID := "my-key"
+	err := kmsStore.CreateKeyRing(ctx, projectID, location, keyringID, kms.KeyRing{ID: keyringID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = kmsStore.CreateCryptoKey(ctx, projectID, location, keyringID, keyID, kms.CryptoKey{ID: keyID, Purpose: "ENCRYPT_DECRYPT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := kmsStore.CreateVersion(ctx, projectID, location, keyringID, keyID, kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = kmsStore.UpdatePrimaryVersion(ctx, projectID, location, keyringID, keyID, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kmsKeyName := "projects/" + projectID + "/locations/" + location + "/keyRings/" + keyringID + "/cryptoKeys/" + keyID
+
+	// Create Secret with CMEK
+	createNR := newNR(map[string]any{
+		"secretId": "cmek-secret",
+		"body": map[string]any{
+			"replication": map[string]any{
+				"automatic": map[string]any{
+					"customerManagedEncryption": map[string]any{
+						"kmsKeyName": kmsKeyName,
+					},
+				},
+			},
+		},
+	})
+	createNR.AccountID = projectID
+
+	_, err = p.Create(ctx, createNR)
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	// Add Version
+	payloadB64 := "aGVsbG8sIHdvcmxk" // "hello, world"
+	addNR := newNR(map[string]any{
+		"name": "projects/" + projectID + "/secrets/cmek-secret",
+		"body": map[string]any{
+			"payload": map[string]any{
+				"data": payloadB64,
+			},
+		},
+	})
+	addNR.AccountID = projectID
+
+	addResp, err := p.AddVersion(ctx, addNR)
+	if err != nil {
+		t.Fatalf("add version: %v", err)
+	}
+	versionName := addResp.Data["name"].(string)
+
+	// Access
+	accessNR := newNR(map[string]any{
+		"name": versionName,
+	})
+	accessNR.AccountID = projectID
+
+	accessResp, err := p.Access(ctx, accessNR)
+	if err != nil {
+		t.Fatalf("access version: %v", err)
+	}
+
+	payloadResp := accessResp.Data["payload"].(map[string]any)
+	if payloadResp["data"] != payloadB64 {
+		t.Fatalf("expected payload %q, got %q", payloadB64, payloadResp["data"])
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -19,7 +21,7 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 
 func TestSecretRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	// Create.
 	nr := newNR(map[string]any{"secretId": "my-secret", "body": map[string]any{"replication": map[string]any{"automatic": map[string]any{}}}})

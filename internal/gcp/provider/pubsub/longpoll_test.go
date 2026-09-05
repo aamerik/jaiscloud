@@ -4,9 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
-	"jaiscloud/internal/store"
 )
 
 // setupLongPoll creates a provider with a topic and subscription, ready for
@@ -14,7 +11,7 @@ import (
 func setupLongPoll(t *testing.T) *Provider {
 	t.Helper()
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/my-topic"})); err != nil {
 		t.Fatalf("topic create: %v", err)

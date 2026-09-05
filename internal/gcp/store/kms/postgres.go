@@ -73,6 +73,10 @@ func (s *PostgresStore) unwrapDEK(blob []byte) ([]byte, error) {
 	return blob, nil // legacy raw plaintext
 }
 
+func (s *PostgresStore) ServerDEK(ctx context.Context) ([]byte, error) {
+	return s.dek(ctx)
+}
+
 func (s *PostgresStore) CreateKeyRing(ctx context.Context, projectID, location, id string, kr KeyRing) error {
 	if kr.CreateTime.IsZero() {
 		kr.CreateTime = clock.Now()
