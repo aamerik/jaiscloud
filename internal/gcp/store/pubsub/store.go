@@ -19,6 +19,11 @@ type Message struct {
 	DeliveryAttempt int
 	OrderingKey     string    // GCP orderingKey (FIFO group, like SQS MessageGroupId)
 	VisibleAt       time.Time // when the message becomes visible again (ack deadline)
+	// KmsKeyName is the CMEK key name (empty when server-DEK encrypted). The
+	// Data field stores base64(AES-GCM ciphertext) when envelope encryption is
+	// active; WrappedDEK is the DEK wrapped by KmsKeyName.
+	KmsKeyName string
+	WrappedDEK []byte
 }
 
 // Messages is the Pub/Sub message store.

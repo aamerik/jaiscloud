@@ -14,15 +14,17 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
+	kms "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
 func newTestProvider() *Provider {
-	return New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore())
+	return New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 }
 
 // streamBytes reads the bytes from a "_stream" media response.
@@ -1234,7 +1236,7 @@ func TestGenerationSeededAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	objStore := gcs.NewMemoryObjectStore()
 	blobs := blobfs.NewMemoryBlobStore()
-	p1 := New(objStore, store.NewMemoryResourceStore(), blobs)
+	p1 := New(objStore, store.NewMemoryResourceStore(), blobs, crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
 	nr := bucketParams()
 	nr.Params["body"] = map[string]any{"name": "bkt"}
@@ -1252,7 +1254,7 @@ func TestGenerationSeededAcrossRestart(t *testing.T) {
 
 	// A "restarted" provider over the same object store must continue past the
 	// stored generation (monotonicity across restarts, --dsn parity).
-	p2 := New(objStore, store.NewMemoryResourceStore(), blobs)
+	p2 := New(objStore, store.NewMemoryResourceStore(), blobs, crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 	nr = bucketParams()
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "b.txt"

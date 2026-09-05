@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -26,10 +28,11 @@ const rtSecretPolicy = "gcp_secret_policy"
 type Provider struct {
 	secrets   secretmanagerstore.Store
 	resources store.ResourceStore // IAM policies (control-plane)
+	encryptor crypto.EnvelopeEncryptor
 }
 
-func New(secrets secretmanagerstore.Store, resources store.ResourceStore) *Provider {
-	return &Provider{secrets: secrets, resources: resources}
+func New(secrets secretmanagerstore.Store, resources store.ResourceStore, encryptor crypto.EnvelopeEncryptor) *Provider {
+	return &Provider{secrets: secrets, resources: resources, encryptor: encryptor}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
@@ -58,6 +61,7 @@ type secretMeta struct {
 	NextVer        int
 	Rotation       *secretmanagerstore.Rotation
 	VersionAliases map[string]int
+	KmsKeyName     string
 }
 
 type versionMeta struct {
@@ -76,10 +80,13 @@ func resourceName(nr *model.NormalizedRequest) (string, error) {
 	return n, nil
 }
 
-// parseSecretName splits a relative resource name (e.g. "secrets/foo" or
-// "secrets/foo/versions/2") into the secret ID and version.
+// parseSecretName splits a relative resource name or full GCP name into the secret ID and version.
 func parseSecretName(name string) (secret, version string) {
-	name = strings.TrimPrefix(name, "secrets/")
+	if i := strings.Index(name, "/secrets/"); i >= 0 {
+		name = name[i+len("/secrets/"):]
+	} else {
+		name = strings.TrimPrefix(name, "secrets/")
+	}
 	if i := strings.Index(name, "/versions/"); i >= 0 {
 		return name[:i], name[i+len("/versions/"):]
 	}
@@ -99,11 +106,12 @@ func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 	return secretmanagerstore.Secret{
 		ID: secretID(m.Name), Labels: m.Labels, CreateTime: tc, NextVer: m.NextVer,
 		Rotation: m.Rotation, VersionAliases: m.VersionAliases,
+		KmsKeyName: m.KmsKeyName,
 	}
 }
 
 func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) secretMeta {
-	m := secretMeta{Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, NextVer: s.NextVer, Rotation: s.Rotation, VersionAliases: s.VersionAliases}
+	m := secretMeta{Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, NextVer: s.NextVer, Rotation: s.Rotation, VersionAliases: s.VersionAliases, KmsKeyName: s.KmsKeyName}
 	if !s.CreateTime.IsZero() {
 		m.CreateTime = s.CreateTime.Format(time.RFC3339Nano)
 	}
@@ -140,6 +148,30 @@ func versionAliasesFromBody(body map[string]any) map[string]int {
 		}
 	}
 	return out
+}
+
+func kmsKeyNameFromBody(body map[string]any) string {
+	if repl, ok := body["replication"].(map[string]any); ok {
+		if auto, ok := repl["automatic"].(map[string]any); ok {
+			if cmek, ok := auto["customerManagedEncryption"].(map[string]any); ok {
+				if k, ok := cmek["kmsKeyName"].(string); ok {
+					return k
+				}
+			}
+		}
+		if um, ok := repl["userManaged"].(map[string]any); ok {
+			if reps, ok := um["replicas"].([]any); ok && len(reps) > 0 {
+				if rMap, ok := reps[0].(map[string]any); ok {
+					if cmek, ok := rMap["customerManagedEncryption"].(map[string]any); ok {
+						if k, ok := cmek["kmsKeyName"].(string); ok {
+							return k
+						}
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version) versionMeta {
@@ -185,6 +217,9 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	if va := versionAliasesFromBody(body); va != nil {
 		m.VersionAliases = va
+	}
+	if kmsKeyName := kmsKeyNameFromBody(body); kmsKeyName != "" {
+		m.KmsKeyName = kmsKeyName
 	}
 	if err := p.secrets.CreateSecret(ctx, nr.AccountID, id, toStoreSecret(m)); err != nil {
 		if errors.Is(err, secretmanagerstore.ErrAlreadyExists) {
@@ -252,6 +287,9 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		}
 		if va := versionAliasesFromBody(body); va != nil {
 			m.VersionAliases = va
+		}
+		if kmsKeyName := kmsKeyNameFromBody(body); kmsKeyName != "" {
+			m.KmsKeyName = kmsKeyName
 		}
 	}
 	if err := p.secrets.UpdateSecret(ctx, nr.AccountID, id, toStoreSecret(m)); err != nil {
@@ -322,15 +360,37 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	}
 	version := strconv.Itoa(ver)
 
+	sec, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+
+	payloadBytes, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "payload is not base64", 400)
+	}
+
+	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, nr.AccountID, sec.KmsKeyName)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedPayloadBytes, err := kms.EncryptData(rawDEK, payloadBytes, nil)
+	if err != nil {
+		return nil, err
+	}
+	encryptedPayloadBase64 := base64.StdEncoding.EncodeToString(encryptedPayloadBytes)
+
 	v := versionMeta{
 		Name:       nr.ResourceID("secret", id) + "/versions/" + version,
 		State:      "ENABLED",
 		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
-		Data:       payload,
+		Data:       encryptedPayloadBase64,
 	}
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: version, State: "ENABLED",
-		CreateTime: mustParse(v.CreateTime), Data: payload,
+		CreateTime: mustParse(v.CreateTime), Data: encryptedPayloadBase64,
+		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
 	}
 	if err := p.secrets.CreateVersion(ctx, nr.AccountID, stv); err != nil {
 		return nil, err
@@ -348,7 +408,26 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+
+	encryptedPayloadBytes, err := base64.StdEncoding.DecodeString(v.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	rawDEK, err := p.encryptor.Unwrap(ctx, nr.AccountID, v.KmsKeyName, v.WrappedDEK)
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedPayloadBytes, err := kms.DecryptData(rawDEK, encryptedPayloadBytes, nil)
+	if err != nil {
+		return nil, err
+	}
+	decryptedPayloadBase64 := base64.StdEncoding.EncodeToString(decryptedPayloadBytes)
+
 	m := fromStoreVersion(nr, v)
+	m.Data = decryptedPayloadBase64
+
 	return provider.OK(map[string]any{
 		"name": m.Name,
 		"payload": map[string]any{

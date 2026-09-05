@@ -173,11 +173,11 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 	timeDeleted := nullableTime(meta.TimeDeleted)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO jc_gcs_objects
-		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 	`, meta.Bucket, meta.Name, meta.Generation, meta.Metageneration, meta.ContentType, meta.Size, meta.MD5Hash, meta.CRC32C,
 		meta.StorageClass, json.RawMessage(metaRaw), meta.TimeCreated, meta.Updated, retainUntil, retentionMode,
-		meta.TemporaryHold, meta.EventBasedHold, timeDeleted)
+		meta.TemporaryHold, meta.EventBasedHold, timeDeleted, meta.KmsKeyName, meta.WrappedDEK, meta.CSEKeySHA256)
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 }
 
 // objectCols is the shared SELECT column list for object rows.
-const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted"
+const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256"
 
 // scanObject scans the objectCols columns into an ObjectMeta.
 func scanObject(scan func(...any) error) (ObjectMeta, error) {
@@ -195,7 +195,7 @@ func scanObject(scan func(...any) error) (ObjectMeta, error) {
 	var retainUntil pgtype.Timestamptz
 	var timeDeleted pgtype.Timestamptz
 	err := scan(&m.Bucket, &m.Name, &m.Generation, &m.Metageneration, &m.ContentType, &m.Size, &m.MD5Hash, &m.CRC32C,
-		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted)
+		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted, &m.KmsKeyName, &m.WrappedDEK, &m.CSEKeySHA256)
 	if err != nil {
 		return ObjectMeta{}, err
 	}

@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
-	"jaiscloud/internal/store"
 )
 
 func errStatus(err error) int {
@@ -23,7 +23,7 @@ func errStatus(err error) int {
 
 func TestPubSubNegativesAndPagination(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	// Create three topics for pagination.
 	for _, id := range []string{"a", "b", "c"} {
@@ -88,7 +88,7 @@ func TestPubSubNegativesAndPagination(t *testing.T) {
 // maxDeliveryAttempts times, then republished to the dead-letter topic.
 func TestPubSubDLQ(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	for _, id := range []string{"src", "dlq"} {
 		if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/" + id})); err != nil {
@@ -155,8 +155,19 @@ func TestPubSubDLQ(t *testing.T) {
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("expected 1 message in DLQ topic, got %d / %v", len(msgs), err)
 	}
-	if msgs[0].Data != "aGk=" {
-		t.Errorf("unexpected DLQ message data: %q", msgs[0].Data)
+	// DLQ republish preserves the envelope-encrypted payload + key material;
+	// decrypt it to verify the payload round-trips.
+	rawDEK, err := p.encryptor.Unwrap(ctx, "proj", msgs[0].KmsKeyName, msgs[0].WrappedDEK)
+	if err != nil {
+		t.Fatalf("unwrap: %v", err)
+	}
+	ct, _ := base64.StdEncoding.DecodeString(msgs[0].Data)
+	plain, err := kmsstore.DecryptData(rawDEK, ct, nil)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(plain) != "hi" {
+		t.Errorf("unexpected DLQ message data: %q", string(plain))
 	}
 }
 
@@ -164,7 +175,7 @@ func TestPubSubDLQ(t *testing.T) {
 // deliverToHTTP analogue).
 func TestPubSubPushSubscription(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +218,7 @@ func TestPubSubPushSubscription(t *testing.T) {
 // publish indefinitely — the delivery client has a bounded timeout.
 func TestPubSubPushDeliveryTimeout(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/src"})); err != nil {
 		t.Fatalf("create topic: %v", err)
@@ -247,7 +258,7 @@ func TestPubSubPushDeliveryTimeout(t *testing.T) {
 // TestPubSubIamPolicy verifies topic getIamPolicy/setIamPolicy/testIamPermissions.
 func TestPubSubIamPolicy(t *testing.T) {
 	ctx := context.Background()
-	p := New(store.NewMemoryResourceStore(), pubsubstore.NewMemoryMessages())
+	p := newTestProvider()
 
 	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/t1"})); err != nil {
 		t.Fatalf("create topic: %v", err)

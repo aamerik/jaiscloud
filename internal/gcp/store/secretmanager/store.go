@@ -30,6 +30,7 @@ type Secret struct {
 	NextVer        int
 	Rotation       *Rotation      // nil when rotation is disabled
 	VersionAliases map[string]int // alias name → version number, nil when none
+	KmsKeyName     string
 }
 
 // Version is a Secret Manager secret version.
@@ -39,6 +40,8 @@ type Version struct {
 	State      string
 	CreateTime time.Time
 	Data       string // base64 payload
+	KmsKeyName string
+	WrappedDEK []byte
 }
 
 // Store is the Secret Manager store.

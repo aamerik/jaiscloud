@@ -52,6 +52,13 @@ type ObjectMeta struct {
 	EventBasedHold bool `json:"eventBasedHold,omitempty"`
 	// TimeDeleted is set when this generation is no longer live (versioning).
 	TimeDeleted *time.Time `json:"timeDeleted,omitempty"`
+	// KmsKeyName is the CMEK key name (empty when server-DEK encrypted).
+	KmsKeyName string `json:"kmsKeyName,omitempty"`
+	// WrappedDEK is the DEK wrapped under KmsKeyName (nil for CSEK/server-DEK).
+	WrappedDEK []byte `json:"wrappedDek,omitempty"`
+	// CSEKeySHA256 is the base64 SHA-256 of the customer-supplied encryption
+	// key when the object is CSEK-encrypted (empty otherwise).
+	CSEKeySHA256 string `json:"cseKeySha256,omitempty"`
 }
 
 // ResumableSession tracks an in-progress GCS resumable upload (the analogue of

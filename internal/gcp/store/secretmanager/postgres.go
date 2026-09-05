@@ -38,9 +38,9 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 	}
 	labels, _ := json.Marshal(sec.Labels)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases))
+		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -55,9 +55,9 @@ func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Se
 	var sec Secret
 	var labels, rotation, aliases []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases
+		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name
 		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases)
+	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
@@ -77,9 +77,9 @@ func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Se
 func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	labels, _ := json.Marshal(sec.Labels)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases))
+	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (s *PostgresStore) DeleteSecret(ctx context.Context, projectID, id string) 
 
 func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Secret, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases
+		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name
 		FROM jc_sm_secrets WHERE project_id=$1 ORDER BY secret_id
 	`, projectID)
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Se
 	for rows.Next() {
 		var sec Secret
 		var labels, rotation, aliases []byte
-		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases); err != nil {
+		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName); err != nil {
 			return nil, err
 		}
 		json.Unmarshal(labels, &sec.Labels)
@@ -137,18 +137,18 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID string, v V
 		v.CreateTime = clock.Now()
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, data)
-		VALUES ($1,$2,$3,$4,$5,$6)
-	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, v.Data)
+		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, v.Data, v.KmsKeyName, v.WrappedDEK)
 	return err
 }
 
 func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, versionID string) (Version, error) {
 	var v Version
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, data
+		SELECT secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -160,7 +160,7 @@ func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, ver
 
 func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID string) ([]Version, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, state, create_time, data
+		SELECT secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 ORDER BY version_id
 	`, projectID, secretID)
 	if err != nil {
@@ -170,7 +170,7 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 	var result []Version
 	for rows.Next() {
 		var v Version
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data); err != nil {
+		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK); err != nil {
 			return nil, err
 		}
 		result = append(result, v)
