@@ -308,7 +308,10 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 // ListCollectionIds returns the distinct subcollection IDs of a document,
 // paginated.
 func (s *Service) ListCollectionIds(ctx context.Context, project, database, path string, page pageParams) ([]string, string, error) {
-	parent := docName(project, database, path)
+	// parentDocOfCollection returns the parent without a trailing slash, so
+	// trim the "/" that docName appends for an empty (top-level) path before
+	// comparing.
+	parent := strings.TrimSuffix(docName(project, database, path), "/")
 
 	docs, err := s.store.ListDocuments(ctx, project, database)
 	if err != nil {
@@ -543,15 +546,27 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		return firestorestore.Document{}, nil, err
 	}
 
-	var maskPaths []string
-	if mask != nil {
-		maskPaths = mask.FieldPaths
-	}
 	base := map[string]*firestorestore.Value{}
 	if exists {
 		base = existing.Fields
 	}
-	merged := applyMask(dw.Fields, maskPaths, base)
+	// Three mask states, matching real Firestore update semantics:
+	//   - nil mask: replace-all (set) — document.fields fully replace the doc.
+	//   - non-empty mask: patch — only the listed field paths are updated.
+	//   - present-but-empty mask: transform-only update — document.fields is
+	//     ignored entirely and the transforms apply on top of the existing doc.
+	//
+	// applyMask is NOT used for the empty-mask case because its len==0 → replace
+	// contract is REST-patch-specific (it would wipe unrelated fields).
+	var merged map[string]*firestorestore.Value
+	switch {
+	case mask == nil:
+		merged = cloneFields(dw.Fields)
+	case len(mask.FieldPaths) > 0:
+		merged = applyMask(dw.Fields, mask.FieldPaths, base)
+	default:
+		merged = cloneFields(base)
+	}
 
 	// Apply post-update transforms to the merged fields.
 	var transformResults []*firestorestore.Value

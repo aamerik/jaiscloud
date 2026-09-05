@@ -95,6 +95,8 @@ func mapCommitError(err error) error {
 		return newAbortedErr("transaction was aborted due to concurrent modification")
 	case errors.Is(err, firestorestore.ErrPreconditionFailed):
 		return newPreconditionErr("precondition failed")
+	case errors.Is(err, firestorestore.ErrDocumentExists):
+		return model.NewProviderError("AlreadyExists", "document already exists", 409)
 	default:
 		return err
 	}
@@ -135,6 +137,8 @@ func statusWireForError(err error) map[string]any {
 		return statusWire(10, "transaction aborted")
 	case errors.Is(err, firestorestore.ErrPreconditionFailed):
 		return statusWire(9, "precondition failed")
+	case errors.Is(err, firestorestore.ErrDocumentExists):
+		return statusWire(6, "document already exists")
 	default:
 		return statusWire(13, errMsg(err))
 	}
