@@ -463,6 +463,16 @@ func applyMask(fields map[string]*firestorestore.Value, mask []string, base map[
 	return out
 }
 
+// cloneFields returns a shallow copy of a fields map. Values are shared (they
+// are never mutated in place — transform operations always build new Values).
+func cloneFields(fields map[string]*firestorestore.Value) map[string]*firestorestore.Value {
+	out := make(map[string]*firestorestore.Value, len(fields))
+	for k, v := range fields {
+		out[k] = v
+	}
+	return out
+}
+
 // valueAt returns the value at the dotted field path within a mapValue, or nil.
 func valueAt(v *firestorestore.Value, path []string) *firestorestore.Value {
 	cur := v

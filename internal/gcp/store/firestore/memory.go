@@ -120,8 +120,12 @@ func checkPrecondition(docs map[string]Document, w Write) error {
 		return nil
 	}
 	if w.Precondition.Exists != nil {
-		if *w.Precondition.Exists != exists {
-			return ErrPreconditionFailed
+		if *w.Precondition.Exists {
+			if !exists {
+				return ErrPreconditionFailed
+			}
+		} else if exists {
+			return ErrDocumentExists
 		}
 		return nil
 	}

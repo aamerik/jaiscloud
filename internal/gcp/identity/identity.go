@@ -128,6 +128,16 @@ func BearerToken(auth string) string {
 	return strings.TrimSpace(strings.TrimPrefix(auth, prefix))
 }
 
+// ProjectFromToken returns the project ID embedded in a JWT bearer token's
+// project_id claim, or "" for opaque tokens (e.g. the emulator's literal
+// "owner" token) and malformed JWTs. The signature is never verified.
+func ProjectFromToken(token string) string {
+	if c := decodeClaims(token); c != nil {
+		return c.ProjectID
+	}
+	return ""
+}
+
 // ProjectFromPath extracts the project ID from a GCP resource-name URL path.
 // Returns "" if the path does not embed a project segment.
 func ProjectFromPath(path string) string {

@@ -32,15 +32,16 @@ func TestMemoryCommitAtomicAndPrecondition(t *testing.T) {
 		t.Fatalf("commit with exists precondition: %v", err)
 	}
 
-	// Precondition exists=false on a present doc → ErrPreconditionFailed.
+	// Precondition exists=false on a present doc → ErrDocumentExists (a create
+	// on an existing document, matching real Firestore ALREADY_EXISTS).
 	existsFalse := false
 	err = s.Commit(ctx, nil, []Write{{
 		Name:         name,
 		Document:     &Document{Name: name, Fields: map[string]*Value{}, CreateTime: now, UpdateTime: now.Add(2 * time.Minute)},
 		Precondition: &Precondition{Exists: &existsFalse},
 	}})
-	if !errors.Is(err, ErrPreconditionFailed) {
-		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
+	if !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("expected ErrDocumentExists, got %v", err)
 	}
 
 	// Precondition updateTime mismatch → ErrPreconditionFailed.
@@ -92,5 +93,52 @@ func TestMemoryCommitReadSetAbort(t *testing.T) {
 	s2.CreateDocument(ctx, testDoc(name, now))
 	if err := s2.Commit(ctx, reads2, nil); !errors.Is(err, ErrAborted) {
 		t.Fatalf("expected ErrAborted on missing→created, got %v", err)
+	}
+}
+
+// TestMemoryCommitCreatePrecondition asserts the exists:false (create) vs
+// exists:true precondition distinction: a create on an existing document returns
+// ErrDocumentExists (→ ALREADY_EXISTS), while an exists:true precondition on a
+// missing document returns ErrPreconditionFailed (→ FAILED_PRECONDITION).
+func TestMemoryCommitCreatePrecondition(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	name := "projects/p/databases/(default)/documents/cities/SF"
+
+	existsFalse := false
+	existsTrue := true
+
+	// create (exists:false) on an existing doc → ErrDocumentExists.
+	s := NewMemoryStore()
+	s.CreateDocument(ctx, testDoc(name, now))
+	err := s.Commit(ctx, nil, []Write{{
+		Name:         name,
+		Document:     &Document{Name: name, Fields: map[string]*Value{"n": IntVal(2)}, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		Precondition: &Precondition{Exists: &existsFalse},
+	}})
+	if !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("expected ErrDocumentExists on create-over-existing, got %v", err)
+	}
+
+	// exists:true on a missing doc → ErrPreconditionFailed.
+	s2 := NewMemoryStore()
+	err = s2.Commit(ctx, nil, []Write{{
+		Name:         name,
+		Document:     &Document{Name: name, Fields: map[string]*Value{"n": IntVal(2)}, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		Precondition: &Precondition{Exists: &existsTrue},
+	}})
+	if !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("expected ErrPreconditionFailed on exists:true-over-missing, got %v", err)
+	}
+
+	// create (exists:false) on a missing doc → succeeds.
+	s3 := NewMemoryStore()
+	err = s3.Commit(ctx, nil, []Write{{
+		Name:         name,
+		Document:     &Document{Name: name, Fields: map[string]*Value{"n": IntVal(2)}, CreateTime: now, UpdateTime: now.Add(time.Minute)},
+		Precondition: &Precondition{Exists: &existsFalse},
+	}})
+	if err != nil {
+		t.Fatalf("expected create-over-missing to succeed, got %v", err)
 	}
 }

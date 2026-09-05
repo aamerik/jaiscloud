@@ -21,6 +21,8 @@ import (
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	"jaiscloud/internal/gcp/crypto"
+	grpcserver "jaiscloud/internal/gcp/grpc"
+	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
@@ -39,6 +41,8 @@ import (
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
+
+	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
@@ -129,6 +133,14 @@ func startCmd() *cobra.Command {
 				Register(pubsubP).
 				Register(firestoreP)
 
+			// gRPC transport shares the SAME Firestore provider Service as the
+			// REST adapter, so both transports use one transaction read-set
+			// registry.
+			grpcPort, _ := cmd.Flags().GetInt("grpc-port")
+			firestoreGRPC := grpcfirestore.NewService(firestoreP.Service, cfg.ProjectID)
+			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
+			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(stores.objects)
 			adminHandler.RegisterResetter(stores.messages)
@@ -139,6 +151,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(firestoreP)
+			adminHandler.RegisterResetter(firestoreGRPC)
 			if snap, ok := stores.resources.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("resources", snap)
 			}
@@ -261,6 +274,17 @@ func startCmd() *cobra.Command {
 			defer cleanup()
 
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
+
+			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
+			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.
+			go func() {
+				slog.Info("grpc server starting", "grpc_port", grpcPort)
+				if err := gserv.Serve(); err != nil {
+					slog.Error("grpc server error", "err", err)
+				}
+			}()
+			defer gserv.Stop()
+
 			return srv.ListenAndServe()
 		},
 	}
@@ -278,6 +302,7 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("blob-dir", "", "Directory for GCS blob bytes (persistent mode only)")
 	cmd.Flags().Bool("gcp-metadata", false, "Enable the GCP metadata-server emulator")
 	cmd.Flags().String("kms-master-key", "", "32-byte hex KEK for KMS envelope encryption")
+	cmd.Flags().Int("grpc-port", 8081, "gRPC (h2c) listen port")
 	return cmd
 }
 

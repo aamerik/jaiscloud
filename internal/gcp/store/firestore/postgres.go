@@ -199,8 +199,12 @@ func checkPreconditionDoc(cur *Document, pre *Precondition) error {
 	}
 	exists := cur != nil
 	if pre.Exists != nil {
-		if *pre.Exists != exists {
-			return ErrPreconditionFailed
+		if *pre.Exists {
+			if !exists {
+				return ErrPreconditionFailed
+			}
+		} else if exists {
+			return ErrDocumentExists
 		}
 		return nil
 	}
