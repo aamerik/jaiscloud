@@ -94,6 +94,10 @@ func detectV1Service(path string) string {
 		return "firestore"
 	case "functions":
 		return "functions"
+	case "workflows", "operations":
+		return "workflows"
+	case "executions":
+		return "workflowexecutions"
 	}
 	return ""
 }

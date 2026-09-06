@@ -64,6 +64,16 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "Function",
 		Codec:          func() adapter.Codec { return &JSONCodec{Service: "functions"} },
 	},
+	{
+		ServiceName:    "workflows",
+		ProviderPrefix: "Workflow",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "workflows"} },
+	},
+	{
+		ServiceName:    "workflowexecutions",
+		ProviderPrefix: "WorkflowExecution",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "workflowexecutions"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.
