@@ -18,6 +18,7 @@ func TestResourceIDFormatters(t *testing.T) {
 		{"kms-cryptokey", "us/keyring1/key1", "projects/proj/locations/us/keyRings/keyring1/cryptoKeys/key1"},
 		{"kms-cryptokey-version", "us/keyring1/key1/3", "projects/proj/locations/us/keyRings/keyring1/cryptoKeys/key1/cryptoKeyVersions/3"},
 		{"service-account", "sa@x.iam.gserviceaccount.com", "projects/proj/serviceAccounts/sa@x.iam.gserviceaccount.com"},
+		{"cloud-function", "us-central1/fn", "projects/proj/locations/us-central1/functions/fn"},
 		{"cloud-function", "fn", "projects/proj/locations/-/functions/fn"},
 	}
 	for _, tc := range cases {

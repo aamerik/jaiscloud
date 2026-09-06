@@ -71,6 +71,17 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys", "ServiceAccountKeyList"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1", "ServiceAccountKeyGet"},
 		{"DELETE", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1", "ServiceAccountKeyDelete"},
+		// Cloud Functions
+		{"POST", "/v1/projects/p/locations/us-central1/functions", "CreateFunction"},
+		{"GET", "/v1/projects/p/locations/us-central1/functions", "ListFunctions"},
+		{"GET", "/v1/projects/p/locations/us-central1/functions/f", "GetFunction"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/functions/f", "UpdateFunction"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/functions/f", "DeleteFunction"},
+		{"POST", "/v1/projects/p/locations/us-central1/functions/f:call", "CallFunction"},
+		{"POST", "/v1/projects/p/locations/us-central1/functions:generateUploadUrl", "GenerateUploadUrl"},
+		{"GET", "/v1/projects/p/locations/us-central1/functions/f:getIamPolicy", "FunctionGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/functions/f:setIamPolicy", "FunctionSetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/functions/f:testIamPermissions", "FunctionTestIamPermissions"},
 	}
 	for _, tc := range cases {
 		codec := &JSONCodec{Service: "test"}
@@ -94,6 +105,7 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us/keyRings/kr":                                  "kms",
 		"/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3": "kms",
 		"/v1/projects/p/serviceAccounts/sa@x.com":                                  "iam",
+		"/v1/projects/p/locations/us-central1/functions/f":                         "functions",
 		"/storage/v1/b/bkt/o":                                                      "",
 	}
 	for path, want := range cases {
