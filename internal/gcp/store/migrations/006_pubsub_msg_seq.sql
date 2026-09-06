@@ -5,6 +5,9 @@
 CREATE SEQUENCE IF NOT EXISTS jc_pubsub_msg_seq;
 
 -- Seed above any pre-existing numeric message IDs so sequence-allocated IDs do
--- not collide with rows created before this migration.
+-- not collide with rows created before this migration. When there are no
+-- pre-existing numeric IDs, leave the sequence at its default start (1) —
+-- setval(0) would be below the sequence's MINVALUE (1) and fail.
 SELECT setval('jc_pubsub_msg_seq',
-    COALESCE((SELECT MAX(message_id::bigint) FROM jc_pubsub_messages WHERE message_id ~ '^[0-9]+$'), 0));
+    (SELECT MAX(message_id::bigint) FROM jc_pubsub_messages WHERE message_id ~ '^[0-9]+$'))
+WHERE EXISTS (SELECT 1 FROM jc_pubsub_messages WHERE message_id ~ '^[0-9]+$');
