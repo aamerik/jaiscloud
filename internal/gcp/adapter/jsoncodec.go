@@ -84,6 +84,17 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
+	// Cloud Workflows (management + executions + operations): surface the
+	// location segment for store scoping.
+	if resourceType == "workflows" || resourceType == "executions" || resourceType == "operations" {
+		for i, s := range rest {
+			if s == "locations" && i+1 < len(rest) {
+				nr.Params["location"] = rest[i+1]
+				break
+			}
+		}
+	}
+
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
 	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom)
@@ -140,6 +151,7 @@ func (c *JSONCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provide
 // cryptoKeys since a version path also contains "cryptoKeys".
 func detectResourceType(segs []string) string {
 	var hasKeyRings, hasCryptoKeys, hasVersions, hasServiceAccounts bool
+	var hasWorkflows, hasExecutions bool
 	for _, s := range segs {
 		switch s {
 		case "topics":
@@ -170,7 +182,22 @@ func detectResourceType(segs []string) string {
 			hasServiceAccounts = true
 		case "functions":
 			return "functions"
+		case "operations":
+			// Workflows long-running operations (…/locations/{l}/operations/{id}).
+			return "operations"
+		case "executions":
+			// Workflow executions nest under …/workflows/{w}/executions, so this
+			// must win over the "workflows" marker below.
+			hasExecutions = true
+		case "workflows":
+			hasWorkflows = true
 		}
+	}
+	if hasExecutions {
+		return "executions"
+	}
+	if hasWorkflows {
+		return "workflows"
 	}
 	if hasVersions {
 		return "cryptoKeyVersions"
@@ -310,6 +337,11 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			case "testIamPermissions":
 				return "FunctionTestIamPermissions"
 			}
+		case "executions":
+			switch custom {
+			case "cancel":
+				return "CancelExecution"
+			}
 		}
 	}
 
@@ -448,6 +480,33 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			return "DeleteFunction"
 		case method == http.MethodGet:
 			return "GetFunction"
+		}
+	case "workflows":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateWorkflow"
+		case isCollection && method == http.MethodGet:
+			return "ListWorkflows"
+		case method == http.MethodPatch:
+			return "UpdateWorkflow"
+		case method == http.MethodDelete:
+			return "DeleteWorkflow"
+		case method == http.MethodGet:
+			return "GetWorkflow"
+		}
+	case "executions":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateExecution"
+		case isCollection && method == http.MethodGet:
+			return "ListExecutions"
+		case method == http.MethodGet:
+			return "GetExecution"
+		}
+	case "operations":
+		switch {
+		case method == http.MethodGet:
+			return "GetOperation"
 		}
 	}
 	return ""

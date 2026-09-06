@@ -40,6 +40,8 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
+	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	gcpstore "jaiscloud/internal/gcp/store"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
@@ -50,6 +52,8 @@ import (
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
+	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
@@ -161,6 +165,10 @@ func startCmd() *cobra.Command {
 			slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
 			functionsP := functionsprovider.New(stores.functions, stores.resources, lambdaExec)
 
+			workflowsEngine := workflowengine.New()
+			workflowsP := workflowsprovider.New(stores.workflows)
+			workflowExecutionsP := workflowexecutionsprovider.New(stores.workflows, workflowsEngine)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -168,7 +176,9 @@ func startCmd() *cobra.Command {
 				Register(iamP).
 				Register(pubsubP).
 				Register(firestoreP).
-				Register(functionsP)
+				Register(functionsP).
+				Register(workflowsP).
+				Register(workflowExecutionsP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -213,6 +223,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.documents)
 			adminHandler.RegisterResetter(stores.entities)
 			adminHandler.RegisterResetter(stores.functions)
+			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.resources)
@@ -244,6 +255,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.functions.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("functions", snap)
+			}
+			if snap, ok := stores.workflows.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("workflows", snap)
 			}
 			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("log_entries", snap)
@@ -413,6 +427,7 @@ type stores struct {
 	documents  firestorestore.FirestoreStore
 	entities   datastorestore.Store
 	functions  functionsstore.Store
+	workflows  workflowsstore.Store
 	logEntries loggingstore.Store
 	monitoring monitoringstore.Store
 	resources  store.ResourceStore
@@ -443,6 +458,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			documents:  firestorestore.NewPostgresStore(pg.Pool()),
 			entities:   datastorestore.NewPostgresStore(pg.Pool()),
 			functions:  functionsstore.NewPostgresStore(pg.Pool()),
+			workflows:  workflowsstore.NewPostgresStore(pg.Pool()),
 			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring: monitoringstore.NewPostgresStore(pg.Pool()),
 			resources:  pg,
@@ -459,6 +475,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			documents:  firestorestore.NewMemoryStore(),
 			entities:   datastorestore.NewMemoryStore(),
 			functions:  functionsstore.NewMemoryStore(),
+			workflows:  workflowsstore.NewMemoryStore(),
 			logEntries: loggingstore.NewMemoryStore(),
 			monitoring: monitoringstore.NewMemoryStore(),
 			resources:  store.NewMemoryResourceStore(),
@@ -478,6 +495,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		documents:  firestorestore.NewMemoryStore(),
 		entities:   datastorestore.NewMemoryStore(),
 		functions:  functionsstore.NewMemoryStore(),
+		workflows:  workflowsstore.NewMemoryStore(),
 		logEntries: loggingstore.NewMemoryStore(),
 		monitoring: monitoringstore.NewMemoryStore(),
 		resources:  store.NewMemoryResourceStore(),

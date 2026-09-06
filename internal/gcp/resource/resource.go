@@ -50,6 +50,21 @@ var formatters = map[string]func(project, name string) string{
 		loc, fn := fnLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/functions/%s", p, loc, fn)
 	},
+	// Cloud Workflows — names embed the location; callers pass "location/workflow".
+	"workflow": func(p, n string) string {
+		loc, wf := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/workflows/%s", p, loc, wf)
+	},
+	// Workflow executions — callers pass "location/workflow/execution".
+	"workflow-execution": func(p, n string) string {
+		loc, wf, ex := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/workflows/%s/executions/%s", p, loc, wf, ex)
+	},
+	// Workflow long-running operations — callers pass "location/operation".
+	"workflow-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.
@@ -127,4 +142,25 @@ func fnLoc(name string) (loc, fn string) {
 		return name[:i], name[i+1:]
 	}
 	return "-", name
+}
+
+// wfLoc splits a "location/workflow" name. A name with no slash defaults the
+// location to "-".
+func wfLoc(name string) (loc, wf string) {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i], name[i+1:]
+	}
+	return "-", name
+}
+
+// wfExec splits a "location/workflow/execution" name.
+func wfExec(name string) (loc, wf, ex string) {
+	parts := strings.Split(name, "/")
+	if len(parts) >= 3 {
+		return parts[0], parts[1], parts[2]
+	}
+	if len(parts) == 2 {
+		return parts[0], parts[1], ""
+	}
+	return "-", name, ""
 }
