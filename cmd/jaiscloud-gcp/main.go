@@ -25,6 +25,7 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
+	grpclogging "jaiscloud/internal/gcp/grpc/logging"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -40,6 +41,7 @@ import (
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	loggingstore "jaiscloud/internal/gcp/store/logging"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
@@ -52,6 +54,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -167,11 +170,13 @@ func startCmd() *cobra.Command {
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
 			pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
 			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
 			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
+			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
 			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 			// TestIamPermissions) is served by the SecretManagerService itself
 			// (its proto embeds the methods), so it does not re-register the
@@ -192,6 +197,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.keys)
 			adminHandler.RegisterResetter(stores.documents)
 			adminHandler.RegisterResetter(stores.functions)
+			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -218,6 +224,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.functions.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("functions", snap)
+			}
+			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("log_entries", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -374,15 +383,16 @@ func bindFlags(cmd *cobra.Command) {
 
 // stores bundles the per-mode store backends constructed by initStores.
 type stores struct {
-	objects   gcs.ObjectStore
-	messages  pubsubstore.Messages
-	secrets   secretmanagerstore.Store
-	keys      kmsstore.Store
-	documents firestorestore.FirestoreStore
-	functions functionsstore.Store
-	resources store.ResourceStore
-	blobs     blobfs.BlobStore
-	close     func()
+	objects    gcs.ObjectStore
+	messages   pubsubstore.Messages
+	secrets    secretmanagerstore.Store
+	keys       kmsstore.Store
+	documents  firestorestore.FirestoreStore
+	functions  functionsstore.Store
+	logEntries loggingstore.Store
+	resources  store.ResourceStore
+	blobs      blobfs.BlobStore
+	close      func()
 }
 
 func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*stores, error) {
@@ -401,28 +411,30 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			return nil, fmt.Errorf("blobfs: %w", err)
 		}
 		return &stores{
-			objects:   gcs.NewPostgresObjectStore(pg.Pool()),
-			messages:  pubsubstore.NewPostgresMessages(pg.Pool()),
-			secrets:   secretmanagerstore.NewPostgresStore(pg.Pool()),
-			keys:      kmsstore.NewPostgresStore(pg.Pool()),
-			documents: firestorestore.NewPostgresStore(pg.Pool()),
-			functions: functionsstore.NewPostgresStore(pg.Pool()),
-			resources: pg,
-			blobs:     blobs,
-			close:     func() { pg.Close() },
+			objects:    gcs.NewPostgresObjectStore(pg.Pool()),
+			messages:   pubsubstore.NewPostgresMessages(pg.Pool()),
+			secrets:    secretmanagerstore.NewPostgresStore(pg.Pool()),
+			keys:       kmsstore.NewPostgresStore(pg.Pool()),
+			documents:  firestorestore.NewPostgresStore(pg.Pool()),
+			functions:  functionsstore.NewPostgresStore(pg.Pool()),
+			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
+			resources:  pg,
+			blobs:      blobs,
+			close:      func() { pg.Close() },
 		}, nil
 	}
 	if cfg.Ephemeral {
 		return &stores{
-			objects:   gcs.NewMemoryObjectStore(),
-			messages:  pubsubstore.NewMemoryMessages(),
-			secrets:   secretmanagerstore.NewMemoryStore(),
-			keys:      kmsstore.NewMemoryStore(),
-			documents: firestorestore.NewMemoryStore(),
-			functions: functionsstore.NewMemoryStore(),
-			resources: store.NewMemoryResourceStore(),
-			blobs:     blobfs.NewMemoryBlobStore(),
-			close:     func() {},
+			objects:    gcs.NewMemoryObjectStore(),
+			messages:   pubsubstore.NewMemoryMessages(),
+			secrets:    secretmanagerstore.NewMemoryStore(),
+			keys:       kmsstore.NewMemoryStore(),
+			documents:  firestorestore.NewMemoryStore(),
+			functions:  functionsstore.NewMemoryStore(),
+			logEntries: loggingstore.NewMemoryStore(),
+			resources:  store.NewMemoryResourceStore(),
+			blobs:      blobfs.NewMemoryBlobStore(),
+			close:      func() {},
 		}, nil
 	}
 	blobs, err := blobfs.NewSessionBlobStore(instanceID)
@@ -430,15 +442,16 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		return nil, fmt.Errorf("blobfs: %w", err)
 	}
 	return &stores{
-		objects:   gcs.NewMemoryObjectStore(),
-		messages:  pubsubstore.NewMemoryMessages(),
-		secrets:   secretmanagerstore.NewMemoryStore(),
-		keys:      kmsstore.NewMemoryStore(),
-		documents: firestorestore.NewMemoryStore(),
-		functions: functionsstore.NewMemoryStore(),
-		resources: store.NewMemoryResourceStore(),
-		blobs:     blobs,
-		close:     func() {},
+		objects:    gcs.NewMemoryObjectStore(),
+		messages:   pubsubstore.NewMemoryMessages(),
+		secrets:    secretmanagerstore.NewMemoryStore(),
+		keys:       kmsstore.NewMemoryStore(),
+		documents:  firestorestore.NewMemoryStore(),
+		functions:  functionsstore.NewMemoryStore(),
+		logEntries: loggingstore.NewMemoryStore(),
+		resources:  store.NewMemoryResourceStore(),
+		blobs:      blobs,
+		close:      func() {},
 	}, nil
 }
 

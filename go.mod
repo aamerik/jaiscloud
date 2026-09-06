@@ -6,6 +6,8 @@ require (
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/iam v1.13.0
 	cloud.google.com/go/kms v1.33.0
+	cloud.google.com/go/logging v1.19.1
+	cloud.google.com/go/longrunning v1.2.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/secretmanager v1.21.0
 	github.com/aws/aws-sdk-go-v2 v1.41.7
@@ -62,6 +64,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sys v0.47.0
 	google.golang.org/genproto v0.0.0-20260904194346-d0f1323225a4
+	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
@@ -73,7 +76,6 @@ require (
 )
 
 require (
-	cloud.google.com/go/longrunning v1.2.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.23 // indirect
@@ -130,7 +132,6 @@ require (
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
