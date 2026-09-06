@@ -3,6 +3,7 @@ module jaiscloud
 go 1.26.3
 
 require (
+	cloud.google.com/go/datastore v1.22.0
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/iam v1.13.0
 	cloud.google.com/go/kms v1.33.0
