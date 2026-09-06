@@ -1446,8 +1446,9 @@ func TestObjectsGetMediaBlobMissing(t *testing.T) {
 	p := newTestProvider()
 	insertTestObject(t, p, "bkt", "obj.txt", "text/plain", nil)
 
-	// Delete the blob behind the metadata: media reads must surface 500, not
-	// silently return nothing.
+	// Delete the blob behind the metadata: media reads must surface 404 (a
+	// tombstoned/deleted version whose data was dropped), not silently return
+	// nothing and not a 500.
 	meta, err := p.objects.GetObjectMeta(ctx, "bkt", "obj.txt")
 	if err != nil {
 		t.Fatalf("get object meta: %v", err)
@@ -1457,8 +1458,8 @@ func TestObjectsGetMediaBlobMissing(t *testing.T) {
 	}
 	if _, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "obj.txt")); err == nil {
 		t.Error("expected error when metadata is present but blob is missing")
-	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 500 {
-		t.Errorf("expected 500 ProviderError, got %v", err)
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 404 {
+		t.Errorf("expected 404 ProviderError, got %v", err)
 	}
 }
 

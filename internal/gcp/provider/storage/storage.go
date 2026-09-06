@@ -879,7 +879,8 @@ func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) 
 func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	// Metadata first: metadata gone → 404; metadata present + blob absent → 500.
+	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
+	// (a tombstoned/deleted version whose data was dropped, not corruption).
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
 	if err != nil {
 		return nil, err
@@ -887,7 +888,7 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	id := blobKey(bucket, object, meta.Generation)
 	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
-		return nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
+		return nil, model.NewProviderError("NotFound", "object not found", 404)
 	}
 	// Decrypt the ciphertext. Buffered AES-GCM (see TODO(streaming-AEAD) in
 	// ObjectsInsert); a CSEK-encrypted object requires the matching key header.
@@ -986,7 +987,7 @@ func (p *Provider) readSourceRaw(ctx context.Context, nr *model.NormalizedReques
 	id := blobKey(bucket, object, meta.Generation)
 	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
-		return gcs.ObjectMeta{}, nil, model.NewProviderError("InternalError", "object metadata present but blob missing: "+err.Error(), 500)
+		return gcs.ObjectMeta{}, nil, model.NewProviderError("NotFound", "object not found", 404)
 	}
 	ciphertext, err := io.ReadAll(rc)
 	rc.Close()
