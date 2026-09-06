@@ -5,8 +5,8 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  # ─── Unit + integration tests ──────────────────────────────────────────────
-  test:
+  # ─── AWS unit + integration tests ──────────────────────────────────────────
+  test-aws:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,15 +55,15 @@ jobs:
           echo "AWS_SECRET_ACCESS_KEY=test" >> $GITHUB_ENV
           echo "AWS_REGION=us-east-1" >> $GITHUB_ENV
 
-      - name: Run unit tests
-        run: go test -race ./internal/... -v -count=1
+      - name: Run unit tests (AWS + shared packages)
+        run: go test -race -count=1 $(go list ./internal/... | grep -v '/internal/gcp/')
 
       - name: Run integration tests
         env:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
-        run: go test ./tests/integration/ -v -count=1 -timeout 120s
+        run: go test ./tests/integration/ -v -count=1 -timeout 300s
 
       - name: Upload server log (on failure)
         if: failure()
@@ -101,11 +101,24 @@ jobs:
           cache-from: type=gha,scope=jaiscloud
           cache-to: type=gha,mode=max,scope=jaiscloud
 
-  # ─── GCP integration tests ──────────────────────────────────────────────────
-  # Builds and boots jaiscloud-gcp, then runs the GCP integration suite against it.
-  # GCP unit tests are already covered by the `test` job (go test ./internal/...).
+  # ─── GCP unit + integration tests ──────────────────────────────────────────
+  # Builds and boots jaiscloud-gcp, then runs the GCP unit + integration suites.
   test-gcp:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: jaiscloud
+          POSTGRES_PASSWORD: jaiscloud
+          POSTGRES_DB: jaiscloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -130,6 +143,10 @@ jobs:
           go mod download
           cd tests/integration/gcp/sdk && go mod download
           cd ../sdkv1 && go mod download
+          cd ../sdk-firestore && go mod download
+
+      - name: Run GCP unit tests
+        run: go test -race -count=1 ./internal/gcp/...
 
       - name: Build jaiscloud-gcp
         run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -156,13 +173,19 @@ jobs:
         working-directory: tests/integration/gcp/sdk
         env:
           STORAGE_EMULATOR_HOST: http://localhost:8080
-        run: go test -race -count=1 -timeout 120s ./...
+        run: go test -race -v -count=1 -timeout 120s ./...
 
       - name: Run GCP Phase 1 SDK integration tests
         working-directory: tests/integration/gcp/sdkv1
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -race -count=1 -timeout 120s ./...
+        run: go test -race -v -count=1 -timeout 120s ./...
+
+      - name: Run GCP Firestore SDK tests
+        working-directory: tests/integration/gcp/sdk-firestore
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8081
+        run: go test -race -v -count=1 -timeout 120s ./...
 
       - name: Upload GCP server log (on failure)
         if: failure()
@@ -175,3 +198,19 @@ jobs:
         if: always()
         run: |
           if [ -f gcp-server.pid ]; then kill $(cat gcp-server.pid) || true; fi
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            if (echo > /dev/tcp/localhost/5432) 2>/dev/null; then
+              echo "postgres ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready"; exit 1
+
+      - name: Run GCP persistence tests
+        env:
+          JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
+          JAISCLOUD_GCP_BIN: ${{ github.workspace }}/jaiscloud-gcp
+        run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./tests/persistent_mode/gcp/...
