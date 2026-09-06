@@ -32,7 +32,7 @@ jobs:
         run: go mod download
 
       - name: Build server
-        run: go build -o jaiscloud ./cmd/jaiscloud/
+        run: go build -o jaiscloud ./cmd/jaiscloud-aws/
 
       - name: Start jaiscloud server (background)
         run: |
