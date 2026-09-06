@@ -23,6 +23,7 @@ import (
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
+	grpcdatastore "jaiscloud/internal/gcp/grpc/datastore"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/grpc/logging"
@@ -39,6 +40,7 @@ import (
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	gcpstore "jaiscloud/internal/gcp/store"
+	datastorestore "jaiscloud/internal/gcp/store/datastore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
@@ -53,6 +55,7 @@ import (
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
 
+	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -174,8 +177,10 @@ func startCmd() *cobra.Command {
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
 			storageGRPC := grpcstorage.NewService(stores.objects, storageP, cfg.ProjectID)
+			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+			datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
 			pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
 			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
 			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
@@ -200,6 +205,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.secrets)
 			adminHandler.RegisterResetter(stores.keys)
 			adminHandler.RegisterResetter(stores.documents)
+			adminHandler.RegisterResetter(stores.entities)
 			adminHandler.RegisterResetter(stores.functions)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.resources)
@@ -225,6 +231,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.documents.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("firestore_documents", snap)
+			}
+			if snap, ok := stores.entities.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("datastore_entities", snap)
 			}
 			if snap, ok := stores.functions.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("functions", snap)
@@ -392,6 +401,7 @@ type stores struct {
 	secrets    secretmanagerstore.Store
 	keys       kmsstore.Store
 	documents  firestorestore.FirestoreStore
+	entities   datastorestore.Store
 	functions  functionsstore.Store
 	logEntries loggingstore.Store
 	resources  store.ResourceStore
@@ -420,6 +430,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			secrets:    secretmanagerstore.NewPostgresStore(pg.Pool()),
 			keys:       kmsstore.NewPostgresStore(pg.Pool()),
 			documents:  firestorestore.NewPostgresStore(pg.Pool()),
+			entities:   datastorestore.NewPostgresStore(pg.Pool()),
 			functions:  functionsstore.NewPostgresStore(pg.Pool()),
 			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
 			resources:  pg,
@@ -434,6 +445,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			secrets:    secretmanagerstore.NewMemoryStore(),
 			keys:       kmsstore.NewMemoryStore(),
 			documents:  firestorestore.NewMemoryStore(),
+			entities:   datastorestore.NewMemoryStore(),
 			functions:  functionsstore.NewMemoryStore(),
 			logEntries: loggingstore.NewMemoryStore(),
 			resources:  store.NewMemoryResourceStore(),
@@ -451,6 +463,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		secrets:    secretmanagerstore.NewMemoryStore(),
 		keys:       kmsstore.NewMemoryStore(),
 		documents:  firestorestore.NewMemoryStore(),
+		entities:   datastorestore.NewMemoryStore(),
 		functions:  functionsstore.NewMemoryStore(),
 		logEntries: loggingstore.NewMemoryStore(),
 		resources:  store.NewMemoryResourceStore(),

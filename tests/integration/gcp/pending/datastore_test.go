@@ -1,5 +1,3 @@
-//go:build gcp_pending
-
 package tests
 
 import (
