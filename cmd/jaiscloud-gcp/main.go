@@ -27,6 +27,7 @@ import (
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/grpc/logging"
+	grpcmonitoring "jaiscloud/internal/gcp/grpc/monitoring"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -46,6 +47,7 @@ import (
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
@@ -61,6 +63,7 @@ import (
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 
@@ -176,6 +179,7 @@ func startCmd() *cobra.Command {
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
+			monitoringGRPC := grpcmonitoring.NewService(stores.monitoring, cfg.ProjectID)
 			storageGRPC := grpcstorage.NewService(stores.objects, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
@@ -185,6 +189,8 @@ func startCmd() *cobra.Command {
 			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
 			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
 			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
+			monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
+			monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
 			grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
 			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 			// TestIamPermissions) is served by the SecretManagerService itself
@@ -208,6 +214,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.entities)
 			adminHandler.RegisterResetter(stores.functions)
 			adminHandler.RegisterResetter(stores.logEntries)
+			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -240,6 +247,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("log_entries", snap)
+			}
+			if snap, ok := stores.monitoring.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("monitoring", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -404,6 +414,7 @@ type stores struct {
 	entities   datastorestore.Store
 	functions  functionsstore.Store
 	logEntries loggingstore.Store
+	monitoring monitoringstore.Store
 	resources  store.ResourceStore
 	blobs      blobfs.BlobStore
 	close      func()
@@ -433,6 +444,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			entities:   datastorestore.NewPostgresStore(pg.Pool()),
 			functions:  functionsstore.NewPostgresStore(pg.Pool()),
 			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
+			monitoring: monitoringstore.NewPostgresStore(pg.Pool()),
 			resources:  pg,
 			blobs:      blobs,
 			close:      func() { pg.Close() },
@@ -448,6 +460,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			entities:   datastorestore.NewMemoryStore(),
 			functions:  functionsstore.NewMemoryStore(),
 			logEntries: loggingstore.NewMemoryStore(),
+			monitoring: monitoringstore.NewMemoryStore(),
 			resources:  store.NewMemoryResourceStore(),
 			blobs:      blobfs.NewMemoryBlobStore(),
 			close:      func() {},
@@ -466,6 +479,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		entities:   datastorestore.NewMemoryStore(),
 		functions:  functionsstore.NewMemoryStore(),
 		logEntries: loggingstore.NewMemoryStore(),
+		monitoring: monitoringstore.NewMemoryStore(),
 		resources:  store.NewMemoryResourceStore(),
 		blobs:      blobs,
 		close:      func() {},
