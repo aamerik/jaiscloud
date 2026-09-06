@@ -24,6 +24,7 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
@@ -48,6 +49,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 
@@ -161,6 +163,10 @@ func startCmd() *cobra.Command {
 			// surfaces are dispatched through one router.
 			secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 			iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
+			// google.longrunning.Operations is a stub: the emulator completes
+			// operations synchronously, so SDK init paths that poll Operations
+			// observe a terminal (done=true) state instead of erroring.
+			longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New())
 
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(stores.objects)

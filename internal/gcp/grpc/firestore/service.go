@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
@@ -26,6 +27,12 @@ type Service struct {
 	firestorepb.UnimplementedFirestoreServer
 	svc         *firestoreprovider.Service
 	defaultProj string
+
+	// writeMu guards writeSeq, the monotonic sequence backing Write stream
+	// tokens. It is shared across Write streams so tokens strictly advance
+	// server-wide (the Java BulkWriter relies on never-repeated tokens).
+	writeMu  sync.Mutex
+	writeSeq uint64
 }
 
 // NewService returns a Firestore gRPC service wrapping the provider Service.
