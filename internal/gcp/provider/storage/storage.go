@@ -149,6 +149,10 @@ func (p *Provider) nextGen() string {
 	return strconv.FormatInt(g, 10)
 }
 
+// NextGen returns a fresh monotonically-increasing object generation. Exported
+// so the gRPC Storage service shares the REST provider's generation counter.
+func (p *Provider) NextGen() string { return p.nextGen() }
+
 // Reset clears in-progress resumable-upload sessions. Implements admin.Resetter
 // so /_jaiscloud/reset does not leak upload state across test runs.
 func (p *Provider) Reset(_ context.Context) {
@@ -370,6 +374,12 @@ func fromStoreObject(m gcs.ObjectMeta) objectMeta {
 // versioned object never clobbers a prior generation's bytes.
 func blobKey(bucket, object, generation string) string {
 	return bucket + "/" + object + "/" + generation
+}
+
+// BlobKey returns the blob store key for an object generation. Exported so the
+// gRPC Storage service computes the same keys as the REST provider.
+func BlobKey(bucket, object, generation string) string {
+	return blobKey(bucket, object, generation)
 }
 
 // ─── buckets ──────────────────────────────────────────────────────────────────
@@ -823,64 +833,78 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return o, err
 	}
+	finalMeta, err := p.PutObjectData(ctx, nr.AccountID, toStoreObject(o), raw, versioned, priorBlobKey, md5Enabled, kmsKeyName, cseKey, cseKeySHA256)
+	if err != nil {
+		return o, err
+	}
+	return fromStoreObject(finalMeta), nil
+}
 
+// PutObjectData writes an object's plaintext bytes through the shared envelope-
+// encryption + blob-store path and persists the object metadata. It is the
+// transport-agnostic core shared by the REST ObjectsInsert and the gRPC
+// WriteObject, so both transports stay byte-compatible. meta carries the new
+// generation and metadata; checksums/size are computed here and stamped onto
+// the returned metadata. project is the owning project (account scope) used for
+// envelope DEK wrapping.
+func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.ObjectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool, kmsKeyName string, cseKey []byte, cseKeySHA256 string) (gcs.ObjectMeta, error) {
 	// Plaintext checksums/size (GCS reports the logical object, not the
 	// ciphertext).
 	if md5Enabled {
 		sum := md5.Sum(raw)
-		o.Md5Hash = base64.StdEncoding.EncodeToString(sum[:])
+		meta.MD5Hash = base64.StdEncoding.EncodeToString(sum[:])
 	}
 	crc := crc32.Checksum(raw, crc32.MakeTable(crc32.Castagnoli))
 	crcBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(crcBytes, crc)
-	o.Crc32c = base64.StdEncoding.EncodeToString(crcBytes)
-	o.Size = strconv.FormatInt(int64(len(raw)), 10)
+	meta.CRC32C = base64.StdEncoding.EncodeToString(crcBytes)
+	meta.Size = int64(len(raw))
 
 	// Encrypt and store the ciphertext blob.
-	id := blobKey(bucket, object, o.Generation)
+	id := blobKey(meta.Bucket, meta.Name, meta.Generation)
 	var wrappedDEK []byte
 	if cseKey != nil {
 		ciphertext, err := kmsstore.EncryptData(cseKey, raw, nil)
 		if err != nil {
-			return o, err
+			return meta, err
 		}
 		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
-			return o, err
+			return meta, err
 		}
-		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: cseKeySHA256}
+		meta.CSEKeySHA256 = cseKeySHA256
 	} else {
-		rawDEK, wd, err := p.encryptor.Wrap(ctx, nr.AccountID, kmsKeyName)
+		rawDEK, wd, err := p.encryptor.Wrap(ctx, project, kmsKeyName)
 		if err != nil {
-			return o, err
+			return meta, err
 		}
 		wrappedDEK = wd
 		ciphertext, err := kmsstore.EncryptData(rawDEK, raw, nil)
 		if err != nil {
-			return o, err
+			return meta, err
 		}
 		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
-			return o, err
+			return meta, err
 		}
-		o.KmsKeyName = kmsKeyName
+		meta.KmsKeyName = kmsKeyName
 	}
 
-	storeMeta := toStoreObject(o)
-	storeMeta.WrappedDEK = wrappedDEK
+	meta.WrappedDEK = wrappedDEK
+	var err error
 	if versioned {
-		err = p.objects.PutObjectGeneration(ctx, bucket, object, storeMeta)
+		err = p.objects.PutObjectGeneration(ctx, meta.Bucket, meta.Name, meta)
 	} else {
-		err = p.objects.PutObjectMeta(ctx, bucket, object, storeMeta)
+		err = p.objects.PutObjectMeta(ctx, meta.Bucket, meta.Name, meta)
 	}
 	if err != nil {
 		// Roll back the just-written blob so a failed metadata write does not
 		// leave an orphaned object (metadata absent, blob present).
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
-		return o, err
+		return meta, err
 	}
 	if priorBlobKey != "" {
 		_ = p.blobs.Delete(ctx, blobsNamespace, priorBlobKey)
 	}
-	return o, nil
+	return meta, nil
 }
 
 func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -989,8 +1013,34 @@ func (p *Provider) bucketVersioned(ctx context.Context, bucket string) bool {
 	return false
 }
 
+// BucketVersioned reports whether the bucket has versioning enabled. Exported
+// for the gRPC Storage service.
+func (p *Provider) BucketVersioned(ctx context.Context, bucket string) bool {
+	return p.bucketVersioned(ctx, bucket)
+}
+
 // readSourceRaw reads and decrypts an object's plaintext bytes.
 func (p *Provider) readSourceRaw(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, params map[string]any) (gcs.ObjectMeta, []byte, error) {
+	meta, err := p.getObjectForRead(ctx, bucket, object, params)
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, err
+	}
+	plain, err := p.readDecrypt(ctx, nr.AccountID, bucket, object, meta, params)
+	if err != nil {
+		return gcs.ObjectMeta{}, nil, err
+	}
+	return meta, plain, nil
+}
+
+// GetObjectData reads and decrypts an object's plaintext bytes, returning its
+// metadata and the full plaintext. generation selects a specific revision when
+// non-empty (empty = live); cseKey is required when the object is CSEK-
+// encrypted. Shared by the REST read path and the gRPC ReadObject.
+func (p *Provider) GetObjectData(ctx context.Context, project, bucket, object, generation string, cseKey []byte) (gcs.ObjectMeta, []byte, error) {
+	params := map[string]any{}
+	if generation != "" {
+		params["generation"] = generation
+	}
 	meta, err := p.getObjectForRead(ctx, bucket, object, params)
 	if err != nil {
 		return gcs.ObjectMeta{}, nil, err
@@ -1005,11 +1055,27 @@ func (p *Provider) readSourceRaw(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return gcs.ObjectMeta{}, nil, err
 	}
-	plain, err := p.decryptObject(ctx, nr, meta, ciphertext)
+	plain, err := p.decryptObjectWithKey(ctx, project, meta, ciphertext, cseKey)
 	if err != nil {
 		return gcs.ObjectMeta{}, nil, err
 	}
 	return meta, plain, nil
+}
+
+// readDecrypt reads the ciphertext blob and decrypts it to plaintext, resolving
+// the CSEK key from params (empty when the object is server-DEK/CMEK encrypted).
+func (p *Provider) readDecrypt(ctx context.Context, project, bucket, object string, meta gcs.ObjectMeta, params map[string]any) ([]byte, error) {
+	id := blobKey(bucket, object, meta.Generation)
+	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
+	if err != nil {
+		return nil, model.NewProviderError("NotFound", "object not found", 404)
+	}
+	ciphertext, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		return nil, err
+	}
+	return p.decryptObject(ctx, &model.NormalizedRequest{AccountID: project, Params: params}, meta, ciphertext)
 }
 
 // ObjectsRewrite implements objects.rewrite (the GCS JSON API copy action used
@@ -1208,6 +1274,7 @@ func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, b
 // decryptObject returns the plaintext for a stored ciphertext, using the CSEK
 // key (when the object is CSEK-encrypted) or the envelope DEK otherwise.
 func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedRequest, meta gcs.ObjectMeta, ciphertext []byte) ([]byte, error) {
+	var cseKey []byte
 	if meta.CSEKeySHA256 != "" {
 		keyB64, _ := nr.Params[wire.CSEKKey].(string)
 		if keyB64 == "" {
@@ -1217,13 +1284,27 @@ func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedReques
 		if err != nil || len(key) != 32 {
 			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
 		}
-		sum := sha256.Sum256(key)
+		cseKey = key
+	}
+	return p.decryptObjectWithKey(ctx, nr.AccountID, meta, ciphertext, cseKey)
+}
+
+// decryptObjectWithKey returns the plaintext for a stored ciphertext given the
+// already-resolved CSEK key (nil for server-DEK/CMEK-encrypted objects). This
+// is the transport-agnostic core shared by the REST read path and the gRPC
+// ReadObject.
+func (p *Provider) decryptObjectWithKey(ctx context.Context, project string, meta gcs.ObjectMeta, ciphertext []byte, cseKey []byte) ([]byte, error) {
+	if meta.CSEKeySHA256 != "" {
+		if len(cseKey) != 32 {
+			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+		}
+		sum := sha256.Sum256(cseKey)
 		if base64.StdEncoding.EncodeToString(sum[:]) != meta.CSEKeySHA256 {
 			return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption key mismatch", 400)
 		}
-		return kmsstore.DecryptData(key, ciphertext, nil)
+		return kmsstore.DecryptData(cseKey, ciphertext, nil)
 	}
-	rawDEK, err := p.encryptor.Unwrap(ctx, nr.AccountID, meta.KmsKeyName, meta.WrappedDEK)
+	rawDEK, err := p.encryptor.Unwrap(ctx, project, meta.KmsKeyName, meta.WrappedDEK)
 	if err != nil {
 		return nil, err
 	}
@@ -1339,18 +1420,28 @@ func bumpMeta(m string) string {
 func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
+	if err := p.DeleteObjectData(ctx, bucket, object); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
 
+// DeleteObjectData deletes an object, honoring retention holds and bucket
+// versioning (non-versioned: hard-delete every generation and its bytes;
+// versioned: tombstone the live generation and drop its bytes). Shared by the
+// REST ObjectsDelete and the gRPC DeleteObject.
+func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string) error {
 	// Retention check first: a held or retention-active object cannot be
 	// deleted (GCS returns PERMISSION_DENIED).
 	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
-			return nil, model.NewProviderError("NotFound", "object not found", 404)
+			return model.NewProviderError("NotFound", "object not found", 404)
 		}
-		return nil, err
+		return err
 	}
 	if objectProtected(meta) {
-		return nil, model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
+		return model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
 	}
 
 	if p.bucketVersioned(ctx, bucket) {
@@ -1358,12 +1449,12 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 		// non-live tombstone that appears in ?versions=true listings.
 		if _, err := p.objects.TombstoneObjectMeta(ctx, bucket, object); err != nil {
 			if errors.Is(err, gcs.ErrNoSuchObject) {
-				return nil, model.NewProviderError("NotFound", "object not found", 404)
+				return model.NewProviderError("NotFound", "object not found", 404)
 			}
-			return nil, err
+			return err
 		}
 		_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, meta.Generation))
-		return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+		return nil
 	}
 
 	// Non-versioned bucket: hard-delete every generation (there should only
@@ -1378,14 +1469,14 @@ func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedReques
 	}
 	if err := p.objects.DeleteObjectMeta(ctx, bucket, object); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
-			return nil, model.NewProviderError("NotFound", "object not found", 404)
+			return model.NewProviderError("NotFound", "object not found", 404)
 		}
-		return nil, err
+		return err
 	}
 	for _, id := range blobKeys {
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
-	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+	return nil
 }
 
 // objectProtected reports whether an object's holds or active retention block

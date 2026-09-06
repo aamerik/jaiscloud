@@ -29,6 +29,8 @@ import (
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
+	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
+	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
@@ -171,12 +173,14 @@ func startCmd() *cobra.Command {
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
+			storageGRPC := grpcstorage.NewService(stores.objects, storageP, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
 			pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
 			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
 			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
 			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
+			grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
 			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 			// TestIamPermissions) is served by the SecretManagerService itself
 			// (its proto embeds the methods), so it does not re-register the

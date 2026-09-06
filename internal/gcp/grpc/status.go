@@ -43,6 +43,8 @@ func statusToCode(s string) (codes.Code, bool) {
 	switch s {
 	case "FAILED_PRECONDITION":
 		return codes.FailedPrecondition, true
+	case "OUT_OF_RANGE":
+		return codes.OutOfRange, true
 	case "ABORTED":
 		return codes.Aborted, true
 	case "NOT_FOUND":
@@ -103,6 +105,8 @@ func codeAlias(c string) (codes.Code, bool) {
 		return codes.AlreadyExists, true
 	case "FailedPrecondition":
 		return codes.FailedPrecondition, true
+	case "OutOfRange":
+		return codes.OutOfRange, true
 	case "Aborted":
 		return codes.Aborted, true
 	case "PermissionDenied":
