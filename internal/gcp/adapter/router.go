@@ -81,6 +81,12 @@ func detectV1Service(path string) string {
 			rest[len(rest)-1] = last[:i]
 		}
 	}
+	// Dataproc lives under /v1/projects/{project}/regions/{region}/{clusters|jobs|operations}
+	// — detect it before the generic resource-type switch (its "operations"
+	// segment would otherwise be mistaken for the Workflows LRO surface).
+	if detectDataprocResourceType(rest) != "" {
+		return "dataproc"
+	}
 	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"
@@ -98,6 +104,19 @@ func detectV1Service(path string) string {
 		return "workflows"
 	case "executions":
 		return "workflowexecutions"
+	}
+	return ""
+}
+
+// detectDataprocResourceType returns "clusters", "jobs", or "operations" when
+// the segments after projects/{project} form regions/{region}/{type}, else "".
+func detectDataprocResourceType(seg []string) string {
+	if len(seg) < 3 || seg[0] != "regions" {
+		return ""
+	}
+	switch seg[2] {
+	case "clusters", "jobs", "operations":
+		return seg[2]
 	}
 	return ""
 }
