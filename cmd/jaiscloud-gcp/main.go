@@ -18,6 +18,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	"jaiscloud/internal/gcp/crypto"
@@ -28,6 +29,7 @@ import (
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
+	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -35,6 +37,7 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	gcpstore "jaiscloud/internal/gcp/store"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
@@ -134,13 +137,27 @@ func startCmd() *cobra.Command {
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
+			// Cloud Functions reuses the Lambda executor: mock echo by default,
+			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE.
+			lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
+			lambdaCfg := lambdaexec.DefaultLambdaConfig()
+			lambdaCfg.Mode = lambdaMode
+			lambdaCfg.Region = cfg.Region
+			lambdaCfg.InstanceID = instanceID
+			lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+			lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
+			defer lambdaExec.Close()
+			slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
+			functionsP := functionsprovider.New(stores.functions, stores.resources, lambdaExec)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
 				Register(kmsP).
 				Register(iamP).
 				Register(pubsubP).
-				Register(firestoreP)
+				Register(firestoreP).
+				Register(functionsP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -174,6 +191,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.secrets)
 			adminHandler.RegisterResetter(stores.keys)
 			adminHandler.RegisterResetter(stores.documents)
+			adminHandler.RegisterResetter(stores.functions)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -196,6 +214,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.documents.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("firestore_documents", snap)
+			}
+			if snap, ok := stores.functions.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("functions", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -357,6 +378,7 @@ type stores struct {
 	secrets   secretmanagerstore.Store
 	keys      kmsstore.Store
 	documents firestorestore.FirestoreStore
+	functions functionsstore.Store
 	resources store.ResourceStore
 	blobs     blobfs.BlobStore
 	close     func()
@@ -383,6 +405,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			secrets:   secretmanagerstore.NewPostgresStore(pg.Pool()),
 			keys:      kmsstore.NewPostgresStore(pg.Pool()),
 			documents: firestorestore.NewPostgresStore(pg.Pool()),
+			functions: functionsstore.NewPostgresStore(pg.Pool()),
 			resources: pg,
 			blobs:     blobs,
 			close:     func() { pg.Close() },
@@ -395,6 +418,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			secrets:   secretmanagerstore.NewMemoryStore(),
 			keys:      kmsstore.NewMemoryStore(),
 			documents: firestorestore.NewMemoryStore(),
+			functions: functionsstore.NewMemoryStore(),
 			resources: store.NewMemoryResourceStore(),
 			blobs:     blobfs.NewMemoryBlobStore(),
 			close:     func() {},
@@ -410,6 +434,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		secrets:   secretmanagerstore.NewMemoryStore(),
 		keys:      kmsstore.NewMemoryStore(),
 		documents: firestorestore.NewMemoryStore(),
+		functions: functionsstore.NewMemoryStore(),
 		resources: store.NewMemoryResourceStore(),
 		blobs:     blobs,
 		close:     func() {},

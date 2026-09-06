@@ -92,6 +92,8 @@ func detectV1Service(path string) string {
 		return "iam"
 	case "documents", "indexes":
 		return "firestore"
+	case "functions":
+		return "functions"
 	}
 	return ""
 }

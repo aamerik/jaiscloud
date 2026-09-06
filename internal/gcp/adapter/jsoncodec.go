@@ -74,6 +74,16 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
+	// Cloud Functions: surface the location segment for store scoping.
+	if resourceType == "functions" {
+		for i, s := range rest {
+			if s == "locations" && i+1 < len(rest) {
+				nr.Params["location"] = rest[i+1]
+				break
+			}
+		}
+	}
+
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
 	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom)
@@ -158,6 +168,8 @@ func detectResourceType(segs []string) string {
 			hasKeyRings = true
 		case "serviceAccounts":
 			hasServiceAccounts = true
+		case "functions":
+			return "functions"
 		}
 	}
 	if hasVersions {
@@ -285,6 +297,19 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			case "listCollectionIds":
 				return "ListCollectionIds"
 			}
+		case "functions":
+			switch custom {
+			case "call":
+				return "CallFunction"
+			case "generateUploadUrl":
+				return "GenerateUploadUrl"
+			case "getIamPolicy":
+				return "FunctionGetIamPolicy"
+			case "setIamPolicy":
+				return "FunctionSetIamPolicy"
+			case "testIamPermissions":
+				return "FunctionTestIamPermissions"
+			}
 		}
 	}
 
@@ -410,6 +435,19 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			return "GetIndex"
 		case method == http.MethodDelete:
 			return "DeleteIndex"
+		}
+	case "functions":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateFunction"
+		case isCollection && method == http.MethodGet:
+			return "ListFunctions"
+		case method == http.MethodPatch:
+			return "UpdateFunction"
+		case method == http.MethodDelete:
+			return "DeleteFunction"
+		case method == http.MethodGet:
+			return "GetFunction"
 		}
 	}
 	return ""
