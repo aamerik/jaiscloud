@@ -145,6 +145,7 @@ jobs:
           cd ../sdkv1 && go mod download
           cd ../sdk-firestore && go mod download
           cd ../sdk-workflows && go mod download
+          cd ../sdk-dataproc && go mod download
 
       - name: Run GCP unit tests
         run: go test -race -count=1 ./internal/gcp/...
@@ -184,6 +185,12 @@ jobs:
 
       - name: Run GCP Workflows SDK tests
         working-directory: tests/integration/gcp/sdk-workflows
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -race -v -count=1 -timeout 120s ./...
+
+      - name: Run GCP Dataproc SDK tests
+        working-directory: tests/integration/gcp/sdk-dataproc
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
         run: go test -race -v -count=1 -timeout 120s ./...

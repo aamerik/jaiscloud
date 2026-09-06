@@ -65,6 +65,21 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Cloud Dataproc — names embed the region; callers pass "region/name".
+	// Dataproc uses "regions" (not "locations") and its operations are the
+	// google.longrunning operations under /regions/{region}/operations/{id}.
+	"dataproc-cluster": func(p, n string) string {
+		reg, c := regionOf(n)
+		return fmt.Sprintf("projects/%s/regions/%s/clusters/%s", p, reg, c)
+	},
+	"dataproc-job": func(p, n string) string {
+		reg, j := regionOf(n)
+		return fmt.Sprintf("projects/%s/regions/%s/jobs/%s", p, reg, j)
+	},
+	"dataproc-operation": func(p, n string) string {
+		reg, op := regionOf(n)
+		return fmt.Sprintf("projects/%s/regions/%s/operations/%s", p, reg, op)
+	},
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.
@@ -151,6 +166,15 @@ func wfLoc(name string) (loc, wf string) {
 		return name[:i], name[i+1:]
 	}
 	return "-", name
+}
+
+// regionOf splits a "region/name" Dataproc name. A name with no slash
+// defaults the region to "global".
+func regionOf(name string) (region, id string) {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i], name[i+1:]
+	}
+	return "global", name
 }
 
 // wfExec splits a "location/workflow/execution" name.

@@ -33,6 +33,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
@@ -42,7 +43,9 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
+	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
+	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -57,6 +60,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
+	"jaiscloud/internal/platform"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
@@ -74,6 +78,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const version = "0.2.0"
@@ -169,6 +175,55 @@ func startCmd() *cobra.Command {
 			workflowsP := workflowsprovider.New(stores.workflows)
 			workflowExecutionsP := workflowexecutionsprovider.New(stores.workflows, workflowsEngine)
 
+			// Cloud Dataproc reuses the Spark client-mode executor: mock by
+			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
+			// for Spark is out of scope (Phase A) — mock only.
+			sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
+			if sparkMode == "docker" {
+				slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
+				sparkMode = "mock"
+			}
+			dataprocOpts := []dataprocprovider.Option{
+				dataprocprovider.WithInstanceID(instanceID),
+				dataprocprovider.WithProjectID(cfg.ProjectID),
+			}
+			if cfg.K8sSparkSA != "" {
+				dataprocOpts = append(dataprocOpts, dataprocprovider.WithServiceAccountName(cfg.K8sSparkSA))
+			}
+			gcpEmulatorCfg := &sparkgcp.GCPEmulatorConfig{ProjectID: cfg.ProjectID, Region: "global"}
+			if v := os.Getenv("STORAGE_EMULATOR_HOST"); v != "" {
+				gcpEmulatorCfg.GCSEndpoint = v
+			} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
+				gcpEmulatorCfg.GCSEndpoint = v
+			}
+			dataprocOpts = append(dataprocOpts, dataprocprovider.WithGCPEmulator(gcpEmulatorCfg))
+			if sparkMode == "k8s" {
+				sparkImage := cfg.K8sSparkImage
+				if sparkImage == "" {
+					slog.Error("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required when executor mode is k8s")
+					os.Exit(1)
+				}
+				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+				k8sNS := cfg.K8sNamespace
+				if k8sNS == "" {
+					k8sNS = "jaiscloud"
+				}
+				platformCfg, err := platform.LoadFromEnv()
+				if err != nil {
+					return fmt.Errorf("platform config: %w", err)
+				}
+				if k8sClient, err := buildK8sClient(); err != nil {
+					slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
+				} else {
+					dataprocOpts = append(dataprocOpts, dataprocprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+				}
+			} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
+				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+			}
+			slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
+			dataprocP := dataprocprovider.New(stores.dataproc, stores.resources, dataprocOpts...)
+			defer dataprocP.Shutdown(context.Background())
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -178,7 +233,8 @@ func startCmd() *cobra.Command {
 				Register(firestoreP).
 				Register(functionsP).
 				Register(workflowsP).
-				Register(workflowExecutionsP)
+				Register(workflowExecutionsP).
+				Register(dataprocP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -224,6 +280,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.entities)
 			adminHandler.RegisterResetter(stores.functions)
 			adminHandler.RegisterResetter(stores.workflows)
+			adminHandler.RegisterResetter(stores.dataproc)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.resources)
@@ -258,6 +315,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.workflows.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("workflows", snap)
+			}
+			if snap, ok := stores.dataproc.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("dataproc", snap)
 			}
 			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("log_entries", snap)
@@ -428,6 +488,7 @@ type stores struct {
 	entities   datastorestore.Store
 	functions  functionsstore.Store
 	workflows  workflowsstore.Store
+	dataproc   dataprocstore.Store
 	logEntries loggingstore.Store
 	monitoring monitoringstore.Store
 	resources  store.ResourceStore
@@ -459,6 +520,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			entities:   datastorestore.NewPostgresStore(pg.Pool()),
 			functions:  functionsstore.NewPostgresStore(pg.Pool()),
 			workflows:  workflowsstore.NewPostgresStore(pg.Pool()),
+			dataproc:   dataprocstore.NewPostgresStore(pg.Pool()),
 			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring: monitoringstore.NewPostgresStore(pg.Pool()),
 			resources:  pg,
@@ -476,6 +538,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			entities:   datastorestore.NewMemoryStore(),
 			functions:  functionsstore.NewMemoryStore(),
 			workflows:  workflowsstore.NewMemoryStore(),
+			dataproc:   dataprocstore.NewMemoryStore(),
 			logEntries: loggingstore.NewMemoryStore(),
 			monitoring: monitoringstore.NewMemoryStore(),
 			resources:  store.NewMemoryResourceStore(),
@@ -496,6 +559,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		entities:   datastorestore.NewMemoryStore(),
 		functions:  functionsstore.NewMemoryStore(),
 		workflows:  workflowsstore.NewMemoryStore(),
+		dataproc:   dataprocstore.NewMemoryStore(),
 		logEntries: loggingstore.NewMemoryStore(),
 		monitoring: monitoringstore.NewMemoryStore(),
 		resources:  store.NewMemoryResourceStore(),
@@ -512,6 +576,28 @@ func versionCmd() *cobra.Command {
 			fmt.Printf("jaiscloud-gcp %s\n", version)
 		},
 	}
+}
+
+// buildK8sClient constructs a kubernetes.Interface using in-cluster config if
+// available, falling back to JAISCLOUD_K8S_APISERVER + JAISCLOUD_K8S_TOKEN env
+// vars (mirrors cmd/jaiscloud-aws/main.go).
+func buildK8sClient() (kubernetes.Interface, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return kubernetes.NewForConfig(cfg)
+	}
+	apiServer := os.Getenv("JAISCLOUD_K8S_APISERVER")
+	if apiServer == "" {
+		apiServer = "https://kubernetes.default.svc"
+	}
+	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
+	cfg := &rest.Config{
+		Host:        apiServer,
+		BearerToken: token,
+		TLSClientConfig: rest.TLSClientConfig{
+			Insecure: true,
+		},
+	}
+	return kubernetes.NewForConfig(cfg)
 }
 
 func envCmd() *cobra.Command {
