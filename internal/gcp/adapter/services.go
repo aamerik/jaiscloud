@@ -89,6 +89,11 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "BigQuery",
 		Codec:          func() adapter.Codec { return &BigQueryCodec{Service: "bigquery"} },
 	},
+	{
+		ServiceName:    "metastore",
+		ProviderPrefix: "Metastore",
+		Codec:          func() adapter.Codec { return &MetastoreCodec{Service: "metastore"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.

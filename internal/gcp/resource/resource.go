@@ -90,6 +90,25 @@ var formatters = map[string]func(project, name string) string{
 		loc, c, t := wfExec(n)
 		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/topics/%s", p, loc, c, t)
 	},
+	// Dataproc Metastore (control plane) — names embed the location; callers pass
+	// "location/service", "location/service/backup",
+	// "location/service/import", and "location/operation".
+	"metastore-service": func(p, n string) string {
+		loc, s := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s", p, loc, s)
+	},
+	"metastore-backup": func(p, n string) string {
+		loc, s, b := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s/backups/%s", p, loc, s, b)
+	},
+	"metastore-metadata-import": func(p, n string) string {
+		loc, s, m := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s/metadataImports/%s", p, loc, s, m)
+	},
+	"metastore-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// BigQuery — datasets/tables/jobs carry a projectId but no "name" field on
 	// the REST wire (they use datasetReference/tableReference/jobReference and
 	// the opaque id), so these formatters are not exercised by the v2 REST

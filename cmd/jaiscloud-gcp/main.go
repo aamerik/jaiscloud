@@ -40,6 +40,7 @@ import (
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	managedkafkaprovider "jaiscloud/internal/gcp/provider/managedkafka"
+	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
@@ -56,6 +57,7 @@ import (
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 	managedkafkastore "jaiscloud/internal/gcp/store/managedkafka"
+	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
@@ -233,6 +235,8 @@ func startCmd() *cobra.Command {
 
 			managedkafkaP := managedkafkaprovider.New(stores.managedkafka)
 
+			metastoreP := metastoreprovider.New(stores.metastore)
+
 			bigqueryP := bigqueryprovider.New(stores.bigquery)
 
 			reg := provider.NewRegistry().
@@ -247,7 +251,8 @@ func startCmd() *cobra.Command {
 				Register(workflowExecutionsP).
 				Register(dataprocP).
 				Register(managedkafkaP).
-				Register(bigqueryP)
+				Register(bigqueryP).
+				Register(metastoreP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -295,6 +300,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.dataproc)
 			adminHandler.RegisterResetter(stores.managedkafka)
+			adminHandler.RegisterResetter(stores.metastore)
 			adminHandler.RegisterResetter(stores.bigquery)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
@@ -336,6 +342,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.managedkafka.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("managedkafka", snap)
+			}
+			if snap, ok := stores.metastore.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("metastore", snap)
 			}
 			if snap, ok := stores.bigquery.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("bigquery", snap)
@@ -511,6 +520,7 @@ type stores struct {
 	workflows    workflowsstore.Store
 	dataproc     dataprocstore.Store
 	managedkafka managedkafkastore.Store
+	metastore    metastorestore.Store
 	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
@@ -545,6 +555,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			workflows:    workflowsstore.NewPostgresStore(pg.Pool()),
 			dataproc:     dataprocstore.NewPostgresStore(pg.Pool()),
 			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
+			metastore:    metastorestore.NewPostgresStore(pg.Pool()),
 			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
@@ -565,6 +576,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			workflows:    workflowsstore.NewMemoryStore(),
 			dataproc:     dataprocstore.NewMemoryStore(),
 			managedkafka: managedkafkastore.NewMemoryStore(),
+			metastore:    metastorestore.NewMemoryStore(),
 			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
@@ -588,6 +600,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		workflows:    workflowsstore.NewMemoryStore(),
 		dataproc:     dataprocstore.NewMemoryStore(),
 		managedkafka: managedkafkastore.NewMemoryStore(),
+		metastore:    metastorestore.NewMemoryStore(),
 		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),
