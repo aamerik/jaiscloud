@@ -53,17 +53,19 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build test docker clean \
+.PHONY: lint lint-pagination help build build-all docker docker-all test test-aws test-gcp clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
+        server-gcp server-gcp-ephemeral server-gcp-postgres \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration \
+        test-integration test-integration-gcp \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
         test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
-        test-e2e-iceberg \
-        test-e2e-docker-all test-e2e-k8s-all test-e2e test-all \
+        test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
+        test-e2e-gcp-persistence test-e2e-iceberg \
+        test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq
@@ -131,13 +133,19 @@ lint: ## Run ARN lint guard + go vet
 	@go vet ./...
 
 lint-pagination: ## Heuristic check that List*/Describe* provider methods use pagination
-	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/...
+	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/... ./internal/gcp/provider/...
 
 ##@ Unit tests
 
 test: ## Run all unit tests with the race detector  (no server needed)
 	go clean -testcache
 	go test -race ./internal/...
+
+test-aws: ## Run AWS + shared unit tests (excludes internal/gcp — mirrors CI test-aws)
+	go test -race $$(go list ./internal/... | grep -v '/internal/gcp/')
+
+test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
+	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 
 ##@ Server — foreground (Ctrl-C to stop)
 
@@ -464,6 +472,31 @@ test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence test
 	JAISCLOUD_DSN=$(JAISCLOUD_DSN) JAISCLOUD_GCP_PERSIST_PORT=8099 \
 	  go test -tags gcp_persistence -count=1 -timeout 5m ./tests/persistent_mode/gcp/...
 
+##@ GCP integration tests
+
+test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an ephemeral server (REST :8080 + gRPC :8081)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"
+	@echo "Running raw-HTTP integration tests..."
+	@go test -race -count=1 -timeout 120s ./tests/integration/gcp/
+	@echo "Running REST SDK suites..."
+	@cd tests/integration/gcp/sdk && STORAGE_EMULATOR_HOST=http://localhost:8080 go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-rest && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
+	@echo "Running gRPC SDK suites..."
+	@cd tests/integration/gcp/sdk-firestore && FIRESTORE_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
+	@cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
+	@echo "Stopping jaiscloud-gcp..."
+	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
 	go clean -testcache
@@ -480,6 +513,8 @@ test-e2e-k8s-all: test-e2e-emrcontainers-k8s test-e2e-dpc-k8s test-e2e-lambda-k8
 test-e2e: test-e2e-docker-all test-e2e-k8s-all test-e2e-persistence test-e2e-iceberg ## All e2e suites (Docker + K8s + Persistence + Iceberg)
 
 test-all: test test-integration test-e2e ## Unit tests + integration tests + all e2e suites
+
+test-all-gcp: test-gcp test-integration-gcp test-e2e-gcp-persistence ## GCP unit + integration + persistence
 
 # ─── Internal helpers (not shown in help) ────────────────────────────────────
 
