@@ -5,12 +5,26 @@ package dataproc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
+	"time"
 
 	gcpstore "jaiscloud/internal/gcp/store"
 	"jaiscloud/internal/store"
 )
+
+// jsonEqual reports whether two JSON documents are semantically equal, ignoring
+// object key order (JSONB normalizes key order on the round trip, so byte-for-byte
+// comparison is not meaningful against Postgres — unlike the memory store).
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // TestPostgresStoreSnapshotVerbatim verifies that cluster config, job type_job,
 // and operation metadata/response survive a Postgres Snapshot/Restore round
@@ -58,8 +72,8 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
-	if string(got.Config) != config {
-		t.Fatalf("config not verbatim: %q", got.Config)
+	if !jsonEqual(string(got.Config), config) {
+		t.Fatalf("config not preserved: %q", got.Config)
 	}
 	if got.Labels["k"] != "v" || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster fields lost: %+v", got)
@@ -69,8 +83,8 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if string(gotJob.TypeJob) != typeJob {
-		t.Fatalf("type_job not verbatim: %q", gotJob.TypeJob)
+	if !jsonEqual(string(gotJob.TypeJob), typeJob) {
+		t.Fatalf("type_job not preserved: %q", gotJob.TypeJob)
 	}
 }
 
@@ -139,5 +153,91 @@ func TestPostgresStoreProjectRegionRoundTrip(t *testing.T) {
 	}
 	if gotOp.ProjectID != project || gotOp.Region != region {
 		t.Fatalf("operation projectId/region lost (drives operation name region): %+v", gotOp)
+	}
+}
+
+// TestPostgresStoreSnapshotRoundTrip verifies that terminal-job fields
+// (driverOutputResourceUri, driverControlFilesUri, and statusHistory, including
+// the terminal status.details) survive a Postgres Snapshot/Restore round trip
+// byte-for-byte — mirroring TestMemoryStoreSnapshotRoundTrip's field assertions.
+func TestPostgresStoreSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres snapshot round-trip test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	const typeJob = `{"mainJarFileUri":"gs://b/a.jar","mainClass":"Main","args":["x","y"]}`
+	doneAt := time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC)
+	history := []JobStatus{
+		{State: "RUNNING", StateStartTime: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		{State: "DONE", StateStartTime: doneAt},
+	}
+	want := Job{
+		JobID:                   "j1",
+		PlacementClusterName:    "c1",
+		Type:                    "sparkJob",
+		TypeJob:                 []byte(typeJob),
+		Status:                  JobStatus{State: "DONE", Details: "finished", StateStartTime: doneAt},
+		StatusHistory:           history,
+		DriverOutputResourceURI: "gs://jaiscloud-dataproc/jobuuid/driveroutput",
+		DriverControlFilesURI:   "gs://jaiscloud-dataproc/jobuuid/control",
+		JobUUID:                 "jobuuid",
+	}
+	if err := s.CreateJob(ctx, "proj", "us-central1", want); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx) // wipe so Restore is the sole source of the restored state
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got, err := s.GetJob(ctx, "proj", "us-central1", "j1")
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !jsonEqual(string(got.TypeJob), typeJob) {
+		t.Fatalf("type_job not preserved: %q", got.TypeJob)
+	}
+	if got.DriverOutputResourceURI != want.DriverOutputResourceURI {
+		t.Fatalf("driverOutputResourceUri lost: got %q want %q", got.DriverOutputResourceURI, want.DriverOutputResourceURI)
+	}
+	if got.DriverControlFilesURI != want.DriverControlFilesURI {
+		t.Fatalf("driverControlFilesUri lost: got %q want %q", got.DriverControlFilesURI, want.DriverControlFilesURI)
+	}
+	if got.JobUUID != want.JobUUID {
+		t.Fatalf("jobUuid lost: got %q want %q", got.JobUUID, want.JobUUID)
+	}
+	if got.Status.State != "DONE" || got.Status.Details != "finished" {
+		t.Fatalf("status lost: got %+v", got.Status)
+	}
+	if !got.Status.StateStartTime.Equal(doneAt) {
+		t.Fatalf("status.stateStartTime lost: got %v want %v", got.Status.StateStartTime, doneAt)
+	}
+	if len(got.StatusHistory) != len(history) {
+		t.Fatalf("statusHistory length: got %d want %d", len(got.StatusHistory), len(history))
+	}
+	for i := range history {
+		if got.StatusHistory[i].State != history[i].State ||
+			!got.StatusHistory[i].StateStartTime.Equal(history[i].StateStartTime) {
+			t.Fatalf("statusHistory[%d] lost: got %+v want %+v", i, got.StatusHistory[i], history[i])
+		}
 	}
 }
