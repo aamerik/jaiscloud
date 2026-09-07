@@ -1,23 +1,40 @@
 # Pending GCP service tests
 
-This nested module holds SDK test suites for the GCP services jaiscloud-gcp does
-**not yet implement**: Cloud Logging, Datastore, Managed Kafka, and Cloud Storage
-gRPC v2.
+This nested module holds SDK test suites that live outside the main `sdk*`
+modules. As services get implemented, their tests here are "flipped active"
+(the `gcp_pending` build tag is removed) and run in CI via the
+`test-gcp-integration` job.
 
-**These tests are expected to FAIL.** They are real, complete test bodies (real
-SDK calls + assertions) written ahead of the implementation, serving as the
-acceptance spec to build against — not placeholders. Each is gated behind
-`//go:build gcp_pending`, so they are excluded from normal `go build`/`go test`
-and have no CI impact.
+**Currently active (untagged, run in CI):** Cloud Datastore
+(`datastore_test.go`), Cloud Storage gRPC v2 (`gcs_grpc_test.go`), and Cloud
+Logging (`logging_test.go`).
 
-To run them (and see the current failures):
+**Currently pending (tagged `//go:build gcp_pending`, excluded from normal
+`go build`/`go test` and CI):** Managed Kafka (`kafka_test.go`).
+
+## Running
+
+Against a running `jaiscloud-gcp` (REST `http://localhost:8080`, gRPC
+`localhost:8081`):
 
 ```bash
+# Active tests (no build tag)
+STORAGE_EMULATOR_HOST_GRPC=localhost:8081 \
+DATASTORE_EMULATOR_HOST=localhost:8081 \
+LOGGING_EMULATOR_HOST=localhost:8081 \
+GCP_EMULATOR_PROJECT=test-project \
+go test -count=1 ./...
+
+# Include the still-pending (kafka) test to see its current failures
 go test -tags gcp_pending -count=1 ./...
 ```
 
-against a running `jaiscloud-gcp` (REST `http://localhost:8080`, gRPC
-`localhost:8081`; env vars `GCP_EMULATOR_ENDPOINT` / `GCP_EMULATOR_PROJECT`).
+Client factories live in `internal/testutil/fixtures.go`. Env-var contract:
 
-When a service is implemented, flip its test into the active suite (drop the
-`gcp_pending` build tag and move it alongside the other `sdk*` modules).
+- `STORAGE_EMULATOR_HOST_GRPC` — Storage v2 gRPC endpoint (default `localhost:8081`)
+- `DATASTORE_EMULATOR_HOST` — Datastore gRPC endpoint (native SDK var)
+- `LOGGING_EMULATOR_HOST` — Logging v2 gRPC endpoint (default `localhost:8081`)
+- `GCP_EMULATOR_PROJECT` — project id (default `test-project`)
+
+When the pending service is implemented, drop its `gcp_pending` build tag (and
+optionally move the file alongside the other `sdk*` modules).
