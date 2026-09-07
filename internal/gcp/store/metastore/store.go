@@ -101,6 +101,11 @@ type Store interface {
 	CreateService(ctx context.Context, projectID, location string, s Service) error
 	GetService(ctx context.Context, projectID, location, name string) (Service, error)
 	UpdateService(ctx context.Context, projectID, location string, s Service) error
+	// UpdateServiceAtomic reads, mutates, and writes a service under one lock
+	// (memory) or a Serializable SELECT ... FOR UPDATE transaction (postgres),
+	// so a concurrent writer can't land between the read and the write. mutate
+	// returns the next Service, or an error to abort without writing.
+	UpdateServiceAtomic(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error)
 	DeleteService(ctx context.Context, projectID, location, name string) error
 	ListServices(ctx context.Context, projectID, location string) ([]Service, error)
 
@@ -112,6 +117,9 @@ type Store interface {
 	CreateMetadataImport(ctx context.Context, projectID, location, serviceName string, m MetadataImport) error
 	GetMetadataImport(ctx context.Context, projectID, location, serviceName, name string) (MetadataImport, error)
 	UpdateMetadataImport(ctx context.Context, projectID, location, serviceName string, m MetadataImport) error
+	// UpdateMetadataImportAtomic mirrors UpdateServiceAtomic for a metadata
+	// import under a service.
+	UpdateMetadataImportAtomic(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error)
 	ListMetadataImports(ctx context.Context, projectID, location, serviceName string) ([]MetadataImport, error)
 
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error

@@ -4,6 +4,8 @@ import (
 	"context"
 	"sort"
 	"sync"
+
+	"jaiscloud/internal/gcp/storeutil"
 )
 
 // MemoryStore is an in-memory Store.
@@ -68,6 +70,24 @@ func (s *MemoryStore) UpdateService(_ context.Context, projectID, location strin
 	svc.Location = location
 	s.services[key][svc.Name] = svc
 	return nil
+}
+
+func (s *MemoryStore) UpdateServiceAtomic(_ context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
+	key := serviceScope(projectID, location)
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (Service, bool) { svc, ok := s.services[key][name]; return svc, ok },
+		func(current Service, exists bool) (Service, error) {
+			if !exists {
+				return Service{}, ErrNoSuchService
+			}
+			return mutate(current)
+		},
+		func(svc Service) {
+			svc.ProjectID = projectID
+			svc.Location = location
+			s.services[key][name] = svc
+		},
+	)
 }
 
 func (s *MemoryStore) DeleteService(_ context.Context, projectID, location, name string) error {
@@ -184,6 +204,25 @@ func (s *MemoryStore) UpdateMetadataImport(_ context.Context, projectID, locatio
 	mi.ServiceName = serviceName
 	s.metadataImports[key][mi.Name] = mi
 	return nil
+}
+
+func (s *MemoryStore) UpdateMetadataImportAtomic(_ context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
+	key := childScope(projectID, location, serviceName)
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (MetadataImport, bool) { mi, ok := s.metadataImports[key][name]; return mi, ok },
+		func(current MetadataImport, exists bool) (MetadataImport, error) {
+			if !exists {
+				return MetadataImport{}, ErrNoSuchMetadataImport
+			}
+			return mutate(current)
+		},
+		func(mi MetadataImport) {
+			mi.ProjectID = projectID
+			mi.Location = location
+			mi.ServiceName = serviceName
+			s.metadataImports[key][name] = mi
+		},
+	)
 }
 
 func (s *MemoryStore) ListMetadataImports(_ context.Context, projectID, location, serviceName string) ([]MetadataImport, error) {

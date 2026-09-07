@@ -92,6 +92,48 @@ func (s *PostgresStore) UpdateService(ctx context.Context, projectID, location s
 	return nil
 }
 
+// UpdateServiceAtomic mirrors MemoryStore's version: a Serializable transaction
+// with SELECT ... FOR UPDATE row-locks the service for the duration of mutate,
+// so a concurrent writer can't land between the read and the write. See
+// store/secretmanager/postgres.go's UpdateSecretAtomic for the reference shape.
+func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Service{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	svc, err := scanService(tx.QueryRow(ctx, `
+		SELECT project_id, location, service_name, config, labels, state, state_history, create_time, update_time
+		FROM jc_metastore_services WHERE project_id=$1 AND location=$2 AND service_name=$3 FOR UPDATE
+	`, projectID, location, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Service{}, ErrNoSuchService
+	}
+	if err != nil {
+		return Service{}, err
+	}
+
+	next, err := mutate(svc)
+	if err != nil {
+		return Service{}, err
+	}
+
+	labels, _ := json.Marshal(next.Labels)
+	history, _ := json.Marshal(next.StateHistory)
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_metastore_services SET config=$4, labels=$5, state=$6, state_history=$7, update_time=$8
+		WHERE project_id=$1 AND location=$2 AND service_name=$3
+	`, projectID, location, next.Name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.State,
+		nullableJSONRaw(history, "[]"), next.UpdateTime); err != nil {
+		return Service{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Service{}, err
+	}
+	return next, nil
+}
+
 func (s *PostgresStore) DeleteService(ctx context.Context, projectID, location, name string) error {
 	// Delete the service's backups and metadata imports first so no orphaned
 	// rows remain, mirroring MemoryStore.DeleteService (which drops the child
@@ -275,6 +317,42 @@ func (s *PostgresStore) UpdateMetadataImport(ctx context.Context, projectID, loc
 		return ErrNoSuchMetadataImport
 	}
 	return nil
+}
+
+// UpdateMetadataImportAtomic mirrors UpdateServiceAtomic for a metadata import.
+func (s *PostgresStore) UpdateMetadataImportAtomic(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return MetadataImport{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	mi, err := scanMetadataImport(tx.QueryRow(ctx, `
+		SELECT project_id, location, service_name, import_name, config, description, state, create_time, update_time, end_time
+		FROM jc_metastore_metadata_imports WHERE project_id=$1 AND location=$2 AND service_name=$3 AND import_name=$4 FOR UPDATE
+	`, projectID, location, serviceName, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MetadataImport{}, ErrNoSuchMetadataImport
+	}
+	if err != nil {
+		return MetadataImport{}, err
+	}
+
+	next, err := mutate(mi)
+	if err != nil {
+		return MetadataImport{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_metastore_metadata_imports SET config=$5, description=$6, state=$7, update_time=$8, end_time=$9
+		WHERE project_id=$1 AND location=$2 AND service_name=$3 AND import_name=$4
+	`, projectID, location, serviceName, next.Name, nullableJSONRaw(next.Config, "{}"), next.Description, next.State, next.UpdateTime, next.EndTime); err != nil {
+		return MetadataImport{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return MetadataImport{}, err
+	}
+	return next, nil
 }
 
 func (s *PostgresStore) ListMetadataImports(ctx context.Context, projectID, location, serviceName string) ([]MetadataImport, error) {

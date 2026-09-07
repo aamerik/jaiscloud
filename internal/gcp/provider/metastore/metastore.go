@@ -368,58 +368,58 @@ func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedReques
 	if location == "" || serviceID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location or serviceId", 400)
 	}
-	svc, err := p.store.GetService(ctx, nr.AccountID, location, serviceID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
 	mask := strParam(nr, "updateMask")
 
-	apply := func(field string) bool {
-		return mask == "" || containsMaskField(mask, field)
-	}
-
-	if apply("labels") {
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			svc.Labels = labels
+	// UpdateServiceAtomic reads, merges, and writes under one lock so a
+	// concurrent update/delete can't land between our read and our write.
+	updated, err := p.store.UpdateServiceAtomic(ctx, nr.AccountID, location, serviceID, func(current metastorestore.Service) (metastorestore.Service, error) {
+		apply := func(field string) bool {
+			return mask == "" || containsMaskField(mask, field)
 		}
-	}
-	// Echo the remaining body fields into the stored config verbatim (top-level
-	// keys overwrite), honoring the updateMask's named paths.
-	if body != nil {
-		var stored map[string]any
-		if len(svc.Config) > 0 {
-			_ = json.Unmarshal(svc.Config, &stored)
-		}
-		if stored == nil {
-			stored = map[string]any{}
-		}
-		if mask == "" {
-			for k, v := range body {
-				stored[k] = v
-			}
-		} else {
-			for _, field := range splitMask(mask) {
-				root, ok := maskJSONRoot(field)
-				if !ok {
-					return nil, model.NewProviderError("InvalidArgument", "unsupported updateMask field "+field, 400)
-				}
-				if v, present := body[root]; present {
-					stored[root] = v
-				}
+		if apply("labels") {
+			if labels := bodyStringMap(body, "labels"); labels != nil {
+				current.Labels = labels
 			}
 		}
-		if data, err := json.Marshal(stored); err == nil {
-			svc.Config = data
+		// Echo the remaining body fields into the stored config verbatim
+		// (top-level keys overwrite), honoring the updateMask's named paths.
+		if body != nil {
+			var stored map[string]any
+			if len(current.Config) > 0 {
+				_ = json.Unmarshal(current.Config, &stored)
+			}
+			if stored == nil {
+				stored = map[string]any{}
+			}
+			if mask == "" {
+				for k, v := range body {
+					stored[k] = v
+				}
+			} else {
+				for _, field := range splitMask(mask) {
+					root, ok := maskJSONRoot(field)
+					if !ok {
+						return metastorestore.Service{}, model.NewProviderError("InvalidArgument", "unsupported updateMask field "+field, 400)
+					}
+					if v, present := body[root]; present {
+						stored[root] = v
+					}
+				}
+			}
+			if data, err := json.Marshal(stored); err == nil {
+				current.Config = data
+			}
 		}
-	}
-	svc.UpdateTime = clock.Now().UTC()
-	if err := p.store.UpdateService(ctx, nr.AccountID, location, svc); err != nil {
+		current.UpdateTime = clock.Now().UTC()
+		return current, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("metastore-service", location+"/"+serviceID)
 	op, err := p.storeOperation(ctx, nr, location, "update", target,
-		operationMetadata(target, "update", clock.Now().UTC()), p.serviceMap(nr, svc))
+		operationMetadata(target, "update", clock.Now().UTC()), p.serviceMap(nr, updated))
 	if err != nil {
 		return nil, err
 	}
@@ -605,26 +605,26 @@ func (p *Provider) UpdateMetadataImport(ctx context.Context, nr *model.Normalize
 	if location == "" || serviceID == "" || importID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location, serviceId, or metadataImportId", 400)
 	}
-	mi, err := p.store.GetMetadataImport(ctx, nr.AccountID, location, serviceID, importID)
-	if err != nil {
-		return nil, mapErr(err)
-	}
 	body, _ := nr.Params["body"].(map[string]any)
 	mask := strParam(nr, "updateMask")
-	if mask == "" || containsMaskField(mask, "description") {
-		if desc, ok := body["description"].(string); ok {
-			mi.Description = desc
+
+	updated, err := p.store.UpdateMetadataImportAtomic(ctx, nr.AccountID, location, serviceID, importID, func(current metastorestore.MetadataImport) (metastorestore.MetadataImport, error) {
+		if mask == "" || containsMaskField(mask, "description") {
+			if desc, ok := body["description"].(string); ok {
+				current.Description = desc
+			}
 		}
-	}
-	now := clock.Now().UTC()
-	mi.UpdateTime = now
-	mi.EndTime = now
-	if err := p.store.UpdateMetadataImport(ctx, nr.AccountID, location, serviceID, mi); err != nil {
+		now := clock.Now().UTC()
+		current.UpdateTime = now
+		current.EndTime = now
+		return current, nil
+	})
+	if err != nil {
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("metastore-metadata-import", location+"/"+serviceID+"/"+importID)
 	op, err := p.storeOperation(ctx, nr, location, "update", target,
-		operationMetadata(target, "update", now), p.metadataImportMap(nr, mi))
+		operationMetadata(target, "update", clock.Now().UTC()), p.metadataImportMap(nr, updated))
 	if err != nil {
 		return nil, err
 	}
