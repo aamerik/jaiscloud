@@ -24,6 +24,7 @@
 | Cloud Workflows | REST | Workflow definitions + executions, real YAML expression engine |
 | Cloud Dataproc | REST | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
 | Dataproc Metastore | REST | Control-plane CRUD (services/backups/metadata-imports) — no Hive Thrift / Iceberg table-metadata plane, see [Known Limitations](#known-limitations) |
+| Apache Iceberg REST catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | gRPC | Metrics + alert policies — see [Known Limitations](#known-limitations) |
@@ -197,6 +198,10 @@ Alert policies can be created, listed, updated, and deleted, but their condition
 ### Dataproc Metastore: control plane only, no table-metadata plane
 
 Only the management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The actual table-metadata plane — the Hive Metastore **Thrift** server that Spark's Hive/Iceberg clients talk to on `endpoint_uri:9083` — is not implemented; `endpointUri` is a synthesized placeholder. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
+
+### Apache Iceberg REST catalog: DB-backed, no Hive Thrift, generic REST protocol
+
+The Iceberg catalog is mounted at `/iceberg/` (Spark configures `uri=http://host:port/iceberg/`) and speaks the generic `org.apache.iceberg.rest.RESTCatalog` protocol — **not** the GCP Dataproc Metastore (DPMS) Hive Thrift protocol. This is a documented fidelity divergence: the generic REST protocol matches AWS's Glue-REST catalog role and is what the Iceberg Spark runtime bundles out of the box, at the cost of not being GCP-DPMS-faithful. The catalog is database-backed (Polaris-style): it stores the `TableMetadata` JSON and a synthesized `metadata-location` pointer (`{location}/metadata/{version:05d}-{uuid}.metadata.json`) but never writes `metadata.json`/`version-hint.text` to object storage itself — the client's `FileIO` does that. `CommitTableRequest` requirements (`assert-table-uuid`, `assert-ref-snapshot-id`, schema/spec/sort-order assertions, …) and updates (`assign-uuid`, `add-schema`, `add-snapshot`, `set-properties`, …) are applied atomically, so concurrent commits cannot lose updates. `set-statistics`/`remove-statistics`/`remove-partition-statistics` are accepted as no-ops, and `GET /tables/{table}/metrics` returns `501 Not Implemented`.
 
 ---
 
