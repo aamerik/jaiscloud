@@ -1,12 +1,10 @@
-package tests
+package gcs_grpc_test
 
 import (
 	"bytes"
 	"context"
 	"io"
 	"testing"
-
-	"jaiscloud-gcp-pending-test/internal/testutil"
 
 	"cloud.google.com/go/storage"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +14,7 @@ import (
 
 func TestGCSGRPC(t *testing.T) {
 	ctx := context.Background()
-	client := testutil.StorageGRPCClient(ctx)
+	client := StorageGRPCClient(ctx)
 	defer client.Close()
 
 	bucketName := uniqueName("go-gcs-grpc")
@@ -34,7 +32,7 @@ func TestGCSGRPC(t *testing.T) {
 		_ = bucket.Delete(ctx)
 	})
 
-	require.NoError(t, bucket.Create(ctx, testutil.ProjectID(), &storage.BucketAttrs{
+	require.NoError(t, bucket.Create(ctx, ProjectID(), &storage.BucketAttrs{
 		Location: "US",
 		Labels:   map[string]string{"transport": "grpc"},
 	}))
