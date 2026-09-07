@@ -84,6 +84,11 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "ManagedKafka",
 		Codec:          func() adapter.Codec { return &ManagedKafkaCodec{Service: "managedkafka"} },
 	},
+	{
+		ServiceName:    "bigquery",
+		ProviderPrefix: "BigQuery",
+		Codec:          func() adapter.Codec { return &BigQueryCodec{Service: "bigquery"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.

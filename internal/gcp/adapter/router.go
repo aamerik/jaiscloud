@@ -28,6 +28,13 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			}
 		}
 	}
+	// BigQuery's servicePath is bigquery/v2/ (not /v1/), so it is detected here
+	// before the generic /v1/ resolver below. The /bigquery/v2/projects prefix
+	// is unambiguous and cannot collide with dataproc/workflows/managedkafka
+	// (all /v1/projects/...).
+	if svc := detectBigQueryService(p); svc != "" {
+		return svc, SourcePath
+	}
 	// /v1/projects/{project}/... services — resolve by resource type. This must
 	// run before the raw-media fallback: a /v1/... path also has two or more
 	// segments and would otherwise be mistaken for a GCS media download.
@@ -59,6 +66,35 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	}
 	idx := strings.IndexByte(p, '/')
 	return idx > 0 && idx < len(p)-1
+}
+
+// detectBigQueryService maps a BigQuery path to the "bigquery" service name.
+// Two forms are accepted: the full servicePath /bigquery/v2/projects/{project}/...
+// and the WithEndpoint-stripped form /projects/{project}/{datasets|jobs|queries|serviceAccount}
+// (the apiary client resolves method paths against the endpoint option, which
+// drops the bigquery/v2/ servicePath). Both are unambiguous — no other GCP
+// service in the emulator routes bare /projects/{project}/... without a
+// version segment, so this runs before the generic /v1/ resolver and the raw
+// GCS media fallback without colliding.
+func detectBigQueryService(path string) string {
+	if strings.HasPrefix(path, "/bigquery/v2/projects/") {
+		return "bigquery"
+	}
+	if !strings.HasPrefix(path, "/projects/") {
+		return ""
+	}
+	rest := strings.TrimPrefix(path, "/projects/")
+	idx := strings.IndexByte(rest, '/')
+	if idx < 0 {
+		return ""
+	}
+	resource := rest[idx+1:]
+	for _, r := range []string{"datasets", "jobs", "queries", "serviceAccount"} {
+		if resource == r || strings.HasPrefix(resource, r+"/") {
+			return "bigquery"
+		}
+	}
+	return ""
 }
 
 // detectV1Service maps a /v1/projects/{project}/... path to a service name by
