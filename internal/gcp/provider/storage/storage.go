@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -936,14 +937,86 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
+	status := 200
+	headers := mediaHeaders(meta)
+	body := plain
+	// Honor HTTP Range requests (the gcs-connector uses them to fetch object
+	// footers and read large objects in chunks); otherwise the gcs-connector's
+	// GoogleCloudStorageReadChannel NPEs on a 200-with-full-body response.
+	if nr.Raw != nil {
+		if rng := nr.Raw.Header.Get("Range"); rng != "" {
+			if start, end, ok := parseByteRange(rng, int64(len(plain))); ok {
+				body = plain[start : end+1]
+				status = http.StatusPartialContent
+				headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, len(plain))
+				headers["Content-Length"] = strconv.Itoa(len(body))
+			}
+		}
+	}
 	return &model.ProviderResponse{
-		HTTPStatus: 200,
+		HTTPStatus: status,
 		Data: map[string]any{
-			"_stream":           io.NopCloser(bytes.NewReader(plain)),
+			"_stream":           io.NopCloser(bytes.NewReader(body)),
 			wire.ContentTypeKey: meta.ContentType,
-			wire.HeadersKey:     mediaHeaders(meta),
+			wire.HeadersKey:     headers,
 		},
 	}, nil
+}
+
+// parseByteRange parses an HTTP Range header ("bytes=start-end", "bytes=start-",
+// or "bytes=-suffix") against a total length and returns the inclusive byte
+// bounds, clamping to the object bounds. Returns ok=false for malformed or
+// unsatisfiable ranges.
+func parseByteRange(rng string, total int64) (start, end int64, ok bool) {
+	const prefix = "bytes="
+	if !strings.HasPrefix(rng, prefix) {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(rng, prefix)
+	if total <= 0 {
+		return 0, 0, false
+	}
+	if i := strings.IndexByte(spec, '-'); i >= 0 {
+		startStr := spec[:i]
+		endStr := spec[i+1:]
+		switch {
+		case startStr == "" && endStr == "":
+			return 0, 0, false
+		case startStr == "": // bytes=-suffix
+			n, err := strconv.ParseInt(endStr, 10, 64)
+			if err != nil || n <= 0 {
+				return 0, 0, false
+			}
+			start = total - n
+			if start < 0 {
+				start = 0
+			}
+			end = total - 1
+		default: // bytes=start-end or bytes=start-
+			s, err := strconv.ParseInt(startStr, 10, 64)
+			if err != nil || s < 0 {
+				return 0, 0, false
+			}
+			if s >= total {
+				return 0, 0, false
+			}
+			start = s
+			if endStr == "" {
+				end = total - 1
+			} else {
+				e, err := strconv.ParseInt(endStr, 10, 64)
+				if err != nil || e < start {
+					return 0, 0, false
+				}
+				end = e
+				if end >= total {
+					end = total - 1
+				}
+			}
+		}
+		return start, end, true
+	}
+	return 0, 0, false
 }
 
 // mediaHeaders builds the GCS media-download response headers for an object so

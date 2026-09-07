@@ -85,6 +85,10 @@ type Config struct {
 	K8sSparkSA       string
 	SparkEMRImage    string
 	SparkEMREKSImage string
+	// K8sSparkSubmitPath overrides the spark-submit binary path inside the
+	// Spark driver image (default "spark-submit"; the official apache/spark
+	// image keeps it at /opt/spark/bin/spark-submit, off PATH).
+	K8sSparkSubmitPath string
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -175,6 +179,10 @@ func Load(cloud model.Cloud) (*Config, error) {
 		viper.SetDefault("gcp_project_id", "jaiscloud-project")
 		viper.SetDefault("gcp_service_account", "jaiscloud@example.iam.gserviceaccount.com")
 		viper.SetDefault("gcp_metadata_enabled", false)
+		viper.SetDefault("k8s_namespace", "jaiscloud")
+		viper.SetDefault("k8s_spark_image", "")
+		viper.SetDefault("k8s_spark_sa", "")
+		viper.SetDefault("k8s_spark_submit_path", "")
 	}
 
 	viper.SetEnvPrefix("JAISCLOUD")
@@ -238,6 +246,10 @@ func Load(cloud model.Cloud) (*Config, error) {
 		cfg.ProjectID = viper.GetString("gcp_project_id")
 		cfg.GCPServiceAccount = viper.GetString("gcp_service_account")
 		cfg.GCPMetadataEnabled = viper.GetBool("gcp_metadata_enabled")
+		cfg.K8sNamespace = viper.GetString("k8s_namespace")
+		cfg.K8sSparkImage = viper.GetString("k8s_spark_image")
+		cfg.K8sSparkSA = viper.GetString("k8s_spark_sa")
+		cfg.K8sSparkSubmitPath = viper.GetString("k8s_spark_submit_path")
 	}
 
 	if cfg.Ephemeral && cfg.DSN != "" {

@@ -69,7 +69,13 @@ func DriverSparkConfsFromEnv(cfg *GCPEmulatorConfig, driverEnv []corev1.EnvVar) 
 		"--conf", "spark.hadoop.fs.gs.impl=com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
 		"--conf", "spark.hadoop.fs.gs.project.id=" + project,
 		"--conf", "spark.hadoop.fs.gs.auth.service.account.enable=false",
+		"--conf", "spark.hadoop.fs.gs.auth.null.enable=true",
 		"--conf", "spark.hadoop.fs.AbstractFileSystem.gs.impl=com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
+	}
+	if cfg.GCSEndpoint != "" {
+		// The gcs-connector's gcsio layer does not honour STORAGE_EMULATOR_HOST;
+		// its explicit JSON-API root URL must point at the emulator.
+		confs = append(confs, "--conf", "spark.hadoop.fs.gs.storage.root.url="+cfg.GCSEndpoint)
 	}
 	// Mirror every driver env var into spark.executorEnv.* so executor pods
 	// inherit the same GCP wiring.
