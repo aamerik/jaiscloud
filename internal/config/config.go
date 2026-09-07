@@ -85,6 +85,10 @@ type Config struct {
 	K8sSparkSA       string
 	SparkEMRImage    string
 	SparkEMREKSImage string
+	// K8sSparkSubmitPath overrides the spark-submit binary path inside the
+	// Spark driver image (default "spark-submit"; the official apache/spark
+	// image keeps it at /opt/spark/bin/spark-submit, off PATH).
+	K8sSparkSubmitPath string
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -153,15 +157,20 @@ func Load(cloud model.Cloud) (*Config, error) {
 	viper.SetDefault("seed", 0)
 	viper.SetDefault("time_mode", "offset")
 
+	// ── Shared Kubernetes/Spark executor config ──────────────────────────────
+	// EMR and Dataproc both run Spark on Kubernetes; these keys are cloud-neutral
+	// and read regardless of the active cloud.
+	viper.SetDefault("k8s_namespace", "jaiscloud")
+	viper.SetDefault("k8s_spark_image", "")
+	viper.SetDefault("k8s_spark_sa", "")
+	viper.SetDefault("k8s_spark_submit_path", "")
+
 	// ── Cloud-specific defaults ─────────────────────────────────────────────
 	// Only the active cloud's keys are registered; the other cloud's
 	// configuration is not supported.
 	switch cloud {
 	case model.CloudAWS:
 		viper.SetDefault("kms_master_key", "")
-		viper.SetDefault("k8s_namespace", "jaiscloud")
-		viper.SetDefault("k8s_spark_image", "")
-		viper.SetDefault("k8s_spark_sa", "")
 		viper.SetDefault("spark_emr_image", "")
 		viper.SetDefault("spark_emreks_image", "")
 		viper.SetDefault("aws_emulator_endpoint", "")
@@ -190,33 +199,34 @@ func Load(cloud model.Cloud) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Cloud:            cloud,
-		Port:             viper.GetInt("port"),
-		Ephemeral:        viper.GetBool("ephemeral"),
-		LogLevel:         viper.GetString("log_level"),
-		Region:           viper.GetString("region"),
-		AccountID:        viper.GetString("account_id"),
-		DSN:              viper.GetString("dsn"),
-		BlobDir:          viper.GetString("blob_dir"),
-		DataDir:          viper.GetString("data_dir"),
-		FreshStart:       viper.GetBool("fresh_start"),
-		SnapshotInterval: snapshotInterval,
-		ExportSoftLimit:  viper.GetInt64("export_soft_limit"),
-		ExecutorMode:     viper.GetString("executor_mode"),
-		Metrics:          viper.GetBool("metrics"),
-		Tracing:          viper.GetBool("tracing"),
-		Deterministic:    viper.GetBool("deterministic"),
-		Seed:             viper.GetInt64("seed"),
-		TimeMode:         viper.GetString("time_mode"),
+		Cloud:              cloud,
+		Port:               viper.GetInt("port"),
+		Ephemeral:          viper.GetBool("ephemeral"),
+		LogLevel:           viper.GetString("log_level"),
+		Region:             viper.GetString("region"),
+		AccountID:          viper.GetString("account_id"),
+		DSN:                viper.GetString("dsn"),
+		BlobDir:            viper.GetString("blob_dir"),
+		DataDir:            viper.GetString("data_dir"),
+		FreshStart:         viper.GetBool("fresh_start"),
+		SnapshotInterval:   snapshotInterval,
+		ExportSoftLimit:    viper.GetInt64("export_soft_limit"),
+		ExecutorMode:       viper.GetString("executor_mode"),
+		Metrics:            viper.GetBool("metrics"),
+		Tracing:            viper.GetBool("tracing"),
+		Deterministic:      viper.GetBool("deterministic"),
+		Seed:               viper.GetInt64("seed"),
+		TimeMode:           viper.GetString("time_mode"),
+		K8sNamespace:       viper.GetString("k8s_namespace"),
+		K8sSparkImage:      viper.GetString("k8s_spark_image"),
+		K8sSparkSA:         viper.GetString("k8s_spark_sa"),
+		K8sSparkSubmitPath: viper.GetString("k8s_spark_submit_path"),
 	}
 
 	// Cloud-specific fields — only the active cloud's keys are read.
 	switch cloud {
 	case model.CloudAWS:
 		cfg.KMSMasterKey = viper.GetString("kms_master_key")
-		cfg.K8sNamespace = viper.GetString("k8s_namespace")
-		cfg.K8sSparkImage = viper.GetString("k8s_spark_image")
-		cfg.K8sSparkSA = viper.GetString("k8s_spark_sa")
 		cfg.SparkEMRImage = viper.GetString("spark_emr_image")
 		cfg.SparkEMREKSImage = viper.GetString("spark_emreks_image")
 		cfg.AWSEmulatorEndpoint = viper.GetString("aws_emulator_endpoint")

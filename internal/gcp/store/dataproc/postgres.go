@@ -48,8 +48,8 @@ func (s *PostgresStore) CreateCluster(ctx context.Context, projectID, region str
 		INSERT INTO jc_dataproc_clusters
 			(project_id, region, cluster_name, config, labels, status, status_history, cluster_uuid, create_time, update_time)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, projectID, region, c.Name, nullableJSONRaw(c.Config), nullableJSONRaw(labels), nullableJSONRaw(status),
-		nullableJSONRaw(history), c.ClusterUUID, c.CreateTime, c.UpdateTime)
+	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"),
+		nullableJSONRaw(history, "[]"), c.ClusterUUID, c.CreateTime, c.UpdateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -92,8 +92,8 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_dataproc_clusters SET config=$4, labels=$5, status=$6, status_history=$7, cluster_uuid=$8, update_time=$9
 		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
-	`, projectID, region, c.Name, nullableJSONRaw(c.Config), nullableJSONRaw(labels), nullableJSONRaw(status),
-		nullableJSONRaw(history), c.ClusterUUID, c.UpdateTime)
+	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"),
+		nullableJSONRaw(history, "[]"), c.ClusterUUID, c.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -149,8 +149,8 @@ func (s *PostgresStore) CreateJob(ctx context.Context, projectID, region string,
 			(project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
 			 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob), nullableJSONRaw(labels),
-		nullableJSONRaw(status), nullableJSONRaw(history), j.DriverOutputResourceURI, j.DriverControlFilesURI,
+	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), j.DriverOutputResourceURI, j.DriverControlFilesURI,
 		j.JobUUID, j.CreateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -197,8 +197,8 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, region string,
 		UPDATE jc_dataproc_jobs SET placement_cluster_name=$4, job_type=$5, type_job=$6, labels=$7, status=$8,
 		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12
 		WHERE project_id=$1 AND region=$2 AND job_id=$3
-	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob), nullableJSONRaw(labels),
-		nullableJSONRaw(status), nullableJSONRaw(history), j.DriverOutputResourceURI, j.DriverControlFilesURI, j.JobUUID)
+	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), j.DriverOutputResourceURI, j.DriverControlFilesURI, j.JobUUID)
 	if err != nil {
 		return err
 	}
@@ -299,9 +299,12 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 
 // nullableJSONRaw renders nil config/type_job as SQL NULL, otherwise the raw
 // JSON bytes (kept verbatim).
-func nullableJSONRaw(b []byte) any {
+// nullableJSONRaw returns a json.RawMessage for a JSONB column, substituting the
+// given empty default ("{}" or "[]") for a nil/null value so NOT NULL columns
+// receive valid JSON instead of SQL NULL.
+func nullableJSONRaw(b []byte, empty string) any {
 	if len(b) == 0 || string(b) == "null" {
-		return nil
+		return json.RawMessage(empty)
 	}
 	return json.RawMessage(b)
 }

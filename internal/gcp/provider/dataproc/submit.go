@@ -84,6 +84,7 @@ func (p *Provider) runJob(ctx context.Context, project, region string, j datapro
 		Namespace:          ns,
 		Image:              p.sparkImage,
 		EntryPoint:         ep,
+		SparkSubmitPath:    p.sparkSubmitPath,
 		SparkSubmitArgs:    sparkArgs,
 		JarArgs:            jarArgs,
 		PlatformOverlay:    p.platformCfg,

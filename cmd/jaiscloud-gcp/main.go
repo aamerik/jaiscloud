@@ -190,6 +190,9 @@ func startCmd() *cobra.Command {
 			if cfg.K8sSparkSA != "" {
 				dataprocOpts = append(dataprocOpts, dataprocprovider.WithServiceAccountName(cfg.K8sSparkSA))
 			}
+			if cfg.K8sSparkSubmitPath != "" {
+				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkSubmitPath(cfg.K8sSparkSubmitPath))
+			}
 			gcpEmulatorCfg := &sparkgcp.GCPEmulatorConfig{ProjectID: cfg.ProjectID, Region: "global"}
 			if v := os.Getenv("STORAGE_EMULATOR_HOST"); v != "" {
 				gcpEmulatorCfg.GCSEndpoint = v

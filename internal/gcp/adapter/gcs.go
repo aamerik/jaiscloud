@@ -44,7 +44,7 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	if len(seg) < 2 || seg[0] == "" {
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}
-	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
+	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}, Raw: r}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
 	metadataFromHeaders(r, nr.Params)
@@ -74,7 +74,7 @@ func (c *GCSCodec) decodeDownload(r *http.Request, body []byte, rest string) (*m
 // decodeStorage handles the metadata/JSON API under /storage/v1/ and /download/storage/v1/.
 func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(rest)
-	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
+	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}, Raw: r}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
 	metadataFromHeaders(r, nr.Params)
@@ -257,7 +257,7 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 	if !(len(seg) >= 3 && seg[0] == "b" && seg[2] == "o") {
 		return nil, model.NewProviderError("InvalidRequest", "unsupported upload path", 404)
 	}
-	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}}
+	nr := &model.NormalizedRequest{Service: "storage", Params: map[string]any{}, Raw: r}
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
 	metadataFromHeaders(r, nr.Params)

@@ -1734,3 +1734,29 @@ func TestObjectsListDelimiterPagination(t *testing.T) {
 		t.Error("expected no nextPageToken on final page")
 	}
 }
+
+func TestParseByteRange(t *testing.T) {
+	total := int64(100)
+	cases := []struct {
+		rng        string
+		start, end int64
+		ok         bool
+	}{
+		{"bytes=0-15", 0, 15, true},
+		{"bytes=50-", 50, 99, true},
+		{"bytes=-10", 90, 99, true},
+		{"bytes=0-200", 0, 99, true}, // clamped to total
+		{"bytes=100-", 0, 0, false},  // start >= total
+		{"bytes=", 0, 0, false},      // empty
+		{"items=0-5", 0, 0, false},   // wrong unit
+		{"bytes=5-2", 0, 0, false},   // end < start
+		{"bytes=-0", 0, 0, false},    // suffix 0
+	}
+	for _, c := range cases {
+		s, e, ok := parseByteRange(c.rng, total)
+		if ok != c.ok || (ok && (s != c.start || e != c.end)) {
+			t.Errorf("parseByteRange(%q, %d) = (%d,%d,%v), want (%d,%d,%v)",
+				c.rng, total, s, e, ok, c.start, c.end, c.ok)
+		}
+	}
+}

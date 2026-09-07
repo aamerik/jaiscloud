@@ -44,6 +44,8 @@ type Provider struct {
 	sparkImage  string
 	gcpEmulator *sparkgcp.GCPEmulatorConfig
 
+	sparkSubmitPath string
+
 	instanceID         string
 	serviceAccountName string
 	projectID          string // default project (from cfg.ProjectID), used as WI fallback
@@ -72,6 +74,13 @@ func WithK8s(client kubernetes.Interface, namespace string, platformCfg *platfor
 // WithSparkImage sets the container image used for spark-submit driver pods.
 func WithSparkImage(image string) Option {
 	return func(p *Provider) { p.sparkImage = image }
+}
+
+// WithSparkSubmitPath overrides the spark-submit binary path inside the driver
+// image (default "spark-submit"; the apache/spark image keeps it at
+// /opt/spark/bin/spark-submit, off PATH).
+func WithSparkSubmitPath(path string) Option {
+	return func(p *Provider) { p.sparkSubmitPath = path }
 }
 
 // WithGCPEmulator wires GCP emulator endpoint config into Spark driver pods.
