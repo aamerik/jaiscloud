@@ -40,7 +40,7 @@ func TestGCSPersistenceAcrossRestart(t *testing.T) {
 	const object = "data/hello.txt"
 	const content = "persisted across restart"
 
-	// ── Phase 1: start, create bucket + object ────────────────────────────────
+	// ── start, create bucket + object ────────────────────────────────
 	proc1 := startGCPProcess(t, port, dsn, blobDir)
 	waitForHealth(t, host)
 

@@ -1,6 +1,6 @@
 //go:build gcp_persistence
 
-// Package v1_test verifies that the GCP Phase 1 services (Pub/Sub, Secret
+// Package core_test verifies that the GCP core messaging/security services (Pub/Sub, Secret
 // Manager, KMS, IAM) survive a jaiscloud-gcp process restart when backed by
 // PostgreSQL (--dsn).
 //
@@ -12,7 +12,7 @@
 //
 //	JAISCLOUD_GCP_BIN         — path to the jaiscloud-gcp binary
 //	JAISCLOUD_GCP_PERSIST_PORT — port for the managed server (default 8099)
-package v1_test
+package core_test
 
 import (
 	"fmt"
@@ -149,9 +149,9 @@ func stopProcess(t *testing.T, cmd *exec.Cmd) {
 	t.Fatal("jaiscloud-gcp did not release the port after kill")
 }
 
-// TestPhase1PersistenceAcrossRestart creates one resource in each Phase 1
+// TestPersistenceAcrossRestart creates one resource in each core
 // service, restarts against the same DSN, and verifies they survive.
-func TestPhase1PersistenceAcrossRestart(t *testing.T) {
+func TestPersistenceAcrossRestart(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
 		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
@@ -161,7 +161,7 @@ func TestPhase1PersistenceAcrossRestart(t *testing.T) {
 	host := fmt.Sprintf("http://localhost:%d", port)
 	blobDir := t.TempDir()
 
-	// ── Phase 1: create resources ──────────────────────────────────────────────
+	// ── create resources ──────────────────────────────────────────────
 	proc1 := startGCPProcess(t, port, dsn, blobDir)
 	waitForHealth(t, host)
 
