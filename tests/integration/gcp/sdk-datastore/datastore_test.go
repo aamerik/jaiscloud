@@ -1,10 +1,8 @@
-package tests
+package datastore_test
 
 import (
 	"context"
 	"testing"
-
-	"jaiscloud-gcp-pending-test/internal/testutil"
 
 	"cloud.google.com/go/datastore"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +17,7 @@ type Task struct {
 
 func TestDatastore(t *testing.T) {
 	ctx := context.Background()
-	client := testutil.DatastoreClient(ctx)
+	client := DatastoreClient(ctx)
 	defer client.Close()
 
 	suffix := uniqueName("go-ds")

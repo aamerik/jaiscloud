@@ -1,4 +1,4 @@
-package tests
+package kafka_test
 
 import (
 	"crypto/rand"

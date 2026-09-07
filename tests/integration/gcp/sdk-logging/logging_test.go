@@ -1,11 +1,9 @@
-package tests
+package logging_test
 
 import (
 	"context"
 	"fmt"
 	"testing"
-
-	"jaiscloud-gcp-pending-test/internal/testutil"
 
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	"github.com/stretchr/testify/assert"
@@ -17,10 +15,10 @@ import (
 
 func TestLogging(t *testing.T) {
 	ctx := context.Background()
-	client := testutil.LoggingClient(ctx)
+	client := LoggingClient(ctx)
 	defer client.Close()
 
-	project := testutil.ProjectID()
+	project := ProjectID()
 	parent := fmt.Sprintf("projects/%s", project)
 	logName := fmt.Sprintf("projects/%s/logs/%s", project, uniqueName("go-log"))
 
