@@ -1,6 +1,6 @@
-// Package sdkv1_test exercises the Firestore documents REST surface through the
+// Package sdkrest_test exercises the Firestore documents REST surface through the
 // official apiary client (google.golang.org/api/firestore/v1).
-package sdkv1_test
+package sdkrest_test
 
 import (
 	"context"

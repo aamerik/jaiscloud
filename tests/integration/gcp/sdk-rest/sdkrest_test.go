@@ -1,4 +1,4 @@
-// Package sdkv1_test exercises the jaiscloud-gcp emulator's Phase 1 services
+// Package sdkrest_test exercises the jaiscloud-gcp emulator's core messaging/security services
 // (Pub/Sub, Secret Manager, KMS, IAM) through the official Google REST API
 // clients. This validates wire-level parity with the real SDKs.
 //
@@ -10,7 +10,7 @@
 // The high-level cloud.google.com/go/{pubsub,secretmanager,kms} clients speak
 // gRPC, but the emulator is REST/JSON, so these tests use the REST apiary
 // clients under google.golang.org/api instead.
-package sdkv1_test
+package sdkrest_test
 
 import (
 	"context"

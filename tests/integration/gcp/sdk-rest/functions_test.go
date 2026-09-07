@@ -1,4 +1,4 @@
-package sdkv1_test
+package sdkrest_test
 
 import (
 	"context"

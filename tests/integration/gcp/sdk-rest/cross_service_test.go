@@ -1,4 +1,4 @@
-package sdkv1_test
+package sdkrest_test
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCrossServiceCMEK validates the Phase 1.5 customer-managed encryption key
+// TestCrossServiceCMEK validates the customer-managed encryption key
 // (CMEK) feature end-to-end across services: a single Cloud KMS key is created
 // by one "service", then reused by two other services to encrypt data — Secret
 // Manager (at rest) and Pub/Sub (topic-level) — and a consumer reads/decrypts

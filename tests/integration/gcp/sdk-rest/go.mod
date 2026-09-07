@@ -1,4 +1,4 @@
-module jaiscloud-gcp-sdk-v1-test
+module jaiscloud-gcp-sdk-rest-test
 
 go 1.26
 
