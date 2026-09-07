@@ -103,6 +103,9 @@ func mapErr(err error) error {
 	if errors.Is(err, workflowsstore.ErrNoSuchWorkflow) {
 		return model.NewProviderError("NotFound", "workflow not found", 404)
 	}
+	if errors.Is(err, workflowsstore.ErrAlreadyExists) {
+		return model.NewProviderError("AlreadyExists", "execution already exists", 409)
+	}
 	return err
 }
 
@@ -249,7 +252,7 @@ func (p *Provider) CreateExecution(ctx context.Context, nr *model.NormalizedRequ
 	e.Duration = durationString(e.EndTime.Sub(e.StartTime))
 
 	if err := p.workflows.CreateExecution(ctx, nr.AccountID, location, workflowID, executionID, e); err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return provider.OK(p.executionToMap(nr, e)), nil
 }

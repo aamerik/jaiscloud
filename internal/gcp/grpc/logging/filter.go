@@ -347,6 +347,33 @@ func supportedFilterField(field string) bool {
 	return false
 }
 
+// supportedFilterOp reports whether op is implemented for field by
+// cmpExpr.match. The tokenizer accepts >, <, >=, <=, and : for any field, but
+// only a subset of (field, op) combinations are actually evaluated — without
+// this check, e.g. "logName>\"x\"" or "severity:5" would compile successfully
+// and then silently match zero entries at evaluation time instead of being
+// rejected as InvalidArgument.
+func supportedFilterOp(field, op string) bool {
+	switch field {
+	case "logName", "log_name", "resource.type", "resource_type":
+		switch op {
+		case "=", "!=":
+			return true
+		}
+	case "severity", "timestamp":
+		switch op {
+		case "=", "!=", ">", ">=", "<", "<=":
+			return true
+		}
+	case "textPayload", "text_payload":
+		switch op {
+		case ":", "=", "!=":
+			return true
+		}
+	}
+	return false
+}
+
 func (p *filterParser) parseComparison() (filterExpr, error) {
 	field := p.next()
 	if field.kind != "ident" {
@@ -358,6 +385,9 @@ func (p *filterParser) parseComparison() (filterExpr, error) {
 	op := p.next()
 	if op.kind != "op" {
 		return nil, fmt.Errorf("expected comparison operator after %q", field.text)
+	}
+	if !supportedFilterOp(field.text, op.text) {
+		return nil, fmt.Errorf("unsupported operator %q for filter field %q", op.text, field.text)
 	}
 	value := p.next()
 	switch value.kind {

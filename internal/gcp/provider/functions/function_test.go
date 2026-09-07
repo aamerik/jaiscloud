@@ -111,6 +111,48 @@ func TestFunctionCRUD(t *testing.T) {
 	}
 }
 
+// TestListFunctions_AllLocationsWildcard verifies that location="-"
+// aggregates functions across every region for the project, matching real
+// Cloud Functions' "locations/-/functions" wildcard, instead of doing an
+// exact-match lookup under the literal location "-" (which is always empty).
+func TestListFunctions_AllLocationsWildcard(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	for _, loc := range []string{"us-central1", "europe-west1"} {
+		nr := newNR(map[string]any{
+			"location":   loc,
+			"functionId": "fn-" + loc,
+			"body": map[string]any{
+				"runtime":    "nodejs20",
+				"entryPoint": "helloWorld",
+			},
+		})
+		if _, err := p.CreateFunction(ctx, nr); err != nil {
+			t.Fatalf("create in %s: %v", loc, err)
+		}
+	}
+
+	// A single-location list only sees that region's function.
+	resp, err := p.ListFunctions(ctx, newNR(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("list us-central1: %v", err)
+	}
+	if fns, _ := resp.Data["functions"].([]any); len(fns) != 1 {
+		t.Fatalf("expected 1 function in us-central1, got %d", len(fns))
+	}
+
+	// The "-" wildcard sees both.
+	resp, err = p.ListFunctions(ctx, newNR(map[string]any{"location": "-"}))
+	if err != nil {
+		t.Fatalf("list -: %v", err)
+	}
+	fns, _ := resp.Data["functions"].([]any)
+	if len(fns) != 2 {
+		t.Fatalf("expected 2 functions across all locations, got %d: %+v", len(fns), fns)
+	}
+}
+
 func TestCallFunctionMockEcho(t *testing.T) {
 	ctx := context.Background()
 	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)

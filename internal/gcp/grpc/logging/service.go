@@ -14,6 +14,7 @@ import (
 	"jaiscloud/internal/clock"
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/resource"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 	"jaiscloud/internal/model"
 
@@ -43,7 +44,7 @@ func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 // ─── resource-name parsing ────────────────────────────────────────────────────
 
 func logName(project, id string) string {
-	return "projects/" + project + "/logs/" + id
+	return resource.ResourceID(project)("log", id)
 }
 
 // splitLogName parses "projects/{p}/logs/{l}".

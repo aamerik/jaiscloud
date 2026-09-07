@@ -74,10 +74,18 @@ func (e *encryptor) Wrap(ctx context.Context, accountID, kmsKeyName string) ([]b
 		return nil, nil, err
 	}
 
-	wrappedDEK, err := kms.EncryptData(rawKMSDEK, rawDEK, nil)
+	ct, err := kms.EncryptData(rawKMSDEK, rawDEK, nil)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Tag the blob with the CryptoKeyVersion that wrapped it, so Unwrap can
+	// fetch the matching key material even after the key's primary version is
+	// rotated (CryptoKeyUpdatePrimaryVersion) — mirrors CryptoKeyEncrypt/Decrypt
+	// in the direct KMS API (kms.go), which already does this. Without the tag,
+	// Unwrap would fetch whatever is the *current* primary version's key
+	// material, which cannot decrypt a DEK wrapped under a since-rotated-away
+	// version.
+	wrappedDEK := kms.EncodeVersionedCiphertext(cryptoKey.PrimaryVersion, ct)
 
 	return rawDEK, wrappedDEK, nil
 }
@@ -92,15 +100,23 @@ func (e *encryptor) Unwrap(ctx context.Context, accountID, kmsKeyName string, wr
 		return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
 	}
 
-	cryptoKey, err := e.kmsStore.GetCryptoKey(ctx, project, loc, kr, key)
+	// The wrapping version is tagged onto the blob by Wrap so rotating the
+	// key's primary version (CryptoKeyUpdatePrimaryVersion) after a Wrap
+	// doesn't strand data encrypted under the version that was primary at
+	// wrap time.
+	wrapVersion, ct, err := kms.DecodeVersionedCiphertext(wrappedDEK)
 	if err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
+	}
+
+	if _, err := e.kmsStore.GetCryptoKey(ctx, project, loc, kr, key); err != nil {
 		if err == kms.ErrNoSuchCryptoKey {
 			return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
 		}
 		return nil, err
 	}
 
-	version, err := e.kmsStore.GetVersion(ctx, project, loc, kr, key, cryptoKey.PrimaryVersion)
+	version, err := e.kmsStore.GetVersion(ctx, project, loc, kr, key, wrapVersion)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
 	}
@@ -109,12 +125,12 @@ func (e *encryptor) Unwrap(ctx context.Context, accountID, kmsKeyName string, wr
 		return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
 	}
 
-	rawKMSDEK, err := e.kmsStore.KeyMaterial(ctx, project, loc, kr, key, cryptoKey.PrimaryVersion)
+	rawKMSDEK, err := e.kmsStore.KeyMaterial(ctx, project, loc, kr, key, wrapVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	rawDEK, err := kms.DecryptData(rawKMSDEK, wrappedDEK, nil)
+	rawDEK, err := kms.DecryptData(rawKMSDEK, ct, nil)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
 	}

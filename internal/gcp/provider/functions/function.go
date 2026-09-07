@@ -261,7 +261,17 @@ func (p *Provider) GetFunction(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) ListFunctions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	location := strParam(nr, "location")
-	fns, err := p.functions.ListFunctions(ctx, nr.AccountID, location)
+	// "-" is GCP's all-locations wildcard (locations/-/functions): aggregate
+	// across every region for the project instead of an exact-match lookup,
+	// which would always be empty since no function is ever stored under the
+	// literal location "-".
+	var fns []functionsstore.Function
+	var err error
+	if location == "-" {
+		fns, err = p.functions.ListFunctionsAllLocations(ctx, nr.AccountID)
+	} else {
+		fns, err = p.functions.ListFunctions(ctx, nr.AccountID, location)
+	}
 	if err != nil {
 		return nil, err
 	}

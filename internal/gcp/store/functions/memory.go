@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -78,6 +79,28 @@ func (s *MemoryStore) ListFunctions(_ context.Context, projectID, location strin
 		result = append(result, f)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) ListFunctionsAllLocations(_ context.Context, projectID string) ([]Function, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Function
+	for key, m := range s.functions {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, f := range m {
+			result = append(result, f)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result, nil
 }
 

@@ -144,6 +144,34 @@ func (s *PostgresStore) ListFunctions(ctx context.Context, projectID, location s
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListFunctionsAllLocations(ctx context.Context, projectID string) ([]Function, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
+		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
+		       available_memory_mb, timeout, description
+		FROM jc_functions WHERE project_id=$1 ORDER BY location, function_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Function
+	for rows.Next() {
+		f, err := scanFunction(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, f)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_functions`)
 }

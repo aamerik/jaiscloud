@@ -1411,6 +1411,9 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
 	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
 		return nil, err
 	}
 	return provider.OK(toMap(o)), nil
@@ -1446,6 +1449,9 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
 	if err := p.objects.PutObjectMeta(ctx, bucket, object, toStoreObject(o)); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
 		return nil, err
 	}
 	return provider.OK(toMap(o)), nil
