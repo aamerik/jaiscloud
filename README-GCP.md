@@ -23,6 +23,7 @@
 | Cloud Functions (v1) | REST | Deploy, invoke (mock echo by default, Docker/K8s execution modes) |
 | Cloud Workflows | REST | Workflow definitions + executions, real YAML expression engine |
 | Cloud Dataproc | REST | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
+| Dataproc Metastore | REST | Control-plane CRUD (services/backups/metadata-imports) — no Hive Thrift / Iceberg table-metadata plane, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | gRPC | Metrics + alert policies — see [Known Limitations](#known-limitations) |
@@ -192,6 +193,10 @@ Alert policies can be created, listed, updated, and deleted, but their condition
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 
 `POST /_jaiscloud/reset` wipes the Dataproc store but does not cancel or wait for jobs currently executing (Docker/K8s executor mode). This matches AWS EMR's own `Reset` behaviour in this codebase, which is a no-op for the same reason — not a GCP-specific gap. If you reset while a job is mid-execution and then resubmit a job with the *same* `(project, region, jobId)` before the stale run finishes, the stale run's completion could overwrite the new job's state. Avoid reusing job IDs across a reset boundary while a prior run may still be in flight.
+
+### Dataproc Metastore: control plane only, no table-metadata plane
+
+Only the management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The actual table-metadata plane — the Hive Metastore **Thrift** server that Spark's Hive/Iceberg clients talk to on `endpoint_uri:9083` — is not implemented; `endpointUri` is a synthesized placeholder. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
 
 ---
 
