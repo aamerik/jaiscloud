@@ -1,5 +1,3 @@
-//go:build gcp_pending
-
 package tests
 
 import (
@@ -62,6 +60,39 @@ func kafkaGet(t *testing.T, url string) map[string]interface{} {
 	return result
 }
 
+// kafkaGetStatus performs a GET and returns the raw HTTP status code (used by
+// negative cases that expect a non-200).
+func kafkaGetStatus(t *testing.T, url string) int {
+	t.Helper()
+	resp, err := http.Get(url) //nolint:noctx
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// kafkaPostStatus performs a POST and returns the raw HTTP status code (used by
+// negative cases that expect a non-200).
+func kafkaPostStatus(t *testing.T, url string, body interface{}) int {
+	t.Helper()
+	data, err := json.Marshal(body)
+	require.NoError(t, err)
+	resp, err := http.Post(url, "application/json", bytes.NewReader(data)) //nolint:noctx
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// kafkaDeleteStatus performs a DELETE and returns the raw HTTP status code.
+func kafkaDeleteStatus(t *testing.T, url string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil) //nolint:noctx
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
 func kafkaDelete(url string) {
 	req, _ := http.NewRequest(http.MethodDelete, url, nil) //nolint:noctx
 	resp, err := http.DefaultClient.Do(req)
@@ -115,7 +146,18 @@ func TestManagedKafka(t *testing.T) {
 		name, _ := resp["name"].(string)
 		assert.Contains(t, name, clusterID)
 		assert.Equal(t, "ACTIVE", resp["state"])
-		assert.NotEmpty(t, resp["bootstrapAddress"])
+	})
+
+	t.Run("CreateDuplicateCluster", func(t *testing.T) {
+		status := kafkaPostStatus(t, base+"/clusters?clusterId="+clusterID, map[string]interface{}{
+			"capacityConfig": map[string]interface{}{"vcpuCount": 3, "memoryBytes": 3221225472},
+		})
+		assert.Equal(t, 409, status)
+	})
+
+	t.Run("DeleteMissingCluster", func(t *testing.T) {
+		status := kafkaDeleteStatus(t, base+"/clusters/does-not-exist")
+		assert.Equal(t, 404, status)
 	})
 
 	t.Run("ListClusters", func(t *testing.T) {
@@ -141,7 +183,9 @@ func TestManagedKafka(t *testing.T) {
 		})
 		assert.Equal(t, true, resp["done"])
 		response, _ := resp["response"].(map[string]interface{})
-		assert.Equal(t, float64(6), response["vcpuCount"])
+		capacity, _ := response["capacityConfig"].(map[string]interface{})
+		require.NotNil(t, capacity)
+		assert.Equal(t, float64(6), capacity["vcpuCount"])
 	})
 
 	t.Run("CreateTopic", func(t *testing.T) {

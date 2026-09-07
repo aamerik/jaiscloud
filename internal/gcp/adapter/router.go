@@ -17,6 +17,10 @@ const (
 // GCP has no SigV4 scope; the path is the sole reliable discriminator.
 func DetectService(r *http.Request) (service string, source DetectionSource) {
 	p := r.URL.Path
+	// SDK test clients concatenate an endpoint that may already end in "/" with
+	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading
+	// slashes so path-prefix detection is stable.
+	p = "/" + strings.TrimLeft(p, "/")
 	for _, svc := range gcpServices {
 		for _, prefix := range svc.PathPrefixes {
 			if strings.HasPrefix(p, prefix) {
@@ -87,6 +91,12 @@ func detectV1Service(path string) string {
 	if detectDataprocResourceType(rest) != "" {
 		return "dataproc"
 	}
+	// Managed Kafka lives under /v1/projects/{project}/locations/{location}/clusters
+	// — detect it before the generic resource-type switch (a topic path's "topics"
+	// segment would otherwise be mistaken for the Pub/Sub topic surface).
+	if detectManagedKafkaResourceType(rest) != "" {
+		return "managedkafka"
+	}
 	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"
@@ -117,6 +127,19 @@ func detectDataprocResourceType(seg []string) string {
 	switch seg[2] {
 	case "clusters", "jobs", "operations":
 		return seg[2]
+	}
+	return ""
+}
+
+// detectManagedKafkaResourceType returns "clusters" when the segments after
+// projects/{project} form locations/{location}/clusters, else "". The
+// "locations" (vs Dataproc's "regions") segment is the distinguishing key.
+func detectManagedKafkaResourceType(seg []string) string {
+	if len(seg) < 3 || seg[0] != "locations" {
+		return ""
+	}
+	if seg[2] == "clusters" {
+		return "clusters"
 	}
 	return ""
 }
