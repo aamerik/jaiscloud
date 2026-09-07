@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -212,13 +213,16 @@ func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	// pageSize/pageToken are accepted but ignored — the emulator returns the
-	// full list (no pagination).
-	items := make([]any, 0, len(clusters))
-	for _, c := range clusters {
+	page, next := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, nr.Params)
+	items := make([]any, 0, len(page))
+	for _, c := range page {
 		items = append(items, p.clusterMap(nr, c))
 	}
-	return provider.OK(map[string]any{"clusters": items}), nil
+	resp := map[string]any{"clusters": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) UpdateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -322,13 +326,16 @@ func (p *Provider) ListTopics(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	// pageSize/pageToken are accepted but ignored — the emulator returns the
-	// full list (no pagination).
-	items := make([]any, 0, len(topics))
-	for _, t := range topics {
+	page, next := paging.Page(topics, func(t mkstore.Topic) string { return t.Name }, nr.Params)
+	items := make([]any, 0, len(page))
+	for _, t := range page {
 		items = append(items, p.topicMap(nr, t))
 	}
-	return provider.OK(map[string]any{"topics": items}), nil
+	resp := map[string]any{"topics": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) UpdateTopic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -382,9 +389,16 @@ func (p *Provider) DeleteTopic(ctx context.Context, nr *model.NormalizedRequest)
 }
 
 // ListConsumerGroups returns an empty list — the emulator does not track
-// consumer-group state.
+// consumer-group state. The empty set is still passed through paging.Page so
+// the list wire-shape matches the real paginated API.
 func (p *Provider) ListConsumerGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"consumerGroups": []any{}}), nil
+	var groups []string
+	page, next := paging.Page(groups, func(s string) string { return s }, nr.Params)
+	resp := map[string]any{"consumerGroups": page}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 // consumerGroupUnimplemented returns Unimplemented for the consumer-group
