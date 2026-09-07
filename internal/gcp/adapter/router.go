@@ -133,6 +133,13 @@ func detectV1Service(path string) string {
 	if detectManagedKafkaResourceType(rest) != "" {
 		return "managedkafka"
 	}
+	// Dataproc Metastore lives under /v1/projects/{project}/locations/{location}/services
+	// — detect it before the generic resource-type switch (its "services" segment
+	// is otherwise unmatched; "backups"/"metadataImports"/"operations" are only
+	// meaningful nested under it).
+	if detectMetastoreResourceType(rest) != "" {
+		return "metastore"
+	}
 	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"
@@ -176,6 +183,24 @@ func detectManagedKafkaResourceType(seg []string) string {
 	}
 	if seg[2] == "clusters" {
 		return "clusters"
+	}
+	return ""
+}
+
+// detectMetastoreResourceType returns "services" when the segments after
+// projects/{project} form locations/{location}/services, else "". The
+// "services" segment is unique to Dataproc Metastore among the emulator's
+// /v1/projects/{project}/locations/{location}/... services (workflows uses
+// "workflows", functions uses "functions", KMS uses "keyRings", Managed Kafka
+// uses "clusters"). The shared locations/{location}/operations/{id} LRO path is
+// intentionally NOT claimed here — it is path-ambiguous with Workflows'
+// operations surface on a single host, so it remains routed to workflows.
+func detectMetastoreResourceType(seg []string) string {
+	if len(seg) < 3 || seg[0] != "locations" {
+		return ""
+	}
+	if seg[2] == "services" {
+		return "services"
 	}
 	return ""
 }
