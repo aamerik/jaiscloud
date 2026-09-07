@@ -138,15 +138,16 @@ func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace
 }
 
 func (s *PostgresStore) DropNamespace(ctx context.Context, namespace string) error {
-	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_iceberg_tables WHERE namespace=$1`, namespace).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return ErrNamespaceNotEmpty
-	}
+	// The emptiness check is enforced atomically by the FK (ON DELETE RESTRICT):
+	// a DELETE on a namespace still referenced by a table fails with 23503
+	// (foreign_key_violation), closing the check-then-act race where a table
+	// could be created between a count probe and the delete.
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_iceberg_namespaces WHERE namespace=$1`, namespace)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrNamespaceNotEmpty
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {
@@ -166,6 +167,9 @@ func (s *PostgresStore) CreateTable(ctx context.Context, namespace, name string,
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrTableExists
+		}
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrNamespaceNotFound
 		}
 		return err
 	}
@@ -301,6 +305,10 @@ func (s *PostgresStore) RenameTable(ctx context.Context, srcNamespace, srcName, 
 		INSERT INTO jc_iceberg_tables (namespace, table_name, metadata, metadata_location, table_uuid, version)
 		VALUES ($1,$2,$3,$4,$5,$6)
 	`, dstNamespace, dstName, jsonObj(src.Metadata), src.MetadataLocation, src.UUID, src.Version); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return Table{}, ErrNamespaceNotFound
+		}
 		return Table{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

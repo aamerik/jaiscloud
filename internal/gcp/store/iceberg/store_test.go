@@ -66,6 +66,9 @@ func runStoreTests(t *testing.T, s Store) {
 	if err := s.CreateTable(ctx, "db", "t1", t0); err != ErrTableExists {
 		t.Fatalf("expected ErrTableExists, got %v", err)
 	}
+	if err := s.CreateTable(ctx, "missing", "t", t0); err != ErrNamespaceNotFound {
+		t.Fatalf("expected ErrNamespaceNotFound creating table in missing namespace, got %v", err)
+	}
 	got, err := s.GetTable(ctx, "db", "t1")
 	if err != nil || got.UUID != "u-1" || got.Version != 0 {
 		t.Fatalf("get table: %v %+v", err, got)
@@ -138,6 +141,9 @@ func runStoreTests(t *testing.T, s Store) {
 	}
 	if _, err := s.RenameTable(ctx, "db2", "missing", "db2", "x"); err != ErrTableNotFound {
 		t.Fatalf("expected ErrTableNotFound renaming missing source, got %v", err)
+	}
+	if _, err := s.RenameTable(ctx, "db2", "t2", "missing", "x"); err != ErrNamespaceNotFound {
+		t.Fatalf("expected ErrNamespaceNotFound renaming into missing namespace, got %v", err)
 	}
 	// Destination exists -> ErrTableExists.
 	if err := s.CreateTable(ctx, "db2", "t3", t0); err != nil {

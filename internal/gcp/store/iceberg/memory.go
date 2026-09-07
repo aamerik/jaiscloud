@@ -103,6 +103,9 @@ func (s *MemoryStore) DropNamespace(_ context.Context, namespace string) error {
 func (s *MemoryStore) CreateTable(_ context.Context, namespace, name string, t Table) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.namespaces[namespace]; !ok {
+		return ErrNamespaceNotFound
+	}
 	if s.tables[namespace] == nil {
 		s.tables[namespace] = make(map[string]Table)
 	}
@@ -170,6 +173,9 @@ func (s *MemoryStore) RenameTable(_ context.Context, srcNamespace, srcName, dstN
 	src, ok := s.tables[srcNamespace][srcName]
 	if !ok {
 		return Table{}, ErrTableNotFound
+	}
+	if _, ok := s.namespaces[dstNamespace]; !ok {
+		return Table{}, ErrNamespaceNotFound
 	}
 	if _, exists := s.tables[dstNamespace][dstName]; exists {
 		return Table{}, ErrTableExists

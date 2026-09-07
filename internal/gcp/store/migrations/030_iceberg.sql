@@ -27,5 +27,10 @@ CREATE TABLE IF NOT EXISTS jc_iceberg_tables (
     metadata_location TEXT    NOT NULL DEFAULT '',
     table_uuid        TEXT    NOT NULL DEFAULT '',
     version           INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (namespace, table_name)
+    PRIMARY KEY (namespace, table_name),
+    -- Enforce namespace existence and "no tables → droppable" at the DB level,
+    -- so DropNamespace/CreateTable/RenameTable are atomic against concurrent
+    -- namespace drops (mirrors the OCC-fix series' atomic-write discipline).
+    CONSTRAINT jc_iceberg_tables_ns_fk FOREIGN KEY (namespace)
+        REFERENCES jc_iceberg_namespaces (namespace) ON DELETE RESTRICT
 );
