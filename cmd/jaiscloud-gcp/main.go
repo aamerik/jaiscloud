@@ -33,6 +33,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
@@ -46,6 +47,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
+	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
@@ -231,6 +233,8 @@ func startCmd() *cobra.Command {
 
 			managedkafkaP := managedkafkaprovider.New(stores.managedkafka)
 
+			bigqueryP := bigqueryprovider.New(stores.bigquery)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -242,7 +246,8 @@ func startCmd() *cobra.Command {
 				Register(workflowsP).
 				Register(workflowExecutionsP).
 				Register(dataprocP).
-				Register(managedkafkaP)
+				Register(managedkafkaP).
+				Register(bigqueryP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -290,6 +295,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.dataproc)
 			adminHandler.RegisterResetter(stores.managedkafka)
+			adminHandler.RegisterResetter(stores.bigquery)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.resources)
@@ -330,6 +336,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.managedkafka.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("managedkafka", snap)
+			}
+			if snap, ok := stores.bigquery.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("bigquery", snap)
 			}
 			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("log_entries", snap)
@@ -502,6 +511,7 @@ type stores struct {
 	workflows    workflowsstore.Store
 	dataproc     dataprocstore.Store
 	managedkafka managedkafkastore.Store
+	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
 	resources    store.ResourceStore
@@ -535,6 +545,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			workflows:    workflowsstore.NewPostgresStore(pg.Pool()),
 			dataproc:     dataprocstore.NewPostgresStore(pg.Pool()),
 			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
+			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
@@ -554,6 +565,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			workflows:    workflowsstore.NewMemoryStore(),
 			dataproc:     dataprocstore.NewMemoryStore(),
 			managedkafka: managedkafkastore.NewMemoryStore(),
+			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
@@ -576,6 +588,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		workflows:    workflowsstore.NewMemoryStore(),
 		dataproc:     dataprocstore.NewMemoryStore(),
 		managedkafka: managedkafkastore.NewMemoryStore(),
+		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
