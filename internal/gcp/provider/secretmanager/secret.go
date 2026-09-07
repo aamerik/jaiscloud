@@ -312,7 +312,14 @@ func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secret
 	}
 	if s.Rotation.RotationPeriod != "" {
 		if d, err := time.ParseDuration(s.Rotation.RotationPeriod); err == nil {
-			s.Rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
+			// Copy before mutating: s.Rotation is a pointer aliased with the
+			// store's own copy (GetSecret returns Secret by value, but Rotation
+			// is a *Rotation field), so writing through it directly would mutate
+			// live store state ahead of, and regardless of the outcome of, the
+			// UpdateSecret call below.
+			rotation := *s.Rotation
+			rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
+			s.Rotation = &rotation
 		}
 	}
 	ver, err := p.secrets.NextVersion(ctx, account, id)

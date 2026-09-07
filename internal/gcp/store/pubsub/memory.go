@@ -14,12 +14,39 @@ import (
 type MemoryMessages struct {
 	mu       sync.RWMutex
 	messages map[string]map[string]Message // topic → messageID → message
-	seq      atomic.Int64                  // monotonic message-ID counter
+	// sortedIDs caches, per topic, message IDs in ascending PublishTime order.
+	// Put/Delete invalidate a topic's entry (they change membership/order);
+	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline only
+	// touch VisibleAt/DeliveryAttempt, never PublishTime) do not, so repeated
+	// polling against an unchanged topic — the common Pub/Sub access pattern —
+	// avoids re-sorting the topic on every call.
+	sortedIDs map[string][]string
+	seq       atomic.Int64 // monotonic message-ID counter
 }
 
 // NewMemoryMessages returns an empty in-memory message store.
 func NewMemoryMessages() *MemoryMessages {
-	return &MemoryMessages{messages: make(map[string]map[string]Message)}
+	return &MemoryMessages{
+		messages:  make(map[string]map[string]Message),
+		sortedIDs: make(map[string][]string),
+	}
+}
+
+// orderedIDsLocked returns messageIDs for topic in ascending PublishTime
+// order, building and caching them if the cache was invalidated. Callers must
+// hold s.mu for writing.
+func (s *MemoryMessages) orderedIDsLocked(topic string) []string {
+	if ids, ok := s.sortedIDs[topic]; ok {
+		return ids
+	}
+	msgs := s.messages[topic]
+	ids := make([]string, 0, len(msgs))
+	for id := range msgs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return msgs[ids[i]].PublishTime.Before(msgs[ids[j]].PublishTime) })
+	s.sortedIDs[topic] = ids
+	return ids
 }
 
 // NextID returns the next monotonic message ID for this process.
@@ -34,18 +61,19 @@ func (s *MemoryMessages) Put(_ context.Context, m Message) error {
 		s.messages[m.Topic] = make(map[string]Message)
 	}
 	s.messages[m.Topic][m.MessageID] = m
+	delete(s.sortedIDs, m.Topic)
 	return nil
 }
 
 func (s *MemoryMessages) List(_ context.Context, topic string) ([]Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	msgs := s.messages[topic]
-	result := make([]Message, 0, len(msgs))
-	for _, m := range msgs {
-		result = append(result, m)
+	ids := s.orderedIDsLocked(topic)
+	result := make([]Message, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, msgs[id])
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].PublishTime.Before(result[j].PublishTime) })
 	return result, nil
 }
 
@@ -56,6 +84,8 @@ func (s *MemoryMessages) Pull(_ context.Context, topic string, maxMessages, ackD
 	defer s.mu.Unlock()
 
 	msgs := s.messages[topic]
+	ids := s.orderedIDsLocked(topic)
+
 	// FIFO: build the set of ordering keys that have an earlier in-flight message.
 	inFlightGroups := map[string]bool{}
 	for _, m := range msgs {
@@ -64,17 +94,12 @@ func (s *MemoryMessages) Pull(_ context.Context, topic string, maxMessages, ackD
 		}
 	}
 
-	sorted := make([]Message, 0, len(msgs))
-	for _, m := range msgs {
-		sorted = append(sorted, m)
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].PublishTime.Before(sorted[j].PublishTime) })
-
 	var out []Message
-	for _, m := range sorted {
+	for _, id := range ids {
 		if len(out) >= maxMessages {
 			break
 		}
+		m := msgs[id]
 		// Retention: skip expired messages.
 		if retentionSec > 0 && now.Sub(m.PublishTime) > duration(retentionSec) {
 			continue
@@ -103,7 +128,10 @@ func (s *MemoryMessages) Delete(_ context.Context, topic, messageID string) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if msgs, ok := s.messages[topic]; ok {
-		delete(msgs, messageID)
+		if _, existed := msgs[messageID]; existed {
+			delete(msgs, messageID)
+			delete(s.sortedIDs, topic)
+		}
 	}
 	return nil
 }
@@ -151,6 +179,7 @@ func (s *MemoryMessages) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = make(map[string]map[string]Message)
+	s.sortedIDs = make(map[string][]string)
 }
 
 func duration(sec int) time.Duration { return time.Duration(sec) * time.Second }

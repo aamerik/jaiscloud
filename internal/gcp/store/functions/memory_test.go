@@ -73,6 +73,34 @@ func TestMemoryStoreFunctionCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreListFunctionsAllLocations(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	s.CreateFunction(ctx, "proj", "us-central1", "b", Function{ID: "b"})
+	s.CreateFunction(ctx, "proj", "us-central1", "a", Function{ID: "a"})
+	s.CreateFunction(ctx, "proj", "europe-west1", "c", Function{ID: "c"})
+	// A different project's function must not leak in.
+	s.CreateFunction(ctx, "other-proj", "us-central1", "d", Function{ID: "d"})
+
+	all, err := s.ListFunctionsAllLocations(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ListFunctionsAllLocations: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 functions across all locations, got %d: %+v", len(all), all)
+	}
+	// Sorted by location then ID: europe-west1/c, us-central1/a, us-central1/b.
+	wantOrder := []struct{ loc, id string }{
+		{"europe-west1", "c"}, {"us-central1", "a"}, {"us-central1", "b"},
+	}
+	for i, w := range wantOrder {
+		if all[i].Location != w.loc || all[i].ID != w.id {
+			t.Errorf("index %d: got (%s,%s), want (%s,%s)", i, all[i].Location, all[i].ID, w.loc, w.id)
+		}
+	}
+}
+
 func TestMemoryStoreReset(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

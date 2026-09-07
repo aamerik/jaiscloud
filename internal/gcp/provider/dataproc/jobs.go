@@ -56,7 +56,7 @@ func (p *Provider) submitJob(ctx context.Context, nr *model.NormalizedRequest) (
 			StateStartTime: now,
 		}
 		if err := p.store.CreateJob(ctx, nr.AccountID, region, j); err != nil {
-			return nil, err
+			return nil, mapCreateJobErr(err)
 		}
 		return jobToMap(j), nil
 	}
@@ -66,16 +66,13 @@ func (p *Provider) submitJob(ctx context.Context, nr *model.NormalizedRequest) (
 		now := clock.Now().UTC()
 		j.Status = dataprocstore.JobStatus{State: "ERROR", Details: err.Error(), StateStartTime: now}
 		if createErr := p.store.CreateJob(ctx, nr.AccountID, region, j); createErr != nil {
-			return nil, createErr
+			return nil, mapCreateJobErr(createErr)
 		}
 		return jobToMap(j), nil
 	}
 
 	if err := p.store.CreateJob(ctx, nr.AccountID, region, j); err != nil {
-		if errors.Is(err, dataprocstore.ErrAlreadyExists) {
-			return nil, model.NewProviderError("AlreadyExists", "job already exists", 409)
-		}
-		return nil, err
+		return nil, mapCreateJobErr(err)
 	}
 
 	// Mock mode: complete synchronously (no goroutine). K8s mode: run for real.
@@ -96,6 +93,17 @@ func (p *Provider) submitJob(ctx context.Context, nr *model.NormalizedRequest) (
 		p.runJob(p.ctx, nr.AccountID, region, j)
 	}()
 	return jobToMap(j), nil
+}
+
+// mapCreateJobErr translates store.CreateJob's sentinel errors into the
+// matching wire error. Used by every CreateJob call site in submitJob so a
+// duplicate client-specified jobId always surfaces as 409 AlreadyExists,
+// regardless of which job-type branch triggered the create.
+func mapCreateJobErr(err error) error {
+	if errors.Is(err, dataprocstore.ErrAlreadyExists) {
+		return model.NewProviderError("AlreadyExists", "job already exists", 409)
+	}
+	return err
 }
 
 func (p *Provider) SubmitJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

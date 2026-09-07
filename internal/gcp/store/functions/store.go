@@ -50,6 +50,9 @@ type Store interface {
 	UpdateFunction(ctx context.Context, projectID, location, id string, f Function) error
 	DeleteFunction(ctx context.Context, projectID, location, id string) error
 	ListFunctions(ctx context.Context, projectID, location string) ([]Function, error)
+	// ListFunctionsAllLocations returns every function for a project across all
+	// locations, for the "locations/-/functions" (all-locations) wildcard.
+	ListFunctionsAllLocations(ctx context.Context, projectID string) ([]Function, error)
 
 	Reset(ctx context.Context)
 }

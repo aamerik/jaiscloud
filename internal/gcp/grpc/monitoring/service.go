@@ -39,6 +39,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/resource"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	"jaiscloud/internal/model"
 
@@ -97,7 +98,7 @@ func projectFromResourceName(name string) string {
 // ─── resource-name helpers ────────────────────────────────────────────────────
 
 func metricDescriptorName(project, typ string) string {
-	return "projects/" + project + "/metricDescriptors/" + typ
+	return resource.ResourceID(project)("metric-descriptor", typ)
 }
 
 // splitMetricDescriptorName parses "projects/{p}/metricDescriptors/{type}",
@@ -122,7 +123,7 @@ func splitMetricDescriptorName(name string) (project, typ string, ok bool) {
 }
 
 func alertPolicyName(project, id string) string {
-	return "projects/" + project + "/alertPolicies/" + id
+	return resource.ResourceID(project)("alert-policy", id)
 }
 
 // splitAlertPolicyName parses "projects/{p}/alertPolicies/{id}".
@@ -304,7 +305,7 @@ func (s *Service) ListMonitoredResourceDescriptors(ctx context.Context, req *mon
 	all := make([]*monitoredrespb.MonitoredResourceDescriptor, 0, len(types))
 	for _, t := range types {
 		all = append(all, &monitoredrespb.MonitoredResourceDescriptor{
-			Name: "projects/" + project + "/monitoredResourceDescriptors/" + t,
+			Name: resource.ResourceID(project)("monitored-resource-descriptor", t),
 			Type: t,
 		})
 	}

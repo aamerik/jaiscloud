@@ -105,6 +105,16 @@ var formatters = map[string]func(project, name string) string{
 	"bigquery-job": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/jobs/%s", p, n)
 	},
+	// Cloud Logging (gRPC-only; no REST wire equivalent in this emulator).
+	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
+	// Cloud Monitoring (gRPC-only; no REST wire equivalent in this emulator).
+	"metric-descriptor": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/metricDescriptors/%s", p, n)
+	},
+	"alert-policy": func(p, n string) string { return fmt.Sprintf("projects/%s/alertPolicies/%s", p, n) },
+	"monitored-resource-descriptor": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/monitoredResourceDescriptors/%s", p, n)
+	},
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.

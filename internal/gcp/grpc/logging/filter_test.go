@@ -178,6 +178,10 @@ func TestFilterEmptyAndErrors(t *testing.T) {
 		`(logName="x"`,          // missing close paren
 		`severity ~= WARNING`,   // unsupported operator
 		`logName="unterminated`, // unterminated string
+		`logName>"x"`,           // supported field, but > isn't implemented for it
+		`severity:5`,            // supported field, but : isn't implemented for it
+		`resource.type>"x"`,     // supported field, but > isn't implemented for it
+		`timestamp:"x"`,         // supported field, but : isn't implemented for it
 	} {
 		if _, err := compileFilter(bad); err == nil {
 			t.Errorf("expected error for filter %q", bad)

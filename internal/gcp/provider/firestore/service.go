@@ -50,12 +50,22 @@ func newService(s firestorestore.FirestoreStore, resources store.ResourceStore) 
 	}
 }
 
-// Reset clears transaction read-sets (document state is reset via the store's
-// own Resetter; index state via the resource store's).
+// Reset clears transaction read-sets and the change-feed history/sequence
+// (document state is reset via the store's own Resetter; index state via the
+// resource store's). Live subscribers (changeSubs) are left attached: they
+// only ever receive events published after Reset, from the fresh sequence, so
+// leaving them subscribed is safe — clearing changeLog/changeSeq is what
+// matters, since ChangesSince(seq) would otherwise keep replaying pre-reset
+// history that references documents the reset store no longer has.
 func (s *Service) Reset(_ context.Context) {
 	s.txnMu.Lock()
 	s.readSets = make(map[string]*readSet)
 	s.txnMu.Unlock()
+
+	s.changeMu.Lock()
+	s.changeSeq = 0
+	s.changeLog = nil
+	s.changeMu.Unlock()
 }
 
 // docName builds the full document resource name.

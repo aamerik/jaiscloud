@@ -175,6 +175,7 @@ func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedReques
 	body, _ := nr.Params["body"].(map[string]any)
 	now := clock.Now().UTC()
 	c := mkstore.Cluster{
+		Location:   location,
 		Name:       clusterID,
 		Labels:     bodyStringMap(body, "labels"),
 		CreateTime: now,
@@ -285,6 +286,8 @@ func (p *Provider) CreateTopic(ctx context.Context, nr *model.NormalizedRequest)
 	body, _ := nr.Params["body"].(map[string]any)
 	now := clock.Now().UTC()
 	t := mkstore.Topic{
+		Location:          location,
+		ClusterName:       clusterID,
 		Name:              topicID,
 		PartitionCount:    bodyInt(body, "partitionCount"),
 		ReplicationFactor: bodyInt(body, "replicationFactor"),
