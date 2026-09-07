@@ -106,6 +106,11 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3": "kms",
 		"/v1/projects/p/serviceAccounts/sa@x.com":                                  "iam",
 		"/v1/projects/p/locations/us-central1/functions/f":                         "functions",
+		"/v1/projects/p/locations/us-central1/clusters":                            "managedkafka",
+		"/v1/projects/p/locations/us-central1/clusters/c":                          "managedkafka",
+		"/v1/projects/p/locations/us-central1/clusters/c/topics":                   "managedkafka",
+		"/v1/projects/p/locations/us-central1/clusters/c/topics/t":                 "managedkafka",
+		"/v1/projects/p/locations/us-central1/clusters/c/consumerGroups":           "managedkafka",
 		"/storage/v1/b/bkt/o":                                                      "",
 	}
 	for path, want := range cases {

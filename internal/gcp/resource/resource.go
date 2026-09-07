@@ -80,6 +80,16 @@ var formatters = map[string]func(project, name string) string{
 		reg, op := regionOf(n)
 		return fmt.Sprintf("projects/%s/regions/%s/operations/%s", p, reg, op)
 	},
+	// Managed Kafka (Apache Kafka for BigQuery) — names embed the location;
+	// callers pass "location/cluster" and "location/cluster/topic".
+	"managedkafka-cluster": func(p, n string) string {
+		loc, c := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s", p, loc, c)
+	},
+	"managedkafka-topic": func(p, n string) string {
+		loc, c, t := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/topics/%s", p, loc, c, t)
+	},
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.

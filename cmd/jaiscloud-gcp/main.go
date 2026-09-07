@@ -38,6 +38,7 @@ import (
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
+	managedkafkaprovider "jaiscloud/internal/gcp/provider/managedkafka"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
@@ -52,6 +53,7 @@ import (
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	managedkafkastore "jaiscloud/internal/gcp/store/managedkafka"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
@@ -227,6 +229,8 @@ func startCmd() *cobra.Command {
 			dataprocP := dataprocprovider.New(stores.dataproc, stores.resources, dataprocOpts...)
 			defer dataprocP.Shutdown(context.Background())
 
+			managedkafkaP := managedkafkaprovider.New(stores.managedkafka)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -237,7 +241,8 @@ func startCmd() *cobra.Command {
 				Register(functionsP).
 				Register(workflowsP).
 				Register(workflowExecutionsP).
-				Register(dataprocP)
+				Register(dataprocP).
+				Register(managedkafkaP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -284,6 +289,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.functions)
 			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.dataproc)
+			adminHandler.RegisterResetter(stores.managedkafka)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.resources)
@@ -321,6 +327,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.dataproc.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("dataproc", snap)
+			}
+			if snap, ok := stores.managedkafka.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("managedkafka", snap)
 			}
 			if snap, ok := stores.logEntries.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("log_entries", snap)
@@ -483,20 +492,21 @@ func bindFlags(cmd *cobra.Command) {
 
 // stores bundles the per-mode store backends constructed by initStores.
 type stores struct {
-	objects    gcs.ObjectStore
-	messages   pubsubstore.Messages
-	secrets    secretmanagerstore.Store
-	keys       kmsstore.Store
-	documents  firestorestore.FirestoreStore
-	entities   datastorestore.Store
-	functions  functionsstore.Store
-	workflows  workflowsstore.Store
-	dataproc   dataprocstore.Store
-	logEntries loggingstore.Store
-	monitoring monitoringstore.Store
-	resources  store.ResourceStore
-	blobs      blobfs.BlobStore
-	close      func()
+	objects      gcs.ObjectStore
+	messages     pubsubstore.Messages
+	secrets      secretmanagerstore.Store
+	keys         kmsstore.Store
+	documents    firestorestore.FirestoreStore
+	entities     datastorestore.Store
+	functions    functionsstore.Store
+	workflows    workflowsstore.Store
+	dataproc     dataprocstore.Store
+	managedkafka managedkafkastore.Store
+	logEntries   loggingstore.Store
+	monitoring   monitoringstore.Store
+	resources    store.ResourceStore
+	blobs        blobfs.BlobStore
+	close        func()
 }
 
 func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*stores, error) {
@@ -515,38 +525,40 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			return nil, fmt.Errorf("blobfs: %w", err)
 		}
 		return &stores{
-			objects:    gcs.NewPostgresObjectStore(pg.Pool()),
-			messages:   pubsubstore.NewPostgresMessages(pg.Pool()),
-			secrets:    secretmanagerstore.NewPostgresStore(pg.Pool()),
-			keys:       kmsstore.NewPostgresStore(pg.Pool()),
-			documents:  firestorestore.NewPostgresStore(pg.Pool()),
-			entities:   datastorestore.NewPostgresStore(pg.Pool()),
-			functions:  functionsstore.NewPostgresStore(pg.Pool()),
-			workflows:  workflowsstore.NewPostgresStore(pg.Pool()),
-			dataproc:   dataprocstore.NewPostgresStore(pg.Pool()),
-			logEntries: loggingstore.NewPostgresStore(pg.Pool()),
-			monitoring: monitoringstore.NewPostgresStore(pg.Pool()),
-			resources:  pg,
-			blobs:      blobs,
-			close:      func() { pg.Close() },
+			objects:      gcs.NewPostgresObjectStore(pg.Pool()),
+			messages:     pubsubstore.NewPostgresMessages(pg.Pool()),
+			secrets:      secretmanagerstore.NewPostgresStore(pg.Pool()),
+			keys:         kmsstore.NewPostgresStore(pg.Pool()),
+			documents:    firestorestore.NewPostgresStore(pg.Pool()),
+			entities:     datastorestore.NewPostgresStore(pg.Pool()),
+			functions:    functionsstore.NewPostgresStore(pg.Pool()),
+			workflows:    workflowsstore.NewPostgresStore(pg.Pool()),
+			dataproc:     dataprocstore.NewPostgresStore(pg.Pool()),
+			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
+			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
+			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
+			resources:    pg,
+			blobs:        blobs,
+			close:        func() { pg.Close() },
 		}, nil
 	}
 	if cfg.Ephemeral {
 		return &stores{
-			objects:    gcs.NewMemoryObjectStore(),
-			messages:   pubsubstore.NewMemoryMessages(),
-			secrets:    secretmanagerstore.NewMemoryStore(),
-			keys:       kmsstore.NewMemoryStore(),
-			documents:  firestorestore.NewMemoryStore(),
-			entities:   datastorestore.NewMemoryStore(),
-			functions:  functionsstore.NewMemoryStore(),
-			workflows:  workflowsstore.NewMemoryStore(),
-			dataproc:   dataprocstore.NewMemoryStore(),
-			logEntries: loggingstore.NewMemoryStore(),
-			monitoring: monitoringstore.NewMemoryStore(),
-			resources:  store.NewMemoryResourceStore(),
-			blobs:      blobfs.NewMemoryBlobStore(),
-			close:      func() {},
+			objects:      gcs.NewMemoryObjectStore(),
+			messages:     pubsubstore.NewMemoryMessages(),
+			secrets:      secretmanagerstore.NewMemoryStore(),
+			keys:         kmsstore.NewMemoryStore(),
+			documents:    firestorestore.NewMemoryStore(),
+			entities:     datastorestore.NewMemoryStore(),
+			functions:    functionsstore.NewMemoryStore(),
+			workflows:    workflowsstore.NewMemoryStore(),
+			dataproc:     dataprocstore.NewMemoryStore(),
+			managedkafka: managedkafkastore.NewMemoryStore(),
+			logEntries:   loggingstore.NewMemoryStore(),
+			monitoring:   monitoringstore.NewMemoryStore(),
+			resources:    store.NewMemoryResourceStore(),
+			blobs:        blobfs.NewMemoryBlobStore(),
+			close:        func() {},
 		}, nil
 	}
 	blobs, err := blobfs.NewSessionBlobStore(instanceID)
@@ -554,20 +566,21 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		return nil, fmt.Errorf("blobfs: %w", err)
 	}
 	return &stores{
-		objects:    gcs.NewMemoryObjectStore(),
-		messages:   pubsubstore.NewMemoryMessages(),
-		secrets:    secretmanagerstore.NewMemoryStore(),
-		keys:       kmsstore.NewMemoryStore(),
-		documents:  firestorestore.NewMemoryStore(),
-		entities:   datastorestore.NewMemoryStore(),
-		functions:  functionsstore.NewMemoryStore(),
-		workflows:  workflowsstore.NewMemoryStore(),
-		dataproc:   dataprocstore.NewMemoryStore(),
-		logEntries: loggingstore.NewMemoryStore(),
-		monitoring: monitoringstore.NewMemoryStore(),
-		resources:  store.NewMemoryResourceStore(),
-		blobs:      blobs,
-		close:      func() {},
+		objects:      gcs.NewMemoryObjectStore(),
+		messages:     pubsubstore.NewMemoryMessages(),
+		secrets:      secretmanagerstore.NewMemoryStore(),
+		keys:         kmsstore.NewMemoryStore(),
+		documents:    firestorestore.NewMemoryStore(),
+		entities:     datastorestore.NewMemoryStore(),
+		functions:    functionsstore.NewMemoryStore(),
+		workflows:    workflowsstore.NewMemoryStore(),
+		dataproc:     dataprocstore.NewMemoryStore(),
+		managedkafka: managedkafkastore.NewMemoryStore(),
+		logEntries:   loggingstore.NewMemoryStore(),
+		monitoring:   monitoringstore.NewMemoryStore(),
+		resources:    store.NewMemoryResourceStore(),
+		blobs:        blobs,
+		close:        func() {},
 	}, nil
 }
 
