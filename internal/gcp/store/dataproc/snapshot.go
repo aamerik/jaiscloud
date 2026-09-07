@@ -208,8 +208,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			INSERT INTO jc_dataproc_clusters
 				(project_id, region, cluster_name, config, labels, status, status_history, cluster_uuid, create_time, update_time)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		`, r.ProjectID, r.Cluster.Region, r.Cluster.Name, nullableJSONRaw(r.Cluster.Config), nullableJSONRaw(labels),
-			nullableJSONRaw(status), nullableJSONRaw(history), r.Cluster.ClusterUUID, r.Cluster.CreateTime, r.Cluster.UpdateTime); err != nil {
+		`, r.ProjectID, r.Cluster.Region, r.Cluster.Name, nullableJSONRaw(r.Cluster.Config, "{}"), nullableJSONRaw(labels, "{}"),
+			nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Cluster.ClusterUUID, r.Cluster.CreateTime, r.Cluster.UpdateTime); err != nil {
 			return err
 		}
 	}
@@ -222,8 +222,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 				(project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
 				 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		`, r.ProjectID, r.Job.Region, r.Job.JobID, r.Job.PlacementClusterName, r.Job.Type, nullableJSONRaw(r.Job.TypeJob),
-			nullableJSONRaw(labels), nullableJSONRaw(status), nullableJSONRaw(history), r.Job.DriverOutputResourceURI,
+		`, r.ProjectID, r.Job.Region, r.Job.JobID, r.Job.PlacementClusterName, r.Job.Type, nullableJSONRaw(r.Job.TypeJob, "{}"),
+			nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Job.DriverOutputResourceURI,
 			r.Job.DriverControlFilesURI, r.Job.JobUUID, r.Job.CreateTime); err != nil {
 			return err
 		}
