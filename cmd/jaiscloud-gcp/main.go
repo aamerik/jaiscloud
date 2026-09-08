@@ -38,6 +38,7 @@ import (
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
+	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	managedkafkaprovider "jaiscloud/internal/gcp/provider/managedkafka"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
@@ -54,6 +55,7 @@ import (
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
+	icebergstore "jaiscloud/internal/gcp/store/iceberg"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 	managedkafkastore "jaiscloud/internal/gcp/store/managedkafka"
@@ -237,6 +239,8 @@ func startCmd() *cobra.Command {
 
 			metastoreP := metastoreprovider.New(stores.metastore)
 
+			icebergP := icebergprovider.New(stores.iceberg)
+
 			bigqueryP := bigqueryprovider.New(stores.bigquery)
 
 			reg := provider.NewRegistry().
@@ -252,7 +256,8 @@ func startCmd() *cobra.Command {
 				Register(dataprocP).
 				Register(managedkafkaP).
 				Register(bigqueryP).
-				Register(metastoreP)
+				Register(metastoreP).
+				Register(icebergP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -301,6 +306,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.dataproc)
 			adminHandler.RegisterResetter(stores.managedkafka)
 			adminHandler.RegisterResetter(stores.metastore)
+			adminHandler.RegisterResetter(stores.iceberg)
 			adminHandler.RegisterResetter(stores.bigquery)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
@@ -345,6 +351,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.metastore.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("metastore", snap)
+			}
+			if snap, ok := stores.iceberg.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("iceberg", snap)
 			}
 			if snap, ok := stores.bigquery.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("bigquery", snap)
@@ -521,6 +530,7 @@ type stores struct {
 	dataproc     dataprocstore.Store
 	managedkafka managedkafkastore.Store
 	metastore    metastorestore.Store
+	iceberg      icebergstore.Store
 	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
@@ -556,6 +566,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			dataproc:     dataprocstore.NewPostgresStore(pg.Pool()),
 			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
 			metastore:    metastorestore.NewPostgresStore(pg.Pool()),
+			iceberg:      icebergstore.NewPostgresStore(pg.Pool()),
 			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
@@ -577,6 +588,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			dataproc:     dataprocstore.NewMemoryStore(),
 			managedkafka: managedkafkastore.NewMemoryStore(),
 			metastore:    metastorestore.NewMemoryStore(),
+			iceberg:      icebergstore.NewMemoryStore(),
 			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
@@ -601,6 +613,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		dataproc:     dataprocstore.NewMemoryStore(),
 		managedkafka: managedkafkastore.NewMemoryStore(),
 		metastore:    metastorestore.NewMemoryStore(),
+		iceberg:      icebergstore.NewMemoryStore(),
 		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),

@@ -94,6 +94,12 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "Metastore",
 		Codec:          func() adapter.Codec { return &MetastoreCodec{Service: "metastore"} },
 	},
+	{
+		ServiceName:    "iceberg",
+		PathPrefixes:   []string{"/iceberg/"},
+		ProviderPrefix: "Iceberg",
+		Codec:          func() adapter.Codec { return &IcebergCodec{} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.
