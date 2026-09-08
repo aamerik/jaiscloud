@@ -1,6 +1,10 @@
 package gcp
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -64,6 +68,52 @@ func TestDetectIcebergService(t *testing.T) {
 		req := httptest.NewRequest("GET", path, nil)
 		if got, _ := DetectService(req); got != want {
 			t.Errorf("DetectService(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestIcebergCodecDecodeUseNumber(t *testing.T) {
+	// > 2^53: decoding to float64 would silently corrupt this id.
+	const snapshotID = 1000000000000000001
+	body := []byte(fmt.Sprintf(`{"snapshot-id":%d}`, snapshotID))
+	codec := &IcebergCodec{}
+	r := httptest.NewRequest(http.MethodPost, "/iceberg/v1/namespaces/a/tables/t1", bytes.NewReader(body))
+	nr, err := codec.Decode(r, body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	bodyMap := nr.Params["body"].(map[string]any)
+	n, ok := bodyMap["snapshot-id"].(json.Number)
+	if !ok {
+		t.Fatalf("snapshot-id decoded as %T, want json.Number", bodyMap["snapshot-id"])
+	}
+	v, err := n.Int64()
+	if err != nil || v != snapshotID {
+		t.Fatalf("snapshot-id = %v (err %v), want %d", n, err, snapshotID)
+	}
+}
+
+func TestIcebergCodecTrailingSlash(t *testing.T) {
+	cases := []struct {
+		method, path, action, namespace string
+	}{
+		{"GET", "/iceberg/v1/namespaces/a/", "GetNamespace", "a"},
+		{"GET", "/iceberg/v1/namespaces/a/tables/", "ListTables", "a"},
+		{"GET", "/iceberg/v1/namespaces/a/b/", "GetNamespace", "a/b"},
+	}
+	for _, tc := range cases {
+		codec := &IcebergCodec{}
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		nr, err := codec.Decode(r, nil)
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+		if got := nr.Params["namespace"]; got != tc.namespace {
+			t.Errorf("%s %s: namespace = %q, want %q", tc.method, tc.path, got, tc.namespace)
 		}
 	}
 }

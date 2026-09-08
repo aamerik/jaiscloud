@@ -104,10 +104,10 @@ func (s *PostgresStore) NamespaceExists(ctx context.Context, namespace string) (
 	return true, nil
 }
 
-func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (map[string]string, error) {
+func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
-		return nil, err
+		return NamespacePropertiesUpdate{}, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -116,12 +116,16 @@ func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace
 		SELECT properties FROM jc_iceberg_namespaces WHERE namespace=$1 FOR UPDATE
 	`, namespace).Scan(&b)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNamespaceNotFound
+		return NamespacePropertiesUpdate{}, ErrNamespaceNotFound
 	}
 	if err != nil {
-		return nil, err
+		return NamespacePropertiesUpdate{}, err
 	}
-	next := scanNamespaceProps(b)
+	before := scanNamespaceProps(b)
+	next := make(map[string]string, len(before)+len(updates))
+	for k, v := range before {
+		next[k] = v
+	}
 	for _, r := range removals {
 		delete(next, r)
 	}
@@ -129,12 +133,12 @@ func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace
 		next[k] = v
 	}
 	if _, err := tx.Exec(ctx, `UPDATE jc_iceberg_namespaces SET properties=$2 WHERE namespace=$1`, namespace, jsonObj(next)); err != nil {
-		return nil, err
+		return NamespacePropertiesUpdate{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return NamespacePropertiesUpdate{}, err
 	}
-	return next, nil
+	return NamespacePropertiesUpdate{Before: before, After: next}, nil
 }
 
 func (s *PostgresStore) DropNamespace(ctx context.Context, namespace string) error {
@@ -290,7 +294,7 @@ func (s *PostgresStore) RenameTable(ctx context.Context, srcNamespace, srcName, 
 	}
 
 	var one int
-	err = tx.QueryRow(ctx, `SELECT 1 FROM jc_iceberg_tables WHERE namespace=$1 AND table_name=$2`, dstNamespace, dstName).Scan(&one)
+	err = tx.QueryRow(ctx, `SELECT 1 FROM jc_iceberg_tables WHERE namespace=$1 AND table_name=$2 FOR UPDATE`, dstNamespace, dstName).Scan(&one)
 	if err == nil {
 		return Table{}, ErrTableExists
 	}
@@ -308,6 +312,12 @@ func (s *PostgresStore) RenameTable(ctx context.Context, srcNamespace, srcName, 
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return Table{}, ErrNamespaceNotFound
+		}
+		// 23505 (unique_violation) closes the race where two concurrent renames
+		// target the same destination: the second INSERT collides on the
+		// (namespace, table_name) primary key.
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Table{}, ErrTableExists
 		}
 		return Table{}, err
 	}

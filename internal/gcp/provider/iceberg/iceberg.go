@@ -1,10 +1,12 @@
-// Package iceberg implements the Apache Iceberg REST catalog provider, mounted
-// at /iceberg/v1/... (Spark configures uri=http://host:port/iceberg/, so real
-// requests arrive as /iceberg/v1/...). Unlike the project-scoped GCP v1
-// services, the Iceberg catalog is addressed by warehouse prefix + namespace
-// (multi-level, levels joined by "/"), and it speaks Iceberg's own REST JSON
-// (kebab-case TableMetadata, camelCase request envelopes) with Iceberg's
-// ErrorResponse error shape — not the GCP error envelope.
+// Package iceberg implements the BigLake Metastore Iceberg REST Catalog,
+// mounted at /iceberg/v1/... (Spark configures uri=http://host:port/iceberg/,
+// so real requests arrive as /iceberg/v1/...). BigLake Metastore is GCP's
+// managed-Iceberg product, and its catalog is the standard Apache Iceberg REST
+// catalog surface — Spark, Trino, and Flink attach over the standard spec. The
+// catalog is addressed by warehouse prefix + namespace (multi-level, levels
+// joined by "/"), and it speaks Iceberg's own REST JSON (kebab-case
+// TableMetadata, camelCase request envelopes) with Iceberg's ErrorResponse
+// error shape — not the GCP error envelope.
 //
 // The catalog never writes metadata.json to object storage (the client's
 // FileIO does); it persists the TableMetadata JSON plus a metadata-location
@@ -99,6 +101,10 @@ func badRequest(msg string) error {
 
 func commitFailed(msg string) error {
 	return model.NewProviderError("CommitFailedException", msg, 409)
+}
+
+func internalError(msg string) error {
+	return model.NewProviderError("ServiceUnavailableException", msg, 500)
 }
 
 // --- JSON value helpers (numbers decode as float64) ---
@@ -266,12 +272,11 @@ func (p *Provider) UpdateNamespaceProperties(ctx context.Context, nr *model.Norm
 	removals := anyStrings(asList(body["removals"]))
 	updates := stringMap(asMap(body["updates"]))
 
-	before, err := p.store.GetNamespace(ctx, ns)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-
-	props, err := p.store.UpdateNamespaceProperties(ctx, ns, removals, updates)
+	// The store returns the pre-update map from the same locked read that
+	// produced the write, so the removed/missing split below reflects the
+	// properties as they actually were — not a separate GetNamespace read that
+	// a concurrent writer could have invalidated.
+	result, err := p.store.UpdateNamespaceProperties(ctx, ns, removals, updates)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -283,13 +288,12 @@ func (p *Provider) UpdateNamespaceProperties(ctx context.Context, nr *model.Norm
 		updated = append(updated, k)
 	}
 	for _, k := range removals {
-		if _, ok := before[k]; ok {
+		if _, ok := result.Before[k]; ok {
 			removed = append(removed, k)
 		} else {
 			missing = append(missing, k)
 		}
 	}
-	_ = props
 	return provider.OK(map[string]any{
 		"updated": sortedStrings(updated),
 		"removed": sortedStrings(removed),
@@ -446,7 +450,7 @@ func (p *Provider) CommitTable(ctx context.Context, nr *model.NormalizedRequest)
 		var meta map[string]any
 		if len(cur.Metadata) > 0 {
 			if err := json.Unmarshal(cur.Metadata, &meta); err != nil {
-				return icebergstore.Table{}, commitFailed("corrupt table metadata")
+				return icebergstore.Table{}, internalError("corrupt table metadata")
 			}
 		}
 		if meta == nil {
@@ -456,12 +460,13 @@ func (p *Provider) CommitTable(ctx context.Context, nr *model.NormalizedRequest)
 		if err := checkRequirements(meta, requirements); err != nil {
 			return icebergstore.Table{}, err
 		}
-		if err := applyUpdates(meta, cur, updates); err != nil {
+		if err := applyUpdates(meta, updates); err != nil {
 			return icebergstore.Table{}, err
 		}
 
 		next := meta
-		next["last-updated-ms"] = clock.Now().UnixMilli()
+		now := clock.Now().UnixMilli()
+		next["last-updated-ms"] = now
 		tableUUID := asString(next["table-uuid"])
 		if tableUUID == "" {
 			tableUUID = cur.UUID
@@ -469,6 +474,14 @@ func (p *Provider) CommitTable(ctx context.Context, nr *model.NormalizedRequest)
 		}
 		location := asString(next["location"])
 		newVersion := cur.Version + 1
+
+		// metadata-log is append-only and is written once per successful commit
+		// (not just on add-snapshot): every commit in real Iceberg supersedes the
+		// previous metadata file, so record the file this commit replaces.
+		next["metadata-log"] = append(listOf(next, "metadata-log"), map[string]any{
+			"timestamp-ms":  now,
+			"metadata-file": cur.MetadataLocation,
+		})
 
 		nextJSON, err := json.Marshal(next)
 		if err != nil {
@@ -541,14 +554,25 @@ func checkRequirements(meta map[string]any, requirements any) error {
 }
 
 // applyUpdates applies each update to the metadata map in order.
-func applyUpdates(meta map[string]any, cur icebergstore.Table, updates any) error {
+func applyUpdates(meta map[string]any, updates any) error {
 	for _, u := range asList(updates) {
 		m := asMap(u)
 		switch asString(m["action"]) {
 		case "assign-uuid":
-			meta["table-uuid"] = asString(m["uuid"])
+			newUUID := asString(m["uuid"])
+			if existing := asString(meta["table-uuid"]); existing != "" && existing != newUUID {
+				return commitFailed(fmt.Sprintf("table-uuid already set to %s, cannot assign %s", existing, newUUID))
+			}
+			meta["table-uuid"] = newUUID
 		case "upgrade-format-version":
-			meta["format-version"] = asInt(m["format-version"])
+			v := asInt(m["format-version"])
+			if current := asInt(meta["format-version"]); v < current {
+				return commitFailed(fmt.Sprintf("format-version %d < current %d", v, current))
+			}
+			if v != 1 && v != 2 {
+				return commitFailed(fmt.Sprintf("unsupported format-version %d", v))
+			}
+			meta["format-version"] = v
 		case "add-schema":
 			schema := asMap(m["schema"])
 			if schema == nil {
@@ -565,7 +589,11 @@ func applyUpdates(meta map[string]any, cur icebergstore.Table, updates any) erro
 				meta["last-column-id"] = maxSchemaColumnID(schema)
 			}
 		case "set-current-schema":
-			meta["current-schema-id"] = asInt(m["schema-id"])
+			id := asInt(m["schema-id"])
+			if !schemaIDExists(meta, id) {
+				return commitFailed(fmt.Sprintf("schema-id %d does not exist", id))
+			}
+			meta["current-schema-id"] = id
 		case "add-spec":
 			spec := asMap(m["spec"])
 			if spec == nil {
@@ -577,7 +605,11 @@ func applyUpdates(meta map[string]any, cur icebergstore.Table, updates any) erro
 			spec = normalizePartitionSpec(spec, asInt(spec["spec-id"]))
 			meta["partition-specs"] = append(listOf(meta, "partition-specs"), spec)
 		case "set-default-spec":
-			meta["default-spec-id"] = asInt(m["spec-id"])
+			id := asInt(m["spec-id"])
+			if !specIDExists(meta, id) {
+				return commitFailed(fmt.Sprintf("spec-id %d does not exist", id))
+			}
+			meta["default-spec-id"] = id
 		case "add-sort-order":
 			order := asMap(m["sort-order"])
 			if order == nil {
@@ -589,7 +621,11 @@ func applyUpdates(meta map[string]any, cur icebergstore.Table, updates any) erro
 			order = normalizeSortOrder(order, asInt(order["order-id"]))
 			meta["sort-orders"] = append(listOf(meta, "sort-orders"), order)
 		case "set-default-sort-order":
-			meta["default-sort-order-id"] = asInt(m["sort-order-id"])
+			id := asInt(m["sort-order-id"])
+			if !sortOrderIDExists(meta, id) {
+				return commitFailed(fmt.Sprintf("sort-order-id %d does not exist", id))
+			}
+			meta["default-sort-order-id"] = id
 		case "add-snapshot":
 			snap := asMap(m["snapshot"])
 			if snap == nil {
@@ -601,10 +637,6 @@ func applyUpdates(meta map[string]any, cur icebergstore.Table, updates any) erro
 			meta["snapshot-log"] = append(listOf(meta, "snapshot-log"), map[string]any{
 				"snapshot-id":  asInt64(snap["snapshot-id"]),
 				"timestamp-ms": ts,
-			})
-			meta["metadata-log"] = append(listOf(meta, "metadata-log"), map[string]any{
-				"timestamp-ms":  ts,
-				"metadata-file": cur.MetadataLocation,
 			})
 		case "remove-snapshots":
 			removeSnapshots(meta, asList(m["snapshot-ids"]))
@@ -641,29 +673,26 @@ func removeSnapshots(meta map[string]any, ids []any) {
 		}
 	}
 	meta["snapshots"] = kept
+	// Removing the current snapshot clears current-snapshot-id to -1; it is NOT
+	// auto-promoted to the last remaining snapshot, and snapshot-log (append-only
+	// in Iceberg) is left untouched.
 	if removed[asInt64(meta["current-snapshot-id"])] {
 		meta["current-snapshot-id"] = -1
-		if len(kept) > 0 {
-			meta["current-snapshot-id"] = asInt64(asMap(kept[len(kept)-1])["snapshot-id"])
-		}
 	}
-	log := listOf(meta, "snapshot-log")
-	keptLog := make([]any, 0, len(log))
-	for _, e := range log {
-		if !removed[asInt64(asMap(e)["snapshot-id"])] {
-			keptLog = append(keptLog, e)
-		}
-	}
-	meta["snapshot-log"] = keptLog
 }
 
 func deleteRef(meta map[string]any, refName string) {
 	refs := asMap(meta["refs"])
 	if refs == nil {
-		return
+		refs = map[string]any{}
 	}
 	delete(refs, refName)
 	meta["refs"] = refs
+	// The "main" ref and current-snapshot-id move in lockstep: deleting main
+	// clears the current snapshot.
+	if refName == "main" {
+		meta["current-snapshot-id"] = -1
+	}
 }
 
 func setRef(meta map[string]any, m map[string]any) {
@@ -687,6 +716,11 @@ func setRef(meta map[string]any, m map[string]any) {
 	}
 	refs[refName] = entry
 	meta["refs"] = refs
+	// The "main" ref and current-snapshot-id move in lockstep: setting main
+	// also updates the current snapshot.
+	if refName == "main" {
+		meta["current-snapshot-id"] = asInt64(m["snapshot-id"])
+	}
 }
 
 func setProperties(meta map[string]any, updates map[string]any) {
@@ -724,6 +758,29 @@ func refSnapshotID(meta map[string]any, ref string) int64 {
 	return -1
 }
 
+// idInList reports whether any entry in the meta[key] list carries an id field
+// (keyed by idField) equal to id.
+func idInList(meta map[string]any, key, idField string, id int) bool {
+	for _, e := range listOf(meta, key) {
+		if asInt(asMap(e)[idField]) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaIDExists(meta map[string]any, id int) bool {
+	return idInList(meta, "schemas", "schema-id", id)
+}
+
+func specIDExists(meta map[string]any, id int) bool {
+	return idInList(meta, "partition-specs", "spec-id", id)
+}
+
+func sortOrderIDExists(meta map[string]any, id int) bool {
+	return idInList(meta, "sort-orders", "order-id", id)
+}
+
 // --- initial metadata normalization ---
 
 func normalizeSchema(schema map[string]any, id int) map[string]any {
@@ -741,28 +798,88 @@ func normalizeSchema(schema map[string]any, id int) map[string]any {
 
 // maxSchemaColumnID returns the highest field id in a schema, assigning
 // sequential ids to fields that lack one (so last-column-id is well defined).
+// It recurses through nested struct/list/map types so ids are counted across
+// the whole schema tree, not just the top-level fields.
 func maxSchemaColumnID(schema map[string]any) int {
+	next := 1
+	return assignStructFieldIDs(schema, &next)
+}
+
+// assignStructFieldIDs assigns sequential ids to any field in a struct's
+// fields array that lacks one, then recurses into each field's nested type.
+// It returns the highest id seen (or assigned) in the subtree, updating next
+// past every id it consumes.
+func assignStructFieldIDs(schema map[string]any, next *int) int {
 	fields := asList(schema["fields"])
 	max := 0
-	next := 1
-	for _, f := range fields {
-		fm := asMap(f)
+	for i, f := range fields {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
 		if id := asInt(fm["id"]); id > 0 {
 			if id > max {
 				max = id
 			}
-			if id >= next {
-				next = id + 1
+			if id >= *next {
+				*next = id + 1
 			}
 		} else {
-			fm["id"] = next
-			if next > max {
-				max = next
+			fm["id"] = *next
+			if *next > max {
+				max = *next
 			}
-			next++
+			*next++
+		}
+		fields[i] = fm
+		if n := assignNestedTypeIDs(fm["type"], next); n > max {
+			max = n
 		}
 	}
 	schema["fields"] = fields
+	return max
+}
+
+// assignNestedTypeIDs recurses into a field's type value. A struct nests more
+// fields; a list/map nests an element/key/value id plus a further nested type.
+func assignNestedTypeIDs(typ any, next *int) int {
+	tm, ok := typ.(map[string]any)
+	if !ok {
+		return 0
+	}
+	switch asString(tm["type"]) {
+	case "struct":
+		return assignStructFieldIDs(tm, next)
+	case "list":
+		return assignElemID(tm, "element-id", "element", next)
+	case "map":
+		m1 := assignElemID(tm, "key-id", "key", next)
+		m2 := assignElemID(tm, "value-id", "value", next)
+		if m2 > m1 {
+			return m2
+		}
+		return m1
+	}
+	return 0
+}
+
+// assignElemID assigns an id to a list element / map key / map value (the id
+// field keyed by idKey) and recurses into its nested type.
+func assignElemID(tm map[string]any, idKey, typeKey string, next *int) int {
+	max := 0
+	if id := asInt(tm[idKey]); id > 0 {
+		max = id
+		if id >= *next {
+			*next = id + 1
+		}
+	} else {
+		tm[idKey] = *next
+		max = *next
+		*next++
+	}
+	if n := assignNestedTypeIDs(tm[typeKey], next); n > max {
+		max = n
+	}
 	return max
 }
 

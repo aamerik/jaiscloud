@@ -1,8 +1,8 @@
-// Package sdk_iceberg_test exercises the jaiscloud-gcp emulator's Apache
-// Iceberg REST catalog (mounted at /iceberg/v1/...) directly over net/http.
+// Package sdk_iceberg_test exercises the jaiscloud-gcp emulator's BigLake
+// Iceberg REST Catalog (mounted at /iceberg/v1/...) directly over net/http.
 // There is no Google SDK for Iceberg, so this drives the raw REST surface and
 // validates wire-level parity with the Iceberg REST catalog spec (config,
-// namespace lifecycle, table lifecycle, and one commit round-trip).
+// namespace lifecycle, table lifecycle, and commit round-trips).
 //
 // Run with the GCP binary running and GCP_EMULATOR_ENDPOINT set (defaults to
 // http://localhost:8080/):
@@ -244,5 +244,141 @@ func TestSDKIceberg(t *testing.T) {
 	code, _, e = do(t, http.MethodGet, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName+"/metrics", nil)
 	if code != 501 || e == nil || e.Error.Type != "NotImplementedException" {
 		t.Fatalf("expected 501 NotImplementedException, got %d %+v", code, e)
+	}
+}
+
+// TestSDKIcebergSnapshots exercises the snapshot-commit lifecycle: add-snapshot,
+// set-snapshot-ref (main), and remove-snapshots over the raw REST surface.
+func TestSDKIcebergSnapshots(t *testing.T) {
+	ns := unique("ns-snap")
+	code, _, e := do(t, http.MethodPost, "/iceberg/v1/namespaces", map[string]any{
+		"namespace":  []string{ns},
+		"properties": map[string]string{},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("create namespace: %d %+v", code, e)
+	}
+
+	tableName := unique("tbl")
+	location := "s3://warehouse/" + ns + "/" + tableName
+	code, _, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables", map[string]any{
+		"name":     tableName,
+		"location": location,
+		"schema": map[string]any{
+			"type":   "struct",
+			"fields": []any{map[string]any{"id": 1, "name": "id", "type": "long", "required": true}},
+		},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("create table: %d %+v", code, e)
+	}
+
+	// add-snapshot 100 -> current-snapshot-id = 100.
+	code, m, e := do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName, map[string]any{
+		"requirements": []any{},
+		"updates": []any{
+			map[string]any{"action": "add-snapshot", "snapshot": map[string]any{"snapshot-id": 100, "timestamp-ms": 123, "manifest-list": "s3://m/ml"}},
+		},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("add-snapshot: %d %+v", code, e)
+	}
+	if cur := m["metadata"].(map[string]any)["current-snapshot-id"]; cur != float64(100) {
+		t.Fatalf("current-snapshot-id after add-snapshot = %v, want 100", cur)
+	}
+
+	// set-snapshot-ref main -> 100 (current-snapshot-id stays in lockstep).
+	code, m, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName, map[string]any{
+		"requirements": []any{},
+		"updates": []any{
+			map[string]any{"action": "set-snapshot-ref", "ref-name": "main", "snapshot-id": 100, "type": "branch"},
+		},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("set-snapshot-ref: %d %+v", code, e)
+	}
+	refs := m["metadata"].(map[string]any)["refs"].(map[string]any)
+	if main, ok := refs["main"].(map[string]any); !ok || main["snapshot-id"] != float64(100) {
+		t.Fatalf("refs.main = %v, want snapshot-id 100", refs["main"])
+	}
+
+	// remove-snapshots [100] -> current-snapshot-id = -1, snapshots empty.
+	code, m, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName, map[string]any{
+		"requirements": []any{},
+		"updates": []any{
+			map[string]any{"action": "remove-snapshots", "snapshot-ids": []any{100}},
+		},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("remove-snapshots: %d %+v", code, e)
+	}
+	meta := m["metadata"].(map[string]any)
+	if cur := meta["current-snapshot-id"]; cur != float64(-1) {
+		t.Fatalf("current-snapshot-id after remove-snapshots = %v, want -1", cur)
+	}
+	if snaps := meta["snapshots"].([]any); len(snaps) != 0 {
+		t.Fatalf("snapshots = %v, want empty", snaps)
+	}
+}
+
+// TestSDKIcebergPagination verifies pageSize/pageToken pagination over the
+// namespaces listing (Iceberg's next-page-token convention).
+func TestSDKIcebergPagination(t *testing.T) {
+	prefix := unique("nspage")
+	created := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("%s-%d", prefix, i)
+		code, _, e := do(t, http.MethodPost, "/iceberg/v1/namespaces", map[string]any{
+			"namespace":  []string{name},
+			"properties": map[string]string{},
+		})
+		if code != 200 || e != nil {
+			t.Fatalf("create namespace %s: %d %+v", name, code, e)
+		}
+		created[name] = true
+	}
+
+	seen := map[string]bool{}
+	token := ""
+	pages := 0
+	for {
+		path := "/iceberg/v1/namespaces?pageSize=2"
+		if token != "" {
+			path += "&pageToken=" + token
+		}
+		code, m, e := do(t, http.MethodGet, path, nil)
+		if code != 200 || e != nil {
+			t.Fatalf("list page: %d %+v", code, e)
+		}
+		ids, _ := m["namespaces"].([]any)
+		if len(ids) > 2 {
+			t.Fatalf("page size %d > 2", len(ids))
+		}
+		for _, id := range ids {
+			levels := id.([]any)
+			parts := make([]string, 0, len(levels))
+			for _, l := range levels {
+				parts = append(parts, l.(string))
+			}
+			name := strings.Join(parts, "/")
+			if seen[name] {
+				t.Fatalf("namespace %s duplicated across pages", name)
+			}
+			seen[name] = true
+		}
+		tok, _ := m["next-page-token"].(string)
+		if tok == "" {
+			break
+		}
+		token = tok
+		pages++
+		if pages > 100 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+	for name := range created {
+		if !seen[name] {
+			t.Fatalf("namespace %s missing from paginated listing", name)
+		}
 	}
 }

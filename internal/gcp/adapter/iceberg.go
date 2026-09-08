@@ -1,6 +1,7 @@
 package gcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -8,12 +9,14 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// IcebergCodec decodes the Apache Iceberg REST catalog surface mounted at
-// /iceberg/v1/... (Spark points uri=http://host:port/iceberg/, so real
-// requests arrive as /iceberg/v1/...). It is a plain method+path → action
-// mapping — no projects segment, no custom-method :suffix — with the body
-// placed verbatim in nr.Params["body"] and query params (pageToken/pageSize)
-// folded in via queryToParams.
+// IcebergCodec decodes the BigLake Metastore Iceberg REST Catalog surface
+// mounted at /iceberg/v1/... (Spark points uri=http://host:port/iceberg/, so
+// real requests arrive as /iceberg/v1/...). BigLake Metastore is GCP's
+// managed-Iceberg product, and its catalog is the standard Apache Iceberg REST
+// catalog surface. It is a plain method+path → action mapping — no projects
+// segment, no custom-method :suffix — with the body placed verbatim in
+// nr.Params["body"] and query params (pageToken/pageSize) folded in via
+// queryToParams.
 //
 // Path shape (after stripping the /iceberg mount):
 //
@@ -25,14 +28,13 @@ import (
 // The {prefix} is the warehouse id (optional, a single segment); {namespace}
 // is one-or-more segments joined by "/". Because namespace levels and the
 // trailing tables/properties/metrics keywords are ambiguous, the namespace
-// branch splits at the last such marker (see splitNamespaceRoute below).
+// branch splits at the LAST such marker. That means a namespace whose FINAL
+// level is a marker keyword (e.g. the namespace "a/tables") is misrouted to
+// the "a" tables collection rather than treated as a namespace level (see
+// decodeNamespaceRoute below).
 type IcebergCodec struct{}
 
 func (c *IcebergCodec) ServiceName() string { return "iceberg" }
-
-// markerKeywords are the Iceberg route keywords that may follow a namespace in
-// a path.
-var icebergMarkers = map[string]bool{"tables": true, "properties": true, "metrics": true}
 
 func (c *IcebergCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
@@ -40,6 +42,9 @@ func (c *IcebergCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRe
 	if len(seg) > 0 && seg[0] == "iceberg" {
 		seg = seg[1:]
 	}
+	// Drop empty segments so a trailing slash (e.g. /iceberg/v1/namespaces/a/)
+	// does not produce a spurious empty namespace level.
+	seg = dropEmptySegments(seg)
 	if len(seg) == 0 || seg[0] != "v1" {
 		return nil, model.NewProviderError("BadRequestException", "expected /iceberg/v1/... path", 404)
 	}
@@ -47,9 +52,15 @@ func (c *IcebergCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRe
 
 	nr := &model.NormalizedRequest{Service: "iceberg", Params: map[string]any{}, Raw: r}
 	queryToParams(r, nr.Params)
-	m, err := parseJSON(body)
-	if err != nil {
-		return nil, model.NewProviderError("BadRequestException", "malformed JSON body", 400)
+	// Decode the body with UseNumber so int64 snapshot ids (~1e18, > 2^53) are
+	// not silently corrupted into float64.
+	var m map[string]any
+	if len(bytes.TrimSpace(body)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.UseNumber()
+		if err := dec.Decode(&m); err != nil {
+			return nil, model.NewProviderError("BadRequestException", "malformed JSON body", 400)
+		}
 	}
 	if m != nil {
 		nr.Params["body"] = m
@@ -102,11 +113,25 @@ func icebergDispatchKeyword(s string) bool {
 	return s == "config" || s == "namespaces" || s == "tables"
 }
 
+// dropEmptySegments removes empty path segments introduced by a trailing slash
+// (or doubled slash), so a namespace never gains a spurious empty level.
+func dropEmptySegments(seg []string) []string {
+	out := seg[:0]
+	for _, s := range seg {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // decodeNamespaceRoute maps the segments after "namespaces" to an action. The
 // namespace is the join of segments before the last tables/properties/metrics
-// marker (so a namespace level that happens to be named "tables" resolves as a
-// level, not a route). metrics always appears as tables/{table}/metrics and is
-// checked first.
+// marker. Because the split happens at the LAST marker, a namespace whose FINAL
+// level is a marker keyword (e.g. the namespace "a/tables") is misrouted to the
+// "a" tables collection — it cannot be disambiguated from a plain namespace
+// level on this path shape. metrics always appears as tables/{table}/metrics
+// and is checked first.
 func (c *IcebergCodec) decodeNamespaceRoute(r *http.Request, seg []string, params map[string]any) (string, error) {
 	// Collection: /namespaces
 	if len(seg) == 0 {

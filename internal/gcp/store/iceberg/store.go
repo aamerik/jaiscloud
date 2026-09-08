@@ -1,8 +1,9 @@
-// Package iceberg provides the Apache Iceberg REST catalog store: namespaces
-// (multi-level, levels joined with "/") and tables (a full TableMetadata JSON
-// blob plus a metadata-location pointer, the table UUID, and a monotonically
-// increasing version). It is the GCP Glue Data Catalog analogue for the
-// tabular catalog surface, mounted at /iceberg/v1/... rather than under
+// Package iceberg provides the BigLake Metastore Iceberg REST Catalog store:
+// namespaces (multi-level, levels joined with "/") and tables (a full
+// TableMetadata JSON blob plus a metadata-location pointer, the table UUID,
+// and a monotonically increasing version). BigLake Metastore is GCP's
+// managed-Iceberg product, and its catalog is the standard Apache Iceberg REST
+// catalog surface, mounted at /iceberg/v1/... rather than under
 // projects/{project}/locations/{location}.
 //
 // The commit path is the crux of the catalog: CommitTable applies a mutate
@@ -54,6 +55,16 @@ type Table struct {
 	Version          int             `json:"version"`
 }
 
+// NamespacePropertiesUpdate is the atomic result of UpdateNamespaceProperties:
+// the property map before the update (used by the provider to report which
+// removals actually removed a key vs. referred to a missing one) and the map
+// after. Both snapshots come from the same locked read, so the removed/missing
+// split cannot race a concurrent update.
+type NamespacePropertiesUpdate struct {
+	Before map[string]string
+	After  map[string]string
+}
+
 // Store is the Iceberg catalog store. Both the memory and postgres backends
 // implement it, plus Reset/Snapshot/Restore/IsEmpty.
 type Store interface {
@@ -62,9 +73,11 @@ type Store interface {
 	ListNamespaces(ctx context.Context) ([]Namespace, error)
 	NamespaceExists(ctx context.Context, namespace string) (bool, error)
 	// UpdateNamespaceProperties applies removals then updates to a namespace's
-	// properties and returns the resulting map. Missing namespace ->
+	// properties atomically and returns the before/after property maps (so the
+	// provider can report removed/missing without a separate GetNamespace read
+	// that would race a concurrent writer). Missing namespace ->
 	// ErrNamespaceNotFound.
-	UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (map[string]string, error)
+	UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error)
 	// DropNamespace removes a namespace, refusing with ErrNamespaceNotEmpty if
 	// it still holds tables.
 	DropNamespace(ctx context.Context, namespace string) error

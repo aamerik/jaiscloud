@@ -1,6 +1,8 @@
--- Apache Iceberg REST catalog. Unlike the project-scoped GCP v1 services, the
--- Iceberg catalog is mounted at /iceberg/v1/... and addressed by warehouse
--- prefix + namespace (multi-level, levels joined with "/") rather than
+-- BigLake Metastore Iceberg REST Catalog. BigLake Metastore is GCP's
+-- managed-Iceberg product, and its catalog is the standard Apache Iceberg REST
+-- catalog surface. Unlike the project-scoped GCP v1 services, the catalog is
+-- mounted at /iceberg/v1/... and addressed by warehouse prefix + namespace
+-- (multi-level, levels joined with "/") rather than
 -- projects/{project}/locations/{location}. Two logical tables:
 --
 --   jc_iceberg_namespaces — namespace -> properties map (JSONB).

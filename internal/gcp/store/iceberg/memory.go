@@ -64,13 +64,15 @@ func (s *MemoryStore) NamespaceExists(_ context.Context, namespace string) (bool
 	return ok, nil
 }
 
-func (s *MemoryStore) UpdateNamespaceProperties(_ context.Context, namespace string, removals []string, updates map[string]string) (map[string]string, error) {
-	return storeutil.AtomicUpdate(&s.mu,
+func (s *MemoryStore) UpdateNamespaceProperties(_ context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
+	var before map[string]string
+	after, err := storeutil.AtomicUpdate(&s.mu,
 		func() (map[string]string, bool) { p, ok := s.namespaces[namespace]; return p, ok },
 		func(current map[string]string, exists bool) (map[string]string, error) {
 			if !exists {
 				return nil, ErrNamespaceNotFound
 			}
+			before = current
 			next := make(map[string]string, len(current)+len(updates))
 			for k, v := range current {
 				next[k] = v
@@ -85,6 +87,10 @@ func (s *MemoryStore) UpdateNamespaceProperties(_ context.Context, namespace str
 		},
 		func(next map[string]string) { s.namespaces[namespace] = next },
 	)
+	if err != nil {
+		return NamespacePropertiesUpdate{}, err
+	}
+	return NamespacePropertiesUpdate{Before: before, After: after}, nil
 }
 
 func (s *MemoryStore) DropNamespace(_ context.Context, namespace string) error {
