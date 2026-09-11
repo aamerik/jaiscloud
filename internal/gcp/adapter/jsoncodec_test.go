@@ -82,6 +82,22 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"GET", "/v1/projects/p/locations/us-central1/functions/f:getIamPolicy", "FunctionGetIamPolicy"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions/f:setIamPolicy", "FunctionSetIamPolicy"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions/f:testIamPermissions", "FunctionTestIamPermissions"},
+		// Eventarc
+		{"POST", "/v1/projects/p/locations/us-central1/triggers", "CreateTrigger"},
+		{"GET", "/v1/projects/p/locations/us-central1/triggers", "ListTriggers"},
+		{"GET", "/v1/projects/p/locations/us-central1/triggers/t", "GetTrigger"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/triggers/t", "UpdateTrigger"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/triggers/t", "DeleteTrigger"},
+		{"GET", "/v1/projects/p/locations/us-central1/triggers/t:getIamPolicy", "TriggerGetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/triggers/t:setIamPolicy", "TriggerSetIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us-central1/triggers/t:testIamPermissions", "TriggerTestIamPermissions"},
+		{"POST", "/v1/projects/p/locations/us-central1/channels", "CreateChannel"},
+		{"GET", "/v1/projects/p/locations/us-central1/channels", "ListChannels"},
+		{"GET", "/v1/projects/p/locations/us-central1/channels/c", "GetChannel"},
+		{"PATCH", "/v1/projects/p/locations/us-central1/channels/c", "UpdateChannel"},
+		{"DELETE", "/v1/projects/p/locations/us-central1/channels/c", "DeleteChannel"},
+		{"GET", "/v1/projects/p/locations/us-central1/providers", "ListProviders"},
+		{"GET", "/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com", "GetProvider"},
 	}
 	for _, tc := range cases {
 		codec := &JSONCodec{Service: "test"}
@@ -111,6 +127,9 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us-central1/clusters/c/topics":                   "managedkafka",
 		"/v1/projects/p/locations/us-central1/clusters/c/topics/t":                 "managedkafka",
 		"/v1/projects/p/locations/us-central1/clusters/c/consumerGroups":           "managedkafka",
+		"/v1/projects/p/locations/us-central1/triggers/t":                          "eventarc",
+		"/v1/projects/p/locations/us-central1/channels/c":                          "eventarc",
+		"/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com":     "eventarc",
 		"/storage/v1/b/bkt/o":                                                      "",
 	}
 	for path, want := range cases {

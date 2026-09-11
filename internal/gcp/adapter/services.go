@@ -95,6 +95,11 @@ var gcpServices = []ServiceDescriptor{
 		Codec:          func() adapter.Codec { return &MetastoreCodec{Service: "metastore"} },
 	},
 	{
+		ServiceName:    "eventarc",
+		ProviderPrefix: "Eventarc",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "eventarc"} },
+	},
+	{
 		ServiceName:    "iceberg",
 		PathPrefixes:   []string{"/iceberg/"},
 		ProviderPrefix: "Iceberg",
