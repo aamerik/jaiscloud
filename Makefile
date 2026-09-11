@@ -17,6 +17,9 @@ SPARK_IMAGE             ?= apache/spark:3.5.0
 LAMBDA_IMAGE            ?= public.ecr.aws/lambda/python:3.12
 # Custom Iceberg-enabled Spark image (must be built locally before use)
 SPARK_E2E_ICEBERG_IMAGE ?= spark-iceberg-test
+# GCP variant: apache/spark:3.5.0 + iceberg-spark-runtime + gcs-connector (hadoop3),
+# NO iceberg-gcp-bundle (HadoopFileIO data path — plan_docs/gcp-iceberg-dataproc-e2e.md §7 D1).
+SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
@@ -64,11 +67,11 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-lambda-docker test-e2e-lambda-k8s \
         test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
         test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
-        test-e2e-gcp-persistence test-e2e-iceberg \
+        test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
-        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq
+        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -506,6 +509,22 @@ test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/
 	  go test -v -tags iceberg_e2e -timeout 30m ./tests/persistent_mode/aws/iceberg/
 	$(MAKE) down-docker
 
+# Iceberg-on-Dataproc E2E — external Docker Spark against the emulator's Hive
+# Metastore Thrift listener (:9083, Phase 4) + GCS (:8080). Blocked on Phase 4:
+# the tests compile under the iceberg_e2e tag but will not pass until the Thrift
+# listener merges (plan_docs/gcp-iceberg-dataproc-e2e.md §7 D3).
+test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tests — tests/persistent_mode/gcp/iceberg/ (tag: iceberg_e2e)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-iceberg.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-iceberg.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"
+	go clean -testcache
+	SPARK_E2E_ICEBERG_GCP_IMAGE=$(SPARK_E2E_ICEBERG_GCP_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
+	  go test -v -tags iceberg_e2e -timeout 30m ./tests/persistent_mode/gcp/iceberg/
+	@echo "Stopping jaiscloud-gcp..."
+	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
 ##@ Aggregate test targets
 
 test-e2e-docker-all: test-e2e-emr-docker test-e2e-dpc-docker test-e2e-lambda-docker test-e2e-eventbridge ## All Docker-based e2e suites
@@ -579,3 +598,7 @@ _check-k8s-prereq:
 _check-iceberg-prereq:
 	@docker image inspect $(SPARK_E2E_ICEBERG_IMAGE) > /dev/null 2>&1 || \
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_IMAGE)' not found — build or pull it first"; exit 1)
+
+_check-iceberg-gcp-prereq:
+	@docker image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
+	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
