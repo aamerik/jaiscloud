@@ -136,6 +136,36 @@ func endpointURI(id, location string) string {
 	return fmt.Sprintf("thrift://%s.%s.metastore.jaiscloud.local:9083", id, location)
 }
 
+// endpointProtocolFromBody extracts hiveMetastoreConfig.endpointProtocol
+// (camelCase on the wire) from a CreateService request body, or "" when unset.
+func endpointProtocolFromBody(body map[string]any) string {
+	if body == nil {
+		return ""
+	}
+	hmsCfg, _ := body["hiveMetastoreConfig"].(map[string]any)
+	if hmsCfg == nil {
+		return ""
+	}
+	s, _ := hmsCfg["endpointProtocol"].(string)
+	return s
+}
+
+// validateEndpointProtocol enforces the endpoint_protocol contract (D4/F7):
+// THRIFT (or absent, the proto default) is accepted; GRPC is rejected with
+// InvalidArgument (the gRPC serving plane is deferred), and any other value is
+// rejected as invalid rather than stored verbatim.
+func validateEndpointProtocol(body map[string]any) error {
+	proto := strings.ToUpper(strings.TrimSpace(endpointProtocolFromBody(body)))
+	switch proto {
+	case "", "THRIFT":
+		return nil
+	case "GRPC":
+		return model.NewProviderError("InvalidArgument", "endpointProtocol GRPC is not supported by the emulator (gRPC serving plane is deferred)", 400)
+	default:
+		return model.NewProviderError("InvalidArgument", "invalid endpointProtocol "+proto+": must be THRIFT or GRPC", 400)
+	}
+}
+
 // serviceMap renders a store Service as a metastore.v1.Service wire map. The
 // stored request body is echoed verbatim, then name/state/times/endpointUri are
 // overlaid (output-only) and tier defaults to DEVELOPER.
@@ -310,6 +340,12 @@ func (p *Provider) CreateService(ctx context.Context, nr *model.NormalizedReques
 		return nil, model.NewProviderError("InvalidArgument", "missing location or serviceId", 400)
 	}
 	body, _ := nr.Params["body"].(map[string]any)
+	// D4/F7: parse and validate hiveMetastoreConfig.endpointProtocol. THRIFT is
+	// the default and the only served protocol; GRPC is deferred, so it fails
+	// loud rather than advertising an endpoint nothing listens on.
+	if err := validateEndpointProtocol(body); err != nil {
+		return nil, err
+	}
 	now := clock.Now().UTC()
 	svc := metastorestore.Service{
 		Location:     location,

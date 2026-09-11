@@ -33,6 +33,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	hms "jaiscloud/internal/gcp/hms"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
@@ -55,6 +56,7 @@ import (
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
+	hmsstore "jaiscloud/internal/gcp/store/hms"
 	icebergstore "jaiscloud/internal/gcp/store/iceberg"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
@@ -307,6 +309,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.managedkafka)
 			adminHandler.RegisterResetter(stores.metastore)
 			adminHandler.RegisterResetter(stores.iceberg)
+			adminHandler.RegisterResetter(stores.hms)
 			adminHandler.RegisterResetter(stores.bigquery)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
@@ -354,6 +357,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.iceberg.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("iceberg", snap)
+			}
+			if snap, ok := stores.hms.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("hms", snap)
 			}
 			if snap, ok := stores.bigquery.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("bigquery", snap)
@@ -479,6 +485,21 @@ func startCmd() *cobra.Command {
 			}()
 			defer gserv.Stop()
 
+			// Serve the Hive Metastore (Thrift) serving plane on its own TCP
+			// listener. Thrift is a binary protocol over raw TCP — it does not
+			// flow through the HTTP gateway or the gRPC server. The catalog is
+			// single-global (gcp-dpms-hms-thrift.md §2.4/F6): the per-Service
+			// endpoint_uri emitted by the control plane is cosmetic.
+			hmsPort, _ := cmd.Flags().GetInt("hms-port")
+			hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
+			go func() {
+				slog.Info("hive metastore (thrift) server starting", "hms_port", hmsPort)
+				if err := hmsServer.Serve(); err != nil {
+					slog.Error("hive metastore server error", "err", err)
+				}
+			}()
+			defer hmsServer.Stop()
+
 			return srv.ListenAndServe()
 		},
 	}
@@ -497,6 +518,7 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Bool("gcp-metadata", false, "Enable the GCP metadata-server emulator")
 	cmd.Flags().String("kms-master-key", "", "32-byte hex KEK for KMS envelope encryption")
 	cmd.Flags().Int("grpc-port", 8081, "gRPC (h2c) listen port")
+	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
 	return cmd
 }
 
@@ -531,6 +553,7 @@ type stores struct {
 	managedkafka managedkafkastore.Store
 	metastore    metastorestore.Store
 	iceberg      icebergstore.Store
+	hms          hmsstore.Store
 	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
@@ -567,6 +590,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			managedkafka: managedkafkastore.NewPostgresStore(pg.Pool()),
 			metastore:    metastorestore.NewPostgresStore(pg.Pool()),
 			iceberg:      icebergstore.NewPostgresStore(pg.Pool()),
+			hms:          hmsstore.NewPostgresStore(pg.Pool()),
 			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
@@ -589,6 +613,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			managedkafka: managedkafkastore.NewMemoryStore(),
 			metastore:    metastorestore.NewMemoryStore(),
 			iceberg:      icebergstore.NewMemoryStore(),
+			hms:          hmsstore.NewMemoryStore(),
 			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
@@ -614,6 +639,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		managedkafka: managedkafkastore.NewMemoryStore(),
 		metastore:    metastorestore.NewMemoryStore(),
 		iceberg:      icebergstore.NewMemoryStore(),
+		hms:          hmsstore.NewMemoryStore(),
 		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),

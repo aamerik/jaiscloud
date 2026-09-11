@@ -458,3 +458,47 @@ func TestUpdateService_UnrecognizedNestedMaskFailsLoud(t *testing.T) {
 func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
+
+func TestCreateServiceEndpointProtocol(t *testing.T) {
+	ctx := context.Background()
+
+	// Absent endpointProtocol -> THRIFT default, accepted.
+	p := newProvider()
+	if _, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc1", map[string]any{
+		"hiveMetastoreConfig": map[string]any{"version": "3.1.2"},
+	}))); err != nil {
+		t.Fatalf("absent endpointProtocol should default to THRIFT: %v", err)
+	}
+
+	// THRIFT (and lowercase) accepted.
+	p = newProvider()
+	if _, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc2", map[string]any{
+		"hiveMetastoreConfig": map[string]any{"version": "3.1.2", "endpointProtocol": "thrift"},
+	}))); err != nil {
+		t.Fatalf("THRIFT endpointProtocol should be accepted: %v", err)
+	}
+
+	// GRPC rejected with InvalidArgument (gRPC serving plane deferred — D4).
+	p = newProvider()
+	_, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc3", map[string]any{
+		"hiveMetastoreConfig": map[string]any{"version": "3.1.2", "endpointProtocol": "GRPC"},
+	})))
+	if err == nil {
+		t.Fatal("expected GRPC endpointProtocol to be rejected, got nil")
+	}
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Fatalf("expected InvalidArgument for GRPC, got %v", err)
+	}
+
+	// Unknown value rejected with InvalidArgument.
+	p = newProvider()
+	_, err = p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc4", map[string]any{
+		"hiveMetastoreConfig": map[string]any{"endpointProtocol": "BOGUS"},
+	})))
+	if err == nil {
+		t.Fatal("expected invalid endpointProtocol to be rejected, got nil")
+	}
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Fatalf("expected InvalidArgument for invalid value, got %v", err)
+	}
+}
