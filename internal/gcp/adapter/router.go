@@ -157,6 +157,8 @@ func detectV1Service(path string) string {
 		return "workflows"
 	case "executions":
 		return "workflowexecutions"
+	case "triggers", "channels", "providers":
+		return "eventarc"
 	}
 	return ""
 }

@@ -109,6 +109,24 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Eventarc — names embed the location; callers pass "location/trigger",
+	// "location/channel", "location/provider", and "location/operation".
+	"eventarc-trigger": func(p, n string) string {
+		loc, t := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/triggers/%s", p, loc, t)
+	},
+	"eventarc-channel": func(p, n string) string {
+		loc, c := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/channels/%s", p, loc, c)
+	},
+	"eventarc-provider": func(p, n string) string {
+		loc, pr := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/providers/%s", p, loc, pr)
+	},
+	"eventarc-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// BigQuery — datasets/tables/jobs carry a projectId but no "name" field on
 	// the REST wire (they use datasetReference/tableReference/jobReference and
 	// the opaque id), so these formatters are not exercised by the v2 REST

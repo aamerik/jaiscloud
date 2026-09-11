@@ -29,6 +29,7 @@
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | gRPC | Metrics + alert policies — see [Known Limitations](#known-limitations) |
 | Cloud Logging | gRPC | Log entries, filtering, log-based routing |
+| Eventarc | REST | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 
 ---
 
@@ -202,6 +203,10 @@ Only the management plane is implemented (`Service` / `Backup` / `MetadataImport
 ### BigLake Iceberg REST Catalog: DB-backed, standard REST spec
 
 The BigLake Iceberg REST Catalog is mounted at `/iceberg/` (Spark configures `uri=http://host:port/iceberg/`) and speaks the standard `org.apache.iceberg.rest.RESTCatalog` protocol. It models GCP's real BigLake Metastore managed-Iceberg product, whose catalog is the standard Apache Iceberg REST spec — Spark, Trino, and Flink attach over that spec. (Dataproc Metastore's own table plane is the Hive Metastore Thrift server, a separate product.) The catalog is database-backed (Polaris-style): it stores the `TableMetadata` JSON and a synthesized `metadata-location` pointer (`{location}/metadata/{version:05d}-{uuid}.metadata.json`) but never writes `metadata.json`/`version-hint.text` to object storage itself — the client's `FileIO` does that. `CommitTableRequest` requirements (`assert-table-uuid`, `assert-ref-snapshot-id`, schema/spec/sort-order assertions, …) and updates (`assign-uuid`, `add-schema`, `add-snapshot`, `set-properties`, …) are applied atomically, so concurrent commits cannot lose updates. `set-statistics`/`remove-statistics`/`remove-partition-statistics` are accepted as no-ops, and `GET /tables/{table}/metrics` returns `501 Not Implemented`.
+
+### Eventarc: metadata only, no event-delivery engine
+
+Eventarc is implemented as trigger-based metadata CRUD, **not** the AWS EventBridge "bus + rule + event-pattern + target" fan-out model (the two are different models despite the shared "event routing" purpose). A `Trigger` is a stored record with a `destination` (Cloud Run service, Cloud Functions v2, Workflows, or GKE — all accepted as metadata references, since Cloud Run / Cloud Functions v2 do not exist in the emulator), a `transport.pubsub.topic` source, and `eventFilters`; a `Channel` is a 3rd-party-source registration record referencing a `provider`; and `Provider` resources are read-only discovery (a small catalogue of real providers — `pubsub.googleapis.com`, `storage.googleapis.com` — not invented ones). No events are ever delivered: there is no Pub/Sub subscription, Cloud Run deployment, or Workflow execution created, and no event-matching engine. Source/destination references are validated structurally — a `transport.pubsub.topic` must name an existing Pub/Sub topic and a `destination.workflow` must name an existing Workflow (`NotFound` otherwise) — and a channel's `pubsubTopic`/`activationToken` are synthesized placeholders. Trigger/Channel IAM (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) and the other Eventarc v1 resources (`ChannelConnection`, `GoogleApiSource`, `MessageBus`, `Pipeline`, `Enrollment`) return `Unimplemented`/`404`, not a silent success.
 
 ---
 

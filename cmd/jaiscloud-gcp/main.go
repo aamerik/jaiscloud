@@ -36,6 +36,7 @@ import (
 	hms "jaiscloud/internal/gcp/hms"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
+	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
@@ -53,6 +54,7 @@ import (
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
+	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/gcp/store/gcs"
@@ -245,6 +247,8 @@ func startCmd() *cobra.Command {
 
 			bigqueryP := bigqueryprovider.New(stores.bigquery)
 
+			eventarcP := eventarcprovider.New(stores.eventarc, stores.resources, stores.workflows)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -259,7 +263,8 @@ func startCmd() *cobra.Command {
 				Register(managedkafkaP).
 				Register(bigqueryP).
 				Register(metastoreP).
-				Register(icebergP)
+				Register(icebergP).
+				Register(eventarcP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -313,6 +318,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.bigquery)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
+			adminHandler.RegisterResetter(stores.eventarc)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -369,6 +375,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.monitoring.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("monitoring", snap)
+			}
+			if snap, ok := stores.eventarc.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("eventarc", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -557,6 +566,7 @@ type stores struct {
 	bigquery     bigquerystore.Store
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
+	eventarc     eventarcstore.Store
 	resources    store.ResourceStore
 	blobs        blobfs.BlobStore
 	close        func()
@@ -594,6 +604,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			bigquery:     bigquerystore.NewPostgresStore(pg.Pool()),
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
+			eventarc:     eventarcstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
 			blobs:        blobs,
 			close:        func() { pg.Close() },
@@ -617,6 +628,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			bigquery:     bigquerystore.NewMemoryStore(),
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
+			eventarc:     eventarcstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
 			blobs:        blobfs.NewMemoryBlobStore(),
 			close:        func() {},
@@ -643,6 +655,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		bigquery:     bigquerystore.NewMemoryStore(),
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),
+		eventarc:     eventarcstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
 		blobs:        blobs,
 		close:        func() {},

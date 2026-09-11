@@ -95,6 +95,17 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
+	// Eventarc (triggers/channels/providers): surface the location segment for
+	// store scoping and resource-name reconstruction.
+	if resourceType == "triggers" || resourceType == "channels" || resourceType == "providers" {
+		for i, s := range rest {
+			if s == "locations" && i+1 < len(rest) {
+				nr.Params["location"] = rest[i+1]
+				break
+			}
+		}
+	}
+
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
 	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom)
@@ -191,6 +202,16 @@ func detectResourceType(segs []string) string {
 			hasExecutions = true
 		case "workflows":
 			hasWorkflows = true
+		case "triggers":
+			// Eventarc triggers (…/locations/{l}/triggers[/{t}]).
+			return "triggers"
+		case "channels":
+			// Eventarc channels (…/locations/{l}/channels[/{c}]).
+			return "channels"
+		case "providers":
+			// Eventarc providers (…/locations/{l}/providers[/{p}]) — read-only
+			// discovery.
+			return "providers"
 		}
 	}
 	if hasExecutions {
@@ -341,6 +362,24 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			switch custom {
 			case "cancel":
 				return "CancelExecution"
+			}
+		case "triggers":
+			switch custom {
+			case "getIamPolicy":
+				return "TriggerGetIamPolicy"
+			case "setIamPolicy":
+				return "TriggerSetIamPolicy"
+			case "testIamPermissions":
+				return "TriggerTestIamPermissions"
+			}
+		case "channels":
+			switch custom {
+			case "getIamPolicy":
+				return "ChannelGetIamPolicy"
+			case "setIamPolicy":
+				return "ChannelSetIamPolicy"
+			case "testIamPermissions":
+				return "ChannelTestIamPermissions"
 			}
 		}
 	}
@@ -507,6 +546,39 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 		switch {
 		case method == http.MethodGet:
 			return "GetOperation"
+		}
+	case "triggers":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateTrigger"
+		case isCollection && method == http.MethodGet:
+			return "ListTriggers"
+		case method == http.MethodPatch:
+			return "UpdateTrigger"
+		case method == http.MethodDelete:
+			return "DeleteTrigger"
+		case method == http.MethodGet:
+			return "GetTrigger"
+		}
+	case "channels":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateChannel"
+		case isCollection && method == http.MethodGet:
+			return "ListChannels"
+		case method == http.MethodPatch:
+			return "UpdateChannel"
+		case method == http.MethodDelete:
+			return "DeleteChannel"
+		case method == http.MethodGet:
+			return "GetChannel"
+		}
+	case "providers":
+		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListProviders"
+		case method == http.MethodGet:
+			return "GetProvider"
 		}
 	}
 	return ""
