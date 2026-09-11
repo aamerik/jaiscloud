@@ -51,19 +51,6 @@ func (s *MemoryStore) GetTrigger(_ context.Context, projectID, location, id stri
 	return t, nil
 }
 
-func (s *MemoryStore) UpdateTrigger(_ context.Context, projectID, location string, t Trigger) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := scope(projectID, location)
-	if _, ok := s.triggers[key][t.Name]; !ok {
-		return ErrNoSuchTrigger
-	}
-	t.ProjectID = projectID
-	t.Location = location
-	s.triggers[key][t.Name] = t
-	return nil
-}
-
 func (s *MemoryStore) UpdateTriggerAtomic(_ context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,6 +75,21 @@ func (s *MemoryStore) DeleteTrigger(_ context.Context, projectID, location, id s
 	key := scope(projectID, location)
 	if _, ok := s.triggers[key][id]; !ok {
 		return ErrNoSuchTrigger
+	}
+	delete(s.triggers[key], id)
+	return nil
+}
+
+func (s *MemoryStore) DeleteTriggerAtomic(_ context.Context, projectID, location, id string, guard func(Trigger) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope(projectID, location)
+	current, ok := s.triggers[key][id]
+	if !ok {
+		return ErrNoSuchTrigger
+	}
+	if err := guard(current); err != nil {
+		return err
 	}
 	delete(s.triggers[key], id)
 	return nil
@@ -133,19 +135,6 @@ func (s *MemoryStore) GetChannel(_ context.Context, projectID, location, id stri
 	return c, nil
 }
 
-func (s *MemoryStore) UpdateChannel(_ context.Context, projectID, location string, c Channel) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := scope(projectID, location)
-	if _, ok := s.channels[key][c.Name]; !ok {
-		return ErrNoSuchChannel
-	}
-	c.ProjectID = projectID
-	c.Location = location
-	s.channels[key][c.Name] = c
-	return nil
-}
-
 func (s *MemoryStore) UpdateChannelAtomic(_ context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -170,6 +159,21 @@ func (s *MemoryStore) DeleteChannel(_ context.Context, projectID, location, id s
 	key := scope(projectID, location)
 	if _, ok := s.channels[key][id]; !ok {
 		return ErrNoSuchChannel
+	}
+	delete(s.channels[key], id)
+	return nil
+}
+
+func (s *MemoryStore) DeleteChannelAtomic(_ context.Context, projectID, location, id string, guard func(Channel) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope(projectID, location)
+	current, ok := s.channels[key][id]
+	if !ok {
+		return ErrNoSuchChannel
+	}
+	if err := guard(current); err != nil {
+		return err
 	}
 	delete(s.channels[key], id)
 	return nil

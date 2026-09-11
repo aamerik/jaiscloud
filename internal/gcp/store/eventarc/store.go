@@ -43,9 +43,11 @@ type Trigger struct {
 }
 
 // Channel is a stored Eventarc channel. Config holds the wire request body
-// verbatim (provider, cryptoKeyName, ...). UID and ActivationToken are
-// server-assigned output-only values generated at create time and kept stable;
-// pubsubTopic and state are synthesized on read.
+// verbatim (provider, cryptoKeyName, ...). UID, Etag, and ActivationToken are
+// server-assigned output-only values; UID/ActivationToken are generated at
+// create time and kept stable, while Etag is a deterministic content checksum
+// recomputed on every mutation for optimistic concurrency control. pubsubTopic
+// and state are synthesized on read.
 type Channel struct {
 	ProjectID       string            `json:"projectId"`
 	Location        string            `json:"location"`
@@ -53,6 +55,7 @@ type Channel struct {
 	Config          json.RawMessage   `json:"config,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
 	UID             string            `json:"uid,omitempty"`
+	Etag            string            `json:"etag,omitempty"`
 	ActivationToken string            `json:"activationToken,omitempty"`
 	CreateTime      time.Time         `json:"createTime"`
 	UpdateTime      time.Time         `json:"updateTime"`
@@ -62,25 +65,33 @@ type Channel struct {
 type Store interface {
 	CreateTrigger(ctx context.Context, projectID, location string, t Trigger) error
 	GetTrigger(ctx context.Context, projectID, location, id string) (Trigger, error)
-	UpdateTrigger(ctx context.Context, projectID, location string, t Trigger) error
 	// UpdateTriggerAtomic performs a locked get-mutate-set cycle: mutate
 	// receives the current trigger and returns the version to persist, or an
 	// error to abort without writing. Unlike a separate GetTrigger followed by
-	// UpdateTrigger, this is atomic with respect to concurrent updates on the
-	// same trigger, so two concurrent PATCH requests merging different fields
-	// can't lose one or the other.
+	// a standalone write, this is atomic with respect to concurrent updates on
+	// the same trigger, so two concurrent PATCH requests merging different
+	// fields can't lose one or the other.
 	UpdateTriggerAtomic(ctx context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error)
 	DeleteTrigger(ctx context.Context, projectID, location, id string) error
+	// DeleteTriggerAtomic performs a locked get-check-delete cycle: guard
+	// receives the current trigger and returns an error to abort without
+	// deleting. The read and the delete happen under one lock, so an etag
+	// precondition checked in guard can't be invalidated by a concurrent
+	// update landing between the check and the delete.
+	DeleteTriggerAtomic(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error
 	ListTriggers(ctx context.Context, projectID, location string) ([]Trigger, error)
 
 	CreateChannel(ctx context.Context, projectID, location string, c Channel) error
 	GetChannel(ctx context.Context, projectID, location, id string) (Channel, error)
-	UpdateChannel(ctx context.Context, projectID, location string, c Channel) error
 	// UpdateChannelAtomic performs a locked get-mutate-set cycle: mutate
 	// receives the current channel and returns the version to persist, or an
 	// error to abort without writing. See UpdateTriggerAtomic.
 	UpdateChannelAtomic(ctx context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error)
 	DeleteChannel(ctx context.Context, projectID, location, id string) error
+	// DeleteChannelAtomic performs a locked get-check-delete cycle: guard
+	// receives the current channel and returns an error to abort without
+	// deleting. See DeleteTriggerAtomic.
+	DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error
 	ListChannels(ctx context.Context, projectID, location string) ([]Channel, error)
 
 	Reset(ctx context.Context)

@@ -19,6 +19,8 @@ package eventarc
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,17 +30,27 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/policy"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
+
+	"github.com/google/uuid"
 )
 
 // rtTopic is the Pub/Sub topic resource type in the shared ResourceStore
 // (mirrors provider/pubsub's unexported constant). Eventarc validates
 // transport.pubsub.topic references against it.
 const rtTopic = "gcp_topic"
+
+// rtTriggerPolicy / rtChannelPolicy are the generic ResourceStore types for
+// Eventarc trigger/channel IAM policies (mirrors provider/functions).
+const (
+	rtTriggerPolicy = "gcp_eventarc_trigger_policy"
+	rtChannelPolicy = "gcp_eventarc_channel_policy"
+)
 
 // Provider handles Eventarc v1 trigger/channel/provider resources.
 type Provider struct {
@@ -72,13 +84,12 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Eventarc.ListProviders": p.ListProviders,
 		"Eventarc.GetProvider":   p.GetProvider,
 
-		// IAM on triggers/channels is not implemented by the emulator.
-		"Eventarc.TriggerGetIamPolicy":       p.unimplemented("GetIamPolicy"),
-		"Eventarc.TriggerSetIamPolicy":       p.unimplemented("SetIamPolicy"),
-		"Eventarc.TriggerTestIamPermissions": p.unimplemented("TestIamPermissions"),
-		"Eventarc.ChannelGetIamPolicy":       p.unimplemented("GetIamPolicy"),
-		"Eventarc.ChannelSetIamPolicy":       p.unimplemented("SetIamPolicy"),
-		"Eventarc.ChannelTestIamPermissions": p.unimplemented("TestIamPermissions"),
+		"Eventarc.TriggerGetIamPolicy":       p.TriggerGetIamPolicy,
+		"Eventarc.TriggerSetIamPolicy":       p.TriggerSetIamPolicy,
+		"Eventarc.TriggerTestIamPermissions": p.TriggerTestIamPermissions,
+		"Eventarc.ChannelGetIamPolicy":       p.ChannelGetIamPolicy,
+		"Eventarc.ChannelSetIamPolicy":       p.ChannelSetIamPolicy,
+		"Eventarc.ChannelTestIamPermissions": p.ChannelTestIamPermissions,
 	}
 }
 
@@ -93,6 +104,14 @@ func bodyMap(body map[string]any, key string) map[string]any {
 	}
 	m, _ := body[key].(map[string]any)
 	return m
+}
+
+func bodyString(body map[string]any, key string) string {
+	if body == nil {
+		return ""
+	}
+	s, _ := body[key].(string)
+	return s
 }
 
 func bodyStringMap(body map[string]any, key string) map[string]string {
@@ -119,6 +138,169 @@ func mapErr(err error) error {
 		return model.NewProviderError("AlreadyExists", "resource already exists", 409)
 	}
 	return err
+}
+
+// boolParam reports whether a query/body parameter is the boolean true. It
+// accepts the "true" string the REST codec stores for ?validateOnly=true, and
+// a native bool for in-process callers.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "true")
+	}
+	return false
+}
+
+// maskPaths splits a comma-separated updateMask query value into its non-empty
+// field paths. An empty mask returns nil, meaning "apply every field present in
+// the request body" (the historical merge behavior).
+func maskPaths(mask string) []string {
+	if mask == "" {
+		return nil
+	}
+	parts := strings.Split(mask, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func maskRoot(path string) string {
+	if i := strings.IndexByte(path, '.'); i >= 0 {
+		return path[:i]
+	}
+	return path
+}
+
+// normalizeMaskField folds a field-mask path segment to a case/underscore-
+// insensitive form so both the proto snake_case (event_filters) and the JSON
+// camelCase (eventFilters) spellings resolve to the same field.
+func normalizeMaskField(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
+}
+
+// triggerMaskCanonical maps a normalized update_mask root to the canonical
+// camelCase JSON key of an updatable Trigger field. Output-only fields are
+// intentionally absent so a mask naming one fails loud rather than silently
+// echoing.
+var triggerMaskCanonical = map[string]string{
+	"destination":          "destination",
+	"eventfilters":         "eventFilters",
+	"serviceaccount":       "serviceAccount",
+	"transport":            "transport",
+	"channel":              "channel",
+	"labels":               "labels",
+	"eventdatacontenttype": "eventDataContentType",
+}
+
+// channelMaskCanonical maps a normalized update_mask root to the canonical
+// camelCase JSON key of an updatable Channel field.
+var channelMaskCanonical = map[string]string{
+	"provider":      "provider",
+	"cryptokeyname": "cryptoKeyName",
+	"labels":        "labels",
+}
+
+// applyTriggerMask merges an incoming Trigger body into the stored body
+// according to the updateMask paths: a masked path takes the incoming value,
+// every unmasked path retains the stored value. This is the Eventarc analogue
+// of applyAlertPolicyMask, applied inside the store's atomic mutate closure so a
+// masked PATCH cannot clobber a concurrent PATCH's disjoint fields. An empty
+// mask merges every body field (the pre-existing behavior). An unsupported path
+// fails loud with Unimplemented.
+func applyTriggerMask(stored, incoming map[string]any, paths []string) (map[string]any, error) {
+	merged := make(map[string]any, len(stored)+len(incoming))
+	for k, v := range stored {
+		merged[k] = v
+	}
+	if len(paths) == 0 {
+		for k, v := range incoming {
+			merged[k] = v
+		}
+		return merged, nil
+	}
+	for _, path := range paths {
+		canon, ok := triggerMaskCanonical[normalizeMaskField(maskRoot(path))]
+		if !ok {
+			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
+		}
+		if v, present := incoming[canon]; present {
+			merged[canon] = v
+		}
+	}
+	return merged, nil
+}
+
+// applyChannelMask is applyTriggerMask for Channel bodies.
+func applyChannelMask(stored, incoming map[string]any, paths []string) (map[string]any, error) {
+	merged := make(map[string]any, len(stored)+len(incoming))
+	for k, v := range stored {
+		merged[k] = v
+	}
+	if len(paths) == 0 {
+		for k, v := range incoming {
+			merged[k] = v
+		}
+		return merged, nil
+	}
+	for _, path := range paths {
+		canon, ok := channelMaskCanonical[normalizeMaskField(maskRoot(path))]
+		if !ok {
+			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
+		}
+		if v, present := incoming[canon]; present {
+			merged[canon] = v
+		}
+	}
+	return merged, nil
+}
+
+// contentEtag derives a deterministic OCC etag from a resource's mutable
+// content. It is recomputed on every create/update so a caller presenting a
+// pre-mutation etag is rejected (409 ABORTED) on the next write.
+func contentEtag(parts ...[]byte) string {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write(p)
+		h.Write([]byte{0})
+	}
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+func triggerEtag(t eventarcstore.Trigger) string {
+	labels, _ := json.Marshal(t.Labels)
+	return contentEtag(t.Config, labels)
+}
+
+func channelEtag(c eventarcstore.Channel) string {
+	labels, _ := json.Marshal(c.Labels)
+	return contentEtag(c.Config, labels, []byte(c.ActivationToken))
+}
+
+// abortedEtagMismatch is the etag-precondition failure returned as HTTP 409
+// with the ABORTED google.rpc status (the exact status is unverified against
+// real Eventarc; ABORTED matches the sibling shared-IAM OCC contract).
+func abortedEtagMismatch() error {
+	return &model.ProviderError{
+		Code:       "Aborted",
+		Message:    "etag mismatch: optimistic concurrency control failed",
+		HTTPStatus: 409,
+		Status:     "ABORTED",
+	}
+}
+
+// checkEtag enforces the request-supplied etag precondition against the stored
+// value. An empty request etag is a no-op (the caller opted out of OCC).
+func checkEtag(reqEtag, storedEtag string) error {
+	if reqEtag != "" && reqEtag != storedEtag {
+		return abortedEtagMismatch()
+	}
+	return nil
 }
 
 func formatTimestamp(t time.Time) string {
@@ -190,11 +372,15 @@ func (p *Provider) channelMap(nr *model.NormalizedRequest, c eventarcstore.Chann
 	}
 	out["name"] = nr.ResourceID("eventarc-channel", c.Location+"/"+c.Name)
 	out["uid"] = c.UID
+	out["etag"] = c.Etag
 	out["createTime"] = formatTimestamp(c.CreateTime)
 	out["updateTime"] = formatTimestamp(c.UpdateTime)
 	out["activationToken"] = c.ActivationToken
 	out["pubsubTopic"] = fmt.Sprintf("projects/%s/topics/jc-eventarc-channel-%s", nr.AccountID, c.Name)
-	out["state"] = "ACTIVE"
+	// A freshly created channel has no provider Connection yet, so it is
+	// PENDING; it only becomes ACTIVE once a SaaS provider connects. The
+	// emulator never delivers events or connects providers.
+	out["state"] = "PENDING"
 	labels := c.Labels
 	if labels == nil {
 		labels = map[string]string{}
@@ -259,24 +445,34 @@ func validateDestination(dest map[string]any) error {
 	return nil
 }
 
-// validateFilters enforces the eventFilters contract: at least one filter, each
-// with a non-empty attribute and value.
+// validateFilters enforces the eventFilters contract: at least one filter,
+// each with a non-empty attribute and value, and at least one filter whose
+// attribute is "type" — real Eventarc requires a type filter on every trigger.
 func validateFilters(body map[string]any) error {
 	filters, ok := body["eventFilters"].([]any)
 	if !ok || len(filters) == 0 {
 		return model.NewProviderError("InvalidArgument", "eventFilters is required", 400)
 	}
+	hasType := false
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
 			return model.NewProviderError("InvalidArgument", "eventFilters entries must be objects", 400)
 		}
-		if attr, _ := fm["attribute"].(string); attr == "" {
+		attr, _ := fm["attribute"].(string)
+		if attr == "" {
 			return model.NewProviderError("InvalidArgument", "eventFilters[].attribute is required", 400)
 		}
+		value, _ := fm["value"].(string)
 		if _, ok := fm["value"].(string); !ok {
 			return model.NewProviderError("InvalidArgument", "eventFilters[].value is required", 400)
 		}
+		if attr == "type" && value != "" {
+			hasType = true
+		}
+	}
+	if !hasType {
+		return model.NewProviderError("InvalidArgument", `eventFilters must contain a filter with attribute "type"`, 400)
 	}
 	return nil
 }
@@ -356,8 +552,7 @@ func (p *Provider) CreateTrigger(ctx context.Context, nr *model.NormalizedReques
 		Location:   location,
 		Name:       triggerID,
 		Labels:     bodyStringMap(body, "labels"),
-		UID:        randomHex(32),
-		Etag:       randomHex(32),
+		UID:        uuid.NewString(),
 		CreateTime: now,
 		UpdateTime: now,
 	}
@@ -365,6 +560,15 @@ func (p *Provider) CreateTrigger(ctx context.Context, nr *model.NormalizedReques
 		if data, err := json.Marshal(body); err == nil {
 			t.Config = data
 		}
+	}
+	t.Etag = triggerEtag(t)
+	if boolParam(nr, "validateOnly") {
+		if _, err := p.store.GetTrigger(ctx, nr.AccountID, location, triggerID); err == nil {
+			return nil, mapErr(eventarcstore.ErrAlreadyExists)
+		} else if !errors.Is(err, eventarcstore.ErrNoSuchTrigger) {
+			return nil, mapErr(err)
+		}
+		return p.operationLRO(nr, location, "eventarc-trigger", triggerID, "create", p.triggerMap(nr, t)), nil
 	}
 	if err := p.store.CreateTrigger(ctx, nr.AccountID, location, t); err != nil {
 		return nil, mapErr(err)
@@ -413,30 +617,74 @@ func (p *Provider) UpdateTrigger(ctx context.Context, nr *model.NormalizedReques
 		return nil, model.NewProviderError("InvalidArgument", "missing location or trigger id", 400)
 	}
 	body, _ := nr.Params["body"].(map[string]any)
+	paths := maskPaths(strParam(nr, "updateMask"))
+	reqEtag := bodyString(body, "etag")
+
+	// Reference validation reads the shared stores (e.g. a channel named in the
+	// body), so it must run outside UpdateTriggerAtomic's locked closure: the
+	// store mutex is not reentrant and validateReferences re-enters it.
+	stored, err := p.store.GetTrigger(ctx, nr.AccountID, location, triggerID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if err := checkEtag(reqEtag, stored.Etag); err != nil {
+		return nil, err
+	}
+	next, merged, err := mergeTriggerBody(stored, body, paths)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if err := p.validateTrigger(ctx, nr.AccountID, merged); err != nil {
+		return nil, mapErr(err)
+	}
+	if boolParam(nr, "validateOnly") {
+		return p.operationLRO(nr, location, "eventarc-trigger", triggerID, "update", p.triggerMap(nr, next)), nil
+	}
+
 	updated, err := p.store.UpdateTriggerAtomic(ctx, nr.AccountID, location, triggerID, func(t eventarcstore.Trigger) (eventarcstore.Trigger, error) {
-		stored := map[string]any{}
-		if len(t.Config) > 0 {
-			_ = json.Unmarshal(t.Config, &stored)
-		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if err := p.validateTrigger(ctx, nr.AccountID, stored); err != nil {
+		// The etag precondition and the masked merge both run inside the
+		// store's locked mutate closure, so a stale etag can't slip past a
+		// concurrent update and a masked PATCH can't clobber a concurrent
+		// PATCH's disjoint fields.
+		if err := checkEtag(reqEtag, t.Etag); err != nil {
 			return eventarcstore.Trigger{}, err
 		}
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			t.Labels = labels
+		next, _, err := mergeTriggerBody(t, body, paths)
+		if err != nil {
+			return eventarcstore.Trigger{}, err
 		}
-		if data, err := json.Marshal(stored); err == nil {
-			t.Config = data
-		}
-		t.UpdateTime = clock.Now().UTC()
-		return t, nil
+		next.UpdateTime = clock.Now().UTC()
+		next.Etag = triggerEtag(next)
+		return next, nil
 	})
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	return p.operationLRO(nr, location, "eventarc-trigger", triggerID, "update", p.triggerMap(nr, updated)), nil
+}
+
+// mergeTriggerBody applies a Trigger PATCH body to the stored trigger under the
+// given updateMask paths: it overlays only the masked (or, for an empty mask,
+// every present) top-level body field, mirrors the merged labels onto the
+// struct, and returns the merged wire body. It performs no reference validation
+// and never touches the store, so it is safe to call from inside the store's
+// locked mutate closure.
+func mergeTriggerBody(t eventarcstore.Trigger, body map[string]any, paths []string) (eventarcstore.Trigger, map[string]any, error) {
+	stored := map[string]any{}
+	if len(t.Config) > 0 {
+		_ = json.Unmarshal(t.Config, &stored)
+	}
+	merged, err := applyTriggerMask(stored, body, paths)
+	if err != nil {
+		return eventarcstore.Trigger{}, nil, err
+	}
+	if labels := bodyStringMap(merged, "labels"); labels != nil {
+		t.Labels = labels
+	}
+	if data, err := json.Marshal(merged); err == nil {
+		t.Config = data
+	}
+	return t, merged, nil
 }
 
 func (p *Provider) DeleteTrigger(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -445,7 +693,20 @@ func (p *Provider) DeleteTrigger(ctx context.Context, nr *model.NormalizedReques
 	if location == "" || triggerID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location or trigger id", 400)
 	}
-	if err := p.store.DeleteTrigger(ctx, nr.AccountID, location, triggerID); err != nil {
+	reqEtag := strParam(nr, "etag")
+	if boolParam(nr, "validateOnly") {
+		stored, err := p.store.GetTrigger(ctx, nr.AccountID, location, triggerID)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		if err := checkEtag(reqEtag, stored.Etag); err != nil {
+			return nil, err
+		}
+		return p.operationLRO(nr, location, "eventarc-trigger", triggerID, "delete", map[string]any{}), nil
+	}
+	if err := p.store.DeleteTriggerAtomic(ctx, nr.AccountID, location, triggerID, func(t eventarcstore.Trigger) error {
+		return checkEtag(reqEtag, t.Etag)
+	}); err != nil {
 		return nil, mapErr(err)
 	}
 	return p.operationLRO(nr, location, "eventarc-trigger", triggerID, "delete", map[string]any{}), nil
@@ -468,7 +729,7 @@ func (p *Provider) CreateChannel(ctx context.Context, nr *model.NormalizedReques
 		Location:        location,
 		Name:            channelID,
 		Labels:          bodyStringMap(body, "labels"),
-		UID:             randomHex(32),
+		UID:             uuid.NewString(),
 		ActivationToken: randomHex(32),
 		CreateTime:      now,
 		UpdateTime:      now,
@@ -477,6 +738,15 @@ func (p *Provider) CreateChannel(ctx context.Context, nr *model.NormalizedReques
 		if data, err := json.Marshal(body); err == nil {
 			c.Config = data
 		}
+	}
+	c.Etag = channelEtag(c)
+	if boolParam(nr, "validateOnly") {
+		if _, err := p.store.GetChannel(ctx, nr.AccountID, location, channelID); err == nil {
+			return nil, mapErr(eventarcstore.ErrAlreadyExists)
+		} else if !errors.Is(err, eventarcstore.ErrNoSuchChannel) {
+			return nil, mapErr(err)
+		}
+		return p.operationLRO(nr, location, "eventarc-channel", channelID, "create", p.channelMap(nr, c)), nil
 	}
 	if err := p.store.CreateChannel(ctx, nr.AccountID, location, c); err != nil {
 		return nil, mapErr(err)
@@ -525,30 +795,69 @@ func (p *Provider) UpdateChannel(ctx context.Context, nr *model.NormalizedReques
 		return nil, model.NewProviderError("InvalidArgument", "missing location or channel id", 400)
 	}
 	body, _ := nr.Params["body"].(map[string]any)
+	paths := maskPaths(strParam(nr, "updateMask"))
+	reqEtag := bodyString(body, "etag")
+
+	// See UpdateTrigger: reference validation must run outside the locked
+	// closure.
+	stored, err := p.store.GetChannel(ctx, nr.AccountID, location, channelID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if err := checkEtag(reqEtag, stored.Etag); err != nil {
+		return nil, err
+	}
+	next, merged, err := mergeChannelBody(stored, body, paths)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if err := p.validateChannel(ctx, nr.AccountID, merged); err != nil {
+		return nil, mapErr(err)
+	}
+	if boolParam(nr, "validateOnly") {
+		return p.operationLRO(nr, location, "eventarc-channel", channelID, "update", p.channelMap(nr, next)), nil
+	}
+
 	updated, err := p.store.UpdateChannelAtomic(ctx, nr.AccountID, location, channelID, func(c eventarcstore.Channel) (eventarcstore.Channel, error) {
-		stored := map[string]any{}
-		if len(c.Config) > 0 {
-			_ = json.Unmarshal(c.Config, &stored)
-		}
-		for k, v := range body {
-			stored[k] = v
-		}
-		if err := p.validateChannel(ctx, nr.AccountID, stored); err != nil {
+		// See UpdateTrigger: etag check and masked merge are both inside the
+		// locked mutate closure.
+		if err := checkEtag(reqEtag, c.Etag); err != nil {
 			return eventarcstore.Channel{}, err
 		}
-		if labels := bodyStringMap(body, "labels"); labels != nil {
-			c.Labels = labels
+		next, _, err := mergeChannelBody(c, body, paths)
+		if err != nil {
+			return eventarcstore.Channel{}, err
 		}
-		if data, err := json.Marshal(stored); err == nil {
-			c.Config = data
-		}
-		c.UpdateTime = clock.Now().UTC()
-		return c, nil
+		next.UpdateTime = clock.Now().UTC()
+		next.Etag = channelEtag(next)
+		return next, nil
 	})
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	return p.operationLRO(nr, location, "eventarc-channel", channelID, "update", p.channelMap(nr, updated)), nil
+}
+
+// mergeChannelBody applies a Channel PATCH body to the stored channel under the
+// given updateMask paths. It performs no reference validation and never touches
+// the store, so it is safe to call from inside the store's locked mutate
+// closure.
+func mergeChannelBody(c eventarcstore.Channel, body map[string]any, paths []string) (eventarcstore.Channel, map[string]any, error) {
+	stored := map[string]any{}
+	if len(c.Config) > 0 {
+		_ = json.Unmarshal(c.Config, &stored)
+	}
+	merged, err := applyChannelMask(stored, body, paths)
+	if err != nil {
+		return eventarcstore.Channel{}, nil, err
+	}
+	if labels := bodyStringMap(merged, "labels"); labels != nil {
+		c.Labels = labels
+	}
+	if data, err := json.Marshal(merged); err == nil {
+		c.Config = data
+	}
+	return c, merged, nil
 }
 
 func (p *Provider) DeleteChannel(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -557,7 +866,20 @@ func (p *Provider) DeleteChannel(ctx context.Context, nr *model.NormalizedReques
 	if location == "" || channelID == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing location or channel id", 400)
 	}
-	if err := p.store.DeleteChannel(ctx, nr.AccountID, location, channelID); err != nil {
+	reqEtag := strParam(nr, "etag")
+	if boolParam(nr, "validateOnly") {
+		stored, err := p.store.GetChannel(ctx, nr.AccountID, location, channelID)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		if err := checkEtag(reqEtag, stored.Etag); err != nil {
+			return nil, err
+		}
+		return p.operationLRO(nr, location, "eventarc-channel", channelID, "delete", map[string]any{}), nil
+	}
+	if err := p.store.DeleteChannelAtomic(ctx, nr.AccountID, location, channelID, func(c eventarcstore.Channel) error {
+		return checkEtag(reqEtag, c.Etag)
+	}); err != nil {
 		return nil, mapErr(err)
 	}
 	return p.operationLRO(nr, location, "eventarc-channel", channelID, "delete", map[string]any{}), nil
@@ -642,10 +964,91 @@ func (p *Provider) GetProvider(ctx context.Context, nr *model.NormalizedRequest)
 	return nil, model.NewProviderError("NotFound", "provider not found: "+providerID, 404)
 }
 
-// unimplemented returns a handler that fails loud with Unimplemented for the
-// deferred Eventarc operations (the trigger/channel IAM surface).
-func (p *Provider) unimplemented(name string) provider.HandlerFunc {
-	return func(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-		return nil, model.NewProviderError("Unimplemented", name+" is not supported by the emulator", 501)
+// --- IAM (triggers / channels) ---
+
+// requireTrigger resolves the IAM policy resource id for a trigger and
+// requires the trigger to exist (NotFound otherwise), mirroring
+// functions.requireFunction.
+func (p *Provider) requireTrigger(ctx context.Context, nr *model.NormalizedRequest) (string, error) {
+	location := strParam(nr, "location")
+	id := lastSegment(strParam(nr, "name"))
+	if location == "" || id == "" {
+		return "", model.NewProviderError("InvalidArgument", "missing trigger name or location", 400)
 	}
+	if _, err := p.store.GetTrigger(ctx, nr.AccountID, location, id); err != nil {
+		return "", mapErr(err)
+	}
+	return location + "/" + id, nil
+}
+
+// requireChannel resolves the IAM policy resource id for a channel and
+// requires the channel to exist (NotFound otherwise).
+func (p *Provider) requireChannel(ctx context.Context, nr *model.NormalizedRequest) (string, error) {
+	location := strParam(nr, "location")
+	id := lastSegment(strParam(nr, "name"))
+	if location == "" || id == "" {
+		return "", model.NewProviderError("InvalidArgument", "missing channel name or location", 400)
+	}
+	if _, err := p.store.GetChannel(ctx, nr.AccountID, location, id); err != nil {
+		return "", mapErr(err)
+	}
+	return location + "/" + id, nil
+}
+
+func (p *Provider) TriggerGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, err := p.requireTrigger(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(policy.Load(ctx, p.resources, nr.AccountID, rtTriggerPolicy, id))), nil
+}
+
+func (p *Provider) TriggerSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, err := p.requireTrigger(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	pol, err := policy.Set(ctx, p.resources, nr.AccountID, rtTriggerPolicy, id, body)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) TriggerTestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := p.requireTrigger(ctx, nr); err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
+}
+
+func (p *Provider) ChannelGetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, err := p.requireChannel(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(policy.Load(ctx, p.resources, nr.AccountID, rtChannelPolicy, id))), nil
+}
+
+func (p *Provider) ChannelSetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id, err := p.requireChannel(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	pol, err := policy.Set(ctx, p.resources, nr.AccountID, rtChannelPolicy, id, body)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+func (p *Provider) ChannelTestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := p.requireChannel(ctx, nr); err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
 }

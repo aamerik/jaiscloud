@@ -3,6 +3,7 @@ package eventarc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -65,11 +66,22 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("list triggers: %v %d", err, len(list))
 	}
 
+	// Atomic delete aborts on a guard error without removing the trigger.
+	guardErr := errors.New("guard refused")
+	if err := s.DeleteTriggerAtomic(ctx, "proj", "us-central1", "my-trigger", func(Trigger) error { return guardErr }); !errors.Is(err, guardErr) {
+		t.Fatalf("expected guard error, got %v", err)
+	}
+	if _, err := s.GetTrigger(ctx, "proj", "us-central1", "my-trigger"); err != nil {
+		t.Fatalf("guard-aborted delete removed the trigger: %v", err)
+	}
 	if err := s.DeleteTrigger(ctx, "proj", "us-central1", "my-trigger"); err != nil {
 		t.Fatalf("delete trigger: %v", err)
 	}
 	if _, err := s.GetTrigger(ctx, "proj", "us-central1", "my-trigger"); err != ErrNoSuchTrigger {
 		t.Fatalf("expected ErrNoSuchTrigger after delete, got %v", err)
+	}
+	if err := s.DeleteTriggerAtomic(ctx, "proj", "us-central1", "my-trigger", func(Trigger) error { return nil }); err != ErrNoSuchTrigger {
+		t.Fatalf("expected ErrNoSuchTrigger from atomic delete of missing trigger, got %v", err)
 	}
 
 	// Channels.
@@ -93,11 +105,20 @@ func runStoreTests(t *testing.T, s Store) {
 	if err != nil || len(chList) != 1 {
 		t.Fatalf("list channels: %v %d", err, len(chList))
 	}
+	if err := s.DeleteChannelAtomic(ctx, "proj", "us-central1", "my-channel", func(Channel) error { return guardErr }); !errors.Is(err, guardErr) {
+		t.Fatalf("expected channel guard error, got %v", err)
+	}
+	if _, err := s.GetChannel(ctx, "proj", "us-central1", "my-channel"); err != nil {
+		t.Fatalf("guard-aborted channel delete removed the channel: %v", err)
+	}
 	if err := s.DeleteChannel(ctx, "proj", "us-central1", "my-channel"); err != nil {
 		t.Fatalf("delete channel: %v", err)
 	}
 	if _, err := s.GetChannel(ctx, "proj", "us-central1", "my-channel"); err != ErrNoSuchChannel {
 		t.Fatalf("expected ErrNoSuchChannel after delete, got %v", err)
+	}
+	if err := s.DeleteChannelAtomic(ctx, "proj", "us-central1", "my-channel", func(Channel) error { return nil }); err != ErrNoSuchChannel {
+		t.Fatalf("expected ErrNoSuchChannel from atomic delete of missing channel, got %v", err)
 	}
 }
 
@@ -109,7 +130,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
 	_ = s.CreateTrigger(ctx, "p", "l", Trigger{Name: "t", Labels: map[string]string{"k": "v"}, Config: []byte(`{"eventFilters":[]}`), UID: "u", Etag: "e"})
-	_ = s.CreateChannel(ctx, "p", "l", Channel{Name: "c", UID: "uc", ActivationToken: "tc", Config: []byte(`{"provider":"x"}`)})
+	_ = s.CreateChannel(ctx, "p", "l", Channel{Name: "c", UID: "uc", Etag: "ec", ActivationToken: "tc", Config: []byte(`{"provider":"x"}`)})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -125,7 +146,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("trigger lost after restore: %v %+v", err, got)
 	}
 	gotCh, err := s2.GetChannel(ctx, "p", "l", "c")
-	if err != nil || gotCh.ActivationToken != "tc" {
+	if err != nil || gotCh.ActivationToken != "tc" || gotCh.Etag != "ec" {
 		t.Fatalf("channel lost after restore: %v %+v", err, gotCh)
 	}
 }

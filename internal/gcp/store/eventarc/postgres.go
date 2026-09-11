@@ -72,21 +72,6 @@ func (s *PostgresStore) GetTrigger(ctx context.Context, projectID, location, id 
 	return t, err
 }
 
-func (s *PostgresStore) UpdateTrigger(ctx context.Context, projectID, location string, t Trigger) error {
-	labels, _ := json.Marshal(t.Labels)
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_eventarc_triggers SET config=$4, labels=$5, uid=$6, etag=$7, update_time=$8
-		WHERE project_id=$1 AND location=$2 AND trigger_id=$3
-	`, projectID, location, t.Name, nullableJSONRaw(t.Config, "{}"), nullableJSONRaw(labels, "{}"), t.UID, t.Etag, t.UpdateTime)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoSuchTrigger
-	}
-	return nil
-}
-
 // UpdateTriggerAtomic mirrors MemoryStore's version: a Serializable transaction
 // with SELECT ... FOR UPDATE row-locks the trigger for the duration of mutate,
 // so a concurrent UpdateTriggerAtomic on the same trigger blocks until this
@@ -146,6 +131,40 @@ func (s *PostgresStore) DeleteTrigger(ctx context.Context, projectID, location, 
 	return nil
 }
 
+// DeleteTriggerAtomic mirrors MemoryStore's version: a Serializable transaction
+// with SELECT ... FOR UPDATE row-locks the trigger for the duration of guard,
+// so an etag precondition checked in guard is evaluated against a snapshot no
+// concurrent update can invalidate before the DELETE commits.
+func (s *PostgresStore) DeleteTriggerAtomic(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanTrigger(tx.QueryRow(ctx, `
+		SELECT project_id, location, trigger_id, config, labels, uid, etag, create_time, update_time
+		FROM jc_eventarc_triggers WHERE project_id=$1 AND location=$2 AND trigger_id=$3 FOR UPDATE
+	`, projectID, location, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchTrigger
+	}
+	if err != nil {
+		return err
+	}
+	if err := guard(current); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM jc_eventarc_triggers WHERE project_id=$1 AND location=$2 AND trigger_id=$3`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchTrigger
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) ListTriggers(ctx context.Context, projectID, location string) ([]Trigger, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, location, trigger_id, config, labels, uid, etag, create_time, update_time
@@ -179,9 +198,9 @@ func (s *PostgresStore) CreateChannel(ctx context.Context, projectID, location s
 	labels, _ := json.Marshal(c.Labels)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_eventarc_channels
-			(project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	`, projectID, location, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(labels, "{}"), c.UID, c.ActivationToken, c.CreateTime, c.UpdateTime)
+			(project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, projectID, location, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(labels, "{}"), c.UID, c.Etag, c.ActivationToken, c.CreateTime, c.UpdateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -195,7 +214,7 @@ func (s *PostgresStore) CreateChannel(ctx context.Context, projectID, location s
 func scanChannel(row pgx.Row) (Channel, error) {
 	var c Channel
 	var config, labels []byte
-	err := row.Scan(&c.ProjectID, &c.Location, &c.Name, &config, &labels, &c.UID, &c.ActivationToken, &c.CreateTime, &c.UpdateTime)
+	err := row.Scan(&c.ProjectID, &c.Location, &c.Name, &config, &labels, &c.UID, &c.Etag, &c.ActivationToken, &c.CreateTime, &c.UpdateTime)
 	if err != nil {
 		return Channel{}, err
 	}
@@ -206,28 +225,13 @@ func scanChannel(row pgx.Row) (Channel, error) {
 
 func (s *PostgresStore) GetChannel(ctx context.Context, projectID, location, id string) (Channel, error) {
 	c, err := scanChannel(s.pool.QueryRow(ctx, `
-		SELECT project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
 		FROM jc_eventarc_channels WHERE project_id=$1 AND location=$2 AND channel_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Channel{}, ErrNoSuchChannel
 	}
 	return c, err
-}
-
-func (s *PostgresStore) UpdateChannel(ctx context.Context, projectID, location string, c Channel) error {
-	labels, _ := json.Marshal(c.Labels)
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_eventarc_channels SET config=$4, labels=$5, uid=$6, activation_token=$7, update_time=$8
-		WHERE project_id=$1 AND location=$2 AND channel_id=$3
-	`, projectID, location, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(labels, "{}"), c.UID, c.ActivationToken, c.UpdateTime)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoSuchChannel
-	}
-	return nil
 }
 
 // UpdateChannelAtomic mirrors MemoryStore's version: a Serializable transaction
@@ -242,7 +246,7 @@ func (s *PostgresStore) UpdateChannelAtomic(ctx context.Context, projectID, loca
 	defer tx.Rollback(ctx)
 
 	current, err := scanChannel(tx.QueryRow(ctx, `
-		SELECT project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
 		FROM jc_eventarc_channels WHERE project_id=$1 AND location=$2 AND channel_id=$3 FOR UPDATE
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -259,9 +263,9 @@ func (s *PostgresStore) UpdateChannelAtomic(ctx context.Context, projectID, loca
 
 	labels, _ := json.Marshal(next.Labels)
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_eventarc_channels SET config=$4, labels=$5, uid=$6, activation_token=$7, update_time=$8
+		UPDATE jc_eventarc_channels SET config=$4, labels=$5, uid=$6, etag=$7, activation_token=$8, update_time=$9
 		WHERE project_id=$1 AND location=$2 AND channel_id=$3
-	`, projectID, location, id, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.UID, next.ActivationToken, next.UpdateTime)
+	`, projectID, location, id, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(labels, "{}"), next.UID, next.Etag, next.ActivationToken, next.UpdateTime)
 	if err != nil {
 		return Channel{}, err
 	}
@@ -287,9 +291,40 @@ func (s *PostgresStore) DeleteChannel(ctx context.Context, projectID, location, 
 	return nil
 }
 
+// DeleteChannelAtomic mirrors DeleteTriggerAtomic for channels.
+func (s *PostgresStore) DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanChannel(tx.QueryRow(ctx, `
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
+		FROM jc_eventarc_channels WHERE project_id=$1 AND location=$2 AND channel_id=$3 FOR UPDATE
+	`, projectID, location, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchChannel
+	}
+	if err != nil {
+		return err
+	}
+	if err := guard(current); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM jc_eventarc_channels WHERE project_id=$1 AND location=$2 AND channel_id=$3`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchChannel
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) ListChannels(ctx context.Context, projectID, location string) ([]Channel, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
 		FROM jc_eventarc_channels WHERE project_id=$1 AND location=$2 ORDER BY channel_id
 	`, projectID, location)
 	if err != nil {

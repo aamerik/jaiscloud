@@ -98,7 +98,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	crows, err := s.pool.Query(ctx, `
-		SELECT project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
 		FROM jc_eventarc_channels ORDER BY project_id, location, channel_id
 	`)
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var r channelRow
 		var config, labels []byte
 		if err := crows.Scan(&r.ProjectID, &r.Channel.Location, &r.Channel.Name, &config, &labels,
-			&r.Channel.UID, &r.Channel.ActivationToken, &r.Channel.CreateTime, &r.Channel.UpdateTime); err != nil {
+			&r.Channel.UID, &r.Channel.Etag, &r.Channel.ActivationToken, &r.Channel.CreateTime, &r.Channel.UpdateTime); err != nil {
 			crows.Close()
 			return err
 		}
@@ -166,10 +166,10 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		labels, _ := json.Marshal(r.Channel.Labels)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_eventarc_channels
-				(project_id, location, channel_id, config, labels, uid, activation_token, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+				(project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		`, r.ProjectID, r.Channel.Location, r.Channel.Name, nullableJSONRaw(r.Channel.Config, "{}"), nullableJSONRaw(labels, "{}"),
-			r.Channel.UID, r.Channel.ActivationToken, r.Channel.CreateTime, r.Channel.UpdateTime); err != nil {
+			r.Channel.UID, r.Channel.Etag, r.Channel.ActivationToken, r.Channel.CreateTime, r.Channel.UpdateTime); err != nil {
 			return err
 		}
 	}

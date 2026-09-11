@@ -103,17 +103,33 @@ func TestSDKEventarc(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, list.Triggers)
 
-	// Patch labels.
+	// Patch labels. The body also carries a conflicting destination, which the
+	// "labels" update mask must leave untouched.
 	patchOp, err := svc.Projects.Locations.Triggers.Patch(wantName, &eventarc.Trigger{
-		Labels: map[string]string{"env": "prod"},
+		Labels:      map[string]string{"env": "prod"},
+		Destination: &eventarc.Destination{CloudRun: &eventarc.CloudRun{Service: "clobber", Region: location}},
 	}).UpdateMask("labels").Do()
 	require.NoError(t, err)
 	require.True(t, patchOp.Done)
 	var patched eventarc.Trigger
 	require.NoError(t, json.Unmarshal(patchOp.Response, &patched))
 	require.Equal(t, "prod", patched.Labels["env"])
+	require.NotNil(t, patched.Destination)
+	require.NotNil(t, patched.Destination.CloudRun)
+	require.Equal(t, "svc", patched.Destination.CloudRun.Service, "unmasked destination must retain its stored value")
+	require.NotEmpty(t, patched.Etag)
 
-	del, err := svc.Projects.Locations.Triggers.Delete(wantName).Do()
+	// A stale etag on patch is rejected with 409 ABORTED.
+	_, err = svc.Projects.Locations.Triggers.Patch(wantName, &eventarc.Trigger{
+		Etag:   created.Etag,
+		Labels: map[string]string{"env": "stale"},
+	}).UpdateMask("labels").Do()
+	require.Error(t, err, "a stale etag must be rejected")
+
+	// A stale etag on delete is rejected; the fresh etag succeeds.
+	_, err = svc.Projects.Locations.Triggers.Delete(wantName).Etag(created.Etag).Do()
+	require.Error(t, err, "a stale delete etag must be rejected")
+	del, err := svc.Projects.Locations.Triggers.Delete(wantName).Etag(patched.Etag).Do()
 	require.NoError(t, err)
 	require.True(t, del.Done)
 
@@ -134,7 +150,8 @@ func TestSDKEventarc(t *testing.T) {
 	require.Equal(t, wantChannelName, createdChannel.Name)
 	require.NotEmpty(t, createdChannel.ActivationToken)
 	require.NotEmpty(t, createdChannel.PubsubTopic)
-	require.Equal(t, "ACTIVE", createdChannel.State)
+	// A newly created channel is PENDING until a provider Connection is made.
+	require.Equal(t, "PENDING", createdChannel.State)
 
 	gotChannel, err := svc.Projects.Locations.Channels.Get(wantChannelName).Do()
 	require.NoError(t, err)
