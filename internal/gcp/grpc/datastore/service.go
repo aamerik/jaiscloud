@@ -518,6 +518,219 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 	return &datastorepb.RunQueryResponse{Batch: batch}, nil
 }
 
+// RunAggregationQuery implements the Datastore aggregation-query RPC over the
+// structured AggregationQuery form. It runs the wrapped nested query with the
+// same engine RunQuery uses (ListKind + matchesFilter) and reduces the matching
+// entities to one result per aggregation (count/sum/avg), keyed by alias.
+//
+// The GQL aggregation form is not supported by the emulator's query engine and
+// fails loud with InvalidArgument rather than returning a silent empty result,
+// mirroring RunQuery. Zero aggregations is rejected as well: the proto requires
+// a minimum of one, so a request without any is malformed.
+//
+// Transaction-aware: a ReadOptions.transaction selector must name an *active*
+// transaction, and every entity the nested query returns is recorded in the
+// transaction's read-set — exactly as RunQuery does — so a transactional
+// commit re-validates them (real Datastore's RunAggregationQuery participates
+// in transactions). Non-transactional calls are unaffected.
+func (s *Service) RunAggregationQuery(ctx context.Context, req *datastorepb.RunAggregationQueryRequest) (*datastorepb.RunAggregationQueryResponse, error) {
+	if err := rejectDatabaseID(req.GetDatabaseId()); err != nil {
+		return nil, mapError(err)
+	}
+	// See RunQuery: the transaction selector lives in ReadOptions.
+	txn := req.GetReadOptions().GetTransaction()
+	if err := s.requireActive(txn); err != nil {
+		return nil, mapError(err)
+	}
+	project := s.project(ctx, req.GetProjectId())
+
+	var aq *datastorepb.AggregationQuery
+	switch qt := req.GetQueryType().(type) {
+	case *datastorepb.RunAggregationQueryRequest_AggregationQuery:
+		aq = qt.AggregationQuery
+	case *datastorepb.RunAggregationQueryRequest_GqlQuery:
+		return nil, mapError(model.NewProviderError("InvalidArgument", "GQL aggregation queries are not supported", 400))
+	default:
+		return nil, mapError(model.NewProviderError("InvalidArgument", "run aggregation query request has no query", 400))
+	}
+	if aq == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "aggregation query is missing", 400))
+	}
+	nested := aq.GetNestedQuery()
+	if nested == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "aggregation query is missing its nested query", 400))
+	}
+	aggs := aq.GetAggregations()
+	if len(aggs) == 0 {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "aggregation query must contain at least one aggregation", 400))
+	}
+	if len(aggs) > maxAggregations {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "aggregation query supports at most five aggregations", 400))
+	}
+
+	kind := ""
+	if len(nested.GetKind()) > 0 {
+		kind = nested.GetKind()[0].GetName()
+	}
+	entities, err := s.store.ListKind(ctx, project, kind)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	// Reduce the nested query once, recording every matching entity in the
+	// transaction read-set (the same approximation RunQuery makes: the version
+	// of each returned entity is re-validated at commit).
+	matching := make([]datastorestore.Entity, 0, len(entities))
+	for _, e := range entities {
+		match, err := matchesFilter(e, nested.GetFilter())
+		if err != nil {
+			return nil, mapError(err)
+		}
+		if !match {
+			continue
+		}
+		s.recordRead(txn, e.Key, true, e.Version)
+		matching = append(matching, e)
+	}
+
+	// A non-grouped aggregation query returns a single AggregationResult whose
+	// aggregate_properties map holds one entry per aggregation.
+	result := &datastorepb.AggregationResult{AggregateProperties: make(map[string]*datastorepb.Value, len(aggs))}
+	unnamed := 0
+	for _, agg := range aggs {
+		alias := agg.GetAlias()
+		if alias == "" {
+			// Real Datastore auto-names an unaliased aggregation
+			// "property_<incremental_id>", sharing one counter across the
+			// whole query (proto AggregationQuery.Aggregation.alias docs).
+			unnamed++
+			alias = "property_" + strconv.Itoa(unnamed)
+		}
+		if _, dup := result.AggregateProperties[alias]; dup {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "duplicate aggregation alias: "+alias, 400))
+		}
+		val, err := aggregate(agg, matching, project)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		result.AggregateProperties[alias] = val
+	}
+
+	return &datastorepb.RunAggregationQueryResponse{
+		Batch: &datastorepb.AggregationResultBatch{
+			AggregationResults: []*datastorepb.AggregationResult{result},
+			MoreResults:        datastorepb.QueryResultBatch_NO_MORE_RESULTS,
+			ReadTime:           timestamppb.New(clock.Now()),
+		},
+	}, nil
+}
+
+// maxAggregations is the proto cap on aggregations per AggregationQuery.
+const maxAggregations = 5
+
+// aggregate computes one aggregation over the entities the nested query
+// returned and returns its wire Value.
+func aggregate(agg *datastorepb.AggregationQuery_Aggregation, entities []datastorestore.Entity, project string) (*datastorepb.Value, error) {
+	switch op := agg.GetOperator().(type) {
+	case *datastorepb.AggregationQuery_Aggregation_Count_:
+		n := int64(len(entities))
+		if upTo := op.Count.GetUpTo(); upTo != nil {
+			if upTo.GetValue() < 0 {
+				return nil, model.NewProviderError("InvalidArgument", "count up_to must be non-negative", 400)
+			}
+			if n > upTo.GetValue() {
+				n = upTo.GetValue()
+			}
+		}
+		return valueToProto(datastorestore.Value{IntegerValue: &n}, project), nil
+	case *datastorepb.AggregationQuery_Aggregation_Sum_:
+		return aggregateSum(op.Sum.GetProperty().GetName(), entities, project)
+	case *datastorepb.AggregationQuery_Aggregation_Avg_:
+		return aggregateAvg(op.Avg.GetProperty().GetName(), entities, project)
+	default:
+		return nil, model.NewProviderError("InvalidArgument", "aggregation has no operator", 400)
+	}
+}
+
+// aggregateSum sums the named property over entities, following the proto's
+// documented Sum behavior:
+//   - only integer and double values contribute; a missing property or a
+//     non-numeric value (string, bool, null, key, array, ...) is skipped;
+//   - an empty contributing set yields integer 0;
+//   - the result is a 64-bit integer when every contributing value is an
+//     integer and the sum does not overflow int64; otherwise it is a double.
+func aggregateSum(name string, entities []datastorestore.Entity, project string) (*datastorepb.Value, error) {
+	if name == "" {
+		return nil, model.NewProviderError("InvalidArgument", "sum aggregation requires a property", 400)
+	}
+	var (
+		isum     int64
+		fsum     float64
+		allInt   = true
+		overflow bool
+	)
+	for _, e := range entities {
+		v, ok := e.Properties[name]
+		if !ok {
+			continue
+		}
+		switch {
+		case v.IntegerValue != nil:
+			iv := *v.IntegerValue
+			if (iv > 0 && isum+iv < isum) || (iv < 0 && isum+iv > isum) {
+				overflow = true
+			}
+			isum += iv
+			fsum += float64(iv)
+		case v.DoubleValue != nil:
+			allInt = false
+			fsum += *v.DoubleValue
+		default:
+			continue
+		}
+	}
+	if allInt && !overflow {
+		return valueToProto(datastorestore.Value{IntegerValue: &isum}, project), nil
+	}
+	return valueToProto(datastorestore.Value{DoubleValue: &fsum}, project), nil
+}
+
+// aggregateAvg averages the named property over entities, following the
+// proto's documented Avg behavior: only integer and double values contribute;
+// a missing property or a non-numeric value is skipped; an empty contributing
+// set yields NULL; and the result is always a double.
+func aggregateAvg(name string, entities []datastorestore.Entity, project string) (*datastorepb.Value, error) {
+	if name == "" {
+		return nil, model.NewProviderError("InvalidArgument", "avg aggregation requires a property", 400)
+	}
+	var (
+		sum float64
+		n   int64
+	)
+	for _, e := range entities {
+		v, ok := e.Properties[name]
+		if !ok {
+			continue
+		}
+		switch {
+		case v.IntegerValue != nil:
+			sum += float64(*v.IntegerValue)
+			n++
+		case v.DoubleValue != nil:
+			sum += *v.DoubleValue
+			n++
+		default:
+			continue
+		}
+	}
+	if n == 0 {
+		s := "NULL_VALUE"
+		return valueToProto(datastorestore.Value{NullValue: &s}, project), nil
+	}
+	avg := sum / float64(n)
+	return valueToProto(datastorestore.Value{DoubleValue: &avg}, project), nil
+}
+
 func (s *Service) BeginTransaction(ctx context.Context, req *datastorepb.BeginTransactionRequest) (*datastorepb.BeginTransactionResponse, error) {
 	txn := []byte("txn-" + strconv.FormatInt(atomic.AddInt64(&txnSeq, 1), 10))
 	s.txnMu.Lock()
@@ -560,6 +773,47 @@ func (s *Service) AllocateIds(ctx context.Context, req *datastorepb.AllocateIdsR
 		resp.Keys = append(resp.Keys, completed)
 	}
 	return resp, nil
+}
+
+// ReserveIds implements the Datastore ReserveIds RPC: the supplied complete
+// keys' numeric IDs will never be handed out by a later AllocateIds. Each key
+// is canonicalized; a numeric-ID key advances the project's ID allocator past
+// that ID (store.AdvanceIDs), while a name key is a no-op because names never
+// collide with the numeric-ID space (the same split advanceAllocator makes).
+// An incomplete key is rejected with InvalidArgument, as real Datastore
+// requires complete key paths.
+//
+// The emulator is single-project and single-database; a non-empty DatabaseId
+// is rejected (see rejectDatabaseID). The response is empty by design.
+func (s *Service) ReserveIds(ctx context.Context, req *datastorepb.ReserveIdsRequest) (*datastorepb.ReserveIdsResponse, error) {
+	if err := rejectDatabaseID(req.GetDatabaseId()); err != nil {
+		return nil, mapError(err)
+	}
+	project := s.project(ctx, req.GetProjectId())
+	for _, k := range req.GetKeys() {
+		key, _, complete, err := canonicalKey(k)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		if !complete {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "reserve ids requires complete keys", 400))
+		}
+		if err := s.advanceAllocator(ctx, project, key); err != nil {
+			return nil, mapError(err)
+		}
+	}
+	return &datastorepb.ReserveIdsResponse{}, nil
+}
+
+// rejectDatabaseID rejects a non-empty request DatabaseId. The emulator
+// serves a single default database per project, so a named database cannot be
+// honored; failing loud mirrors canonicalKey's rejection of database-scoped
+// keys rather than silently reading/writing the default database.
+func rejectDatabaseID(databaseID string) error {
+	if databaseID != "" {
+		return model.NewProviderError("InvalidArgument", "database-scoped requests are not supported", 400)
+	}
+	return nil
 }
 
 // resolveEntity transcodes a mutation entity and, when its key path is
