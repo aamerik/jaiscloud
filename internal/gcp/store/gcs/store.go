@@ -48,6 +48,16 @@ func normalizeBucketMeta(meta map[string]any) {
 	}
 }
 
+// nextMetageneration increments a metageneration string ("N" → "N+1",
+// defaulting a missing/invalid value to "1").
+func nextMetageneration(m string) string {
+	n, err := strconv.Atoi(m)
+	if err != nil {
+		return "1"
+	}
+	return strconv.Itoa(n + 1)
+}
+
 // BucketMetagenerationMatches reports whether p is satisfied by the bucket's
 // current metageneration. Buckets have no generation dimension, so only
 // MetagenerationMatch/MetagenerationNotMatch are consulted; a nil p matches,
@@ -215,6 +225,15 @@ type ObjectStore interface {
 	// and returns it, leaving any prior non-live generations untouched. Used
 	// for versioned-object deletion so a non-live tombstone is retained.
 	TombstoneObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error)
+	// RestoreObjectGeneration makes the given (tombstoned) generation the live
+	// generation: the current live generation, if any, is marked non-live
+	// (timeDeleted set) and the target generation's timeDeleted is cleared. The
+	// precondition (if non-nil) is validated against the current live-generation
+	// state atomically with the mutation. Returns ErrNoSuchObject when the
+	// target generation does not exist and ErrPreconditionFailed — without
+	// applying the mutation — on a mismatch. If the target is already live the
+	// call is a no-op and returns it unchanged.
+	RestoreObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error)
 
 	// PutObjectMetaChecked/PutObjectGenerationChecked/DeleteObjectMetaChecked/
 	// TombstoneObjectMetaChecked mirror their unchecked counterparts above,

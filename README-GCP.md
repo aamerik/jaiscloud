@@ -172,6 +172,12 @@ curl -X POST http://localhost:8080/_jaiscloud/reset
 
 This section documents deliberate simplifications and known correctness edge cases — distinct from ordinary bugs, these are behaviours a developer relying on this emulator should know about up front.
 
+### Cloud Storage: gRPC v2 `BidiReadObject` is not implemented
+
+The Cloud Storage v2 gRPC service implements `ReadObject` (metadata + bounded 2 MiB data chunks, with `read_offset`/`read_limit`), but the newer bidirectional streaming read RPC `BidiReadObject` is deliberately left `Unimplemented` — clients that reach for it receive `codes.Unimplemented`, while `ReadObject` covers the read surface. The bucket/object write, copy, restore, IAM, and resumable-upload surfaces are all implemented.
+
+`RestoreObject` models GCS soft-delete as versioning tombstones (`timeDeleted` set): restoring a non-live generation flips it live and marks the current live generation non-live, honoring the `if_generation_match`/`if_metageneration_match` preconditions atomically. `restore_token` and `copy_source_acl` are accepted but ignored (the emulator has no ACL plane and no hierarchical namespaces). `UpdateBucket` applies only the field-mask paths it models — `labels`, `versioning`, `storage_class`, `location`, and `retention_policy` — and bumps the bucket metageneration; unknown paths are ignored rather than rejected.
+
 ### Firestore: optimistic-concurrency conflict detection can miss a race under a frozen clock
 
 Firestore's `documents.patch` and transform-carrying `commit`/`batchWrite` writes are protected against concurrent lost updates via an optimistic-concurrency check: the document's `UpdateTime` at read time is captured and re-validated, atomically with applying the write, against the live document's current `UpdateTime` — a conflicting concurrent write causes the loser to receive `409 ABORTED` instead of silently overwriting the winner. This is correct and race-free under the real (or offset) clock, where `UpdateTime` values are effectively unique to nanosecond resolution.

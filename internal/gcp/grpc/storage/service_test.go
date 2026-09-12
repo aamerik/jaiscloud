@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -1114,5 +1116,291 @@ func TestReadObjectRange(t *testing.T) {
 	}
 	if zeroMsgs != 1 {
 		t.Fatalf("zero-length range messages = %d, want 1 (metadata only)", zeroMsgs)
+	}
+}
+
+func TestUpdateBucketLabelsAndPrecondition(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	initial, err := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucket})
+	if err != nil {
+		t.Fatalf("GetBucket: %v", err)
+	}
+	initialMeta := initial.GetMetageneration()
+	if initialMeta != 1 {
+		t.Fatalf("fresh bucket metageneration = %d, want 1", initialMeta)
+	}
+
+	updated, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket:     &storagepb.Bucket{Name: testBucket, Labels: map[string]string{"env": "prod"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBucket: %v", err)
+	}
+	if updated.GetLabels()["env"] != "prod" {
+		t.Fatalf("UpdateBucket labels = %v, want env=prod", updated.GetLabels())
+	}
+	if updated.GetMetageneration() != initialMeta+1 {
+		t.Fatalf("UpdateBucket metageneration = %d, want %d", updated.GetMetageneration(), initialMeta+1)
+	}
+
+	// A stale metageneration precondition must fail without mutating.
+	if _, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket:                &storagepb.Bucket{Name: testBucket, Labels: map[string]string{"env": "dev"}},
+		UpdateMask:            &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+		IfMetagenerationMatch: &initialMeta,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("UpdateBucket stale precondition err = %v, want FailedPrecondition", err)
+	}
+	if got, _ := client.GetBucket(ctx, &storagepb.GetBucketRequest{Name: testBucket}); got.GetLabels()["env"] != "prod" {
+		t.Fatalf("stale-precondition update mutated labels: %v", got.GetLabels())
+	}
+
+	// The current metageneration satisfies the precondition.
+	current := updated.GetMetageneration()
+	again, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket:                &storagepb.Bucket{Name: testBucket, Labels: map[string]string{"env": "dev"}},
+		UpdateMask:            &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+		IfMetagenerationMatch: &current,
+	})
+	if err != nil {
+		t.Fatalf("UpdateBucket matching precondition: %v", err)
+	}
+	if again.GetLabels()["env"] != "dev" {
+		t.Fatalf("UpdateBucket labels = %v, want env=dev", again.GetLabels())
+	}
+
+	// An update_mask is required.
+	if _, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket: &storagepb.Bucket{Name: testBucket, Labels: map[string]string{"env": "x"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateBucket missing mask err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestRestoreObject(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Versioned bucket so overwrites retain (tombstone) prior generations.
+	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "bucket-a",
+		Bucket: &storagepb.Bucket{
+			Project:    "projects/test-project",
+			Location:   "US",
+			Versioning: &storagepb.Bucket_Versioning{Enabled: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	v1 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-one"))
+	v2 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-two"))
+	if v1.GetGeneration() == v2.GetGeneration() {
+		t.Fatal("expected distinct generations")
+	}
+
+	// v1 is now non-live (tombstoned) after the v2 write.
+	dead, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("GetObject(v1): %v", err)
+	}
+	if dead.GetDeleteTime() == nil {
+		t.Fatal("expected v1 to carry a delete_time before restore")
+	}
+
+	restored, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreObject: %v", err)
+	}
+	if restored.GetGeneration() != v1.GetGeneration() {
+		t.Fatalf("RestoreObject generation = %d, want %d", restored.GetGeneration(), v1.GetGeneration())
+	}
+	if restored.GetDeleteTime() != nil {
+		t.Fatalf("RestoreObject delete_time = %v, want nil", restored.GetDeleteTime())
+	}
+
+	// v1 is the live generation again (reads resolve to it).
+	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
+		t.Fatalf("read after restore = %q, want version-one", got)
+	}
+	// v2 was superseded and is now non-live.
+	superseded, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("GetObject(v2): %v", err)
+	}
+	if superseded.GetDeleteTime() == nil {
+		t.Fatal("expected v2 to be non-live after restoring v1")
+	}
+
+	// Precondition mismatch on the current live generation fails without mutating.
+	stale := int64(99999999)
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(), IfGenerationMatch: &stale,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreObject precondition err = %v, want FailedPrecondition", err)
+	}
+	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
+		t.Fatalf("failed restore mutated live object: %q", got)
+	}
+
+	// An unknown generation is NotFound.
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration() + v2.GetGeneration() + 1,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RestoreObject unknown generation err = %v, want NotFound", err)
+	}
+}
+
+func TestLockBucketRetentionPolicy(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	// No retention policy yet: lock returns NotFound.
+	if _, err := client.LockBucketRetentionPolicy(ctx, &storagepb.LockBucketRetentionPolicyRequest{
+		Bucket: testBucket, IfMetagenerationMatch: 1,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("lock without retention policy err = %v, want NotFound", err)
+	}
+
+	// Set an unlocked retention policy via UpdateBucket.
+	upd, err := client.UpdateBucket(ctx, &storagepb.UpdateBucketRequest{
+		Bucket: &storagepb.Bucket{
+			Name:            testBucket,
+			RetentionPolicy: &storagepb.Bucket_RetentionPolicy{RetentionDuration: durationpb.New(time.Hour)},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"retention_policy"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBucket retention policy: %v", err)
+	}
+	if got := upd.GetRetentionPolicy().GetRetentionDuration().AsDuration(); got != time.Hour {
+		t.Fatalf("retention duration = %v, want 1h", got)
+	}
+	if upd.GetRetentionPolicy().GetIsLocked() {
+		t.Fatal("retention policy should start unlocked")
+	}
+	unlockedMeta := upd.GetMetageneration()
+
+	locked, err := client.LockBucketRetentionPolicy(ctx, &storagepb.LockBucketRetentionPolicyRequest{
+		Bucket: testBucket, IfMetagenerationMatch: unlockedMeta,
+	})
+	if err != nil {
+		t.Fatalf("LockBucketRetentionPolicy: %v", err)
+	}
+	if !locked.GetRetentionPolicy().GetIsLocked() {
+		t.Fatal("retention policy not locked after lock")
+	}
+	if locked.GetMetageneration() != unlockedMeta+1 {
+		t.Fatalf("metageneration after lock = %d, want %d", locked.GetMetageneration(), unlockedMeta+1)
+	}
+
+	// Locking again is harmless: still locked, metageneration unchanged.
+	lockedAgain, err := client.LockBucketRetentionPolicy(ctx, &storagepb.LockBucketRetentionPolicyRequest{
+		Bucket: testBucket, IfMetagenerationMatch: locked.GetMetageneration(),
+	})
+	if err != nil {
+		t.Fatalf("second LockBucketRetentionPolicy: %v", err)
+	}
+	if !lockedAgain.GetRetentionPolicy().GetIsLocked() {
+		t.Fatal("retention policy lost its lock on a second attempt")
+	}
+	if lockedAgain.GetMetageneration() != locked.GetMetageneration() {
+		t.Fatalf("second lock bumped metageneration to %d, want %d", lockedAgain.GetMetageneration(), locked.GetMetageneration())
+	}
+
+	// The precondition is enforced.
+	stale := int64(1)
+	if _, err := client.LockBucketRetentionPolicy(ctx, &storagepb.LockBucketRetentionPolicyRequest{
+		Bucket: testBucket, IfMetagenerationMatch: stale,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("lock stale precondition err = %v, want FailedPrecondition", err)
+	}
+}
+
+func TestCancelResumableWrite(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "cancel-me", Bucket: testBucket, ContentType: "text/plain"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+	if _, err := client.QueryWriteStatus(ctx, &storagepb.QueryWriteStatusRequest{UploadId: uploadID}); err != nil {
+		t.Fatalf("QueryWriteStatus before cancel: %v", err)
+	}
+
+	if _, err := client.CancelResumableWrite(ctx, &storagepb.CancelResumableWriteRequest{UploadId: uploadID}); err != nil {
+		t.Fatalf("CancelResumableWrite: %v", err)
+	}
+	if _, err := client.QueryWriteStatus(ctx, &storagepb.QueryWriteStatusRequest{UploadId: uploadID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("QueryWriteStatus after cancel err = %v, want NotFound", err)
+	}
+
+	// Idempotent for the same id and for an unknown id.
+	if _, err := client.CancelResumableWrite(ctx, &storagepb.CancelResumableWriteRequest{UploadId: uploadID}); err != nil {
+		t.Fatalf("CancelResumableWrite (idempotent): %v", err)
+	}
+	if _, err := client.CancelResumableWrite(ctx, &storagepb.CancelResumableWriteRequest{UploadId: "does-not-exist"}); err != nil {
+		t.Fatalf("CancelResumableWrite (unknown id): %v", err)
+	}
+
+	// An empty upload_id is invalid.
+	if _, err := client.CancelResumableWrite(ctx, &storagepb.CancelResumableWriteRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CancelResumableWrite empty id err = %v, want InvalidArgument", err)
+	}
+
+	// Cancelling the id of an already-completed upload must not remove the
+	// committed object (the session is already gone by completion).
+	done, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "completed-obj", Bucket: testBucket, ContentType: "text/plain"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite (completed): %v", err)
+	}
+	payload := []byte("already committed")
+	stream, err := client.WriteObject(ctx)
+	if err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.WriteObjectRequest{
+		FirstMessage: &storagepb.WriteObjectRequest_UploadId{UploadId: done.GetUploadId()},
+		WriteOffset:  0,
+		Data:         &storagepb.WriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: payload}},
+		FinishWrite:  true,
+	}); err != nil {
+		t.Fatalf("WriteObject Send: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("WriteObject CloseAndRecv: %v", err)
+	}
+	if _, err := client.CancelResumableWrite(ctx, &storagepb.CancelResumableWriteRequest{UploadId: done.GetUploadId()}); err != nil {
+		t.Fatalf("CancelResumableWrite (completed): %v", err)
+	}
+	if got := readObject(t, client, testBucket, "completed-obj"); !bytes.Equal(got, payload) {
+		t.Fatalf("completed object content = %q, want %q", got, payload)
 	}
 }
