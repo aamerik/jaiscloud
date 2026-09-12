@@ -322,6 +322,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
+			adminHandler.RegisterResetter(storageGRPC)
 			adminHandler.RegisterResetter(firestoreP)
 			adminHandler.RegisterResetter(firestoreGRPC)
 			adminHandler.RegisterPostRestoreHook(storageP)

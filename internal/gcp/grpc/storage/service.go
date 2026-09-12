@@ -10,7 +10,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,7 +54,10 @@ type Service struct {
 	uploads map[string]*uploadSession // in-progress resumable uploads (in-memory)
 }
 
-// uploadSession accumulates the bytes of an in-progress resumable write.
+// uploadSession accumulates the bytes of an in-progress resumable write. Bytes
+// stay in buf up to resumableSpillThreshold; past that they spill to private
+// tmpFile so a large upload never buffers fully in memory (mirroring the REST
+// provider's spill model).
 type uploadSession struct {
 	bucket       string
 	object       string
@@ -63,9 +68,27 @@ type uploadSession struct {
 	cseKeySHA256 string
 	precondition *gcs.Precondition // from WriteObjectSpec's if_* fields; checked atomically at finalize
 	buf          []byte
+	tmpPath      string   // spill file path once the threshold is exceeded
+	tmpFile      *os.File // open handle for appending spilled bytes
 	length       int64
 	lastAccess   time.Time
 }
+
+// closeSpill closes and removes the session's spill file, if any. It is
+// idempotent and safe to call on both the finalize and error/reset paths.
+func (sess *uploadSession) closeSpill() {
+	if sess.tmpFile != nil {
+		sess.tmpFile.Close()
+		os.Remove(sess.tmpPath)
+		sess.tmpFile = nil
+		sess.tmpPath = ""
+	}
+}
+
+// resumableSpillThreshold is the in-memory buffer size beyond which a
+// resumable upload session spills its accumulated bytes to a temp file. It
+// matches the REST provider's threshold so both transports behave alike.
+const resumableSpillThreshold = 4 << 20 // 4 MiB
 
 // NewService returns a Cloud Storage v2 gRPC service backed by the shared
 // object store, the generic ResourceStore (IAM policies), and the REST
@@ -79,6 +102,18 @@ func NewService(objects gcs.ObjectStore, resources store.ResourceStore, provider
 		defaultProj: defaultProj,
 		uploads:     make(map[string]*uploadSession),
 	}
+}
+
+// Reset closes and removes every in-progress resumable session's spill file
+// and clears the session map. Implements admin.Resetter so /_jaiscloud/reset
+// does not leak temp files across test runs.
+func (s *Service) Reset(_ context.Context) {
+	s.mu.Lock()
+	for _, sess := range s.uploads {
+		sess.closeSpill()
+	}
+	s.uploads = make(map[string]*uploadSession)
+	s.mu.Unlock()
 }
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
@@ -1044,15 +1079,70 @@ func (s *Service) QueryWriteStatus(ctx context.Context, req *storagepb.QueryWrit
 // stream left off). A gap or overlap is an OutOfRange error, matching real
 // GCS. It runs under s.mu so a concurrent QueryWriteStatus read of sess.length
 // never races with an active write stream.
+//
+// Bytes accumulate in memory until they would cross resumableSpillThreshold, at
+// which point the buffer is flushed to a temp file and subsequent bytes are
+// appended there (mirroring the REST provider's spill model), so a large upload
+// never holds its whole payload in memory.
 func (s *Service) appendData(sess *uploadSession, writeOffset int64, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if writeOffset != sess.length {
 		return &model.ProviderError{Code: "OutOfRange", Message: "write offset does not match the persisted size", HTTPStatus: 400, Status: "OUT_OF_RANGE"}
 	}
-	sess.buf = append(sess.buf, content...)
+	if sess.tmpFile != nil {
+		if _, err := sess.tmpFile.Write(content); err != nil {
+			return fmt.Errorf("resumable upload: write spill file: %w", err)
+		}
+	} else if int64(len(sess.buf))+int64(len(content)) > resumableSpillThreshold {
+		if err := spillUploadSession(sess); err != nil {
+			return err
+		}
+		if _, err := sess.tmpFile.Write(content); err != nil {
+			return fmt.Errorf("resumable upload: write spill file: %w", err)
+		}
+	} else {
+		sess.buf = append(sess.buf, content...)
+	}
 	sess.length += int64(len(content))
 	return nil
+}
+
+// spillUploadSession flushes the in-memory buffer to a temp file and switches
+// the session to file-backed accumulation. The caller must hold s.mu.
+func spillUploadSession(sess *uploadSession) error {
+	f, err := os.CreateTemp("", "jaiscloud-gcp-grpc-resumable-*")
+	if err != nil {
+		return fmt.Errorf("resumable upload: create spill file: %w", err)
+	}
+	if _, err := f.Write(sess.buf); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return fmt.Errorf("resumable upload: flush spill file: %w", err)
+	}
+	sess.tmpFile = f
+	sess.tmpPath = f.Name()
+	sess.buf = nil
+	return nil
+}
+
+// sessionBytes returns the session's accumulated bytes, reading them back from
+// the spill file when the session spilled. It runs under s.mu so a concurrent
+// resume stream's append cannot race the read (appendData takes the same lock).
+func (s *Service) sessionBytes(sess *uploadSession) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess.tmpFile == nil {
+		return sess.buf, nil
+	}
+	if _, err := sess.tmpFile.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("resumable upload: seek spill file: %w", err)
+	}
+	data, err := io.ReadAll(sess.tmpFile)
+	if err != nil {
+		return nil, fmt.Errorf("resumable upload: read spill file: %w", err)
+	}
+	return data, nil
 }
 
 // finalize persists the accumulated bytes as a new object generation and
@@ -1080,7 +1170,11 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
 	}
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, sess.buf, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256, sess.precondition)
+	raw, err := s.sessionBytes(sess)
+	if err != nil {
+		return nil, err
+	}
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, raw, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256, sess.precondition)
 	if err != nil {
 		// The caller maps the result to a gRPC status.
 		return nil, preconditionResult(err)
@@ -1095,6 +1189,16 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 	var uploadID string
 	project := ""
 	resumable := false
+
+	// A non-resumable session is local to this stream, so its spill file (if
+	// any) is removed when the stream ends, success or error. A resumable
+	// session stays in the upload map for a later resume and is cleaned up on
+	// finish (below) or Reset.
+	defer func() {
+		if sess != nil && !resumable {
+			sess.closeSpill()
+		}
+	}()
 
 	for {
 		req, err := stream.Recv()
@@ -1146,6 +1250,7 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 				s.mu.Lock()
 				delete(s.uploads, uploadID)
 				s.mu.Unlock()
+				sess.closeSpill()
 				_ = s.objects.DeleteResumable(ctx, uploadID)
 			}
 			return stream.SendAndClose(&storagepb.WriteObjectResponse{
@@ -1168,6 +1273,16 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 	var uploadID string
 	project := ""
 	resumable := false
+
+	// A non-resumable session is local to this stream, so its spill file (if
+	// any) is removed when the stream ends, success or error. A resumable
+	// session stays in the upload map for a later resume and is cleaned up on
+	// finish (below) or Reset.
+	defer func() {
+		if sess != nil && !resumable {
+			sess.closeSpill()
+		}
+	}()
 
 	for {
 		req, err := stream.Recv()
@@ -1226,6 +1341,7 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 				s.mu.Lock()
 				delete(s.uploads, uploadID)
 				s.mu.Unlock()
+				sess.closeSpill()
 				_ = s.objects.DeleteResumable(ctx, uploadID)
 			}
 			return stream.Send(&storagepb.BidiWriteObjectResponse{
@@ -1251,27 +1367,42 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 
 // ─── reads ────────────────────────────────────────────────────────────────────
 
+// ReadObject streams an object (or a byte range of it) to the client.
+//
+// Range handling note: objects are stored as a single AES-256-GCM blob
+// (iv || ciphertext || tag) for both CSEK and the server/CMEK envelope. GCM
+// authenticates the entire ciphertext with one tag, so the requested window
+// cannot be decrypted without processing the whole blob — true partial
+// decryption is not feasible for the on-disk format. The closest safe
+// improvement is therefore: (1) decrypt exactly once per request (the provider
+// returns the full plaintext and the range is sliced as a view, with no copy),
+// and (2) detect a zero-byte range from the metadata and skip the blob read and
+// decryption entirely. Both paths preserve correctness.
 func (s *Service) ReadObject(req *storagepb.ReadObjectRequest, stream storagepb.Storage_ReadObjectServer) error {
 	ctx := stream.Context()
 	bucket := parseBucketName(req.GetBucket())
 	project := s.projectForBucket(ctx, bucket)
-
 	gen := ""
 	if req.GetGeneration() > 0 {
 		gen = int64ToGen(req.GetGeneration())
 	}
-	var cseKey []byte
-	if cop := req.GetCommonObjectRequestParams(); cop != nil {
-		cseKey, _ = cseKeyFromParams(cop)
+
+	// Resolve the byte range from metadata before touching the blob so a
+	// zero-length read never decrypts the object.
+	var meta gcs.ObjectMeta
+	var err error
+	if req.GetGeneration() > 0 {
+		meta, err = s.objects.GetObjectGeneration(ctx, bucket, req.GetObject(), gen)
+	} else {
+		meta, err = s.objects.GetObjectMeta(ctx, bucket, req.GetObject())
 	}
-	meta, plain, err := s.provider.GetObjectData(ctx, project, bucket, req.GetObject(), gen, cseKey)
 	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return mapError(model.NewProviderError("NotFound", "object not found", 404))
+		}
 		return mapError(err)
 	}
-
-	// Honor read_offset (negative = from end) and read_limit.
-	start, end := readRange(int64(len(plain)), req.GetReadOffset(), req.GetReadLimit())
-	data := plain[start:end]
+	start, end := readRange(meta.Size, req.GetReadOffset(), req.GetReadLimit())
 
 	// First message carries metadata + object checksums + content range.
 	first := &storagepb.ReadObjectResponse{
@@ -1280,12 +1411,40 @@ func (s *Service) ReadObject(req *storagepb.ReadObjectRequest, stream storagepb.
 		ContentRange: &storagepb.ContentRange{
 			Start:          start,
 			End:            end,
-			CompleteLength: int64(len(plain)),
+			CompleteLength: meta.Size,
 		},
 	}
+	if start == end {
+		// Zero-byte range: metadata-only response; no blob read/decrypt.
+		return stream.Send(first)
+	}
+
+	var cseKey []byte
+	if cop := req.GetCommonObjectRequestParams(); cop != nil {
+		cseKey, _ = cseKeyFromParams(cop)
+	}
+	readMeta, plain, err := s.provider.GetObjectData(ctx, project, bucket, req.GetObject(), gen, cseKey)
+	if err != nil {
+		return mapError(err)
+	}
+	meta = readMeta
+	// Defensive clamp: metadata size and the decrypted length should agree, but
+	// never index past the plaintext actually in hand.
+	if int64(len(plain)) < end {
+		end = int64(len(plain))
+	}
+	if start > end {
+		start = end
+	}
+	// Rebuild the envelope from the decrypted plaintext (the authoritative
+	// length) rather than the pre-decrypt metadata snapshot.
+	first.Metadata = objectToProto(meta)
+	first.ObjectChecksums = objectChecksumsFromMeta(meta)
+	first.ContentRange = &storagepb.ContentRange{Start: start, End: end, CompleteLength: int64(len(plain))}
 	if err := stream.Send(first); err != nil {
 		return err
 	}
+	data := plain[start:end]
 
 	// Stream the data in bounded chunks.
 	const chunk = 2 << 20 // 2 MiB

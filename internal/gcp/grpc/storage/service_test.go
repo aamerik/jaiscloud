@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
@@ -882,5 +885,234 @@ func TestStorageIAMNotFound(t *testing.T) {
 		Resource: "projects/_/buckets/missing-bucket",
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("TestIamPermissions missing bucket: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── resumable spill ──────────────────────────────────────────────────────────
+
+func TestResumableUploadSpillsToTempFileAndCleansUp(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "spill-obj", Bucket: testBucket, ContentType: "application/octet-stream"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+
+	// Two sub-4-MiB chunks: each is under the gRPC default max message size,
+	// but together they cross resumableSpillThreshold and force a spill.
+	chunk1 := bytes.Repeat([]byte("x"), 3<<20)
+	chunk2 := bytes.Repeat([]byte("y"), 2<<20)
+	big := append(append([]byte{}, chunk1...), chunk2...)
+	stream, err := client.BidiWriteObject(ctx)
+	if err != nil {
+		t.Fatalf("BidiWriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		FirstMessage: &storagepb.BidiWriteObjectRequest_UploadId{UploadId: uploadID},
+		WriteOffset:  0,
+		Data:         &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk1}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send first chunk: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		WriteOffset: int64(len(chunk1)),
+		Data:        &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk2}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send second chunk: %v", err)
+	}
+	// A state lookup forces the server to process the preceding data messages
+	// before we inspect in-memory session state (client Send is asynchronous).
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{StateLookup: true}); err != nil {
+		t.Fatalf("BidiWriteObject send state lookup: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("BidiWriteObject state lookup Recv: %v", err)
+	}
+
+	// The session must have spilled: bytes live in a temp file, not memory.
+	svc.mu.Lock()
+	sess := svc.uploads[uploadID]
+	spilled := sess != nil && sess.tmpFile != nil && sess.buf == nil
+	var tmpPath string
+	if spilled {
+		tmpPath = sess.tmpPath
+	}
+	svc.mu.Unlock()
+	if !spilled {
+		t.Fatal("expected the resumable session to spill to a temp file past the threshold")
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("expected spill file %s to exist: %v", tmpPath, err)
+	}
+
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{FinishWrite: true}); err != nil {
+		t.Fatalf("BidiWriteObject send finish: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("BidiWriteObject Recv: %v", err)
+	}
+	if resp.GetResource() == nil {
+		t.Fatalf("BidiWriteObject response = %v, want Resource", resp.GetWriteStatus())
+	}
+
+	if got := readObject(t, client, testBucket, "spill-obj"); !bytes.Equal(got, big) {
+		t.Fatalf("spilled round-trip: got %d bytes, want %d", len(got), len(big))
+	}
+	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("spill file %s not removed after finalize (err=%v)", tmpPath, err)
+	}
+}
+
+func TestResetRemovesSpillFiles(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "reset-obj", Bucket: testBucket, ContentType: "application/octet-stream"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+
+	stream, err := client.BidiWriteObject(ctx)
+	if err != nil {
+		t.Fatalf("BidiWriteObject: %v", err)
+	}
+	chunk1 := bytes.Repeat([]byte("y"), 3<<20)
+	chunk2 := bytes.Repeat([]byte("z"), 2<<20)
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		FirstMessage: &storagepb.BidiWriteObjectRequest_UploadId{UploadId: uploadID},
+		WriteOffset:  0,
+		Data:         &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk1}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send first chunk: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		WriteOffset: int64(len(chunk1)),
+		Data:        &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk2}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send second chunk: %v", err)
+	}
+	// Synchronize with the server before inspecting session state.
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{StateLookup: true}); err != nil {
+		t.Fatalf("BidiWriteObject send state lookup: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("BidiWriteObject state lookup Recv: %v", err)
+	}
+
+	svc.mu.Lock()
+	sess := svc.uploads[uploadID]
+	var tmpPath string
+	if sess != nil {
+		tmpPath = sess.tmpPath
+	}
+	svc.mu.Unlock()
+	if tmpPath == "" {
+		t.Fatal("expected a spilled session before Reset")
+	}
+
+	svc.Reset(ctx)
+	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("spill file %s not removed by Reset (err=%v)", tmpPath, err)
+	}
+	if _, err := client.QueryWriteStatus(ctx, &storagepb.QueryWriteStatusRequest{UploadId: uploadID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("QueryWriteStatus after Reset: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── range reads ──────────────────────────────────────────────────────────────
+
+func TestReadObjectRange(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	payload := []byte("0123456789abcdefghij")
+	writeSingleShot(t, client, testBucket, "range-obj", "text/plain", payload)
+
+	stream, err := client.ReadObject(ctx, &storagepb.ReadObjectRequest{
+		Bucket: testBucket, Object: "range-obj", ReadOffset: 5, ReadLimit: 4,
+	})
+	if err != nil {
+		t.Fatalf("ReadObject: %v", err)
+	}
+	var out []byte
+	first := true
+	var cr *storagepb.ContentRange
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadObject Recv: %v", err)
+		}
+		if first {
+			first = false
+			cr = msg.GetContentRange()
+			if msg.GetMetadata() == nil {
+				t.Fatal("ReadObject first message missing metadata")
+			}
+		}
+		if cd := msg.GetChecksummedData(); cd != nil {
+			out = append(out, cd.GetContent()...)
+		}
+	}
+	if string(out) != "5678" {
+		t.Fatalf("range read = %q, want 5678", out)
+	}
+	if cr.GetStart() != 5 || cr.GetEnd() != 9 || cr.GetCompleteLength() != int64(len(payload)) {
+		t.Fatalf("content range = %+v, want start=5 end=9 complete=%d", cr, len(payload))
+	}
+
+	// A whole-object read still round-trips.
+	if got := readObject(t, client, testBucket, "range-obj"); !bytes.Equal(got, payload) {
+		t.Fatalf("full read = %q, want %q", got, payload)
+	}
+
+	// A zero-length range (offset at EOF) returns metadata only and no data
+	// chunks; this path deliberately skips the blob read and decryption.
+	zero, err := client.ReadObject(ctx, &storagepb.ReadObjectRequest{
+		Bucket: testBucket, Object: "range-obj", ReadOffset: int64(len(payload)),
+	})
+	if err != nil {
+		t.Fatalf("ReadObject zero range: %v", err)
+	}
+	zeroMsgs := 0
+	for {
+		msg, err := zero.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadObject zero range Recv: %v", err)
+		}
+		zeroMsgs++
+		if msg.GetChecksummedData() != nil {
+			t.Fatalf("zero-length range returned data: %q", msg.GetChecksummedData().GetContent())
+		}
+		cr := msg.GetContentRange()
+		if cr.GetStart() != int64(len(payload)) || cr.GetEnd() != int64(len(payload)) {
+			t.Fatalf("zero-length content range = %+v, want start=end=%d", cr, len(payload))
+		}
+	}
+	if zeroMsgs != 1 {
+		t.Fatalf("zero-length range messages = %d, want 1 (metadata only)", zeroMsgs)
 	}
 }
