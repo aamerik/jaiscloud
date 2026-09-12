@@ -3,11 +3,15 @@ package datastore
 import (
 	"context"
 	"testing"
+	"time"
 
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 
+	"jaiscloud/internal/clock"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // readTxn builds ReadOptions carrying an explicit transaction selector, as the
@@ -305,5 +309,218 @@ func TestTransactionRunQueryRecordsReads(t *testing.T) {
 	// A commit with no mutations still validates the read-set and must abort.
 	if _, err := txnCommit(t, client, txn); status.Code(err) != codes.Aborted {
 		t.Fatalf("commit err = %v, want Aborted", err)
+	}
+}
+
+// ─── coverage additions ──────────────────────────────────────────────────────
+
+// TestTransactionCommitMixedMutations exercises the Upsert and Delete branches
+// of the transactional path (the other tests only commit Insert/Update).
+func TestTransactionCommitMixedMutations(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	upsertTask(t, client, "a", 1)
+	upsertTask(t, client, "b", 1)
+	txn := beginTxn(t, client)
+	if lookupTask(t, client, "a", txn) == nil {
+		t.Fatal("transactional lookup did not find a")
+	}
+
+	resp, err := txnCommit(t, client, txn,
+		&datastorepb.Mutation{Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "c"), map[string]*datastorepb.Value{"n": intVal(7)})}},
+		&datastorepb.Mutation{Operation: &datastorepb.Mutation_Delete{Delete: nameKey("Task", "b")}},
+		&datastorepb.Mutation{Operation: &datastorepb.Mutation_Update{Update: entity(nameKey("Task", "a"), map[string]*datastorepb.Value{"n": intVal(2)})}},
+	)
+	if err != nil {
+		t.Fatalf("transactional commit: %v", err)
+	}
+	if len(resp.GetMutationResults()) != 3 {
+		t.Fatalf("mutation_results = %d, want 3", len(resp.GetMutationResults()))
+	}
+	if got := lookupTask(t, client, "c", nil).GetEntity().GetProperties()["n"].GetIntegerValue(); got != 7 {
+		t.Fatalf("c.n = %d, want 7 (upsert)", got)
+	}
+	if r := lookupTask(t, client, "b", nil); r != nil {
+		t.Fatalf("b should have been deleted, got %+v", r)
+	}
+	if got := lookupTask(t, client, "a", nil).GetEntity().GetProperties()["n"].GetIntegerValue(); got != 2 {
+		t.Fatalf("a.n = %d, want 2 (update)", got)
+	}
+}
+
+// TestTransactionCommitAutoAllocatesID covers the allocated-key branch: an
+// Insert with an incomplete key inside a transaction gets a server-allocated
+// id, returned in mutation_results[i].key.
+func TestTransactionCommitAutoAllocatesID(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	txn := beginTxn(t, client)
+	resp, err := txnCommit(t, client, txn, &datastorepb.Mutation{
+		Operation: &datastorepb.Mutation_Insert{Insert: entity(incompleteKey("Task"), map[string]*datastorepb.Value{"n": intVal(1)})},
+	})
+	if err != nil {
+		t.Fatalf("transactional commit: %v", err)
+	}
+	k := resp.GetMutationResults()[0].GetKey()
+	if k == nil {
+		t.Fatal("an auto-allocated insert must return the allocated key")
+	}
+	path := k.GetPath()
+	if len(path) == 0 || path[len(path)-1].GetId() == 0 {
+		t.Fatalf("auto-allocated key has no id: %v", k)
+	}
+
+	// An Upsert with an incomplete key auto-allocates too.
+	txn2 := beginTxn(t, client)
+	resp2, err := txnCommit(t, client, txn2, &datastorepb.Mutation{
+		Operation: &datastorepb.Mutation_Upsert{Upsert: entity(incompleteKey("Task"), map[string]*datastorepb.Value{"n": intVal(2)})},
+	})
+	if err != nil {
+		t.Fatalf("transactional upsert commit: %v", err)
+	}
+	k2 := resp2.GetMutationResults()[0].GetKey()
+	if k2 == nil || len(k2.GetPath()) == 0 || k2.GetPath()[len(k2.GetPath())-1].GetId() == 0 {
+		t.Fatalf("upsert auto-allocated key missing id: %v", k2)
+	}
+}
+
+// TestTransactionIncompleteUpdateKeyInvalid covers the transactional path's
+// incomplete-Update-key rejection.
+func TestTransactionIncompleteUpdateKeyInvalid(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	txn := beginTxn(t, client)
+	_, err := txnCommit(t, client, txn, &datastorepb.Mutation{
+		Operation: &datastorepb.Mutation_Update{Update: entity(incompleteKey("Task"), map[string]*datastorepb.Value{"n": intVal(1)})},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("err = %v, want InvalidArgument", err)
+	}
+}
+
+// TestRollbackEmptyTransactionIdempotent covers Rollback with no transaction
+// (a no-op, matching real Datastore's tolerance of an unknown transaction).
+func TestRollbackEmptyTransactionIdempotent(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.Rollback(ctx, &datastorepb.RollbackRequest{ProjectId: "test"}); err != nil {
+		t.Fatalf("rollback with no transaction = %v, want nil", err)
+	}
+	if _, err := client.Rollback(ctx, &datastorepb.RollbackRequest{ProjectId: "test", Transaction: []byte("unknown")}); err != nil {
+		t.Fatalf("rollback with unknown transaction = %v, want nil", err)
+	}
+}
+
+// TestTransactionUpdateTimePreconditionMismatch covers the Mutation_UpdateTime
+// conflict-detection branch (the other tests only use base_version).
+func TestTransactionUpdateTimePreconditionMismatch(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	upsertTask(t, client, "a", 1)
+	txn := beginTxn(t, client)
+	if lookupTask(t, client, "a", txn) == nil {
+		t.Fatal("transactional lookup did not find a")
+	}
+
+	_, err := txnCommit(t, client, txn, &datastorepb.Mutation{
+		Operation:                 &datastorepb.Mutation_Update{Update: entity(nameKey("Task", "a"), map[string]*datastorepb.Value{"n": intVal(2)})},
+		ConflictDetectionStrategy: &datastorepb.Mutation_UpdateTime{UpdateTime: timestamppb.New(time.Now().Add(-time.Hour))},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("commit err = %v, want FailedPrecondition", err)
+	}
+	if got := lookupTask(t, client, "a", nil).GetEntity().GetProperties()["n"].GetIntegerValue(); got != 1 {
+		t.Fatalf("n = %d after precondition failure, want 1", got)
+	}
+}
+
+// TestTransactionCommitNoOperationMutation covers the transactional path's
+// default branch: a mutation carrying no operation is INVALID_ARGUMENT.
+func TestTransactionCommitNoOperationMutation(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	txn := beginTxn(t, client)
+	if _, err := txnCommit(t, client, txn, &datastorepb.Mutation{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("commit err = %v, want InvalidArgument", err)
+	}
+}
+
+// TestCommitExplicitNonTransactional covers the explicit NON_TRANSACTIONAL mode
+// (the other tests rely on the MODE_UNSPECIFIED default).
+func TestCommitExplicitNonTransactional(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	resp, err := client.Commit(ctx, &datastorepb.CommitRequest{
+		ProjectId: "test",
+		Mode:      datastorepb.CommitRequest_NON_TRANSACTIONAL,
+		Mutations: []*datastorepb.Mutation{{
+			Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "x"), map[string]*datastorepb.Value{"n": intVal(1)})},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if resp.GetCommitTime() != nil {
+		t.Fatal("non-transactional commit must not set commit_time")
+	}
+	if got := lookupTask(t, client, "x", nil); got == nil {
+		t.Fatal("upsert did not apply")
+	}
+}
+
+// TestTransactionExpiredTTL verifies that a transaction past its TTL is evicted
+// and can no longer be committed (real Datastore expires transactions too).
+func TestTransactionExpiredTTL(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	clock.SetGlobalClock(clock.FixedClock{T: time.Now()})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	txn := beginTxn(t, client)
+	// Advance well past the ~270s transaction TTL.
+	clock.SetGlobalClock(clock.FixedClock{T: time.Now().Add(10 * time.Minute)})
+
+	_, err := txnCommit(t, client, txn, &datastorepb.Mutation{
+		Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "a"), map[string]*datastorepb.Value{"n": intVal(1)})},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expired transaction err = %v, want InvalidArgument", err)
+	}
+}
+
+// TestLookupRunQueryUnknownTransaction verifies a non-empty but unknown
+// transaction selector is rejected on reads (not silently ignored).
+func TestLookupRunQueryUnknownTransaction(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	bogus := []byte("not-a-real-transaction")
+
+	_, err := client.Lookup(ctx, &datastorepb.LookupRequest{
+		ProjectId:   "test",
+		Keys:        []*datastorepb.Key{nameKey("Task", "a")},
+		ReadOptions: readTxn(bogus),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("lookup unknown transaction err = %v, want InvalidArgument", err)
+	}
+
+	_, err = client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+		ProjectId:   "test",
+		QueryType:   &datastorepb.RunQueryRequest_Query{Query: &datastorepb.Query{Kind: []*datastorepb.KindExpression{{Name: "Task"}}}},
+		ReadOptions: readTxn(bogus),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("runquery unknown transaction err = %v, want InvalidArgument", err)
 	}
 }
