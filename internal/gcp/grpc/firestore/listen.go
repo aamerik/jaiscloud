@@ -41,6 +41,14 @@ type listenTarget struct {
 	query     *firestoreprovider.StructuredQuery
 	parent    string
 	documents []string
+
+	// seq is this target's own delivered sequence position: the highest
+	// change-feed sequence it has been brought up to (by snapshot, incremental
+	// replay, or a live delta). Real Firestore resume tokens are per-target;
+	// encoding seq rather than the global head in this target's TargetChange
+	// frames is the emulator's approximation of that cursor (see the package
+	// doc's Listen fidelity note).
+	seq uint64
 }
 
 func (t listenTarget) isQuery() bool { return t.query != nil }
@@ -51,7 +59,7 @@ func (t listenTarget) isQuery() bool { return t.query != nil }
 type listenSession struct {
 	srv     *Service
 	stream  firestorepb.Firestore_ListenServer
-	targets map[int32]listenTarget
+	targets map[int32]*listenTarget
 	nextID  int32
 
 	// lastReadTime is the most recent read_time handed out on this stream.
@@ -84,7 +92,7 @@ func (s *Service) Listen(stream firestorepb.Firestore_ListenServer) error {
 	ls := &listenSession{
 		srv:     s,
 		stream:  stream,
-		targets: make(map[int32]listenTarget),
+		targets: make(map[int32]*listenTarget),
 	}
 
 	sub := s.svc.SubscribeChange()
@@ -153,7 +161,8 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 	if err != nil {
 		return err
 	}
-	ls.targets[id] = target
+	lt := &target
+	ls.targets[id] = lt
 
 	if err := ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
 		TargetChange: &firestorepb.TargetChange{
@@ -164,32 +173,55 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 		return err
 	}
 
-	// A valid resume token replays only the deltas after it; an absent or
-	// invalid token falls back to the full initial snapshot.
+	// Capture the feed position this target is about to observe, before reading
+	// the snapshot/replay. Any write published after this point is still
+	// buffered on the stream subscription and delivered by handleChange, so
+	// advancing the cursor to it can never advertise a delta that was not (or
+	// will not be) delivered — unlike reading the head after the snapshot, which
+	// could run past a buffered event. Reads that land between this position and
+	// the snapshot store-read are seen twice (snapshot + delta), never lost.
+	base := ls.srv.svc.CurrentSeq()
+
+	// A valid, unexpired resume token replays only this target's deltas after
+	// it; an absent, malformed, evicted, or pre-reset token falls back to the
+	// full initial snapshot. seq == 0 is treated as the start of time (not a
+	// resumable position) because the change log records only writes, not a
+	// document history, so replaying from zero cannot reconstruct documents
+	// that predate the log.
 	incremental := false
 	if rt, ok := t.GetResumeType().(*firestorepb.Target_ResumeToken); ok {
-		if seq, valid := DecodeResumeToken(rt.ResumeToken); valid {
+		if seq, valid := DecodeResumeToken(rt.ResumeToken); valid && seq > 0 && ls.srv.svc.ReplayableFrom(seq) {
 			incremental = true
 			for _, ev := range ls.srv.svc.ChangesSince(seq) {
-				if ls.targetMatches(target, ev) {
+				if ls.targetMatches(*lt, ev) {
 					if err := ls.sendChange(id, ev); err != nil {
 						return err
+					}
+					if ev.Seq > lt.seq {
+						lt.seq = ev.Seq
 					}
 				}
 			}
 		}
 	}
 	if !incremental {
-		if err := ls.sendSnapshot(id, target); err != nil {
+		if err := ls.sendSnapshot(id, *lt); err != nil {
 			return err
 		}
+	}
+
+	// The target is now caught up through `base` (and through any later delta it
+	// replayed). Deltas published after `base` arrive via handleChange and advance
+	// the cursor from there.
+	if base > lt.seq {
+		lt.seq = base
 	}
 
 	if err := ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
 		TargetChange: &firestorepb.TargetChange{
 			TargetChangeType: firestorepb.TargetChange_CURRENT,
 			TargetIds:        []int32{id},
-			ResumeToken:      EncodeResumeToken(ls.srv.svc.CurrentSeq()),
+			ResumeToken:      EncodeResumeToken(lt.seq),
 			ReadTime:         timestamppb.New(ls.nextReadTime()),
 		},
 	}}); err != nil {
@@ -205,16 +237,40 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 }
 
 // sendNoChange emits a NO_CHANGE frame with empty target_ids (meaning "all
-// targets on this stream"), a monotonic read_time, and the current change-feed
-// resume token. The SDK concludes a snapshot epoch on this frame.
+// targets on this stream"), a monotonic read_time, and a resume token covering
+// all targets. The SDK concludes a snapshot epoch on this frame.
 func (ls *listenSession) sendNoChange() error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
 		TargetChange: &firestorepb.TargetChange{
 			TargetChangeType: firestorepb.TargetChange_NO_CHANGE,
 			ReadTime:         timestamppb.New(ls.nextReadTime()),
-			ResumeToken:      EncodeResumeToken(ls.srv.svc.CurrentSeq()),
+			ResumeToken:      EncodeResumeToken(ls.allTargetsSeq()),
 		},
 	}})
+}
+
+// allTargetsSeq returns the resume position advertised on the empty target_ids
+// NO_CHANGE frame. The proto defines that token as covering "all targets", which
+// a single 8-byte token cannot represent exactly once targets sit at different
+// positions; real Firestore instead pairs each resume token with its own
+// target_ids. As the safe approximation this returns the minimum of the live
+// targets' cursors (or the global head when there are no targets): a position at
+// or below every target's delivered seq means resuming all targets can replay a
+// duplicate delta but never skip one. Note the Go SDK watches a single target per
+// stream, so there this is exactly that target's cursor.
+func (ls *listenSession) allTargetsSeq() uint64 {
+	if len(ls.targets) == 0 {
+		return ls.srv.svc.CurrentSeq()
+	}
+	var min uint64
+	first := true
+	for _, t := range ls.targets {
+		if first || t.seq < min {
+			min = t.seq
+			first = false
+		}
+	}
+	return min
 }
 
 func (ls *listenSession) handleRemoveTarget(id int32) error {
@@ -230,8 +286,11 @@ func (ls *listenSession) handleRemoveTarget(id int32) error {
 func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
 	sent := false
 	for id, t := range ls.targets {
-		if ls.targetMatches(t, ev) {
+		if ls.targetMatches(*t, ev) {
 			_ = ls.sendChange(id, ev)
+			if ev.Seq > t.seq {
+				t.seq = ev.Seq
+			}
 			sent = true
 		}
 	}

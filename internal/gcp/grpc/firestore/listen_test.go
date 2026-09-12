@@ -70,6 +70,13 @@ func addTargetReq(t *firestorepb.Target) *firestorepb.ListenRequest {
 	}
 }
 
+func removeTargetReq(tid int32) *firestorepb.ListenRequest {
+	return &firestorepb.ListenRequest{
+		Database:     "projects/test/databases/(default)",
+		TargetChange: &firestorepb.ListenRequest_RemoveTarget{RemoveTarget: tid},
+	}
+}
+
 func recvN(t *testing.T, stream firestorepb.Firestore_ListenClient, n int, timeout time.Duration) []*firestorepb.ListenResponse {
 	t.Helper()
 	var responses []*firestorepb.ListenResponse
@@ -650,5 +657,190 @@ func TestPublishChangeNonBlocking(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("publishChange blocked on a full subscriber channel")
+	}
+}
+
+// TestListenMultiTargetPerTargetResumeTokens asserts that each target tracks its
+// own delivered sequence and is resumed from its own resume token. Because a
+// single empty-target_ids NO_CHANGE token cannot carry one cursor per target,
+// the stream-wide token is the minimum of the live cursors (documented
+// approximation); this test pins that behavior and shows each target replaying
+// only its own deltas when resumed from its own token.
+func TestListenMultiTargetPerTargetResumeTokens(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed one doc in "a" so target 1 snapshots at head 1.
+	svc.CreateDocument(ctx, "test", "(default)", "a", "a1", map[string]*firestorestore.Value{
+		"v": firestorestore.StringVal("1"),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	// Target 1 on "a": ADD, a1, CURRENT, NO_CHANGE. Its own token is seq 1.
+	if err := stream.Send(addTargetReq(queryTarget(1, "a"))); err != nil {
+		t.Fatalf("send target 1: %v", err)
+	}
+	rs := recvN(t, stream, 4, 3*time.Second)
+	t1Token := rs[2].GetTargetChange().GetResumeToken()
+	if seq, ok := DecodeResumeToken(t1Token); !ok || seq != 1 {
+		t.Fatalf("target 1 CURRENT token seq = %d ok = %v, want 1", seq, ok)
+	}
+
+	// Seed a doc in "b" (head 2) and add target 2: its cursor is 2, distinct
+	// from target 1's 1.
+	svc.CreateDocument(ctx, "test", "(default)", "b", "b1", map[string]*firestorestore.Value{
+		"v": firestorestore.StringVal("1"),
+	})
+	if err := stream.Send(addTargetReq(queryTarget(2, "b"))); err != nil {
+		t.Fatalf("send target 2: %v", err)
+	}
+	rs = recvN(t, stream, 4, 3*time.Second)
+	t2Token := rs[2].GetTargetChange().GetResumeToken()
+	if seq, ok := DecodeResumeToken(t2Token); !ok || seq != 2 {
+		t.Fatalf("target 2 CURRENT token seq = %d ok = %v, want 2", seq, ok)
+	}
+
+	// A new "a" doc (seq 3) matches only target 1, leaving target 2 at 2: the
+	// NO_CHANGE token is min(3, 2) = 2, not the global head 3.
+	svc.CreateDocument(ctx, "test", "(default)", "a", "a2", map[string]*firestorestore.Value{
+		"v": firestorestore.StringVal("2"),
+	})
+	rs = recvN(t, stream, 2, 3*time.Second)
+	if dc := rs[0].GetDocumentChange(); dc == nil || !containsTargetID(dc.TargetIds, 1) {
+		t.Fatalf("expected DocumentChange for target 1, got %v", rs[0])
+	}
+	if seq, ok := DecodeResumeToken(rs[1].GetTargetChange().GetResumeToken()); !ok || seq != 2 {
+		t.Fatalf("stream NO_CHANGE token after a2 = seq %d ok = %v, want 2 (min cursor)", seq, ok)
+	}
+
+	// A new "b" doc (seq 4) matches only target 2: min cursor becomes 3.
+	svc.CreateDocument(ctx, "test", "(default)", "b", "b2", map[string]*firestorestore.Value{
+		"v": firestorestore.StringVal("2"),
+	})
+	rs = recvN(t, stream, 2, 3*time.Second)
+	if dc := rs[0].GetDocumentChange(); dc == nil || !containsTargetID(dc.TargetIds, 2) {
+		t.Fatalf("expected DocumentChange for target 2, got %v", rs[0])
+	}
+	if seq, ok := DecodeResumeToken(rs[1].GetTargetChange().GetResumeToken()); !ok || seq != 3 {
+		t.Fatalf("stream NO_CHANGE token after b2 = seq %d ok = %v, want 3 (min cursor)", seq, ok)
+	}
+
+	// Resume target 1 from its own token (seq 1): it must replay only a2 (seq 3),
+	// not target 2's b2.
+	if err := stream.Send(removeTargetReq(1)); err != nil {
+		t.Fatalf("remove target 1: %v", err)
+	}
+	recvN(t, stream, 1, 3*time.Second)
+	t1Resume := queryTarget(3, "a")
+	t1Resume.ResumeType = &firestorepb.Target_ResumeToken{ResumeToken: t1Token}
+	if err := stream.Send(addTargetReq(t1Resume)); err != nil {
+		t.Fatalf("resume target 1: %v", err)
+	}
+	rs = recvN(t, stream, 4, 3*time.Second) // ADD, a2, CURRENT, NO_CHANGE
+	dc := rs[1].GetDocumentChange()
+	if dc == nil || dc.Document.Name != listenParent+"/a/a2" {
+		t.Fatalf("target 1 resume replayed %v, want only a2", rs[1])
+	}
+	if !containsTargetID(dc.TargetIds, 3) {
+		t.Fatalf("target 1 resume change target_ids = %v, want [3]", dc.TargetIds)
+	}
+
+	// Resume target 2 from its own token (seq 2): it must replay only b2 (seq 4).
+	if err := stream.Send(removeTargetReq(2)); err != nil {
+		t.Fatalf("remove target 2: %v", err)
+	}
+	recvN(t, stream, 1, 3*time.Second)
+	t2Resume := queryTarget(4, "b")
+	t2Resume.ResumeType = &firestorepb.Target_ResumeToken{ResumeToken: t2Token}
+	if err := stream.Send(addTargetReq(t2Resume)); err != nil {
+		t.Fatalf("resume target 2: %v", err)
+	}
+	rs = recvN(t, stream, 4, 3*time.Second) // ADD, b2, CURRENT, NO_CHANGE
+	dc = rs[1].GetDocumentChange()
+	if dc == nil || dc.Document.Name != listenParent+"/b/b2" {
+		t.Fatalf("target 2 resume replayed %v, want only b2", rs[1])
+	}
+}
+
+// TestListenResumeTokenBelowFloorFallsBackToSnapshot asserts that a resume token
+// whose deltas have been evicted (below the retention floor) is treated as
+// expired: the target gets a fresh snapshot instead of replaying from a partial
+// history. Deltas that would have matched are gone, so a stale replay would be
+// silently lossy.
+func TestListenResumeTokenBelowFloorFallsBackToSnapshot(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Two docs in the watched collection establish a resumable position at seq 2.
+	for _, id := range []string{"a1", "a2"} {
+		if _, err := svc.CreateDocument(ctx, "test", "(default)", "a", id, map[string]*firestorestore.Value{
+			"v": firestorestore.StringVal(id),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	lctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := stream.Send(addTargetReq(queryTarget(1, "a"))); err != nil {
+		t.Fatalf("send target: %v", err)
+	}
+	rs := recvN(t, stream, 5, 5*time.Second) // ADD, a1, a2, CURRENT, NO_CHANGE
+	resumeToken := rs[3].GetTargetChange().GetResumeToken()
+	if seq, ok := DecodeResumeToken(resumeToken); !ok || seq != 2 {
+		t.Fatalf("CURRENT resume token seq = %d ok = %v, want 2", seq, ok)
+	}
+
+	// Evict the resume position by writing past the change-feed retention window.
+	// The unrelated "z" writes still advance the floor.
+	const maxWrites = 50_000
+	for i := 0; svc.ChangeFloor() <= 2 && i < maxWrites; i++ {
+		if _, err := svc.CreateDocument(ctx, "test", "(default)", "z", fmt.Sprintf("z%05d", i), nil); err != nil {
+			t.Fatalf("bulk write %d: %v", i, err)
+		}
+	}
+	if floor := svc.ChangeFloor(); floor <= 2 {
+		t.Fatalf("change floor = %d, want > 2 after eviction", floor)
+	}
+
+	// Resume from the now-expired token. A correct server falls back to a full
+	// snapshot (a1 + a2); a stale incremental replay would send no deltas at all
+	// because no "a" write happened after seq 2.
+	if err := stream.Send(removeTargetReq(1)); err != nil {
+		t.Fatalf("remove target: %v", err)
+	}
+	recvN(t, stream, 1, 5*time.Second)
+
+	rt := queryTarget(2, "a")
+	rt.ResumeType = &firestorepb.Target_ResumeToken{ResumeToken: resumeToken}
+	if err := stream.Send(addTargetReq(rt)); err != nil {
+		t.Fatalf("resume target: %v", err)
+	}
+	rs = recvN(t, stream, 5, 10*time.Second) // ADD, a1, a2, CURRENT, NO_CHANGE
+	if rs[0].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_ADD {
+		t.Fatalf("frame 0: expected ADD, got %v", rs[0])
+	}
+	got := map[string]bool{}
+	for _, r := range rs[1:3] {
+		dc := r.GetDocumentChange()
+		if dc == nil {
+			t.Fatalf("expected snapshot DocumentChange, got %v", r)
+		}
+		got[dc.Document.Name] = true
+	}
+	if !got[listenParent+"/a/a1"] || !got[listenParent+"/a/a2"] {
+		t.Fatalf("snapshot documents = %v, want a1 and a2", got)
 	}
 }

@@ -1,5 +1,31 @@
 // Package firestore implements the Firestore gRPC service over the shared
 // transport-agnostic provider Service.
+//
+// # Listen fidelity
+//
+// Listen delta replay uses the shared change-feed's monotonic sequence as the
+// resume token (an opaque 8-byte encoding of the sequence; see
+// EncodeResumeToken). Three deliberate approximations of real Firestore are
+// documented here:
+//
+//   - Bounded history. The change-feed retains the most recent
+//     changeLogRetention events and drops older ones, advancing a floor. A resume
+//     token below the floor (or from before a Reset) is treated as expired: the
+//     target is not incrementally replayed and receives a fresh snapshot instead,
+//     which matches real Firestore's behavior for an expired resume token. A
+//     token of 0 is likewise not a resumable position, because the log records
+//     writes rather than a full document history.
+//   - Per-target cursors. Each target tracks the last sequence delivered to it.
+//     Its TargetChange_CURRENT frame carries that target's own sequence. The
+//     empty-target_ids NO_CHANGE frame's token must cover all targets at once; it
+//     carries the minimum of the live cursors — resuming from there can replay a
+//     duplicate delta but never skip one. Real Firestore pairs each resume token
+//     with its own target_ids, which a single "all targets" token cannot express.
+//   - Read position. A resume token is a position in the write feed, not a
+//     query-range read position: an incremental resume replays matching deltas
+//     only and does not re-stream the pre-existing result set, so a client must
+//     already hold the snapshot it is resuming from. Snapshots are computed from
+//     current document state rather than a consistent read-time index.
 package firestore
 
 import (
