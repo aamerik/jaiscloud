@@ -127,6 +127,19 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Memorystore for Redis — names embed the location; callers pass
+	// "location/instance" and "location/operation".
+	"memorystore-instance": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/instances/%s", p, loc, id)
+	},
+	"memorystore-location": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/locations/%s", p, n)
+	},
+	"memorystore-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Cloud DNS — the v1 REST wire uses bare names (managed zone "name",
 	// rrset "name"), so these formatters are not exercised by the REST
 	// provider; they exist for the shared resource-name surface. Callers pass
