@@ -308,6 +308,16 @@ func clusterToMap(c dataprocstore.Cluster) map[string]any {
 	return out
 }
 
+// substateRunning is the dataproc.v1.JobStatus.Substate rendered while a job is
+// non-terminal. The emulator hands a submitted job straight to the executor and
+// its only live state is RUNNING, so it reports the real QUEUED substate
+// ("the Job has been received and is awaiting execution"; dataproc.v1 documents
+// QUEUED as applying to RUNNING). The other defined substates (SUBMITTED,
+// STALE_STATUS) describe agent hand-off/staleness the emulator does not model,
+// and terminal jobs omit substate entirely because every defined substate
+// applies only to RUNNING.
+const substateRunning = "QUEUED"
+
 func jobStatusMap(s dataprocstore.JobStatus) map[string]any {
 	out := map[string]any{
 		"state":          s.State,
@@ -315,6 +325,11 @@ func jobStatusMap(s dataprocstore.JobStatus) map[string]any {
 	}
 	if s.Details != "" {
 		out["details"] = s.Details
+	}
+	// substate is an enum-valued field in dataproc.v1.JobStatus; proto3 JSON
+	// omits it at its default (UNSPECIFIED), so only render a set value.
+	if s.Substate != "" {
+		out["substate"] = s.Substate
 	}
 	return out
 }

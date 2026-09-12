@@ -7,6 +7,9 @@ import (
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 
+	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/store"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -52,5 +55,29 @@ func TestIAMRouterDispatchesByOwnership(t *testing.T) {
 	// An unrecognized resource is rejected.
 	if _, err := router.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: "projects/p/secrets/s"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("GetIamPolicy unknown err = %v, want InvalidArgument", err)
+	}
+}
+
+// TestSharedIAMPolicyEtagMismatchMapsToAborted locks in the etag-OCC contract
+// for the shared IAM policy envelope: a stale-etag setIamPolicy is google.rpc
+// ABORTED on the gRPC path, not an incidental mapping through the HTTP 409
+// fallback.
+func TestSharedIAMPolicyEtagMismatchMapsToAborted(t *testing.T) {
+	ctx := context.Background()
+	s := store.NewMemoryResourceStore()
+
+	if _, err := policy.Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+		"policy": map[string]any{"bindings": []any{}},
+	}); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	_, err := policy.Set(ctx, s, "proj", "gcp_topic_policy", "t1", map[string]any{
+		"policy": map[string]any{"etag": "stale", "bindings": []any{}},
+	})
+	if err == nil {
+		t.Fatal("expected etag-mismatch error")
+	}
+	if got := status.Code(GRPCStatus(err)); got != codes.Aborted {
+		t.Fatalf("GRPCStatus(etag mismatch) = %v, want Aborted", got)
 	}
 }

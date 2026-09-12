@@ -514,3 +514,78 @@ func TestOperationTTLSweep(t *testing.T) {
 		t.Fatalf("fresh op should remain, got %v", err)
 	}
 }
+
+// TestJobSubstateRunning verifies the dataproc.v1 JobStatus.substate field: a
+// submitted/non-terminal job carries the real QUEUED substate, both in the
+// stored JobStatus and in the rendered job response.
+func TestJobSubstateRunning(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+
+	j, err := jobToStore(testNR(map[string]any{}), map[string]any{
+		"placement":  map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+	}, "us-central1")
+	if err != nil {
+		t.Fatalf("jobToStore: %v", err)
+	}
+	if j.Status.State != "RUNNING" || j.Status.Substate != "QUEUED" {
+		t.Fatalf("submitted job status = %+v, want RUNNING/QUEUED", j.Status)
+	}
+	if got := jobStatusMap(j.Status)["substate"]; got != "QUEUED" {
+		t.Fatalf("rendered substate = %v, want QUEUED", got)
+	}
+
+	if err := p.store.CreateJob(ctx, "proj", "us-central1", j); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	resp, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": j.JobID}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	status, _ := resp.Data["status"].(map[string]any)
+	if status["substate"] != "QUEUED" {
+		t.Fatalf("GetJob status.substate = %v, want QUEUED", status["substate"])
+	}
+}
+
+// TestJobSubstateTerminalOmitted verifies a terminal job response omits
+// substate (every defined dataproc.v1 substate applies only to RUNNING) while
+// the RUNNING entry retained in statusHistory keeps QUEUED.
+func TestJobSubstateTerminalOmitted(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"job": map[string]any{
+				"reference":  map[string]any{"projectId": "proj", "jobId": "j-sub"},
+				"placement":  map[string]any{"clusterName": "c1"},
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	status, _ := resp.Data["status"].(map[string]any)
+	if status["state"] != "DONE" {
+		t.Fatalf("expected DONE, got %v", status["state"])
+	}
+	if _, ok := status["substate"]; ok {
+		t.Fatalf("terminal job status must omit substate, got %v", status)
+	}
+	history, _ := resp.Data["statusHistory"].([]any)
+	if len(history) == 0 {
+		t.Fatalf("expected a RUNNING statusHistory entry, got %v", resp.Data["statusHistory"])
+	}
+	if h0, _ := history[0].(map[string]any); h0["substate"] != "QUEUED" {
+		t.Fatalf("history RUNNING entry substate = %v, want QUEUED", h0["substate"])
+	}
+}
