@@ -85,6 +85,23 @@ func runStoreTests(t *testing.T, s Store) {
 	if _, err := s.GetCluster(ctx, "proj", "us-central1", "my-cluster"); err != ErrNoSuchCluster {
 		t.Fatalf("expected ErrNoSuchCluster after delete, got %v", err)
 	}
+
+	// Operations
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "nope"); err != ErrNoSuchOperation {
+		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
+	}
+	op := Operation{ID: "op1", Done: true, Metadata: `{"@type":"x"}`, Response: `{}`, Verb: "create", Target: "t"}
+	if err := s.CreateOperation(ctx, "proj", "us-central1", op); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	gotOp, err := s.GetOperation(ctx, "proj", "us-central1", "op1")
+	if err != nil || gotOp.Verb != "create" || gotOp.Metadata != `{"@type":"x"}` {
+		t.Fatalf("get operation: %v %+v", err, gotOp)
+	}
+	ops, err := s.ListOperations(ctx, "proj", "us-central1")
+	if err != nil || len(ops) != 1 || ops[0].ID != "op1" {
+		t.Fatalf("list operations: %v %+v", err, ops)
+	}
 }
 
 func TestMemoryStore(t *testing.T) {
@@ -96,6 +113,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	s := NewMemoryStore()
 	_ = s.CreateCluster(ctx, "p", "l", Cluster{Name: "c", Labels: map[string]string{"k": "v"}, Config: []byte(`{"capacityConfig":{"vcpuCount":3}}`)})
 	_ = s.CreateTopic(ctx, "p", "l", "c", Topic{Name: "t", PartitionCount: 3, ReplicationFactor: 1})
+	_ = s.CreateOperation(ctx, "p", "l", Operation{ID: "op1", Done: true, Metadata: `{"@type":"x"}`, Response: `{}`})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -113,5 +131,9 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	gotTopic, err := s2.GetTopic(ctx, "p", "l", "c", "t")
 	if err != nil || gotTopic.PartitionCount != 3 || gotTopic.ReplicationFactor != 1 {
 		t.Fatalf("topic lost after restore: %v %+v", err, gotTopic)
+	}
+	gotOp, err := s2.GetOperation(ctx, "p", "l", "op1")
+	if err != nil || !gotOp.Done || gotOp.Metadata != `{"@type":"x"}` {
+		t.Fatalf("operation lost after restore: %v %+v", err, gotOp)
 	}
 }

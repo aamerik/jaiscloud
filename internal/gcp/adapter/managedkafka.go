@@ -12,10 +12,16 @@ import (
 // ManagedKafkaCodec decodes the Managed Kafka v1 REST surface
 // (managedkafka.googleapis.com/v1). Resources live under
 // /v1/projects/{project}/locations/{location}/clusters[/{id}][/topics[/{topicId}]|/consumerGroups].
-// Unlike Dataproc, there are no custom ":verb" methods and no long-running
-// operation resource — cluster create/update/delete return the resource inline
-// (wrapped in a done operation by the provider), and topic CRUD is fully
+// Unlike Dataproc, there are no custom ":verb" methods. Cluster
+// create/update/delete return a proper google.longrunning.Operation inline with
+// done:true (the provider also persists it), and topic CRUD is fully
 // synchronous.
+//
+// The codec also decodes locations/{location}/operations[/{id}] to
+// GetOperation/ListOperations so the registered handlers are reachable by
+// direct dispatch. The router still resolves that path to Cloud Workflows
+// (it is host-ambiguous on a single emulator host), so no client needs to poll
+// Managed Kafka's operations — they are returned inline already done.
 type ManagedKafkaCodec struct {
 	Service string
 }
@@ -53,6 +59,28 @@ func (c *ManagedKafkaCodec) Decode(r *http.Request, body []byte) (*model.Normali
 	}
 	nr.Params["location"] = rest[1]
 	tail := rest[2:]
+
+	// Long-running operations: locations/{location}/operations[/{id}]. The path
+	// is path-ambiguous with Cloud Workflows' LRO surface on a single host and
+	// is routed to Workflows; decoding it here keeps the registered
+	// ManagedKafka.GetOperation/ListOperations handlers reachable by direct
+	// dispatch (operations are returned inline with done:true, so no client
+	// needs to poll them).
+	if len(tail) > 0 && tail[0] == "operations" {
+		nr.Params["resourceType"] = "operations"
+		nr.Params["name"] = strings.Join(rest, "/")
+		switch {
+		case len(tail) == 1 && r.Method == http.MethodGet:
+			nr.Action = "ListOperations"
+		case len(tail) == 2 && r.Method == http.MethodGet:
+			nr.Params["operationId"] = tail[1]
+			nr.Action = "GetOperation"
+		}
+		if nr.Action == "" {
+			return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		}
+		return nr, nil
+	}
 
 	if len(tail) == 0 || tail[0] != "clusters" {
 		return nil, model.NewProviderError("InvalidRequest", "expected clusters in managed kafka path", 404)

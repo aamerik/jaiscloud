@@ -8,16 +8,18 @@ import (
 
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
-	mu       sync.RWMutex
-	clusters map[string]map[string]Cluster // projectID+"/"+location → name → cluster
-	topics   map[string]map[string]Topic   // projectID+"/"+location+"/"+cluster → name → topic
+	mu         sync.RWMutex
+	clusters   map[string]map[string]Cluster   // projectID+"/"+location → name → cluster
+	topics     map[string]map[string]Topic     // projectID+"/"+location+"/"+cluster → name → topic
+	operations map[string]map[string]Operation // projectID+"/"+location → id → operation
 }
 
 // NewMemoryStore returns an empty in-memory store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		clusters: make(map[string]map[string]Cluster),
-		topics:   make(map[string]map[string]Topic),
+		clusters:   make(map[string]map[string]Cluster),
+		topics:     make(map[string]map[string]Topic),
+		operations: make(map[string]map[string]Operation),
 	}
 }
 
@@ -191,9 +193,45 @@ func (s *MemoryStore) ListTopics(_ context.Context, projectID, location, cluster
 	return result, nil
 }
 
+func (s *MemoryStore) CreateOperation(_ context.Context, projectID, location string, op Operation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := clusterScope(projectID, location)
+	if s.operations[key] == nil {
+		s.operations[key] = make(map[string]Operation)
+	}
+	op.ProjectID = projectID
+	op.Location = location
+	s.operations[key][op.ID] = op
+	return nil
+}
+
+func (s *MemoryStore) GetOperation(_ context.Context, projectID, location, id string) (Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	op, ok := s.operations[clusterScope(projectID, location)][id]
+	if !ok {
+		return Operation{}, ErrNoSuchOperation
+	}
+	return op, nil
+}
+
+func (s *MemoryStore) ListOperations(_ context.Context, projectID, location string) ([]Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.operations[clusterScope(projectID, location)]
+	result := make([]Operation, 0, len(m))
+	for _, op := range m {
+		result = append(result, op)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clusters = make(map[string]map[string]Cluster)
 	s.topics = make(map[string]map[string]Topic)
+	s.operations = make(map[string]map[string]Operation)
 }

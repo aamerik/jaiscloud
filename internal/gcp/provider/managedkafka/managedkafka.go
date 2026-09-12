@@ -2,15 +2,30 @@
 // v1 provider (managedkafka.googleapis.com/v1): Cluster and Topic resources.
 //
 // A cluster is a logical record only — the emulator never stands up a real
-// broker. Cluster create/update/delete return the resource inline wrapped in a
-// done long-running operation (matching the test's expectation that the SDK
-// reads `done` + `response` from the HTTP body); topic CRUD is fully synchronous
-// and returns the resource directly. Consumer groups are not tracked — their
-// list endpoint always returns an empty list.
+// broker. Cluster create/update/delete return a proper
+// google.longrunning.Operation (name, metadata with @type, done, response)
+// returned inline with done:true and response set to the cluster (or {} for
+// delete), so SDKs that read done+response from the body succeed without
+// polling. The operation is also persisted under
+// projects/{project}/locations/{location}/operations/{id} and is served by the
+// registered GetOperation/ListOperations handlers for direct dispatch.
+//
+// Managed Kafka's operations share the locations/{location}/operations/{id}
+// path with Cloud Workflows' LRO surface, which is host-ambiguous on a single
+// emulator host; the adapter deliberately routes that path to Workflows (the
+// Dataproc-Metastore convention). Because every operation is returned inline
+// already done, no Managed Kafka client needs to poll operations.get, so the
+// handlers below are reachable only via direct dispatch and the shared
+// /operations/ routing is intentionally left unchanged.
+//
+// Topic CRUD is fully synchronous and returns the resource directly. Consumer
+// groups are not tracked — their list endpoint always returns an empty list.
 package managedkafka
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
@@ -21,6 +36,9 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
+
+// operationMetadataType is the @type of the Managed Kafka v1 OperationMetadata.
+const operationMetadataType = "type.googleapis.com/google.cloud.managedkafka.v1.OperationMetadata"
 
 // Provider handles Managed Kafka v1 cluster and topic resources.
 type Provider struct {
@@ -42,6 +60,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ManagedKafka.ListClusters":       p.ListClusters,
 		"ManagedKafka.UpdateCluster":      p.UpdateCluster,
 		"ManagedKafka.DeleteCluster":      p.DeleteCluster,
+		"ManagedKafka.GetOperation":       p.GetOperation,
+		"ManagedKafka.ListOperations":     p.ListOperations,
 		"ManagedKafka.CreateTopic":        p.CreateTopic,
 		"ManagedKafka.GetTopic":           p.GetTopic,
 		"ManagedKafka.ListTopics":         p.ListTopics,
@@ -106,10 +126,21 @@ func mapErr(err error) error {
 		return model.NewProviderError("NotFound", "cluster not found", 404)
 	case errors.Is(err, mkstore.ErrNoSuchTopic):
 		return model.NewProviderError("NotFound", "topic not found", 404)
+	case errors.Is(err, mkstore.ErrNoSuchOperation):
+		return model.NewProviderError("NotFound", "operation not found", 404)
 	case errors.Is(err, mkstore.ErrAlreadyExists):
 		return model.NewProviderError("AlreadyExists", "resource already exists", 409)
 	}
 	return err
+}
+
+// randomHex returns n random hexadecimal characters.
+func randomHex(n int) string {
+	b := make([]byte, (n+1)/2)
+	if _, err := rand.Read(b); err != nil {
+		b = make([]byte, (n+1)/2)
+	}
+	return hex.EncodeToString(b)[:n]
 }
 
 func formatTimestamp(t time.Time) string {
@@ -158,12 +189,65 @@ func (p *Provider) topicMap(nr *model.NormalizedRequest, t mkstore.Topic) map[st
 
 // --- Clusters ---
 
-// clusterLRO wraps a cluster mutation in the emulator's flattened synchronous
-// long-running-operation shape, {"done":true,"response":{...}}. The proto
-// returns a google.longrunning.Operation (with name/metadata/@type); this is a
-// deliberate simplification so SDKs reading done+response from the body succeed.
-func (p *Provider) clusterLRO(nr *model.NormalizedRequest, c mkstore.Cluster) *model.ProviderResponse {
-	return provider.OK(map[string]any{"done": true, "response": p.clusterMap(nr, c)})
+// operationMetadata renders the managedkafka.v1.OperationMetadata for an
+// operation. The emulator completes every cluster mutation synchronously, so
+// createTime and endTime are the same instant.
+func operationMetadata(target, verb string, start time.Time) map[string]any {
+	return map[string]any{
+		"@type":      operationMetadataType,
+		"createTime": formatTimestamp(start),
+		"endTime":    formatTimestamp(start),
+		"target":     target,
+		"verb":       verb,
+		"apiVersion": "v1",
+	}
+}
+
+// operationMap renders a stored Operation as a google.longrunning.Operation.
+func (p *Provider) operationMap(nr *model.NormalizedRequest, op mkstore.Operation) map[string]any {
+	name := nr.ResourceID("managedkafka-operation", op.Location+"/"+op.ID)
+	var metadata any = map[string]any{}
+	if op.Metadata != "" {
+		_ = json.Unmarshal([]byte(op.Metadata), &metadata)
+	}
+	out := map[string]any{
+		"name":     name,
+		"metadata": metadata,
+		"done":     op.Done,
+	}
+	if op.Done && op.Response != "" {
+		var response any = map[string]any{}
+		if json.Unmarshal([]byte(op.Response), &response) == nil {
+			out["response"] = response
+		}
+	}
+	return out
+}
+
+// storeOperation persists a done google.longrunning.Operation and returns its
+// wire map. Marshalling metadata/response cannot fail for the plain maps the
+// provider builds, so a marshal error is ignored and surfaces as an empty
+// JSON object on read-back.
+func (p *Provider) storeOperation(ctx context.Context, nr *model.NormalizedRequest, location, verb, target string, response map[string]any) (map[string]any, error) {
+	now := clock.Now().UTC()
+	metaJSON, _ := json.Marshal(operationMetadata(target, verb, now))
+	respJSON, _ := json.Marshal(response)
+	op := mkstore.Operation{
+		ID:         randomHex(12),
+		ProjectID:  nr.AccountID,
+		Location:   location,
+		Done:       true,
+		Metadata:   string(metaJSON),
+		Response:   string(respJSON),
+		Verb:       verb,
+		Target:     target,
+		CreateTime: now,
+		EndTime:    now,
+	}
+	if err := p.store.CreateOperation(ctx, nr.AccountID, location, op); err != nil {
+		return nil, err
+	}
+	return p.operationMap(nr, op), nil
 }
 
 func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -189,7 +273,12 @@ func (p *Provider) CreateCluster(ctx context.Context, nr *model.NormalizedReques
 	if err := p.store.CreateCluster(ctx, nr.AccountID, location, c); err != nil {
 		return nil, mapErr(err)
 	}
-	return p.clusterLRO(nr, c), nil
+	target := nr.ResourceID("managedkafka-cluster", c.Location+"/"+c.Name)
+	op, err := p.storeOperation(ctx, nr, location, "create", target, p.clusterMap(nr, c))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(op), nil
 }
 
 func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -255,7 +344,12 @@ func (p *Provider) UpdateCluster(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return p.clusterLRO(nr, c), nil
+	target := nr.ResourceID("managedkafka-cluster", c.Location+"/"+c.Name)
+	op, err := p.storeOperation(ctx, nr, location, "update", target, p.clusterMap(nr, c))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(op), nil
 }
 
 func (p *Provider) DeleteCluster(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -267,7 +361,55 @@ func (p *Provider) DeleteCluster(ctx context.Context, nr *model.NormalizedReques
 	if err := p.store.DeleteCluster(ctx, nr.AccountID, location, clusterID); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(map[string]any{"done": true, "response": map[string]any{}}), nil
+	target := nr.ResourceID("managedkafka-cluster", location+"/"+clusterID)
+	op, err := p.storeOperation(ctx, nr, location, "delete", target, map[string]any{})
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(op), nil
+}
+
+// --- Operations ---
+
+// GetOperation serves a persisted cluster-mutation operation. On a single host
+// the locations/{location}/operations/{id} path is routed to Cloud Workflows
+// (see the package doc), so this handler is reachable only by direct dispatch;
+// every operation is already returned inline with done:true, so no Managed
+// Kafka client needs to poll it.
+func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	location := strParam(nr, "location")
+	opID := strParam(nr, "operationId")
+	if location == "" || opID == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing location or operationId", 400)
+	}
+	op, err := p.store.GetOperation(ctx, nr.AccountID, location, opID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(p.operationMap(nr, op)), nil
+}
+
+// ListOperations lists the persisted cluster-mutation operations for a
+// location. Like GetOperation it is reachable only by direct dispatch.
+func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	location := strParam(nr, "location")
+	if location == "" {
+		return nil, model.NewProviderError("InvalidArgument", "missing location", 400)
+	}
+	ops, err := p.store.ListOperations(ctx, nr.AccountID, location)
+	if err != nil {
+		return nil, err
+	}
+	page, next := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, nr.Params)
+	items := make([]any, 0, len(page))
+	for _, op := range page {
+		items = append(items, p.operationMap(nr, op))
+	}
+	resp := map[string]any{"operations": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 // --- Topics ---

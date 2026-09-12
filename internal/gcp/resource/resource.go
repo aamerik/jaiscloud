@@ -98,6 +98,14 @@ var formatters = map[string]func(project, name string) string{
 		loc, c, t := wfExec(n)
 		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/topics/%s", p, loc, c, t)
 	},
+	// Managed Kafka long-running operations — callers pass "location/operation".
+	// The path is shared with Workflows' LRO surface on a single host, so the
+	// emulator returns operations inline (done:true); the formatter exists for
+	// direct operations.get/list dispatch.
+	"managedkafka-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Dataproc Metastore (control plane) — names embed the location; callers pass
 	// "location/service", "location/service/backup",
 	// "location/service/import", and "location/operation".
