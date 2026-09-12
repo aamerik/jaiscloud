@@ -431,6 +431,12 @@ func (s *Service) Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmsp
 	if err != nil {
 		return nil, versionErr(err)
 	}
+	if err := verifyCRC("plaintext_crc32c", req.GetPlaintextCrc32C(), req.GetPlaintext()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("additional_authenticated_data_crc32c", req.GetAdditionalAuthenticatedDataCrc32C(), req.GetAdditionalAuthenticatedData()); err != nil {
+		return nil, err
+	}
 	ct, err := kmsstore.EncryptData(keyMat, req.GetPlaintext(), req.GetAdditionalAuthenticatedData())
 	if err != nil {
 		return nil, mapError(model.NewProviderError("Internal", "encryption failed", 500))
@@ -488,6 +494,12 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 	if err != nil {
 		return nil, mapError(err)
 	}
+	if err := verifyCRC("digest_crc32c", req.GetDigestCrc32C(), digest); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("data_crc32c", req.GetDataCrc32C(), req.GetData()); err != nil {
+		return nil, err
+	}
 	priv, err := s.keys.PrivateKey(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -529,6 +541,9 @@ func (s *Service) AsymmetricDecrypt(ctx context.Context, req *kmspb.AsymmetricDe
 	}
 	if !strings.HasPrefix(v.Algorithm, "RSA_DECRYPT") {
 		return nil, mapError(model.NewProviderError("FailedPrecondition", "key is not for asymmetric decryption", 400))
+	}
+	if err := verifyCRC("ciphertext_crc32c", req.GetCiphertextCrc32C(), req.GetCiphertext()); err != nil {
+		return nil, err
 	}
 	pt, err := kmsstore.RSADecryptOAEP(priv, req.GetCiphertext(), v.Algorithm)
 	if err != nil {
@@ -603,6 +618,9 @@ func (s *Service) MacSign(ctx context.Context, req *kmspb.MacSignRequest) (*kmsp
 	if err != nil {
 		return nil, versionErr(err)
 	}
+	if err := verifyCRC("data_crc32c", req.GetDataCrc32C(), req.GetData()); err != nil {
+		return nil, err
+	}
 	mac, err := kmsstore.HMACSign(mat, req.GetData(), v.Algorithm)
 	if err != nil {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "mac sign failed", 400))
@@ -631,6 +649,12 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 	mat, err := s.keys.KeyMaterial(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
+	}
+	if err := verifyCRC("data_crc32c", req.GetDataCrc32C(), req.GetData()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("mac_crc32c", req.GetMacCrc32C(), req.GetMac()); err != nil {
+		return nil, err
 	}
 	return &kmspb.MacVerifyResponse{
 		Name:               versionName(project, loc, kr, key, version),
@@ -882,6 +906,21 @@ func signHashFor(algo string) crypto.Hash {
 // (google.protobuf.Int64Value encoding).
 func crc32cOf(b []byte) int64 {
 	return int64(crc32.Checksum(b, crc32.MakeTable(crc32.Castagnoli)))
+}
+
+// verifyCRC enforces the Cloud KMS integrity contract: when the caller supplies
+// a CRC32C checksum for an input field, it must match the computed checksum of
+// that input. A mismatch fails the request with InvalidArgument (400); real KMS
+// never reports an input as verified when the checksums differ. A nil checksum
+// means the caller opted out of verification and is accepted.
+func verifyCRC(field string, supplied *wrapperspb.Int64Value, data []byte) error {
+	if supplied == nil {
+		return nil
+	}
+	if supplied.GetValue() != crc32cOf(data) {
+		return mapError(model.NewProviderError("InvalidArgument", field+" checksum mismatch", 400))
+	}
+	return nil
 }
 
 func protoPolicyToBody(p *iampb.Policy) map[string]any {
