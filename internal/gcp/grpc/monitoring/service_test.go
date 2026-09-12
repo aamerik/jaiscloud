@@ -52,6 +52,115 @@ func testServerWithStore(t *testing.T, store monitoringstore.Store) (monitoringp
 		func() { conn.Close(); srv.Stop() }
 }
 
+func testChannelServer(t *testing.T) (monitoringpb.NotificationChannelServiceClient, func()) {
+	t.Helper()
+	store := monitoringstore.NewMemoryStore()
+	svc := NewService(store, "test")
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	monitoringpb.RegisterNotificationChannelServiceServer(srv, svc)
+	go srv.Serve(ln)
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		srv.Stop()
+		t.Fatalf("dial: %v", err)
+	}
+	return monitoringpb.NewNotificationChannelServiceClient(conn),
+		func() { conn.Close(); srv.Stop() }
+}
+
+func TestNotificationChannelCRUD(t *testing.T) {
+	nc, cleanup := testChannelServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := nc.CreateNotificationChannel(ctx, &monitoringpb.CreateNotificationChannelRequest{
+		Name: "projects/test",
+		NotificationChannel: &monitoringpb.NotificationChannel{
+			Type:        "pubsub",
+			DisplayName: "Ops topic",
+			Labels:      map[string]string{"topic": "projects/test/topics/ops-alerts"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if !strings.HasPrefix(created.GetName(), "projects/test/notificationChannels/") {
+		t.Fatalf("created name = %q", created.GetName())
+	}
+	if created.GetType() != "pubsub" || created.GetLabels()["topic"] != "projects/test/topics/ops-alerts" {
+		t.Fatalf("created = %+v", created)
+	}
+	if created.GetEnabled() == nil || !created.GetEnabled().GetValue() {
+		t.Fatalf("created enabled = %v, want true", created.GetEnabled())
+	}
+
+	got, err := nc.GetNotificationChannel(ctx, &monitoringpb.GetNotificationChannelRequest{Name: created.GetName()})
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+	if got.GetDisplayName() != "Ops topic" {
+		t.Fatalf("get display name = %q", got.GetDisplayName())
+	}
+
+	list, err := nc.ListNotificationChannels(ctx, &monitoringpb.ListNotificationChannelsRequest{Name: "projects/test"})
+	if err != nil {
+		t.Fatalf("list channels: %v", err)
+	}
+	if len(list.GetNotificationChannels()) != 1 || list.GetTotalSize() != 1 {
+		t.Fatalf("list = %d (total %d), want 1", len(list.GetNotificationChannels()), list.GetTotalSize())
+	}
+
+	// Masked update keeps unmasked fields (the labels) intact.
+	updated, err := nc.UpdateNotificationChannel(ctx, &monitoringpb.UpdateNotificationChannelRequest{
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+		NotificationChannel: &monitoringpb.NotificationChannel{
+			Name:        created.GetName(),
+			DisplayName: "Renamed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update channel: %v", err)
+	}
+	if updated.GetDisplayName() != "Renamed" {
+		t.Fatalf("updated display name = %q", updated.GetDisplayName())
+	}
+	if updated.GetLabels()["topic"] != "projects/test/topics/ops-alerts" {
+		t.Fatalf("labels not preserved across masked update: %+v", updated.GetLabels())
+	}
+
+	if _, err := nc.DeleteNotificationChannel(ctx, &monitoringpb.DeleteNotificationChannelRequest{Name: created.GetName()}); err != nil {
+		t.Fatalf("delete channel: %v", err)
+	}
+	if _, err := nc.GetNotificationChannel(ctx, &monitoringpb.GetNotificationChannelRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("get after delete err = %v, want NotFound", err)
+	}
+}
+
+func TestNotificationChannelValidation(t *testing.T) {
+	nc, cleanup := testChannelServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := nc.CreateNotificationChannel(ctx, &monitoringpb.CreateNotificationChannelRequest{
+		Name:                "projects/test",
+		NotificationChannel: &monitoringpb.NotificationChannel{DisplayName: "no type"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create without type err = %v, want InvalidArgument", err)
+	}
+	if _, err := nc.GetNotificationChannel(ctx, &monitoringpb.GetNotificationChannelRequest{Name: "projects/test/notAChannel/x"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("get invalid name err = %v, want InvalidArgument", err)
+	}
+	if _, err := nc.GetNotificationChannel(ctx, &monitoringpb.GetNotificationChannelRequest{Name: "projects/test/notificationChannels/missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("get missing err = %v, want NotFound", err)
+	}
+}
+
 func TestMetricDescriptorCRUD(t *testing.T) {
 	mc, _, cleanup := testServer(t)
 	defer cleanup()

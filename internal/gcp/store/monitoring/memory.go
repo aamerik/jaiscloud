@@ -10,9 +10,11 @@ import (
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
 	mu          sync.RWMutex
-	descriptors map[string]map[string]MetricDescriptor // project → type → descriptor
-	series      map[string]map[string]*TimeSeries      // project → seriesKey → series
-	policies    map[string]map[string]AlertPolicy      // project → id → policy
+	descriptors map[string]map[string]MetricDescriptor    // project → type → descriptor
+	series      map[string]map[string]*TimeSeries         // project → seriesKey → series
+	policies    map[string]map[string]AlertPolicy         // project → id → policy
+	channels    map[string]map[string]NotificationChannel // project → id → channel
+	incidents   map[string]map[string]Incident            // project → id → incident
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -21,6 +23,8 @@ func NewMemoryStore() *MemoryStore {
 		descriptors: make(map[string]map[string]MetricDescriptor),
 		series:      make(map[string]map[string]*TimeSeries),
 		policies:    make(map[string]map[string]AlertPolicy),
+		channels:    make(map[string]map[string]NotificationChannel),
+		incidents:   make(map[string]map[string]Incident),
 	}
 }
 
@@ -170,12 +174,177 @@ func (s *MemoryStore) DeleteAlertPolicy(_ context.Context, project, id string) e
 	return nil
 }
 
+// ─── notification channels ────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateNotificationChannel(_ context.Context, project string, c NotificationChannel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.channels[project][c.ID]; ok {
+		return ErrNotificationChannelExists
+	}
+	if s.channels[project] == nil {
+		s.channels[project] = make(map[string]NotificationChannel)
+	}
+	s.channels[project][c.ID] = c
+	return nil
+}
+
+func (s *MemoryStore) GetNotificationChannel(_ context.Context, project, id string) (NotificationChannel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.channels[project][id]
+	if !ok {
+		return NotificationChannel{}, ErrNotificationChannelNotFound
+	}
+	return c, nil
+}
+
+func (s *MemoryStore) ListNotificationChannels(_ context.Context, project string) ([]NotificationChannel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]NotificationChannel, 0, len(s.channels[project]))
+	for _, c := range s.channels[project] {
+		result = append(result, c)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) UpdateNotificationChannelAtomic(_ context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.channels[project][id]
+	if !ok {
+		return NotificationChannel{}, ErrNotificationChannelNotFound
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	next.ID = id
+	s.channels[project][id] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteNotificationChannel(_ context.Context, project, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.channels[project][id]; !ok {
+		return ErrNotificationChannelNotFound
+	}
+	delete(s.channels[project], id)
+	return nil
+}
+
+// ─── incidents ────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateIncident(_ context.Context, inc Incident) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.incidents[inc.ProjectID][inc.ID]; ok && existing.State == IncidentOpen {
+		return ErrIncidentExists
+	}
+	for _, existing := range s.incidents[inc.ProjectID] {
+		if existing.State == IncidentOpen && existing.PolicyID == inc.PolicyID {
+			return ErrIncidentExists
+		}
+	}
+	if s.incidents[inc.ProjectID] == nil {
+		s.incidents[inc.ProjectID] = make(map[string]Incident)
+	}
+	s.incidents[inc.ProjectID][inc.ID] = inc
+	return nil
+}
+
+func (s *MemoryStore) GetIncident(_ context.Context, project, id string) (Incident, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	inc, ok := s.incidents[project][id]
+	if !ok {
+		return Incident{}, ErrIncidentNotFound
+	}
+	return inc, nil
+}
+
+func (s *MemoryStore) ListIncidents(_ context.Context, project string) ([]Incident, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Incident, 0, len(s.incidents[project]))
+	for _, inc := range s.incidents[project] {
+		result = append(result, inc)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if !result[i].StartedAt.Equal(result[j].StartedAt) {
+			return result[i].StartedAt.Before(result[j].StartedAt)
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, nil
+}
+
+func (s *MemoryStore) FindOpenIncident(_ context.Context, project, policyID string) (Incident, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, inc := range s.incidents[project] {
+		if inc.State == IncidentOpen && inc.PolicyID == policyID {
+			return inc, nil
+		}
+	}
+	return Incident{}, ErrIncidentNotFound
+}
+
+func (s *MemoryStore) UpdateIncidentAtomic(_ context.Context, project, id string, mutate func(Incident) (Incident, error)) (Incident, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.incidents[project][id]
+	if !ok {
+		return Incident{}, ErrIncidentNotFound
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Incident{}, err
+	}
+	next.ID = id
+	s.incidents[project][id] = next
+	return next, nil
+}
+
+// ListProjects returns the distinct projects that hold any monitoring state.
+func (s *MemoryStore) ListProjects(_ context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := make(map[string]struct{})
+	for p := range s.descriptors {
+		seen[p] = struct{}{}
+	}
+	for p := range s.series {
+		seen[p] = struct{}{}
+	}
+	for p := range s.policies {
+		seen[p] = struct{}{}
+	}
+	for p := range s.channels {
+		seen[p] = struct{}{}
+	}
+	for p := range s.incidents {
+		seen[p] = struct{}{}
+	}
+	result := make([]string, 0, len(seen))
+	for p := range seen {
+		result = append(result, p)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.descriptors = make(map[string]map[string]MetricDescriptor)
 	s.series = make(map[string]map[string]*TimeSeries)
 	s.policies = make(map[string]map[string]AlertPolicy)
+	s.channels = make(map[string]map[string]NotificationChannel)
+	s.incidents = make(map[string]map[string]Incident)
 }
 
 // seriesKey returns a stable identity key for a time series, derived from its

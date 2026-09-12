@@ -18,9 +18,13 @@ import (
 // Sentinel errors returned by the store, mapped to gRPC status codes by the
 // service (errors.Is-compatible, matching the datastore/logging conventions).
 var (
-	ErrMetricDescriptorNotFound = errors.New("MetricDescriptorNotFound")
-	ErrAlertPolicyNotFound      = errors.New("AlertPolicyNotFound")
-	ErrAlertPolicyExists        = errors.New("AlertPolicyExists")
+	ErrMetricDescriptorNotFound    = errors.New("MetricDescriptorNotFound")
+	ErrAlertPolicyNotFound         = errors.New("AlertPolicyNotFound")
+	ErrAlertPolicyExists           = errors.New("AlertPolicyExists")
+	ErrNotificationChannelNotFound = errors.New("NotificationChannelNotFound")
+	ErrNotificationChannelExists   = errors.New("NotificationChannelExists")
+	ErrIncidentNotFound            = errors.New("IncidentNotFound")
+	ErrIncidentExists              = errors.New("IncidentExists")
 )
 
 // LabelDescriptor mirrors google.api.LabelDescriptor (the label key, its value
@@ -91,6 +95,62 @@ type AlertPolicy struct {
 	UserLabels           map[string]string `json:"userLabels,omitempty"`
 }
 
+// NotificationChannel is a stored notification destination (the CloudWatch
+// SNS-topic analogue). ID is the server-assigned channel id (the trailing
+// segment of the resource name). Labels carry the type-specific configuration
+// (e.g. {"topic": "projects/p/topics/t"} for pubsub, {"email_address": "..."}
+// for email). VerificationStatus carries the numeric
+// google.monitoring.v3.NotificationChannel.VerificationStatus enum value.
+type NotificationChannel struct {
+	ID                 string            `json:"id,omitempty"`
+	Type               string            `json:"type,omitempty"`
+	DisplayName        string            `json:"displayName,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Labels             map[string]string `json:"labels,omitempty"`
+	UserLabels         map[string]string `json:"userLabels,omitempty"`
+	Enabled            *bool             `json:"enabled,omitempty"`
+	VerificationStatus int32             `json:"verificationStatus,omitempty"`
+	CreateTime         time.Time         `json:"createTime,omitempty"`
+	UpdateTime         time.Time         `json:"updateTime,omitempty"`
+}
+
+// IncidentState is the lifecycle state of a monitoring incident. GCP exposes
+// incidents only on an internal API (not the v3 client library), so the
+// emulator records them for observability via snapshots and slog.
+type IncidentState string
+
+const (
+	IncidentOpen   IncidentState = "OPEN"
+	IncidentClosed IncidentState = "CLOSED"
+)
+
+// IncidentNotification records one attempted notification delivery for an
+// incident. Status is "delivered" (pubsub publish succeeded), "recorded"
+// (email/webhook/sms — recorded but not sent by the emulator), "failed", or
+// "skipped" (channel disabled/missing/unsupported type).
+type IncidentNotification struct {
+	ChannelName string    `json:"channelName,omitempty"`
+	ChannelType string    `json:"channelType,omitempty"`
+	Status      string    `json:"status"`
+	Detail      string    `json:"detail,omitempty"`
+	DeliveredAt time.Time `json:"deliveredAt"`
+}
+
+// Incident is a fired alert-policy incident. ID is a server-assigned uuid.
+// ConditionName is the display name of the condition that fired (the combined
+// policy state is tracked at policy granularity, so this is informational).
+type Incident struct {
+	ID            string                 `json:"id"`
+	ProjectID     string                 `json:"projectId"`
+	PolicyID      string                 `json:"policyId"`
+	ConditionName string                 `json:"conditionName,omitempty"`
+	State         IncidentState          `json:"state"`
+	StartedAt     time.Time              `json:"startedAt"`
+	EndedAt       time.Time              `json:"endedAt,omitempty"`
+	Reason        string                 `json:"reason,omitempty"`
+	Notifications []IncidentNotification `json:"notifications,omitempty"`
+}
+
 // Store is the Cloud Monitoring store. All state is project-scoped.
 type Store interface {
 	// Metric descriptor catalog.
@@ -117,6 +177,32 @@ type Store interface {
 	// other fields.
 	UpdateAlertPolicyAtomic(ctx context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error)
 	DeleteAlertPolicy(ctx context.Context, project, id string) error
+
+	// Notification channel registry.
+	CreateNotificationChannel(ctx context.Context, project string, c NotificationChannel) error
+	GetNotificationChannel(ctx context.Context, project, id string) (NotificationChannel, error)
+	ListNotificationChannels(ctx context.Context, project string) ([]NotificationChannel, error)
+	// UpdateNotificationChannelAtomic performs a locked get-mutate-set cycle so
+	// a masked PATCH cannot lose a concurrent PATCH's changes (mirrors
+	// UpdateAlertPolicyAtomic).
+	UpdateNotificationChannelAtomic(ctx context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error)
+	DeleteNotificationChannel(ctx context.Context, project, id string) error
+
+	// Incident registry (recorded state for fired alert policies).
+	// CreateIncident returns ErrIncidentExists when an OPEN incident already
+	// exists for the policy.
+	CreateIncident(ctx context.Context, inc Incident) error
+	GetIncident(ctx context.Context, project, id string) (Incident, error)
+	ListIncidents(ctx context.Context, project string) ([]Incident, error)
+	// FindOpenIncident returns the OPEN incident for a policy, or
+	// ErrIncidentNotFound when none is open.
+	FindOpenIncident(ctx context.Context, project, policyID string) (Incident, error)
+	UpdateIncidentAtomic(ctx context.Context, project, id string, mutate func(Incident) (Incident, error)) (Incident, error)
+
+	// ListProjects returns the distinct project ids that hold any monitoring
+	// state (descriptors, series, policies, channels, or incidents) so the
+	// background evaluator can scope its work without a separate registry.
+	ListProjects(ctx context.Context) ([]string, error)
 
 	Reset(ctx context.Context)
 }

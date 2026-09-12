@@ -287,6 +287,7 @@ func startCmd() *cobra.Command {
 			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
 			monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
 			monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
+			monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
 			grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
 			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 			// TestIamPermissions) is served by the SecretManagerService itself

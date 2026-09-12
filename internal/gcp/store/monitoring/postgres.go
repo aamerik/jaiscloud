@@ -336,4 +336,275 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_metric_descriptors`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_time_series`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_alert_policies`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_notification_channels`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_incidents`)
+}
+
+// ─── notification channels ────────────────────────────────────────────────────
+
+func scanNotificationChannel(scan func(...any) error) (NotificationChannel, error) {
+	var c NotificationChannel
+	var labels, userLabels []byte
+	if err := scan(&c.ID, &c.Type, &c.DisplayName, &c.Description, &labels, &userLabels, &c.Enabled, &c.VerificationStatus, &c.CreateTime, &c.UpdateTime); err != nil {
+		return NotificationChannel{}, err
+	}
+	if len(labels) > 0 {
+		_ = json.Unmarshal(labels, &c.Labels)
+	}
+	if len(userLabels) > 0 {
+		_ = json.Unmarshal(userLabels, &c.UserLabels)
+	}
+	return c, nil
+}
+
+const channelCols = "id, type, display_name, description, labels, user_labels, enabled, verification_status, create_time, update_time"
+
+func (s *PostgresStore) CreateNotificationChannel(ctx context.Context, project string, c NotificationChannel) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_monitoring_notification_channels
+			(project_id, id, type, display_name, description, labels, user_labels, enabled, verification_status, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, project, c.ID, c.Type, c.DisplayName, c.Description, jsonb(c.Labels), jsonb(c.UserLabels),
+		c.Enabled, c.VerificationStatus, c.CreateTime, c.UpdateTime)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrNotificationChannelExists
+		}
+		return fmt.Errorf("monitoring CreateNotificationChannel: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetNotificationChannel(ctx context.Context, project, id string) (NotificationChannel, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+channelCols+` FROM jc_monitoring_notification_channels WHERE project_id=$1 AND id=$2
+	`, project, id)
+	c, err := scanNotificationChannel(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotificationChannel{}, ErrNotificationChannelNotFound
+	}
+	return c, err
+}
+
+func (s *PostgresStore) ListNotificationChannels(ctx context.Context, project string) ([]NotificationChannel, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+channelCols+` FROM jc_monitoring_notification_channels WHERE project_id=$1 ORDER BY id
+	`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]NotificationChannel, 0)
+	for rows.Next() {
+		c, err := scanNotificationChannel(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateNotificationChannelAtomic(ctx context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		SELECT `+channelCols+` FROM jc_monitoring_notification_channels WHERE project_id=$1 AND id=$2 FOR UPDATE
+	`, project, id)
+	current, err := scanNotificationChannel(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotificationChannel{}, ErrNotificationChannelNotFound
+	}
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_monitoring_notification_channels
+		SET type=$3, display_name=$4, description=$5, labels=$6, user_labels=$7, enabled=$8, verification_status=$9, update_time=$10
+		WHERE project_id=$1 AND id=$2
+	`, project, id, next.Type, next.DisplayName, next.Description, jsonb(next.Labels), jsonb(next.UserLabels),
+		next.Enabled, next.VerificationStatus, next.UpdateTime)
+	if err != nil {
+		return NotificationChannel{}, fmt.Errorf("monitoring UpdateNotificationChannelAtomic: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return NotificationChannel{}, ErrNotificationChannelNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return NotificationChannel{}, err
+	}
+	next.ID = id
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteNotificationChannel(ctx context.Context, project, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_monitoring_notification_channels WHERE project_id=$1 AND id=$2
+	`, project, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotificationChannelNotFound
+	}
+	return nil
+}
+
+// ─── incidents ────────────────────────────────────────────────────────────────
+
+func scanIncident(scan func(...any) error) (Incident, error) {
+	var inc Incident
+	var notifications []byte
+	if err := scan(&inc.ID, &inc.ProjectID, &inc.PolicyID, &inc.ConditionName, &inc.State, &inc.StartedAt, &inc.EndedAt, &inc.Reason, &notifications); err != nil {
+		return Incident{}, err
+	}
+	if len(notifications) > 0 {
+		_ = json.Unmarshal(notifications, &inc.Notifications)
+	}
+	return inc, nil
+}
+
+const incidentCols = "id, project_id, policy_id, condition_name, state, started_at, ended_at, reason, notifications"
+
+func (s *PostgresStore) CreateIncident(ctx context.Context, inc Incident) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var openID string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM jc_monitoring_incidents
+		WHERE project_id=$1 AND policy_id=$2 AND state=$3
+		LIMIT 1
+	`, inc.ProjectID, inc.PolicyID, IncidentOpen).Scan(&openID)
+	switch {
+	case err == nil:
+		return ErrIncidentExists
+	case errors.Is(err, pgx.ErrNoRows):
+		// no open incident; proceed
+	default:
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO jc_monitoring_incidents
+			(project_id, id, policy_id, condition_name, state, started_at, ended_at, reason, notifications)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, inc.ProjectID, inc.ID, inc.PolicyID, inc.ConditionName, inc.State, inc.StartedAt, inc.EndedAt, inc.Reason, jsonb(inc.Notifications)); err != nil {
+		return fmt.Errorf("monitoring CreateIncident: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) GetIncident(ctx context.Context, project, id string) (Incident, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+incidentCols+` FROM jc_monitoring_incidents WHERE project_id=$1 AND id=$2
+	`, project, id)
+	inc, err := scanIncident(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Incident{}, ErrIncidentNotFound
+	}
+	return inc, err
+}
+
+func (s *PostgresStore) ListIncidents(ctx context.Context, project string) ([]Incident, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+incidentCols+` FROM jc_monitoring_incidents WHERE project_id=$1 ORDER BY started_at, id
+	`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Incident, 0)
+	for rows.Next() {
+		inc, err := scanIncident(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, inc)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) FindOpenIncident(ctx context.Context, project, policyID string) (Incident, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+incidentCols+` FROM jc_monitoring_incidents
+		WHERE project_id=$1 AND policy_id=$2 AND state=$3
+		ORDER BY started_at LIMIT 1
+	`, project, policyID, IncidentOpen)
+	inc, err := scanIncident(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Incident{}, ErrIncidentNotFound
+	}
+	return inc, err
+}
+
+func (s *PostgresStore) UpdateIncidentAtomic(ctx context.Context, project, id string, mutate func(Incident) (Incident, error)) (Incident, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Incident{}, err
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
+		SELECT `+incidentCols+` FROM jc_monitoring_incidents WHERE project_id=$1 AND id=$2 FOR UPDATE
+	`, project, id)
+	current, err := scanIncident(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Incident{}, ErrIncidentNotFound
+	}
+	if err != nil {
+		return Incident{}, err
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Incident{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_monitoring_incidents
+		SET condition_name=$3, state=$4, started_at=$5, ended_at=$6, reason=$7, notifications=$8
+		WHERE project_id=$1 AND id=$2
+	`, project, id, next.ConditionName, next.State, next.StartedAt, next.EndedAt, next.Reason, jsonb(next.Notifications)); err != nil {
+		return Incident{}, fmt.Errorf("monitoring UpdateIncidentAtomic: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Incident{}, err
+	}
+	next.ID = id
+	return next, nil
+}
+
+// ListProjects returns the distinct projects that hold any monitoring state.
+func (s *PostgresStore) ListProjects(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id FROM jc_monitoring_metric_descriptors
+		UNION SELECT project_id FROM jc_monitoring_time_series
+		UNION SELECT project_id FROM jc_monitoring_alert_policies
+		UNION SELECT project_id FROM jc_monitoring_notification_channels
+		UNION SELECT project_id FROM jc_monitoring_incidents
+		ORDER BY project_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
 }

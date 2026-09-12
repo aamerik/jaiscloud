@@ -2,8 +2,10 @@
 // (MetricService + AlertPolicyService) over the shared monitoringstore.Store —
 // the Amazon CloudWatch metrics+alarms analogue. It manages the metric
 // descriptor catalog, the time-series data plane, and the alert-policy (alarm)
-// registry. Alert policies are stored verbatim; the emulator does not evaluate
-// conditions or trigger notifications.
+// registry. Alert policies are stored verbatim; a background evaluator
+// (evaluator.go) evaluates condition_threshold conditions, opens/closes
+// incidents, and delivers notifications to the referenced notification
+// channels.
 //
 // Documented limitations:
 //
@@ -13,9 +15,15 @@
 //     filter field and return synthesized (not canonical)
 //     MonitoredResourceDescriptors.
 //   - DISTRIBUTION point values are rejected.
-//   - Alert policies are stored but never evaluated.
+//   - Only condition_threshold alert conditions are evaluated;
+//     condition_absent, condition_matched_log,
+//     condition_monitoring_query_language, condition_prometheus_query_language,
+//     and condition_sql are stored but never evaluated.
 //   - ListTimeSeries supports only the metric.type / resource.type equality
 //     filter subset.
+//   - NotificationChannelService supports CRUD only;
+//     ListNotificationChannelDescriptors, GetNotificationChannelDescriptor,
+//     and the verification-code RPCs are Unimplemented.
 package monitoring
 
 import (
@@ -46,11 +54,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Service implements monitoringpb.MetricServiceServer and
-// monitoringpb.AlertPolicyServiceServer over the shared store.
+// Service implements monitoringpb.MetricServiceServer,
+// monitoringpb.AlertPolicyServiceServer, and
+// monitoringpb.NotificationChannelServiceServer over the shared store.
 type Service struct {
 	monitoringpb.UnimplementedMetricServiceServer
 	monitoringpb.UnimplementedAlertPolicyServiceServer
+	monitoringpb.UnimplementedNotificationChannelServiceServer
 
 	store       monitoringstore.Store
 	defaultProj string
@@ -65,10 +75,13 @@ func NewService(store monitoringstore.Store, defaultProj string) *Service {
 func mapError(err error) error {
 	switch {
 	case errors.Is(err, monitoringstore.ErrMetricDescriptorNotFound),
-		errors.Is(err, monitoringstore.ErrAlertPolicyNotFound):
+		errors.Is(err, monitoringstore.ErrAlertPolicyNotFound),
+		errors.Is(err, monitoringstore.ErrNotificationChannelNotFound):
 		return grpcutil.GRPCStatus(model.NewProviderError("NotFound", "resource not found", 404))
 	case errors.Is(err, monitoringstore.ErrAlertPolicyExists):
 		return grpcutil.GRPCStatus(model.NewProviderError("AlreadyExists", "alert policy already exists", 409))
+	case errors.Is(err, monitoringstore.ErrNotificationChannelExists):
+		return grpcutil.GRPCStatus(model.NewProviderError("AlreadyExists", "notification channel already exists", 409))
 	}
 	return grpcutil.GRPCStatus(err)
 }
@@ -130,6 +143,20 @@ func alertPolicyName(project, id string) string {
 func splitAlertPolicyName(name string) (project, id string, ok bool) {
 	parts := strings.Split(name, "/")
 	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "alertPolicies" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
+func notificationChannelName(project, id string) string {
+	return resource.ResourceID(project)("notification-channel", id)
+}
+
+// splitNotificationChannelName parses
+// "projects/{p}/notificationChannels/{id}".
+func splitNotificationChannelName(name string) (project, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "notificationChannels" {
 		return "", "", false
 	}
 	return parts[1], parts[3], true
@@ -406,6 +433,98 @@ func (s *Service) DeleteAlertPolicy(ctx context.Context, req *monitoringpb.Delet
 	return &emptypb.Empty{}, nil
 }
 
+// ─── NotificationChannelService ──────────────────────────────────────────────
+
+func (s *Service) ListNotificationChannels(ctx context.Context, req *monitoringpb.ListNotificationChannelsRequest) (*monitoringpb.ListNotificationChannelsResponse, error) {
+	project := s.project(ctx, req.GetName())
+	channels, err := s.store.ListNotificationChannels(ctx, project)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, next := pageSlice(channels, req.GetPageSize(), req.GetPageToken())
+	out := make([]*monitoringpb.NotificationChannel, 0, len(page))
+	for _, c := range page {
+		out = append(out, notificationChannelToProto(c, project))
+	}
+	return &monitoringpb.ListNotificationChannelsResponse{
+		NotificationChannels: out,
+		NextPageToken:        next,
+		TotalSize:            int32(len(channels)),
+	}, nil
+}
+
+func (s *Service) GetNotificationChannel(ctx context.Context, req *monitoringpb.GetNotificationChannelRequest) (*monitoringpb.NotificationChannel, error) {
+	project, id, ok := splitNotificationChannelName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetName(), 400))
+	}
+	c, err := s.store.GetNotificationChannel(ctx, project, id)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return notificationChannelToProto(c, project), nil
+}
+
+func (s *Service) CreateNotificationChannel(ctx context.Context, req *monitoringpb.CreateNotificationChannelRequest) (*monitoringpb.NotificationChannel, error) {
+	project := s.project(ctx, req.GetName())
+	c := notificationChannelFromProto(req.GetNotificationChannel())
+	if c.Type == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "notification channel type is required", 400))
+	}
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	now := clock.Now()
+	c.ID = uuid.NewString()
+	c.CreateTime = now
+	c.UpdateTime = now
+	c.VerificationStatus = int32(monitoringpb.NotificationChannel_VERIFIED)
+	if err := s.store.CreateNotificationChannel(ctx, project, c); err != nil {
+		return nil, mapError(err)
+	}
+	return notificationChannelToProto(c, project), nil
+}
+
+func (s *Service) UpdateNotificationChannel(ctx context.Context, req *monitoringpb.UpdateNotificationChannelRequest) (*monitoringpb.NotificationChannel, error) {
+	project, id, ok := splitNotificationChannelName(req.GetNotificationChannel().GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetNotificationChannel().GetName(), 400))
+	}
+	incoming := notificationChannelFromProto(req.GetNotificationChannel())
+	incoming.ID = id
+	incoming.UpdateTime = clock.Now()
+
+	c, err := s.store.UpdateNotificationChannelAtomic(ctx, project, id, func(stored monitoringstore.NotificationChannel) (monitoringstore.NotificationChannel, error) {
+		paths := req.GetUpdateMask().GetPaths()
+		if len(paths) == 0 {
+			// Full replacement, but preserve the immutable create time and
+			// verification status unless explicitly masked.
+			incoming.CreateTime = stored.CreateTime
+			if incoming.VerificationStatus == 0 {
+				incoming.VerificationStatus = stored.VerificationStatus
+			}
+			return incoming, nil
+		}
+		return applyNotificationChannelMask(stored, incoming, paths)
+	})
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return notificationChannelToProto(c, project), nil
+}
+
+func (s *Service) DeleteNotificationChannel(ctx context.Context, req *monitoringpb.DeleteNotificationChannelRequest) (*emptypb.Empty, error) {
+	project, id, ok := splitNotificationChannelName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetName(), 400))
+	}
+	if err := s.store.DeleteNotificationChannel(ctx, project, id); err != nil {
+		return nil, mapError(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
 // ─── proto ↔ internal transcoding ─────────────────────────────────────────────
 
 func descriptorToProto(d monitoringstore.MetricDescriptor, project string) *metricpb.MetricDescriptor {
@@ -642,6 +761,78 @@ func applyAlertPolicyMask(stored, incoming monitoringstore.AlertPolicy, updateMa
 			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
 		}
 	}
+	return stored, nil
+}
+
+func notificationChannelToProto(c monitoringstore.NotificationChannel, project string) *monitoringpb.NotificationChannel {
+	out := &monitoringpb.NotificationChannel{
+		Name:               notificationChannelName(project, c.ID),
+		Type:               c.Type,
+		DisplayName:        c.DisplayName,
+		Description:        c.Description,
+		Labels:             c.Labels,
+		UserLabels:         c.UserLabels,
+		VerificationStatus: monitoringpb.NotificationChannel_VerificationStatus(c.VerificationStatus),
+	}
+	if c.Enabled != nil {
+		out.Enabled = wrapperspb.Bool(*c.Enabled)
+	}
+	if !c.CreateTime.IsZero() {
+		out.CreationRecord = &monitoringpb.MutationRecord{
+			MutateTime: timestamppb.New(c.CreateTime),
+		}
+	}
+	if !c.UpdateTime.IsZero() {
+		out.MutationRecords = []*monitoringpb.MutationRecord{{
+			MutateTime: timestamppb.New(c.UpdateTime),
+		}}
+	}
+	return out
+}
+
+func notificationChannelFromProto(p *monitoringpb.NotificationChannel) monitoringstore.NotificationChannel {
+	if p == nil {
+		return monitoringstore.NotificationChannel{}
+	}
+	c := monitoringstore.NotificationChannel{
+		Type:               p.GetType(),
+		DisplayName:        p.GetDisplayName(),
+		Description:        p.GetDescription(),
+		Labels:             p.GetLabels(),
+		UserLabels:         p.GetUserLabels(),
+		VerificationStatus: int32(p.GetVerificationStatus()),
+	}
+	if p.GetEnabled() != nil {
+		v := p.GetEnabled().GetValue()
+		c.Enabled = &v
+	}
+	return c
+}
+
+// applyNotificationChannelMask merges an incoming channel into the stored
+// channel according to the field paths in updateMask. Supported paths are
+// type, display_name, description, labels, user_labels, and enabled. Any other
+// path returns an error mapped to Unimplemented.
+func applyNotificationChannelMask(stored, incoming monitoringstore.NotificationChannel, updateMask []string) (monitoringstore.NotificationChannel, error) {
+	for _, path := range updateMask {
+		switch path {
+		case "type":
+			stored.Type = incoming.Type
+		case "display_name":
+			stored.DisplayName = incoming.DisplayName
+		case "description":
+			stored.Description = incoming.Description
+		case "labels":
+			stored.Labels = incoming.Labels
+		case "user_labels":
+			stored.UserLabels = incoming.UserLabels
+		case "enabled":
+			stored.Enabled = incoming.Enabled
+		default:
+			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
+		}
+	}
+	stored.UpdateTime = incoming.UpdateTime
 	return stored, nil
 }
 

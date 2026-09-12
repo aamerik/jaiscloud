@@ -23,11 +23,23 @@ type policyRow struct {
 	Policy  AlertPolicy `json:"policy"`
 }
 
+type channelRow struct {
+	Project string              `json:"project"`
+	Channel NotificationChannel `json:"channel"`
+}
+
+type incidentRow struct {
+	Project  string   `json:"project"`
+	Incident Incident `json:"incident"`
+}
+
 // monitoringSnap is the JSON snapshot shape shared by both backends.
 type monitoringSnap struct {
 	Descriptors []descriptorRow `json:"descriptors"`
 	Series      []seriesRow     `json:"series"`
 	Policies    []policyRow     `json:"policies"`
+	Channels    []channelRow    `json:"channels,omitempty"`
+	Incidents   []incidentRow   `json:"incidents,omitempty"`
 }
 
 // MemoryStore Snapshot/Restore/IsEmpty.
@@ -35,7 +47,8 @@ type monitoringSnap struct {
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.descriptors) == 0 && len(s.series) == 0 && len(s.policies) == 0, nil
+	return len(s.descriptors) == 0 && len(s.series) == 0 && len(s.policies) == 0 &&
+		len(s.channels) == 0 && len(s.incidents) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
@@ -91,6 +104,38 @@ func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 		}
 	}
 
+	projects = projects[:0]
+	for p := range s.channels {
+		projects = append(projects, p)
+	}
+	sort.Strings(projects)
+	for _, p := range projects {
+		ids := make([]string, 0, len(s.channels[p]))
+		for id := range s.channels[p] {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			snap.Channels = append(snap.Channels, channelRow{Project: p, Channel: s.channels[p][id]})
+		}
+	}
+
+	projects = projects[:0]
+	for p := range s.incidents {
+		projects = append(projects, p)
+	}
+	sort.Strings(projects)
+	for _, p := range projects {
+		ids := make([]string, 0, len(s.incidents[p]))
+		for id := range s.incidents[p] {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			snap.Incidents = append(snap.Incidents, incidentRow{Project: p, Incident: s.incidents[p][id]})
+		}
+	}
+
 	return json.NewEncoder(w).Encode(snap)
 }
 
@@ -121,11 +166,27 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 		}
 		policies[row.Project][row.Policy.ID] = row.Policy
 	}
+	channels := make(map[string]map[string]NotificationChannel)
+	for _, row := range snap.Channels {
+		if channels[row.Project] == nil {
+			channels[row.Project] = make(map[string]NotificationChannel)
+		}
+		channels[row.Project][row.Channel.ID] = row.Channel
+	}
+	incidents := make(map[string]map[string]Incident)
+	for _, row := range snap.Incidents {
+		if incidents[row.Project] == nil {
+			incidents[row.Project] = make(map[string]Incident)
+		}
+		incidents[row.Project][row.Incident.ID] = row.Incident
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.descriptors = descriptors
 	s.series = series
 	s.policies = policies
+	s.channels = channels
+	s.incidents = incidents
 	return nil
 }
 
@@ -137,6 +198,8 @@ func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 		SELECT (SELECT count(*) FROM jc_monitoring_metric_descriptors)
 		     + (SELECT count(*) FROM jc_monitoring_time_series)
 		     + (SELECT count(*) FROM jc_monitoring_alert_policies)
+		     + (SELECT count(*) FROM jc_monitoring_notification_channels)
+		     + (SELECT count(*) FROM jc_monitoring_incidents)
 	`).Scan(&n); err != nil {
 		return false, err
 	}
@@ -216,6 +279,59 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	rows.Close()
 
+	rows, err = s.pool.Query(ctx, `
+		SELECT project_id, `+channelCols+` FROM jc_monitoring_notification_channels ORDER BY project_id, id
+	`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var p string
+		var c NotificationChannel
+		var labels, userLabels []byte
+		if err := rows.Scan(&p, &c.ID, &c.Type, &c.DisplayName, &c.Description, &labels, &userLabels, &c.Enabled, &c.VerificationStatus, &c.CreateTime, &c.UpdateTime); err != nil {
+			rows.Close()
+			return err
+		}
+		if len(labels) > 0 {
+			_ = json.Unmarshal(labels, &c.Labels)
+		}
+		if len(userLabels) > 0 {
+			_ = json.Unmarshal(userLabels, &c.UserLabels)
+		}
+		snap.Channels = append(snap.Channels, channelRow{Project: p, Channel: c})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.pool.Query(ctx, `
+		SELECT project_id, `+incidentCols+` FROM jc_monitoring_incidents ORDER BY project_id, started_at, id
+	`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var p string
+		var inc Incident
+		var notifications []byte
+		if err := rows.Scan(&p, &inc.ID, &inc.ProjectID, &inc.PolicyID, &inc.ConditionName, &inc.State, &inc.StartedAt, &inc.EndedAt, &inc.Reason, &notifications); err != nil {
+			rows.Close()
+			return err
+		}
+		if len(notifications) > 0 {
+			_ = json.Unmarshal(notifications, &inc.Notifications)
+		}
+		snap.Incidents = append(snap.Incidents, incidentRow{Project: p, Incident: inc})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
 	return json.NewEncoder(w).Encode(snap)
 }
 
@@ -236,6 +352,12 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_monitoring_alert_policies`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_monitoring_notification_channels`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_monitoring_incidents`); err != nil {
 		return err
 	}
 	for _, row := range snap.Descriptors {
@@ -267,6 +389,27 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		`, row.Project, row.Policy.ID, row.Policy.DisplayName, row.Policy.Combiner, row.Policy.Enabled,
 			jsonb(row.Policy.Documentation), jsonb(row.Policy.Conditions), jsonb(row.Policy.NotificationChannels),
 			jsonb(row.Policy.UserLabels)); err != nil {
+			return err
+		}
+	}
+	for _, row := range snap.Channels {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_monitoring_notification_channels
+				(project_id, id, type, display_name, description, labels, user_labels, enabled, verification_status, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		`, row.Project, row.Channel.ID, row.Channel.Type, row.Channel.DisplayName, row.Channel.Description,
+			jsonb(row.Channel.Labels), jsonb(row.Channel.UserLabels), row.Channel.Enabled, row.Channel.VerificationStatus,
+			row.Channel.CreateTime, row.Channel.UpdateTime); err != nil {
+			return err
+		}
+	}
+	for _, row := range snap.Incidents {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_monitoring_incidents
+				(project_id, id, policy_id, condition_name, state, started_at, ended_at, reason, notifications)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		`, row.Project, row.Incident.ID, row.Incident.PolicyID, row.Incident.ConditionName, row.Incident.State,
+			row.Incident.StartedAt, row.Incident.EndedAt, row.Incident.Reason, jsonb(row.Incident.Notifications)); err != nil {
 			return err
 		}
 	}
