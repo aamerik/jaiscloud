@@ -27,7 +27,7 @@
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
-| Cloud Monitoring | gRPC | Metrics + alert policies — see [Known Limitations](#known-limitations) |
+| Cloud Monitoring | gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
 | Cloud Logging | gRPC | Log entries, filtering, log-based routing |
 | Eventarc | REST | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 
@@ -188,9 +188,11 @@ The Datastore gRPC service is intentionally non-transactional. `BeginTransaction
 
 A cluster is a logical record only — the emulator never stands up a real Kafka broker. Consumer groups are not tracked: `ListConsumerGroups` always returns an empty list, and get/update/delete operations on a consumer group return `Unimplemented`.
 
-### Cloud Monitoring: alert policies are stored, never evaluated
+### Cloud Monitoring: alert policies are evaluated for `condition_threshold`
 
-Alert policies can be created, listed, updated, and deleted, but their conditions are never evaluated and no notifications are ever triggered. `GetMonitoredResourceDescriptor` and `CreateServiceTimeSeries` are `Unimplemented`. `ListMetricDescriptors`/`ListMonitoredResourceDescriptors` ignore the `filter` field. `DISTRIBUTION`-typed point values are rejected. `ListTimeSeries` supports only the `metric.type` / `resource.type` equality filter subset — the full Monitoring Query Language is not implemented.
+Alert policies are evaluated by a background worker (30s tick, matching the AWS CloudWatch alarm evaluator). Only `condition_threshold` conditions are evaluated; `condition_absent`, `condition_matched_log`, `condition_monitoring_query_language`, `condition_prometheus_query_language`, and `condition_sql` are stored but never evaluated (and never fire). The evaluated filter subset is equality clauses joined by `AND` on `metric.type`, `resource.type`, `metric.label.{key}`, and `resource.label.{key}`; unknown clauses are ignored. The matching series' latest point in each alignment window is reduced across series (`REDUCE_SUM`/`MEAN`/`MAX`/`MIN`/`COUNT`, default mean), then compared to `threshold_value`; `duration` requires the comparison to hold across every alignment window it spans, and `trigger` count/percent is honored when no reducer is set. A firing policy opens an incident and delivers notifications; a below-threshold evaluation or no matching data closes its open incident and delivers a resolution notification. Incidents have no public API, so they are observable via the snapshot/export surface and logs. `pubsub` channels receive a CloudEvents-style JSON message on `labels.topic`; `email`/`webhook`/`sms` notifications are recorded on the incident and logged but not sent.
+
+`GetMonitoredResourceDescriptor` and `CreateServiceTimeSeries` are `Unimplemented`. `ListMetricDescriptors`/`ListMonitoredResourceDescriptors` ignore the `filter` field. `DISTRIBUTION`-typed point values are rejected. `ListTimeSeries` supports only the `metric.type` / `resource.type` equality filter subset — the full Monitoring Query Language is not implemented. `NotificationChannelService` supports CRUD for `pubsub`/`email`/`webhook`/`sms` channels; `ListNotificationChannelDescriptors`, `GetNotificationChannelDescriptor`, and the verification-code RPCs are `Unimplemented`.
 
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 
