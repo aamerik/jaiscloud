@@ -127,6 +127,21 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Cloud DNS — the v1 REST wire uses bare names (managed zone "name",
+	// rrset "name"), so these formatters are not exercised by the REST
+	// provider; they exist for the shared resource-name surface. Callers pass
+	// "zone", "zone/name/type", and "zone/changeId".
+	"clouddns-managed-zone": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/managedZones/%s", p, n)
+	},
+	"clouddns-rrset": func(p, n string) string {
+		z, nm, t := wfExec(n)
+		return fmt.Sprintf("projects/%s/managedZones/%s/rrsets/%s/%s", p, z, nm, t)
+	},
+	"clouddns-change": func(p, n string) string {
+		z, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/managedZones/%s/changes/%s", p, z, id)
+	},
 	// BigQuery — datasets/tables/jobs carry a projectId but no "name" field on
 	// the REST wire (they use datasetReference/tableReference/jobReference and
 	// the opaque id), so these formatters are not exercised by the v2 REST

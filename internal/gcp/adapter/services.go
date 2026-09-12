@@ -105,6 +105,15 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "Iceberg",
 		Codec:          func() adapter.Codec { return &IcebergCodec{} },
 	},
+	{
+		// Cloud DNS's method paths embed the "dns/v1/" service prefix (unlike
+		// the shared /v1/projects/{project}/... services), so it is identified
+		// by path prefix.
+		ServiceName:    "dns",
+		PathPrefixes:   []string{"/dns/v1/"},
+		ProviderPrefix: "CloudDNS",
+		Codec:          func() adapter.Codec { return &CloudDNSCodec{Service: "dns"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.
