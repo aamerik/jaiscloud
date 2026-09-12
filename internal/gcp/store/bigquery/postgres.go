@@ -16,12 +16,13 @@ import (
 // PostgresStore implements Store against jc_bq_datasets / jc_bq_tables /
 // jc_bq_jobs / jc_bq_rows.
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	dedup *insertDedupTracker
 }
 
 // NewPostgresStore returns a Postgres-backed store.
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{pool: pool}
+	return &PostgresStore{pool: pool, dedup: newInsertDedupTracker()}
 }
 
 // --- Datasets ---
@@ -152,7 +153,11 @@ func (s *PostgresStore) DeleteDataset(ctx context.Context, projectID, datasetID 
 	if tag.RowsAffected() == 0 {
 		return ErrNoSuchDataset
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.dedup.forgetPrefix(datasetScope(projectID, datasetID) + "/")
+	return nil
 }
 
 func (s *PostgresStore) ListDatasets(ctx context.Context, projectID string) ([]Dataset, error) {
@@ -303,7 +308,11 @@ func (s *PostgresStore) DeleteTable(ctx context.Context, projectID, datasetID, t
 	if tag.RowsAffected() == 0 {
 		return ErrNoSuchTable
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.dedup.forget(tableScope(projectID, datasetID, tableID))
+	return nil
 }
 
 func (s *PostgresStore) ListTables(ctx context.Context, projectID, datasetID string) ([]Table, error) {
@@ -403,16 +412,31 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID string) ([]Job, 
 
 // --- Rows ---
 
-func (s *PostgresStore) InsertRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) error {
-	if len(rows) == 0 {
-		if _, err := s.GetTable(ctx, projectID, datasetID, tableID); err != nil {
-			return err
-		}
-		return nil
+func (s *PostgresStore) InsertRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) ([]int, error) {
+	// Resolve the table up front so a missing table never records insertIds.
+	if _, err := s.GetTable(ctx, projectID, datasetID, tableID); err != nil {
+		return nil, err
 	}
+	key := tableScope(projectID, datasetID, tableID)
+	dups := s.dedup.filter(key, rows, clock.Now())
+	dupSet := make(map[int]bool, len(dups))
+	for _, i := range dups {
+		dupSet[i] = true
+	}
+	keep := make([]Row, 0, len(rows))
+	for i := range rows {
+		if dupSet[i] {
+			continue
+		}
+		keep = append(keep, rows[i])
+	}
+	if len(keep) == 0 {
+		return dups, nil
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -421,32 +445,35 @@ func (s *PostgresStore) InsertRows(ctx context.Context, projectID, datasetID, ta
 		SELECT COALESCE(MAX(seq), 0) FROM jc_bq_rows
 		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
 	`, projectID, datasetID, tableID).Scan(&seq); err != nil {
-		return err
+		return nil, err
 	}
-	for i := range rows {
+	for i := range keep {
 		seq++
-		rows[i].ProjectID = projectID
-		rows[i].DatasetID = datasetID
-		rows[i].TableID = tableID
-		rows[i].Seq = seq
+		keep[i].ProjectID = projectID
+		keep[i].DatasetID = datasetID
+		keep[i].TableID = tableID
+		keep[i].Seq = seq
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_bq_rows (project_id, dataset_id, table_id, seq, data)
 			VALUES ($1,$2,$3,$4,$5)
-		`, projectID, datasetID, tableID, seq, nullableJSONRaw(rows[i].Data, "{}")); err != nil {
-			return err
+		`, projectID, datasetID, tableID, seq, nullableJSONRaw(keep[i].Data, "{}")); err != nil {
+			return nil, err
 		}
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_bq_tables SET num_rows = num_rows + $4, update_time = now()
 		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
-	`, projectID, datasetID, tableID, len(rows))
+	`, projectID, datasetID, tableID, len(keep))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNoSuchTable
+		return nil, ErrNoSuchTable
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return dups, nil
 }
 
 func (s *PostgresStore) ListRows(ctx context.Context, projectID, datasetID, tableID string) ([]Row, error) {
@@ -476,6 +503,7 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_tables`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_datasets`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_bq_jobs`)
+	s.dedup.reset()
 }
 
 // nullableJSONRaw returns a json.RawMessage for a JSONB column, substituting the

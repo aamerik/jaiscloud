@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"jaiscloud/internal/clock"
 )
 
 // MemoryStore is an in-memory Store.
@@ -14,6 +16,7 @@ type MemoryStore struct {
 	tables   map[string]Table   // projectID+"/"+datasetID+"/"+tableID → table
 	jobs     map[string]Job     // projectID+"/"+jobID → job
 	rows     map[string][]Row   // projectID+"/"+datasetID+"/"+tableID → rows (seq order)
+	dedup    *insertDedupTracker
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -23,6 +26,7 @@ func NewMemoryStore() *MemoryStore {
 		tables:   make(map[string]Table),
 		jobs:     make(map[string]Job),
 		rows:     make(map[string][]Row),
+		dedup:    newInsertDedupTracker(),
 	}
 }
 
@@ -104,6 +108,7 @@ func (s *MemoryStore) DeleteDataset(_ context.Context, projectID, datasetID stri
 			delete(s.rows, k)
 		}
 	}
+	s.dedup.forgetPrefix(prefix)
 	return nil
 }
 
@@ -184,6 +189,7 @@ func (s *MemoryStore) DeleteTable(_ context.Context, projectID, datasetID, table
 	}
 	delete(s.tables, key)
 	delete(s.rows, key)
+	s.dedup.forget(key)
 	return nil
 }
 
@@ -248,13 +254,18 @@ func (s *MemoryStore) ListJobs(_ context.Context, projectID string) ([]Job, erro
 	return result, nil
 }
 
-func (s *MemoryStore) InsertRows(_ context.Context, projectID, datasetID, tableID string, rows []Row) error {
+func (s *MemoryStore) InsertRows(_ context.Context, projectID, datasetID, tableID string, rows []Row) ([]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := tableScope(projectID, datasetID, tableID)
 	t, ok := s.tables[key]
 	if !ok {
-		return ErrNoSuchTable
+		return nil, ErrNoSuchTable
+	}
+	dups := s.dedup.filter(key, rows, clock.Now())
+	dupSet := make(map[int]bool, len(dups))
+	for _, i := range dups {
+		dupSet[i] = true
 	}
 	existing := s.rows[key]
 	var next int64
@@ -263,18 +274,23 @@ func (s *MemoryStore) InsertRows(_ context.Context, projectID, datasetID, tableI
 			next = r.Seq
 		}
 	}
+	added := 0
 	for i := range rows {
+		if dupSet[i] {
+			continue
+		}
 		next++
 		rows[i].ProjectID = projectID
 		rows[i].DatasetID = datasetID
 		rows[i].TableID = tableID
 		rows[i].Seq = next
 		existing = append(existing, rows[i])
+		added++
 	}
 	s.rows[key] = existing
-	t.NumRows += int64(len(rows))
+	t.NumRows += int64(added)
 	s.tables[key] = t
-	return nil
+	return dups, nil
 }
 
 func (s *MemoryStore) ListRows(_ context.Context, projectID, datasetID, tableID string) ([]Row, error) {
@@ -293,4 +309,5 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.tables = make(map[string]Table)
 	s.jobs = make(map[string]Job)
 	s.rows = make(map[string][]Row)
+	s.dedup.reset()
 }

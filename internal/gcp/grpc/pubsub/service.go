@@ -29,6 +29,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -578,9 +579,20 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	}
 	retention := s.topicRetention(ctx, project, topicID)
 
+	// Flow control: honor the client's max_outstanding_messages /
+	// max_outstanding_bytes (0 or omitted = unlimited). The counters are scoped
+	// to this stream and track only messages this stream has sent and that are
+	// still unacked. Per the proto, these fields are only valid on the initial
+	// request; later values are ignored.
+	flow := newStreamFlowControl(first.GetMaxOutstandingMessages(), first.GetMaxOutstandingBytes())
+
 	// Handle the initial request's control fields.
-	s.applyStreamAcks(ctx, topicID, first)
-	s.applyStreamModifyDeadlines(ctx, topicID, first)
+	for _, id := range s.applyStreamAcks(ctx, topicID, first) {
+		flow.release(id)
+	}
+	for _, id := range s.applyStreamModifyDeadlines(ctx, topicID, first) {
+		flow.release(id)
+	}
 
 	// recvLoop consumes subsequent requests (acks / modify-deadlines) as they
 	// arrive, so message delivery is never blocked on the client's control flow.
@@ -592,14 +604,43 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				recvErr <- err
 				return
 			}
-			s.applyStreamAcks(ctx, topicID, r)
-			s.applyStreamModifyDeadlines(ctx, topicID, r)
+			for _, id := range s.applyStreamAcks(ctx, topicID, r) {
+				flow.release(id)
+			}
+			for _, id := range s.applyStreamModifyDeadlines(ctx, topicID, r) {
+				flow.release(id)
+			}
 		}
 	}()
 
-	// sendLoop streams claimed messages until the stream is closed.
+	// sendLoop streams claimed messages until the stream is closed, never
+	// claiming more than the client's declared flow-control budget allows.
 	for {
-		msgs, err := s.messages.Pull(ctx, topicID, streamPullBatch, ackDeadline, retention, clock.Now())
+		budget := flow.claimBudget(streamPullBatch)
+		if budget <= 0 || flow.bytesExhausted() {
+			// At the client's limit: release any messages acked out of band
+			// (another stream / unary Acknowledge) and wait for a slot.
+			if stored, err := s.messages.List(ctx, topicID); err == nil {
+				flow.reconcile(stored)
+			}
+			if flow.claimBudget(1) <= 0 || flow.bytesExhausted() {
+				select {
+				case <-ctx.Done():
+					return nil
+				case err := <-recvErr:
+					if errors.Is(err, io.EOF) {
+						return nil
+					}
+					return err
+				case <-flow.wake:
+				case <-time.After(longPollInterval):
+				}
+				continue
+			}
+			budget = flow.claimBudget(streamPullBatch)
+		}
+
+		msgs, err := s.messages.Pull(ctx, topicID, budget, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return mapError(err)
 		}
@@ -608,19 +649,40 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 			if err != nil {
 				return err
 			}
-			if len(received) > 0 {
-				if err := stream.Send(&pubsubpb.StreamingPullResponse{ReceivedMessages: received}); err != nil {
+			sendable := make([]*pubsubpb.ReceivedMessage, 0, len(received))
+			for _, rm := range received {
+				size := proto.Size(rm.GetMessage())
+				// Let a lone oversized message through when nothing is
+				// outstanding, so it cannot stall the stream forever.
+				allowOverflow := len(sendable) == 0 && flow.outstandingCount() == 0
+				if flow.reserve(rm.GetMessage().GetMessageId(), size, allowOverflow) {
+					sendable = append(sendable, rm)
+					continue
+				}
+				// Claimed but over the byte budget: make it visible again
+				// immediately instead of stranding it until the ack deadline.
+				if decoded, ok := decodeAckID(rm.GetAckId()); ok {
+					if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
+						_ = s.messages.ModifyAckDeadline(ctx, topicID, []string{decoded}, 0, clock.Now())
+					}
+				}
+			}
+			if len(sendable) > 0 {
+				if err := stream.Send(&pubsubpb.StreamingPullResponse{ReceivedMessages: sendable}); err != nil {
 					if errors.Is(err, io.EOF) {
 						return nil
 					}
 					return err
 				}
+				continue
 			}
-			continue
+			// Everything this poll claimed was over the byte budget; fall
+			// through to the wait so we don't busy-spin on re-claiming it.
 		}
 
-		// No messages: long-poll by waiting a short interval rather than
-		// busy-spinning, and stop promptly on stream close / context cancel.
+		// No sendable messages: long-poll by waiting a short interval rather
+		// than busy-spinning, and stop promptly on stream close / context
+		// cancel / a freed flow-control slot.
 		select {
 		case <-ctx.Done():
 			return nil
@@ -629,13 +691,17 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				return nil
 			}
 			return err
+		case <-flow.wake:
 		case <-time.After(longPollInterval):
 		}
 	}
 }
 
-// applyStreamAcks acknowledges the ackIds in a StreamingPull request.
-func (s *Service) applyStreamAcks(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) {
+// applyStreamAcks acknowledges the ackIds in a StreamingPull request. It returns
+// the decoded message IDs so the caller can release them from the stream's
+// outstanding flow-control set.
+func (s *Service) applyStreamAcks(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) []string {
+	var acked []string
 	for _, a := range req.GetAckIds() {
 		decoded, ok := decodeAckID(a)
 		if !ok {
@@ -644,26 +710,38 @@ func (s *Service) applyStreamAcks(ctx context.Context, topicID string, req *pubs
 		parts := strings.SplitN(decoded, "/", 2)
 		if len(parts) == 2 {
 			_ = s.messages.Delete(ctx, parts[0], parts[1])
+			acked = append(acked, parts[1])
 		}
 	}
+	return acked
 }
 
 // applyStreamModifyDeadlines applies the parallel modifyDeadlineAckIds /
 // modifyDeadlineSeconds arrays, resetting each message's visibility deadline.
-func (s *Service) applyStreamModifyDeadlines(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) {
+// A deadline of 0 is a nack (immediately redeliverable), so those IDs are
+// returned for flow-control release; a positive extension keeps the message
+// outstanding.
+func (s *Service) applyStreamModifyDeadlines(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) []string {
 	ackIDs := req.GetModifyDeadlineAckIds()
 	seconds := req.GetModifyDeadlineSeconds()
 	n := len(seconds)
 	if len(ackIDs) < n {
 		n = len(ackIDs)
 	}
+	var nacked []string
 	for i := 0; i < n; i++ {
 		decoded, ok := decodeAckID(ackIDs[i])
 		if !ok {
 			continue
 		}
 		_ = s.messages.ModifyAckDeadline(ctx, topicID, []string{decoded}, int(seconds[i]), clock.Now())
+		if seconds[i] <= 0 {
+			if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
+				nacked = append(nacked, parts[1])
+			}
+		}
 	}
+	return nacked
 }
 
 func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequest) (*emptypb.Empty, error) {

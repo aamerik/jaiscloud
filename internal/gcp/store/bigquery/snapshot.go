@@ -53,6 +53,7 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	s.tables = snap.Tables
 	s.jobs = snap.Jobs
 	s.rows = snap.Rows
+	s.dedup.reset()
 	return nil
 }
 

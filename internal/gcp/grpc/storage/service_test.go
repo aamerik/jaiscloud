@@ -1,10 +1,15 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
+
+	iampb "cloud.google.com/go/iam/apiv1/iampb"
 
 	"jaiscloud/internal/blobfs"
 	gcpcrypto "jaiscloud/internal/gcp/crypto"
@@ -21,14 +26,17 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-func storageTestService(t *testing.T) (storagepb.StorageClient, func()) {
+// newStorageTestServer starts an in-process gRPC Storage server and returns the
+// client plus the service itself (so tests can inspect in-memory session state,
+// e.g. the resumable spill file).
+func newStorageTestServer(t *testing.T) (storagepb.StorageClient, *Service, func()) {
 	t.Helper()
 	objects := gcs.NewMemoryObjectStore()
 	blobs := blobfs.NewMemoryBlobStore()
 	keys := kmsstore.NewMemoryStore()
 	resources := store.NewMemoryResourceStore()
 	provider := storageprovider.New(objects, resources, blobs, gcpcrypto.NewEnvelopeEncryptor(keys))
-	svc := NewService(objects, provider, "test-project")
+	svc := NewService(objects, resources, provider, "test-project")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -47,7 +55,13 @@ func storageTestService(t *testing.T) (storagepb.StorageClient, func()) {
 		conn.Close()
 		srv.Stop()
 	}
-	return storagepb.NewStorageClient(conn), cleanup
+	return storagepb.NewStorageClient(conn), svc, cleanup
+}
+
+func storageTestService(t *testing.T) (storagepb.StorageClient, func()) {
+	t.Helper()
+	client, _, cleanup := newStorageTestServer(t)
+	return client, cleanup
 }
 
 const testBucket = "projects/_/buckets/bucket-a"
@@ -584,5 +598,521 @@ func TestWriteObjectPrecondition(t *testing.T) {
 	}
 	if _, err := stream.Recv(); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("resumable finalize with stale precondition: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── RewriteObject ────────────────────────────────────────────────────────────
+
+func TestRewriteObjectCopiesBytesAndMetadata(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	src := writeSingleShot(t, client, testBucket, "rw-src", "text/plain", []byte("rewrite-payload"))
+	if _, err := client.UpdateObject(ctx, &storagepb.UpdateObjectRequest{
+		Object:     &storagepb.Object{Name: "rw-src", Bucket: testBucket, Metadata: map[string]string{"k": "v"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.k"}},
+	}); err != nil {
+		t.Fatalf("UpdateObject source: %v", err)
+	}
+
+	resp, err := client.RewriteObject(ctx, &storagepb.RewriteObjectRequest{
+		SourceBucket:      testBucket,
+		SourceObject:      "rw-src",
+		DestinationBucket: testBucket,
+		DestinationName:   "rw-dst",
+	})
+	if err != nil {
+		t.Fatalf("RewriteObject: %v", err)
+	}
+	if !resp.GetDone() {
+		t.Fatalf("RewriteObject done = false, want true")
+	}
+	if resp.GetObjectSize() != int64(len("rewrite-payload")) {
+		t.Fatalf("RewriteObject objectSize = %d, want %d", resp.GetObjectSize(), len("rewrite-payload"))
+	}
+	dst := resp.GetResource()
+	if dst.GetName() != "rw-dst" {
+		t.Fatalf("RewriteObject resource name = %q, want rw-dst", dst.GetName())
+	}
+	if dst.GetGeneration() == src.GetGeneration() {
+		t.Fatalf("destination generation = source generation %d, want a fresh generation", dst.GetGeneration())
+	}
+	if dst.GetContentType() != "text/plain" {
+		t.Fatalf("destination contentType = %q, want text/plain", dst.GetContentType())
+	}
+	if dst.GetMetadata()["k"] != "v" {
+		t.Fatalf("destination metadata = %v, want k=v", dst.GetMetadata())
+	}
+	if got := readObject(t, client, testBucket, "rw-dst"); string(got) != "rewrite-payload" {
+		t.Fatalf("rewritten content = %q, want rewrite-payload", got)
+	}
+	// Source is untouched by a rewrite.
+	if got := readObject(t, client, testBucket, "rw-src"); string(got) != "rewrite-payload" {
+		t.Fatalf("source content = %q, want rewrite-payload", got)
+	}
+}
+
+func TestRewriteObjectDestinationPrecondition(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	writeSingleShot(t, client, testBucket, "rw-p-src", "text/plain", []byte("SRC"))
+	writeSingleShot(t, client, testBucket, "rw-p-dst", "text/plain", []byte("OLD"))
+
+	zero := int64(0)
+	if _, err := client.RewriteObject(ctx, &storagepb.RewriteObjectRequest{
+		SourceBucket:      testBucket,
+		SourceObject:      "rw-p-src",
+		DestinationBucket: testBucket,
+		DestinationName:   "rw-p-dst",
+		IfGenerationMatch: &zero,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("rewrite if_generation_match=0 on existing dest: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+	if got := readObject(t, client, testBucket, "rw-p-dst"); string(got) != "OLD" {
+		t.Fatalf("destination unchanged after rejected rewrite, got %q, want OLD", got)
+	}
+	if got := readObject(t, client, testBucket, "rw-p-src"); string(got) != "SRC" {
+		t.Fatalf("source unchanged after rejected rewrite, got %q, want SRC", got)
+	}
+
+	// A matching source generation is honored; a stale if_source_generation_match
+	// fails without writing the destination.
+	srcObj, err := client.GetObject(ctx, &storagepb.GetObjectRequest{Bucket: testBucket, Object: "rw-p-src"})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	if _, err := client.RewriteObject(ctx, &storagepb.RewriteObjectRequest{
+		SourceBucket:            testBucket,
+		SourceObject:            "rw-p-src",
+		DestinationBucket:       testBucket,
+		DestinationName:         "rw-p-new",
+		IfSourceGenerationMatch: &zero,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("rewrite stale if_source_generation_match: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{Bucket: testBucket, Object: "rw-p-new"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("destination created despite source precondition failure: %v", err)
+	}
+
+	if _, err := client.RewriteObject(ctx, &storagepb.RewriteObjectRequest{
+		SourceBucket:            testBucket,
+		SourceObject:            "rw-p-src",
+		DestinationBucket:       testBucket,
+		DestinationName:         "rw-p-new",
+		IfSourceGenerationMatch: &srcObj.Generation,
+	}); err != nil {
+		t.Fatalf("rewrite with matching source generation: %v", err)
+	}
+	if got := readObject(t, client, testBucket, "rw-p-new"); string(got) != "SRC" {
+		t.Fatalf("rewritten content = %q, want SRC", got)
+	}
+}
+
+// ─── MoveObject ───────────────────────────────────────────────────────────────
+
+func TestMoveObjectLeavesSourceGoneAndDestPresent(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	writeSingleShot(t, client, testBucket, "mv-src", "text/plain", []byte("move-payload"))
+
+	moved, err := client.MoveObject(ctx, &storagepb.MoveObjectRequest{
+		Bucket:            testBucket,
+		SourceObject:      "mv-src",
+		DestinationObject: "mv-dst",
+	})
+	if err != nil {
+		t.Fatalf("MoveObject: %v", err)
+	}
+	if moved.GetName() != "mv-dst" {
+		t.Fatalf("MoveObject resource name = %q, want mv-dst", moved.GetName())
+	}
+	if got := readObject(t, client, testBucket, "mv-dst"); string(got) != "move-payload" {
+		t.Fatalf("moved content = %q, want move-payload", got)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{Bucket: testBucket, Object: "mv-src"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("source after move: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+func TestMoveObjectPreconditionsAndMissingSource(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	writeSingleShot(t, client, testBucket, "mv-p-src", "text/plain", []byte("SRC"))
+	writeSingleShot(t, client, testBucket, "mv-p-dst", "text/plain", []byte("OLD"))
+
+	// Destination create-only precondition rejects the move; the source stays.
+	zero := int64(0)
+	if _, err := client.MoveObject(ctx, &storagepb.MoveObjectRequest{
+		Bucket:            testBucket,
+		SourceObject:      "mv-p-src",
+		DestinationObject: "mv-p-dst",
+		IfGenerationMatch: &zero,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("move destination precondition: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+	if got := readObject(t, client, testBucket, "mv-p-dst"); string(got) != "OLD" {
+		t.Fatalf("destination unchanged after rejected move, got %q, want OLD", got)
+	}
+	if got := readObject(t, client, testBucket, "mv-p-src"); string(got) != "SRC" {
+		t.Fatalf("source removed despite rejected move, got %q, want SRC", got)
+	}
+
+	// A missing source is NotFound.
+	if _, err := client.MoveObject(ctx, &storagepb.MoveObjectRequest{
+		Bucket:            testBucket,
+		SourceObject:      "mv-p-missing",
+		DestinationObject: "mv-p-new",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("move missing source: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── IAM ──────────────────────────────────────────────────────────────────────
+
+func TestStorageBucketIAMRoundTrip(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	got, err := client.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: testBucket})
+	if err != nil {
+		t.Fatalf("GetIamPolicy: %v", err)
+	}
+	if got.GetEtag() == nil {
+		t.Fatalf("GetIamPolicy etag is empty, want a default etag")
+	}
+
+	set, err := client.SetIamPolicy(ctx, &iampb.SetIamPolicyRequest{
+		Resource: testBucket,
+		Policy: &iampb.Policy{
+			Bindings: []*iampb.Binding{
+				{Role: "roles/storage.objectViewer", Members: []string{"user:alice@example.com"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetIamPolicy: %v", err)
+	}
+	if len(set.GetBindings()) != 1 || set.GetBindings()[0].GetRole() != "roles/storage.objectViewer" {
+		t.Fatalf("SetIamPolicy bindings = %v, want objectViewer", set.GetBindings())
+	}
+
+	got, err = client.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: testBucket})
+	if err != nil {
+		t.Fatalf("GetIamPolicy after set: %v", err)
+	}
+	if len(got.GetBindings()) != 1 || got.GetBindings()[0].GetMembers()[0] != "user:alice@example.com" {
+		t.Fatalf("GetIamPolicy round-trip bindings = %v", got.GetBindings())
+	}
+
+	perms, err := client.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{
+		Resource:    testBucket,
+		Permissions: []string{"storage.buckets.get", "storage.objects.list"},
+	})
+	if err != nil {
+		t.Fatalf("TestIamPermissions: %v", err)
+	}
+	if len(perms.GetPermissions()) != 2 {
+		t.Fatalf("TestIamPermissions = %v, want both permissions", perms.GetPermissions())
+	}
+}
+
+func TestStorageObjectIAMRoundTrip(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+	writeSingleShot(t, client, testBucket, "iam-obj", "text/plain", []byte("data"))
+
+	const res = testBucket + "/objects/iam-obj"
+	if _, err := client.SetIamPolicy(ctx, &iampb.SetIamPolicyRequest{
+		Resource: res,
+		Policy: &iampb.Policy{
+			Bindings: []*iampb.Binding{
+				{Role: "roles/storage.objectAdmin", Members: []string{"serviceAccount:svc@example.com"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SetIamPolicy(object): %v", err)
+	}
+	got, err := client.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: res})
+	if err != nil {
+		t.Fatalf("GetIamPolicy(object): %v", err)
+	}
+	if len(got.GetBindings()) != 1 || got.GetBindings()[0].GetRole() != "roles/storage.objectAdmin" {
+		t.Fatalf("object IAM bindings = %v, want objectAdmin", got.GetBindings())
+	}
+	// The bucket policy is stored under a separate id and stays empty.
+	bucketPol, err := client.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: testBucket})
+	if err != nil {
+		t.Fatalf("GetIamPolicy(bucket): %v", err)
+	}
+	if len(bucketPol.GetBindings()) != 0 {
+		t.Fatalf("bucket IAM unexpectedly shares object bindings: %v", bucketPol.GetBindings())
+	}
+}
+
+func TestStorageIAMNotFound(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	if _, err := client.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{
+		Resource: "projects/_/buckets/missing-bucket",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetIamPolicy missing bucket: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+	if _, err := client.SetIamPolicy(ctx, &iampb.SetIamPolicyRequest{
+		Resource: testBucket + "/objects/missing-obj",
+		Policy:   &iampb.Policy{},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("SetIamPolicy missing object: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+	if _, err := client.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{
+		Resource: "projects/_/buckets/missing-bucket",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("TestIamPermissions missing bucket: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── resumable spill ──────────────────────────────────────────────────────────
+
+func TestResumableUploadSpillsToTempFileAndCleansUp(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "spill-obj", Bucket: testBucket, ContentType: "application/octet-stream"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+
+	// Two sub-4-MiB chunks: each is under the gRPC default max message size,
+	// but together they cross resumableSpillThreshold and force a spill.
+	chunk1 := bytes.Repeat([]byte("x"), 3<<20)
+	chunk2 := bytes.Repeat([]byte("y"), 2<<20)
+	big := append(append([]byte{}, chunk1...), chunk2...)
+	stream, err := client.BidiWriteObject(ctx)
+	if err != nil {
+		t.Fatalf("BidiWriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		FirstMessage: &storagepb.BidiWriteObjectRequest_UploadId{UploadId: uploadID},
+		WriteOffset:  0,
+		Data:         &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk1}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send first chunk: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		WriteOffset: int64(len(chunk1)),
+		Data:        &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk2}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send second chunk: %v", err)
+	}
+	// A state lookup forces the server to process the preceding data messages
+	// before we inspect in-memory session state (client Send is asynchronous).
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{StateLookup: true}); err != nil {
+		t.Fatalf("BidiWriteObject send state lookup: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("BidiWriteObject state lookup Recv: %v", err)
+	}
+
+	// The session must have spilled: bytes live in a temp file, not memory.
+	svc.mu.Lock()
+	sess := svc.uploads[uploadID]
+	spilled := sess != nil && sess.tmpFile != nil && sess.buf == nil
+	var tmpPath string
+	if spilled {
+		tmpPath = sess.tmpPath
+	}
+	svc.mu.Unlock()
+	if !spilled {
+		t.Fatal("expected the resumable session to spill to a temp file past the threshold")
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("expected spill file %s to exist: %v", tmpPath, err)
+	}
+
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{FinishWrite: true}); err != nil {
+		t.Fatalf("BidiWriteObject send finish: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("BidiWriteObject Recv: %v", err)
+	}
+	if resp.GetResource() == nil {
+		t.Fatalf("BidiWriteObject response = %v, want Resource", resp.GetWriteStatus())
+	}
+
+	if got := readObject(t, client, testBucket, "spill-obj"); !bytes.Equal(got, big) {
+		t.Fatalf("spilled round-trip: got %d bytes, want %d", len(got), len(big))
+	}
+	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("spill file %s not removed after finalize (err=%v)", tmpPath, err)
+	}
+}
+
+func TestResetRemovesSpillFiles(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource: &storagepb.Object{Name: "reset-obj", Bucket: testBucket, ContentType: "application/octet-stream"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	uploadID := srw.GetUploadId()
+
+	stream, err := client.BidiWriteObject(ctx)
+	if err != nil {
+		t.Fatalf("BidiWriteObject: %v", err)
+	}
+	chunk1 := bytes.Repeat([]byte("y"), 3<<20)
+	chunk2 := bytes.Repeat([]byte("z"), 2<<20)
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		FirstMessage: &storagepb.BidiWriteObjectRequest_UploadId{UploadId: uploadID},
+		WriteOffset:  0,
+		Data:         &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk1}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send first chunk: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		WriteOffset: int64(len(chunk1)),
+		Data:        &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: chunk2}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send second chunk: %v", err)
+	}
+	// Synchronize with the server before inspecting session state.
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{StateLookup: true}); err != nil {
+		t.Fatalf("BidiWriteObject send state lookup: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("BidiWriteObject state lookup Recv: %v", err)
+	}
+
+	svc.mu.Lock()
+	sess := svc.uploads[uploadID]
+	var tmpPath string
+	if sess != nil {
+		tmpPath = sess.tmpPath
+	}
+	svc.mu.Unlock()
+	if tmpPath == "" {
+		t.Fatal("expected a spilled session before Reset")
+	}
+
+	svc.Reset(ctx)
+	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("spill file %s not removed by Reset (err=%v)", tmpPath, err)
+	}
+	if _, err := client.QueryWriteStatus(ctx, &storagepb.QueryWriteStatusRequest{UploadId: uploadID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("QueryWriteStatus after Reset: code = %v, want NotFound (err=%v)", status.Code(err), err)
+	}
+}
+
+// ─── range reads ──────────────────────────────────────────────────────────────
+
+func TestReadObjectRange(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	payload := []byte("0123456789abcdefghij")
+	writeSingleShot(t, client, testBucket, "range-obj", "text/plain", payload)
+
+	stream, err := client.ReadObject(ctx, &storagepb.ReadObjectRequest{
+		Bucket: testBucket, Object: "range-obj", ReadOffset: 5, ReadLimit: 4,
+	})
+	if err != nil {
+		t.Fatalf("ReadObject: %v", err)
+	}
+	var out []byte
+	first := true
+	var cr *storagepb.ContentRange
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadObject Recv: %v", err)
+		}
+		if first {
+			first = false
+			cr = msg.GetContentRange()
+			if msg.GetMetadata() == nil {
+				t.Fatal("ReadObject first message missing metadata")
+			}
+		}
+		if cd := msg.GetChecksummedData(); cd != nil {
+			out = append(out, cd.GetContent()...)
+		}
+	}
+	if string(out) != "5678" {
+		t.Fatalf("range read = %q, want 5678", out)
+	}
+	if cr.GetStart() != 5 || cr.GetEnd() != 9 || cr.GetCompleteLength() != int64(len(payload)) {
+		t.Fatalf("content range = %+v, want start=5 end=9 complete=%d", cr, len(payload))
+	}
+
+	// A whole-object read still round-trips.
+	if got := readObject(t, client, testBucket, "range-obj"); !bytes.Equal(got, payload) {
+		t.Fatalf("full read = %q, want %q", got, payload)
+	}
+
+	// A zero-length range (offset at EOF) returns metadata only and no data
+	// chunks; this path deliberately skips the blob read and decryption.
+	zero, err := client.ReadObject(ctx, &storagepb.ReadObjectRequest{
+		Bucket: testBucket, Object: "range-obj", ReadOffset: int64(len(payload)),
+	})
+	if err != nil {
+		t.Fatalf("ReadObject zero range: %v", err)
+	}
+	zeroMsgs := 0
+	for {
+		msg, err := zero.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadObject zero range Recv: %v", err)
+		}
+		zeroMsgs++
+		if msg.GetChecksummedData() != nil {
+			t.Fatalf("zero-length range returned data: %q", msg.GetChecksummedData().GetContent())
+		}
+		cr := msg.GetContentRange()
+		if cr.GetStart() != int64(len(payload)) || cr.GetEnd() != int64(len(payload)) {
+			t.Fatalf("zero-length content range = %+v, want start=end=%d", cr, len(payload))
+		}
+	}
+	if zeroMsgs != 1 {
+		t.Fatalf("zero-length range messages = %d, want 1 (metadata only)", zeroMsgs)
 	}
 }

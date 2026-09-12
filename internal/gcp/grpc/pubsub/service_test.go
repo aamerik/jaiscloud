@@ -315,6 +315,108 @@ func TestStreamingPullDeliversAndAcks(t *testing.T) {
 	stream.CloseSend()
 }
 
+func TestStreamingPullHonorsMaxOutstandingMessages(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const topic = "projects/test/topics/flow-topic"
+	const subscription = "projects/test/subscriptions/flow-sub"
+
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: subscription, Topic: topic}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic,
+		Messages: []*pubsubpb.PubsubMessage{
+			{Data: []byte("flow-1")},
+			{Data: []byte("flow-2")},
+			{Data: []byte("flow-3")},
+		},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	stream, err := subc.StreamingPull(ctx)
+	if err != nil {
+		t.Fatalf("StreamingPull: %v", err)
+	}
+	if err := stream.Send(&pubsubpb.StreamingPullRequest{
+		Subscription:             subscription,
+		StreamAckDeadlineSeconds: 10,
+		MaxOutstandingMessages:   1,
+	}); err != nil {
+		t.Fatalf("StreamingPull Send: %v", err)
+	}
+
+	type recvResult struct {
+		msgs []*pubsubpb.ReceivedMessage
+		err  error
+	}
+	recvCh := make(chan recvResult, 4)
+	go func() {
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				recvCh <- recvResult{err: err}
+				return
+			}
+			recvCh <- recvResult{msgs: resp.GetReceivedMessages()}
+		}
+	}()
+
+	// The first response must carry exactly one message: the batch is clamped
+	// to max_outstanding_messages=1.
+	var first *pubsubpb.ReceivedMessage
+	select {
+	case r := <-recvCh:
+		if r.err != nil {
+			t.Fatalf("StreamingPull Recv: %v", r.err)
+		}
+		if len(r.msgs) != 1 {
+			t.Fatalf("first response delivered %d messages, want 1", len(r.msgs))
+		}
+		first = r.msgs[0]
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first message")
+	}
+
+	// While that message is unacked, no further messages may be delivered.
+	select {
+	case r := <-recvCh:
+		if r.err != nil {
+			t.Fatalf("StreamingPull Recv before ack: %v", r.err)
+		}
+		if len(r.msgs) != 0 {
+			t.Fatalf("received %d more messages before ack, want 0", len(r.msgs))
+		}
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Acking the outstanding message frees the single slot, so the next message
+	// must be delivered.
+	if err := stream.Send(&pubsubpb.StreamingPullRequest{AckIds: []string{first.GetAckId()}}); err != nil {
+		t.Fatalf("StreamingPull ack Send: %v", err)
+	}
+	select {
+	case r := <-recvCh:
+		if r.err != nil {
+			t.Fatalf("StreamingPull Recv after ack: %v", r.err)
+		}
+		if len(r.msgs) != 1 {
+			t.Fatalf("after ack delivered %d messages, want 1", len(r.msgs))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the message after ack")
+	}
+
+	stream.CloseSend()
+}
+
 func TestTestIamPermissionsFailsOpenOnMissingTopic(t *testing.T) {
 	_, _, iam, _, cleanup := pubsubTestService(t)
 	defer cleanup()
