@@ -158,8 +158,9 @@ jobs:
       - name: Download modules
         run: |
           go mod download
-          for m in sdk sdk-rest sdk-firestore sdk-monitoring sdk-workflows sdk-dataproc sdk-datastore sdk-logging sdk-gcs-grpc sdk-managed-kafka sdk-bigquery sdk-metastore sdk-iceberg sdk-eventarc; do
-            (cd tests/integration/gcp/$m && go mod download)
+          for mod in tests/integration/gcp/*/go.mod; do
+            [ -f "$mod" ] || continue
+            (cd "${mod%/go.mod}" && go mod download)
           done
 
       - name: Build jaiscloud-gcp
@@ -174,6 +175,17 @@ jobs:
           for i in {1..60}; do
             if curl -sfS http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; then
               echo "gcp server healthy"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-server.log
+          exit 1
+
+      - name: Wait for gRPC listener
+        run: |
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null; then
+              echo "grpc listener accepting connections"; exit 0
             fi
             sleep 1
           done
