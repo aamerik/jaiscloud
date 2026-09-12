@@ -3,7 +3,12 @@
 // the Amazon CloudWatch metrics+alarms analogue. It manages the metric
 // descriptor catalog, the time-series data plane, and the alert-policy (alarm)
 // registry. Alert policies are stored verbatim; the emulator does not evaluate
-// conditions or trigger notifications.
+// conditions or trigger notifications. That is deliberate — not a TODO: the AWS
+// CloudWatch analogue implements a full alarm evaluator (a background worker
+// that compares metrics to thresholds, transitions ALARM/OK/INSUFFICIENT_DATA,
+// and fires SNS actions), but it is untested and low-value in an emulator, and
+// GCP has no NotificationChannel service to fire at. Alert policies stay
+// CRUD-only rather than porting that evaluator.
 //
 // Documented limitations:
 //
@@ -13,7 +18,7 @@
 //     filter field and return synthesized (not canonical)
 //     MonitoredResourceDescriptors.
 //   - DISTRIBUTION point values are rejected.
-//   - Alert policies are stored but never evaluated.
+//   - Alert policies are stored but never evaluated (see above — by design).
 //   - ListTimeSeries supports only the metric.type / resource.type equality
 //     filter subset.
 package monitoring

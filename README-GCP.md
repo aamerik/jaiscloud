@@ -190,7 +190,7 @@ A cluster is a logical record only — the emulator never stands up a real Kafka
 
 ### Cloud Monitoring: alert policies are stored, never evaluated
 
-Alert policies can be created, listed, updated, and deleted, but their conditions are never evaluated and no notifications are ever triggered. `GetMonitoredResourceDescriptor` and `CreateServiceTimeSeries` are `Unimplemented`. `ListMetricDescriptors`/`ListMonitoredResourceDescriptors` ignore the `filter` field. `DISTRIBUTION`-typed point values are rejected. `ListTimeSeries` supports only the `metric.type` / `resource.type` equality filter subset — the full Monitoring Query Language is not implemented.
+Alert policies can be created, listed, updated, and deleted, but their conditions are never evaluated and no notifications are ever triggered — **by design**, not as a pending TODO. This intentionally diverges from the AWS emulator, whose CloudWatch analogue implements a full alarm evaluator (threshold comparison, `ALARM`/`OK`/`INSUFFICIENT_DATA` transitions, and SNS actions); that evaluator is untested and the capability is low-value in an emulator, and GCP exposes no NotificationChannel service to fire at. Alert policies therefore stay CRUD-only. `GetMonitoredResourceDescriptor` and `CreateServiceTimeSeries` are `Unimplemented`. `ListMetricDescriptors`/`ListMonitoredResourceDescriptors` ignore the `filter` field. `DISTRIBUTION`-typed point values are rejected. `ListTimeSeries` supports only the `metric.type` / `resource.type` equality filter subset — the full Monitoring Query Language is not implemented.
 
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 
