@@ -130,6 +130,51 @@ func (s *MemoryStore) DeleteConflictChecked(_ context.Context, project, key stri
 	return nil
 }
 
+// Commit applies reads+writes atomically under one lock: the read-set is
+// re-validated and every write is validated before any write is applied, so a
+// concurrent mutation can neither land between the checks and the apply nor be
+// observed half-applied. See Store.Commit's doc comment for the error contract.
+func (s *MemoryStore) Commit(_ context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Re-validate the transaction read-set.
+	for _, r := range reads {
+		current, exists := s.entities[project][r.Key]
+		if r.Exists != exists {
+			return nil, ErrAborted
+		}
+		if exists && current.Version != r.Version {
+			return nil, ErrAborted
+		}
+	}
+
+	// 2. Validate every write and compute the entity to persist, without
+	//    mutating anything yet (all-or-nothing).
+	applied := make([]Entity, len(writes))
+	for i, w := range writes {
+		current, exists := s.entities[project][w.Key]
+		e, err := resolveWrite(current, exists, w)
+		if err != nil {
+			return nil, err
+		}
+		applied[i] = e
+	}
+
+	// 3. Apply all writes now that every validation has passed.
+	for i, w := range writes {
+		if w.Op == WriteDelete {
+			delete(s.entities[project], w.Key)
+			continue
+		}
+		if s.entities[project] == nil {
+			s.entities[project] = make(map[string]Entity)
+		}
+		s.entities[project][w.Key] = applied[i]
+	}
+	return applied, nil
+}
+
 func (s *MemoryStore) ListKind(_ context.Context, project, kind string) ([]Entity, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

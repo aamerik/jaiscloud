@@ -42,7 +42,15 @@ func scanEntity(scan func(...any) error) (Entity, error) {
 	if e.Properties == nil {
 		e.Properties = map[string]Value{}
 	}
-	e.Key = e.Kind + "/" + nameOrID
+	// Rebuild the canonical (length-prefixed) key form the rest of the store
+	// uses (KeyOfID/KeyOfName). The name_or_id column is the tagged identifier
+	// ("id:<n>"/"name:<s>"), not the canonical key, so — unlike the
+	// pre-#42 "kind/name_or_id" join — it round-trips through SplitKey.
+	if id, name, isID := ParseIDOrName(nameOrID); isID {
+		e.Key = KeyOfID(e.Kind, id)
+	} else {
+		e.Key = KeyOfName(e.Kind, name)
+	}
 	return e, nil
 }
 
@@ -239,6 +247,115 @@ func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// Commit mirrors MemoryStore's, in one Serializable transaction with each
+// read-set and write row locked (SELECT ... FOR UPDATE), so the read-set and
+// precondition validations and the apply are atomic: no concurrent mutation
+// can slip in between them. See Store.Commit's doc comment for the error
+// contract.
+func (s *PostgresStore) Commit(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Re-validate the transaction read-set under row locks.
+	for _, r := range reads {
+		kind, nameOrID, ok := SplitKey(r.Key)
+		if !ok {
+			return nil, ErrInvalidKey
+		}
+		var version int64
+		err := tx.QueryRow(ctx, `
+			SELECT version FROM jc_datastore_entities
+			WHERE project=$1 AND kind=$2 AND name_or_id=$3 FOR UPDATE
+		`, project, kind, nameOrID).Scan(&version)
+		exists := true
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			exists = false
+		case err != nil:
+			return nil, err
+		}
+		if r.Exists != exists {
+			return nil, ErrAborted
+		}
+		if exists && version != r.Version {
+			return nil, ErrAborted
+		}
+	}
+
+	// 2. Validate every write under a row lock and compute the entity to
+	//    persist, without mutating anything yet (all-or-nothing).
+	applied := make([]Entity, len(writes))
+	for i, w := range writes {
+		kind, nameOrID, ok := SplitKey(w.Key)
+		if !ok {
+			return nil, ErrInvalidKey
+		}
+		row := tx.QueryRow(ctx, `
+			SELECT `+entityCols+` FROM jc_datastore_entities
+			WHERE project=$1 AND kind=$2 AND name_or_id=$3 FOR UPDATE
+		`, project, kind, nameOrID)
+		current, err := scanEntity(row.Scan)
+		exists := true
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			exists = false
+		case err != nil:
+			return nil, err
+		}
+		e, err := resolveWrite(current, exists, w)
+		if err != nil {
+			return nil, err
+		}
+		applied[i] = e
+	}
+
+	// 3. Apply all writes now that every validation has passed.
+	for i, w := range writes {
+		kind, nameOrID, ok := SplitKey(w.Key)
+		if !ok {
+			return nil, ErrInvalidKey
+		}
+		if w.Op == WriteDelete {
+			if _, err := tx.Exec(ctx, `DELETE FROM jc_datastore_entities WHERE project=$1 AND kind=$2 AND name_or_id=$3`, project, kind, nameOrID); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		e := applied[i]
+		if w.Op == WriteInsert {
+			// A plain INSERT (not upsert) preserves insert's existence
+			// semantics: a concurrent insert of the same key surfaces as a
+			// unique violation instead of silently overwriting.
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
+				VALUES ($1,$2,$3,$4,$5,$6)
+			`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+					return nil, ErrEntityExists
+				}
+				return nil, err
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (project, kind, name_or_id) DO UPDATE
+				SET properties=EXCLUDED.properties, version=EXCLUDED.version, update_time=EXCLUDED.update_time
+		`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return applied, nil
 }
 
 func (s *PostgresStore) ListKind(ctx context.Context, project, kind string) ([]Entity, error) {

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"jaiscloud/internal/clock"
 )
 
 // Sentinel errors returned by the store, mapped to gRPC status codes by the
@@ -25,6 +27,11 @@ var (
 	// conflict_detected=true) rather than aborting the whole Commit — see
 	// ApplyMutation's doc comment.
 	ErrConflict = errors.New("Conflict")
+	// ErrAborted is returned by Commit when a transaction read-set entry no
+	// longer matches the entity's current state. No write in the batch was
+	// applied; the caller must retry the whole transaction. Mirrors real
+	// Datastore's ABORTED (transaction contention).
+	ErrAborted = errors.New("Aborted")
 )
 
 // GeoPoint is a Datastore geo_point_value ({latitude, longitude}).
@@ -82,6 +89,38 @@ const (
 	MutationUpsert
 )
 
+// WriteOp identifies the operation a Write applies within Store.Commit. It is
+// the multi-mutation analogue of MutationKind, extended with a delete (which
+// ApplyMutation does not handle — a delete has no stored entity to return).
+type WriteOp int
+
+const (
+	WriteInsert WriteOp = iota
+	WriteUpdate
+	WriteUpsert
+	WriteDelete
+)
+
+// ReadRef records an entity observed within a transaction, for optimistic
+// concurrency re-validation at commit time. Key is the store's canonical key
+// string; Exists is false when the key was read as absent (Version is then 0).
+type ReadRef struct {
+	Key     string
+	Exists  bool
+	Version int64
+}
+
+// Write is a single mutation applied atomically within Store.Commit. Key is
+// the canonical store key holding the target (for WriteDelete, the entity
+// being deleted; for the others it must equal Entity.Key). Entity is ignored
+// for WriteDelete.
+type Write struct {
+	Op           WriteOp
+	Key          string
+	Entity       Entity
+	Precondition *Precondition
+}
+
 // Precondition is the optional per-mutation conflict-detection condition from
 // Datastore's real Mutation.conflict_detection_strategy oneof. At most one of
 // BaseVersion/UpdateTime should be set; nil (no Precondition at all) always
@@ -136,6 +175,23 @@ type Store interface {
 	// treats a missing entity as version 0) — anything else returns
 	// ErrConflict.
 	DeleteConflictChecked(ctx context.Context, project, key string, precondition *Precondition) error
+
+	// Commit applies a batch of writes atomically (all-or-nothing) after
+	// (1) re-validating the transaction read-set and (2) validating each
+	// write's Precondition and existence requirement. No check-then-apply gap
+	// exists between any step: in memory the whole sequence runs under one
+	// lock, and in Postgres inside one Serializable transaction with each
+	// touched row locked (SELECT ... FOR UPDATE).
+	//
+	// Returns ErrAborted when a read-set entry no longer matches, ErrConflict
+	// when a write precondition fails, ErrEntityExists for an Insert whose key
+	// already exists, or ErrEntityNotFound for an Update whose key is absent.
+	// In every error case NO write is applied.
+	//
+	// On success the returned slice is aligned with writes and carries the
+	// server-stamped Version for each applied entity (a delete yields
+	// Entity{Key: <key>}).
+	Commit(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error)
 	// ListKind returns every entity of the given kind in the project, sorted by
 	// key. An empty kind returns every entity in the project.
 	ListKind(ctx context.Context, project, kind string) ([]Entity, error)
@@ -170,6 +226,47 @@ func preconditionMatches(current Entity, exists bool, p *Precondition) bool {
 		return current.UpdateTime.Equal(*p.UpdateTime)
 	}
 	return true
+}
+
+// resolveWrite validates one Write against the entity currently stored at its
+// key (current, exists) and returns the entity to persist with its
+// server-stamped Version/UpdateTime, or an error. For WriteDelete the returned
+// entity is Entity{Key: w.Key} (the caller performs the delete). Shared by the
+// memory and Postgres Commit implementations so both enforce identical
+// semantics: a precondition mismatch (ErrConflict) takes priority over an
+// existence mismatch (ErrEntityExists / ErrEntityNotFound), exactly as
+// ApplyMutation does.
+func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
+	if !preconditionMatches(current, exists, w.Precondition) {
+		return Entity{}, ErrConflict
+	}
+	switch w.Op {
+	case WriteInsert:
+		if exists {
+			return Entity{}, ErrEntityExists
+		}
+		e := w.Entity
+		e.Version = 1
+		e.UpdateTime = clock.Now()
+		return e, nil
+	case WriteUpdate:
+		if !exists {
+			return Entity{}, ErrEntityNotFound
+		}
+		e := w.Entity
+		e.Version = current.Version + 1
+		e.UpdateTime = clock.Now()
+		return e, nil
+	case WriteUpsert:
+		e := w.Entity
+		e.Version = current.Version + 1
+		e.UpdateTime = clock.Now()
+		return e, nil
+	case WriteDelete:
+		return Entity{Key: w.Key}, nil
+	default:
+		return Entity{}, ErrInvalidKey
+	}
 }
 
 // KeyOfID returns the canonical key string for a numeric-ID key:
