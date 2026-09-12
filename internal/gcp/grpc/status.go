@@ -82,6 +82,8 @@ func httpToCode(h int) (codes.Code, bool) {
 		return codes.NotFound, true
 	case 409:
 		return codes.Aborted, true
+	case 412:
+		return codes.FailedPrecondition, true
 	case 429:
 		return codes.ResourceExhausted, true
 	case 500:
@@ -103,7 +105,7 @@ func codeAlias(c string) (codes.Code, bool) {
 		return codes.NotFound, true
 	case "AlreadyExists":
 		return codes.AlreadyExists, true
-	case "FailedPrecondition":
+	case "FailedPrecondition", "PreconditionFailed":
 		return codes.FailedPrecondition, true
 	case "OutOfRange":
 		return codes.OutOfRange, true

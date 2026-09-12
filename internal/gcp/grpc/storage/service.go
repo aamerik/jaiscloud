@@ -53,6 +53,7 @@ type uploadSession struct {
 	kmsKeyName   string
 	cseKey       []byte
 	cseKeySHA256 string
+	precondition *gcs.Precondition // from WriteObjectSpec's if_* fields; checked atomically at finalize
 	buf          []byte
 	length       int64
 	lastAccess   time.Time
@@ -473,32 +474,23 @@ func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectR
 	bucket := parseBucketName(req.GetBucket())
 	object := req.GetObject()
 
-	// Preconditions are evaluated against the live object. The optional
-	// `generation` field selects the revision to delete; the store's delete
-	// operates on the live revision, so a non-live target is a precondition
-	// failure rather than a partial delete.
-	live, err := s.objects.GetObjectMeta(ctx, bucket, object)
-	if err != nil {
-		if errors.Is(err, gcs.ErrNoSuchObject) {
-			return nil, mapError(model.NewProviderError("NotFound", "object not found", 404))
+	// Preconditions are threaded into the store's *Checked delete so the check
+	// and the delete happen under one lock/transaction — the same atomic path
+	// the REST ObjectsDelete uses (see storage.objectPrecondition). A
+	// separately-fetched read would leave a check-then-write race.
+	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
+	// The optional `generation` field selects the revision to delete; the store
+	// deletes the live revision, so fold it into the atomic precondition (a
+	// non-live target is a precondition failure, not a partial delete).
+	if req.GetGeneration() > 0 {
+		if pre == nil {
+			pre = &gcs.Precondition{}
 		}
-		return nil, mapError(err)
+		gen := req.GetGeneration()
+		pre.GenerationMatch = &gen
 	}
-	if req.GetGeneration() > 0 && genToInt64(live.Generation) != req.GetGeneration() {
-		return nil, mapError(preconditionErr("generation precondition failed"))
-	}
-	if err := checkObjectPreconditions(live, req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch); err != nil {
-		return nil, mapError(err)
-	}
-
-	// precondition: nil — checkObjectPreconditions above already validated
-	// the request's preconditions against a separately-fetched read. That
-	// check-then-write isn't atomic the way the REST path's is (see
-	// storage.DeleteObjectData's *Checked call) — a real but narrower,
-	// pre-existing gap, left as a follow-up rather than duplicating the
-	// check here.
-	if err := s.provider.DeleteObjectData(ctx, bucket, object, nil); err != nil {
-		return nil, mapError(err)
+	if err := s.provider.DeleteObjectData(ctx, bucket, object, pre); err != nil {
+		return nil, mapError(preconditionResult(err))
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -507,6 +499,36 @@ func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectR
 // matching the canonical precondition-failure shape used across GCP services.
 func preconditionErr(msg string) error {
 	return &model.ProviderError{Code: "FailedPrecondition", Message: msg, HTTPStatus: 400, Status: "FAILED_PRECONDITION"}
+}
+
+// grpcObjectPrecondition builds a gcs.Precondition from a gRPC request's four
+// optional if_*_match fields, returning nil when none is set (the common case).
+// The proto fields are optional (*int64), so nil already means "unset" and a
+// present 0 keeps GCS's special "no live version" meaning — the same shape the
+// store's *Checked methods expect.
+func grpcObjectPrecondition(ifGenMatch, ifGenNotMatch, ifMetaMatch, ifMetaNotMatch *int64) *gcs.Precondition {
+	if ifGenMatch == nil && ifGenNotMatch == nil && ifMetaMatch == nil && ifMetaNotMatch == nil {
+		return nil
+	}
+	return &gcs.Precondition{
+		GenerationMatch:        ifGenMatch,
+		GenerationNotMatch:     ifGenNotMatch,
+		MetagenerationMatch:    ifMetaMatch,
+		MetagenerationNotMatch: ifMetaNotMatch,
+	}
+}
+
+// preconditionResult maps the store's raw gcs.ErrPreconditionFailed (returned
+// by the *Checked object-write methods) to the canonical FAILED_PRECONDITION
+// provider error. Callers still run the result through mapError. The provider's
+// delete path instead returns a 412 PreconditionFailed provider error, which
+// passes through here and is resolved by mapError's 412→FAILED_PRECONDITION
+// status mapping.
+func preconditionResult(err error) error {
+	if errors.Is(err, gcs.ErrPreconditionFailed) {
+		return preconditionErr("At least one of the pre-conditions you specified did not hold")
+	}
+	return err
 }
 
 // checkObjectPreconditions validates the four GCS object preconditions against
@@ -627,12 +649,13 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	meta := protoResourceToMeta(dest, bucket, object, s.provider.NextGen(), now)
 	meta.ComponentCount = int64(len(sources))
 
-	// precondition: nil — this gRPC path doesn't yet parse
-	// WriteObjectSpec.if_generation_match/if_metageneration_match; the REST
-	// ObjectsInsert/ObjectsRewrite path does (see storage.objectPrecondition).
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "", nil)
+	// The compose destination's if_generation_match/if_metageneration_match
+	// (ComposeObjectRequest has no not-match variants) guard the write
+	// atomically via the store's *Checked path.
+	pre := grpcObjectPrecondition(req.IfGenerationMatch, nil, req.IfMetagenerationMatch, nil)
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "", pre)
 	if err != nil {
-		return nil, mapError(err)
+		return nil, mapError(preconditionResult(err))
 	}
 	return objectToProto(finalMeta), nil
 }
@@ -651,13 +674,21 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 	id := s.provider.NextGen()
 	now := clock.RealNow()
 
+	// Preconditions from the write spec are carried on the session and checked
+	// atomically when the resumable write is finalized.
+	var pre *gcs.Precondition
+	if spec != nil {
+		pre = grpcObjectPrecondition(spec.IfGenerationMatch, spec.IfGenerationNotMatch, spec.IfMetagenerationMatch, spec.IfMetagenerationNotMatch)
+	}
+
 	sess := &uploadSession{
-		bucket:      bucket,
-		object:      object,
-		contentType: resource.GetContentType(),
-		metadata:    resource.GetMetadata(),
-		kmsKeyName:  resource.GetKmsKey(),
-		lastAccess:  now,
+		bucket:       bucket,
+		object:       object,
+		contentType:  resource.GetContentType(),
+		metadata:     resource.GetMetadata(),
+		kmsKeyName:   resource.GetKmsKey(),
+		precondition: pre,
+		lastAccess:   now,
 	}
 	if sess.contentType == "" {
 		sess.contentType = "application/octet-stream"
@@ -737,9 +768,10 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
 	}
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, sess.buf, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256, nil)
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, sess.buf, versioned, priorBlobKey, true, sess.kmsKeyName, sess.cseKey, sess.cseKeySHA256, sess.precondition)
 	if err != nil {
-		return nil, err
+		// The caller maps the result to a gRPC status.
+		return nil, preconditionResult(err)
 	}
 	return objectToProto(finalMeta), nil
 }
@@ -765,11 +797,12 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 			case *storagepb.WriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:      parseBucketName(res.GetBucket()),
-					object:      res.GetName(),
-					contentType: res.GetContentType(),
-					metadata:    res.GetMetadata(),
-					kmsKeyName:  res.GetKmsKey(),
+					bucket:       parseBucketName(res.GetBucket()),
+					object:       res.GetName(),
+					contentType:  res.GetContentType(),
+					metadata:     res.GetMetadata(),
+					kmsKeyName:   res.GetKmsKey(),
+					precondition: grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				project = s.projectForBucket(ctx, sess.bucket)
 			case *storagepb.WriteObjectRequest_UploadId:
@@ -837,11 +870,12 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 			case *storagepb.BidiWriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:      parseBucketName(res.GetBucket()),
-					object:      res.GetName(),
-					contentType: res.GetContentType(),
-					metadata:    res.GetMetadata(),
-					kmsKeyName:  res.GetKmsKey(),
+					bucket:       parseBucketName(res.GetBucket()),
+					object:       res.GetName(),
+					contentType:  res.GetContentType(),
+					metadata:     res.GetMetadata(),
+					kmsKeyName:   res.GetKmsKey(),
+					precondition: grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				if sess.contentType == "" {
 					sess.contentType = "application/octet-stream"

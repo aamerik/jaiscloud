@@ -453,3 +453,136 @@ func TestDeleteAndUpdatePreconditions(t *testing.T) {
 		t.Fatalf("ReadObject content = %q, want %q", got, "data")
 	}
 }
+
+// The compose/write paths below thread their request preconditions into the
+// store's atomic *Checked methods — the follow-up #48 deliberately deferred
+// (its DeleteObject/ComposeObject/finalize calls passed precondition=nil). A
+// stale precondition must be rejected atomically, without mutating the object.
+
+func TestComposeObjectDestinationPrecondition(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	a := writeSingleShot(t, client, testBucket, "cs-a", "text/plain", []byte("A"))
+	b := writeSingleShot(t, client, testBucket, "cs-b", "text/plain", []byte("B"))
+	writeSingleShot(t, client, testBucket, "cs-dest", "text/plain", []byte("OLD"))
+
+	sources := []*storagepb.ComposeObjectRequest_SourceObject{
+		{Name: "cs-a", Generation: a.GetGeneration()},
+		{Name: "cs-b", Generation: b.GetGeneration()},
+	}
+
+	// if_generation_match=0 ("create only if absent") against an existing
+	// destination is rejected atomically; the existing object is untouched.
+	zero := int64(0)
+	if _, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:       &storagepb.Object{Name: "cs-dest", Bucket: testBucket},
+		SourceObjects:     sources,
+		IfGenerationMatch: &zero,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("compose if_generation_match=0 on existing dest: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+	if got := readObject(t, client, testBucket, "cs-dest"); string(got) != "OLD" {
+		t.Fatalf("destination unchanged after rejected compose, got %q, want OLD", got)
+	}
+
+	// The same create-only precondition succeeds against a new destination.
+	if _, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:       &storagepb.Object{Name: "cs-new", Bucket: testBucket},
+		SourceObjects:     sources,
+		IfGenerationMatch: &zero,
+	}); err != nil {
+		t.Fatalf("compose if_generation_match=0 on new dest: %v", err)
+	}
+	if got := readObject(t, client, testBucket, "cs-new"); string(got) != "AB" {
+		t.Fatalf("composed content = %q, want AB", got)
+	}
+}
+
+// writeSingleShotPre writes via the client-streaming WriteObject RPC with an
+// optional if_generation_match precondition, returning the RPC error.
+func writeSingleShotPre(t *testing.T, client storagepb.StorageClient, bucket, object string, data []byte, ifGenMatch *int64) error {
+	t.Helper()
+	stream, err := client.WriteObject(context.Background())
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&storagepb.WriteObjectRequest{
+		FirstMessage: &storagepb.WriteObjectRequest_WriteObjectSpec{
+			WriteObjectSpec: &storagepb.WriteObjectSpec{
+				Resource:          &storagepb.Object{Name: object, Bucket: bucket, ContentType: "text/plain"},
+				IfGenerationMatch: ifGenMatch,
+			},
+		},
+		WriteOffset: 0,
+		Data:        &storagepb.WriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: data}},
+		FinishWrite: true,
+	}); err != nil {
+		return err
+	}
+	_, err = stream.CloseAndRecv()
+	return err
+}
+
+func TestWriteObjectPrecondition(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	obj := writeSingleShot(t, client, testBucket, "wp", "text/plain", []byte("first"))
+	gen := obj.GetGeneration()
+	zero := int64(0)
+
+	// Create-only (if_generation_match=0) against an existing object is
+	// rejected; the stored bytes are untouched.
+	if err := writeSingleShotPre(t, client, testBucket, "wp", []byte("second"), &zero); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("write if_generation_match=0 on existing: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+	if got := readObject(t, client, testBucket, "wp"); string(got) != "first" {
+		t.Fatalf("object unchanged after rejected write, got %q, want first", got)
+	}
+
+	// A matching generation overwrites.
+	if err := writeSingleShotPre(t, client, testBucket, "wp", []byte("second"), &gen); err != nil {
+		t.Fatalf("write with matching if_generation_match: %v", err)
+	}
+	if got := readObject(t, client, testBucket, "wp"); string(got) != "second" {
+		t.Fatalf("object content = %q, want second", got)
+	}
+
+	// Create-only against a new object succeeds.
+	if err := writeSingleShotPre(t, client, testBucket, "wp-new", []byte("fresh"), &zero); err != nil {
+		t.Fatalf("write if_generation_match=0 on new object: %v", err)
+	}
+
+	// A resumable write carries the write spec's precondition through to
+	// finalize (StartResumableWrite captures it on the session).
+	srw, err := client.StartResumableWrite(ctx, &storagepb.StartResumableWriteRequest{
+		WriteObjectSpec: &storagepb.WriteObjectSpec{
+			Resource:          &storagepb.Object{Name: "wp", Bucket: testBucket, ContentType: "text/plain"},
+			IfGenerationMatch: &zero,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartResumableWrite: %v", err)
+	}
+	stream, err := client.BidiWriteObject(ctx)
+	if err != nil {
+		t.Fatalf("BidiWriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{
+		FirstMessage: &storagepb.BidiWriteObjectRequest_UploadId{UploadId: srw.GetUploadId()},
+		Data:         &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: []byte("resumed")}},
+	}); err != nil {
+		t.Fatalf("BidiWriteObject send data: %v", err)
+	}
+	if err := stream.Send(&storagepb.BidiWriteObjectRequest{FinishWrite: true}); err != nil {
+		t.Fatalf("BidiWriteObject send finish: %v", err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("resumable finalize with stale precondition: code = %v, want FailedPrecondition (err=%v)", status.Code(err), err)
+	}
+}
