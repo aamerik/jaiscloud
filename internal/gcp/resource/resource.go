@@ -155,6 +155,23 @@ var formatters = map[string]func(project, name string) string{
 		z, id := wfLoc(n)
 		return fmt.Sprintf("projects/%s/managedZones/%s/changes/%s", p, z, id)
 	},
+	// Cloud SQL Admin — relative resource names used to build selfLink and
+	// targetLink. Callers pass "instance", "instance/database",
+	// "instance/user", and "operation".
+	"cloudsql-instance": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/instances/%s", p, n)
+	},
+	"cloudsql-database": func(p, n string) string {
+		inst, db := wfLoc(n)
+		return fmt.Sprintf("projects/%s/instances/%s/databases/%s", p, inst, db)
+	},
+	"cloudsql-user": func(p, n string) string {
+		inst, usr := wfLoc(n)
+		return fmt.Sprintf("projects/%s/instances/%s/users/%s", p, inst, usr)
+	},
+	"cloudsql-operation": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/operations/%s", p, n)
+	},
 	// BigQuery — datasets/tables/jobs carry a projectId but no "name" field on
 	// the REST wire (they use datasetReference/tableReference/jobReference and
 	// the opaque id), so these formatters are not exercised by the v2 REST

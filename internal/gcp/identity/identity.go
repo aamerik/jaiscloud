@@ -29,8 +29,10 @@ const (
 )
 
 // projectPathRE matches the project segment of GCP resource-name URLs.
-// Handles /v1/projects/{project}/... and /v2/projects/{project}/....
-var projectPathRE = regexp.MustCompile(`/v[0-9]+(?:beta)?/projects/([^/]+)`)
+// Handles /v1/projects/{project}/... and /v2/projects/{project}/.... The
+// optional beta suffix covers versioned beta APIs such as Cloud SQL's
+// /sql/v1beta4/projects/{project}/... surface.
+var projectPathRE = regexp.MustCompile(`/v[0-9]+(?:beta[0-9]*)?/projects/([^/]+)`)
 
 // Source describes how the identity was derived.
 type Source uint8

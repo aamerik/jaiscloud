@@ -37,6 +37,7 @@ import (
 	hms "jaiscloud/internal/gcp/hms"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
+	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
 	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
 	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
@@ -258,6 +259,9 @@ func startCmd() *cobra.Command {
 			// Memorystore for Redis is metadata-only over the shared ResourceStore.
 			memorystoreP := memorystoreprovider.New(stores.resources)
 
+			// Cloud SQL Admin is metadata-only over the shared ResourceStore.
+			cloudsqlP := cloudsqlprovider.New(stores.resources)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -275,7 +279,8 @@ func startCmd() *cobra.Command {
 				Register(icebergP).
 				Register(eventarcP).
 				Register(clouddnsP).
-				Register(memorystoreP)
+				Register(memorystoreP).
+				Register(cloudsqlP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
