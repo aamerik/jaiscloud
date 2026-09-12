@@ -3,13 +3,14 @@
 // datasets/tables/jobs are logical records only, jobs.query never evaluates
 // SQL (it stores the query and reports jobComplete=true with empty results),
 // and tabledata.insertAll stores streamed rows that tabledata.list reads back.
-// routines/models/rowAccessPolicies are deferred and route to Unimplemented.
+// tabledata.list honors startIndex (offset pagination) and echoes it in the
+// response. routines/models/rowAccessPolicies are deferred and route to an
+// explicit Unimplemented (501) rather than the codec's 404.
 //
 // Known limitations (emulator simplifications, documented rather than fixed):
 //   - tabledata.insertAll does not honor insertId/skipInvalidRows/
 //     ignoreUnknownValues/templateSuffix and performs no schema validation: it
 //     always streams the rows and returns an empty insertErrors list.
-//   - tabledata.list ignores startIndex (rows are returned from the first row).
 //   - List methods (datasets/tables/jobs) return full resource objects rather
 //     than the discovery-doc summary subsets (over-inclusion, tolerated by the
 //     SDK).
@@ -73,6 +74,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"BigQuery.Query":             p.Query,
 		"BigQuery.GetQueryResults":   p.GetQueryResults,
 		"BigQuery.GetServiceAccount": p.GetServiceAccount,
+		"BigQuery.Routines":          p.Routines,
+		"BigQuery.Models":            p.Models,
+		"BigQuery.RowAccessPolicies": p.RowAccessPolicies,
 	}
 }
 
@@ -545,6 +549,10 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if datasetID == "" || tableID == "" {
 		return nil, invalidArgument("datasetId and tableId are required")
 	}
+	startIndex, err := startIndexParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
 	if err != nil {
 		return nil, mapErr(err)
@@ -554,20 +562,45 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	total := int64(len(rows))
+	// startIndex offsets into the full row set; an out-of-range index yields an
+	// empty page rather than an error (matching the real API).
+	if startIndex > 0 {
+		if startIndex >= len(rows) {
+			rows = nil
+		} else {
+			rows = rows[startIndex:]
+		}
+	}
 	page, next := paging.Page(rows, func(r bqstore.Row) string { return fmt.Sprintf("%020d", r.Seq) }, pagingParams(nr.Params))
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, rowToTableRow(r.Data, fields))
 	}
 	resp := map[string]any{
-		"kind":      kindPrefix + "tableDataList",
-		"rows":      items,
-		"totalRows": strconv.FormatInt(int64(len(rows)), 10),
+		"kind":       kindPrefix + "tableDataList",
+		"rows":       items,
+		"totalRows":  strconv.FormatInt(total, 10),
+		"startIndex": strconv.Itoa(startIndex),
 	}
 	if next != "" {
 		resp["pageToken"] = next
 	}
 	return provider.OK(resp), nil
+}
+
+// startIndexParam parses the tabledata.list startIndex query parameter,
+// defaulting to 0. A non-numeric or negative value is InvalidArgument.
+func startIndexParam(nr *model.NormalizedRequest) (int, error) {
+	raw := strParam(nr, "startIndex")
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, invalidArgument("startIndex must be a non-negative integer")
+	}
+	return n, nil
 }
 
 // --- Jobs ---
@@ -712,4 +745,28 @@ func (p *Provider) GetServiceAccount(ctx context.Context, nr *model.NormalizedRe
 		"kind":  kindPrefix + "getServiceAccountResponse",
 		"email": fmt.Sprintf("bq-%s@gcp-sa-bigquery.iam.gserviceaccount.com", projectOf(nr)),
 	}), nil
+}
+
+// --- Deferred resources ---
+
+// unimplementedResource fails loud with Unimplemented for the resource types
+// the emulator deliberately does not model, so clients get an explicit 501
+// rather than a misleading 404.
+func unimplementedResource(resource string) error {
+	return model.NewProviderError("Unimplemented", resource+" is not implemented by this emulator", 501)
+}
+
+// Routines handles the deferred dataset-scoped routines surface.
+func (p *Provider) Routines(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, unimplementedResource("routines")
+}
+
+// Models handles the deferred dataset-scoped models surface.
+func (p *Provider) Models(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, unimplementedResource("models")
+}
+
+// RowAccessPolicies handles the deferred table-scoped rowAccessPolicies surface.
+func (p *Provider) RowAccessPolicies(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return nil, unimplementedResource("rowAccessPolicies")
 }

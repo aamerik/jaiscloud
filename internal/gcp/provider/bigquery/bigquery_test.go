@@ -269,6 +269,106 @@ func TestTableAndRowRoundTrip(t *testing.T) {
 	}
 }
 
+func TestListRowsStartIndex(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"datasetId": "d"},
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+	if _, err := p.CreateTable(ctx, newNR(map[string]any{
+		"datasetId": "d",
+		"body": map[string]any{
+			"tableReference": map[string]any{"tableId": "t"},
+			"schema": map[string]any{
+				"fields": []any{map[string]any{"name": "id", "type": "INTEGER"}},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	rawRows := make([]any, 0, 5)
+	for i := 0; i < 5; i++ {
+		rawRows = append(rawRows, map[string]any{"json": map[string]any{"id": i}})
+	}
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d",
+		"tableId":   "t",
+		"body":      map[string]any{"rows": rawRows},
+	})); err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+
+	firstID := func(row any) any {
+		m, _ := row.(map[string]any)
+		cells, _ := m["f"].([]any)
+		if len(cells) == 0 {
+			return nil
+		}
+		cell, _ := cells[0].(map[string]any)
+		return cell["v"]
+	}
+
+	// startIndex=2 returns rows from index 2 and echoes startIndex.
+	list, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "startIndex": "2"}))
+	if err != nil {
+		t.Fatalf("list rows startIndex=2: %v", err)
+	}
+	if list.Data["startIndex"] != "2" {
+		t.Errorf("startIndex echo = %v, want 2", list.Data["startIndex"])
+	}
+	if list.Data["totalRows"] != "5" {
+		t.Errorf("totalRows = %v, want 5", list.Data["totalRows"])
+	}
+	rows, _ := list.Data["rows"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows from startIndex 2, got %d", len(rows))
+	}
+	if got := firstID(rows[0]); got != float64(2) {
+		t.Errorf("first row id = %v, want 2", got)
+	}
+
+	// Out-of-range startIndex yields an empty page, not an error.
+	empty, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "startIndex": "99"}))
+	if err != nil {
+		t.Fatalf("list rows with out-of-range startIndex: %v", err)
+	}
+	if rows, _ := empty.Data["rows"].([]any); len(rows) != 0 {
+		t.Errorf("expected no rows for out-of-range startIndex, got %d", len(rows))
+	}
+	if empty.Data["startIndex"] != "99" {
+		t.Errorf("startIndex echo = %v, want 99", empty.Data["startIndex"])
+	}
+
+	// Invalid startIndex → 400 InvalidArgument.
+	_, err = p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "startIndex": "abc"}))
+	if err == nil {
+		t.Fatalf("expected InvalidArgument for non-numeric startIndex")
+	}
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("expected InvalidArgument/400, got %v", err)
+	}
+}
+
+func TestDeferredResourceOps_Unimplemented(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	routes := p.Routes()
+	for _, action := range []string{"BigQuery.Routines", "BigQuery.Models", "BigQuery.RowAccessPolicies"} {
+		h, ok := routes[action]
+		if !ok {
+			t.Fatalf("missing route %q", action)
+		}
+		_, err := h(ctx, newNR(nil))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "Unimplemented" || perr.HTTPStatus != 501 {
+			t.Errorf("%s: expected Unimplemented/501, got %v", action, err)
+		}
+	}
+}
+
 func TestJobAndQueryEmptyResults(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())

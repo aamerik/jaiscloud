@@ -3,6 +3,7 @@ package gcp
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
@@ -17,7 +18,10 @@ import (
 // share the same "projects/{project}" tail, so the segment scan below resolves
 // them identically. tabledata lives as trailing methods on a table path
 // (.../tables/{id}/insertAll and .../tables/{id}/data); jobs.delete is a DELETE
-// on .../jobs/{id}/delete (not a bare DELETE).
+// on .../jobs/{id}/delete (not a bare DELETE). The dataset-scoped routines and
+// models resources and the table-scoped rowAccessPolicies resource are deferred
+// by the emulator; they resolve to their own action names here so the provider
+// can fail loud with Unimplemented rather than the codec 404-ing them.
 type BigQueryCodec struct {
 	Service string
 }
@@ -98,16 +102,22 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 				return "DeleteDataset", seg[1], "", ""
 			}
 		case 3:
-			if seg[2] == "tables" {
+			switch seg[2] {
+			case "tables":
 				if method == http.MethodPost {
 					return "CreateTable", seg[1], "", ""
 				}
 				if method == http.MethodGet {
 					return "ListTables", seg[1], "", ""
 				}
+			case "routines":
+				return "Routines", seg[1], "", ""
+			case "models":
+				return "Models", seg[1], "", ""
 			}
 		case 4:
-			if seg[2] == "tables" {
+			switch seg[2] {
+			case "tables":
 				switch method {
 				case http.MethodGet:
 					return "GetTable", seg[1], seg[3], ""
@@ -118,10 +128,14 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 				case http.MethodDelete:
 					return "DeleteTable", seg[1], seg[3], ""
 				}
+			case "routines":
+				return "Routines", seg[1], "", ""
+			case "models":
+				return "Models", seg[1], "", ""
 			}
 		case 5:
 			if seg[2] == "tables" {
-				switch seg[4] {
+				switch resourceSegment(seg[4]) {
 				case "insertAll":
 					if method == http.MethodPost {
 						return "InsertAll", seg[1], seg[3], ""
@@ -130,7 +144,13 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 					if method == http.MethodGet {
 						return "ListRows", seg[1], seg[3], ""
 					}
+				case "rowAccessPolicies":
+					return "RowAccessPolicies", seg[1], seg[3], ""
 				}
+			}
+		case 6:
+			if seg[2] == "tables" && resourceSegment(seg[4]) == "rowAccessPolicies" {
+				return "RowAccessPolicies", seg[1], seg[3], ""
 			}
 		}
 	case "jobs":
@@ -175,6 +195,16 @@ func bigQueryAction(seg []string, method string) (action, datasetID, tableID, jo
 		}
 	}
 	return "", "", "", ""
+}
+
+// resourceSegment strips a trailing custom-method suffix (for example
+// "rowAccessPolicies:batchDelete") from a path segment, leaving the resource
+// type used to derive the action name.
+func resourceSegment(seg string) string {
+	if i := strings.IndexByte(seg, ':'); i >= 0 {
+		return seg[:i]
+	}
+	return seg
 }
 
 // Encode serialises a provider response as JSON.
