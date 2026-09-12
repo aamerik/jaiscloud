@@ -128,6 +128,15 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "CloudDNS",
 		Codec:          func() adapter.Codec { return &CloudDNSCodec{Service: "dns"} },
 	},
+	{
+		// Compute Engine's method paths embed the "compute/v1/" service prefix
+		// (unlike the shared /v1/projects/{project}/... services), so it is
+		// identified by path prefix.
+		ServiceName:    "compute",
+		PathPrefixes:   []string{"/compute/v1/"},
+		ProviderPrefix: "Compute",
+		Codec:          func() adapter.Codec { return &ComputeCodec{Service: "compute"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.

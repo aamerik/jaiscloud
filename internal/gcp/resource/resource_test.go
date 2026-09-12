@@ -20,6 +20,18 @@ func TestResourceIDFormatters(t *testing.T) {
 		{"service-account", "sa@x.iam.gserviceaccount.com", "projects/proj/serviceAccounts/sa@x.iam.gserviceaccount.com"},
 		{"cloud-function", "us-central1/fn", "projects/proj/locations/us-central1/functions/fn"},
 		{"cloud-function", "fn", "projects/proj/locations/-/functions/fn"},
+		{"compute-instance", "us-central1-a/vm", "projects/proj/zones/us-central1-a/instances/vm"},
+		{"compute-disk", "us-central1-a/d", "projects/proj/zones/us-central1-a/disks/d"},
+		{"compute-disk-type", "us-central1-a/pd-ssd", "projects/proj/zones/us-central1-a/diskTypes/pd-ssd"},
+		{"compute-machine-type", "us-central1-a/e2-micro", "projects/proj/zones/us-central1-a/machineTypes/e2-micro"},
+		{"compute-network", "default", "projects/proj/global/networks/default"},
+		{"compute-firewall", "allow-ssh", "projects/proj/global/firewalls/allow-ssh"},
+		{"compute-subnetwork", "us-central1/sub", "projects/proj/regions/us-central1/subnetworks/sub"},
+		{"compute-zone", "us-central1-a", "projects/proj/zones/us-central1-a"},
+		{"compute-region", "us-central1", "projects/proj/regions/us-central1"},
+		{"compute-zone-operation", "us-central1-a/op1", "projects/proj/zones/us-central1-a/operations/op1"},
+		{"compute-region-operation", "us-central1/op1", "projects/proj/regions/us-central1/operations/op1"},
+		{"compute-global-operation", "op1", "projects/proj/global/operations/op1"},
 	}
 	for _, tc := range cases {
 		if got := r(tc.typ, tc.name); got != tc.want {

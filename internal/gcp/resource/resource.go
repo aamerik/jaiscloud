@@ -187,6 +187,53 @@ var formatters = map[string]func(project, name string) string{
 	"bigquery-job": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/jobs/%s", p, n)
 	},
+	// Compute Engine — relative resource names used to build selfLink and
+	// targetLink. Zonal resources pass "zone/name"; regional resources pass
+	// "region/name"; global resources pass "name"; operations pass
+	// "zone/op" or "region/op" (and the global formatter passes "op").
+	"compute-instance": func(p, n string) string {
+		z, name := wfLoc(n)
+		return fmt.Sprintf("projects/%s/zones/%s/instances/%s", p, z, name)
+	},
+	"compute-disk": func(p, n string) string {
+		z, name := wfLoc(n)
+		return fmt.Sprintf("projects/%s/zones/%s/disks/%s", p, z, name)
+	},
+	"compute-disk-type": func(p, n string) string {
+		z, name := wfLoc(n)
+		return fmt.Sprintf("projects/%s/zones/%s/diskTypes/%s", p, z, name)
+	},
+	"compute-machine-type": func(p, n string) string {
+		z, name := wfLoc(n)
+		return fmt.Sprintf("projects/%s/zones/%s/machineTypes/%s", p, z, name)
+	},
+	"compute-network": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/global/networks/%s", p, n)
+	},
+	"compute-firewall": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/global/firewalls/%s", p, n)
+	},
+	"compute-subnetwork": func(p, n string) string {
+		r, name := wfLoc(n)
+		return fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", p, r, name)
+	},
+	"compute-zone": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/zones/%s", p, n)
+	},
+	"compute-region": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/regions/%s", p, n)
+	},
+	"compute-zone-operation": func(p, n string) string {
+		z, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/zones/%s/operations/%s", p, z, op)
+	},
+	"compute-region-operation": func(p, n string) string {
+		r, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/regions/%s/operations/%s", p, r, op)
+	},
+	"compute-global-operation": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/global/operations/%s", p, n)
+	},
 	// Cloud Logging (gRPC-only; no REST wire equivalent in this emulator).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
 	// Cloud Monitoring (gRPC-only; no REST wire equivalent in this emulator).
