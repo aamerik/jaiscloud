@@ -1,0 +1,215 @@
+package logging
+
+import (
+	"context"
+	"errors"
+	"io"
+	"time"
+
+	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
+
+	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/model"
+
+	"google.golang.org/protobuf/types/known/durationpb"
+)
+
+const (
+	// defaultTailBufferWindow mirrors real Cloud Logging's default buffer_window.
+	defaultTailBufferWindow = 2 * time.Second
+	// maxTailBufferWindow caps a client-supplied buffer_window (spec: 0-60000 ms).
+	maxTailBufferWindow = 60 * time.Second
+	// minTailPollInterval keeps an explicit zero buffer_window from busy-spinning.
+	minTailPollInterval = 50 * time.Millisecond
+)
+
+// tailPollInterval maps the request's buffer_window to the emulator's polling
+// cadence. Real Cloud Logging holds entries server-side for up to buffer_window
+// to smooth out late-arriving (out-of-order) entries; the emulator's store has
+// no late-arrival reordering to absorb — List already returns every entry in
+// (timestamp, id) order — so the window is realized as the bounded interval at
+// which the tail re-reads the store. A nil/absent window uses the 2 s default.
+func tailPollInterval(bw *durationpb.Duration) time.Duration {
+	if bw == nil {
+		return defaultTailBufferWindow
+	}
+	d := bw.AsDuration()
+	if d < minTailPollInterval {
+		return minTailPollInterval
+	}
+	if d > maxTailBufferWindow {
+		return maxTailBufferWindow
+	}
+	return d
+}
+
+// tailProject resolves the project from the request's resource_names, falling
+// back to routing metadata and then the configured default — the same
+// resolution ListLogEntries uses.
+func (s *Service) tailProject(ctx context.Context, req *loggingpb.TailLogEntriesRequest) string {
+	for _, rn := range req.GetResourceNames() {
+		if p := projectFromResourceName(rn); p != "" {
+			return p
+		}
+	}
+	return grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+}
+
+// latestEntryID returns the highest stored entry id for the project, or -1 when
+// there are no entries. It seeds the tail's "new since stream start" cursor;
+// -1 (not 0) is required because the in-memory store's first entry gets id 0.
+func (s *Service) latestEntryID(ctx context.Context, project string) (int64, error) {
+	entries, err := s.store.List(ctx, project)
+	if err != nil {
+		return -1, err
+	}
+	max := int64(-1)
+	for _, e := range entries {
+		if e.ID > max {
+			max = e.ID
+		}
+	}
+	return max, nil
+}
+
+// TailLogEntries implements a bounded, store-polling approximation of Cloud
+// Logging's streaming read. After accepting the initial request it streams log
+// entries written after the stream began whose fields satisfy the same filter
+// engine ListLogEntries uses. A client may send further requests to change the
+// filter (and project); they are applied to subsequent polls.
+//
+// Approximation (documented in the package doc): real Logging guarantees
+// at-least-once delivery with per-response timestamp ordering and uses
+// buffer_window to reorder late arrivals. The emulator instead records the
+// store's monotonic write id at stream start and, on each poll, emits every
+// entry with a larger id in (timestamp, id) order. This yields at-most-once
+// delivery relative to the read snapshot, no server-side retention, and a
+// latency bounded below by the poll interval derived from buffer_window (the
+// 2 s default). It never returns Unimplemented and never busy-spins.
+func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntriesServer) error {
+	req, err := stream.Recv()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+
+	pred, err := compileFilter(req.GetFilter())
+	if err != nil {
+		return mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400))
+	}
+
+	ctx := stream.Context()
+	project := s.tailProject(ctx, req)
+	lastID, err := s.latestEntryID(ctx, project)
+	if err != nil {
+		return mapError(err)
+	}
+	interval := tailPollInterval(req.GetBufferWindow())
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// tailUpdate carries a client reconfiguration (a further
+	// TailLogEntriesRequest) or the terminal Recv error. It is buffered so the
+	// reader goroutine can always deliver one update and exit, even after the
+	// main loop has returned.
+	type tailUpdate struct {
+		pred     filterExpr
+		project  string
+		interval time.Duration
+		err      error
+	}
+	updates := make(chan tailUpdate, 1)
+
+	// Drain the client's send side on a dedicated goroutine: it applies filter
+	// updates and, importantly, notices a half-close (Recv -> io.EOF) so the
+	// session terminates instead of tailing forever.
+	go func() {
+		for {
+			r, rerr := stream.Recv()
+			if rerr != nil {
+				select {
+				case updates <- tailUpdate{err: rerr}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			p, perr := compileFilter(r.GetFilter())
+			if perr != nil {
+				select {
+				case updates <- tailUpdate{err: mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+perr.Error(), 400))}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			u := tailUpdate{
+				pred:     p,
+				project:  s.tailProject(ctx, r),
+				interval: tailPollInterval(r.GetBufferWindow()),
+			}
+			select {
+			case updates <- u:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case u := <-updates:
+			if u.err != nil {
+				if errors.Is(u.err, io.EOF) {
+					return nil
+				}
+				return u.err
+			}
+			// A project change must re-seed the id cursor, otherwise the tail
+			// would replay the new project's pre-existing backlog.
+			if u.project != project {
+				project = u.project
+				lastID, err = s.latestEntryID(ctx, project)
+				if err != nil {
+					return mapError(err)
+				}
+			}
+			pred = u.pred
+			if u.interval != interval {
+				interval = u.interval
+				ticker.Reset(interval)
+			}
+		case <-ticker.C:
+			entries, lerr := s.store.List(ctx, project)
+			if lerr != nil {
+				return mapError(lerr)
+			}
+			batch := make([]*loggingpb.LogEntry, 0)
+			newLast := lastID
+			for _, e := range entries {
+				if e.ID <= lastID {
+					continue
+				}
+				if e.ID > newLast {
+					newLast = e.ID
+				}
+				if pred.match(e) {
+					batch = append(batch, entryToProto(e))
+				}
+			}
+			lastID = newLast
+			if len(batch) == 0 {
+				continue
+			}
+			if serr := stream.Send(&loggingpb.TailLogEntriesResponse{Entries: batch}); serr != nil {
+				if ctx.Err() != nil || errors.Is(serr, io.EOF) {
+					return nil
+				}
+				return serr
+			}
+		}
+	}
+}

@@ -22,7 +22,12 @@ import (
 // store and returns the Logging client.
 func loggingTestService(t *testing.T) (loggingpb.LoggingServiceV2Client, func()) {
 	t.Helper()
-	svc := NewService(loggingstore.NewMemoryStore(), "test")
+	return loggingTestServiceWithStore(t, loggingstore.NewMemoryStore())
+}
+
+func loggingTestServiceWithStore(t *testing.T, store loggingstore.Store) (loggingpb.LoggingServiceV2Client, func()) {
+	t.Helper()
+	svc := NewService(store, "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
