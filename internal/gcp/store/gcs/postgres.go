@@ -34,6 +34,7 @@ func (s *PostgresObjectStore) CreateBucket(ctx context.Context, projectID, name 
 	}
 	meta["name"] = name
 	meta["projectId"] = projectID
+	normalizeBucketMeta(meta)
 	loc, _ := meta["location"].(string)
 	sc, _ := meta["storageClass"].(string)
 	raw, _ := json.Marshal(meta)
@@ -64,6 +65,7 @@ func (s *PostgresObjectStore) GetBucket(ctx context.Context, name string) (map[s
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return nil, err
 	}
+	normalizeBucketMeta(meta)
 	return meta, nil
 }
 
@@ -77,6 +79,48 @@ func (s *PostgresObjectStore) UpdateBucketMeta(ctx context.Context, name string,
 		return ErrNoSuchBucket
 	}
 	return nil
+}
+
+// UpdateBucketMetaAtomic runs mutate against the bucket's current meta inside a
+// Serializable transaction that row-locks the bucket (SELECT ... FOR UPDATE),
+// then persists the result. The lock spans the read-mutate-write sequence, so a
+// precondition validated inside mutate cannot race a concurrent update — the
+// same discipline as the object *Checked methods above.
+func (s *PostgresObjectStore) UpdateBucketMetaAtomic(ctx context.Context, name string, mutate func(meta map[string]any) (map[string]any, error)) (map[string]any, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var raw []byte
+	err = tx.QueryRow(ctx, `SELECT meta FROM jc_gcs_buckets WHERE name=$1 FOR UPDATE`, name).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+	var current map[string]any
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return nil, err
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return nil, err
+	}
+	if next == nil {
+		next = map[string]any{}
+	}
+	next["name"] = name
+	normalizeBucketMeta(next)
+	out, _ := json.Marshal(next)
+	if _, err := tx.Exec(ctx, `UPDATE jc_gcs_buckets SET meta=$2 WHERE name=$1`, name, json.RawMessage(out)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func (s *PostgresObjectStore) DeleteBucket(ctx context.Context, name string) error {
@@ -128,6 +172,7 @@ func (s *PostgresObjectStore) ListBuckets(ctx context.Context, projectID string)
 		}
 		var meta map[string]any
 		if json.Unmarshal(raw, &meta) == nil {
+			normalizeBucketMeta(meta)
 			result = append(result, meta)
 		}
 	}

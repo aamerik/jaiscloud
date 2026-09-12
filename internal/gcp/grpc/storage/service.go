@@ -176,7 +176,7 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 	b := &storagepb.Bucket{
 		Name:           bucketResourceName(name),
 		BucketId:       name,
-		Metageneration: 1,
+		Metageneration: genToInt64(gcs.BucketMetageneration(m)),
 	}
 	if v, _ := m["location"].(string); v != "" {
 		b.Location = v

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 )
 
 // MemoryObjectStore is an in-memory ObjectStore.
@@ -38,6 +39,7 @@ func (s *MemoryObjectStore) CreateBucket(_ context.Context, projectID, name stri
 	}
 	meta["name"] = name
 	meta["projectId"] = projectID
+	normalizeBucketMeta(meta)
 	s.buckets[name] = meta
 	return nil
 }
@@ -54,6 +56,7 @@ func (s *MemoryObjectStore) GetBucket(_ context.Context, name string) (map[strin
 	for k, v := range meta {
 		out[k] = v
 	}
+	normalizeBucketMeta(out)
 	return out, nil
 }
 
@@ -65,6 +68,34 @@ func (s *MemoryObjectStore) UpdateBucketMeta(_ context.Context, name string, met
 	}
 	s.buckets[name] = meta
 	return nil
+}
+
+func (s *MemoryObjectStore) UpdateBucketMetaAtomic(_ context.Context, name string, mutate func(meta map[string]any) (map[string]any, error)) (map[string]any, error) {
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (map[string]any, bool) { meta, ok := s.buckets[name]; return meta, ok },
+		func(current map[string]any, exists bool) (map[string]any, error) {
+			if !exists {
+				return nil, ErrNoSuchBucket
+			}
+			// Mutate a copy so a precondition failure (or any error) leaves the
+			// stored map untouched rather than partially modified.
+			next := make(map[string]any, len(current))
+			for k, v := range current {
+				next[k] = v
+			}
+			next, err := mutate(next)
+			if err != nil {
+				return nil, err
+			}
+			if next == nil {
+				next = map[string]any{}
+			}
+			next["name"] = name
+			normalizeBucketMeta(next)
+			return next, nil
+		},
+		func(next map[string]any) { s.buckets[name] = next },
+	)
 }
 
 func (s *MemoryObjectStore) DeleteBucket(_ context.Context, name string) error {
@@ -95,6 +126,7 @@ func (s *MemoryObjectStore) ListBuckets(_ context.Context, projectID string) ([]
 			out[k] = v
 		}
 		out["name"] = name
+		normalizeBucketMeta(out)
 		result = append(result, out)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i]["name"].(string) < result[j]["name"].(string) })

@@ -197,3 +197,95 @@ func TestObjectsDelete_IfGenerationMatch(t *testing.T) {
 		t.Fatal("expected the object to be gone after a matching conditional delete")
 	}
 }
+
+// TestBucketsUpdate_MetagenerationPrecondition verifies buckets.update honors
+// GCS's ifMetagenerationMatch/ifMetagenerationNotMatch preconditions atomically
+// with the write: a stale match is rejected with 412 and the bucket is left
+// unchanged, a matching one applies and advances the metageneration.
+func TestBucketsUpdate_MetagenerationPrecondition(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	created, err := p.BucketsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	if got, _ := created.Data["metageneration"].(string); got != "1" {
+		t.Fatalf("new bucket metageneration = %q, want \"1\"", got)
+	}
+
+	get := func() (string, string) {
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		resp, err := p.BucketsGet(ctx, nr)
+		if err != nil {
+			t.Fatalf("get bucket: %v", err)
+		}
+		metagen, _ := resp.Data["metageneration"].(string)
+		sc, _ := resp.Data["storageClass"].(string)
+		return metagen, sc
+	}
+	update := func(params map[string]any, storageClass string) (*model.ProviderResponse, error) {
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		for k, v := range params {
+			nr.Params[k] = v
+		}
+		nr.Params["body"] = map[string]any{"storageClass": storageClass}
+		return p.BucketsUpdate(ctx, nr)
+	}
+
+	// Stale ifMetagenerationMatch: rejected, bucket unchanged.
+	if _, err := update(map[string]any{"ifMetagenerationMatch": "999"}, "NEARLINE"); err == nil {
+		t.Fatal("expected a stale ifMetagenerationMatch update to fail")
+	} else {
+		assertPrecondition412(t, err)
+	}
+	if metagen, sc := get(); metagen != "1" || sc != "STANDARD" {
+		t.Fatalf("rejected update must not apply: metageneration=%q storageClass=%q", metagen, sc)
+	}
+
+	// Matching ifMetagenerationMatch: applies and bumps 1 → 2.
+	resp, err := update(map[string]any{"ifMetagenerationMatch": "1"}, "NEARLINE")
+	if err != nil {
+		t.Fatalf("matching metageneration update: %v", err)
+	}
+	if got, _ := resp.Data["metageneration"].(string); got != "2" {
+		t.Fatalf("after update metageneration = %q, want \"2\"", got)
+	}
+	if metagen, sc := get(); metagen != "2" || sc != "NEARLINE" {
+		t.Fatalf("matching update not applied: metageneration=%q storageClass=%q", metagen, sc)
+	}
+
+	// The now-stale value is rejected again.
+	if _, err := update(map[string]any{"ifMetagenerationMatch": "1"}, "COLDLINE"); err == nil {
+		t.Fatal("expected the same now-stale match to fail")
+	} else {
+		assertPrecondition412(t, err)
+	}
+
+	// ifMetagenerationNotMatch fails when it equals the current metageneration…
+	if _, err := update(map[string]any{"ifMetagenerationNotMatch": "2"}, "COLDLINE"); err == nil {
+		t.Fatal("expected ifMetagenerationNotMatch=2 to fail against current 2")
+	} else {
+		assertPrecondition412(t, err)
+	}
+
+	// …and applies against a different one, bumping 2 → 3.
+	if _, err := update(map[string]any{"ifMetagenerationNotMatch": "1"}, "COLDLINE"); err != nil {
+		t.Fatalf("ifMetagenerationNotMatch against a different value: %v", err)
+	}
+	if metagen, sc := get(); metagen != "3" || sc != "COLDLINE" {
+		t.Fatalf("not-match update not applied: metageneration=%q storageClass=%q", metagen, sc)
+	}
+
+	// No precondition still bumps (3 → 4).
+	if _, err := update(nil, "STANDARD"); err != nil {
+		t.Fatalf("unconditional update: %v", err)
+	}
+	if metagen, _ := get(); metagen != "4" {
+		t.Fatalf("unconditional update metageneration = %q, want \"4\"", metagen)
+	}
+}
