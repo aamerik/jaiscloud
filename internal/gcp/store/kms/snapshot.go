@@ -67,14 +67,17 @@ type kmsKeyringRow struct {
 }
 
 type kmsCryptokeyRow struct {
-	ProjectID      string    `json:"projectId"`
-	Location       string    `json:"location"`
-	KeyRingID      string    `json:"keyRingId"`
-	ID             string    `json:"id"`
-	Purpose        string    `json:"purpose"`
-	Algorithm      string    `json:"algorithm"`
-	CreateTime     time.Time `json:"createTime"`
-	PrimaryVersion string    `json:"primaryVersion"`
+	ProjectID        string            `json:"projectId"`
+	Location         string            `json:"location"`
+	KeyRingID        string            `json:"keyRingId"`
+	ID               string            `json:"id"`
+	Purpose          string            `json:"purpose"`
+	Algorithm        string            `json:"algorithm"`
+	CreateTime       time.Time         `json:"createTime"`
+	PrimaryVersion   string            `json:"primaryVersion"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	RotationPeriod   time.Duration     `json:"rotationPeriod,omitempty"`
+	NextRotationTime time.Time         `json:"nextRotationTime,omitempty"`
 }
 
 type kmsVersionRow struct {
@@ -119,15 +122,27 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	cryptokeys := make([]kmsCryptokeyRow, 0)
-	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
+	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
 	if err != nil {
 		return err
 	}
 	for crows.Next() {
 		var r kmsCryptokeyRow
-		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion); err != nil {
+		var labels []byte
+		var rotationSecs *int64
+		var next *time.Time
+		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion, &labels, &rotationSecs, &next); err != nil {
 			crows.Close()
 			return err
+		}
+		if len(labels) > 0 {
+			_ = json.Unmarshal(labels, &r.Labels)
+		}
+		if rotationSecs != nil {
+			r.RotationPeriod = time.Duration(*rotationSecs) * time.Second
+		}
+		if next != nil {
+			r.NextRotationTime = *next
 		}
 		cryptokeys = append(cryptokeys, r)
 	}
@@ -222,8 +237,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.CryptoKeys {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion, labelsJSON(r.Labels), rotationSeconds(r.RotationPeriod), nullableTime(r.NextRotationTime)); err != nil {
 			return err
 		}
 	}

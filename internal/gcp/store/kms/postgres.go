@@ -2,9 +2,11 @@ package kms
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
+	"time"
 
 	"jaiscloud/internal/clock"
 
@@ -152,9 +154,9 @@ func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, next_version)
-		VALUES ($1,$2,$3,$4,$5,$6,'1',$7,2)
-	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, ck.Algorithm); err != nil {
+		INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, next_version, labels, rotation_period, next_rotation_time)
+		VALUES ($1,$2,$3,$4,$5,$6,'1',$7,2,$8,$9,$10)
+	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, ck.Algorithm, labelsJSON(ck.Labels), rotationSeconds(ck.RotationPeriod), nullableTime(ck.NextRotationTime)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyExists
@@ -170,12 +172,62 @@ func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location
 	return tx.Commit(ctx)
 }
 
-func (s *PostgresStore) GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error) {
+// labelsJSON marshals a label map for the JSONB column (SQL NULL when empty).
+func labelsJSON(labels map[string]string) any {
+	if len(labels) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(labels)
+	return json.RawMessage(b)
+}
+
+// rotationSeconds converts a rotation period to whole seconds for storage; a
+// non-positive period is stored as SQL NULL (rotation disabled).
+func rotationSeconds(d time.Duration) any {
+	if d <= 0 {
+		return nil
+	}
+	return int64(d / time.Second)
+}
+
+// nullableTime returns nil for the zero instant so an unset schedule is stored
+// as SQL NULL rather than year-1.
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
+// scanCryptoKey decodes a jc_kms_cryptokeys row (the shared column list used by
+// Get/List/Update) into a CryptoKey.
+func scanCryptoKey(sc interface{ Scan(dest ...any) error }) (CryptoKey, error) {
 	var ck CryptoKey
-	err := s.pool.QueryRow(ctx, `
-		SELECT location, keyring_id, key_id, purpose, create_time, primary_version, algorithm
+	var labels []byte
+	var rotationSecs *int64
+	var next *time.Time
+	if err := sc.Scan(&ck.Location, &ck.KeyRingID, &ck.ID, &ck.Purpose, &ck.CreateTime, &ck.PrimaryVersion, &ck.Algorithm, &labels, &rotationSecs, &next); err != nil {
+		return CryptoKey{}, err
+	}
+	if len(labels) > 0 {
+		_ = json.Unmarshal(labels, &ck.Labels)
+	}
+	if rotationSecs != nil {
+		ck.RotationPeriod = time.Duration(*rotationSecs) * time.Second
+	}
+	if next != nil {
+		ck.NextRotationTime = *next
+	}
+	return ck, nil
+}
+
+const cryptoKeyColumns = `location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, labels, rotation_period, next_rotation_time`
+
+func (s *PostgresStore) GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error) {
+	ck, err := scanCryptoKey(s.pool.QueryRow(ctx, `
+		SELECT `+cryptoKeyColumns+`
 		FROM jc_kms_cryptokeys WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
-	`, projectID, location, keyringID, id).Scan(&ck.Location, &ck.KeyRingID, &ck.ID, &ck.Purpose, &ck.CreateTime, &ck.PrimaryVersion, &ck.Algorithm)
+	`, projectID, location, keyringID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CryptoKey{}, ErrNoSuchCryptoKey
 	}
@@ -187,7 +239,7 @@ func (s *PostgresStore) GetCryptoKey(ctx context.Context, projectID, location, k
 
 func (s *PostgresStore) ListCryptoKeys(ctx context.Context, projectID, location, keyringID string) ([]CryptoKey, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT location, keyring_id, key_id, purpose, create_time, primary_version, algorithm
+		SELECT `+cryptoKeyColumns+`
 		FROM jc_kms_cryptokeys WHERE project_id=$1 AND location=$2 AND keyring_id=$3 ORDER BY key_id
 	`, projectID, location, keyringID)
 	if err != nil {
@@ -196,14 +248,53 @@ func (s *PostgresStore) ListCryptoKeys(ctx context.Context, projectID, location,
 	defer rows.Close()
 	var result []CryptoKey
 	for rows.Next() {
-		var ck CryptoKey
-		if err := rows.Scan(&ck.Location, &ck.KeyRingID, &ck.ID, &ck.Purpose, &ck.CreateTime, &ck.PrimaryVersion, &ck.Algorithm); err != nil {
+		ck, err := scanCryptoKey(rows)
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, ck)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, rows.Err()
+}
+
+// UpdateCryptoKeyAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the key for the duration of
+// mutate, so a concurrent update on the same key blocks until this transaction
+// commits or rolls back instead of racing to a lost update.
+func (s *PostgresStore) UpdateCryptoKeyAtomic(ctx context.Context, projectID, location, keyringID, id string, mutate func(CryptoKey) (CryptoKey, error)) (CryptoKey, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return CryptoKey{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanCryptoKey(tx.QueryRow(ctx, `
+		SELECT `+cryptoKeyColumns+`
+		FROM jc_kms_cryptokeys WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 FOR UPDATE
+	`, projectID, location, keyringID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CryptoKey{}, ErrNoSuchCryptoKey
+	}
+	if err != nil {
+		return CryptoKey{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return CryptoKey{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_kms_cryptokeys SET labels=$5, rotation_period=$6, next_rotation_time=$7
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
+	`, projectID, location, keyringID, id, labelsJSON(next.Labels), rotationSeconds(next.RotationPeriod), nullableTime(next.NextRotationTime)); err != nil {
+		return CryptoKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return CryptoKey{}, err
+	}
+	return next, nil
 }
 
 func (s *PostgresStore) CreateVersion(ctx context.Context, projectID, location, keyringID, keyID string, v Version) (string, error) {

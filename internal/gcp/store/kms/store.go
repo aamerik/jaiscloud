@@ -31,6 +31,16 @@ type CryptoKey struct {
 	CreateTime     time.Time
 	PrimaryVersion string
 	Algorithm      string // version template algorithm (e.g. GOOGLE_SYMMETRIC_ENCRYPTION, RSA_SIGN_PKCS1_2048_SHA256)
+
+	// Labels is the user-supplied key metadata. Nil/empty means none.
+	Labels map[string]string
+	// RotationPeriod is the manual rotation schedule. Zero means rotation is
+	// disabled. The emulator stores the schedule and derives NextRotationTime,
+	// but does not execute rotations.
+	RotationPeriod time.Duration
+	// NextRotationTime is when the next rotation is scheduled. Zero means no
+	// rotation is scheduled (RotationPeriod is zero).
+	NextRotationTime time.Time
 }
 
 // Version is a KMS crypto-key version with its own key material.
@@ -54,6 +64,14 @@ type Store interface {
 	CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error
 	GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error)
 	ListCryptoKeys(ctx context.Context, projectID, location, keyringID string) ([]CryptoKey, error)
+	// UpdateCryptoKeyAtomic atomically reads the current crypto key, calls
+	// mutate to compute the new value, and writes it back — no other
+	// GetCryptoKey/UpdateCryptoKeyAtomic for this key can be observed or
+	// applied in between. Callers doing a read-modify-write (a labels/rotation
+	// patch) must use this instead of a separate GetCryptoKey+write pair.
+	// Returns ErrNoSuchCryptoKey if the key doesn't exist (mutate is not
+	// called in that case).
+	UpdateCryptoKeyAtomic(ctx context.Context, projectID, location, keyringID, id string, mutate func(current CryptoKey) (CryptoKey, error)) (CryptoKey, error)
 
 	// CreateVersion allocates the next version number and stores the version
 	// with DEK-wrapped key material. Returns the assigned version string.

@@ -111,7 +111,7 @@ func cryptoKeyVersionName(nr *model.NormalizedRequest, loc, kr, key, version str
 
 // cryptoKeyMap renders a CryptoKey as its GCP response object.
 func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"name":       cryptoKeyName(nr, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
 		"createTime": k.CreateTime.UTC().Format(time.RFC3339Nano),
@@ -125,6 +125,54 @@ func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey) map[string]
 			"protectionLevel": "SOFTWARE",
 		},
 	}
+	if len(k.Labels) > 0 {
+		out["labels"] = k.Labels
+	}
+	if k.RotationPeriod > 0 {
+		out["rotationPeriod"] = durationString(k.RotationPeriod)
+	}
+	if !k.NextRotationTime.IsZero() {
+		out["nextRotationTime"] = k.NextRotationTime.UTC().Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+// durationString formats a duration the way GCP's JSON mapping encodes a
+// google.protobuf.Duration: a decimal seconds value with an "s" suffix
+// (e.g. 86400s).
+func durationString(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10) + "s"
+}
+
+// parseRotationPeriod parses a GCP JSON duration string (e.g. "86400s").
+func parseRotationPeriod(v any) (time.Duration, bool, error) {
+	s, _ := v.(string)
+	if s == "" {
+		return 0, false, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, false, model.NewProviderError("InvalidRequest", "rotationPeriod must be a duration string (e.g. \"86400s\")", 400)
+	}
+	if d <= 0 {
+		return 0, false, model.NewProviderError("InvalidRequest", "rotationPeriod must be positive", 400)
+	}
+	return d, true, nil
+}
+
+// parseLabels converts a decoded JSON labels object into a string map.
+func parseLabels(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return nil
+	}
+	labels := make(map[string]string, len(m))
+	for k, val := range m {
+		if s, ok := val.(string); ok {
+			labels[k] = s
+		}
+	}
+	return labels
 }
 
 // versionMap renders a CryptoKeyVersion as its GCP response object.
@@ -225,6 +273,8 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 	}
 	purpose := "ENCRYPT_DECRYPT"
 	algorithm := ""
+	var labels map[string]string
+	var rotationPeriod time.Duration
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if purp, _ := body["purpose"].(string); purp != "" {
 			purpose = purp
@@ -234,12 +284,23 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 				algorithm = alg
 			}
 		}
+		labels = parseLabels(body["labels"])
+		period, set, err := parseRotationPeriod(body["rotationPeriod"])
+		if err != nil {
+			return nil, err
+		}
+		if set {
+			rotationPeriod = period
+		}
 	}
 	if algorithm == "" {
 		algorithm = defaultAlgorithmForPurpose(purpose)
 	}
 	now := clock.Now()
-	ck := kmsstore.CryptoKey{Location: loc, KeyRingID: kr, ID: key, Purpose: purpose, CreateTime: now, PrimaryVersion: "1", Algorithm: algorithm}
+	ck := kmsstore.CryptoKey{Location: loc, KeyRingID: kr, ID: key, Purpose: purpose, CreateTime: now, PrimaryVersion: "1", Algorithm: algorithm, Labels: labels, RotationPeriod: rotationPeriod}
+	if rotationPeriod > 0 {
+		ck.NextRotationTime = now.Add(rotationPeriod)
+	}
 	if err := p.keys.CreateCryptoKey(ctx, nr.AccountID, loc, kr, key, ck); err != nil {
 		if errors.Is(err, kmsstore.ErrAlreadyExists) {
 			return nil, model.NewProviderError("AlreadyExists", "crypto key already exists", 409)
