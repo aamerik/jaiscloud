@@ -96,3 +96,49 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 		t.Errorf("versionTemplate.protectionLevel = %q, want SOFTWARE", pl)
 	}
 }
+
+// TestCryptoKeyLabelsRotationREST verifies the REST surface persists labels and
+// a rotationPeriod on create and surfaces them (plus the derived
+// nextRotationTime) on get.
+func TestCryptoKeyLabelsRotationREST(t *testing.T) {
+	ctx := context.Background()
+	p := New(kmsstore.NewMemoryStore())
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "rot",
+		"body": map[string]any{
+			"labels":         map[string]any{"env": "test"},
+			"rotationPeriod": "86400s",
+		},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+
+	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": "locations/global/keyRings/kr/cryptoKeys/rot"}))
+	if err != nil {
+		t.Fatalf("cryptokey get: %v", err)
+	}
+	labels, _ := resp.Data["labels"].(map[string]string)
+	if labels["env"] != "test" {
+		t.Errorf("labels = %v, want env=test", resp.Data["labels"])
+	}
+	if period, _ := resp.Data["rotationPeriod"].(string); period != "86400s" {
+		t.Errorf("rotationPeriod = %q, want 86400s", period)
+	}
+	if next, _ := resp.Data["nextRotationTime"].(string); next == "" {
+		t.Error("nextRotationTime is empty, want a derived timestamp")
+	}
+
+	// A non-positive rotationPeriod is rejected.
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "bad",
+		"body":        map[string]any{"rotationPeriod": "-1h"},
+	})); err == nil || errStatus(err) != 400 {
+		t.Fatalf("negative rotationPeriod err = %v, want 400", err)
+	}
+}

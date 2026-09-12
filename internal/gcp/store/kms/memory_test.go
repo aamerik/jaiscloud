@@ -2,8 +2,10 @@ package kms
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMemoryStoreKeyMaterial(t *testing.T) {
@@ -100,6 +102,97 @@ func TestMemoryStoreCryptoKeyCRUD(t *testing.T) {
 	}
 	if len(all) != 3 || all[0].ID != "a" || all[2].ID != "k" {
 		t.Fatalf("unexpected list: %+v", all)
+	}
+}
+
+// TestMemoryStoreCryptoKeyLabelsRotation verifies the labels/rotation fields
+// round-trip through create/get and that UpdateCryptoKeyAtomic merges them
+// without disturbing unmasked fields.
+func TestMemoryStoreCryptoKeyLabelsRotation(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	create := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.CreateKeyRing(ctx, "proj", "global", "kr", KeyRing{ID: "kr"}); err != nil {
+		t.Fatalf("create keyring: %v", err)
+	}
+	if err := s.CreateCryptoKey(ctx, "proj", "global", "kr", "k", CryptoKey{
+		Location: "global", KeyRingID: "kr", ID: "k", CreateTime: create,
+		Labels:           map[string]string{"env": "test"},
+		RotationPeriod:   24 * time.Hour,
+		NextRotationTime: create.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	ck, err := s.GetCryptoKey(ctx, "proj", "global", "kr", "k")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if ck.Labels["env"] != "test" {
+		t.Fatalf("labels = %v, want env=test", ck.Labels)
+	}
+	if ck.RotationPeriod != 24*time.Hour {
+		t.Fatalf("rotation period = %v, want 24h", ck.RotationPeriod)
+	}
+	if !ck.NextRotationTime.Equal(create.Add(24 * time.Hour)) {
+		t.Fatalf("next rotation = %v, want %v", ck.NextRotationTime, create.Add(24*time.Hour))
+	}
+
+	updated, err := s.UpdateCryptoKeyAtomic(ctx, "proj", "global", "kr", "k", func(cur CryptoKey) (CryptoKey, error) {
+		cur.Labels = map[string]string{"env": "prod"}
+		return cur, nil
+	})
+	if err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	if updated.Labels["env"] != "prod" {
+		t.Fatalf("labels after update = %v, want env=prod", updated.Labels)
+	}
+	if updated.RotationPeriod != 24*time.Hour || updated.NextRotationTime.IsZero() {
+		t.Fatalf("rotation not preserved by labels-only update: %+v", updated)
+	}
+
+	if _, err := s.UpdateCryptoKeyAtomic(ctx, "proj", "global", "kr", "missing", func(c CryptoKey) (CryptoKey, error) {
+		return c, nil
+	}); err != ErrNoSuchCryptoKey {
+		t.Fatalf("missing key err = %v, want ErrNoSuchCryptoKey", err)
+	}
+}
+
+// TestMemoryStoreUpdateCryptoKeyAtomicNoLostUpdates guards the read-modify-write
+// discipline: concurrent label patches on the same key must all survive.
+func TestMemoryStoreUpdateCryptoKeyAtomicNoLostUpdates(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	s.CreateKeyRing(ctx, "proj", "global", "kr", KeyRing{ID: "kr"})
+	s.CreateCryptoKey(ctx, "proj", "global", "kr", "k", CryptoKey{ID: "k"})
+
+	const n = 50
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := "label-" + strconv.Itoa(i)
+			if _, err := s.UpdateCryptoKeyAtomic(ctx, "proj", "global", "kr", "k", func(cur CryptoKey) (CryptoKey, error) {
+				if cur.Labels == nil {
+					cur.Labels = map[string]string{}
+				}
+				cur.Labels[key] = "1"
+				return cur, nil
+			}); err != nil {
+				t.Errorf("update %s: %v", key, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	ck, err := s.GetCryptoKey(ctx, "proj", "global", "kr", "k")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(ck.Labels) != n {
+		t.Fatalf("labels = %d, want %d (a lost update slipped through)", len(ck.Labels), n)
 	}
 }
 

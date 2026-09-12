@@ -93,6 +93,76 @@ func TestPostgresDEKSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostgresCryptoKeyLabelsRotation verifies labels/rotation persist through
+// create/get/atomic-update and survive snapshot → reset → restore.
+func TestPostgresCryptoKeyLabelsRotation(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
+	}
+
+	ctx := context.Background()
+	s := newKMSStore(t, dsn)
+	project, location, keyring, key := kmsIDs()
+	create := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if err := s.CreateKeyRing(ctx, project, location, keyring, kms.KeyRing{Location: location, ID: keyring}); err != nil {
+		t.Fatalf("create keyring: %v", err)
+	}
+	if err := s.CreateCryptoKey(ctx, project, location, keyring, key, kms.CryptoKey{
+		Location: location, KeyRingID: keyring, ID: key, Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION",
+		CreateTime: create, Labels: map[string]string{"env": "test"},
+		RotationPeriod: 24 * time.Hour, NextRotationTime: create.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("create cryptokey: %v", err)
+	}
+
+	got, err := s.GetCryptoKey(ctx, project, location, keyring, key)
+	if err != nil {
+		t.Fatalf("get cryptokey: %v", err)
+	}
+	if got.Labels["env"] != "test" || got.RotationPeriod != 24*time.Hour || !got.NextRotationTime.Equal(create.Add(24*time.Hour)) {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+
+	updated, err := s.UpdateCryptoKeyAtomic(ctx, project, location, keyring, key, func(cur kms.CryptoKey) (kms.CryptoKey, error) {
+		cur.Labels = map[string]string{"env": "prod"}
+		return cur, nil
+	})
+	if err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	if updated.Labels["env"] != "prod" || updated.RotationPeriod != 24*time.Hour || updated.NextRotationTime.IsZero() {
+		t.Fatalf("labels-only update lost rotation: %+v", updated)
+	}
+
+	if _, err := s.UpdateCryptoKeyAtomic(ctx, project, location, keyring, "missing", func(c kms.CryptoKey) (kms.CryptoKey, error) {
+		return c, nil
+	}); err != kms.ErrNoSuchCryptoKey {
+		t.Fatalf("missing key err = %v, want ErrNoSuchCryptoKey", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	restored, err := s.GetCryptoKey(ctx, project, location, keyring, key)
+	if err != nil {
+		t.Fatalf("restored key missing: %v", err)
+	}
+	if restored.Labels["env"] != "prod" {
+		t.Fatalf("restored labels = %v, want env=prod", restored.Labels)
+	}
+	if restored.RotationPeriod != 24*time.Hour || !restored.NextRotationTime.Equal(create.Add(24*time.Hour)) {
+		t.Fatalf("restored rotation = (%v, %v), want (24h, %v)", restored.RotationPeriod, restored.NextRotationTime, create.Add(24*time.Hour))
+	}
+}
+
 // TestPostgresConcurrentCreateVersion verifies concurrent CreateVersion calls
 // allocate distinct version numbers without a unique-violation.
 func TestPostgresConcurrentCreateVersion(t *testing.T) {

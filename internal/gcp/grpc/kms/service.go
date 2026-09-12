@@ -12,6 +12,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"strings"
+	"time"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -25,6 +26,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -255,17 +257,32 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 	}
 	purpose := "ENCRYPT_DECRYPT"
 	algorithm := ""
+	var labels map[string]string
+	var rotationPeriod time.Duration
 	if ck := req.GetCryptoKey(); ck != nil {
 		purpose = purposeFromProto(ck.GetPurpose())
 		if vt := ck.GetVersionTemplate(); vt != nil {
 			algorithm = algorithmFromProto(vt.GetAlgorithm())
+		}
+		if len(ck.GetLabels()) > 0 {
+			labels = ck.GetLabels()
+		}
+		if rp := ck.GetRotationPeriod(); rp != nil {
+			d := rp.AsDuration()
+			if d <= 0 {
+				return nil, mapError(model.NewProviderError("InvalidArgument", "rotation period must be positive", 400))
+			}
+			rotationPeriod = d
 		}
 	}
 	if algorithm == "" {
 		algorithm = defaultAlgorithmForPurpose(purpose)
 	}
 	now := clock.Now()
-	ck := kmsstore.CryptoKey{Location: loc, KeyRingID: kr, ID: key, Purpose: purpose, CreateTime: now, PrimaryVersion: "1", Algorithm: algorithm}
+	ck := kmsstore.CryptoKey{Location: loc, KeyRingID: kr, ID: key, Purpose: purpose, CreateTime: now, PrimaryVersion: "1", Algorithm: algorithm, Labels: labels, RotationPeriod: rotationPeriod}
+	if rotationPeriod > 0 {
+		ck.NextRotationTime = now.Add(rotationPeriod)
+	}
 	if err := s.keys.CreateCryptoKey(ctx, project, loc, kr, key, ck); err != nil {
 		if errors.Is(err, kmsstore.ErrAlreadyExists) {
 			return nil, mapError(model.NewProviderError("AlreadyExists", "crypto key already exists", 409))
@@ -287,10 +304,12 @@ func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyReque
 	return cryptoKeyToProto(project, k), nil
 }
 
-// UpdateCryptoKey reads back the current key. Purpose and algorithm are
-// immutable, and the store persists no other mutable metadata (labels,
-// rotation schedule), so this is effectively an idempotent read matching the
-// emulator's minimal surface.
+// UpdateCryptoKey applies the update_mask to the mutable fields. `labels` and
+// `rotation_period` are supported; setting rotation_period (re)derives
+// next_rotation_time = now + period, and clearing it clears next_rotation_time.
+// Purpose/algorithm are immutable. An unsupported mask path fails loud with
+// Unimplemented. The read-modify-write runs inside the store's atomic update so
+// a concurrent masked patch can't be lost.
 func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKeyRequest) (*kmspb.CryptoKey, error) {
 	ck := req.GetCryptoKey()
 	if ck == nil {
@@ -300,11 +319,47 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKe
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	k, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
+	k, err := s.keys.UpdateCryptoKeyAtomic(ctx, project, loc, kr, key, func(stored kmsstore.CryptoKey) (kmsstore.CryptoKey, error) {
+		paths := req.GetUpdateMask().GetPaths()
+		if len(paths) == 0 {
+			// No mask: replace every mutable field (labels, rotation schedule).
+			paths = []string{"labels", "rotation_period"}
+		}
+		return applyCryptoKeyMask(stored, ck, paths)
+	})
 	if err != nil {
 		return nil, keyErr(err)
 	}
 	return cryptoKeyToProto(project, k), nil
+}
+
+// applyCryptoKeyMask merges an incoming crypto key into the stored key
+// according to updateMask. Masked paths take the incoming value; unmasked
+// fields retain the stored value. Supported paths are labels and
+// rotation_period; any other path returns an error mapped to Unimplemented.
+func applyCryptoKeyMask(stored kmsstore.CryptoKey, incoming *kmspb.CryptoKey, updateMask []string) (kmsstore.CryptoKey, error) {
+	for _, path := range updateMask {
+		switch path {
+		case "labels":
+			stored.Labels = incoming.GetLabels()
+		case "rotation_period":
+			rp := incoming.GetRotationPeriod()
+			if rp == nil {
+				stored.RotationPeriod = 0
+				stored.NextRotationTime = time.Time{}
+				continue
+			}
+			d := rp.AsDuration()
+			if d <= 0 {
+				return stored, model.NewProviderError("InvalidArgument", "rotation period must be positive", 400)
+			}
+			stored.RotationPeriod = d
+			stored.NextRotationTime = clock.Now().Add(d)
+		default:
+			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
+		}
+	}
+	return stored, nil
 }
 
 func (s *Service) UpdateCryptoKeyPrimaryVersion(ctx context.Context, req *kmspb.UpdateCryptoKeyPrimaryVersionRequest) (*kmspb.CryptoKey, error) {
@@ -785,6 +840,15 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey) *kmspb.CryptoKey {
 	}
 	if !k.CreateTime.IsZero() {
 		out.CreateTime = timestamppb.New(k.CreateTime)
+	}
+	if len(k.Labels) > 0 {
+		out.Labels = k.Labels
+	}
+	if k.RotationPeriod > 0 {
+		out.RotationSchedule = &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(k.RotationPeriod)}
+	}
+	if !k.NextRotationTime.IsZero() {
+		out.NextRotationTime = timestamppb.New(k.NextRotationTime)
 	}
 	return out
 }

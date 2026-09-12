@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+
+	"jaiscloud/internal/gcp/storeutil"
 )
 
 const defaultAlgorithm = "GOOGLE_SYMMETRIC_ENCRYPTION"
@@ -143,6 +145,24 @@ func (s *MemoryStore) ListCryptoKeys(_ context.Context, projectID, location, key
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// UpdateCryptoKeyAtomic holds the store lock across the read-mutate-write so a
+// concurrent update on the same key cannot be lost.
+func (s *MemoryStore) UpdateCryptoKeyAtomic(_ context.Context, projectID, location, keyringID, id string, mutate func(CryptoKey) (CryptoKey, error)) (CryptoKey, error) {
+	return storeutil.AtomicUpdate(&s.mu,
+		func() (CryptoKey, bool) {
+			ck, ok := s.cryptokeys[ckKey(projectID, location, keyringID)][id]
+			return ck, ok
+		},
+		func(current CryptoKey, exists bool) (CryptoKey, error) {
+			if !exists {
+				return CryptoKey{}, ErrNoSuchCryptoKey
+			}
+			return mutate(current)
+		},
+		func(ck CryptoKey) { s.cryptokeys[ckKey(projectID, location, keyringID)][id] = ck },
+	)
 }
 
 func (s *MemoryStore) CreateVersion(_ context.Context, projectID, location, keyringID, keyID string, v Version) (string, error) {
