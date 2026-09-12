@@ -33,11 +33,18 @@ type Service struct {
 	readSets map[string]*readSet
 
 	// changeMu guards the change-feed: changeSeq (monotonic), changeLog (the
-	// full ordered history used for resume-token replay), and changeSubs.
-	changeMu   sync.Mutex
-	changeSeq  uint64
-	changeLog  []ChangeEvent
-	changeSubs map[*changeSub]struct{}
+	// bounded ordered history used for resume-token replay), changeFloor (the
+	// highest evicted sequence), and changeSubs.
+	changeMu    sync.Mutex
+	changeSeq   uint64
+	changeLog   changeRing
+	changeFloor uint64
+	changeSubs  map[*changeSub]struct{}
+
+	// changeRetentionOverride, when > 0, replaces changeLogRetention. Tests set
+	// it to exercise eviction without writing a full retention window; the
+	// zero value selects the package default.
+	changeRetentionOverride int
 }
 
 // newService returns a Firestore service backed by the given document store and
@@ -54,9 +61,11 @@ func newService(s firestorestore.FirestoreStore, resources store.ResourceStore) 
 // (document state is reset via the store's own Resetter; index state via the
 // resource store's). Live subscribers (changeSubs) are left attached: they
 // only ever receive events published after Reset, from the fresh sequence, so
-// leaving them subscribed is safe — clearing changeLog/changeSeq is what
-// matters, since ChangesSince(seq) would otherwise keep replaying pre-reset
-// history that references documents the reset store no longer has.
+// leaving them subscribed is safe — clearing changeLog/changeSeq/changeFloor is
+// what matters, since ChangesSince(seq) would otherwise keep replaying pre-reset
+// history that references documents the reset store no longer has. A pre-reset
+// resume token is rejected by ReplayableFrom (it is ahead of the fresh
+// sequence), so it resnapshots rather than replaying stale deltas.
 func (s *Service) Reset(_ context.Context) {
 	s.txnMu.Lock()
 	s.readSets = make(map[string]*readSet)
@@ -64,7 +73,8 @@ func (s *Service) Reset(_ context.Context) {
 
 	s.changeMu.Lock()
 	s.changeSeq = 0
-	s.changeLog = nil
+	s.changeLog.reset()
+	s.changeFloor = 0
 	s.changeMu.Unlock()
 }
 
