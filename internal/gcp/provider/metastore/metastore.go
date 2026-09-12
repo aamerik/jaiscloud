@@ -2,7 +2,7 @@
 // provider (metastore.googleapis.com/v1): the Glue Data Catalog analogue — thin
 // management-plane CRUD over services, backups, and metadata imports, plus the
 // google.longrunning.Operation returned by Create/Update/Delete (Dataproc
-// LRO shape, not managedkafka's flattened {done,response}).
+// LRO shape).
 //
 // This is control-plane only: the emulator never stands up a Hive Thrift /
 // Iceberg metadata endpoint (Phase 3). Deferred operations (ExportMetadata,

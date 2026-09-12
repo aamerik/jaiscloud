@@ -1,8 +1,7 @@
 // Package sdk_metastore_test exercises the jaiscloud-gcp emulator's Dataproc
 // Metastore control plane (metastore.googleapis.com/v1) through the official
 // Google REST apiary client. This validates wire-level parity with the real SDK
-// (Dataproc-shaped long-running operations, not ManagedKafka's flattened
-// {done,response}).
+// (Dataproc-shaped long-running operations).
 //
 // Run with the GCP binary running and GCP_EMULATOR_ENDPOINT set:
 //

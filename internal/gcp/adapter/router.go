@@ -186,7 +186,12 @@ func detectDataprocResourceType(seg []string) string {
 
 // detectManagedKafkaResourceType returns "clusters" when the segments after
 // projects/{project} form locations/{location}/clusters, else "". The
-// "locations" (vs Dataproc's "regions") segment is the distinguishing key.
+// "locations" (vs Dataproc's "regions") segment is the distinguishing key. The
+// shared locations/{location}/operations/{id} LRO path is intentionally NOT
+// claimed here — it is path-ambiguous with Workflows' operations surface on a
+// single host, so it remains routed to workflows and Managed Kafka returns its
+// operations inline (done: true) from the cluster mutation that created them.
+// The provider still registers GetOperation/ListOperations for direct dispatch.
 func detectManagedKafkaResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""

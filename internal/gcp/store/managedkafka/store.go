@@ -3,7 +3,9 @@
 // projects/{project}/locations/{location}/clusters/{name} (and
 // .../clusters/{name}/topics/{topic}). A cluster is a logical record only — the
 // emulator never stands up a real broker. Consumer groups are not tracked (their
-// list endpoint always returns an empty list).
+// list endpoint always returns an empty list). Cluster mutations persist a done
+// google.longrunning.Operation under .../locations/{location}/operations/{id}
+// so it can be read back via GetOperation/ListOperations.
 package managedkafka
 
 import (
@@ -14,9 +16,10 @@ import (
 )
 
 var (
-	ErrNoSuchCluster = errors.New("NoSuchCluster")
-	ErrNoSuchTopic   = errors.New("NoSuchTopic")
-	ErrAlreadyExists = errors.New("AlreadyExists")
+	ErrNoSuchCluster   = errors.New("NoSuchCluster")
+	ErrNoSuchTopic     = errors.New("NoSuchTopic")
+	ErrNoSuchOperation = errors.New("NoSuchOperation")
+	ErrAlreadyExists   = errors.New("AlreadyExists")
 )
 
 // Cluster is a logical Managed Kafka cluster. Config holds the wire request
@@ -47,6 +50,23 @@ type Topic struct {
 	UpdateTime        time.Time       `json:"updateTime"`
 }
 
+// Operation is a done google.longrunning.Operation returned by a cluster
+// mutation. Metadata and Response are the already-rendered JSON wire objects
+// (Metadata carries its @type) stored verbatim, mirroring the Dataproc and
+// Dataproc Metastore operation shapes.
+type Operation struct {
+	ID         string    `json:"id"`
+	ProjectID  string    `json:"projectId"`
+	Location   string    `json:"location"`
+	Done       bool      `json:"done"`
+	Metadata   string    `json:"metadata,omitempty"`
+	Response   string    `json:"response,omitempty"`
+	Verb       string    `json:"verb"`
+	Target     string    `json:"target"`
+	CreateTime time.Time `json:"createTime"`
+	EndTime    time.Time `json:"endTime"`
+}
+
 // Store is the Managed Kafka store.
 type Store interface {
 	CreateCluster(ctx context.Context, projectID, location string, c Cluster) error
@@ -74,6 +94,13 @@ type Store interface {
 	UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error)
 	DeleteTopic(ctx context.Context, projectID, location, clusterName, topicName string) error
 	ListTopics(ctx context.Context, projectID, location, clusterName string) ([]Topic, error)
+
+	// Operations persist the done google.longrunning.Operation returned by
+	// cluster create/update/delete so a poll can read it back. They are
+	// project+location scoped and keyed by their opaque id.
+	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
+	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
+	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
 	Reset(ctx context.Context)
 }

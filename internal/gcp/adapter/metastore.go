@@ -14,8 +14,8 @@ import (
 // /v1/projects/{project}/locations/{location}/services[/{id}[/backups[/{bid}]|
 // /metadataImports[/{mid}]]] plus the long-running operations surface at
 // .../locations/{location}/operations/{id}. Create/Update/Delete return a done
-// google.longrunning.Operation (Dataproc shape, unlike ManagedKafka's flattened
-// envelope); Get/List return the resource inline. Custom-method verbs
+// google.longrunning.Operation (Dataproc shape); Get/List return the resource
+// inline. Custom-method verbs
 // (:exportMetadata, :restore, :queryMetadata, :moveTableToDatabase,
 // :alterLocation) are deferred to Unimplemented handlers.
 type MetastoreCodec struct {

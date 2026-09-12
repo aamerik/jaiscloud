@@ -2,6 +2,7 @@ package managedkafka
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,14 @@ func TestClusterCRUDAndLRO(t *testing.T) {
 	if resp.Data["done"] != true {
 		t.Fatalf("expected done=true, got %v", resp.Data["done"])
 	}
+	opName, _ := resp.Data["name"].(string)
+	if opName == "" {
+		t.Fatalf("expected an operation name, got %v", resp.Data["name"])
+	}
+	meta, _ := resp.Data["metadata"].(map[string]any)
+	if meta["@type"] != "type.googleapis.com/google.cloud.managedkafka.v1.OperationMetadata" {
+		t.Errorf("metadata @type = %v", meta["@type"])
+	}
 	created, _ := resp.Data["response"].(map[string]any)
 	wantName := "projects/proj/locations/us-central1/clusters/c1"
 	if created["name"] != wantName {
@@ -47,9 +56,27 @@ func TestClusterCRUDAndLRO(t *testing.T) {
 	if created["state"] != "ACTIVE" {
 		t.Errorf("state = %v, want ACTIVE", created["state"])
 	}
-	labels, _ := created["labels"].(map[string]string)
+	labels, _ := created["labels"].(map[string]any)
 	if labels["env"] != "test" {
 		t.Errorf("labels = %v, want env=test", created["labels"])
+	}
+
+	// The operation is persisted and retrievable by id.
+	opID := opIDFromName(opName)
+	opResp, err := p.GetOperation(ctx, newNR(map[string]any{"location": "us-central1", "operationId": opID}))
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if opResp.Data["name"] != opName || opResp.Data["done"] != true {
+		t.Errorf("GetOperation = %v, want name=%q done=true", opResp.Data, opName)
+	}
+	opRespMeta, _ := opResp.Data["metadata"].(map[string]any)
+	if opRespMeta["verb"] != "create" || opRespMeta["target"] != wantName {
+		t.Errorf("metadata = %v, want verb=create target=%q", opRespMeta, wantName)
+	}
+	opRespCluster, _ := opResp.Data["response"].(map[string]any)
+	if opRespCluster["name"] != wantName {
+		t.Errorf("operation response name = %v, want %v", opRespCluster["name"], wantName)
 	}
 
 	// Get.
@@ -68,9 +95,26 @@ func TestClusterCRUDAndLRO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateCluster: %v", err)
 	}
+	updMeta, _ := updResp.Data["metadata"].(map[string]any)
+	if updMeta["verb"] != "update" {
+		t.Errorf("update metadata verb = %v, want update", updMeta["verb"])
+	}
 	updated, _ := updResp.Data["response"].(map[string]any)
-	if labels, _ := updated["labels"].(map[string]string); labels["env"] != "prod" {
+	if labels, _ := updated["labels"].(map[string]any); labels["env"] != "prod" {
 		t.Errorf("updated labels = %v, want env=prod", updated["labels"])
+	}
+
+	// List operations.
+	listOps, err := p.ListOperations(ctx, newNR(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("ListOperations: %v", err)
+	}
+	ops, _ := listOps.Data["operations"].([]any)
+	if len(ops) != 2 {
+		t.Fatalf("expected 2 operations, got %d", len(ops))
+	}
+	if _, hasNext := listOps.Data["nextPageToken"]; hasNext {
+		t.Errorf("did not expect nextPageToken for an unpaginated list")
 	}
 
 	// List.
@@ -91,9 +135,53 @@ func TestClusterCRUDAndLRO(t *testing.T) {
 	if delResp.Data["done"] != true {
 		t.Errorf("delete done = %v, want true", delResp.Data["done"])
 	}
+	delMeta, _ := delResp.Data["metadata"].(map[string]any)
+	if delMeta["verb"] != "delete" {
+		t.Errorf("delete metadata verb = %v, want delete", delMeta["verb"])
+	}
+	delResponse, _ := delResp.Data["response"].(map[string]any)
+	if len(delResponse) != 0 {
+		t.Errorf("delete response = %v, want empty object", delResponse)
+	}
 
 	if _, err := p.GetCluster(ctx, newNR(map[string]any{"location": "us-central1", "clusterId": "c1"})); err == nil {
 		t.Fatal("expected NotFound after delete, got nil error")
+	}
+}
+
+// opIDFromName returns the trailing {id} of a projects/{p}/locations/{l}/operations/{id} name.
+func opIDFromName(name string) string {
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+func TestGetOperation_NotFound(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	_, err := p.GetOperation(ctx, newNR(map[string]any{"location": "us-central1", "operationId": "missing"}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "NotFound" {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+func TestGetOperation_MissingParams(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	cases := []map[string]any{
+		{"location": "", "operationId": "op"},
+		{"location": "us-central1", "operationId": ""},
+	}
+	for _, params := range cases {
+		if _, err := p.GetOperation(ctx, newNR(params)); err == nil {
+			t.Errorf("params=%v: expected InvalidArgument, got nil", params)
+		} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+			t.Errorf("params=%v: expected InvalidArgument, got %v", params, err)
+		}
 	}
 }
 
@@ -432,6 +520,7 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 	want := []string{
 		"ManagedKafka.CreateCluster", "ManagedKafka.GetCluster", "ManagedKafka.ListClusters",
 		"ManagedKafka.UpdateCluster", "ManagedKafka.DeleteCluster",
+		"ManagedKafka.GetOperation", "ManagedKafka.ListOperations",
 		"ManagedKafka.CreateTopic", "ManagedKafka.GetTopic", "ManagedKafka.ListTopics",
 		"ManagedKafka.UpdateTopic", "ManagedKafka.DeleteTopic",
 		"ManagedKafka.ListConsumerGroups", "ManagedKafka.GetConsumerGroup",
