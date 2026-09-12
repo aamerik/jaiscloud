@@ -19,7 +19,7 @@
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation |
 | Cloud IAM | REST | Service accounts, service account keys |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, queries, composite indexes, `Listen` streaming |
-| Cloud Datastore mode | gRPC | Entities, queries, ID allocation — see [Known Limitations](#known-limitations) for transaction support |
+| Cloud Datastore mode | gRPC | Entities, queries, ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1) | REST | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |
 | Cloud Workflows | REST | Workflow definitions + executions, real YAML expression engine |
 | Cloud Dataproc | REST | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
@@ -186,9 +186,11 @@ Firestore's `documents.patch` and transform-carrying `commit`/`batchWrite` write
 
 We evaluated an alternative (a checksum of document content as the version token) and rejected it: a content hash reintroduces the classic ABA problem — a document that changes and then reverts to its original bytes produces the same hash as if nothing had happened, which would make conflict detection *less* reliable, not more, since it would miss real intervening writes whenever content happened to return to a prior state. We also considered a purely internal monotonic version counter decoupled from `UpdateTime`, but real GCP's `Precondition` proto only supports `exists`/`update_time` — no opaque version token — and client libraries read and pass forward the real `updateTime` value for their own `currentDocument.updateTime` preconditions. Introducing a second, different notion of "version" internally, even without changing the wire-facing `UpdateTime` field itself, was judged higher-risk than documenting the known edge case for the (real-world-rare) frozen-clock scenario.
 
-### Datastore: no transaction support
+### Datastore: transactions are optimistic with a read-set
 
-The Datastore gRPC service is intentionally non-transactional. `BeginTransaction` returns an opaque id (so SDK init paths that poll the transaction surface don't error) and `Rollback` is a no-op, but a `Commit` carrying a transaction selector is rejected with `Unimplemented` rather than being silently applied as a non-transactional write. Non-transactional `Commit`, `Lookup`, and `RunQuery` are fully supported.
+The Datastore gRPC service supports real transactions using GCP's optimistic read-set model. `BeginTransaction` returns an opaque transaction handle; `Lookup`, `RunQuery`, and `RunAggregationQuery` issued with that handle record a read-set; a `Commit` with the `TRANSACTIONAL` mode re-validates every read key against current state and applies all mutations atomically. A concurrent modification to a read key aborts the whole commit with `ABORTED` (no mutations applied), and a per-mutation `base_version`/`update_time` precondition mismatch fails with `FAILED_PRECONDITION`. `Rollback` discards the transaction, and a `TRANSACTIONAL` commit without a handle (or with an unknown/expired one) is `INVALID_ARGUMENT`. Non-transactional `Commit`, `Lookup`, and `RunQuery` are fully supported. `ReserveIds` advances the ID allocator so reserved IDs are never reissued by `AllocateIds`. `RunAggregationQuery` evaluates `count`/`sum`/`avg` over the nested query (kind + filter), honors aliases, and participates in transactions.
+
+Documented approximations: the query read-set tracks the returned entities' versions (real Datastore validates the query's read *range*), transactions are single entity-group, and an unused transaction handle expires after ~270 seconds (real Datastore also expires transactions).
 
 ### BigQuery: metadata only, no SQL engine
 
