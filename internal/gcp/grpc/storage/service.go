@@ -17,12 +17,16 @@ import (
 	"sync"
 	"time"
 
+	iampb "cloud.google.com/go/iam/apiv1/iampb"
+
 	"jaiscloud/internal/clock"
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	"jaiscloud/internal/gcp/policy"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -36,7 +40,11 @@ import (
 type Service struct {
 	storagepb.UnimplementedStorageServer
 
-	objects     gcs.ObjectStore
+	objects gcs.ObjectStore
+	// resources is the generic ResourceStore holding IAM policies. It is the
+	// same store the REST provider uses, so bucket/object policies set through
+	// either transport are visible to both.
+	resources   store.ResourceStore
 	provider    *storageprovider.Provider
 	defaultProj string
 
@@ -60,12 +68,13 @@ type uploadSession struct {
 }
 
 // NewService returns a Cloud Storage v2 gRPC service backed by the shared
-// object store and the REST provider (generation counter + byte/encryption
-// helpers). defaultProj is the config-default project used when a request
-// carries none.
-func NewService(objects gcs.ObjectStore, provider *storageprovider.Provider, defaultProj string) *Service {
+// object store, the generic ResourceStore (IAM policies), and the REST
+// provider (generation counter + byte/encryption helpers). defaultProj is the
+// config-default project used when a request carries none.
+func NewService(objects gcs.ObjectStore, resources store.ResourceStore, provider *storageprovider.Provider, defaultProj string) *Service {
 	return &Service{
 		objects:     objects,
+		resources:   resources,
 		provider:    provider,
 		defaultProj: defaultProj,
 		uploads:     make(map[string]*uploadSession),
@@ -258,6 +267,160 @@ func cseKeyFromParams(params *storagepb.CommonObjectRequestParams) ([]byte, stri
 	}
 	sum := sha256.Sum256(key)
 	return key, base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// ─── IAM (bucket + object policies over the shared ResourceStore) ─────────────
+
+// parseIamResource resolves a gRPC Storage IAM resource name to the bucket and
+// (for object-scoped policies) the object. The recognized shapes are
+// "projects/_/buckets/{bucket}", "projects/_/buckets/{bucket}/objects/{object}",
+// and a bare "{bucket}". Managed folders are not supported.
+func parseIamResource(resource string) (bucket, object string, isObject, ok bool) {
+	rest, found := strings.CutPrefix(resource, "projects/_/buckets/")
+	if !found {
+		if resource != "" && !strings.Contains(resource, "/") {
+			return resource, "", false, true
+		}
+		return "", "", false, false
+	}
+	b, o, found := strings.Cut(rest, "/objects/")
+	if found {
+		if b == "" || o == "" {
+			return "", "", false, false
+		}
+		return b, o, true, true
+	}
+	if rest == "" || strings.Contains(rest, "/") {
+		return "", "", false, false
+	}
+	return rest, "", false, true
+}
+
+// iamPolicyKey returns the policy resource type and id for a bucket- or
+// object-scoped request. The ids match the REST provider's ("{bucket}" and
+// "{bucket}/{object}") so the two transports share stored policies.
+func iamPolicyKey(bucket, object string) (resourceType, id string) {
+	if object == "" {
+		return storageprovider.ResourceTypeBucketIAM, bucket
+	}
+	return storageprovider.ResourceTypeObjectIAM, bucket + "/" + object
+}
+
+// requireIamResource verifies the bucket or object backing an IAM request
+// exists, returning a NotFound provider error otherwise.
+func (s *Service) requireIamResource(ctx context.Context, bucket, object string) error {
+	if object != "" {
+		if _, err := s.objects.GetObjectMeta(ctx, bucket, object); err != nil {
+			if errors.Is(err, gcs.ErrNoSuchObject) {
+				return model.NewProviderError("NotFound", "object not found", 404)
+			}
+			return err
+		}
+		return nil
+	}
+	if _, err := s.objects.GetBucket(ctx, bucket); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {
+	bucket, object, _, ok := parseIamResource(req.GetResource())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.requireIamResource(ctx, bucket, object); err != nil {
+		return nil, mapError(err)
+	}
+	rt, id := iamPolicyKey(bucket, object)
+	return policyToProto(policy.Load(ctx, s.resources, s.projectForBucket(ctx, bucket), rt, id)), nil
+}
+
+func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyRequest) (*iampb.Policy, error) {
+	bucket, object, _, ok := parseIamResource(req.GetResource())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.requireIamResource(ctx, bucket, object); err != nil {
+		return nil, mapError(err)
+	}
+	rt, id := iamPolicyKey(bucket, object)
+	pol, err := policy.Set(ctx, s.resources, s.projectForBucket(ctx, bucket), rt, id, protoPolicyToBody(req.GetPolicy()))
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return policyToProto(pol), nil
+}
+
+func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPermissionsRequest) (*iampb.TestIamPermissionsResponse, error) {
+	bucket, object, _, ok := parseIamResource(req.GetResource())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.requireIamResource(ctx, bucket, object); err != nil {
+		return nil, mapError(err)
+	}
+	return &iampb.TestIamPermissionsResponse{Permissions: policy.TestPermissions(req.GetPermissions())}, nil
+}
+
+// protoPolicyToBody converts a proto IAM policy into the map shape the shared
+// policy package persists (mirrors the KMS/Pub/Sub/Secret Manager services).
+func protoPolicyToBody(p *iampb.Policy) map[string]any {
+	body := map[string]any{}
+	if p == nil {
+		return body
+	}
+	bindings := make([]any, 0, len(p.GetBindings()))
+	for _, b := range p.GetBindings() {
+		members := make([]any, 0, len(b.GetMembers()))
+		for _, m := range b.GetMembers() {
+			members = append(members, m)
+		}
+		bindings = append(bindings, map[string]any{"role": b.GetRole(), "members": members})
+	}
+	body["bindings"] = bindings
+	if et := p.GetEtag(); len(et) > 0 {
+		body["etag"] = string(et)
+	}
+	if p.GetVersion() != 0 {
+		body["version"] = int(p.GetVersion())
+	}
+	return body
+}
+
+// policyToProto renders a stored policy as the proto IAM policy.
+func policyToProto(p policy.Policy) *iampb.Policy {
+	out := &iampb.Policy{Version: int32(p.Version)}
+	if p.Etag != "" {
+		out.Etag = []byte(p.Etag)
+	}
+	for _, b := range p.Bindings {
+		m, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		binding := &iampb.Binding{}
+		binding.Role, _ = m["role"].(string)
+		for _, v := range toStrings(m["members"]) {
+			binding.Members = append(binding.Members, v)
+		}
+		out.Bindings = append(out.Bindings, binding)
+	}
+	return out
+}
+
+func toStrings(v any) []string {
+	items, _ := v.([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if s, ok := it.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ─── buckets ──────────────────────────────────────────────────────────────────
@@ -656,6 +819,155 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "", pre)
 	if err != nil {
 		return nil, mapError(preconditionResult(err))
+	}
+	return objectToProto(finalMeta), nil
+}
+
+// copySourceKey extracts the raw CSEK from a RewriteObjectRequest's
+// copy_source_encryption_key_bytes field (32 bytes); nil when absent. The
+// provider verifies it against the source object's stored key hash.
+func copySourceKey(req *storagepb.RewriteObjectRequest) []byte {
+	key := req.GetCopySourceEncryptionKeyBytes()
+	if len(key) != 32 {
+		return nil
+	}
+	return key
+}
+
+// rewriteDestinationMeta builds the destination metadata for a server-side
+// copy: a copy of the source metadata with a fresh generation, overridden by
+// the request's optional destination resource (contentType/metadata/
+// storageClass). kmsKey is the destination key (empty = server-DEK); the
+// emulator re-encrypts, so encryption fields from the source are cleared.
+func rewriteDestinationMeta(src gcs.ObjectMeta, dest *storagepb.Object, dstBucket, dstObject, generation, kmsKey string) gcs.ObjectMeta {
+	now := clock.Now()
+	meta := src
+	meta.Bucket = dstBucket
+	meta.Name = dstObject
+	meta.Generation = generation
+	meta.Metageneration = "1"
+	meta.TimeCreated = now
+	meta.Updated = now
+	meta.TimeDeleted = nil
+	meta.Retention = nil
+	meta.WrappedDEK = nil
+	meta.CSEKeySHA256 = ""
+	meta.KmsKeyName = kmsKey
+	if dest != nil {
+		if ct := dest.GetContentType(); ct != "" {
+			meta.ContentType = ct
+		}
+		if dest.GetMetadata() != nil {
+			meta.Metadata = dest.GetMetadata()
+		}
+		if sc := dest.GetStorageClass(); sc != "" {
+			meta.StorageClass = sc
+		}
+	}
+	return meta
+}
+
+// priorBlobKeyFor returns the blob key of the destination object's existing
+// live generation when the bucket is not versioned (so the overwrite can drop
+// the superseded blob); empty when versioned or absent.
+func (s *Service) priorBlobKeyFor(ctx context.Context, bucket, object string) string {
+	if s.provider.BucketVersioned(ctx, bucket) {
+		return ""
+	}
+	if prev, err := s.objects.GetObjectMeta(ctx, bucket, object); err == nil && prev.Generation != "" {
+		return storageprovider.BlobKey(bucket, object, prev.Generation)
+	}
+	return ""
+}
+
+// RewriteObject implements the server-side copy RPC. The emulator re-encrypts
+// on write, so it performs a full in-process copy of the source bytes +
+// metadata and records it as a single fresh destination generation
+// (done=true, no rewrite-token chunking). Destination preconditions are
+// enforced atomically by the provider's guarded write; source generation
+// selection and source preconditions are validated against the source meta.
+func (s *Service) RewriteObject(ctx context.Context, req *storagepb.RewriteObjectRequest) (*storagepb.RewriteResponse, error) {
+	srcBucket := parseBucketName(req.GetSourceBucket())
+	srcObject := req.GetSourceObject()
+	dstBucket := parseBucketName(req.GetDestinationBucket())
+	dstObject := req.GetDestinationName()
+	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "rewrite requires source and destination object names", 400))
+	}
+
+	srcProject := s.projectForBucket(ctx, srcBucket)
+	srcGen := ""
+	if req.GetSourceGeneration() > 0 {
+		srcGen = int64ToGen(req.GetSourceGeneration())
+	}
+	srcKey := copySourceKey(req)
+	srcMeta, raw, err := s.provider.GetObjectData(ctx, srcProject, srcBucket, srcObject, srcGen, srcKey)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	if err := checkObjectPreconditions(srcMeta, req.IfSourceGenerationMatch, req.IfSourceGenerationNotMatch, req.IfSourceMetagenerationMatch, req.IfSourceMetagenerationNotMatch); err != nil {
+		return nil, mapError(err)
+	}
+
+	dstProject := s.projectForBucket(ctx, dstBucket)
+	versioned := s.provider.BucketVersioned(ctx, dstBucket)
+	dstKey, dstKeySHA := cseKeyFromParams(req.GetCommonObjectRequestParams())
+	meta := rewriteDestinationMeta(srcMeta, req.GetDestination(), dstBucket, dstObject, s.provider.NextGen(), req.GetDestinationKmsKey())
+
+	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
+	finalMeta, err := s.provider.PutObjectData(ctx, dstProject, meta, raw, versioned, s.priorBlobKeyFor(ctx, dstBucket, dstObject), true, meta.KmsKeyName, dstKey, dstKeySHA, pre)
+	if err != nil {
+		return nil, mapError(preconditionResult(err))
+	}
+	obj := objectToProto(finalMeta)
+	return &storagepb.RewriteResponse{
+		TotalBytesRewritten: finalMeta.Size,
+		ObjectSize:          finalMeta.Size,
+		Done:                true,
+		Resource:            obj,
+	}, nil
+}
+
+// MoveObject implements the move RPC for the single-live-generation emulator as
+// a copy-then-delete: the source bytes+metadata are written to the destination
+// under the destination preconditions, then the source is deleted under the
+// source preconditions. Both mutations go through the store's atomic *Checked
+// path (via the provider), so a precondition mismatch on either side is
+// rejected WITHOUT mutating that side. The two steps are not one transaction,
+// so a concurrent source mutation between them can leave both objects present;
+// the write is ordered first so a failure never loses the source's bytes.
+func (s *Service) MoveObject(ctx context.Context, req *storagepb.MoveObjectRequest) (*storagepb.Object, error) {
+	bucket := parseBucketName(req.GetBucket())
+	srcObject := req.GetSourceObject()
+	dstObject := req.GetDestinationObject()
+	if bucket == "" || srcObject == "" || dstObject == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "move requires bucket, source and destination object names", 400))
+	}
+	if srcObject == dstObject {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "source and destination object must differ", 400))
+	}
+
+	project := s.projectForBucket(ctx, bucket)
+	srcMeta, raw, err := s.provider.GetObjectData(ctx, project, bucket, srcObject, "", nil)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	srcPre := grpcObjectPrecondition(req.IfSourceGenerationMatch, req.IfSourceGenerationNotMatch, req.IfSourceMetagenerationMatch, req.IfSourceMetagenerationNotMatch)
+	if err := checkObjectPreconditions(srcMeta, req.IfSourceGenerationMatch, req.IfSourceGenerationNotMatch, req.IfSourceMetagenerationMatch, req.IfSourceMetagenerationNotMatch); err != nil {
+		return nil, mapError(err)
+	}
+
+	versioned := s.provider.BucketVersioned(ctx, bucket)
+	meta := rewriteDestinationMeta(srcMeta, nil, bucket, dstObject, s.provider.NextGen(), "")
+	destPre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, raw, versioned, s.priorBlobKeyFor(ctx, bucket, dstObject), true, "", nil, "", destPre)
+	if err != nil {
+		return nil, mapError(preconditionResult(err))
+	}
+
+	if err := s.provider.DeleteObjectData(ctx, bucket, srcObject, srcPre); err != nil {
+		return nil, mapError(err)
 	}
 	return objectToProto(finalMeta), nil
 }

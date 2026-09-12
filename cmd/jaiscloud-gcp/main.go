@@ -276,7 +276,7 @@ func startCmd() *cobra.Command {
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
 			monitoringGRPC := grpcmonitoring.NewService(stores.monitoring, cfg.ProjectID)
-			storageGRPC := grpcstorage.NewService(stores.objects, storageP, cfg.ProjectID)
+			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)

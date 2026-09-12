@@ -37,10 +37,15 @@ import (
 )
 
 // Resource types used in the generic ResourceStore (IAM + ACL; buckets and
-// objects live in the dedicated gcs.ObjectStore).
+// objects live in the dedicated gcs.ObjectStore). The two IAM types are
+// exported so the gRPC Storage service keys bucket/object policies identically
+// and both transports share one policy store.
 const (
-	rtBucketIAM = "gcs_bucket_iam"
-	rtObjectIAM = "gcs_object_iam"
+	ResourceTypeBucketIAM = "gcs_bucket_iam"
+	ResourceTypeObjectIAM = "gcs_object_iam"
+
+	rtBucketIAM = ResourceTypeBucketIAM
+	rtObjectIAM = ResourceTypeObjectIAM
 	rtACL       = "gcs_acl"
 )
 
