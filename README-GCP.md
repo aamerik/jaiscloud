@@ -30,6 +30,7 @@
 | Cloud Monitoring | gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
 | Cloud Logging | gRPC | Log entries, filtering, log-based routing |
 | Eventarc | REST | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
+| Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
 
 ---
 
@@ -213,6 +214,12 @@ Eventarc is implemented as trigger-based metadata CRUD, **not** the AWS EventBri
 Trigger and Channel writes honor `updateMask` (masked paths take the incoming value, unmasked paths retain the stored value, merged inside the store's atomic mutate closure), support `validateOnly=true` (validate then skip the write), and enforce `etag` optimistic concurrency control: a deterministic content-checksum etag is recomputed on every create/update, and a stale etag on patch/delete is rejected with **409 `ABORTED`**. A trigger/channel `uid` is a UUID4, and a newly created unconnected Channel reports `state: PENDING` (it only becomes `ACTIVE` once a provider connects). Trigger/Channel IAM (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) is implemented via the shared policy store (etag OCC included), not `Unimplemented`.
 
 Known debt for Eventarc: list `filter`/`orderBy` are **not** honored (`ListTriggers`/`ListChannels` ignore them and return the full page); output-only fields (`name`/`uid`/`etag`/times/`state`/`activationToken`/`pubsubTopic`) are overlaid on read but a client-supplied output-only field in a create/patch body is not rejected, it is echoed into the stored config; and unknown Eventarc v1 resources/custom methods (e.g. `ChannelConnection`, `GoogleApiSource`, `MessageBus`, `Pipeline`, `Enrollment`) are not routed, so they fall through to the adapter's generic 404 envelope rather than an Eventarc-specific `NOT_FOUND`.
+
+### Cloud DNS: metadata only, no authoritative DNS server
+
+Cloud DNS is implemented as metadata CRUD over the shared `ResourceStore`, mirroring the AWS Route53 provider. `ManagedZone`s, `ResourceRecordSet`s, and `Change`s are stored records — the emulator never stands up an authoritative DNS server, so `nameServers` are synthesized `ns-cloud-*.googledomains.com.` placeholders and zones never resolve queries. `managedZones.{create,get,list,patch,update,delete}` and `resourceRecordSets.{create,get,list,patch,delete}` are supported, and `changes.create` applies its `additions`/`deletions` to the stored record sets synchronously and returns `status: "done"`. `projects.get` returns a synthesized `dns#project` with a `quota` block. The `id` of a managed zone and the project `number` are stable numeric strings derived from the resource name.
+
+Known debt for Cloud DNS: DNSSEC (`dnsKeys`), `policies`/`responsePolicies`, and the managed-zone IAM custom methods (`:getIamPolicy`/`:setIamPolicy`/`:testIamPermissions`) are **not** implemented and fail loud with `501 UNIMPLEMENTED`. List pagination honors `maxResults`/`pageToken`; `managedZones.patch` and `managedZones.update` share merge semantics (description/visibility/labels are overlaid, unmasked fields retained, and `dnsName` is immutable/ignored). Only `name`, `dnsName`, `description`, `visibility`, and `labels` are persisted — the other managed-zone config blocks (`dnssecConfig`, `forwardingConfig`, `peeringConfig`, `privateVisibilityConfig`) are accepted but dropped, so no DNSSEC, forwarding, peering, or private-zone visibility behavior is applied.
 
 ---
 
