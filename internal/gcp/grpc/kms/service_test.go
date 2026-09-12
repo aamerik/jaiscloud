@@ -3,6 +3,7 @@ package kms
 import (
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // kmsTestService dials a real in-process gRPC server backed by the memory
@@ -443,5 +445,309 @@ func TestKMSGenerateRandomBytes(t *testing.T) {
 		Location: "projects/test/locations/us-central1", LengthBytes: 0,
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("GenerateRandomBytes length 0 err = %v, want InvalidArgument", err)
+	}
+}
+
+// createTestKey creates a crypto key of the given purpose and returns its
+// primary version name.
+func createTestKey(t *testing.T, client kmspb.KeyManagementServiceClient, id string, purpose kmspb.CryptoKey_CryptoKeyPurpose) string {
+	t.Helper()
+	if _, err := client.CreateCryptoKey(context.Background(), &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: id,
+		CryptoKey:   &kmspb.CryptoKey{Purpose: purpose},
+	}); err != nil {
+		t.Fatalf("CreateCryptoKey %s: %v", id, err)
+	}
+	return keyRing + "/cryptoKeys/" + id + "/cryptoKeyVersions/1"
+}
+
+func TestKMSEncryptCRC32CVerification(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	createTestKey(t, client, "sym", kmspb.CryptoKey_ENCRYPT_DECRYPT)
+
+	plaintext := []byte("the quick brown fox")
+	aad := []byte("context")
+
+	// Matching checksums verify and report so.
+	enc, err := client.Encrypt(ctx, &kmspb.EncryptRequest{
+		Name:                              symKey,
+		Plaintext:                         plaintext,
+		PlaintextCrc32C:                   wrapperspb.Int64(crc32cOf(plaintext)),
+		AdditionalAuthenticatedData:       aad,
+		AdditionalAuthenticatedDataCrc32C: wrapperspb.Int64(crc32cOf(aad)),
+	})
+	if err != nil {
+		t.Fatalf("Encrypt matching checksums: %v", err)
+	}
+	if !enc.GetVerifiedPlaintextCrc32C() || !enc.GetVerifiedAdditionalAuthenticatedDataCrc32C() {
+		t.Fatalf("Encrypt verified = (%v, %v), want (true, true)",
+			enc.GetVerifiedPlaintextCrc32C(), enc.GetVerifiedAdditionalAuthenticatedDataCrc32C())
+	}
+
+	// Absent checksums succeed and are reported as not verified.
+	enc, err = client.Encrypt(ctx, &kmspb.EncryptRequest{Name: symKey, Plaintext: plaintext, AdditionalAuthenticatedData: aad})
+	if err != nil {
+		t.Fatalf("Encrypt absent checksums: %v", err)
+	}
+	if enc.GetVerifiedPlaintextCrc32C() || enc.GetVerifiedAdditionalAuthenticatedDataCrc32C() {
+		t.Fatalf("Encrypt absent verified = (%v, %v), want (false, false)",
+			enc.GetVerifiedPlaintextCrc32C(), enc.GetVerifiedAdditionalAuthenticatedDataCrc32C())
+	}
+
+	// Mismatched plaintext checksum fails with InvalidArgument.
+	if _, err := client.Encrypt(ctx, &kmspb.EncryptRequest{
+		Name:            symKey,
+		Plaintext:       plaintext,
+		PlaintextCrc32C: wrapperspb.Int64(crc32cOf(plaintext) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Encrypt plaintext mismatch err = %v, want InvalidArgument", err)
+	}
+
+	// Mismatched AAD checksum fails with InvalidArgument.
+	if _, err := client.Encrypt(ctx, &kmspb.EncryptRequest{
+		Name:                              symKey,
+		Plaintext:                         plaintext,
+		AdditionalAuthenticatedData:       aad,
+		AdditionalAuthenticatedDataCrc32C: wrapperspb.Int64(crc32cOf(aad) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Encrypt AAD mismatch err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestKMSAsymmetricSignCRC32CVerification(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	verName := createTestKey(t, client, "sign", kmspb.CryptoKey_ASYMMETRIC_SIGN)
+
+	msg := []byte("message to sign")
+	digest := sha256.Sum256(msg)
+
+	// Matching digest checksum verifies and reports so.
+	signResp, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:         verName,
+		Digest:       &kmspb.Digest{Digest: &kmspb.Digest_Sha256{Sha256: digest[:]}},
+		DigestCrc32C: wrapperspb.Int64(crc32cOf(digest[:])),
+	})
+	if err != nil {
+		t.Fatalf("AsymmetricSign matching digest checksum: %v", err)
+	}
+	if !signResp.GetVerifiedDigestCrc32C() || signResp.GetVerifiedDataCrc32C() {
+		t.Fatalf("AsymmetricSign verified = (%v, %v), want (true, false)",
+			signResp.GetVerifiedDigestCrc32C(), signResp.GetVerifiedDataCrc32C())
+	}
+
+	// Absent checksum succeeds and is reported as not verified.
+	signResp, err = client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:   verName,
+		Digest: &kmspb.Digest{Digest: &kmspb.Digest_Sha256{Sha256: digest[:]}},
+	})
+	if err != nil {
+		t.Fatalf("AsymmetricSign absent checksum: %v", err)
+	}
+	if signResp.GetVerifiedDigestCrc32C() || signResp.GetVerifiedDataCrc32C() {
+		t.Fatalf("AsymmetricSign absent verified = (%v, %v), want (false, false)",
+			signResp.GetVerifiedDigestCrc32C(), signResp.GetVerifiedDataCrc32C())
+	}
+
+	// Mismatched digest checksum fails with InvalidArgument.
+	if _, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:         verName,
+		Digest:       &kmspb.Digest{Digest: &kmspb.Digest_Sha256{Sha256: digest[:]}},
+		DigestCrc32C: wrapperspb.Int64(crc32cOf(digest[:]) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("AsymmetricSign digest mismatch err = %v, want InvalidArgument", err)
+	}
+
+	// Matching raw-data checksum verifies and reports so.
+	signResp, err = client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:       verName,
+		Data:       msg,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(msg)),
+	})
+	if err != nil {
+		t.Fatalf("AsymmetricSign matching data checksum: %v", err)
+	}
+	if !signResp.GetVerifiedDataCrc32C() || signResp.GetVerifiedDigestCrc32C() {
+		t.Fatalf("AsymmetricSign data verified = (%v, %v), want (true, false)",
+			signResp.GetVerifiedDataCrc32C(), signResp.GetVerifiedDigestCrc32C())
+	}
+
+	// Mismatched raw-data checksum fails with InvalidArgument.
+	if _, err := client.AsymmetricSign(ctx, &kmspb.AsymmetricSignRequest{
+		Name:       verName,
+		Data:       msg,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(msg) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("AsymmetricSign data mismatch err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestKMSAsymmetricDecryptCRC32CVerification(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	verName := createTestKey(t, client, "decrypt", kmspb.CryptoKey_ASYMMETRIC_DECRYPT)
+
+	plaintext := []byte("secret payload")
+
+	pub, err := client.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: verName})
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	block, _ := pem.Decode([]byte(pub.GetPem()))
+	if block == nil {
+		t.Fatalf("GetPublicKey pem is not valid PEM: %q", pub.GetPem())
+	}
+	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+	rsaPub := pubKey.(*rsa.PublicKey)
+	ct, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, rsaPub, plaintext, nil)
+	if err != nil {
+		t.Fatalf("RSA encrypt: %v", err)
+	}
+
+	// Matching ciphertext checksum verifies and reports so.
+	dec, err := client.AsymmetricDecrypt(ctx, &kmspb.AsymmetricDecryptRequest{
+		Name:             verName,
+		Ciphertext:       ct,
+		CiphertextCrc32C: wrapperspb.Int64(crc32cOf(ct)),
+	})
+	if err != nil {
+		t.Fatalf("AsymmetricDecrypt matching checksum: %v", err)
+	}
+	if !dec.GetVerifiedCiphertextCrc32C() {
+		t.Fatal("AsymmetricDecrypt verifiedCiphertextCrc32C = false, want true")
+	}
+	if string(dec.GetPlaintext()) != string(plaintext) {
+		t.Fatalf("AsymmetricDecrypt plaintext = %q, want %q", dec.GetPlaintext(), plaintext)
+	}
+
+	// Absent checksum succeeds and is reported as not verified.
+	dec, err = client.AsymmetricDecrypt(ctx, &kmspb.AsymmetricDecryptRequest{Name: verName, Ciphertext: ct})
+	if err != nil {
+		t.Fatalf("AsymmetricDecrypt absent checksum: %v", err)
+	}
+	if dec.GetVerifiedCiphertextCrc32C() {
+		t.Fatal("AsymmetricDecrypt absent verifiedCiphertextCrc32C = true, want false")
+	}
+
+	// Mismatched ciphertext checksum fails with InvalidArgument.
+	if _, err := client.AsymmetricDecrypt(ctx, &kmspb.AsymmetricDecryptRequest{
+		Name:             verName,
+		Ciphertext:       ct,
+		CiphertextCrc32C: wrapperspb.Int64(crc32cOf(ct) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("AsymmetricDecrypt mismatch err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestKMSMacSignCRC32CVerification(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	verName := createTestKey(t, client, "mac", kmspb.CryptoKey_MAC)
+
+	data := []byte("mac this data")
+
+	// Matching data checksum verifies and reports so.
+	signResp, err := client.MacSign(ctx, &kmspb.MacSignRequest{
+		Name:       verName,
+		Data:       data,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(data)),
+	})
+	if err != nil {
+		t.Fatalf("MacSign matching checksum: %v", err)
+	}
+	if !signResp.GetVerifiedDataCrc32C() {
+		t.Fatal("MacSign verifiedDataCrc32C = false, want true")
+	}
+
+	// Absent checksum succeeds and is reported as not verified.
+	signResp, err = client.MacSign(ctx, &kmspb.MacSignRequest{Name: verName, Data: data})
+	if err != nil {
+		t.Fatalf("MacSign absent checksum: %v", err)
+	}
+	if signResp.GetVerifiedDataCrc32C() {
+		t.Fatal("MacSign absent verifiedDataCrc32C = true, want false")
+	}
+
+	// Mismatched data checksum fails with InvalidArgument.
+	if _, err := client.MacSign(ctx, &kmspb.MacSignRequest{
+		Name:       verName,
+		Data:       data,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(data) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("MacSign mismatch err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestKMSMacVerifyCRC32CVerification(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	verName := createTestKey(t, client, "mac", kmspb.CryptoKey_MAC)
+
+	data := []byte("mac this data")
+	signResp, err := client.MacSign(ctx, &kmspb.MacSignRequest{Name: verName, Data: data})
+	if err != nil {
+		t.Fatalf("MacSign: %v", err)
+	}
+	mac := signResp.GetMac()
+
+	// Matching data + mac checksums verify and report so.
+	verifyResp, err := client.MacVerify(ctx, &kmspb.MacVerifyRequest{
+		Name:       verName,
+		Data:       data,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(data)),
+		Mac:        mac,
+		MacCrc32C:  wrapperspb.Int64(crc32cOf(mac)),
+	})
+	if err != nil {
+		t.Fatalf("MacVerify matching checksums: %v", err)
+	}
+	if !verifyResp.GetSuccess() || !verifyResp.GetVerifiedDataCrc32C() || !verifyResp.GetVerifiedMacCrc32C() {
+		t.Fatalf("MacVerify = (success=%v, data=%v, mac=%v), want (true, true, true)",
+			verifyResp.GetSuccess(), verifyResp.GetVerifiedDataCrc32C(), verifyResp.GetVerifiedMacCrc32C())
+	}
+
+	// Absent checksums succeed and are reported as not verified.
+	verifyResp, err = client.MacVerify(ctx, &kmspb.MacVerifyRequest{Name: verName, Data: data, Mac: mac})
+	if err != nil {
+		t.Fatalf("MacVerify absent checksums: %v", err)
+	}
+	if !verifyResp.GetSuccess() || verifyResp.GetVerifiedDataCrc32C() || verifyResp.GetVerifiedMacCrc32C() {
+		t.Fatalf("MacVerify absent = (success=%v, data=%v, mac=%v), want (true, false, false)",
+			verifyResp.GetSuccess(), verifyResp.GetVerifiedDataCrc32C(), verifyResp.GetVerifiedMacCrc32C())
+	}
+
+	// Mismatched data checksum fails with InvalidArgument.
+	if _, err := client.MacVerify(ctx, &kmspb.MacVerifyRequest{
+		Name:       verName,
+		Data:       data,
+		DataCrc32C: wrapperspb.Int64(crc32cOf(data) + 1),
+		Mac:        mac,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("MacVerify data mismatch err = %v, want InvalidArgument", err)
+	}
+
+	// Mismatched mac checksum fails with InvalidArgument.
+	if _, err := client.MacVerify(ctx, &kmspb.MacVerifyRequest{
+		Name:      verName,
+		Data:      data,
+		Mac:       mac,
+		MacCrc32C: wrapperspb.Int64(crc32cOf(mac) + 1),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("MacVerify mac mismatch err = %v, want InvalidArgument", err)
 	}
 }
