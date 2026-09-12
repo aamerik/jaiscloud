@@ -50,6 +50,11 @@ type Provider struct {
 	serviceAccountName string
 	projectID          string // default project (from cfg.ProjectID), used as WI fallback
 
+	// operationTTL is how long a completed operation is retained before the
+	// lazy sweep removes it (keeps jc_dataproc_operations bounded; real
+	// operations are GC'd after a similar TTL). Zero disables the sweep.
+	operationTTL time.Duration
+
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -57,6 +62,11 @@ type Provider struct {
 	cancels     map[string]context.CancelFunc
 	patcherStop func()
 }
+
+// defaultOperationTTL is how long a completed operation is retained before the
+// lazy sweep removes it. Real Dataproc operations are GC'd after a TTL; without
+// a sweep, jc_dataproc_operations grows unbounded.
+const defaultOperationTTL = 24 * time.Hour
 
 // Option configures Provider.
 type Option func(*Provider)
@@ -105,16 +115,23 @@ func WithProjectID(project string) Option {
 	return func(p *Provider) { p.projectID = project }
 }
 
+// WithOperationTTL overrides how long completed operations are retained before
+// the lazy sweep removes them. Zero disables the sweep (tests use a short TTL).
+func WithOperationTTL(d time.Duration) Option {
+	return func(p *Provider) { p.operationTTL = d }
+}
+
 // New returns a Provider backed by the given store.
 func New(s dataprocstore.Store, resources store.ResourceStore, opts ...Option) *Provider {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Provider{
-		store:      s,
-		resources:  resources,
-		ctx:        ctx,
-		cancel:     cancel,
-		sparkImage: "spark-dataproc:devbox",
-		cancels:    make(map[string]context.CancelFunc),
+		store:        s,
+		resources:    resources,
+		ctx:          ctx,
+		cancel:       cancel,
+		sparkImage:   "spark-dataproc:devbox",
+		cancels:      make(map[string]context.CancelFunc),
+		operationTTL: defaultOperationTTL,
 	}
 	for _, o := range opts {
 		o(p)
@@ -389,10 +406,24 @@ func (p *Provider) storeOperation(ctx context.Context, nr *model.NormalizedReque
 		respJSON, _ := json.Marshal(response)
 		op.Response = string(respJSON)
 	}
+	p.sweepOperations(ctx)
 	if err := p.store.CreateOperation(ctx, nr.AccountID, region, op); err != nil {
 		return nil, err
 	}
 	return p.operationMap(nr, op), nil
+}
+
+// sweepOperations lazily deletes completed operations older than the retention
+// window. It runs on each operation creation (mirroring the REST provider's
+// resumable-session sweep) so jc_dataproc_operations stays bounded without a
+// background goroutine.
+func (p *Provider) sweepOperations(ctx context.Context) {
+	if p.operationTTL <= 0 {
+		return
+	}
+	if _, err := p.store.DeleteStaleOperations(ctx, clock.Now().UTC().Add(-p.operationTTL)); err != nil {
+		slog.Warn("dataproc: operation sweep failed", "err", err)
+	}
 }
 
 // clusterOperationMetadata renders ClusterOperationMetadata for an operation.

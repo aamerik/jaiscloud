@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 )
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
@@ -89,13 +90,34 @@ func runStoreTests(t *testing.T, s Store) {
 	if _, err := s.GetOperation(ctx, "proj", "us-central1", "nope"); err != ErrNoSuchOperation {
 		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
 	}
-	op := Operation{ID: "op-1", Done: true, Metadata: `{"@type":"x"}`, Response: `{}`}
+	op := Operation{ID: "op-1", Done: true, Metadata: `{"@type":"x"}`, Response: `{}`, CreateTime: time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)}
 	if err := s.CreateOperation(ctx, "proj", "us-central1", op); err != nil {
 		t.Fatalf("create op: %v", err)
 	}
 	gotOp, err := s.GetOperation(ctx, "proj", "us-central1", "op-1")
 	if err != nil || gotOp.Metadata != `{"@type":"x"}` {
 		t.Fatalf("get op: %v %+v", err, gotOp)
+	}
+
+	// Operation retention sweep: only operations older than the cutoff go.
+	if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op-old", Done: true, CreateTime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatalf("create old op: %v", err)
+	}
+	if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op-new", Done: true, CreateTime: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatalf("create new op: %v", err)
+	}
+	removed, err := s.DeleteStaleOperations(ctx, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || removed != 1 {
+		t.Fatalf("DeleteStaleOperations = %d, %v; want 1 removed", removed, err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op-old"); err != ErrNoSuchOperation {
+		t.Fatalf("old op should be swept, got %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op-new"); err != nil {
+		t.Fatalf("new op should remain, got %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op-1"); err != nil {
+		t.Fatalf("fresh op-1 should remain, got %v", err)
 	}
 
 	// Delete cluster

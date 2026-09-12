@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/model"
@@ -477,4 +478,39 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestOperationTTLSweep verifies the lazy operation-retention sweep: minting a
+// new operation (via any LRO) deletes operations older than the TTL and keeps
+// fresh ones.
+func TestOperationTTLSweep(t *testing.T) {
+	ctx := context.Background()
+	st := dataprocstore.NewMemoryStore()
+	p := New(st, store.NewMemoryResourceStore(), WithOperationTTL(time.Hour))
+
+	if err := st.CreateOperation(ctx, "proj", "us-central1", dataprocstore.Operation{
+		ID: "stale", Done: true, CreateTime: clock.Now().UTC().Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed stale op: %v", err)
+	}
+	if err := st.CreateOperation(ctx, "proj", "us-central1", dataprocstore.Operation{
+		ID: "fresh", Done: true, CreateTime: clock.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed fresh op: %v", err)
+	}
+
+	// Creating a cluster mints an LRO, which triggers the sweep.
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	if _, err := st.GetOperation(ctx, "proj", "us-central1", "stale"); err != dataprocstore.ErrNoSuchOperation {
+		t.Fatalf("stale op should have been swept, got %v", err)
+	}
+	if _, err := st.GetOperation(ctx, "proj", "us-central1", "fresh"); err != nil {
+		t.Fatalf("fresh op should remain, got %v", err)
+	}
 }
