@@ -10,6 +10,7 @@ import (
 	"time"
 
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
 	labelpb "google.golang.org/genproto/googleapis/api/label"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -358,26 +360,28 @@ func TestListMonitoredResourceDescriptors(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
-		Name: "projects/test",
-		TimeSeries: []*monitoringpb.TimeSeries{{
-			Metric:   &metricpb.Metric{Type: "custom.googleapis.com/m"},
-			Resource: &monitoredrespb.MonitoredResource{Type: "gce_instance"},
-			Points: []*monitoringpb.Point{{
-				Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.Now()},
-				Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: 1}},
-			}},
-		}},
-	}); err != nil {
-		t.Fatalf("create time series: %v", err)
-	}
-
 	resp, err := mc.ListMonitoredResourceDescriptors(ctx, &monitoringpb.ListMonitoredResourceDescriptorsRequest{Name: "projects/test"})
 	if err != nil {
 		t.Fatalf("list resource descriptors: %v", err)
 	}
-	if len(resp.GetResourceDescriptors()) != 1 || resp.GetResourceDescriptors()[0].GetType() != "gce_instance" {
-		t.Fatalf("resource descriptors = %+v", resp.GetResourceDescriptors())
+	if len(resp.GetResourceDescriptors()) < 10 {
+		t.Fatalf("canonical catalog = %d descriptors, want at least 10", len(resp.GetResourceDescriptors()))
+	}
+	found := false
+	for _, d := range resp.GetResourceDescriptors() {
+		if d.GetType() != "gce_instance" {
+			continue
+		}
+		found = true
+		if d.GetName() != "projects/test/monitoredResourceDescriptors/gce_instance" {
+			t.Fatalf("gce_instance name = %q", d.GetName())
+		}
+		if d.GetDisplayName() == "" {
+			t.Fatalf("gce_instance has no display name")
+		}
+	}
+	if !found {
+		t.Fatalf("canonical catalog missing gce_instance: %+v", resp.GetResourceDescriptors())
 	}
 }
 
@@ -713,5 +717,287 @@ func TestListTimeSeriesOutOfIntervalOmitted(t *testing.T) {
 	}
 	if len(list.GetTimeSeries()) != 0 {
 		t.Fatalf("series = %d, want 0 (out-of-interval point omitted)", len(list.GetTimeSeries()))
+	}
+}
+
+func TestListMetricDescriptorsFilter(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, typ := range []string{
+		"custom.googleapis.com/foo",
+		"custom.googleapis.com/foobar",
+		"compute.googleapis.com/instance/cpu",
+	} {
+		if _, err := mc.CreateMetricDescriptor(ctx, &monitoringpb.CreateMetricDescriptorRequest{
+			Name:             "projects/test",
+			MetricDescriptor: &metricpb.MetricDescriptor{Type: typ},
+		}); err != nil {
+			t.Fatalf("create %s: %v", typ, err)
+		}
+	}
+
+	cases := []struct {
+		name   string
+		filter string
+		want   []string
+	}{
+		{"equality metric.type", `metric.type = "custom.googleapis.com/foo"`, []string{"custom.googleapis.com/foo"}},
+		{"equality type alias", `type = "compute.googleapis.com/instance/cpu"`, []string{"compute.googleapis.com/instance/cpu"}},
+		{"starts_with", `metric.type = starts_with("custom.googleapis.com/foo")`, []string{"custom.googleapis.com/foo", "custom.googleapis.com/foobar"}},
+		{"and", `metric.type = starts_with("custom.googleapis.com") AND type = "custom.googleapis.com/foo"`, []string{"custom.googleapis.com/foo"}},
+	}
+	for _, tc := range cases {
+		resp, err := mc.ListMetricDescriptors(ctx, &monitoringpb.ListMetricDescriptorsRequest{
+			Name:   "projects/test",
+			Filter: tc.filter,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := make([]string, 0, len(resp.GetMetricDescriptors()))
+		for _, d := range resp.GetMetricDescriptors() {
+			got = append(got, d.GetType())
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{
+		`metric.label.zone = "us-east1-a"`,  // unsupported key
+		`metric.type != "x"`,                // unsupported operator
+		`metric.type = "x" AND bogus = "y"`, // unknown key in AND
+		`metric.type = "unterminated`,       // malformed literal
+	} {
+		if _, err := mc.ListMetricDescriptors(ctx, &monitoringpb.ListMetricDescriptorsRequest{
+			Name:   "projects/test",
+			Filter: bad,
+		}); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("filter %q err = %v, want InvalidArgument", bad, err)
+		}
+	}
+}
+
+func TestListMonitoredResourceDescriptorsFilter(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		filter string
+		want   []string
+	}{
+		{"equality resource.type", `resource.type = "gce_instance"`, []string{"gce_instance"}},
+		{"starts_with k8s", `resource.type = starts_with("k8s_")`, []string{"k8s_container", "k8s_node", "k8s_pod"}},
+		{"and", `resource.type = starts_with("pubsub_") AND type = "pubsub_topic"`, []string{"pubsub_topic"}},
+		{"name", `name = starts_with("projects/test/monitoredResourceDescriptors/cloudsql")`, []string{"cloudsql_database"}},
+	}
+	for _, tc := range cases {
+		resp, err := mc.ListMonitoredResourceDescriptors(ctx, &monitoringpb.ListMonitoredResourceDescriptorsRequest{
+			Name:   "projects/test",
+			Filter: tc.filter,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := make([]string, 0, len(resp.GetResourceDescriptors()))
+		for _, d := range resp.GetResourceDescriptors() {
+			got = append(got, d.GetType())
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Pagination still applies to the filtered catalog.
+	page, err := mc.ListMonitoredResourceDescriptors(ctx, &monitoringpb.ListMonitoredResourceDescriptorsRequest{
+		Name:     "projects/test",
+		PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("page list: %v", err)
+	}
+	if len(page.GetResourceDescriptors()) != 2 || page.GetNextPageToken() == "" {
+		t.Fatalf("page = %d descriptors, next = %q", len(page.GetResourceDescriptors()), page.GetNextPageToken())
+	}
+
+	for _, bad := range []string{
+		`metric.type = "gce_instance"`, // wrong surface key
+		`resource.type > "gce"`,        // unsupported operator
+		`resource.label.zone = "x"`,    // unsupported key
+	} {
+		if _, err := mc.ListMonitoredResourceDescriptors(ctx, &monitoringpb.ListMonitoredResourceDescriptorsRequest{
+			Name:   "projects/test",
+			Filter: bad,
+		}); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("filter %q err = %v, want InvalidArgument", bad, err)
+		}
+	}
+}
+
+func TestGetMonitoredResourceDescriptor(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	got, err := mc.GetMonitoredResourceDescriptor(ctx, &monitoringpb.GetMonitoredResourceDescriptorRequest{
+		Name: "projects/test/monitoredResourceDescriptors/gce_instance",
+	})
+	if err != nil {
+		t.Fatalf("get known: %v", err)
+	}
+	if got.GetType() != "gce_instance" || got.GetDisplayName() == "" {
+		t.Fatalf("descriptor = %+v", got)
+	}
+	var instanceID *labelpb.LabelDescriptor
+	for _, l := range got.GetLabels() {
+		if l.GetKey() == "instance_id" {
+			instanceID = l
+		}
+	}
+	if instanceID == nil || instanceID.GetValueType() != labelpb.LabelDescriptor_INT64 {
+		t.Fatalf("instance_id label = %+v, want INT64", instanceID)
+	}
+
+	if _, err := mc.GetMonitoredResourceDescriptor(ctx, &monitoringpb.GetMonitoredResourceDescriptorRequest{
+		Name: "projects/test/monitoredResourceDescriptors/not_a_real_type",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("get unknown err = %v, want NotFound", err)
+	}
+	if _, err := mc.GetMonitoredResourceDescriptor(ctx, &monitoringpb.GetMonitoredResourceDescriptorRequest{
+		Name: "projects/test/notADescriptor/gce_instance",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("get malformed err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestCreateServiceTimeSeriesRoundTrip(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := mc.CreateServiceTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/test",
+		TimeSeries: []*monitoringpb.TimeSeries{{
+			Metric:   &metricpb.Metric{Type: "custom.googleapis.com/svc"},
+			Resource: &monitoredrespb.MonitoredResource{Type: "global"},
+			Points: []*monitoringpb.Point{{
+				Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(now)},
+				Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_Int64Value{Int64Value: 7}},
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("create service time series: %v", err)
+	}
+
+	list, err := mc.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{
+		Name:     "projects/test",
+		Filter:   `metric.type = "custom.googleapis.com/svc"`,
+		Interval: &monitoringpb.TimeInterval{StartTime: timestamppb.New(now.Add(-time.Minute)), EndTime: timestamppb.New(now.Add(time.Minute))},
+		View:     monitoringpb.ListTimeSeriesRequest_FULL,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.GetTimeSeries()) != 1 {
+		t.Fatalf("series = %d, want 1", len(list.GetTimeSeries()))
+	}
+	if got := list.GetTimeSeries()[0].GetPoints()[0].GetValue().GetInt64Value(); got != 7 {
+		t.Fatalf("value = %d, want 7", got)
+	}
+
+	// A series with no metric type is rejected.
+	if _, err := mc.CreateServiceTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name:       "projects/test",
+		TimeSeries: []*monitoringpb.TimeSeries{{Resource: &monitoredrespb.MonitoredResource{Type: "global"}}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty metric type err = %v, want InvalidArgument", err)
+	}
+}
+
+func linearDistribution() *distributionpb.Distribution {
+	return &distributionpb.Distribution{
+		Count:                 6,
+		Mean:                  3.5,
+		SumOfSquaredDeviation: 17.5,
+		BucketOptions: &distributionpb.Distribution_BucketOptions{
+			Options: &distributionpb.Distribution_BucketOptions_LinearBuckets{
+				LinearBuckets: &distributionpb.Distribution_BucketOptions_Linear{
+					NumFiniteBuckets: 3,
+					Width:            2,
+					Offset:           1,
+				},
+			},
+		},
+		BucketCounts: []int64{1, 2, 2, 1, 0},
+	}
+}
+
+func explicitDistribution() *distributionpb.Distribution {
+	return &distributionpb.Distribution{
+		Count:                 6,
+		Mean:                  4.25,
+		SumOfSquaredDeviation: 9.25,
+		BucketOptions: &distributionpb.Distribution_BucketOptions{
+			Options: &distributionpb.Distribution_BucketOptions_ExplicitBuckets{
+				ExplicitBuckets: &distributionpb.Distribution_BucketOptions_Explicit{
+					Bounds: []float64{1, 2, 5, 10},
+				},
+			},
+		},
+		BucketCounts: []int64{0, 1, 2, 2, 1},
+	}
+}
+
+func TestDistributionTimeSeriesRoundTrip(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	want := map[string]*distributionpb.Distribution{
+		"custom.googleapis.com/linear":   linearDistribution(),
+		"custom.googleapis.com/explicit": explicitDistribution(),
+	}
+	for typ, dist := range want {
+		if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+			Name: "projects/test",
+			TimeSeries: []*monitoringpb.TimeSeries{{
+				Metric:   &metricpb.Metric{Type: typ},
+				Resource: &monitoredrespb.MonitoredResource{Type: "global"},
+				Points: []*monitoringpb.Point{{
+					Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(now)},
+					Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DistributionValue{DistributionValue: dist}},
+				}},
+			}},
+		}); err != nil {
+			t.Fatalf("create %s: %v", typ, err)
+		}
+	}
+
+	for typ, wantDist := range want {
+		list, err := mc.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{
+			Name:     "projects/test",
+			Filter:   `metric.type = "` + typ + `"`,
+			Interval: &monitoringpb.TimeInterval{StartTime: timestamppb.New(now.Add(-time.Minute)), EndTime: timestamppb.New(now.Add(time.Minute))},
+			View:     monitoringpb.ListTimeSeriesRequest_FULL,
+		})
+		if err != nil {
+			t.Fatalf("list %s: %v", typ, err)
+		}
+		if len(list.GetTimeSeries()) != 1 {
+			t.Fatalf("%s: series = %d, want 1", typ, len(list.GetTimeSeries()))
+		}
+		got := list.GetTimeSeries()[0].GetPoints()[0].GetValue().GetDistributionValue()
+		if got == nil {
+			t.Fatalf("%s: distribution value missing", typ)
+		}
+		if !proto.Equal(got, wantDist) {
+			t.Fatalf("%s: distribution = %+v, want %+v", typ, got, wantDist)
+		}
 	}
 }

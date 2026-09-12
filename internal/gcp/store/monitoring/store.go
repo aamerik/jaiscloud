@@ -49,13 +49,70 @@ type MetricDescriptor struct {
 	MonitoredResourceTypes []string          `json:"monitoredResourceTypes,omitempty"`
 }
 
-// TypedValue is a single strongly-typed data-point value. Distribution values
-// are not supported by the emulator and are rejected during transcoding.
+// TypedValue is a single strongly-typed data-point value. At most one field is
+// set. DistributionValue carries a histogram (google.api.Distribution); the
+// emulator transcodes it losslessly to and from the wire form.
 type TypedValue struct {
-	BoolValue   *bool    `json:"boolValue,omitempty"`
-	Int64Value  *int64   `json:"int64Value,omitempty"`
-	DoubleValue *float64 `json:"doubleValue,omitempty"`
-	StringValue *string  `json:"stringValue,omitempty"`
+	BoolValue         *bool         `json:"boolValue,omitempty"`
+	Int64Value        *int64        `json:"int64Value,omitempty"`
+	DoubleValue       *float64      `json:"doubleValue,omitempty"`
+	StringValue       *string       `json:"stringValue,omitempty"`
+	DistributionValue *Distribution `json:"distributionValue,omitempty"`
+}
+
+// Distribution mirrors google.api.Distribution: a summary (count, mean, sum of
+// squared deviations, optional range) plus an optional histogram described by
+// one of the three BucketOptions shapes.
+type Distribution struct {
+	Count                 int64              `json:"count,omitempty"`
+	Mean                  float64            `json:"mean,omitempty"`
+	SumOfSquaredDeviation float64            `json:"sumOfSquaredDeviation,omitempty"`
+	Range                 *DistributionRange `json:"range,omitempty"`
+	BucketOptions         *BucketOptions     `json:"bucketOptions,omitempty"`
+	BucketCounts          []int64            `json:"bucketCounts,omitempty"`
+	Exemplars             []Exemplar         `json:"exemplars,omitempty"`
+}
+
+// DistributionRange is the optional [min, max] range of a Distribution.
+type DistributionRange struct {
+	Min float64 `json:"min,omitempty"`
+	Max float64 `json:"max,omitempty"`
+}
+
+// BucketOptions is the Distribution histogram bucket-boundary oneof. Exactly
+// one field is expected to be set.
+type BucketOptions struct {
+	Linear      *LinearBuckets      `json:"linearBuckets,omitempty"`
+	Exponential *ExponentialBuckets `json:"exponentialBuckets,omitempty"`
+	Explicit    *ExplicitBuckets    `json:"explicitBuckets,omitempty"`
+}
+
+// LinearBuckets describes a histogram with constant-width buckets.
+type LinearBuckets struct {
+	NumFiniteBuckets int32   `json:"numFiniteBuckets,omitempty"`
+	Width            float64 `json:"width,omitempty"`
+	Offset           float64 `json:"offset,omitempty"`
+}
+
+// ExponentialBuckets describes a histogram with geometrically-growing buckets.
+type ExponentialBuckets struct {
+	NumFiniteBuckets int32   `json:"numFiniteBuckets,omitempty"`
+	GrowthFactor     float64 `json:"growthFactor,omitempty"`
+	Scale            float64 `json:"scale,omitempty"`
+}
+
+// ExplicitBuckets describes a histogram with explicitly-listed upper bounds.
+type ExplicitBuckets struct {
+	Bounds []float64 `json:"bounds,omitempty"`
+}
+
+// Exemplar is a single sampled observation attached to a Distribution.
+// Attachments carry the marshalled google.protobuf.Any payloads (opaque bytes
+// so the store need not depend on the proto registry).
+type Exemplar struct {
+	Value       float64   `json:"value,omitempty"`
+	Timestamp   time.Time `json:"timestamp,omitempty"`
+	Attachments [][]byte  `json:"attachments,omitempty"`
 }
 
 // Point is a single data point: a time interval plus a typed value.
