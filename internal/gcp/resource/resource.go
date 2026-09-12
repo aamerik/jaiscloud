@@ -45,10 +45,18 @@ var formatters = map[string]func(project, name string) string{
 	// The name argument is the relative path after the project, i.e.
 	// "databases/{db}/documents/{path}".
 	"firestore-document": func(p, n string) string { return fmt.Sprintf("projects/%s/%s", p, n) },
-	// Cloud Functions — names embed the location; callers pass "location/function".
+	// Cloud Functions — names embed the location; callers pass "location/function",
+	// "location" (for location discovery), and "location/operation".
 	"cloud-function": func(p, n string) string {
 		loc, fn := fnLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/functions/%s", p, loc, fn)
+	},
+	"cloud-function-location": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/locations/%s", p, n)
+	},
+	"cloud-function-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
 	// Cloud Workflows — names embed the location; callers pass "location/workflow".
 	"workflow": func(p, n string) string {

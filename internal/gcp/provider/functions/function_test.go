@@ -43,11 +43,32 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: params, ResourceID: resource.ResourceID("proj")}
 }
 
+// operationResponse asserts resp is a done google.longrunning.Operation and
+// returns its response object (the Function for create/update, {} for delete).
+func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]any {
+	t.Helper()
+	if done, _ := resp.Data["done"].(bool); !done {
+		t.Fatalf("expected done operation, got %v", resp.Data)
+	}
+	meta, _ := resp.Data["metadata"].(map[string]any)
+	if meta == nil || meta["@type"] != "type.googleapis.com/google.cloud.functions.v1.OperationMetadata" {
+		t.Fatalf("expected functions OperationMetadata, got %v", resp.Data["metadata"])
+	}
+	if _, ok := resp.Data["name"].(string); !ok {
+		t.Fatalf("expected operation name, got %v", resp.Data["name"])
+	}
+	m, ok := resp.Data["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected response object, got %v", resp.Data["response"])
+	}
+	return m
+}
+
 func TestFunctionCRUD(t *testing.T) {
 	ctx := context.Background()
 	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
 
-	// Create.
+	// Create returns a done Operation wrapping the Function.
 	nr := newNR(map[string]any{
 		"location":   "us-central1",
 		"functionId": "hello",
@@ -61,13 +82,14 @@ func TestFunctionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if resp.Data["name"] != "projects/proj/locations/us-central1/functions/hello" {
-		t.Errorf("unexpected name: %v", resp.Data["name"])
+	fn := operationResponse(t, resp)
+	if fn["name"] != "projects/proj/locations/us-central1/functions/hello" {
+		t.Errorf("unexpected name: %v", fn["name"])
 	}
-	if resp.Data["status"] != "ACTIVE" {
-		t.Errorf("expected ACTIVE, got %v", resp.Data["status"])
+	if fn["status"] != "ACTIVE" {
+		t.Errorf("expected ACTIVE, got %v", fn["status"])
 	}
-	ht, _ := resp.Data["httpsTrigger"].(map[string]any)
+	ht, _ := fn["httpsTrigger"].(map[string]any)
 	if ht == nil || ht["url"] == "" {
 		t.Errorf("expected httpsTrigger.url on HTTP function")
 	}
@@ -82,15 +104,16 @@ func TestFunctionCRUD(t *testing.T) {
 		t.Errorf("unexpected entryPoint: %v", resp.Data["entryPoint"])
 	}
 
-	// Update (PATCH merge).
+	// Update (PATCH merge) returns a done Operation wrapping the updated Function.
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello",
 		"body": map[string]any{"runtime": "nodejs22"}})
 	resp, err = p.UpdateFunction(ctx, nr)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if resp.Data["runtime"] != "nodejs22" || resp.Data["entryPoint"] != "helloWorld" {
-		t.Errorf("unexpected update result: %v", resp.Data)
+	upd := operationResponse(t, resp)
+	if upd["runtime"] != "nodejs22" || upd["entryPoint"] != "helloWorld" {
+		t.Errorf("unexpected update result: %v", upd)
 	}
 
 	// List.
@@ -104,10 +127,14 @@ func TestFunctionCRUD(t *testing.T) {
 		t.Errorf("expected 1 function, got %d", len(fns))
 	}
 
-	// Delete.
+	// Delete returns a done Operation with an empty response.
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello"})
-	if _, err := p.DeleteFunction(ctx, nr); err != nil {
+	resp, err = p.DeleteFunction(ctx, nr)
+	if err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+	if del := operationResponse(t, resp); len(del) != 0 {
+		t.Errorf("expected empty delete response, got %v", del)
 	}
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/hello"})
 	if _, err := p.GetFunction(ctx, nr); err == nil {
@@ -422,5 +449,212 @@ func TestCallFunctionPropagatesMemoryAndTimeout(t *testing.T) {
 	}
 	if exec.req.TimeoutSecs != 120 {
 		t.Errorf("expected TimeoutSecs=120, got %d", exec.req.TimeoutSecs)
+	}
+}
+
+func providerError(t *testing.T, err error) *model.ProviderError {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected an error, got nil")
+	}
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	return perr
+}
+
+func TestUpdateFunctionUpdateMask(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	create := newNR(map[string]any{
+		"location":   "us-central1",
+		"functionId": "f",
+		"body": map[string]any{
+			"runtime":     "nodejs20",
+			"entryPoint":  "h",
+			"description": "d0",
+		},
+	})
+	if _, err := p.CreateFunction(ctx, create); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Masked update: only the masked field is applied even though the body
+	// carries another field.
+	masked := newNR(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/f",
+		"updateMask": "function.runtime",
+		"body":       map[string]any{"runtime": "nodejs22", "description": "ignored"},
+	})
+	resp, err := p.UpdateFunction(ctx, masked)
+	if err != nil {
+		t.Fatalf("masked update: %v", err)
+	}
+	got := operationResponse(t, resp)
+	if got["runtime"] != "nodejs22" {
+		t.Errorf("masked runtime = %v, want nodejs22", got["runtime"])
+	}
+	if got["description"] != "d0" {
+		t.Errorf("unmasked description = %v, want d0 (retained)", got["description"])
+	}
+
+	// Empty mask = replace every mutable field present in the body.
+	full := newNR(map[string]any{
+		"location": "us-central1",
+		"name":     "locations/us-central1/functions/f",
+		"body":     map[string]any{"description": "d1", "entryPoint": "h2"},
+	})
+	resp, err = p.UpdateFunction(ctx, full)
+	if err != nil {
+		t.Fatalf("full update: %v", err)
+	}
+	got = operationResponse(t, resp)
+	if got["description"] != "d1" || got["entryPoint"] != "h2" {
+		t.Errorf("full update = %v", got)
+	}
+	if got["runtime"] != "nodejs22" {
+		t.Errorf("runtime should be retained on full update, got %v", got["runtime"])
+	}
+
+	// Unsupported mask path -> 501 UNIMPLEMENTED, and the store is untouched.
+	bad := newNR(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/f",
+		"updateMask": "bogus",
+		"body":       map[string]any{"runtime": "nodejs18"},
+	})
+	_, err = p.UpdateFunction(ctx, bad)
+	perr := providerError(t, err)
+	if perr.Code != "Unimplemented" || perr.HTTPStatus != 501 {
+		t.Errorf("unsupported mask: code=%q status=%d, want Unimplemented/501", perr.Code, perr.HTTPStatus)
+	}
+	cur, err := p.GetFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/f"}))
+	if err != nil {
+		t.Fatalf("get after bad mask: %v", err)
+	}
+	if cur.Data["runtime"] != "nodejs22" {
+		t.Errorf("bad mask must not mutate the function, runtime = %v", cur.Data["runtime"])
+	}
+}
+
+func TestGenerateDownloadUrl(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	create := newNR(map[string]any{
+		"location":   "us-central1",
+		"functionId": "dl",
+		"body":       map[string]any{"runtime": "nodejs20", "entryPoint": "h"},
+	})
+	if _, err := p.CreateFunction(ctx, create); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	resp, err := p.GenerateDownloadUrl(ctx, newNR(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/dl",
+	}))
+	if err != nil {
+		t.Fatalf("generateDownloadUrl: %v", err)
+	}
+	u, _ := resp.Data["downloadUrl"].(string)
+	if u == "" || !strings.Contains(u, "storage.googleapis.com") || !strings.Contains(u, "dl") {
+		t.Errorf("unexpected downloadUrl: %q", u)
+	}
+
+	// Missing function -> NotFound.
+	_, err = p.GenerateDownloadUrl(ctx, newNR(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/missing",
+	}))
+	if perr := providerError(t, err); perr.Code != "NotFound" {
+		t.Errorf("missing function: code=%q, want NotFound", perr.Code)
+	}
+}
+
+func TestListLocationsPagination(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	resp, err := p.ListLocations(ctx, newNR(map[string]any{"pageSize": "2"}))
+	if err != nil {
+		t.Fatalf("list locations: %v", err)
+	}
+	page, _ := resp.Data["locations"].([]any)
+	if len(page) != 2 {
+		t.Fatalf("expected 2 locations, got %d", len(page))
+	}
+	next, _ := resp.Data["nextPageToken"].(string)
+	if next == "" {
+		t.Fatalf("expected nextPageToken")
+	}
+
+	resp, err = p.ListLocations(ctx, newNR(map[string]any{"pageSize": "2", "pageToken": next}))
+	if err != nil {
+		t.Fatalf("list locations page 2: %v", err)
+	}
+	page2, _ := resp.Data["locations"].([]any)
+	if len(page2) != 2 {
+		t.Fatalf("expected 2 locations on page 2, got %d", len(page2))
+	}
+	l0, _ := page[0].(map[string]any)
+	l1, _ := page2[0].(map[string]any)
+	if l0["locationId"] == l1["locationId"] {
+		t.Errorf("page 2 repeated page 1 location %v", l0["locationId"])
+	}
+	if l0["name"] == nil || l0["displayName"] == nil {
+		t.Errorf("location record missing fields: %v", l0)
+	}
+
+	loc, err := p.GetLocation(ctx, newNR(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("get location: %v", err)
+	}
+	if loc.Data["name"] != "projects/proj/locations/us-central1" || loc.Data["locationId"] != "us-central1" {
+		t.Errorf("unexpected location: %v", loc.Data)
+	}
+}
+
+func TestFunctionValidation(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	// Missing runtime.
+	_, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "f", "body": map[string]any{"entryPoint": "h"},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Errorf("missing runtime: code=%q status=%d, want InvalidArgument/400", perr.Code, perr.HTTPStatus)
+	}
+
+	// Missing functionId (no body name).
+	_, err = p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "body": map[string]any{"runtime": "nodejs20"},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Errorf("missing functionId: code=%q, want InvalidArgument", perr.Code)
+	}
+
+	// Malformed body name on create.
+	_, err = p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "body": map[string]any{"name": "not-a-resource-name", "runtime": "nodejs20"},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Errorf("malformed create name: code=%q, want InvalidArgument", perr.Code)
+	}
+
+	// Malformed name on update.
+	_, err = p.UpdateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "name": "badname", "body": map[string]any{"runtime": "nodejs20"},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Errorf("malformed update name: code=%q, want InvalidArgument", perr.Code)
+	}
+
+	// Malformed name on delete.
+	_, err = p.DeleteFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "badname"}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Errorf("malformed delete name: code=%q, want InvalidArgument", perr.Code)
 	}
 }

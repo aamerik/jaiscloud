@@ -79,6 +79,7 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"DELETE", "/v1/projects/p/locations/us-central1/functions/f", "DeleteFunction"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions/f:call", "CallFunction"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions:generateUploadUrl", "GenerateUploadUrl"},
+		{"POST", "/v1/projects/p/locations/us-central1/functions/f:generateDownloadUrl", "GenerateDownloadUrl"},
 		{"GET", "/v1/projects/p/locations/us-central1/functions/f:getIamPolicy", "FunctionGetIamPolicy"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions/f:setIamPolicy", "FunctionSetIamPolicy"},
 		{"POST", "/v1/projects/p/locations/us-central1/functions/f:testIamPermissions", "FunctionTestIamPermissions"},
@@ -109,6 +110,30 @@ func TestJSONCodecDecode(t *testing.T) {
 		}
 		if nr.Action != tc.action {
 			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+	}
+}
+
+func TestFunctionsLocationsCodec(t *testing.T) {
+	// The Cloud Functions codec derives location-discovery actions from the
+	// shared locations resource type; the bare path itself is claimed by the
+	// Memorystore detector (see TestDetectV1Service) because the emulator host
+	// cannot disambiguate the two clients, and both return the same
+	// google.cloud.location.Location records.
+	codec := &JSONCodec{Service: "functions"}
+	for _, tc := range []struct{ path, action string }{
+		{"/v1/projects/p/locations", "ListLocations"},
+		{"/v1/projects/p/locations/us-central1", "GetLocation"},
+	} {
+		nr, err := codec.Decode(httptest.NewRequest("GET", tc.path, nil), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.path, err)
+		}
+		if nr.Action != tc.action {
+			t.Errorf("%s: action = %q, want %q", tc.path, nr.Action, tc.action)
+		}
+		if nr.Service != "functions" {
+			t.Errorf("%s: service = %q, want functions", tc.path, nr.Service)
 		}
 	}
 }

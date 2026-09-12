@@ -380,6 +380,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 				return "CallFunction"
 			case "generateUploadUrl":
 				return "GenerateUploadUrl"
+			case "generateDownloadUrl":
+				return "GenerateDownloadUrl"
 			case "getIamPolicy":
 				return "FunctionGetIamPolicy"
 			case "setIamPolicy":
