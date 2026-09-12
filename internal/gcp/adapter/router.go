@@ -140,6 +140,14 @@ func detectV1Service(path string) string {
 	if detectMetastoreResourceType(rest) != "" {
 		return "metastore"
 	}
+	// Memorystore for Redis lives under /v1/projects/{project}/locations/{location}/instances
+	// — detect it before the generic resource-type switch (its "locations"
+	// segment would otherwise be unclaimed and fall through to the GCS raw-media
+	// fallback). Location discovery (locations[/{location}]) is claimed here too:
+	// no other emulator service owns those bare paths.
+	if detectMemorystoreResourceType(rest) != "" {
+		return "redis"
+	}
 	switch detectResourceType(rest) {
 	case "topics", "subscriptions":
 		return "pubsub"
@@ -185,6 +193,30 @@ func detectManagedKafkaResourceType(seg []string) string {
 	}
 	if seg[2] == "clusters" {
 		return "clusters"
+	}
+	return ""
+}
+
+// detectMemorystoreResourceType returns "instances" when the segments after
+// projects/{project} form locations/{location}/instances, and "locations" for
+// the bare location-discovery paths locations or locations/{location}. The
+// "instances" segment is unique to Memorystore for Redis among the emulator's
+// /v1/projects/{project}/locations/{location}/... services (workflows uses
+// "workflows", functions uses "functions", KMS uses "keyRings", Managed Kafka
+// uses "clusters", Dataproc Metastore uses "services"). The shared
+// locations/{location}/operations/{id} LRO path is intentionally NOT claimed
+// here — it is path-ambiguous with Workflows' operations surface on a single
+// host, so it remains routed to workflows and Memorystore returns its
+// operations inline (done: true).
+func detectMemorystoreResourceType(seg []string) string {
+	if len(seg) == 0 || seg[0] != "locations" {
+		return ""
+	}
+	switch {
+	case len(seg) >= 3 && seg[2] == "instances":
+		return "instances"
+	case len(seg) <= 2:
+		return "locations"
 	}
 	return ""
 }

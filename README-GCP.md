@@ -31,6 +31,7 @@
 | Cloud Logging | gRPC | Log entries, filtering, log-based routing |
 | Eventarc | REST | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 | Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
+| Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
 
 ---
 
@@ -220,6 +221,12 @@ Known debt for Eventarc: list `filter`/`orderBy` are **not** honored (`ListTrigg
 Cloud DNS is implemented as metadata CRUD over the shared `ResourceStore`, mirroring the AWS Route53 provider. `ManagedZone`s, `ResourceRecordSet`s, and `Change`s are stored records — the emulator never stands up an authoritative DNS server, so `nameServers` are synthesized `ns-cloud-*.googledomains.com.` placeholders and zones never resolve queries. `managedZones.{create,get,list,patch,update,delete}` and `resourceRecordSets.{create,get,list,patch,delete}` are supported, and `changes.create` applies its `additions`/`deletions` to the stored record sets synchronously and returns `status: "done"`. `projects.get` returns a synthesized `dns#project` with a `quota` block. The `id` of a managed zone and the project `number` are stable numeric strings derived from the resource name.
 
 Known debt for Cloud DNS: DNSSEC (`dnsKeys`), `policies`/`responsePolicies`, and the managed-zone IAM custom methods (`:getIamPolicy`/`:setIamPolicy`/`:testIamPermissions`) are **not** implemented and fail loud with `501 UNIMPLEMENTED`. List pagination honors `maxResults`/`pageToken`; `managedZones.patch` and `managedZones.update` share merge semantics (description/visibility/labels are overlaid, unmasked fields retained, and `dnsName` is immutable/ignored). Only `name`, `dnsName`, `description`, `visibility`, and `labels` are persisted — the other managed-zone config blocks (`dnssecConfig`, `forwardingConfig`, `peeringConfig`, `privateVisibilityConfig`) are accepted but dropped, so no DNSSEC, forwarding, peering, or private-zone visibility behavior is applied.
+
+### Memorystore for Redis: metadata only, no Redis data plane
+
+Memorystore for Redis is implemented as metadata CRUD over the shared `ResourceStore`, mirroring the Cloud DNS provider and keyed by project + location (region). The emulator never stands up a Redis server, so an instance is born in `state: READY` with a synthesized `host` (a stable `10.x.y.z` placeholder) and `port: 6379` that nothing listens on — there is no data plane, no `AUTH`, no persistence, and no failover. `instances.create` takes `?instanceId=`, defaults `tier` to `BASIC` (rejecting anything but `BASIC`/`STANDARD_HA` with `400`), defaults `memorySizeGb` to `1` and `redisVersion` to `REDIS_7_0`, and stores `displayName`, `labels`, `redisConfigs`, and the location. `instances.get/list/delete` and `instances.patch` (which applies `updateMask`; unsupported mask paths fail loud with `400`) are supported, and `instances.upgrade` applies the requested `redisVersion`. List pagination honors `pageSize`/`pageToken`, and `locations.get`/`locations.list` return synthesized `projects/{p}/locations/{l}` records.
+
+Create/Update/Delete return the `google.longrunning.Operation` **inline** with `done: true` and the resulting instance in `response` (the Dataproc/Metastore convention): the shared `locations/{location}/operations/{id}` path is path-identical to Cloud Workflows' LRO surface on the single emulator host, so Memorystore does not claim it and operations are never persisted or pollable. Location discovery is the one bare `/v1/projects/{p}/locations[/{l}]` path claimed by Memorystore; no other emulator service serves it. Deferred surfaces — `instances.import`/`export`/`failover`/`rescheduleMaintenance`/`getAuthString`, backup collections, and the Redis Cluster surface — are not routed and fall through to the generic `404` rather than silently succeeding.
 
 ---
 

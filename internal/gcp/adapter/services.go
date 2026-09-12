@@ -106,6 +106,11 @@ var gcpServices = []ServiceDescriptor{
 		Codec:          func() adapter.Codec { return &IcebergCodec{} },
 	},
 	{
+		ServiceName:    "redis",
+		ProviderPrefix: "Memorystore",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "redis"} },
+	},
+	{
 		// Cloud DNS's method paths embed the "dns/v1/" service prefix (unlike
 		// the shared /v1/projects/{project}/... services), so it is identified
 		// by path prefix.

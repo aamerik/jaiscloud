@@ -106,6 +106,22 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
+	// Memorystore for Redis: surface the location and instance id for store
+	// scoping and resource-name reconstruction.
+	if resourceType == "instances" || resourceType == "locations" {
+		for i, s := range rest {
+			if s == "locations" && i+1 < len(rest) {
+				nr.Params["location"] = rest[i+1]
+				break
+			}
+		}
+		if resourceType == "instances" {
+			if id := segmentAfter(rest, "instances"); id != "" {
+				nr.Params["instanceId"] = id
+			}
+		}
+	}
+
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
 	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom)
@@ -161,6 +177,19 @@ func (c *JSONCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provide
 // cryptoKey path also contains "keyRings"; cryptoKeyVersions wins over
 // cryptoKeys since a version path also contains "cryptoKeys".
 func detectResourceType(segs []string) string {
+	// Memorystore for Redis: locations/{location}/instances[/{id}], plus the
+	// bare location-discovery paths locations[/{location}]. The "instances"
+	// marker is unique to Memorystore among the emulator's
+	// /v1/projects/{p}/locations/{l}/... services, so it can be claimed before
+	// the generic scan below.
+	if len(segs) >= 1 && segs[0] == "locations" {
+		if len(segs) >= 3 && segs[2] == "instances" {
+			return "instances"
+		}
+		if len(segs) <= 2 {
+			return "locations"
+		}
+	}
 	var hasKeyRings, hasCryptoKeys, hasVersions, hasServiceAccounts bool
 	var hasWorkflows, hasExecutions bool
 	for _, s := range segs {
@@ -381,6 +410,11 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			case "testIamPermissions":
 				return "ChannelTestIamPermissions"
 			}
+		case "instances":
+			switch custom {
+			case "upgrade":
+				return "UpgradeInstance"
+			}
 		}
 	}
 
@@ -579,6 +613,37 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			return "ListProviders"
 		case method == http.MethodGet:
 			return "GetProvider"
+		}
+	case "instances":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateInstance"
+		case isCollection && method == http.MethodGet:
+			return "ListInstances"
+		case method == http.MethodGet:
+			return "GetInstance"
+		case method == http.MethodPatch:
+			return "UpdateInstance"
+		case method == http.MethodDelete:
+			return "DeleteInstance"
+		}
+	case "locations":
+		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListLocations"
+		case method == http.MethodGet:
+			return "GetLocation"
+		}
+	}
+	return ""
+}
+
+// segmentAfter returns the path segment immediately following marker in segs,
+// or "" when marker is absent or last.
+func segmentAfter(segs []string, marker string) string {
+	for i, s := range segs {
+		if s == marker && i+1 < len(segs) {
+			return segs[i+1]
 		}
 	}
 	return ""
