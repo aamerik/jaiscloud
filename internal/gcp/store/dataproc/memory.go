@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 )
 
 // MemoryStore is an in-memory Store.
@@ -219,6 +220,25 @@ func (s *MemoryStore) UpdateOperation(_ context.Context, projectID, region strin
 	op.Region = region
 	s.operations[key][op.ID] = op
 	return nil
+}
+
+// DeleteStaleOperations removes operations older than cutoff across all scopes.
+func (s *MemoryStore) DeleteStaleOperations(_ context.Context, cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for key, ops := range s.operations {
+		for id, op := range ops {
+			if op.CreateTime.Before(cutoff) {
+				delete(ops, id)
+				n++
+			}
+		}
+		if len(ops) == 0 {
+			delete(s.operations, key)
+		}
+	}
+	return n, nil
 }
 
 func (s *MemoryStore) Reset(_ context.Context) {

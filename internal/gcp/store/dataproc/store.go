@@ -118,6 +118,12 @@ type Store interface {
 	CreateOperation(ctx context.Context, projectID, region string, op Operation) error
 	GetOperation(ctx context.Context, projectID, region, id string) (Operation, error)
 	UpdateOperation(ctx context.Context, projectID, region string, op Operation) error
+	// DeleteStaleOperations removes operations whose CreateTime predates cutoff
+	// (across every project/region scope), returning the number deleted. It is
+	// the store half of the Dataproc operation-retention sweep: real operations
+	// are GC'd after a TTL, and without this jc_dataproc_operations grows
+	// unbounded (the only other delete is Reset).
+	DeleteStaleOperations(ctx context.Context, cutoff time.Time) (int, error)
 
 	Reset(ctx context.Context)
 }
