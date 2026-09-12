@@ -431,6 +431,60 @@ func (s *PostgresObjectStore) TombstoneObjectMetaChecked(ctx context.Context, bu
 	return m, nil
 }
 
+// RestoreObjectGeneration makes generation live again inside one Serializable
+// transaction: it locks the current live generation (validating precondition)
+// and the target row, marks the current live generation non-live, then clears
+// the target's time_deleted and bumps its metageneration.
+func (s *PostgresObjectStore) RestoreObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	defer tx.Rollback(ctx)
+	current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ObjectMeta{}, ErrPreconditionFailed
+	}
+	row := tx.QueryRow(ctx, `
+		SELECT `+objectCols+`
+		FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND generation=$3
+		FOR UPDATE
+	`, bucket, name, generation)
+	target, err := scanObject(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if target.TimeDeleted == nil {
+		// The target is already live: restore is a no-op.
+		return target, nil
+	}
+	now := clock.Now()
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_gcs_objects SET time_deleted=$3 WHERE bucket=$1 AND name=$2 AND time_deleted IS NULL
+	`, bucket, name, now); err != nil {
+		return ObjectMeta{}, err
+	}
+	target.Metageneration = nextMetageneration(target.Metageneration)
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_gcs_objects SET time_deleted=NULL, updated=$3, metageneration=$4
+		WHERE bucket=$1 AND name=$2 AND generation=$5
+	`, bucket, name, now, target.Metageneration, generation); err != nil {
+		return ObjectMeta{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ObjectMeta{}, err
+	}
+	target.TimeDeleted = nil
+	target.Updated = now
+	return target, nil
+}
+
 func (s *PostgresObjectStore) GetObjectMeta(ctx context.Context, bucket, name string) (ObjectMeta, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT `+objectCols+`

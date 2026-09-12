@@ -299,6 +299,56 @@ func (s *MemoryObjectStore) GetObjectMeta(_ context.Context, bucket, name string
 	return ObjectMeta{}, ErrNoSuchObject
 }
 
+// RestoreObjectGeneration makes generation live again: the target's timeDeleted
+// is cleared and metageneration bumped, and any other live generation is marked
+// non-live (mirroring real GCS, where restoring a soft-deleted generation
+// supersedes the current live one). The precondition is validated against the
+// current live state under the same write lock.
+func (s *MemoryObjectStore) RestoreObjectGeneration(_ context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	objs, ok := s.objects[bucket]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	gens, ok := objs[name]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	current, exists := liveGeneration(gens)
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ObjectMeta{}, ErrPreconditionFailed
+	}
+	idx := -1
+	for i := range gens {
+		if gens[i].Generation == generation {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	if gens[idx].TimeDeleted == nil {
+		// The target is already live: restore is a no-op.
+		return gens[idx], nil
+	}
+	now := clock.Now()
+	for i := range gens {
+		if gens[i].TimeDeleted == nil && gens[i].Generation != generation {
+			t := now
+			gens[i].TimeDeleted = &t
+		}
+	}
+	g := gens[idx]
+	g.TimeDeleted = nil
+	g.Metageneration = nextMetageneration(g.Metageneration)
+	g.Updated = now
+	gens[idx] = g
+	objs[name] = gens
+	return g, nil
+}
+
 func (s *MemoryObjectStore) GetObjectGeneration(_ context.Context, bucket, name, generation string) (ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

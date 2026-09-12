@@ -2,6 +2,14 @@
 // (google.storage.v2.Storage) over the same gcs.ObjectStore, blobfs.BlobStore,
 // and crypto.EnvelopeEncryptor backing the REST provider, so REST and gRPC share
 // object state and stay byte-compatible.
+//
+// Implemented RPCs: bucket CRUD + UpdateBucket/LockBucketRetentionPolicy, object
+// CRUD + RestoreObject, compose/rewrite/move, Get/Update/DeleteObject, the
+// resumable-write surface (StartResumableWrite/WriteObject/BidiWriteObject/
+// QueryWriteStatus/CancelResumableWrite), ReadObject, and bucket/object IAM.
+// BidiReadObject — the newer bidirectional streaming read surface — remains
+// intentionally unimplemented (the embedded UnimplementedStorageServer fails it
+// loud with codes.Unimplemented); ReadObject covers the read surface.
 package storage
 
 import (
@@ -30,6 +38,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -255,6 +264,23 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		if t, err := time.Parse(time.RFC3339Nano, u); err == nil {
 			b.UpdateTime = timestamppb.New(t)
 		}
+	}
+	if rp, ok := m["retentionPolicy"].(map[string]any); ok && len(rp) > 0 {
+		policy := &storagepb.Bucket_RetentionPolicy{}
+		if locked, _ := rp["isLocked"].(bool); locked {
+			policy.IsLocked = true
+		}
+		if period, _ := rp["retentionPeriod"].(string); period != "" {
+			if n, err := strconv.ParseInt(period, 10, 64); err == nil && n > 0 {
+				policy.RetentionDuration = durationpb.New(time.Duration(n) * time.Second)
+			}
+		}
+		if et, _ := rp["effectiveTime"].(string); et != "" {
+			if t, err := time.Parse(time.RFC3339Nano, et); err == nil {
+				policy.EffectiveTime = timestamppb.New(t)
+			}
+		}
+		b.RetentionPolicy = policy
 	}
 	return b
 }
@@ -591,6 +617,154 @@ func pageBuckets(buckets []map[string]any, pageSize int, pageToken string) ([]ma
 	return page, next
 }
 
+// ─── buckets: update / retention lock ─────────────────────────────────────────
+
+// mapBucketMutationError maps the bucket-store sentinels returned by
+// UpdateBucketMetaAtomic to the canonical gRPC-facing provider errors.
+func mapBucketMutationError(err error) error {
+	if errors.Is(err, gcs.ErrNoSuchBucket) {
+		return model.NewProviderError("NotFound", "bucket not found", 404)
+	}
+	if errors.Is(err, gcs.ErrPreconditionFailed) {
+		return model.NewProviderError("FailedPrecondition", "At least one of the pre-conditions you specified did not hold", 412)
+	}
+	return err
+}
+
+// bucketRetentionToMap converts a proto bucket retention policy into the map
+// shape the REST provider persists (decimal-second retentionPeriod string,
+// optional effectiveTime RFC 3339, isLocked bool). Returns nil for a nil policy.
+func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
+	if rp == nil {
+		return nil
+	}
+	out := map[string]any{}
+	if d := rp.GetRetentionDuration(); d != nil {
+		out["retentionPeriod"] = strconv.FormatInt(int64(d.AsDuration().Seconds()), 10)
+	}
+	if et := rp.GetEffectiveTime(); et != nil {
+		out["effectiveTime"] = et.AsTime().Format(time.RFC3339Nano)
+	}
+	if rp.GetIsLocked() {
+		out["isLocked"] = true
+	}
+	return out
+}
+
+// applyBucketMask overlays the request's masked Bucket fields onto the stored
+// bucket metadata. Only the field paths this service models (labels, versioning,
+// storageClass, location, retentionPolicy) are applied; "*" applies all of them.
+// An absent/empty masked field clears the stored key where GCS treats the field
+// as a map/message (labels, versioning, retentionPolicy) and is otherwise left
+// untouched.
+func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) {
+	if maskIncludes(mask, "labels") {
+		if labels := pb.GetLabels(); len(labels) > 0 {
+			meta["labels"] = labels
+		} else {
+			delete(meta, "labels")
+		}
+	}
+	if maskIncludes(mask, "versioning") {
+		if v := pb.GetVersioning(); v != nil && v.GetEnabled() {
+			meta["versioning"] = map[string]any{"enabled": true}
+		} else {
+			delete(meta, "versioning")
+		}
+	}
+	if sc := pb.GetStorageClass(); sc != "" && maskIncludes(mask, "storage_class") {
+		meta["storageClass"] = sc
+	}
+	if loc := pb.GetLocation(); loc != "" && maskIncludes(mask, "location") {
+		meta["location"] = loc
+	}
+	if maskIncludes(mask, "retention_policy") {
+		if rp := bucketRetentionToMap(pb.GetRetentionPolicy()); rp != nil {
+			meta["retentionPolicy"] = rp
+		} else {
+			delete(meta, "retentionPolicy")
+		}
+	}
+}
+
+// UpdateBucket applies the request's update_mask to the stored bucket metadata.
+// The metageneration precondition (if_metageneration_match /
+// if_metageneration_not_match) is validated inside the store's atomic
+// read-modify-write, then the metageneration is bumped — the same
+// UpdateBucketMetaAtomic path the REST BucketsUpdate uses, so the two transports
+// share bucket metageneration state.
+func (s *Service) UpdateBucket(ctx context.Context, req *storagepb.UpdateBucketRequest) (*storagepb.Bucket, error) {
+	bucket := parseBucketName(req.GetBucket().GetName())
+	if bucket == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
+	}
+	mask := req.GetUpdateMask()
+	if mask == nil || len(mask.GetPaths()) == 0 {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "update_mask is required", 400))
+	}
+	var pre *gcs.Precondition
+	if req.IfMetagenerationMatch != nil || req.IfMetagenerationNotMatch != nil {
+		pre = &gcs.Precondition{
+			MetagenerationMatch:    req.IfMetagenerationMatch,
+			MetagenerationNotMatch: req.IfMetagenerationNotMatch,
+		}
+	}
+	updated, err := s.objects.UpdateBucketMetaAtomic(ctx, bucket, func(meta map[string]any) (map[string]any, error) {
+		if !gcs.BucketMetagenerationMatches(meta, pre) {
+			return nil, gcs.ErrPreconditionFailed
+		}
+		applyBucketMask(meta, req.GetBucket(), mask)
+		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
+		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
+		return meta, nil
+	})
+	if err != nil {
+		return nil, mapError(mapBucketMutationError(err))
+	}
+	return bucketToProto(updated), nil
+}
+
+// LockBucketRetentionPolicy sets the bucket's retention policy isLocked flag
+// permanently (GCS retention locks cannot be undone) and bumps the bucket
+// metageneration, honoring the required if_metageneration_match precondition.
+// A missing bucket or a bucket with no retention policy is NotFound; a bucket
+// whose policy is already locked is returned unchanged (locking is idempotent).
+func (s *Service) LockBucketRetentionPolicy(ctx context.Context, req *storagepb.LockBucketRetentionPolicyRequest) (*storagepb.Bucket, error) {
+	bucket := parseBucketName(req.GetBucket())
+	if bucket == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
+	}
+	var pre *gcs.Precondition
+	if v := req.GetIfMetagenerationMatch(); v != 0 {
+		pre = &gcs.Precondition{MetagenerationMatch: &v}
+	}
+	updated, err := s.objects.UpdateBucketMetaAtomic(ctx, bucket, func(meta map[string]any) (map[string]any, error) {
+		if !gcs.BucketMetagenerationMatches(meta, pre) {
+			return nil, gcs.ErrPreconditionFailed
+		}
+		rp, _ := meta["retentionPolicy"].(map[string]any)
+		if len(rp) == 0 {
+			return nil, model.NewProviderError("NotFound", "bucket has no retention policy", 404)
+		}
+		if locked, _ := rp["isLocked"].(bool); locked {
+			return meta, nil
+		}
+		next := make(map[string]any, len(rp)+1)
+		for k, v := range rp {
+			next[k] = v
+		}
+		next["isLocked"] = true
+		meta["retentionPolicy"] = next
+		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
+		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
+		return meta, nil
+	})
+	if err != nil {
+		return nil, mapError(mapBucketMutationError(err))
+	}
+	return bucketToProto(updated), nil
+}
+
 // ─── objects ──────────────────────────────────────────────────────────────────
 
 func (s *Service) GetObject(ctx context.Context, req *storagepb.GetObjectRequest) (*storagepb.Object, error) {
@@ -751,6 +925,34 @@ func checkObjectPreconditions(live gcs.ObjectMeta, ifGenMatch, ifGenNotMatch, if
 		return preconditionErr("if_metageneration_not_match precondition failed")
 	}
 	return nil
+}
+
+// RestoreObject restores a non-live (soft-deleted/tombstoned) generation to
+// live. The emulator models GCS soft-delete as versioning tombstones (TimeDeleted
+// set), so this delegates to the store's atomic RestoreObjectGeneration, which
+// flips the targeted generation live and marks the current live generation
+// non-live. The if_* preconditions are validated against the current live
+// generation inside that same atomic mutation. copy_source_acl and restore_token
+// are accepted but ignored (the emulator has no ACL plane and no hierarchical
+// namespaces).
+func (s *Service) RestoreObject(ctx context.Context, req *storagepb.RestoreObjectRequest) (*storagepb.Object, error) {
+	bucket := parseBucketName(req.GetBucket())
+	object := req.GetObject()
+	if bucket == "" || object == "" || req.GetGeneration() <= 0 {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "restore requires bucket, object, and a positive generation", 400))
+	}
+	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
+	meta, err := s.objects.RestoreObjectGeneration(ctx, bucket, object, int64ToGen(req.GetGeneration()), pre)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, mapError(model.NewProviderError("NotFound", "bucket not found", 404))
+		}
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, mapError(model.NewProviderError("NotFound", "object generation not found", 404))
+		}
+		return nil, mapError(preconditionResult(err))
+	}
+	return objectToProto(meta), nil
 }
 
 // UpdateObject applies a patch update to an object's metadata.
@@ -1070,6 +1272,28 @@ func (s *Service) QueryWriteStatus(ctx context.Context, req *storagepb.QueryWrit
 	return &storagepb.QueryWriteStatusResponse{
 		WriteStatus: &storagepb.QueryWriteStatusResponse_PersistedSize{PersistedSize: persisted},
 	}, nil
+}
+
+// CancelResumableWrite discards an in-progress resumable upload session. It
+// removes the in-memory session (closing any spill file) and the durable store
+// record. Both are idempotent for an unknown id — real GCS returns OK for an
+// upload_id it no longer knows — so cancelling an already-completed upload is a
+// harmless no-op that never touches the committed object.
+func (s *Service) CancelResumableWrite(ctx context.Context, req *storagepb.CancelResumableWriteRequest) (*storagepb.CancelResumableWriteResponse, error) {
+	id := req.GetUploadId()
+	if id == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "missing upload_id", 400))
+	}
+	s.mu.Lock()
+	if sess, ok := s.uploads[id]; ok {
+		sess.closeSpill()
+		delete(s.uploads, id)
+	}
+	s.mu.Unlock()
+	if err := s.objects.DeleteResumable(ctx, id); err != nil && !errors.Is(err, gcs.ErrNoSuchUpload) {
+		return nil, mapError(err)
+	}
+	return &storagepb.CancelResumableWriteResponse{}, nil
 }
 
 // ─── writes ───────────────────────────────────────────────────────────────────
