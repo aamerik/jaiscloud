@@ -57,12 +57,14 @@ type Job struct {
 
 // Row is one streamed row under a table. Data holds the row's json object
 // verbatim; Seq is the per-table insertion ordinal used for ordering and
-// pagination.
+// pagination. InsertID is the caller-supplied tabledata.insertAll insertId
+// used for best-effort duplicate suppression (empty means "never dedup").
 type Row struct {
 	ProjectID string          `json:"projectId"`
 	DatasetID string          `json:"datasetId"`
 	TableID   string          `json:"tableId"`
 	Seq       int64           `json:"seq"`
+	InsertID  string          `json:"insertId,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 
@@ -99,7 +101,12 @@ type Store interface {
 	DeleteJob(ctx context.Context, projectID, jobID string) error
 	ListJobs(ctx context.Context, projectID string) ([]Job, error)
 
-	InsertRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) error
+	// InsertRows appends rows to a table. Rows whose non-empty InsertID was
+	// already recorded for this table within the best-effort dedup window are
+	// skipped and their indices into rows are returned (ascending) as
+	// duplicateIndexes; every other row is inserted. It is atomic with respect
+	// to concurrent requests carrying the same InsertID.
+	InsertRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) (duplicateIndexes []int, err error)
 	ListRows(ctx context.Context, projectID, datasetID, tableID string) ([]Row, error)
 
 	Reset(ctx context.Context)

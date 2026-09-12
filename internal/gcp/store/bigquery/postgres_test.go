@@ -61,7 +61,7 @@ func TestPostgresDeleteDatasetCascades(t *testing.T) {
 	if err := s.CreateTable(ctx, "proj", "d", Table{TableID: "t"}); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
-	if err := s.InsertRows(ctx, "proj", "d", "t", []Row{{Data: []byte(`{"a":1}`)}}); err != nil {
+	if _, err := s.InsertRows(ctx, "proj", "d", "t", []Row{{Data: []byte(`{"a":1}`)}}); err != nil {
 		t.Fatalf("insert rows: %v", err)
 	}
 	if err := s.DeleteDataset(ctx, "proj", "d"); err != nil {

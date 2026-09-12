@@ -63,7 +63,7 @@ func runStoreTests(t *testing.T, s Store) {
 		{Data: []byte(`{"id":1,"name":"alice"}`)},
 		{Data: []byte(`{"id":2,"name":"bob"}`)},
 	}
-	if err := s.InsertRows(ctx, "proj", "Sales", "Orders", rows); err != nil {
+	if _, err := s.InsertRows(ctx, "proj", "Sales", "Orders", rows); err != nil {
 		t.Fatalf("insert rows: %v", err)
 	}
 	gotTable, _ = s.GetTable(ctx, "proj", "Sales", "Orders")
@@ -80,8 +80,26 @@ func runStoreTests(t *testing.T, s Store) {
 	if string(listRows[1].Data) != `{"id":2,"name":"bob"}` {
 		t.Fatalf("row data lost: %s", listRows[1].Data)
 	}
-	if err := s.InsertRows(ctx, "proj", "Sales", "missing", rows); err != ErrNoSuchTable {
+	if _, err := s.InsertRows(ctx, "proj", "Sales", "missing", rows); err != ErrNoSuchTable {
 		t.Fatalf("expected ErrNoSuchTable on row insert into missing table, got %v", err)
+	}
+
+	// insertId dedup: a repeat id is skipped and reported at its index, and a
+	// new id in the same batch is still inserted.
+	first, err := s.InsertRows(ctx, "proj", "Sales", "Orders", []Row{
+		{InsertID: "id-1", Data: []byte(`{"id":3}`)},
+		{InsertID: "id-2", Data: []byte(`{"id":4}`)},
+	})
+	if err != nil || len(first) != 0 {
+		t.Fatalf("first dedup batch: err=%v dups=%v", err, first)
+	}
+	second, err := s.InsertRows(ctx, "proj", "Sales", "Orders", []Row{{InsertID: "id-1", Data: []byte(`{"id":99}`)}})
+	if err != nil || len(second) != 1 || second[0] != 0 {
+		t.Fatalf("expected duplicate at index 0, got err=%v dups=%v", err, second)
+	}
+	gotTable, _ = s.GetTable(ctx, "proj", "Sales", "Orders")
+	if gotTable.NumRows != 4 {
+		t.Fatalf("expected numRows=4 after dedup, got %d", gotTable.NumRows)
 	}
 
 	// Jobs
@@ -142,7 +160,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	s := NewMemoryStore()
 	_ = s.CreateDataset(ctx, "p", Dataset{DatasetID: "d", Labels: map[string]string{"k": "v"}, Config: []byte(`{"friendlyName":"F"}`)})
 	_ = s.CreateTable(ctx, "p", "d", Table{TableID: "t", Schema: []byte(`{"fields":[{"name":"a","type":"STRING"}]}`), Labels: map[string]string{"x": "y"}})
-	_ = s.InsertRows(ctx, "p", "d", "t", []Row{{Data: []byte(`{"a":"hi"}`)}})
+	_, _ = s.InsertRows(ctx, "p", "d", "t", []Row{{Data: []byte(`{"a":"hi"}`)}})
 	_ = s.CreateJob(ctx, "p", Job{JobID: "j", Config: []byte(`{"configuration":{"query":{"query":"SELECT 1"}}}`)})
 
 	var buf bytes.Buffer

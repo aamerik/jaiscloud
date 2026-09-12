@@ -8,9 +8,13 @@
 // explicit Unimplemented (501) rather than the codec's 404.
 //
 // Known limitations (emulator simplifications, documented rather than fixed):
-//   - tabledata.insertAll does not honor insertId/skipInvalidRows/
-//     ignoreUnknownValues/templateSuffix and performs no schema validation: it
-//     always streams the rows and returns an empty insertErrors list.
+//   - tabledata.insertAll honors insertId (best-effort duplicate suppression
+//     over a bounded, TTL'd per-table window), skipInvalidRows,
+//     ignoreUnknownValues and the table schema (missing REQUIRED fields and
+//     unknown fields), reporting per-row insertErrors. insertId dedup is
+//     process-local and not persisted across store snapshots/restarts.
+//     templateSuffix is not supported and field *types* are not enforced (only
+//     presence/unknown-field checks).
 //   - List methods (datasets/tables/jobs) return full resource objects rather
 //     than the discovery-doc summary subsets (over-inclusion, tolerated by the
 //     SDK).
@@ -28,6 +32,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -474,6 +479,95 @@ func (p *Provider) DeleteTable(ctx context.Context, nr *model.NormalizedRequest)
 
 // --- Tabledata ---
 
+// insertError is one entry in a row's insertErrors[].errors list.
+type insertError struct {
+	Reason   string
+	Location string
+	Message  string
+}
+
+func (e insertError) toMap() map[string]any {
+	return map[string]any{
+		"reason":    e.Reason,
+		"location":  e.Location,
+		"message":   e.Message,
+		"debugInfo": "",
+	}
+}
+
+// schemaField is one top-level field of a table schema.
+type schemaField struct {
+	Name   string        `json:"name"`
+	Mode   string        `json:"mode"`
+	Type   string        `json:"type"`
+	Fields []schemaField `json:"fields"`
+}
+
+// parseSchemaFields extracts the top-level fields from a table's schema JSON.
+// A missing/empty/unparseable schema yields nil, which callers treat as "no
+// schema validation" so tables without one keep accepting any row.
+func parseSchemaFields(schema json.RawMessage) []schemaField {
+	if len(schema) == 0 {
+		return nil
+	}
+	var s struct {
+		Fields []schemaField `json:"fields"`
+	}
+	if json.Unmarshal(schema, &s) != nil {
+		return nil
+	}
+	return s.Fields
+}
+
+// validateRow checks row against the table's top-level fields. A field is
+// required only when its mode is explicitly REQUIRED (BigQuery's default mode
+// is NULLABLE). Unknown fields are rejected unless ignoreUnknownValues is set.
+// Field value types are not checked — only presence and unknown-field names.
+func validateRow(row map[string]any, fields []schemaField, ignoreUnknownValues bool) []insertError {
+	if len(fields) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		known[f.Name] = true
+	}
+	var errs []insertError
+	for _, f := range fields {
+		if !strings.EqualFold(f.Mode, "REQUIRED") {
+			continue
+		}
+		if v, ok := row[f.Name]; !ok || v == nil {
+			errs = append(errs, insertError{
+				Reason:   "invalid",
+				Location: f.Name,
+				Message:  fmt.Sprintf("missing required field %q", f.Name),
+			})
+		}
+	}
+	if !ignoreUnknownValues {
+		keys := make([]string, 0, len(row))
+		for k := range row {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if !known[k] {
+				errs = append(errs, insertError{
+					Reason:   "invalid",
+					Location: k,
+					Message:  fmt.Sprintf("no such field: %s", k),
+				})
+			}
+		}
+	}
+	return errs
+}
+
+func boolValue(m map[string]any, key string) bool {
+	b, _ := m[key].(bool)
+	return b
+}
+
 func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	datasetID := strParam(nr, "datasetId")
 	tableID := strParam(nr, "tableId")
@@ -482,22 +576,76 @@ func (p *Provider) InsertAll(ctx context.Context, nr *model.NormalizedRequest) (
 	}
 	body := bodyMap(nr)
 	rawRows, _ := body["rows"].([]any)
-	rows := make([]bqstore.Row, 0, len(rawRows))
-	for _, rr := range rawRows {
+	skipInvalidRows := boolValue(body, "skipInvalidRows")
+	ignoreUnknownValues := boolValue(body, "ignoreUnknownValues")
+
+	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	fields := parseSchemaFields(t.Schema)
+
+	type parsedRow struct {
+		index    int
+		insertID string
+		json     map[string]any
+	}
+	parsed := make([]parsedRow, 0, len(rawRows))
+	for i, rr := range rawRows {
 		rowObj, _ := rr.(map[string]any)
 		jsonObj := mapValue(rowObj, "json")
 		if jsonObj == nil {
 			jsonObj = map[string]any{}
 		}
-		data, _ := json.Marshal(jsonObj)
-		rows = append(rows, bqstore.Row{Data: data})
+		parsed = append(parsed, parsedRow{index: i, insertID: strValue(rowObj, "insertId"), json: jsonObj})
 	}
-	if err := p.store.InsertRows(ctx, projectOf(nr), datasetID, tableID, rows); err != nil {
+
+	type rowErrors struct {
+		index int
+		errs  []insertError
+	}
+	var rowErrs []rowErrors
+	validRows := make([]bqstore.Row, 0, len(parsed))
+	validIndexes := make([]int, 0, len(parsed))
+	for _, pr := range parsed {
+		if errs := validateRow(pr.json, fields, ignoreUnknownValues); len(errs) > 0 {
+			if !skipInvalidRows {
+				return nil, invalidArgument(fmt.Sprintf("invalid row %d: %s", pr.index, errs[0].Message))
+			}
+			rowErrs = append(rowErrs, rowErrors{index: pr.index, errs: errs})
+			continue
+		}
+		data, _ := json.Marshal(pr.json)
+		validRows = append(validRows, bqstore.Row{InsertID: pr.insertID, Data: data})
+		validIndexes = append(validIndexes, pr.index)
+	}
+
+	dups, err := p.store.InsertRows(ctx, projectOf(nr), datasetID, tableID, validRows)
+	if err != nil {
 		return nil, mapErr(err)
+	}
+	for _, di := range dups {
+		rowErrs = append(rowErrs, rowErrors{
+			index: validIndexes[di],
+			errs: []insertError{{
+				Reason:  "duplicate",
+				Message: "row already inserted with the same insertId",
+			}},
+		})
+	}
+
+	sort.Slice(rowErrs, func(i, j int) bool { return rowErrs[i].index < rowErrs[j].index })
+	insertErrors := make([]any, 0, len(rowErrs))
+	for _, re := range rowErrs {
+		errs := make([]any, 0, len(re.errs))
+		for _, e := range re.errs {
+			errs = append(errs, e.toMap())
+		}
+		insertErrors = append(insertErrors, map[string]any{"index": re.index, "errors": errs})
 	}
 	return provider.OK(map[string]any{
 		"kind":         kindPrefix + "tableDataInsertAllResponse",
-		"insertErrors": []any{},
+		"insertErrors": insertErrors,
 	}), nil
 }
 

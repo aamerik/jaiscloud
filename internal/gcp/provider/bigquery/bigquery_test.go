@@ -554,3 +554,223 @@ func TestGetServiceAccount(t *testing.T) {
 		t.Fatalf("expected email")
 	}
 }
+
+// --- tabledata.insertAll semantics ---
+
+func createDataset(t *testing.T, p *Provider, datasetID string) {
+	t.Helper()
+	if _, err := p.CreateDataset(context.Background(), newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"datasetId": datasetID},
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+}
+
+func createTable(t *testing.T, p *Provider, datasetID, tableID string, schema any) {
+	t.Helper()
+	body := map[string]any{"tableReference": map[string]any{"tableId": tableID}}
+	if schema != nil {
+		body["schema"] = schema
+	}
+	if _, err := p.CreateTable(context.Background(), newNR(map[string]any{
+		"datasetId": datasetID,
+		"body":      body,
+	})); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+}
+
+func schemaOf(fields ...map[string]any) map[string]any {
+	arr := make([]any, 0, len(fields))
+	for _, f := range fields {
+		arr = append(arr, f)
+	}
+	return map[string]any{"fields": arr}
+}
+
+func insertErrorsOf(t *testing.T, resp *model.ProviderResponse) []any {
+	t.Helper()
+	errs, _ := resp.Data["insertErrors"].([]any)
+	return errs
+}
+
+// soleRowError asserts exactly one row-error entry and returns its request
+// index and first error object.
+func soleRowError(t *testing.T, resp *model.ProviderResponse) (int, map[string]any) {
+	t.Helper()
+	errs := insertErrorsOf(t, resp)
+	if len(errs) != 1 {
+		t.Fatalf("expected exactly 1 row error, got %v", errs)
+	}
+	re, _ := errs[0].(map[string]any)
+	idx, _ := re["index"].(int)
+	list, _ := re["errors"].([]any)
+	if len(list) == 0 {
+		t.Fatalf("row error entry has no errors: %v", re)
+	}
+	e0, _ := list[0].(map[string]any)
+	return idx, e0
+}
+
+func rowDataCount(t *testing.T, p *Provider, datasetID, tableID string) int {
+	t.Helper()
+	resp, err := p.ListRows(context.Background(), newNR(map[string]any{"datasetId": datasetID, "tableId": tableID}))
+	if err != nil {
+		t.Fatalf("list rows: %v", err)
+	}
+	rows, _ := resp.Data["rows"].([]any)
+	return len(rows)
+}
+
+// TestInsertAllInsertIdDedup verifies a repeated insertId is skipped (not
+// double-inserted) and reported as reason "duplicate" at its request index.
+func TestInsertAllInsertIdDedup(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(map[string]any{"name": "id", "type": "INTEGER"}))
+
+	insert := func() *model.ProviderResponse {
+		resp, err := p.InsertAll(ctx, newNR(map[string]any{
+			"datasetId": "d", "tableId": "t",
+			"body": map[string]any{"rows": []any{
+				map[string]any{"insertId": "dup-1", "json": map[string]any{"id": 1}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("insertAll: %v", err)
+		}
+		return resp
+	}
+
+	if errs := insertErrorsOf(t, insert()); len(errs) != 0 {
+		t.Fatalf("first insert should have no errors, got %v", errs)
+	}
+	idx, e := soleRowError(t, insert())
+	if idx != 0 || e["reason"] != "duplicate" {
+		t.Fatalf("expected duplicate at index 0, got index=%d err=%v", idx, e)
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 1 {
+		t.Fatalf("duplicate insertId must not double-insert: got %d rows", got)
+	}
+	tbl, err := p.GetTable(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t"}))
+	if err != nil || tbl.Data["numRows"] != "1" {
+		t.Fatalf("expected numRows 1, got %v (%v)", tbl.Data["numRows"], err)
+	}
+}
+
+// TestInsertAllUnknownField verifies ignoreUnknownValues=false rejects the
+// request with a top-level error, while true accepts the row.
+func TestInsertAllUnknownField(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(map[string]any{"name": "id", "type": "INTEGER"}))
+
+	insert := func(ignore bool, insertID string) (*model.ProviderResponse, error) {
+		return p.InsertAll(ctx, newNR(map[string]any{
+			"datasetId": "d", "tableId": "t",
+			"body": map[string]any{
+				"ignoreUnknownValues": ignore,
+				"rows": []any{
+					map[string]any{"insertId": insertID, "json": map[string]any{"id": 1, "extra": "x"}},
+				},
+			},
+		}))
+	}
+
+	if _, err := insert(false, "u1"); err == nil {
+		t.Fatal("expected top-level error for unknown field with ignoreUnknownValues=false")
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 0 {
+		t.Fatalf("rejected request must insert nothing, got %d rows", got)
+	}
+
+	resp, err := insert(true, "u1")
+	if err != nil {
+		t.Fatalf("insertAll with ignoreUnknownValues=true: %v", err)
+	}
+	if errs := insertErrorsOf(t, resp); len(errs) != 0 {
+		t.Fatalf("expected no insertErrors, got %v", errs)
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 1 {
+		t.Fatalf("expected 1 stored row, got %d", got)
+	}
+}
+
+// TestInsertAllRequiredFieldAndSkipInvalidRows covers both skipInvalidRows
+// modes: false fails the whole request and writes nothing; true reports the
+// invalid row per-index while inserting the valid ones.
+func TestInsertAllRequiredFieldAndSkipInvalidRows(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", schemaOf(
+		map[string]any{"name": "id", "type": "STRING", "mode": "REQUIRED"},
+		map[string]any{"name": "name", "type": "STRING"},
+	))
+
+	if _, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"insertId": "r1", "json": map[string]any{"id": "a"}},
+			map[string]any{"insertId": "r2", "json": map[string]any{"name": "missing-id"}},
+		}},
+	})); err == nil {
+		t.Fatal("expected top-level error when a required field is missing and skipInvalidRows=false")
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 0 {
+		t.Fatalf("failed request must write nothing, got %d rows", got)
+	}
+
+	resp, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t",
+		"body": map[string]any{
+			"skipInvalidRows": true,
+			"rows": []any{
+				map[string]any{"insertId": "r1", "json": map[string]any{"id": "a"}},
+				map[string]any{"insertId": "r2", "json": map[string]any{"name": "missing-id"}},
+				map[string]any{"insertId": "r3", "json": map[string]any{"id": "c"}},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+	idx, e := soleRowError(t, resp)
+	if idx != 1 || e["reason"] != "invalid" || e["location"] != "id" {
+		t.Fatalf("unexpected row error: index=%d err=%v", idx, e)
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 2 {
+		t.Fatalf("valid rows must be inserted alongside the invalid one: got %d rows", got)
+	}
+	tbl, err := p.GetTable(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t"}))
+	if err != nil || tbl.Data["numRows"] != "2" {
+		t.Fatalf("expected numRows 2, got %v (%v)", tbl.Data["numRows"], err)
+	}
+}
+
+// TestInsertAllNoSchemaAcceptsAnyRow locks in that a table without a schema
+// performs no validation (the pre-existing behavior).
+func TestInsertAllNoSchemaAcceptsAnyRow(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	createDataset(t, p, "d")
+	createTable(t, p, "d", "t", nil)
+
+	resp, err := p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "d", "tableId": "t",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"insertId": "n1", "json": map[string]any{"whatever": 1, "extra": true}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("insertAll: %v", err)
+	}
+	if errs := insertErrorsOf(t, resp); len(errs) != 0 {
+		t.Fatalf("schema-less table should accept any row, got %v", errs)
+	}
+	if got := rowDataCount(t, p, "d", "t"); got != 1 {
+		t.Fatalf("expected 1 stored row, got %d", got)
+	}
+}
