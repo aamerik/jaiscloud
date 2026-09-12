@@ -30,6 +30,42 @@ var (
 	ErrPreconditionFailed = errors.New("PreconditionFailed")
 )
 
+// BucketMetageneration returns the bucket's metageneration as a decimal string,
+// defaulting to "1" for buckets persisted before the counter existed (and when
+// the stored value is missing or not a string).
+func BucketMetageneration(meta map[string]any) string {
+	if s, ok := meta["metageneration"].(string); ok && s != "" {
+		return s
+	}
+	return "1"
+}
+
+// normalizeBucketMeta ensures a bucket's metageneration field is present and a
+// decimal string, defaulting a legacy bucket to "1".
+func normalizeBucketMeta(meta map[string]any) {
+	if _, ok := meta["metageneration"].(string); !ok {
+		meta["metageneration"] = "1"
+	}
+}
+
+// BucketMetagenerationMatches reports whether p is satisfied by the bucket's
+// current metageneration. Buckets have no generation dimension, so only
+// MetagenerationMatch/MetagenerationNotMatch are consulted; a nil p matches,
+// mirroring objectPreconditionMatches' nil behavior.
+func BucketMetagenerationMatches(meta map[string]any, p *Precondition) bool {
+	if p == nil {
+		return true
+	}
+	metagen, _ := strconv.ParseInt(BucketMetageneration(meta), 10, 64)
+	if p.MetagenerationMatch != nil && metagen != *p.MetagenerationMatch {
+		return false
+	}
+	if p.MetagenerationNotMatch != nil && metagen == *p.MetagenerationNotMatch {
+		return false
+	}
+	return true
+}
+
 // Precondition is GCS's real per-request conditional-write precondition:
 // ifGenerationMatch / ifGenerationNotMatch / ifMetagenerationMatch /
 // ifMetagenerationNotMatch. A nil field means that condition wasn't
@@ -147,6 +183,14 @@ type ObjectStore interface {
 	CreateBucket(ctx context.Context, projectID, name string, meta map[string]any) error
 	GetBucket(ctx context.Context, name string) (map[string]any, error)
 	UpdateBucketMeta(ctx context.Context, name string, meta map[string]any) error
+	// UpdateBucketMetaAtomic atomically reads the bucket's current meta, applies
+	// mutate, and writes the result — holding the same lock (memory) or
+	// Serializable transaction with a row lock (postgres) across the read and
+	// the write, so a precondition checked inside mutate cannot race a
+	// concurrent update. Returns ErrNoSuchBucket when the bucket is absent;
+	// mutate may return ErrPreconditionFailed to abort without applying.
+	// The returned map is the persisted post-mutation meta.
+	UpdateBucketMetaAtomic(ctx context.Context, name string, mutate func(meta map[string]any) (map[string]any, error)) (map[string]any, error)
 	DeleteBucket(ctx context.Context, name string) error // ErrBucketNotEmpty if objects exist
 	ListBuckets(ctx context.Context, projectID string) ([]map[string]any, error)
 

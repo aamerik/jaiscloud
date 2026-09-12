@@ -317,8 +317,16 @@ func (ls *listenSession) sendDocumentChange(id int32, d firestorestore.Document)
 
 func (ls *listenSession) sendChange(id int32, ev firestoreprovider.ChangeEvent) error {
 	if ev.Doc == nil {
+		// A delete drops the document from every target that previously matched
+		// it. This engine resolves a ChangeEvent per target (the caller only
+		// invokes sendChange for targets where targetMatches is true), so the
+		// responding target is named in removed_target_ids, mirroring the
+		// TargetIds set on the DocumentChange path for non-delete events.
 		return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentDelete{
-			DocumentDelete: &firestorepb.DocumentDelete{Document: ev.Name},
+			DocumentDelete: &firestorepb.DocumentDelete{
+				Document:         ev.Name,
+				RemovedTargetIds: []int32{id},
+			},
 		}})
 	}
 	return ls.sendDocumentChange(id, *ev.Doc)

@@ -233,6 +233,7 @@ type bucketMeta struct {
 	StorageClass    string         `json:"storageClass,omitempty"`
 	TimeCreated     string         `json:"timeCreated,omitempty"`
 	Updated         string         `json:"updated,omitempty"`
+	Metageneration  string         `json:"metageneration,omitempty"`
 	Versioning      map[string]any `json:"versioning,omitempty"`
 	RetentionPolicy map[string]any `json:"retentionPolicy,omitempty"`
 	Lifecycle       map[string]any `json:"lifecycle,omitempty"`
@@ -415,6 +416,26 @@ func objectPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 	return &pre
 }
 
+// bucketPrecondition parses the bucket-level OCC preconditions GCS honors on
+// buckets.update: ifMetagenerationMatch/ifMetagenerationNotMatch. Returns nil
+// when neither is present (the common case).
+func bucketPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
+	var pre gcs.Precondition
+	set := false
+	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+		pre.MetagenerationMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifMetagenerationNotMatch"); ok {
+		pre.MetagenerationNotMatch = &v
+		set = true
+	}
+	if !set {
+		return nil
+	}
+	return &pre
+}
+
 func parseInt64Param(nr *model.NormalizedRequest, key string) (int64, bool) {
 	s, ok := nr.Params[key].(string)
 	if !ok || s == "" {
@@ -519,6 +540,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Encryption = bodyMap(body, "encryption")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
+	b.Metageneration = "1"
 
 	if err := p.objects.CreateBucket(ctx, nr.AccountID, name, bucketToMap(b)); err != nil {
 		if errors.Is(err, gcs.ErrAlreadyExists) {
@@ -543,42 +565,51 @@ func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
-	meta, err := p.objects.GetBucket(ctx, name)
+	body, _ := nr.Params["body"].(map[string]any)
+	pre := bucketPrecondition(nr)
+	// The read-modify-write runs atomically in the store: the metageneration
+	// precondition is validated against the bucket's current meta, then the
+	// metageneration is bumped and the requested fields are applied, all under
+	// the same lock/transaction — so a concurrent update can't be lost and a
+	// stale precondition (checked against the same snapshot) can't slip through.
+	updated, err := p.objects.UpdateBucketMetaAtomic(ctx, name, func(meta map[string]any) (map[string]any, error) {
+		if !gcs.BucketMetagenerationMatches(meta, pre) {
+			return nil, gcs.ErrPreconditionFailed
+		}
+		b := mapToBucket(meta)
+		// Preserve timeCreated; update only fields present in the request body.
+		if loc, _ := body["location"].(string); loc != "" {
+			b.Location = loc
+		}
+		if sc, _ := body["storageClass"].(string); sc != "" {
+			b.StorageClass = sc
+		}
+		if _, ok := body["versioning"]; ok {
+			b.Versioning = bodyMap(body, "versioning")
+		}
+		if _, ok := body["retentionPolicy"]; ok {
+			b.RetentionPolicy = bodyMap(body, "retentionPolicy")
+		}
+		if _, ok := body["lifecycle"]; ok {
+			b.Lifecycle = bodyMap(body, "lifecycle")
+		}
+		if _, ok := body["encryption"]; ok {
+			b.Encryption = bodyMap(body, "encryption")
+		}
+		b.Metageneration = bumpMeta(gcs.BucketMetageneration(meta))
+		b.Updated = clock.Now().Format(time.RFC3339Nano)
+		return bucketToMap(b), nil
+	})
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
-		return nil, err
-	}
-	b := mapToBucket(meta)
-	// Preserve timeCreated; update only fields present in the request body.
-	body, _ := nr.Params["body"].(map[string]any)
-	if loc, _ := body["location"].(string); loc != "" {
-		b.Location = loc
-	}
-	if sc, _ := body["storageClass"].(string); sc != "" {
-		b.StorageClass = sc
-	}
-	if _, ok := body["versioning"]; ok {
-		b.Versioning = bodyMap(body, "versioning")
-	}
-	if _, ok := body["retentionPolicy"]; ok {
-		b.RetentionPolicy = bodyMap(body, "retentionPolicy")
-	}
-	if _, ok := body["lifecycle"]; ok {
-		b.Lifecycle = bodyMap(body, "lifecycle")
-	}
-	if _, ok := body["encryption"]; ok {
-		b.Encryption = bodyMap(body, "encryption")
-	}
-	b.Updated = clock.Now().Format(time.RFC3339Nano)
-	if err := p.objects.UpdateBucketMeta(ctx, name, bucketToMap(b)); err != nil {
-		if errors.Is(err, gcs.ErrNoSuchBucket) {
-			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
 		}
 		return nil, err
 	}
-	return provider.OK(toBucketMap(b)), nil
+	return provider.OK(toBucketMap(mapToBucket(updated))), nil
 }
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1702,6 +1733,10 @@ func toBucketMap(b bucketMeta) map[string]any {
 	if versioning == nil {
 		versioning = map[string]any{"enabled": false}
 	}
+	metageneration := b.Metageneration
+	if metageneration == "" {
+		metageneration = "1"
+	}
 	out := map[string]any{
 		"kind":           "storage#bucket",
 		"id":             b.Name,
@@ -1712,7 +1747,7 @@ func toBucketMap(b bucketMeta) map[string]any {
 		"timeCreated":    b.TimeCreated,
 		"updated":        b.Updated,
 		"generation":     "0",
-		"metageneration": "1",
+		"metageneration": metageneration,
 		"projectNumber":  "0",
 		"selfLink":       "https://www.googleapis.com/storage/v1/b/" + b.Name,
 		"etag":           "CAE=",

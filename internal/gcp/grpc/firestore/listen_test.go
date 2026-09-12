@@ -218,8 +218,63 @@ func TestListenCollectionRealTimeUpdates(t *testing.T) {
 	if dd == nil || dd.Document != listenParent+"/items/item1" {
 		t.Fatalf("expected DocumentDelete, got %v", responses[0])
 	}
+	if !containsTargetID(dd.RemovedTargetIds, 1) {
+		t.Fatalf("expected removed_target_ids to contain 1, got %v", dd.RemovedTargetIds)
+	}
 	if responses[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
 		t.Fatalf("expected NO_CHANGE after delete, got %v", responses[1])
+	}
+}
+
+func containsTargetID(ids []int32, want int32) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestListenDocumentDeleteRemovedTargetIds asserts that a delete which drops a
+// document out of a query target's result set names that target in
+// DocumentDelete.removed_target_ids, so a client can prune the document from
+// that target's result set (real Firestore semantics).
+func TestListenDocumentDeleteRemovedTargetIds(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	const tid int32 = 7
+	if err := stream.Send(addTargetReq(queryTarget(tid, "items"))); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	recvN(t, stream, 3, 3*time.Second) // ADD + CURRENT + NO_CHANGE
+
+	svc.CreateDocument(ctx, "test", "(default)", "items", "item1", map[string]*firestorestore.Value{
+		"title": firestorestore.StringVal("first item"),
+	})
+	responses := recvN(t, stream, 2, 3*time.Second) // DocumentChange + NO_CHANGE
+	if responses[0].GetDocumentChange() == nil {
+		t.Fatalf("expected DocumentChange, got %v", responses[0])
+	}
+
+	svc.DeleteDocument(ctx, "test", "(default)", "items/item1", nil)
+	responses = recvN(t, stream, 2, 3*time.Second) // DocumentDelete + NO_CHANGE
+	dd := responses[0].GetDocumentDelete()
+	if dd == nil {
+		t.Fatalf("expected DocumentDelete, got %v", responses[0])
+	}
+	if dd.Document != listenParent+"/items/item1" {
+		t.Fatalf("expected %q, got %q", listenParent+"/items/item1", dd.Document)
+	}
+	if !containsTargetID(dd.RemovedTargetIds, tid) {
+		t.Fatalf("expected removed_target_ids to contain %d, got %v", tid, dd.RemovedTargetIds)
 	}
 }
 

@@ -80,6 +80,7 @@ func (s *MemoryObjectStore) Restore(_ context.Context, r io.Reader) error {
 		if b.StorageClass != "" {
 			meta["storageClass"] = b.StorageClass
 		}
+		normalizeBucketMeta(meta)
 		buckets[b.Name] = meta
 	}
 	objects := make(map[string]map[string][]ObjectMeta)
@@ -193,6 +194,7 @@ func (s *PostgresObjectStore) Restore(ctx context.Context, r io.Reader) error {
 		if meta == nil {
 			meta = map[string]any{}
 		}
+		normalizeBucketMeta(meta)
 		if _, err := tx.Exec(ctx, `INSERT INTO jc_gcs_buckets (name, project_id, location, storage_class, meta) VALUES ($1,$2,$3,$4,$5)`,
 			b.Name, b.ProjectID, b.Location, b.StorageClass, json.RawMessage(mustJSON(meta))); err != nil {
 			return err
