@@ -78,8 +78,8 @@ func (p *Provider) submitJob(ctx context.Context, nr *model.NormalizedRequest) (
 	// Mock mode: complete synchronously (no goroutine). K8s mode: run for real.
 	if p.k8sClient == nil {
 		now := clock.Now().UTC()
+		j.StatusHistory = append(j.StatusHistory, j.Status)
 		j.Status = dataprocstore.JobStatus{State: "DONE", StateStartTime: now}
-		j.StatusHistory = append(j.StatusHistory, dataprocstore.JobStatus{State: "RUNNING", StateStartTime: j.CreateTime})
 		j.DriverOutputResourceURI = "gs://jaiscloud-dataproc/" + j.JobUUID + "/driveroutput"
 		if err := p.store.UpdateJob(ctx, nr.AccountID, region, j); err != nil {
 			slog.Warn("dataproc: mock SubmitJob update failed", "job", j.JobID, "err", err)

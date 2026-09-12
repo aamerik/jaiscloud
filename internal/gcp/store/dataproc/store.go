@@ -50,6 +50,10 @@ type JobStatus struct {
 	State          string    `json:"state"` // DONE|RUNNING|ERROR|CANCELLED|PENDING
 	Details        string    `json:"details,omitempty"`
 	StateStartTime time.Time `json:"stateStartTime,omitempty"`
+	// Substate is the agent-reported progress substate (SUBMITTED|QUEUED|
+	// STALE_STATUS). Per dataproc.v1.JobStatus every defined substate applies to
+	// RUNNING; terminal states carry none.
+	Substate string `json:"substate,omitempty"`
 }
 
 // Job is a Dataproc job. Type is the oneof field name (sparkJob, pysparkJob,

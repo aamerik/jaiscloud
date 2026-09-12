@@ -90,11 +90,19 @@ func TestIAMNegativesPaginationAndOCC(t *testing.T) {
 		t.Errorf("expected requestedPolicyVersion 3, got %v", pol.Data["version"])
 	}
 
-	// setIamPolicy etag OCC: mismatch → 409.
+	// setIamPolicy etag OCC: mismatch → HTTP 409 / google.rpc ABORTED.
 	bindings := []any{map[string]any{"role": "roles/iam.serviceAccountUser", "members": []any{"allUsers"}}}
 	nr = newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"bindings": bindings, "etag": "BOGUS="}})
-	if _, err := p.SetIamPolicy(ctx, nr); err == nil || errStatus(err) != 409 {
+	_, err = p.SetIamPolicy(ctx, nr)
+	if err == nil || errStatus(err) != 409 {
 		t.Fatalf("expected 409 on etag mismatch, got %v", err)
+	}
+	pe, ok := err.(*model.ProviderError)
+	if !ok {
+		t.Fatalf("expected *model.ProviderError, got %T", err)
+	}
+	if pe.Code != "Aborted" || pe.Status != "ABORTED" {
+		t.Fatalf("expected Code Aborted / Status ABORTED on etag mismatch, got Code=%q Status=%q", pe.Code, pe.Status)
 	}
 
 	// No etag → accepted, and a fresh etag is stored.

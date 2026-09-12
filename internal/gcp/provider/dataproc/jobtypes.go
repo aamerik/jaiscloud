@@ -109,7 +109,7 @@ func jobToStore(nr *model.NormalizedRequest, jobBody map[string]any, region stri
 		PlacementClusterName: clusterName,
 		Type:                 jobType,
 		Labels:               bodyStringMap(jobBody, "labels"),
-		Status:               dataprocstore.JobStatus{State: "RUNNING", StateStartTime: now},
+		Status:               dataprocstore.JobStatus{State: "RUNNING", StateStartTime: now, Substate: substateRunning},
 		JobUUID:              randomHex(32),
 		CreateTime:           now,
 	}

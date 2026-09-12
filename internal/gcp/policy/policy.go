@@ -46,7 +46,19 @@ func Load(ctx context.Context, s store.ResourceStore, account, resourceType, id 
 
 // errEtagMismatch aborts Set's UpsertAtomic mutate callback without writing,
 // distinguishing an etag-precondition failure from a genuine storage error.
-var errEtagMismatch = model.NewProviderError("Conflict", "etag mismatch: optimistic concurrency control failed", 409)
+//
+// A stale IAM policy etag is google.rpc.ABORTED: real Cloud IAM's setIamPolicy
+// fails a stale-etag write with ABORTED, not a generic 409. Status is set
+// explicitly so the gRPC mapping is intentional rather than incidental via
+// httpToCode(409) (and the REST envelope reports "ABORTED" instead of the
+// generic 409 "ALREADY_EXISTS"). HTTP stays 409 — ABORTED → 409 is correct
+// on the REST path. Scoped to the etag-OCC sentinel; other 409s are untouched.
+var errEtagMismatch = &model.ProviderError{
+	Code:       "Aborted",
+	Message:    "etag mismatch: optimistic concurrency control failed",
+	HTTPStatus: 409,
+	Status:     "ABORTED",
+}
 
 // Set stores a policy for a resource, enforcing etag OCC. body is the parsed
 // request JSON — either the Policy fields directly, or wrapped in a "policy"
