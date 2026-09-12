@@ -1,6 +1,29 @@
 // Package logging implements the Cloud Logging (v2) gRPC service
 // (LoggingServiceV2) over the shared loggingstore.Store, so write/list/delete
 // share state across transports.
+//
+// Implemented RPCs: WriteLogEntries, ListLogEntries, ListLogs, DeleteLog,
+// ListMonitoredResourceDescriptors, and TailLogEntries. Monitored resource
+// descriptors are served from the canonical catalog shared with the Cloud
+// Monitoring service (internal/gcp/rescatalog); the Logging descriptors carry
+// type/display_name/description/labels but no resource name. This proto
+// revision's ListMonitoredResourceDescriptorsRequest has only
+// page_size/page_token (no parent/filter), so the catalog is global and
+// unfiltered.
+//
+// TailLogEntries is a bounded, store-polling approximation of the real
+// streaming read. It accepts the initial resource_names/filter/buffer_window
+// (and later requests that change the filter/project), then re-reads the store
+// on a timer derived from buffer_window and streams entries written after the
+// stream began whose fields satisfy the list filter engine. Documented
+// approximation: real Logging provides at-least-once delivery, server-side
+// buffer_window reordering of late-arriving entries, and per-response timestamp
+// ordering. The emulator records the store's monotonic write id at stream start
+// and emits every entry with a larger id in (timestamp, id) order — i.e.
+// at-most-once delivery against the read snapshot, no server-side retention,
+// and latency bounded below by the poll interval (2 s by default, 50 ms
+// minimum). The session terminates cleanly when the client half-closes or
+// cancels.
 package logging
 
 import (
