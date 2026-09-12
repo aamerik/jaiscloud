@@ -193,6 +193,101 @@ func TestMemoryStoreSnapshot(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreNotificationChannelCRUD(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	enabled := true
+	c := NotificationChannel{ID: "nc-1", Type: "pubsub", DisplayName: "ops", Labels: map[string]string{"topic": "projects/p1/topics/t"}, Enabled: &enabled}
+	if err := s.CreateNotificationChannel(ctx, "p1", c); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateNotificationChannel(ctx, "p1", c); err != ErrNotificationChannelExists {
+		t.Fatalf("duplicate channel err = %v, want ErrNotificationChannelExists", err)
+	}
+	if _, err := s.GetNotificationChannel(ctx, "p1", "missing"); err != ErrNotificationChannelNotFound {
+		t.Fatalf("get missing err = %v, want ErrNotificationChannelNotFound", err)
+	}
+	list, err := s.ListNotificationChannels(ctx, "p1")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	updated, err := s.UpdateNotificationChannelAtomic(ctx, "p1", "nc-1", func(cur NotificationChannel) (NotificationChannel, error) {
+		cur.DisplayName = "ops-renamed"
+		return cur, nil
+	})
+	if err != nil || updated.DisplayName != "ops-renamed" {
+		t.Fatalf("update = %+v, %v", updated, err)
+	}
+	if err := s.DeleteNotificationChannel(ctx, "p1", "nc-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteNotificationChannel(ctx, "p1", "nc-1"); err != ErrNotificationChannelNotFound {
+		t.Fatalf("delete missing err = %v, want ErrNotificationChannelNotFound", err)
+	}
+}
+
+func TestMemoryStoreIncidents(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	inc := Incident{ID: "inc-1", ProjectID: "p1", PolicyID: "ap-1", State: IncidentOpen, StartedAt: time.Now().UTC()}
+	if err := s.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	// A second OPEN incident for the same policy is rejected.
+	if err := s.CreateIncident(ctx, Incident{ID: "inc-2", ProjectID: "p1", PolicyID: "ap-1", State: IncidentOpen}); err != ErrIncidentExists {
+		t.Fatalf("second open incident err = %v, want ErrIncidentExists", err)
+	}
+	found, err := s.FindOpenIncident(ctx, "p1", "ap-1")
+	if err != nil || found.ID != "inc-1" {
+		t.Fatalf("find open = %+v, %v", found, err)
+	}
+	if _, err := s.FindOpenIncident(ctx, "p1", "other"); err != ErrIncidentNotFound {
+		t.Fatalf("find other err = %v, want ErrIncidentNotFound", err)
+	}
+	closed, err := s.UpdateIncidentAtomic(ctx, "p1", "inc-1", func(cur Incident) (Incident, error) {
+		cur.State = IncidentClosed
+		cur.EndedAt = time.Now().UTC()
+		return cur, nil
+	})
+	if err != nil || closed.State != IncidentClosed {
+		t.Fatalf("close = %+v, %v", closed, err)
+	}
+	if _, err := s.FindOpenIncident(ctx, "p1", "ap-1"); err != ErrIncidentNotFound {
+		t.Fatalf("find after close err = %v, want ErrIncidentNotFound", err)
+	}
+	if got, err := s.ListIncidents(ctx, "p1"); err != nil || len(got) != 1 {
+		t.Fatalf("list = %+v, %v", got, err)
+	}
+	if got, _ := s.ListProjects(ctx); len(got) != 1 || got[0] != "p1" {
+		t.Fatalf("list projects = %+v", got)
+	}
+}
+
+func TestMemoryStoreSnapshotIncludesChannelsAndIncidents(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	enabled := true
+	_ = s.CreateNotificationChannel(ctx, "p1", NotificationChannel{ID: "nc-1", Type: "email", Labels: map[string]string{"email_address": "a@b.c"}, Enabled: &enabled})
+	_ = s.CreateIncident(ctx, Incident{ID: "inc-1", ProjectID: "p1", PolicyID: "ap-1", State: IncidentClosed, StartedAt: time.Now().UTC()})
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+	s2 := NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s2.ListNotificationChannels(ctx, "p1"); len(got) != 1 || got[0].Labels["email_address"] != "a@b.c" {
+		t.Fatalf("restored channels = %+v", got)
+	}
+	if got, _ := s2.ListIncidents(ctx, "p1"); len(got) != 1 || got[0].State != IncidentClosed {
+		t.Fatalf("restored incidents = %+v", got)
+	}
+}
+
 func TestSeriesKeyDeterministic(t *testing.T) {
 	a := TimeSeries{MetricType: "m", MetricLabels: map[string]string{"x": "1", "y": "2"}, ResourceType: "r", ResourceLabels: map[string]string{"z": "3"}}
 	b := TimeSeries{MetricType: "m", MetricLabels: map[string]string{"y": "2", "x": "1"}, ResourceType: "r", ResourceLabels: map[string]string{"z": "3"}}

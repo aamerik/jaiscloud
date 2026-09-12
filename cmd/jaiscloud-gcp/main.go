@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -276,6 +277,13 @@ func startCmd() *cobra.Command {
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
 			monitoringGRPC := grpcmonitoring.NewService(stores.monitoring, cfg.ProjectID)
+			// The background evaluator evaluates alert-policy condition_threshold
+			// conditions, opens/closes incidents, and publishes notifications to
+			// pubsub notification channels via the emulator's Pub/Sub store.
+			monitoringEval := grpcmonitoring.NewEvaluator(stores.monitoring, pubsubNotificationPublisher{
+				messages:  stores.messages,
+				encryptor: crypto.NewEnvelopeEncryptor(stores.keys),
+			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
 			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
@@ -287,6 +295,7 @@ func startCmd() *cobra.Command {
 			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
 			monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
 			monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
+			monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
 			grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
 			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 			// TestIamPermissions) is served by the SecretManagerService itself
@@ -485,6 +494,13 @@ func startCmd() *cobra.Command {
 
 			srv := gateway.NewServer(cfg, adminHandler, reg, cloudAdapter, certs, gatewayOpts...)
 
+			// Background Cloud Monitoring alert-policy evaluator (30s ticker,
+			// matching the AWS CloudWatch alarm evaluator). Stopped cleanly when
+			// the server shuts down.
+			evalCtx, evalCancel := context.WithCancel(ctx)
+			go monitoringEval.Run(evalCtx)
+			defer evalCancel()
+
 			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
 			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.
 			go func() {
@@ -547,6 +563,44 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("gcp_metadata_enabled", cmd.Flags().Lookup("gcp-metadata"))
 	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
+}
+
+// pubsubNotificationPublisher adapts the emulator's Pub/Sub message store to
+// the monitoring evaluator's Publisher interface. Alert-policy notifications
+// are written as ordinary Pub/Sub messages (envelope-encrypted with the server
+// DEK, matching the Publish service) on the channel's labels.topic, which is
+// the observable effect (mirrors AWS CloudWatch alarm -> SNS delivery).
+type pubsubNotificationPublisher struct {
+	messages  pubsubstore.Messages
+	encryptor crypto.EnvelopeEncryptor
+}
+
+// Publish writes a message to the topic named by topic (a full
+// "projects/{p}/topics/{t}" resource name).
+func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
+	short := topic
+	if i := strings.LastIndex(topic, "/topics/"); i >= 0 {
+		short = topic[i+len("/topics/"):]
+	}
+	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, "", "")
+	if err != nil {
+		return err
+	}
+	ciphertext, err := kmsstore.EncryptData(rawDEK, data, nil)
+	if err != nil {
+		return err
+	}
+	id, err := p.messages.NextID(ctx)
+	if err != nil {
+		return err
+	}
+	return p.messages.Put(ctx, pubsubstore.Message{
+		Topic:       short,
+		MessageID:   id,
+		Data:        base64.StdEncoding.EncodeToString(ciphertext),
+		PublishTime: clock.Now(),
+		WrappedDEK:  wrappedDEK,
+	})
 }
 
 // stores bundles the per-mode store backends constructed by initStores.
