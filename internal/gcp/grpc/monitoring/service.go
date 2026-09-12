@@ -7,14 +7,19 @@
 // incidents, and delivers notifications to the referenced notification
 // channels.
 //
+// Monitored resource descriptors are served from a canonical catalog of
+// well-known types (gce_instance, gcs_bucket, pubsub_topic, ...); Get returns
+// NotFound for a type outside it.
+//
+// The descriptor list methods honor a discovery subset of the Monitoring
+// filter grammar: equality (`type = "x"`, `metric.type = "x"`,
+// `resource.type = "x"`) and `starts_with("prefix")` clauses joined by `AND`,
+// over the descriptor type (and its `name`). Any other key, operator, or
+// malformed clause is rejected with InvalidArgument rather than silently
+// matching everything.
+//
 // Documented limitations:
 //
-//   - GetMonitoredResourceDescriptor and CreateServiceTimeSeries are
-//     Unimplemented.
-//   - ListMetricDescriptors and ListMonitoredResourceDescriptors ignore the
-//     filter field and return synthesized (not canonical)
-//     MonitoredResourceDescriptors.
-//   - DISTRIBUTION point values are rejected.
 //   - Only condition_threshold alert conditions are evaluated;
 //     condition_absent, condition_matched_log,
 //     condition_monitoring_query_language, condition_prometheus_query_language,
@@ -37,10 +42,13 @@ import (
 	"time"
 
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
 	labelpb "google.golang.org/genproto/googleapis/api/label"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -139,6 +147,20 @@ func alertPolicyName(project, id string) string {
 	return resource.ResourceID(project)("alert-policy", id)
 }
 
+// splitMonitoredResourceDescriptorName parses
+// "projects/{p}/monitoredResourceDescriptors/{type}". Monitored resource types
+// contain no slashes, so the name has exactly four segments.
+func splitMonitoredResourceDescriptorName(name string) (project, typ string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "monitoredResourceDescriptors" {
+		return "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
 // splitAlertPolicyName parses "projects/{p}/alertPolicies/{id}".
 func splitAlertPolicyName(name string) (project, id string, ok bool) {
 	parts := strings.Split(name, "/")
@@ -201,11 +223,21 @@ func decodeOffset(token string) int {
 
 func (s *Service) ListMetricDescriptors(ctx context.Context, req *monitoringpb.ListMetricDescriptorsRequest) (*monitoringpb.ListMetricDescriptorsResponse, error) {
 	project := s.project(ctx, req.GetName())
+	filter, err := compileDescriptorFilter(req.GetFilter(), metricDescriptorFilterKeys)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400))
+	}
 	descriptors, err := s.store.ListMetricDescriptors(ctx, project)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := pageSlice(descriptors, req.GetPageSize(), req.GetPageToken())
+	matching := make([]monitoringstore.MetricDescriptor, 0, len(descriptors))
+	for _, d := range descriptors {
+		if filter.match(d.Type, metricDescriptorName(project, d.Type)) {
+			matching = append(matching, d)
+		}
+	}
+	page, next := pageSlice(matching, req.GetPageSize(), req.GetPageToken())
 	out := make([]*metricpb.MetricDescriptor, 0, len(page))
 	for _, d := range page {
 		out = append(out, descriptorToProto(d, project))
@@ -284,60 +316,77 @@ func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTime
 }
 
 func (s *Service) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest) (*emptypb.Empty, error) {
-	project := s.project(ctx, req.GetName())
-	for _, p := range req.GetTimeSeries() {
-		ts, err := timeSeriesFromProto(p)
-		if err != nil {
-			return nil, mapError(err)
-		}
-		if ts.MetricType == "" {
-			return nil, mapError(model.NewProviderError("InvalidArgument", "time series metric type is required", 400))
-		}
-		if err := s.store.CreateTimeSeries(ctx, project, ts); err != nil {
-			return nil, mapError(err)
-		}
+	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries()); err != nil {
+		return nil, err
 	}
 	return &emptypb.Empty{}, nil
 }
 
+// CreateServiceTimeSeries is the service-scoped counterpart to
+// CreateTimeSeries. In real Cloud Monitoring the two differ only in the
+// identity/permission used to authorize the write (the request message type is
+// literally reused). The emulator has no authz plane, so this mirrors the
+// CreateTimeSeries write path and validates each series identically.
+func (s *Service) CreateServiceTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest) (*emptypb.Empty, error) {
+	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries()); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// writeTimeSeries transcodes and persists each supplied series, rejecting a
+// series with no metric type as InvalidArgument.
+func (s *Service) writeTimeSeries(ctx context.Context, name string, series []*monitoringpb.TimeSeries) error {
+	project := s.project(ctx, name)
+	for _, p := range series {
+		ts, err := timeSeriesFromProto(p)
+		if err != nil {
+			return mapError(err)
+		}
+		if ts.MetricType == "" {
+			return mapError(model.NewProviderError("InvalidArgument", "time series metric type is required", 400))
+		}
+		if err := s.store.CreateTimeSeries(ctx, project, ts); err != nil {
+			return mapError(err)
+		}
+	}
+	return nil
+}
+
+// ListMonitoredResourceDescriptors returns the canonical catalog of well-known
+// monitored resource descriptors, filtered by the discovery subset of the
+// Monitoring filter grammar.
 func (s *Service) ListMonitoredResourceDescriptors(ctx context.Context, req *monitoringpb.ListMonitoredResourceDescriptorsRequest) (*monitoringpb.ListMonitoredResourceDescriptorsResponse, error) {
 	project := s.project(ctx, req.GetName())
-
-	seen := make(map[string]struct{})
-	series, err := s.store.ListTimeSeries(ctx, project)
+	filter, err := compileDescriptorFilter(req.GetFilter(), monitoredResourceFilterKeys)
 	if err != nil {
-		return nil, mapError(err)
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400))
 	}
-	for _, ts := range series {
-		if ts.ResourceType != "" {
-			seen[ts.ResourceType] = struct{}{}
+
+	all := monitoredResourceDescriptors(project)
+	matching := make([]*monitoredrespb.MonitoredResourceDescriptor, 0, len(all))
+	for _, d := range all {
+		if filter.match(d.GetType(), d.GetName()) {
+			matching = append(matching, d)
 		}
 	}
-	descriptors, err := s.store.ListMetricDescriptors(ctx, project)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	for _, d := range descriptors {
-		for _, rt := range d.MonitoredResourceTypes {
-			seen[rt] = struct{}{}
-		}
-	}
-
-	types := make([]string, 0, len(seen))
-	for t := range seen {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-
-	all := make([]*monitoredrespb.MonitoredResourceDescriptor, 0, len(types))
-	for _, t := range types {
-		all = append(all, &monitoredrespb.MonitoredResourceDescriptor{
-			Name: resource.ResourceID(project)("monitored-resource-descriptor", t),
-			Type: t,
-		})
-	}
-	page, next := pageSlice(all, req.GetPageSize(), req.GetPageToken())
+	page, next := pageSlice(matching, req.GetPageSize(), req.GetPageToken())
 	return &monitoringpb.ListMonitoredResourceDescriptorsResponse{ResourceDescriptors: page, NextPageToken: next}, nil
+}
+
+// GetMonitoredResourceDescriptor returns the canonical descriptor for a
+// well-known monitored resource type. An unknown type is NotFound, matching
+// real Cloud Monitoring.
+func (s *Service) GetMonitoredResourceDescriptor(ctx context.Context, req *monitoringpb.GetMonitoredResourceDescriptorRequest) (*monitoredrespb.MonitoredResourceDescriptor, error) {
+	project, typ, ok := splitMonitoredResourceDescriptorName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid monitored resource descriptor name: "+req.GetName(), 400))
+	}
+	d, ok := lookupMonitoredResourceDescriptor(project, typ)
+	if !ok {
+		return nil, mapError(model.NewProviderError("NotFound", "monitored resource descriptor not found: "+typ, 404))
+	}
+	return d, nil
 }
 
 // ─── AlertPolicyService ───────────────────────────────────────────────────────
@@ -657,6 +706,8 @@ func typedValueToProto(v monitoringstore.TypedValue) *monitoringpb.TypedValue {
 		return &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: *v.DoubleValue}}
 	case v.StringValue != nil:
 		return &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_StringValue{StringValue: *v.StringValue}}
+	case v.DistributionValue != nil:
+		return &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DistributionValue{DistributionValue: distributionToProto(*v.DistributionValue)}}
 	}
 	return &monitoringpb.TypedValue{}
 }
@@ -675,9 +726,115 @@ func typedValueFromProto(p *monitoringpb.TypedValue) (monitoringstore.TypedValue
 	case *monitoringpb.TypedValue_StringValue:
 		return monitoringstore.TypedValue{StringValue: &v.StringValue}, nil
 	case *monitoringpb.TypedValue_DistributionValue:
-		return monitoringstore.TypedValue{}, model.NewProviderError("InvalidArgument", "distribution values are not supported", 400)
+		d := distributionFromProto(v.DistributionValue)
+		return monitoringstore.TypedValue{DistributionValue: &d}, nil
 	}
 	return monitoringstore.TypedValue{}, nil
+}
+
+// distributionToProto transcodes a stored Distribution back to its
+// google.api.Distribution wire form, including bucket options and exemplars.
+func distributionToProto(d monitoringstore.Distribution) *distributionpb.Distribution {
+	out := &distributionpb.Distribution{
+		Count:                 d.Count,
+		Mean:                  d.Mean,
+		SumOfSquaredDeviation: d.SumOfSquaredDeviation,
+		BucketCounts:          append([]int64(nil), d.BucketCounts...),
+	}
+	if d.Range != nil {
+		out.Range = &distributionpb.Distribution_Range{Min: d.Range.Min, Max: d.Range.Max}
+	}
+	if d.BucketOptions != nil {
+		bo := &distributionpb.Distribution_BucketOptions{}
+		switch {
+		case d.BucketOptions.Linear != nil:
+			bo.Options = &distributionpb.Distribution_BucketOptions_LinearBuckets{
+				LinearBuckets: &distributionpb.Distribution_BucketOptions_Linear{
+					NumFiniteBuckets: d.BucketOptions.Linear.NumFiniteBuckets,
+					Width:            d.BucketOptions.Linear.Width,
+					Offset:           d.BucketOptions.Linear.Offset,
+				},
+			}
+		case d.BucketOptions.Exponential != nil:
+			bo.Options = &distributionpb.Distribution_BucketOptions_ExponentialBuckets{
+				ExponentialBuckets: &distributionpb.Distribution_BucketOptions_Exponential{
+					NumFiniteBuckets: d.BucketOptions.Exponential.NumFiniteBuckets,
+					GrowthFactor:     d.BucketOptions.Exponential.GrowthFactor,
+					Scale:            d.BucketOptions.Exponential.Scale,
+				},
+			}
+		case d.BucketOptions.Explicit != nil:
+			bo.Options = &distributionpb.Distribution_BucketOptions_ExplicitBuckets{
+				ExplicitBuckets: &distributionpb.Distribution_BucketOptions_Explicit{
+					Bounds: append([]float64(nil), d.BucketOptions.Explicit.Bounds...),
+				},
+			}
+		}
+		out.BucketOptions = bo
+	}
+	for _, ex := range d.Exemplars {
+		pe := &distributionpb.Distribution_Exemplar{Value: ex.Value}
+		if !ex.Timestamp.IsZero() {
+			pe.Timestamp = timestamppb.New(ex.Timestamp)
+		}
+		for _, raw := range ex.Attachments {
+			var a anypb.Any
+			if proto.Unmarshal(raw, &a) == nil {
+				pe.Attachments = append(pe.Attachments, &a)
+			}
+		}
+		out.Exemplars = append(out.Exemplars, pe)
+	}
+	return out
+}
+
+// distributionFromProto transcodes a google.api.Distribution into the store
+// representation.
+func distributionFromProto(p *distributionpb.Distribution) monitoringstore.Distribution {
+	d := monitoringstore.Distribution{
+		Count:                 p.GetCount(),
+		Mean:                  p.GetMean(),
+		SumOfSquaredDeviation: p.GetSumOfSquaredDeviation(),
+		BucketCounts:          append([]int64(nil), p.GetBucketCounts()...),
+	}
+	if r := p.GetRange(); r != nil {
+		d.Range = &monitoringstore.DistributionRange{Min: r.GetMin(), Max: r.GetMax()}
+	}
+	if bo := p.GetBucketOptions(); bo != nil {
+		out := &monitoringstore.BucketOptions{}
+		switch o := bo.GetOptions().(type) {
+		case *distributionpb.Distribution_BucketOptions_LinearBuckets:
+			out.Linear = &monitoringstore.LinearBuckets{
+				NumFiniteBuckets: o.LinearBuckets.GetNumFiniteBuckets(),
+				Width:            o.LinearBuckets.GetWidth(),
+				Offset:           o.LinearBuckets.GetOffset(),
+			}
+		case *distributionpb.Distribution_BucketOptions_ExponentialBuckets:
+			out.Exponential = &monitoringstore.ExponentialBuckets{
+				NumFiniteBuckets: o.ExponentialBuckets.GetNumFiniteBuckets(),
+				GrowthFactor:     o.ExponentialBuckets.GetGrowthFactor(),
+				Scale:            o.ExponentialBuckets.GetScale(),
+			}
+		case *distributionpb.Distribution_BucketOptions_ExplicitBuckets:
+			out.Explicit = &monitoringstore.ExplicitBuckets{
+				Bounds: append([]float64(nil), o.ExplicitBuckets.GetBounds()...),
+			}
+		}
+		d.BucketOptions = out
+	}
+	for _, ex := range p.GetExemplars() {
+		me := monitoringstore.Exemplar{Value: ex.GetValue()}
+		if ex.GetTimestamp() != nil {
+			me.Timestamp = ex.GetTimestamp().AsTime()
+		}
+		for _, a := range ex.GetAttachments() {
+			if b, err := proto.Marshal(a); err == nil {
+				me.Attachments = append(me.Attachments, b)
+			}
+		}
+		d.Exemplars = append(d.Exemplars, me)
+	}
+	return d
 }
 
 func alertPolicyToProto(p monitoringstore.AlertPolicy, project string) *monitoringpb.AlertPolicy {

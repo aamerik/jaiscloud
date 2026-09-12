@@ -3,6 +3,7 @@ package monitoring
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -294,4 +295,76 @@ func TestSeriesKeyDeterministic(t *testing.T) {
 	if seriesKey(a) != seriesKey(b) {
 		t.Fatalf("seriesKey not label-order independent: %q vs %q", seriesKey(a), seriesKey(b))
 	}
+}
+
+func TestMemoryStoreDistributionRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	linear := &Distribution{
+		Count:                 6,
+		Mean:                  3.5,
+		SumOfSquaredDeviation: 17.5,
+		Range:                 &DistributionRange{Min: 0, Max: 10},
+		BucketOptions: &BucketOptions{
+			Linear: &LinearBuckets{NumFiniteBuckets: 3, Width: 2, Offset: 1},
+		},
+		BucketCounts: []int64{1, 2, 2, 1, 0},
+	}
+	explicit := &Distribution{
+		Count:                 6,
+		Mean:                  4.25,
+		SumOfSquaredDeviation: 9.25,
+		BucketOptions: &BucketOptions{
+			Explicit: &ExplicitBuckets{Bounds: []float64{1, 2, 5, 10}},
+		},
+		BucketCounts: []int64{0, 1, 2, 2, 1},
+	}
+	for _, tc := range []struct {
+		metric string
+		dist   *Distribution
+	}{
+		{"linear", linear},
+		{"explicit", explicit},
+	} {
+		if err := s.CreateTimeSeries(ctx, "p1", TimeSeries{
+			MetricType:   tc.metric,
+			ResourceType: "global",
+			Points:       []Point{{EndTime: base, Value: TypedValue{DistributionValue: tc.dist}}},
+		}); err != nil {
+			t.Fatalf("create %s: %v", tc.metric, err)
+		}
+	}
+
+	check := func(t *testing.T, store *MemoryStore) {
+		t.Helper()
+		got, err := store.ListTimeSeries(ctx, "p1")
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		byMetric := map[string]*Distribution{}
+		for _, ts := range got {
+			if len(ts.Points) == 1 {
+				byMetric[ts.MetricType] = ts.Points[0].Value.DistributionValue
+			}
+		}
+		if !reflect.DeepEqual(byMetric["linear"], linear) {
+			t.Fatalf("linear = %+v, want %+v", byMetric["linear"], linear)
+		}
+		if !reflect.DeepEqual(byMetric["explicit"], explicit) {
+			t.Fatalf("explicit = %+v, want %+v", byMetric["explicit"], explicit)
+		}
+	}
+	check(t, s)
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s2 := NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	check(t, s2)
 }
