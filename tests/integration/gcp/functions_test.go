@@ -8,7 +8,9 @@ import (
 )
 
 // TestFunctionsAcceptanceFlow covers the Cloud Functions v1 wire surface:
-// create → get → list → call (mock echo) → delete, over the JSON REST API.
+// create → get → list → generateDownloadUrl → locations.list → call (mock
+// echo) → delete, over the JSON REST API. Create/Update/Delete return a done
+// google.longrunning.Operation.
 func TestFunctionsAcceptanceFlow(t *testing.T) {
 	resetState(t)
 
@@ -16,12 +18,15 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	const location = "us-central1"
 	base := "/v1/projects/" + project + "/locations/" + location + "/functions"
 
-	// Create (functionId query param).
+	// Create (functionId query param) returns a done google.longrunning.Operation
+	// whose response is the created Function.
 	resp, body := do(t, "POST", base+"?functionId=hello",
 		[]byte(`{"runtime":"nodejs20","entryPoint":"helloWorld"}`),
 		map[string]string{"Content-Type": "application/json"})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	fn := jsonMap(t, body)
+	op := jsonMap(t, body)
+	require.Equal(t, true, op["done"])
+	fn, _ := op["response"].(map[string]any)
 	require.Equal(t, "projects/proj/locations/us-central1/functions/hello", fn["name"])
 	require.Equal(t, "ACTIVE", fn["status"])
 	require.Equal(t, "nodejs20", fn["runtime"])
@@ -37,6 +42,18 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	items, _ := jsonMap(t, body)["functions"].([]any)
 	require.Len(t, items, 1)
 
+	// generateDownloadUrl (custom method) returns a synthesized URL.
+	resp, body = do(t, "POST", base+"/hello:generateDownloadUrl",
+		[]byte(`{}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, jsonMap(t, body)["downloadUrl"], "storage.googleapis.com")
+
+	// locations.list resolves on the shared project-locations path.
+	resp, body = do(t, "GET", "/v1/projects/"+project+"/locations", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	locations, _ := jsonMap(t, body)["locations"].([]any)
+	require.NotEmpty(t, locations)
+
 	// Call (mock echo returns the request data).
 	resp, body = do(t, "POST", base+"/hello:call",
 		[]byte(`{"data":"ping"}`), map[string]string{"Content-Type": "application/json"})
@@ -45,9 +62,14 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	require.Equal(t, "ping", call["result"])
 	require.NotEmpty(t, call["executionId"])
 
-	// Delete.
-	resp, _ = do(t, "DELETE", base+"/hello", nil, nil)
+	// Delete returns a done Operation with an empty response.
+	resp, body = do(t, "DELETE", base+"/hello", nil, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
+	del := jsonMap(t, body)
+	require.Equal(t, true, del["done"])
+	delResp, ok := del["response"].(map[string]any)
+	require.True(t, ok)
+	require.Empty(t, delResp)
 
 	// Gone after delete.
 	resp, _ = do(t, "GET", base+"/hello", nil, nil)

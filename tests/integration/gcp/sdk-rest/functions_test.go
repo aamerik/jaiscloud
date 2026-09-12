@@ -2,6 +2,7 @@ package sdkrest_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"google.golang.org/api/cloudfunctions/v1"
@@ -11,8 +12,9 @@ import (
 )
 
 // TestSDKCloudFunctions exercises the Cloud Functions v1 REST apiary client
-// against the emulator: create (by resource name in the body), get, list, call,
-// and delete.
+// against the emulator: create (by resource name in the body), get, list,
+// generateDownloadUrl, locations.list, call, and delete. Create/Delete return a
+// done google.longrunning.Operation (the emulator completes synchronously).
 func TestSDKCloudFunctions(t *testing.T) {
 	ctx := context.Background()
 	svc, err := cloudfunctions.NewService(ctx, option.WithEndpoint(endpoint()), option.WithoutAuthentication())
@@ -21,15 +23,17 @@ func TestSDKCloudFunctions(t *testing.T) {
 	const parent = "projects/proj/locations/us-central1"
 	name := parent + "/functions/" + unique("fn")
 
-	// Create returns an Operation in real GCP; the emulator completes
-	// synchronously and returns the function resource, so we only assert the
-	// call succeeds and then verify via Get.
-	_, err = svc.Projects.Locations.Functions.Create(parent, &cloudfunctions.CloudFunction{
+	op, err := svc.Projects.Locations.Functions.Create(parent, &cloudfunctions.CloudFunction{
 		Name:       name,
 		Runtime:    "nodejs20",
 		EntryPoint: "helloWorld",
 	}).Do()
 	require.NoError(t, err)
+	require.True(t, op.Done, "create should return a done Operation")
+	var created cloudfunctions.CloudFunction
+	require.NoError(t, json.Unmarshal(op.Response, &created))
+	require.Equal(t, name, created.Name)
+	require.Equal(t, "nodejs20", created.Runtime)
 
 	fn, err := svc.Projects.Locations.Functions.Get(name).Do()
 	require.NoError(t, err)
@@ -42,6 +46,17 @@ func TestSDKCloudFunctions(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, list.Functions)
 
+	dl, err := svc.Projects.Locations.Functions.GenerateDownloadUrl(name, &cloudfunctions.GenerateDownloadUrlRequest{}).Do()
+	require.NoError(t, err)
+	require.Contains(t, dl.DownloadUrl, "storage.googleapis.com")
+
+	// locations.list resolves on the shared project-locations path (served by
+	// the Memorystore handler, which returns the same
+	// google.cloud.location.Location records).
+	locations, err := svc.Projects.Locations.List("projects/proj").Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, locations.Locations)
+
 	call, err := svc.Projects.Locations.Functions.Call(name, &cloudfunctions.CallFunctionRequest{
 		Data: "ping",
 	}).Do()
@@ -49,8 +64,9 @@ func TestSDKCloudFunctions(t *testing.T) {
 	require.Equal(t, "ping", call.Result)
 	require.NotEmpty(t, call.ExecutionId)
 
-	_, err = svc.Projects.Locations.Functions.Delete(name).Do()
+	op, err = svc.Projects.Locations.Functions.Delete(name).Do()
 	require.NoError(t, err)
+	require.True(t, op.Done, "delete should return a done Operation")
 
 	_, err = svc.Projects.Locations.Functions.Get(name).Do()
 	require.Error(t, err)
