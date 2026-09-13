@@ -110,6 +110,14 @@ func TestPubSubDLQ(t *testing.T) {
 	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
 		t.Fatalf("create subscription: %v", err)
 	}
+	// A subscription on the dead-letter topic so republished messages land in a
+	// queue (fan-out stores per subscription).
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/dlq-sub",
+		"body": map[string]any{"topic": "projects/proj/topics/dlq"},
+	})); err != nil {
+		t.Fatalf("create dlq subscription: %v", err)
+	}
 
 	// Publish one message.
 	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
@@ -130,12 +138,12 @@ func TestPubSubDLQ(t *testing.T) {
 	// redeliver makes every message in the source topic immediately visible
 	// again, simulating the ack deadline expiring.
 	redeliver := func() {
-		msgs, _ := p.messages.List(ctx, "src")
+		msgs, _ := p.messages.List(ctx, "sub")
 		ids := make([]string, 0, len(msgs))
 		for _, m := range msgs {
-			ids = append(ids, "src/"+m.MessageID)
+			ids = append(ids, "sub/"+m.MessageID)
 		}
-		_ = p.messages.ModifyAckDeadline(ctx, "src", ids, 0, time.Now())
+		_ = p.messages.ModifyAckDeadline(ctx, "sub", ids, 0, time.Now())
 	}
 
 	if got := pull(); got != 1 {
@@ -150,10 +158,10 @@ func TestPubSubDLQ(t *testing.T) {
 		t.Fatalf("pull 3 expected 0 messages (moved to DLQ), got %d", got)
 	}
 
-	// The message now lives on the DLQ topic.
-	msgs, err := p.messages.List(ctx, "dlq")
+	// The message now lives on the DLQ topic's subscription queue.
+	msgs, err := p.messages.List(ctx, "dlq-sub")
 	if err != nil || len(msgs) != 1 {
-		t.Fatalf("expected 1 message in DLQ topic, got %d / %v", len(msgs), err)
+		t.Fatalf("expected 1 message in DLQ queue, got %d / %v", len(msgs), err)
 	}
 	// DLQ republish preserves the envelope-encrypted payload + key material;
 	// decrypt it to verify the payload round-trips.
@@ -298,5 +306,84 @@ func TestPubSubIamPolicy(t *testing.T) {
 	// 404 on missing topic.
 	if _, err := p.TopicGetIamPolicy(ctx, newNR(map[string]any{"name": "topics/missing"})); err == nil || errStatus(err) != 404 {
 		t.Fatalf("expected 404 on missing topic, got %v", err)
+	}
+}
+
+// TestPubSubFanOut verifies that every pull subscription of a topic receives a
+// copy of each published message, and that acking one subscription does not
+// affect another's copy.
+func TestPubSubFanOut(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/fan"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	for _, s := range []string{"fan-a", "fan-b"} {
+		if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+			"name": "subscriptions/" + s,
+			"body": map[string]any{"topic": "projects/proj/topics/fan"},
+		})); err != nil {
+			t.Fatalf("subscription %s: %v", s, err)
+		}
+	}
+	// Push subscriptions must not get a queued copy.
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/fan-push",
+		"body": map[string]any{
+			"topic":      "projects/proj/topics/fan",
+			"pushConfig": map[string]any{"pushEndpoint": "http://127.0.0.1:1/push"},
+		},
+	})); err != nil {
+		t.Fatalf("push subscription: %v", err)
+	}
+
+	// "broadcast"
+	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
+		"name": "topics/fan",
+		"body": map[string]any{"messages": []any{map[string]any{"data": "YnJvYWRjYXN0"}}},
+	})); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	pull := func(s string) map[string]any {
+		resp, err := p.SubscriptionPull(ctx, newNR(map[string]any{
+			"name": "subscriptions/" + s,
+			"body": map[string]any{"returnImmediately": true},
+		}))
+		if err != nil {
+			t.Fatalf("pull %s: %v", s, err)
+		}
+		received, _ := resp.Data["receivedMessages"].([]any)
+		if len(received) != 1 {
+			t.Fatalf("subscription %s: expected 1 message, got %d", s, len(received))
+		}
+		return received[0].(map[string]any)
+	}
+
+	rmA := pull("fan-a")
+	rmB := pull("fan-b")
+	for _, rm := range []map[string]any{rmA, rmB} {
+		if got := rm["message"].(map[string]any)["data"]; got != "YnJvYWRjYXN0" {
+			t.Fatalf("fan-out payload = %v, want broadcast", got)
+		}
+	}
+
+	// Acking fan-a must not consume fan-b's copy.
+	if _, err := p.SubscriptionAcknowledge(ctx, newNR(map[string]any{
+		"name": "subscriptions/fan-a",
+		"body": map[string]any{"ackIds": []any{rmA["ackId"].(string)}},
+	})); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
+	resp, err := p.SubscriptionPull(ctx, newNR(map[string]any{
+		"name": "subscriptions/fan-a",
+		"body": map[string]any{"returnImmediately": true},
+	}))
+	if err != nil {
+		t.Fatalf("pull acked: %v", err)
+	}
+	if received, _ := resp.Data["receivedMessages"].([]any); len(received) != 0 {
+		t.Fatalf("acked subscription still has %d messages", len(received))
 	}
 }

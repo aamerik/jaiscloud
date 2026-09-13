@@ -34,6 +34,13 @@ func TestPubSubRoundTrip(t *testing.T) {
 		t.Fatalf("topic create: %v", err)
 	}
 
+	// Create the subscription before publishing: Pub/Sub only delivers
+	// messages published after the subscription exists.
+	nr = newNR(map[string]any{"name": "subscriptions/my-sub", "body": map[string]any{"topic": "projects/proj/topics/my-topic"}})
+	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+
 	// Publish.
 	nr = newNR(map[string]any{"name": "topics/my-topic", "body": map[string]any{"messages": []any{map[string]any{"data": "aGVsbG8="}}}})
 	resp, err := p.TopicPublish(ctx, nr)
@@ -43,12 +50,6 @@ func TestPubSubRoundTrip(t *testing.T) {
 	ids, _ := resp.Data["messageIds"].([]string)
 	if len(ids) != 1 {
 		t.Fatalf("expected 1 message id, got %d", len(ids))
-	}
-
-	// Create subscription.
-	nr = newNR(map[string]any{"name": "subscriptions/my-sub", "body": map[string]any{"topic": "projects/proj/topics/my-topic"}})
-	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
-		t.Fatalf("subscription create: %v", err)
 	}
 
 	// Pull.
@@ -85,12 +86,12 @@ func TestPubSubOpaqueAckID(t *testing.T) {
 	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/t"})); err != nil {
 		t.Fatalf("topic create: %v", err)
 	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{"name": "subscriptions/s", "body": map[string]any{"topic": "projects/proj/topics/t"}})); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
 	nr := newNR(map[string]any{"name": "topics/t", "body": map[string]any{"messages": []any{map[string]any{"data": "aGk="}}}})
 	if _, err := p.TopicPublish(ctx, nr); err != nil {
 		t.Fatalf("publish: %v", err)
-	}
-	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{"name": "subscriptions/s", "body": map[string]any{"topic": "projects/proj/topics/t"}})); err != nil {
-		t.Fatalf("subscription create: %v", err)
 	}
 
 	resp, err := p.SubscriptionPull(ctx, newNR(map[string]any{"name": "subscriptions/s"}))
@@ -105,16 +106,16 @@ func TestPubSubOpaqueAckID(t *testing.T) {
 	ackID, _ := rm["ackId"].(string)
 	msgID, _ := rm["message"].(map[string]any)["messageId"].(string)
 
-	// Opaque: not the raw "topicID/messageID" string.
-	if ackID == "t/"+msgID {
-		t.Errorf("ackId %q is not opaque (raw topic/messageID leaked)", ackID)
+	// Opaque: not the raw "queue/messageID" string.
+	if ackID == "s/"+msgID {
+		t.Errorf("ackId %q is not opaque (raw queue/messageID leaked)", ackID)
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(ackID)
 	if err != nil {
 		t.Fatalf("ackId is not base64url: %v", err)
 	}
-	if string(decoded) != "t/"+msgID {
-		t.Errorf("decoded ackId = %q, want t/%s", decoded, msgID)
+	if string(decoded) != "s/"+msgID {
+		t.Errorf("decoded ackId = %q, want s/%s", decoded, msgID)
 	}
 
 	// modifyAckDeadline round-trips through the opaque ackId.
@@ -224,6 +225,13 @@ func TestPubSubCMEKRoundTrip(t *testing.T) {
 		t.Fatalf("topic create: %v", err)
 	}
 
+	// Subscribe before publishing (a subscription only receives later messages).
+	nr = newNR(map[string]any{"name": "subscriptions/cmek-sub", "body": map[string]any{"topic": "projects/" + projectID + "/topics/cmek-topic"}})
+	nr.AccountID = projectID
+	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+
 	// Publish a message.
 	payload := "aGVsbG8sIHdvcmxk" // base64 "hello, world"
 	nr = newNR(map[string]any{"name": "topics/cmek-topic", "body": map[string]any{"messages": []any{map[string]any{"data": payload}}}})
@@ -232,12 +240,6 @@ func TestPubSubCMEKRoundTrip(t *testing.T) {
 		t.Fatalf("publish: %v", err)
 	}
 
-	// Subscribe and pull; the payload must decrypt back to the original.
-	nr = newNR(map[string]any{"name": "subscriptions/cmek-sub", "body": map[string]any{"topic": "projects/" + projectID + "/topics/cmek-topic"}})
-	nr.AccountID = projectID
-	if _, err := p.SubscriptionCreate(ctx, nr); err != nil {
-		t.Fatalf("subscription create: %v", err)
-	}
 	nr = newNR(map[string]any{"name": "subscriptions/cmek-sub"})
 	nr.AccountID = projectID
 	resp, err := p.SubscriptionPull(ctx, nr)

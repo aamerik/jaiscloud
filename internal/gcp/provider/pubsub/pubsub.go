@@ -245,12 +245,22 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 		if ok, _ := mm["orderingKey"].(string); ok != "" {
 			msg.OrderingKey = ok
 		}
-		if err := p.messages.Put(ctx, msg); err != nil {
-			return nil, err
-		}
 		stored = append(stored, msg)
 		plainData = append(plainData, data)
 		ids = append(ids, id)
+	}
+
+	// Fan out: Pub/Sub delivers a copy to every pull subscription of the topic,
+	// so each subscription has an independent delivery/ack state.
+	subIDs := p.pullSubscriptionIDs(ctx, nr.AccountID, t)
+	for _, msg := range stored {
+		for _, sid := range subIDs {
+			copy := msg
+			copy.Subscription = sid
+			if err := p.messages.Put(ctx, copy); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// Push subscriptions: deliver each message to the push endpoint with the
@@ -453,9 +463,9 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 
 	var msgs []pubsubstore.Message
 	if ri {
-		msgs, err = p.messages.Pull(ctx, topicID, maxMsgs, ackDeadline, retention, clock.Now())
+		msgs, err = p.messages.Pull(ctx, s, maxMsgs, ackDeadline, retention, clock.Now())
 	} else {
-		msgs, err = p.longPoll(ctx, topicID, maxMsgs, ackDeadline, retention)
+		msgs, err = p.longPoll(ctx, s, maxMsgs, ackDeadline, retention)
 	}
 	if err != nil {
 		return nil, err
@@ -466,12 +476,14 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		// dead-letter topic and drop the original (mirrors SQS checkDLQ, strictly
 		// greater threshold).
 		if dlqTopic != "" && maxDeliveryAttempts > 0 && m.DeliveryAttempt > maxDeliveryAttempts {
-			_ = p.messages.Delete(ctx, topicID, m.MessageID)
-			_ = p.messages.Put(ctx, pubsubstore.Message{
-				Topic: dlqTopic, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
-				PublishTime: m.PublishTime, DeliveryAttempt: 0,
-				KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
-			})
+			_ = p.messages.Delete(ctx, s, m.MessageID)
+			for _, sid := range p.pullSubscriptionIDs(ctx, nr.AccountID, dlqTopic) {
+				_ = p.messages.Put(ctx, pubsubstore.Message{
+					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
+					PublishTime: m.PublishTime, DeliveryAttempt: 0,
+					KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
+				})
+			}
 			continue
 		}
 
@@ -502,7 +514,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 			msg["orderingKey"] = m.OrderingKey
 		}
 		received = append(received, map[string]any{
-			"ackId":           encodeAckID(topicID, m.MessageID),
+			"ackId":           encodeAckID(s, m.MessageID),
 			"message":         msg,
 			"deliveryAttempt": m.DeliveryAttempt,
 		})
@@ -514,10 +526,10 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 // bounded window elapses. The deadline is derived from clock.Now() (so a frozen
 // test clock yields a consistent remaining duration) while time.Sleep drives the
 // real poll cadence — the emulator's analogue of SQS WaitForMessages.
-func (p *Provider) longPoll(ctx context.Context, topicID string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
+func (p *Provider) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
 	deadline := clock.Now().Add(longPollTimeout)
 	for {
-		msgs, err := p.messages.Pull(ctx, topicID, maxMsgs, ackDeadline, retention, clock.Now())
+		msgs, err := p.messages.Pull(ctx, queue, maxMsgs, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -553,19 +565,11 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 		return nil, err
 	}
 	s := strings.TrimPrefix(name, "subscriptions/")
-	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s)
-	if err != nil {
+	if _, err = p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "subscription not found", 404)
 		}
 		return nil, err
-	}
-	var sub map[string]any
-	json.Unmarshal(e.Data, &sub)
-	topic, _ := sub["topic"].(string)
-	topicID := topic
-	if i := strings.LastIndex(topicID, "/"); i >= 0 {
-		topicID = topicID[i+1:]
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	ackIDs := toStrings(body["ackIds"])
@@ -579,7 +583,7 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		seconds = int(ad)
 	}
-	if err := p.messages.ModifyAckDeadline(ctx, topicID, decoded, seconds, clock.Now()); err != nil {
+	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, clock.Now()); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
@@ -597,6 +601,40 @@ func decodeAckID(s string) (string, bool) {
 		return "", false
 	}
 	return string(raw), true
+}
+
+// pullSubscriptionIDs returns the IDs of a topic's pull subscriptions. Push
+// subscriptions are delivered over HTTP at publish time and are not queued.
+func (p *Provider) pullSubscriptionIDs(ctx context.Context, accountID, topicID string) []string {
+	entries, err := p.resources.List(ctx, accountID, store.GlobalRegion, rtSubscription, "")
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, e := range entries {
+		var sub map[string]any
+		if json.Unmarshal(e.Data, &sub) != nil {
+			continue
+		}
+		st, _ := sub["topic"].(string)
+		if lastSegment(st) != topicID {
+			continue
+		}
+		if pc, _ := sub["pushConfig"].(map[string]any); pc != nil {
+			if ep, _ := pc["pushEndpoint"].(string); ep != "" {
+				continue
+			}
+		}
+		ids = append(ids, e.ID)
+	}
+	return ids
+}
+
+func lastSegment(s string) string {
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 // topicRetention resolves a topic's messageRetentionDuration in seconds,

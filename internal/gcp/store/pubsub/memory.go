@@ -13,13 +13,13 @@ import (
 // MemoryMessages is an in-memory Messages store.
 type MemoryMessages struct {
 	mu       sync.RWMutex
-	messages map[string]map[string]Message // topic → messageID → message
-	// sortedIDs caches, per topic, message IDs in ascending PublishTime order.
-	// Put/Delete invalidate a topic's entry (they change membership/order);
+	messages map[string]map[string]Message // queue (subscription ID) → messageID → message
+	// sortedIDs caches, per queue, message IDs in ascending PublishTime order.
+	// Put/Delete invalidate a queue's entry (they change membership/order);
 	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline only
 	// touch VisibleAt/DeliveryAttempt, never PublishTime) do not, so repeated
-	// polling against an unchanged topic — the common Pub/Sub access pattern —
-	// avoids re-sorting the topic on every call.
+	// polling against an unchanged queue — the common Pub/Sub access pattern —
+	// avoids re-sorting the queue on every call.
 	sortedIDs map[string][]string
 	seq       atomic.Int64 // monotonic message-ID counter
 }
@@ -32,20 +32,20 @@ func NewMemoryMessages() *MemoryMessages {
 	}
 }
 
-// orderedIDsLocked returns messageIDs for topic in ascending PublishTime
+// orderedIDsLocked returns messageIDs for a queue in ascending PublishTime
 // order, building and caching them if the cache was invalidated. Callers must
 // hold s.mu for writing.
-func (s *MemoryMessages) orderedIDsLocked(topic string) []string {
-	if ids, ok := s.sortedIDs[topic]; ok {
+func (s *MemoryMessages) orderedIDsLocked(queue string) []string {
+	if ids, ok := s.sortedIDs[queue]; ok {
 		return ids
 	}
-	msgs := s.messages[topic]
+	msgs := s.messages[queue]
 	ids := make([]string, 0, len(msgs))
 	for id := range msgs {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return msgs[ids[i]].PublishTime.Before(msgs[ids[j]].PublishTime) })
-	s.sortedIDs[topic] = ids
+	s.sortedIDs[queue] = ids
 	return ids
 }
 
@@ -57,19 +57,20 @@ func (s *MemoryMessages) NextID(_ context.Context) (string, error) {
 func (s *MemoryMessages) Put(_ context.Context, m Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.messages[m.Topic] == nil {
-		s.messages[m.Topic] = make(map[string]Message)
+	q := m.queueKey()
+	if s.messages[q] == nil {
+		s.messages[q] = make(map[string]Message)
 	}
-	s.messages[m.Topic][m.MessageID] = m
-	delete(s.sortedIDs, m.Topic)
+	s.messages[q][m.MessageID] = m
+	delete(s.sortedIDs, q)
 	return nil
 }
 
-func (s *MemoryMessages) List(_ context.Context, topic string) ([]Message, error) {
+func (s *MemoryMessages) List(_ context.Context, queue string) ([]Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	msgs := s.messages[topic]
-	ids := s.orderedIDsLocked(topic)
+	msgs := s.messages[queue]
+	ids := s.orderedIDsLocked(queue)
 	result := make([]Message, 0, len(ids))
 	for _, id := range ids {
 		result = append(result, msgs[id])
@@ -79,12 +80,12 @@ func (s *MemoryMessages) List(_ context.Context, topic string) ([]Message, error
 
 // Pull atomically claims eligible messages (mirrors SQS Receive: skip delayed/
 // in-flight, gate ordering-key groups, then claim under the mutex).
-func (s *MemoryMessages) Pull(_ context.Context, topic string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error) {
+func (s *MemoryMessages) Pull(_ context.Context, queue string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	msgs := s.messages[topic]
-	ids := s.orderedIDsLocked(topic)
+	msgs := s.messages[queue]
+	ids := s.orderedIDsLocked(queue)
 
 	// FIFO: build the set of ordering keys that have an earlier in-flight message.
 	inFlightGroups := map[string]bool{}
@@ -115,7 +116,7 @@ func (s *MemoryMessages) Pull(_ context.Context, topic string, maxMessages, ackD
 		// Claim.
 		m.VisibleAt = now.Add(duration(ackDeadlineSec))
 		m.DeliveryAttempt++
-		s.messages[topic][m.MessageID] = m
+		s.messages[queue][m.MessageID] = m
 		if m.OrderingKey != "" {
 			inFlightGroups[m.OrderingKey] = true
 		}
@@ -124,22 +125,22 @@ func (s *MemoryMessages) Pull(_ context.Context, topic string, maxMessages, ackD
 	return out, nil
 }
 
-func (s *MemoryMessages) Delete(_ context.Context, topic, messageID string) error {
+func (s *MemoryMessages) Delete(_ context.Context, queue, messageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if msgs, ok := s.messages[topic]; ok {
+	if msgs, ok := s.messages[queue]; ok {
 		if _, existed := msgs[messageID]; existed {
 			delete(msgs, messageID)
-			delete(s.sortedIDs, topic)
+			delete(s.sortedIDs, queue)
 		}
 	}
 	return nil
 }
 
-func (s *MemoryMessages) UpdateDeliveryAttempt(_ context.Context, topic, messageID string, attempt int) error {
+func (s *MemoryMessages) UpdateDeliveryAttempt(_ context.Context, queue, messageID string, attempt int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	msgs, ok := s.messages[topic]
+	msgs, ok := s.messages[queue]
 	if !ok {
 		return nil
 	}
@@ -152,8 +153,8 @@ func (s *MemoryMessages) UpdateDeliveryAttempt(_ context.Context, topic, message
 	return nil
 }
 
-// ModifyAckDeadline resets the visibility deadline for each ack ID ("topic/messageID").
-func (s *MemoryMessages) ModifyAckDeadline(_ context.Context, topic string, ackIDs []string, seconds int, now time.Time) error {
+// ModifyAckDeadline resets the visibility deadline for each ack ID ("queue/messageID").
+func (s *MemoryMessages) ModifyAckDeadline(_ context.Context, queue string, ackIDs []string, seconds int, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ackID := range ackIDs {
@@ -161,7 +162,7 @@ func (s *MemoryMessages) ModifyAckDeadline(_ context.Context, topic string, ackI
 		if i := lastSlash(ackID); i >= 0 {
 			msgID = ackID[i+1:]
 		}
-		m, ok := s.messages[topic][msgID]
+		m, ok := s.messages[queue][msgID]
 		if !ok {
 			continue
 		}
@@ -170,7 +171,7 @@ func (s *MemoryMessages) ModifyAckDeadline(_ context.Context, topic string, ackI
 		} else {
 			m.VisibleAt = now.Add(duration(seconds))
 		}
-		s.messages[topic][msgID] = m
+		s.messages[queue][msgID] = m
 	}
 	return nil
 }

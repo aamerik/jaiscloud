@@ -13,7 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PostgresMessages implements Messages against jc_pubsub_messages.
+// PostgresMessages implements Messages against jc_pubsub_messages. Rows are
+// keyed by delivery queue: the subscription ID for fanned-out messages (see
+// Message.Subscription).
 type PostgresMessages struct {
 	pool *pgxpool.Pool
 }
@@ -39,19 +41,19 @@ func (s *PostgresMessages) Put(ctx context.Context, m Message) error {
 	}
 	attrs, _ := json.Marshal(m.Attributes)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_pubsub_messages (topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (topic, message_id) DO UPDATE
-			SET data=$3, attributes=$4, publish_time=$5, delivery_attempt=$6, ordering_key=$7, visible_at=$8, kms_key_name=$9, wrapped_dek=$10
-	`, m.Topic, m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.KmsKeyName, m.WrappedDEK)
+		INSERT INTO jc_pubsub_messages (topic, subscription, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (subscription, message_id) DO UPDATE
+			SET topic=$1, data=$4, attributes=$5, publish_time=$6, delivery_attempt=$7, ordering_key=$8, visible_at=$9, kms_key_name=$10, wrapped_dek=$11
+	`, m.Topic, m.queueKey(), m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.KmsKeyName, m.WrappedDEK)
 	return err
 }
 
-func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, error) {
+func (s *PostgresMessages) List(ctx context.Context, queue string) ([]Message, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek
-		FROM jc_pubsub_messages WHERE topic=$1 ORDER BY publish_time
-	`, topic)
+		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek
+		FROM jc_pubsub_messages WHERE subscription=$1 ORDER BY publish_time
+	`, queue)
 	if err != nil {
 		return nil, err
 	}
@@ -61,11 +63,11 @@ func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, e
 		var m Message
 		var attrs []byte
 		var visibleAt *time.Time
-		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.KmsKeyName, &m.WrappedDEK); err != nil {
+		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			return nil, err
 		}
 		json.Unmarshal(attrs, &m.Attributes)
-		m.Topic = topic
+		m.Subscription = queue
 		if visibleAt != nil {
 			m.VisibleAt = *visibleAt
 		}
@@ -79,7 +81,7 @@ func (s *PostgresMessages) List(ctx context.Context, topic string) ([]Message, e
 // (mirrors SQS Receive), applying the same orderingKey FIFO gating as the
 // memory store: only the earliest eligible message in each ordering-key group
 // is claimed in a single pull.
-func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error) {
+func (s *PostgresMessages) Pull(ctx context.Context, queue string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -91,8 +93,8 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	inFlightGroups := map[string]bool{}
 	krows, err := tx.Query(ctx, `
 		SELECT DISTINCT ordering_key FROM jc_pubsub_messages
-		WHERE topic = $1 AND ordering_key <> '' AND visible_at > $2
-	`, topic, now)
+		WHERE subscription = $1 AND ordering_key <> '' AND visible_at > $2
+	`, queue, now)
 	if err != nil {
 		return nil, err
 	}
@@ -110,14 +112,14 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT message_id, data, attributes, publish_time, delivery_attempt, ordering_key, kms_key_name, wrapped_dek
+		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, kms_key_name, wrapped_dek
 		FROM jc_pubsub_messages
-		WHERE topic = $1
+		WHERE subscription = $1
 		  AND (visible_at IS NULL OR visible_at <= $2)
 		  AND publish_time > $2 - make_interval(secs => $3)
 		ORDER BY publish_time
 		FOR UPDATE SKIP LOCKED
-	`, topic, now, retentionSec)
+	`, queue, now, retentionSec)
 	if err != nil {
 		return nil, err
 	}
@@ -125,12 +127,12 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	for rows.Next() {
 		var m Message
 		var attrs []byte
-		if err := rows.Scan(&m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &m.KmsKeyName, &m.WrappedDEK); err != nil {
+		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		json.Unmarshal(attrs, &m.Attributes)
-		m.Topic = topic
+		m.Subscription = queue
 		candidates = append(candidates, m)
 	}
 	rows.Close()
@@ -158,28 +160,28 @@ func (s *PostgresMessages) Pull(ctx context.Context, topic string, maxMessages, 
 	for _, m := range out {
 		if _, err := tx.Exec(ctx, `
 			UPDATE jc_pubsub_messages SET visible_at=$2, delivery_attempt=$3
-			WHERE topic=$1 AND message_id=$4
-		`, topic, m.VisibleAt, m.DeliveryAttempt, m.MessageID); err != nil {
+			WHERE subscription=$1 AND message_id=$4
+		`, queue, m.VisibleAt, m.DeliveryAttempt, m.MessageID); err != nil {
 			return nil, err
 		}
 	}
 	return out, tx.Commit(ctx)
 }
 
-func (s *PostgresMessages) Delete(ctx context.Context, topic, messageID string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_pubsub_messages WHERE topic=$1 AND message_id=$2`, topic, messageID)
+func (s *PostgresMessages) Delete(ctx context.Context, queue, messageID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_pubsub_messages WHERE subscription=$1 AND message_id=$2`, queue, messageID)
 	return err
 }
 
-func (s *PostgresMessages) UpdateDeliveryAttempt(ctx context.Context, topic, messageID string, attempt int) error {
+func (s *PostgresMessages) UpdateDeliveryAttempt(ctx context.Context, queue, messageID string, attempt int) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE jc_pubsub_messages SET delivery_attempt=$3 WHERE topic=$1 AND message_id=$2
-	`, topic, messageID, attempt)
+		UPDATE jc_pubsub_messages SET delivery_attempt=$3 WHERE subscription=$1 AND message_id=$2
+	`, queue, messageID, attempt)
 	return err
 }
 
-// ModifyAckDeadline resets the visibility deadline for each ack ID ("topic/messageID").
-func (s *PostgresMessages) ModifyAckDeadline(ctx context.Context, topic string, ackIDs []string, seconds int, now time.Time) error {
+// ModifyAckDeadline resets the visibility deadline for each ack ID ("queue/messageID").
+func (s *PostgresMessages) ModifyAckDeadline(ctx context.Context, queue string, ackIDs []string, seconds int, now time.Time) error {
 	for _, ackID := range ackIDs {
 		msgID := ackID
 		if i := strings.LastIndex(ackID, "/"); i >= 0 {
@@ -190,7 +192,7 @@ func (s *PostgresMessages) ModifyAckDeadline(ctx context.Context, topic string, 
 			t := now.Add(time.Duration(seconds) * time.Second)
 			visibleAt = &t
 		}
-		if _, err := s.pool.Exec(ctx, `UPDATE jc_pubsub_messages SET visible_at=$2 WHERE topic=$1 AND message_id=$3`, topic, visibleAt, msgID); err != nil {
+		if _, err := s.pool.Exec(ctx, `UPDATE jc_pubsub_messages SET visible_at=$2 WHERE subscription=$1 AND message_id=$3`, queue, visibleAt, msgID); err != nil {
 			return err
 		}
 	}

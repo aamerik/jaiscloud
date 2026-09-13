@@ -46,6 +46,11 @@ func TestSDKPubSubOrderingKeyAndAttributes(t *testing.T) {
 	_, err = svc.Projects.Topics.Create(topic, &pubsub.Topic{Name: topic}).Do()
 	require.NoError(t, err)
 
+	// Subscribe before publishing (a subscription only receives later messages).
+	sub := "projects/proj/subscriptions/" + unique("ok-sub")
+	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{Name: sub, Topic: topic}).Do()
+	require.NoError(t, err)
+
 	const n = 3
 	// Publish one message per request so each gets a distinct publish time —
 	// the emulator orders delivery by publish time, so a single batch (which
@@ -62,10 +67,6 @@ func TestSDKPubSubOrderingKeyAndAttributes(t *testing.T) {
 		require.Len(t, pub.MessageIds, 1)
 		time.Sleep(time.Millisecond)
 	}
-
-	sub := "projects/proj/subscriptions/" + unique("ok-sub")
-	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{Name: sub, Topic: topic}).Do()
-	require.NoError(t, err)
 
 	// Ordering-key FIFO: only one message per key is in flight at a time, so
 	// pull+ack one at a time and verify strict delivery order.
