@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
@@ -1291,7 +1292,8 @@ func TestResumableSessionEdgeCases(t *testing.T) {
 	}
 	uploadID := extractUploadID(t, start)
 
-	// Status query on an empty session → Range bytes=0-0.
+	// Status query on an empty session → 308 with no Range header (real GCS
+	// omits Range when no bytes are persisted).
 	nr = bucketParams()
 	nr.Params["upload_id"] = uploadID
 	nr.Params["contentRange"] = "bytes */5"
@@ -1299,8 +1301,8 @@ func TestResumableSessionEdgeCases(t *testing.T) {
 	if err != nil || resp.HTTPStatus != 308 {
 		t.Fatalf("status query on empty session: %v / %v", resp, err)
 	}
-	if rng, _ := resp.Data[wire.RangeKey].(string); rng != "bytes=0-0" {
-		t.Fatalf("expected Range bytes=0-0, got %q", rng)
+	if _, ok := resp.Data[wire.RangeKey]; ok {
+		t.Fatalf("empty session must omit Range, got %v", resp.Data[wire.RangeKey])
 	}
 
 	// A chunk may update the session content type.
@@ -1758,5 +1760,420 @@ func TestParseByteRange(t *testing.T) {
 			t.Errorf("parseByteRange(%q, %d) = (%d,%d,%v), want (%d,%d,%v)",
 				c.rng, total, s, e, ok, c.start, c.end, c.ok)
 		}
+	}
+}
+
+// ─── resumable upload semantics (Gap 1–4) ───────────────────────────────────
+
+func resumableStart(t *testing.T, p *Provider, bucket, object string) string {
+	t.Helper()
+	ctx := context.Background()
+	nr := bucketParams()
+	nr.Params["bucket"] = bucket
+	nr.Params["object"] = object
+	nr.Params[wire.ContentTypeKey] = "application/octet-stream"
+	start, err := p.ObjectsInsertStartResumable(ctx, nr)
+	if err != nil {
+		t.Fatalf("start resumable: %v", err)
+	}
+	return extractUploadID(t, start)
+}
+
+func TestResumableEmptyStatusQueryOmitsRange(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	// Empty-session status query -> 308 with no Range and no override.
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes */5"
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("status query: %v / %v", resp, err)
+	}
+	if _, ok := resp.Data[wire.RangeKey]; ok {
+		t.Error("empty session must omit Range")
+	}
+	if _, ok := resp.Data[wire.StatusOverrideKey]; ok {
+		t.Error("empty session must not carry a status override")
+	}
+
+	// length-0 + X-GUploader-No-308 -> 200 + override, no Range (Go SDK contract).
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes */5"
+	nr.Params[wire.No308Key] = true
+	resp, err = p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("no-308 status query: %v / %v", resp, err)
+	}
+	if so, _ := resp.Data[wire.StatusOverrideKey].(string); so != "308" {
+		t.Fatalf("expected status override 308, got %q", so)
+	}
+	if _, ok := resp.Data[wire.RangeKey]; ok {
+		t.Error("empty no-308 session must omit Range")
+	}
+}
+
+func TestResumableNonEmptyStatusKeepsRange(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/*"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	if resp, err := p.ObjectsInsertResumable(ctx, nr); err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("chunk: %v / %v", resp, err)
+	}
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes */100"
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("status: %v / %v", resp, err)
+	}
+	if rng, _ := resp.Data[wire.RangeKey].(string); rng != "bytes=0-4" {
+		t.Fatalf("expected Range bytes=0-4, got %q", rng)
+	}
+}
+
+func TestResumableOffsetGapReturnsPlain503(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 4-5/6"
+	nr.Params[wire.MediaKey] = []byte("ok")
+	_, err := p.ObjectsInsertResumable(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok {
+		t.Fatalf("expected ProviderError, got %v", err)
+	}
+	if pe.HTTPStatus != 503 {
+		t.Fatalf("expected 503, got %d", pe.HTTPStatus)
+	}
+	if f, _ := pe.Data["errorFormat"].(string); f != "plain" {
+		t.Fatalf("expected plain errorFormat, got %q", f)
+	}
+	if len(pe.Message) != 138 {
+		t.Fatalf("expected 138-byte message, got %d", len(pe.Message))
+	}
+	if !strings.Contains(strings.ToLower(pe.Message), "content-range") || strings.Contains(strings.ToLower(pe.Message), "earlier") {
+		t.Fatalf("unexpected message shape: %q", pe.Message)
+	}
+}
+
+func TestResumableRewindIgnored(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/*"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	if resp, err := p.ObjectsInsertResumable(ctx, nr); err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("chunk: %v / %v", resp, err)
+	}
+
+	// Re-send the same chunk (rewind) -> 308, bytes unchanged.
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/*"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("rewind chunk: %v / %v", resp, err)
+	}
+	if rng, _ := resp.Data[wire.RangeKey].(string); rng != "bytes=0-4" {
+		t.Fatalf("expected Range bytes=0-4 after rewind, got %q", rng)
+	}
+}
+
+func TestResumableUnknownSizeFinalChunk(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	body := []byte("seventeen bytes!!")
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-*/*"
+	nr.Params[wire.MediaKey] = body
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("unknown-size final: %v / %v", resp, err)
+	}
+	if size, _ := resp.Data["size"].(string); size != strconv.Itoa(len(body)) {
+		t.Fatalf("expected size %d, got %q", len(body), size)
+	}
+
+	media, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "x.bin"))
+	if err != nil {
+		t.Fatalf("get media: %v", err)
+	}
+	if got := string(streamBytes(t, media)); got != string(body) {
+		t.Fatalf("expected %q, got %q", body, got)
+	}
+}
+
+func TestResumableUnknownSizeFinalKnownTotal(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	body := []byte("12345678901234567") // 17 bytes
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-*/17"
+	nr.Params[wire.MediaKey] = body
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("known-total unknown-end final: %v / %v", resp, err)
+	}
+
+	// A mismatched declared total must 400.
+	uploadID = resumableStart(t, p, "bkt", "y.bin")
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-*/16"
+	nr.Params[wire.MediaKey] = body
+	_, err = p.ObjectsInsertResumable(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("expected 400 on size mismatch, got %v", err)
+	}
+}
+
+func TestResumablePostCompletionReplay(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/*"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	if resp, err := p.ObjectsInsertResumable(ctx, nr); err != nil || resp.HTTPStatus != 308 {
+		t.Fatalf("chunk: %v / %v", resp, err)
+	}
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 5-10/11"
+	nr.Params[wire.MediaKey] = []byte(" world")
+	resp, err := p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("final: %v / %v", resp, err)
+	}
+
+	// Post-completion status query -> 200 + object size.
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes */11"
+	resp, err = p.ObjectsInsertResumable(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("post-completion status: %v / %v", resp, err)
+	}
+	if size, _ := resp.Data["size"].(string); size != "11" {
+		t.Fatalf("expected size 11, got %q", size)
+	}
+}
+
+func TestResumableTombstoneSweep(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	uploadID := resumableStart(t, p, "bkt", "x.bin")
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-4/5"
+	nr.Params[wire.MediaKey] = []byte("hello")
+	if _, err := p.ObjectsInsertResumable(ctx, nr); err != nil {
+		t.Fatalf("final: %v", err)
+	}
+	p.mu.Lock()
+	if _, ok := p.completed[uploadID]; !ok {
+		p.mu.Unlock()
+		t.Fatal("expected a completion tombstone")
+	}
+	p.completed[uploadID].lastAccess = clock.RealNow().Add(-48 * time.Hour)
+	p.sweepSessions()
+	_, ok := p.completed[uploadID]
+	p.mu.Unlock()
+	if ok {
+		t.Error("expected tombstone to be swept after TTL")
+	}
+}
+
+// ─── V4 signed URLs (Gap 6) ────────────────────────────────────────────────
+
+func signedRequest(bucket, object, expires, date string) *model.NormalizedRequest {
+	nr := bucketParamsWithObj(bucket, object)
+	nr.Params[wire.SignedURLKey] = true
+	nr.Params["X-Goog-Algorithm"] = "GOOG4-RSA-SHA256"
+	nr.Params["X-Goog-Credential"] = "test@test.iam.gserviceaccount.com/20260913/auto/storage/goog4_request"
+	nr.Params["X-Goog-SignedHeaders"] = "host"
+	nr.Params["X-Goog-Signature"] = "abc"
+	nr.Params["X-Goog-Expires"] = expires
+	nr.Params["X-Goog-Date"] = date
+	return nr
+}
+
+func TestSignedURLExpiredToken(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := signedRequest("bkt", "o.txt", "60", "20200101T000000Z")
+	_, err := p.ObjectsGetMedia(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "ExpiredToken" {
+		t.Fatalf("expected ExpiredToken 400, got %v", err)
+	}
+	if f, _ := pe.Data["errorFormat"].(string); f != "xml" {
+		t.Fatalf("expected xml errorFormat, got %q", f)
+	}
+}
+
+func TestSignedURLMalformedDate(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := signedRequest("bkt", "o.txt", "3600", "not-a-date")
+	_, err := p.ObjectsGetMedia(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "MalformedSecurityHeader" {
+		t.Fatalf("expected MalformedSecurityHeader 400, got %v", err)
+	}
+	if param, _ := pe.Data["parameterName"].(string); param != "Date" {
+		t.Fatalf("expected ParameterName Date, got %q", param)
+	}
+}
+
+func TestSignedURLInvalidExpires(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := signedRequest("bkt", "o.txt", "604801", "20260913T000000Z")
+	_, err := p.ObjectsGetMedia(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "MalformedSecurityHeader" {
+		t.Fatalf("expected MalformedSecurityHeader 400, got %v", err)
+	}
+	if param, _ := pe.Data["parameterName"].(string); param != "Expires" {
+		t.Fatalf("expected ParameterName Expires, got %q", param)
+	}
+}
+
+func TestSignedURLLowercaseParams(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParamsWithObj("bkt", "o.txt")
+	nr.Params[wire.SignedURLKey] = true
+	nr.Params["X-Goog-Signature"] = "abc"
+	nr.Params["x-goog-expires"] = "604801"
+	nr.Params["x-goog-date"] = "20260913T000000Z"
+	_, err := p.ObjectsGetMedia(ctx, nr)
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "MalformedSecurityHeader" {
+		t.Fatalf("expected MalformedSecurityHeader 400, got %v", err)
+	}
+	if param, _ := pe.Data["parameterName"].(string); param != "Expires" {
+		t.Fatalf("expected ParameterName Expires, got %q", param)
+	}
+}
+
+func TestSignedURLPutStoresObject(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	date := clock.Now().Format("20060102T150405Z")
+	nr = signedRequest("bkt", "o.txt", "3600", date)
+	nr.Params[wire.MediaKey] = []byte("signed data")
+	nr.Params[wire.ContentTypeKey] = "text/plain"
+	resp, err := p.ObjectsInsert(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("signed PUT: %v / %v", resp, err)
+	}
+
+	media, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "o.txt"))
+	if err != nil {
+		t.Fatalf("get media: %v", err)
+	}
+	if got := string(streamBytes(t, media)); got != "signed data" {
+		t.Fatalf("expected 'signed data', got %q", got)
+	}
+}
+
+func TestSignedURLTamperedSignatureAccepted(t *testing.T) {
+	// Records the deliberate auth bypass: a syntactically valid, unexpired
+	// signed URL is accepted regardless of the signature value.
+	ctx := context.Background()
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	nr = bucketParamsWithObj("bkt", "o.txt")
+	nr.Params[wire.MediaKey] = []byte("payload")
+	nr.Params[wire.ContentTypeKey] = "text/plain"
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert object: %v", err)
+	}
+
+	date := clock.Now().Format("20060102T150405Z")
+	nr = signedRequest("bkt", "o.txt", "3600", date)
+	nr.Params["X-Goog-Signature"] = "garbage-forged-signature"
+	resp, err := p.ObjectsGetMedia(ctx, nr)
+	if err != nil || resp.HTTPStatus != 200 {
+		t.Fatalf("tampered signature must be accepted (200), got %v / %v", resp, err)
 	}
 }

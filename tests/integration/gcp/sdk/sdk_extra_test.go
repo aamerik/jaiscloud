@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,4 +187,67 @@ func TestSDKObjectNameSpaceAndSlash(t *testing.T) {
 		}
 	}
 	require.True(t, found, "object %q not found in listing", name)
+}
+
+// signedURLOpts builds a V4 path-style signed URL option set against the
+// emulator host, using a throwaway SignBytes callback (the emulator does not
+// verify signatures).
+func signedURLOpts(method, contentType string, expires time.Time) *storage.SignedURLOptions {
+	host := strings.TrimPrefix(emulatorHost(), "http://")
+	host = strings.TrimPrefix(host, "https://")
+	return &storage.SignedURLOptions{
+		GoogleAccessID: "test@test.iam.gserviceaccount.com",
+		SignBytes:      func([]byte) ([]byte, error) { return []byte("fake-signature"), nil },
+		Method:         method,
+		ContentType:    contentType,
+		Expires:        expires,
+		Scheme:         storage.SigningSchemeV4,
+		Style:          storage.PathStyle(),
+		Insecure:       true,
+		Hostname:       host,
+	}
+}
+
+// TestSDKSignedURLRoundTrip exercises V4 signed GET and PUT through the SDK's
+// own URL builder (produces the exact X-Goog-* query shape).
+func TestSDKSignedURLRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := newClient(t)
+	bucket := fmt.Sprintf("sdk-signed-%d", time.Now().UnixNano())
+	require.NoError(t, client.Bucket(bucket).Create(ctx, "proj", nil))
+
+	writeObject(t, client, bucket, "o.txt", "signed via sdk")
+
+	// Signed GET -> 200 + object bytes.
+	getURL, err := client.Bucket(bucket).SignedURL("o.txt", signedURLOpts("GET", "", time.Now().Add(time.Hour)))
+	require.NoError(t, err)
+	resp, err := http.Get(getURL)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "signed via sdk", string(body))
+
+	// Signed PUT -> 200, object stored.
+	putURL, err := client.Bucket(bucket).SignedURL("put.txt", signedURLOpts("PUT", "text/plain", time.Now().Add(time.Hour)))
+	require.NoError(t, err)
+	req, err := http.NewRequest("PUT", putURL, strings.NewReader("put bytes"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "text/plain")
+	putResp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	putResp.Body.Close()
+	require.Equal(t, http.StatusOK, putResp.StatusCode)
+
+	// Tampered signature is accepted (records the deliberate auth bypass).
+	u, err := url.Parse(getURL)
+	require.NoError(t, err)
+	q := u.Query()
+	q.Set("X-Goog-Signature", "deadbeef-forged")
+	u.RawQuery = q.Encode()
+	resp, err = http.Get(u.String())
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 }

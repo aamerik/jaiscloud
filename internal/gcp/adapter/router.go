@@ -54,10 +54,15 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 }
 
 // isRawStorageMediaPath reports whether r is a GCS raw media download of the
-// form /{bucket}/{object} (GET/HEAD). Admin routes and JSON-API prefixes are
-// handled elsewhere; only genuine object downloads reach this fallback.
+// form /{bucket}/{object} (GET/HEAD), or a V4 signed-URL upload of the same
+// shape (PUT with an X-Goog-Signature query param). Admin routes and JSON-API
+// prefixes are handled elsewhere; only genuine object requests reach this
+// fallback.
 func isRawStorageMediaPath(r *http.Request) bool {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	switch {
+	case r.Method == http.MethodGet, r.Method == http.MethodHead:
+	case r.Method == http.MethodPut && hasSignedSignature(r):
+	default:
 		return false
 	}
 	p := strings.TrimPrefix(r.URL.Path, "/")
