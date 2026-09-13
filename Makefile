@@ -21,6 +21,14 @@ SPARK_E2E_ICEBERG_IMAGE ?= spark-iceberg-test
 # NO iceberg-gcp-bundle (HadoopFileIO data path — plan_docs/gcp-iceberg-dataproc-e2e.md §7 D1).
 SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 
+# GCP emulator image deployed to the k3d cluster (deploy/k8s/jaiscloud-gcp.yaml).
+# `test-e2e-lakehouse-k3d` rebuilds + pushes it before every run so the pipeline
+# is never validated against a stale emulator binary.
+GCP_REGISTRY   ?= 10.0.100.21:5050
+GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
+# k3d's registry is plain HTTP; buildah defaults to HTTPS, so disable verify.
+GCP_PUSH_FLAGS ?= --tls-verify=false
+
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
 JAISCLOUD_K8S_APISERVER ?= $(shell kubectl config view --context docker-desktop --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
@@ -73,7 +81,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
-        _check-lakehouse-k3d-prereq
+        _check-lakehouse-k3d-prereq _refresh-gcp-image
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -532,9 +540,25 @@ test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tes
 
 ##@ k3d (Kubernetes) e2e
 
-test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq ## Medallion ELT pipeline e2e on k3d — tests/persistent_mode/gcp/lakehouse/ (tag: lakehouse_e2e)
+test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medallion ELT pipeline e2e on k3d — rebuilds the emulator image first (tag: lakehouse_e2e)
+	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
 	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
+
+# Rebuild the emulator image from the working tree and roll the deployment so the
+# pipeline always runs against the code under test, not whatever happens to be in
+# the cluster. A stale image silently broke this suite once already.
+# Set SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed image.
+_refresh-gcp-image:
+	@if [ "$(SKIP_GCP_IMAGE_REBUILD)" = "1" ]; then \
+	  echo "SKIP_GCP_IMAGE_REBUILD=1 — reusing deployed $(GCP_IMAGE)"; \
+	else \
+	  echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."; \
+	  docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile . && \
+	  docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE) && \
+	  kubectl -n $(K8S_NAMESPACE) rollout restart deployment/jaiscloud-gcp && \
+	  kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s; \
+	fi
 
 ##@ Aggregate test targets
 

@@ -130,12 +130,13 @@ func jobLogs(t *testing.T) string {
 
 // summary is the JSON line the pipeline prints on success.
 type summary struct {
-	OK               bool     `json:"PIPELINE_OK"`
-	Pipeline         string   `json:"pipeline"`
-	Stages           []string `json:"stages"`
-	InputRows        int      `json:"input_rows"`
-	CuratedObjects   []string `json:"curated_objects"`
-	PublishedObjects []string `json:"published_objects"`
+	OK                 bool           `json:"PIPELINE_OK"`
+	Pipeline           string         `json:"pipeline"`
+	Stages             []string       `json:"stages"`
+	InputRows          int            `json:"input_rows"`
+	IngestRegionCounts map[string]int `json:"ingest_region_counts"`
+	CuratedObjects     []string       `json:"curated_objects"`
+	PublishedObjects   []string       `json:"published_objects"`
 }
 
 // parseSummary extracts the single {"PIPELINE_OK": ...} JSON object from logs.

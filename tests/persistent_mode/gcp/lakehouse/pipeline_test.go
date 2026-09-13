@@ -23,6 +23,9 @@ import (
 // through a port-forward), so a pipeline that "succeeds" without producing
 // data still fails.
 func TestLakehousePipelineK3d(t *testing.T) {
+	// Matches the pipeline's RECORDS default (deploy/k8s/lakehouse/pipeline.yaml).
+	const wantRecords = 100000
+
 	requireK3d(t)
 
 	deleteJob(t)
@@ -50,8 +53,11 @@ func TestLakehousePipelineK3d(t *testing.T) {
 	if got, want := strings.Join(sum.Stages, ","), "ingest,transform,derive,publish"; got != want {
 		t.Errorf("stages = %q, want %q", got, want)
 	}
-	if sum.InputRows != 24 {
-		t.Errorf("input_rows = %d, want 24", sum.InputRows)
+	if sum.InputRows != wantRecords {
+		t.Errorf("input_rows = %d, want %d", sum.InputRows, wantRecords)
+	}
+	if len(sum.IngestRegionCounts) == 0 {
+		t.Fatalf("no ingest_region_counts in summary: %+v", sum)
 	}
 	if len(sum.CuratedObjects) == 0 {
 		t.Fatalf("no curated objects in summary: %+v", sum)
@@ -74,7 +80,7 @@ func TestLakehousePipelineK3d(t *testing.T) {
 	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
 		t.Fatalf("parse published manifest: %v\n%s", err, manifestRaw)
 	}
-	if manifest.Pipeline != "medallion-elt" || manifest.InputRows != 24 {
+	if manifest.Pipeline != "medallion-elt" || manifest.InputRows != wantRecords {
 		t.Errorf("published manifest mismatch: %+v", manifest)
 	}
 
@@ -97,19 +103,23 @@ func TestLakehousePipelineK3d(t *testing.T) {
 		}
 	}
 
-	want := map[string]int{"US": 12, "EU": 8, "APAC": 4}
-	if len(orders) != len(want) {
-		t.Fatalf("regions = %v, want %v", orders, want)
+	// The published aggregation must reproduce the ingested distribution: that
+	// is what proves the two Spark hops preserved every record and grouped it
+	// correctly (no silent row loss or miscount). The expected counts come from
+	// the pipeline's own ingest-side tally, so the assertion stays correct as
+	// the seed size changes.
+	if len(orders) != len(sum.IngestRegionCounts) {
+		t.Fatalf("published regions = %v, want %v", orders, sum.IngestRegionCounts)
 	}
 	total := 0
-	for region, n := range want {
-		if orders[region] != n {
-			t.Errorf("orders[%s] = %d, want %d", region, orders[region], n)
+	for region, want := range sum.IngestRegionCounts {
+		if got := orders[region]; got != want {
+			t.Errorf("orders[%s] = %d, want %d", region, got, want)
 		}
-		total += n
+		total += want
 	}
-	if total != 24 {
-		t.Errorf("total orders = %d, want 24", total)
+	if total != wantRecords {
+		t.Fatalf("total orders = %d, want %d", total, wantRecords)
 	}
 
 	t.Logf("pipeline OK: %d input rows -> %d published object(s), orders=%v",
