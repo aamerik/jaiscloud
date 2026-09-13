@@ -207,6 +207,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.BucketsInsert":               p.BucketsInsert,
 		"Storage.BucketsGet":                  p.BucketsGet,
 		"Storage.BucketsUpdate":               p.BucketsUpdate,
+		"Storage.BucketsLockRetentionPolicy":  p.BucketsLockRetentionPolicy,
 		"Storage.BucketsDelete":               p.BucketsDelete,
 		"Storage.BucketsGetIamPolicy":         p.BucketsGetIamPolicy,
 		"Storage.BucketsSetIamPolicy":         p.BucketsSetIamPolicy,
@@ -223,6 +224,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.ObjectsDelete":               p.ObjectsDelete,
 		"Storage.ObjectsRewrite":              p.ObjectsRewrite,
 		"Storage.ObjectsCopy":                 p.ObjectsCopy,
+		"Storage.ObjectsMove":                 p.ObjectsMove,
+		"Storage.ObjectsRestore":              p.ObjectsRestore,
 		"Storage.ObjectsCompose":              p.ObjectsCompose,
 		"Storage.ObjectACLList":               p.ObjectACLList,
 		"Storage.ObjectACLInsert":             p.ObjectACLInsert,
@@ -244,6 +247,11 @@ type bucketMeta struct {
 	RetentionPolicy map[string]any `json:"retentionPolicy,omitempty"`
 	Lifecycle       map[string]any `json:"lifecycle,omitempty"`
 	Encryption      map[string]any `json:"encryption,omitempty"`
+	// Cors is the bucket's cross-origin resource sharing config (GCS
+	// Bucket.cors): a list of {origin[], method[], responseHeader[],
+	// maxAgeSeconds} rules. Stored verbatim so it round-trips through the
+	// bucket-meta JSON on both the memory and Postgres stores.
+	Cors []any `json:"cors,omitempty"`
 }
 
 type objectMeta struct {
@@ -567,6 +575,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.RetentionPolicy = bodyMap(body, "retentionPolicy")
 	b.Lifecycle = bodyMap(body, "lifecycle")
 	b.Encryption = bodyMap(body, "encryption")
+	b.Cors = bodySlice(body, "cors")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
@@ -617,7 +626,24 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 			b.Versioning = bodyMap(body, "versioning")
 		}
 		if _, ok := body["retentionPolicy"]; ok {
-			b.RetentionPolicy = bodyMap(body, "retentionPolicy")
+			newRP := bodyMap(body, "retentionPolicy")
+			oldRP, _ := meta["retentionPolicy"].(map[string]any)
+			if locked, _ := oldRP["isLocked"].(bool); locked {
+				// Once a bucket's retention policy is locked it can be
+				// extended but never removed or shortened (GCS makes the lock
+				// irreversible). Preserve the lock and its effectiveTime.
+				if newRP == nil || retentionPeriodSeconds(newRP) < retentionPeriodSeconds(oldRP) {
+					return nil, model.NewProviderError("InvalidRequest",
+						"Bucket retention policy is locked and cannot be removed or shortened", 400)
+				}
+				newRP["isLocked"] = true
+				if _, ok := newRP["effectiveTime"]; !ok {
+					if et, ok := oldRP["effectiveTime"]; ok {
+						newRP["effectiveTime"] = et
+					}
+				}
+			}
+			b.RetentionPolicy = newRP
 		}
 		if _, ok := body["lifecycle"]; ok {
 			b.Lifecycle = bodyMap(body, "lifecycle")
@@ -625,9 +651,63 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		if _, ok := body["encryption"]; ok {
 			b.Encryption = bodyMap(body, "encryption")
 		}
+		if _, ok := body["cors"]; ok {
+			b.Cors = bodySlice(body, "cors")
+		}
 		b.Metageneration = bumpMeta(gcs.BucketMetageneration(meta))
 		b.Updated = clock.Now().Format(time.RFC3339Nano)
 		return bucketToMap(b), nil
+	})
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
+		return nil, err
+	}
+	return provider.OK(toBucketMap(nr, mapToBucket(updated))), nil
+}
+
+// BucketsLockRetentionPolicy implements buckets.lockRetentionPolicy. Locking is
+// irreversible: the bucket's retentionPolicy.isLocked is set true (with an
+// effectiveTime) and the metageneration bumped. The optional
+// ifMetagenerationMatch is validated atomically with the mutation. A bucket
+// with no retention policy, or an unknown bucket, is NotFound; an already
+// locked policy is returned unchanged (locking is idempotent).
+func (p *Provider) BucketsLockRetentionPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["bucket"].(string)
+	if name == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing bucket name", 400)
+	}
+	var pre *gcs.Precondition
+	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+		pre = &gcs.Precondition{MetagenerationMatch: &v}
+	}
+	updated, err := p.objects.UpdateBucketMetaAtomic(ctx, name, func(meta map[string]any) (map[string]any, error) {
+		if !gcs.BucketMetagenerationMatches(meta, pre) {
+			return nil, gcs.ErrPreconditionFailed
+		}
+		rp, _ := meta["retentionPolicy"].(map[string]any)
+		if len(rp) == 0 {
+			return nil, model.NewProviderError("NotFound", "bucket has no retention policy", 404)
+		}
+		if locked, _ := rp["isLocked"].(bool); locked {
+			return meta, nil
+		}
+		next := make(map[string]any, len(rp)+1)
+		for k, v := range rp {
+			next[k] = v
+		}
+		next["isLocked"] = true
+		if _, ok := next["effectiveTime"]; !ok {
+			next["effectiveTime"] = clock.Now().Format(time.RFC3339Nano)
+		}
+		meta["retentionPolicy"] = next
+		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
+		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
+		return meta, nil
 	})
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
@@ -1210,6 +1290,30 @@ func (p *Provider) BucketVersioned(ctx context.Context, bucket string) bool {
 	return p.bucketVersioned(ctx, bucket)
 }
 
+// GetBucketCORSRules returns the stored CORS rules for a bucket, in the shape
+// the gateway CORS interceptor expects. It is wired into the gateway via
+// WithGCSCORSLookup and is deliberately context-free (the gateway calls it
+// outside a request context). Nil when the bucket or its cors config is absent.
+func (p *Provider) GetBucketCORSRules(bucket string) []map[string]any {
+	meta, err := p.objects.GetBucket(context.Background(), bucket)
+	if err != nil {
+		return nil
+	}
+	switch v := meta["cors"].(type) {
+	case []map[string]any:
+		return v
+	case []any:
+		out := make([]map[string]any, 0, len(v))
+		for _, r := range v {
+			if m, ok := r.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // readSourceRaw reads and decrypts an object's plaintext bytes.
 func (p *Provider) readSourceRaw(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, params map[string]any) (gcs.ObjectMeta, []byte, error) {
 	meta, err := p.getObjectForRead(ctx, bucket, object, params)
@@ -1364,6 +1468,148 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 		return objectMeta{}, err
 	}
 	return final, nil
+}
+
+// sourcePrecondition parses the ifSourceGenerationMatch/NotMatch and
+// ifSourceMetagenerationMatch/NotMatch query params used by objects.move to
+// guard the source object. Nil when none is present.
+func sourcePrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
+	var pre gcs.Precondition
+	set := false
+	if v, ok := parseInt64Param(nr, "ifSourceGenerationMatch"); ok {
+		pre.GenerationMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifSourceGenerationNotMatch"); ok {
+		pre.GenerationNotMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifSourceMetagenerationMatch"); ok {
+		pre.MetagenerationMatch = &v
+		set = true
+	}
+	if v, ok := parseInt64Param(nr, "ifSourceMetagenerationNotMatch"); ok {
+		pre.MetagenerationNotMatch = &v
+		set = true
+	}
+	if !set {
+		return nil
+	}
+	return &pre
+}
+
+// objectMetaPreconditionMatches reports whether p is satisfied by the given
+// (live) object metadata. A nil p always matches. Mirrors the store's
+// unexported objectPreconditionMatches for callers holding an already-read
+// ObjectMeta.
+func objectMetaPreconditionMatches(m gcs.ObjectMeta, p *gcs.Precondition) bool {
+	if p == nil {
+		return true
+	}
+	gen, _ := strconv.ParseInt(m.Generation, 10, 64)
+	metagen, _ := strconv.ParseInt(m.Metageneration, 10, 64)
+	if p.GenerationMatch != nil && gen != *p.GenerationMatch {
+		return false
+	}
+	if p.GenerationNotMatch != nil && gen == *p.GenerationNotMatch {
+		return false
+	}
+	if p.MetagenerationMatch != nil && metagen != *p.MetagenerationMatch {
+		return false
+	}
+	if p.MetagenerationNotMatch != nil && metagen == *p.MetagenerationNotMatch {
+		return false
+	}
+	return true
+}
+
+// ObjectsMove implements objects.move. It copies the source object's bytes and
+// metadata to the destination under a fresh generation, then deletes the source
+// — a copy-then-delete, matching the gRPC MoveObject semantics. The destination
+// write goes first so a failure never loses the source's bytes. Destination
+// preconditions (ifGenerationMatch/...) are enforced atomically by the write;
+// source preconditions (ifSourceGenerationMatch/...) are validated against the
+// source metadata before the copy.
+func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	srcBucket, _ := nr.Params["sourceBucket"].(string)
+	srcObject, _ := nr.Params["sourceObject"].(string)
+	dstBucket, _ := nr.Params["destinationBucket"].(string)
+	dstObject, _ := nr.Params["destinationObject"].(string)
+	if dstBucket == "" {
+		dstBucket = srcBucket
+	}
+	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
+		return nil, model.NewProviderError("InvalidRequest", "move requires source and destination object names", 400)
+	}
+	if srcBucket == dstBucket && srcObject == dstObject {
+		return nil, model.NewProviderError("InvalidRequest", "source and destination object must differ", 400)
+	}
+	if err := p.scopeToBucket(ctx, nr, dstBucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "destination bucket not found", 404)
+		}
+		return nil, err
+	}
+
+	srcMeta, raw, err := p.readSourceRaw(ctx, nr, srcBucket, srcObject, map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	if !objectMetaPreconditionMatches(srcMeta, sourcePrecondition(nr)) {
+		return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+	}
+
+	now := clock.Now()
+	o := fromStoreObject(nr, srcMeta)
+	o.Name = dstObject
+	o.Bucket = dstBucket
+	o.Generation = p.nextGen()
+	o.Metageneration = "1"
+	o.TimeCreated = now.Format(time.RFC3339Nano)
+	o.Updated = o.TimeCreated
+	o.Retention = nil
+	o.RetentionExpirationTime = ""
+	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
+	o.Etag = "CAE="
+	base := baseURL(nr)
+	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
+
+	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.DeleteObjectData(ctx, srcBucket, srcObject, objectPrecondition(nr)); err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(final)), nil
+}
+
+// ObjectsRestore implements objects.restore: a non-live (soft-deleted) object
+// generation is made live again, superseding the current live generation if
+// any. The store's RestoreObjectGeneration validates the ifGeneration*/
+// ifMetageneration* preconditions atomically with the mutation.
+func (p *Provider) ObjectsRestore(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	object, _ := nr.Params["object"].(string)
+	generation, _ := nr.Params["generation"].(string)
+	if bucket == "" || object == "" || generation == "" {
+		return nil, model.NewProviderError("InvalidRequest", "restore requires bucket, object, and generation", 400)
+	}
+	meta, err := p.objects.RestoreObjectGeneration(ctx, bucket, object, generation, objectPrecondition(nr))
+	if err != nil {
+		switch {
+		case errors.Is(err, gcs.ErrNoSuchBucket):
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		case errors.Is(err, gcs.ErrNoSuchObject):
+			return nil, model.NewProviderError("NotFound", "object generation not found", 404)
+		case errors.Is(err, gcs.ErrPreconditionFailed):
+			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		default:
+			return nil, err
+		}
+	}
+	return provider.OK(toMap(fromStoreObject(nr, meta))), nil
 }
 
 // ObjectsCompose implements objects.compose (the GCS JSON API compose action
@@ -1826,6 +2072,9 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	if b.Encryption != nil {
 		out["encryption"] = b.Encryption
 	}
+	if b.Cors != nil {
+		out["cors"] = b.Cors
+	}
 	return out
 }
 
@@ -1836,6 +2085,35 @@ func bodyMap(body map[string]any, key string) map[string]any {
 	}
 	m, _ := body[key].(map[string]any)
 	return m
+}
+
+// bodySlice returns the named array-valued field from the request body, or nil.
+func bodySlice(body map[string]any, key string) []any {
+	if body == nil {
+		return nil
+	}
+	v, _ := body[key].([]any)
+	return v
+}
+
+// retentionPeriodSeconds extracts a retention policy's period in seconds.
+// GCS carries retentionPeriod as a decimal-second string; a Go-style duration
+// is also accepted for tolerance. Returns 0 when absent/unparseable.
+func retentionPeriodSeconds(rp map[string]any) int64 {
+	if rp == nil {
+		return 0
+	}
+	period, _ := rp["retentionPeriod"].(string)
+	if period == "" {
+		return 0
+	}
+	if n, err := strconv.ParseInt(period, 10, 64); err == nil {
+		return n
+	}
+	if d, err := time.ParseDuration(period); err == nil {
+		return int64(d.Seconds())
+	}
+	return 0
 }
 
 // parseRetentionPeriod parses a retentionPeriod string. GCS carries this as a

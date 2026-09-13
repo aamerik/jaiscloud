@@ -112,6 +112,11 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		default:
 			nr.Action = "BucketsGet"
 		}
+	case len(seg) == 3 && seg[0] == "b" && seg[2] == "lockRetentionPolicy":
+		// /b/{bucket}/lockRetentionPolicy — buckets.lockRetentionPolicy. The
+		// ifMetagenerationMatch query param is captured by queryToParams.
+		nr.Params["bucket"] = seg[1]
+		nr.Action = "BucketsLockRetentionPolicy"
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "iam":
 		// /b/{bucket}/iam
 		nr.Params["bucket"] = seg[1]
@@ -202,6 +207,28 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 			}
 			nr.Params["body"] = m
 		}
+	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o" && segmentIndex(seg, "moveTo") >= 0:
+		// /b/{srcBucket}/o/{srcObject...}/moveTo/o/{dstObject...} (same bucket)
+		// or /b/{srcBucket}/o/{srcObject...}/moveTo/b/{dstBucket}/o/{dstObject...}
+		// (cross-bucket; the discovery doc models the same-bucket form, but real
+		// GCS clients use the /moveTo/b/.../o/... form too, so both are accepted).
+		mi := segmentIndex(seg, "moveTo")
+		nr.Params["sourceBucket"] = seg[1]
+		nr.Params["sourceObject"] = strings.Join(seg[3:mi], "/")
+		if mi+3 < len(seg) && seg[mi+1] == "b" && seg[mi+3] == "o" {
+			nr.Params["destinationBucket"] = seg[mi+2]
+			nr.Params["destinationObject"] = strings.Join(seg[mi+4:], "/")
+		} else {
+			nr.Params["destinationBucket"] = seg[1]
+			nr.Params["destinationObject"] = strings.Join(seg[mi+2:], "/")
+		}
+		nr.Action = "ObjectsMove"
+	case len(seg) >= 5 && seg[0] == "b" && seg[2] == "o" && seg[len(seg)-1] == "restore":
+		// /b/{bucket}/o/{object...}/restore — objects.restore (soft-delete restore).
+		// The generation to restore is carried by the ?generation= query param.
+		nr.Params["bucket"] = seg[1]
+		nr.Params["object"] = strings.Join(seg[3:len(seg)-1], "/")
+		nr.Action = "ObjectsRestore"
 	case len(seg) >= 4 && seg[0] == "b" && seg[2] == "o" && seg[len(seg)-1] == "compose":
 		// /b/{bucket}/o/{destination...}/compose
 		nr.Params["bucket"] = seg[1]

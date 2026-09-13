@@ -436,6 +436,7 @@ func startCmd() *cobra.Command {
 
 			var gatewayOpts []func(*gateway.Server)
 			gatewayOpts = append(gatewayOpts, gateway.WithBarrier(barrier))
+			gatewayOpts = append(gatewayOpts, gateway.WithGCSCORSLookup(storageP.GetBucketCORSRules))
 			if cfg.GCPMetadataEnabled {
 				metaCfg := gcpadapter.MetadataConfig{
 					ProjectID:      cfg.ProjectID,

@@ -46,6 +46,10 @@ type Server struct {
 	// corsLookup returns the stored CORS rules for a given S3 bucket name.
 	// If nil, CORS preflight handling is disabled.
 	corsLookup func(bucket string) []map[string]any
+	// gcsCorsLookup returns the stored CORS rules for a given GCS bucket name.
+	// If nil, GCS CORS preflight handling is disabled. Only the GCP binary
+	// wires this, so S3/AWS behavior is unaffected.
+	gcsCorsLookup func(bucket string) []map[string]any
 	// barrier gates cloud requests during import/reset (503 while write-lock held).
 	barrier middleware.BarrierMiddleware
 }
@@ -73,6 +77,17 @@ func WithExtraRoutes(attach func(chi.Router)) func(*Server) {
 func WithCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
 	return func(s *Server) {
 		s.corsLookup = fn
+	}
+}
+
+// WithGCSCORSLookup wires in a function that returns stored GCS bucket CORS
+// rules (GCS's Bucket.cors shape). When set, the server intercepts OPTIONS
+// preflight requests on GCS paths and adds Access-Control-* headers to regular
+// GCS responses that carry an Origin header. It is independent of
+// WithCORSLookup, so wiring it never alters S3/AWS CORS behavior.
+func WithGCSCORSLookup(fn func(bucket string) []map[string]any) func(*Server) {
+	return func(s *Server) {
+		s.gcsCorsLookup = fn
 	}
 }
 
@@ -229,6 +244,22 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// GCS bucket CORS preflight (independent of the S3 path above).
+	if s.gcsCorsLookup != nil {
+		origin := r.Header.Get("Origin")
+		if origin != "" && r.Method == http.MethodOptions {
+			reqMethod := r.Header.Get("Access-Control-Request-Method")
+			bucket := gcsCORSExtractBucket(r)
+			rule, ok := gcsCORSMatchRule(s.gcsCorsLookup(bucket), origin, reqMethod)
+			if !ok {
+				http.Error(w, "CORS request not allowed", http.StatusForbidden)
+				return
+			}
+			gcsCORSPreflightHeaders(w, rule, origin, r.Header.Get("Access-Control-Request-Headers"))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
 
 	streaming := isS3StreamingUpload(r) || isGCSStreamingUpload(r)
 
@@ -346,6 +377,11 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			bucket := corsExtractBucket(r)
 			rules := s.corsLookup(bucket)
 			CORSAddResponseHeaders(headers, rules, origin)
+		}
+	}
+	if s.gcsCorsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			gcsCORSAddResponseHeaders(headers, s.gcsCorsLookup(gcsCORSExtractBucket(r)), origin)
 		}
 	}
 	if stream, ok := resp.Data["_stream"].(io.ReadCloser); ok {
