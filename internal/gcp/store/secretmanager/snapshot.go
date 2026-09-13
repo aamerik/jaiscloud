@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"time"
 )
 
 // --- Memory store ---
@@ -91,15 +92,19 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]versionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, data FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, data FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r versionRow
-		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &r.Version.Data); err != nil {
+		var destroyTime *time.Time
+		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &r.Version.Data); err != nil {
 			vrows.Close()
 			return err
+		}
+		if destroyTime != nil {
+			r.Version.DestroyTime = *destroyTime
 		}
 		r.Version.SecretID = r.SecretID
 		versions = append(versions, r)
@@ -153,8 +158,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.Versions {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, data) VALUES ($1,$2,$3,$4,$5,$6)`,
-			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, r.Version.Data); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), r.Version.Data); err != nil {
 			return err
 		}
 	}

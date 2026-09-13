@@ -147,6 +147,10 @@ func TestSecretManagerEndToEnd(t *testing.T) {
 	if dis.GetState() != secretmanagerpb.SecretVersion_DISABLED {
 		t.Fatalf("DisableSecretVersion state = %v, want DISABLED", dis.GetState())
 	}
+	// A disabled version cannot be accessed.
+	if _, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: secret + "/versions/1"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("AccessSecretVersion disabled err = %v, want FailedPrecondition", err)
+	}
 
 	en, err := client.EnableSecretVersion(ctx, &secretmanagerpb.EnableSecretVersionRequest{Name: secret + "/versions/1"})
 	if err != nil {
@@ -162,6 +166,16 @@ func TestSecretManagerEndToEnd(t *testing.T) {
 	}
 	if des.GetState() != secretmanagerpb.SecretVersion_DESTROYED {
 		t.Fatalf("DestroySecretVersion state = %v, want DESTROYED", des.GetState())
+	}
+	if des.GetDestroyTime() == nil {
+		t.Fatal("DestroySecretVersion destroyTime is nil")
+	}
+	// DESTROYED is terminal.
+	if _, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: secret + "/versions/1"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("AccessSecretVersion destroyed err = %v, want FailedPrecondition", err)
+	}
+	if _, err := client.EnableSecretVersion(ctx, &secretmanagerpb.EnableSecretVersionRequest{Name: secret + "/versions/1"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("EnableSecretVersion destroyed err = %v, want FailedPrecondition", err)
 	}
 
 	// Get a missing version → NotFound.

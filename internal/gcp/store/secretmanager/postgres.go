@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"time"
 
 	"jaiscloud/internal/clock"
 
@@ -189,30 +190,34 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID string, v V
 		v.CreateTime = clock.Now()
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, v.Data, v.KmsKeyName, v.WrappedDEK)
+		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, nullableTime(v.DestroyTime), v.Data, v.KmsKeyName, v.WrappedDEK)
 	return err
 }
 
 func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, versionID string) (Version, error) {
 	var v Version
+	var destroyTime *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
 	if err != nil {
 		return Version{}, err
 	}
+	if destroyTime != nil {
+		v.DestroyTime = *destroyTime
+	}
 	return v, nil
 }
 
 func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID string) ([]Version, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, state, create_time, data, kms_key_name, wrapped_dek
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 ORDER BY version_id
 	`, projectID, secretID)
 	if err != nil {
@@ -222,8 +227,12 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 	var result []Version
 	for rows.Next() {
 		var v Version
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK); err != nil {
+		var destroyTime *time.Time
+		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK); err != nil {
 			return nil, err
+		}
+		if destroyTime != nil {
+			v.DestroyTime = *destroyTime
 		}
 		result = append(result, v)
 	}
@@ -233,8 +242,8 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 
 func (s *PostgresStore) UpdateVersion(ctx context.Context, projectID string, v Version) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_versions SET state=$4 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, v.SecretID, v.VersionID, v.State)
+		UPDATE jc_sm_versions SET state=$4, destroy_time=$5 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
+	`, projectID, v.SecretID, v.VersionID, v.State, nullableTime(v.DestroyTime))
 	if err != nil {
 		return err
 	}
@@ -265,4 +274,11 @@ func (s *PostgresStore) NextVersion(ctx context.Context, projectID, secretID str
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_sm_versions`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets`)
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }

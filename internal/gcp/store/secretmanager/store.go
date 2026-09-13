@@ -39,9 +39,11 @@ type Version struct {
 	VersionID  string
 	State      string
 	CreateTime time.Time
-	Data       string // base64 payload
-	KmsKeyName string
-	WrappedDEK []byte
+	// DestroyTime is set only when State is DESTROYED (output-only in the API).
+	DestroyTime time.Time
+	Data        string // base64 payload
+	KmsKeyName  string
+	WrappedDEK  []byte
 }
 
 // Store is the Secret Manager store.

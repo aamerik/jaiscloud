@@ -18,9 +18,9 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/secrets/s:addVersion", "AddVersion"},
 		{"POST", "/v1/projects/p/secrets/s/versions/1:access", "Access"},
 		{"GET", "/v1/projects/p/secrets/s/versions/1", "GetVersion"},
-		{"GET", "/v1/projects/p/secrets/s:getIamPolicy", "SecretGetIamPolicy"},
-		{"POST", "/v1/projects/p/secrets/s:setIamPolicy", "SecretSetIamPolicy"},
-		{"POST", "/v1/projects/p/secrets/s:testIamPermissions", "SecretTestIamPermissions"},
+		{"GET", "/v1/projects/p/secrets/s:getIamPolicy", "GetIamPolicy"},
+		{"POST", "/v1/projects/p/secrets/s:setIamPolicy", "SetIamPolicy"},
+		{"POST", "/v1/projects/p/secrets/s:testIamPermissions", "TestIamPermissions"},
 		// Pub/Sub
 		{"PUT", "/v1/projects/p/topics/t", "TopicCreate"},
 		{"GET", "/v1/projects/p/topics", "TopicList"},

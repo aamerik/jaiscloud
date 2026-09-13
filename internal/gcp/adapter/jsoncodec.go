@@ -308,11 +308,11 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom s
 			case "enable":
 				return "EnableVersion"
 			case "getIamPolicy":
-				return "SecretGetIamPolicy"
+				return "GetIamPolicy"
 			case "setIamPolicy":
-				return "SecretSetIamPolicy"
+				return "SetIamPolicy"
 			case "testIamPermissions":
-				return "SecretTestIamPermissions"
+				return "TestIamPermissions"
 			}
 		case "cryptoKeys":
 			switch custom {
