@@ -85,7 +85,8 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
-        _check-lakehouse-k3d-prereq _refresh-gcp-image
+        _check-lakehouse-k3d-prereq _refresh-gcp-image \
+        test-gcp-wire-conformance record-gcp-wire-conformance
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -516,6 +517,22 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	@cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
 	@cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
 	@cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
+	@echo "Stopping jaiscloud-gcp..."
+	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
+test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
+	go test -tags gcp_conformance ./tests/gcpconformance/
+
+record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
+	@echo "Building jaiscloud-gcp..."
+	@go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-conformance.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"
+	@GCP_CONFORMANCE_RECORD=1 GCP_CONFORMANCE_ENDPOINT=http://localhost:8080 \
+	  go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
 	@echo "Stopping jaiscloud-gcp..."
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
 

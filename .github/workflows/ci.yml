@@ -319,6 +319,80 @@ jobs:
         run: |
           if [ -f gcp-server.pid ]; then kill $(cat gcp-server.pid) || true; fi
 
+  # Wire-conformance gate: records a transcript from a freshly-built emulator and
+  # validates every response (and error envelope) against the vendored official
+  # Discovery schemas. Fails the build on any high-severity divergence, so a
+  # regression in the emulator's wire contract can't merge silently.
+  test-gcp-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-gcp-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-gcp-
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build jaiscloud-gcp
+        run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
+      - name: Start jaiscloud-gcp (ephemeral)
+        run: |
+          ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > gcp-conformance.log 2>&1 & echo $! > gcp-conformance.pid
+
+      - name: Wait for GCP server health
+        run: |
+          for i in {1..60}; do
+            if curl -sfS http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; then
+              echo "gcp server healthy"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-conformance.log
+          exit 1
+
+      - name: Record wire transcript against the live emulator
+        env:
+          GCP_CONFORMANCE_RECORD: "1"
+          GCP_CONFORMANCE_ENDPOINT: http://localhost:8080
+        run: go test -tags gcp_conformance -run TestRecord -v ./tests/gcpconformance/
+
+      - name: Validate responses against Discovery schemas (fails on high severity)
+        run: go test -tags gcp_conformance -run TestTranscriptsConform -v ./tests/gcpconformance/
+
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-conformance-report
+          path: tests/gcpconformance/testdata/report/
+
+      - name: Upload GCP server log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-conformance-server-log
+          path: gcp-conformance.log
+
+      - name: Stop GCP server
+        if: always()
+        run: |
+          if [ -f gcp-conformance.pid ]; then kill $(cat gcp-conformance.pid) || true; fi
+
   # Persistence-mode tests backed by a Postgres service container.
   test-gcp-persistence:
     runs-on: ubuntu-latest

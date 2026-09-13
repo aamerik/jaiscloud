@@ -827,6 +827,15 @@ func (p *Provider) CancelJob(ctx context.Context, nr *model.NormalizedRequest) (
 	return provider.OK(map[string]any{"kind": kindPrefix + "jobCancelResponse", "job": p.jobMap(projectOf(nr), j)}), nil
 }
 
+// emptyTableSchema is the result schema for a query the emulator answers
+// without a SQL engine: a TableSchema with no fields. Discovery types
+// queryResponse/getQueryResultsResponse "schema" as a TableSchema object, so
+// returning JSON null is a wire-contract violation (surfaced by
+// tests/gcpconformance against the vendored BigQuery Discovery snapshot).
+func emptyTableSchema() map[string]any {
+	return map[string]any{"fields": []any{}}
+}
+
 func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyMap(nr)
 	query := strValue(body, "query")
@@ -861,7 +870,7 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 		"kind":         kindPrefix + "queryResponse",
 		"jobComplete":  true,
 		"jobReference": ref,
-		"schema":       nil,
+		"schema":       emptyTableSchema(),
 		"rows":         []any{},
 		"totalRows":    "0",
 	}), nil
@@ -882,7 +891,7 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 			"projectId": projectOf(nr),
 			"jobId":     jobID,
 		},
-		"schema":    nil,
+		"schema":    emptyTableSchema(),
 		"rows":      []any{},
 		"totalRows": "0",
 	}), nil
