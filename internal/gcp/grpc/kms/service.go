@@ -70,6 +70,37 @@ func keyRingErr(err error) error {
 	return mapError(err)
 }
 
+// requireVersionEnabled rejects use of a crypto-key version that is not ENABLED.
+func (s *Service) requireVersionEnabled(ctx context.Context, project, loc, kr, key, version string) error {
+	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return mapError(versionNotEnabledErr(version, v.State))
+	}
+	return nil
+}
+
+// primaryState reports the state of a crypto key's primary version.
+func (s *Service) primaryState(ctx context.Context, project string, k kmsstore.CryptoKey) string {
+	if k.PrimaryVersion == "" {
+		return "ENABLED"
+	}
+	v, err := s.keys.GetVersion(ctx, project, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion)
+	if err != nil || v.State == "" {
+		return "ENABLED"
+	}
+	return v.State
+}
+
+func versionNotEnabledErr(version, state string) *model.ProviderError {
+	return &model.ProviderError{
+		Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+		Message: "CryptoKeyVersion " + version + " is " + state,
+	}
+}
+
 func keyErr(err error) error {
 	if errors.Is(err, kmsstore.ErrNoSuchCryptoKey) {
 		return mapError(model.NewProviderError("NotFound", "crypto key not found", 404))
@@ -236,7 +267,7 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
 	out := make([]*kmspb.CryptoKey, 0, len(page))
 	for _, k := range page {
-		out = append(out, cryptoKeyToProto(project, k))
+		out = append(out, cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)))
 	}
 	return &kmspb.ListCryptoKeysResponse{CryptoKeys: out, NextPageToken: next, TotalSize: int32(len(keys))}, nil
 }
@@ -289,7 +320,7 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 		}
 		return nil, mapError(err)
 	}
-	return cryptoKeyToProto(project, ck), nil
+	return cryptoKeyToProto(project, ck, "ENABLED"), nil
 }
 
 func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyRequest) (*kmspb.CryptoKey, error) {
@@ -301,7 +332,7 @@ func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyReque
 	if err != nil {
 		return nil, keyErr(err)
 	}
-	return cryptoKeyToProto(project, k), nil
+	return cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)), nil
 }
 
 // UpdateCryptoKey applies the update_mask to the mutable fields. `labels` and
@@ -330,7 +361,7 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKe
 	if err != nil {
 		return nil, keyErr(err)
 	}
-	return cryptoKeyToProto(project, k), nil
+	return cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)), nil
 }
 
 // applyCryptoKeyMask merges an incoming crypto key into the stored key
@@ -375,7 +406,7 @@ func (s *Service) UpdateCryptoKeyPrimaryVersion(ctx context.Context, req *kmspb.
 		return nil, versionErr(err)
 	}
 	ck, _ := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
-	return cryptoKeyToProto(project, ck), nil
+	return cryptoKeyToProto(project, ck, s.primaryState(ctx, project, ck)), nil
 }
 
 // ─── CryptoKeyVersions ────────────────────────────────────────────────────────
@@ -482,6 +513,9 @@ func (s *Service) Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmsp
 	if version == "" {
 		version = ck.PrimaryVersion
 	}
+	if err := s.requireVersionEnabled(ctx, project, loc, kr, key, version); err != nil {
+		return nil, err
+	}
 	keyMat, err := s.keys.KeyMaterial(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -520,6 +554,9 @@ func (s *Service) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmsp
 	if err != nil {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid ciphertext", 400))
 	}
+	if err := s.requireVersionEnabled(ctx, project, loc, kr, key, version); err != nil {
+		return nil, err
+	}
 	keyMat, err := s.keys.KeyMaterial(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -544,6 +581,9 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
 	}
 	digest, err := digestBytes(req.GetDigest(), req.GetData(), v.Algorithm)
 	if err != nil {
@@ -589,6 +629,9 @@ func (s *Service) AsymmetricDecrypt(ctx context.Context, req *kmspb.AsymmetricDe
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
 	}
 	priv, err := s.keys.PrivateKey(ctx, project, loc, kr, key, version)
 	if err != nil {
@@ -640,6 +683,9 @@ func (s *Service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyReque
 	if err != nil {
 		return nil, versionErr(err)
 	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
+	}
 	pub, err := s.keys.PublicKey(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -665,6 +711,9 @@ func (s *Service) MacSign(ctx context.Context, req *kmspb.MacSignRequest) (*kmsp
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
 	}
 	if !strings.HasPrefix(v.Algorithm, "HMAC_") {
 		return nil, mapError(model.NewProviderError("FailedPrecondition", "key is not for MAC", 400))
@@ -697,6 +746,9 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
 	}
 	if !strings.HasPrefix(v.Algorithm, "HMAC_") {
 		return nil, mapError(model.NewProviderError("FailedPrecondition", "key is not for MAC", 400))
@@ -823,13 +875,16 @@ func keyRingToProto(project, location string, kr kmsstore.KeyRing) *kmspb.KeyRin
 	return out
 }
 
-func cryptoKeyToProto(project string, k kmsstore.CryptoKey) *kmspb.CryptoKey {
+func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryState string) *kmspb.CryptoKey {
+	if primaryState == "" {
+		primaryState = "ENABLED"
+	}
 	out := &kmspb.CryptoKey{
 		Name:    cryptoKeyName(project, k.Location, k.KeyRingID, k.ID),
 		Purpose: purposeToProto(k.Purpose),
 		Primary: &kmspb.CryptoKeyVersion{
 			Name:            versionName(project, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
-			State:           kmspb.CryptoKeyVersion_ENABLED,
+			State:           stateToProto(primaryState),
 			Algorithm:       algorithmToProto(k.Algorithm),
 			ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
 		},
