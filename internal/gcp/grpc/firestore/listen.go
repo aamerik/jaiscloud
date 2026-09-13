@@ -49,6 +49,13 @@ type listenTarget struct {
 	// frames is the emulator's approximation of that cursor (see the package
 	// doc's Listen fidelity note).
 	seq uint64
+
+	// view is the set of document names currently in this target's result set
+	// (the snapshot, adjusted by every live delta since). A live change is
+	// diffed against it to decide whether the document enters the view
+	// (DocumentChange), leaves it (DocumentRemove), or was deleted
+	// (DocumentDelete).
+	view map[string]struct{}
 }
 
 func (t listenTarget) isQuery() bool { return t.query != nil }
@@ -162,6 +169,7 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 		return err
 	}
 	lt := &target
+	lt.view = map[string]struct{}{}
 	ls.targets[id] = lt
 
 	if err := ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
@@ -183,11 +191,11 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 	base := ls.srv.svc.CurrentSeq()
 
 	// A valid, unexpired resume token replays only this target's deltas after
-	// it; an absent, malformed, evicted, or pre-reset token falls back to the
-	// full initial snapshot. seq == 0 is treated as the start of time (not a
-	// resumable position) because the change log records only writes, not a
-	// document history, so replaying from zero cannot reconstruct documents
-	// that predate the log.
+	// it; an absent, malformed, evicted, or pre-reset token cannot be honored,
+	// so the target is reset and given a fresh snapshot. seq == 0 is treated as
+	// the start of time (not a resumable position) because the change log
+	// records only writes, not a document history, so replaying from zero
+	// cannot reconstruct documents that predate the log.
 	incremental := false
 	if rt, ok := t.GetResumeType().(*firestorepb.Target_ResumeToken); ok {
 		if seq, valid := DecodeResumeToken(rt.ResumeToken); valid && seq > 0 && ls.srv.svc.ReplayableFrom(seq) {
@@ -202,10 +210,17 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 					}
 				}
 			}
+			// Seed the view from current state so the first live delta diffs
+			// against the resumed result set instead of re-emitting all of it.
+			if err := ls.seedView(lt); err != nil {
+				return err
+			}
+		} else if err := ls.sendReset(id); err != nil {
+			return err
 		}
 	}
 	if !incremental {
-		if err := ls.sendSnapshot(id, *lt); err != nil {
+		if err := ls.sendSnapshot(id, lt); err != nil {
 			return err
 		}
 	}
@@ -286,8 +301,7 @@ func (ls *listenSession) handleRemoveTarget(id int32) error {
 func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
 	sent := false
 	for id, t := range ls.targets {
-		if ls.targetMatches(*t, ev) {
-			_ = ls.sendChange(id, ev)
+		if ls.applyChange(id, t, ev) {
 			if ev.Seq > t.seq {
 				t.seq = ev.Seq
 			}
@@ -302,6 +316,77 @@ func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
 	// on NO_CHANGE, so real-time deltas would otherwise never surface through
 	// Snapshots.
 	_ = ls.sendNoChange()
+}
+
+// applyChange diffs one live change against a target's current view and emits
+// the resulting deltas (DocumentChange on entry/update, DocumentRemove on
+// exit, DocumentDelete on delete). It reports whether any frame was sent.
+func (ls *listenSession) applyChange(id int32, t *listenTarget, ev firestoreprovider.ChangeEvent) bool {
+	if !ls.targetMatches(*t, ev) {
+		return false
+	}
+	if !t.isQuery() {
+		if ev.Doc == nil {
+			delete(t.view, ev.Name)
+			return ls.sendDocumentDelete(id, ev.Name) == nil
+		}
+		t.view[ev.Name] = struct{}{}
+		return ls.sendDocumentChange(id, *ev.Doc) == nil
+	}
+
+	// Re-run the target's query so where/order_by/limit apply to the delta: a
+	// document that stops matching (or is pushed out by a limit) is no longer in
+	// the new result set, and one that starts matching (or moves into a limit)
+	// is. A delete is delivered by scope alone (below) because its body is gone.
+	docs, err := ls.queryDocs(t)
+	if err != nil {
+		return false
+	}
+	newView := make(map[string]firestorestore.Document, len(docs))
+	for _, d := range docs {
+		newView[d.Name] = d
+	}
+
+	changed := false
+	for name := range t.view {
+		if _, ok := newView[name]; ok {
+			continue
+		}
+		if ev.Doc == nil && name == ev.Name {
+			continue // emitted as DocumentDelete below
+		}
+		if ls.sendDocumentRemove(id, name) == nil {
+			changed = true
+		}
+	}
+	if ev.Doc == nil {
+		if ls.sendDocumentDelete(id, ev.Name) == nil {
+			changed = true
+		}
+	}
+	for name, d := range newView {
+		if _, ok := t.view[name]; ok {
+			if name == ev.Name && ev.Doc != nil {
+				if ls.sendDocumentChange(id, *ev.Doc) == nil {
+					changed = true
+				}
+			}
+			continue
+		}
+		doc := d
+		if name == ev.Name && ev.Doc != nil {
+			doc = *ev.Doc
+		}
+		if ls.sendDocumentChange(id, doc) == nil {
+			changed = true
+		}
+	}
+
+	t.view = make(map[string]struct{}, len(newView))
+	for name := range newView {
+		t.view[name] = struct{}{}
+	}
+	return changed
 }
 
 func (ls *listenSession) assignTargetID() int32 {
@@ -328,17 +413,10 @@ func resolveTarget(t *firestorepb.Target) (listenTarget, error) {
 }
 
 // sendSnapshot streams one DocumentChange per matching document for the initial
-// state of a target.
-func (ls *listenSession) sendSnapshot(id int32, t listenTarget) error {
+// state of a target and records those documents in the target's view.
+func (ls *listenSession) sendSnapshot(id int32, t *listenTarget) error {
 	if t.isQuery() {
-		project, database, rel, ok := splitParent(t.parent)
-		if !ok {
-			return status.Error(codes.InvalidArgument, "invalid query parent resource name")
-		}
-		if project == "" {
-			project = ls.srv.resolveProject(ls.stream.Context())
-		}
-		docs, err := ls.srv.svc.RunQuery(ls.stream.Context(), project, database, rel, t.query, nil)
+		docs, err := ls.queryDocs(t)
 		if err != nil {
 			return mapError(err)
 		}
@@ -346,6 +424,7 @@ func (ls *listenSession) sendSnapshot(id int32, t listenTarget) error {
 			if err := ls.sendDocumentChange(id, d); err != nil {
 				return err
 			}
+			t.view[d.Name] = struct{}{}
 		}
 		return nil
 	}
@@ -361,8 +440,59 @@ func (ls *listenSession) sendSnapshot(id int32, t listenTarget) error {
 		if err := ls.sendDocumentChange(id, doc); err != nil {
 			return err
 		}
+		t.view[doc.Name] = struct{}{}
 	}
 	return nil
+}
+
+// queryDocs runs a query target's StructuredQuery against the current store
+// state, applying collection scope, where, order_by, and limit.
+func (ls *listenSession) queryDocs(t *listenTarget) ([]firestorestore.Document, error) {
+	project, database, rel, ok := splitParent(t.parent)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "invalid query parent resource name")
+	}
+	if project == "" {
+		project = ls.srv.resolveProject(ls.stream.Context())
+	}
+	return ls.srv.svc.RunQuery(ls.stream.Context(), project, database, rel, t.query, nil)
+}
+
+// seedView populates a target's view from current state without emitting a
+// snapshot. It is used after an incremental replay so subsequent live deltas
+// diff against the resumed result set rather than re-emitting all of it.
+func (ls *listenSession) seedView(t *listenTarget) error {
+	if t.isQuery() {
+		docs, err := ls.queryDocs(t)
+		if err != nil {
+			return mapError(err)
+		}
+		for _, d := range docs {
+			t.view[d.Name] = struct{}{}
+		}
+		return nil
+	}
+	for _, name := range t.documents {
+		doc, err := ls.srv.svc.GetDocument(ls.stream.Context(), name, nil, nil)
+		if err != nil {
+			var pe *model.ProviderError
+			if errors.As(err, &pe) && pe.HTTPStatus == 404 {
+				continue
+			}
+			return mapError(err)
+		}
+		t.view[doc.Name] = struct{}{}
+	}
+	return nil
+}
+
+func (ls *listenSession) sendReset(id int32) error {
+	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
+		TargetChange: &firestorepb.TargetChange{
+			TargetChangeType: firestorepb.TargetChange_RESET,
+			TargetIds:        []int32{id},
+		},
+	}})
 }
 
 func (ls *listenSession) sendDocumentChange(id int32, d firestorestore.Document) error {
@@ -374,19 +504,27 @@ func (ls *listenSession) sendDocumentChange(id int32, d firestorestore.Document)
 	}})
 }
 
+func (ls *listenSession) sendDocumentDelete(id int32, name string) error {
+	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentDelete{
+		DocumentDelete: &firestorepb.DocumentDelete{
+			Document:         name,
+			RemovedTargetIds: []int32{id},
+		},
+	}})
+}
+
+func (ls *listenSession) sendDocumentRemove(id int32, name string) error {
+	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentRemove{
+		DocumentRemove: &firestorepb.DocumentRemove{
+			Document:         name,
+			RemovedTargetIds: []int32{id},
+		},
+	}})
+}
+
 func (ls *listenSession) sendChange(id int32, ev firestoreprovider.ChangeEvent) error {
 	if ev.Doc == nil {
-		// A delete drops the document from every target that previously matched
-		// it. This engine resolves a ChangeEvent per target (the caller only
-		// invokes sendChange for targets where targetMatches is true), so the
-		// responding target is named in removed_target_ids, mirroring the
-		// TargetIds set on the DocumentChange path for non-delete events.
-		return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentDelete{
-			DocumentDelete: &firestorepb.DocumentDelete{
-				Document:         ev.Name,
-				RemovedTargetIds: []int32{id},
-			},
-		}})
+		return ls.sendDocumentDelete(id, ev.Name)
 	}
 	return ls.sendDocumentChange(id, *ev.Doc)
 }
