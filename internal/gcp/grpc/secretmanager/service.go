@@ -283,6 +283,12 @@ func (s *Service) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	if v.State != "ENABLED" {
+		return nil, mapError(&model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "secret version " + v.VersionID + " is " + v.State + ", not ENABLED",
+		})
+	}
 
 	encrypted, err := base64.StdEncoding.DecodeString(v.Data)
 	if err != nil {
@@ -392,7 +398,17 @@ func (s *Service) setVersionState(ctx context.Context, name, state string) (*sec
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	// DESTROYED is terminal: a version may not leave this state once entered.
+	if v.State == "DESTROYED" {
+		return nil, mapError(&model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "secret version " + v.VersionID + " is DESTROYED",
+		})
+	}
 	v.State = state
+	if state == "DESTROYED" {
+		v.DestroyTime = clock.Now()
+	}
 	if err := s.secrets.UpdateVersion(ctx, project, v); err != nil {
 		return nil, mapVersionErr(err)
 	}
@@ -513,6 +529,9 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamppb.New(v.CreateTime)
+	}
+	if !v.DestroyTime.IsZero() {
+		out.DestroyTime = timestamppb.New(v.DestroyTime)
 	}
 	return out
 }

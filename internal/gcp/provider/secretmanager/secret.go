@@ -65,10 +65,11 @@ type secretMeta struct {
 }
 
 type versionMeta struct {
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	CreateTime string `json:"createTime"`
-	Data       string `json:"data"` // base64 payload
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	CreateTime  string `json:"createTime"`
+	DestroyTime string `json:"destroyTime,omitempty"` // only when DESTROYED
+	Data        string `json:"data"`                  // base64 payload
 }
 
 // resourceName returns the "name" path param, or a 400 when absent.
@@ -182,6 +183,9 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 	}
 	if !v.CreateTime.IsZero() {
 		m.CreateTime = v.CreateTime.Format(time.RFC3339Nano)
+	}
+	if !v.DestroyTime.IsZero() {
+		m.DestroyTime = v.DestroyTime.Format(time.RFC3339Nano)
 	}
 	return m
 }
@@ -447,6 +451,12 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	if v.State != "ENABLED" {
+		return nil, &model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "secret version " + v.VersionID + " is " + v.State + ", not ENABLED",
+		}
+	}
 
 	encryptedPayloadBytes, err := base64.StdEncoding.DecodeString(v.Data)
 	if err != nil {
@@ -541,7 +551,17 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	// DESTROYED is terminal: a version may not leave this state once entered.
+	if v.State == "DESTROYED" {
+		return nil, &model.ProviderError{
+			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+			Message: "secret version " + v.VersionID + " is DESTROYED",
+		}
+	}
 	v.State = state
+	if state == "DESTROYED" {
+		v.DestroyTime = clock.Now()
+	}
 	if err := p.secrets.UpdateVersion(ctx, nr.AccountID, v); err != nil {
 		return nil, mapVersionErr(err)
 	}
@@ -653,9 +673,13 @@ func secretToMap(m secretMeta) map[string]any {
 }
 
 func versionToMap(v versionMeta) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"name":       v.Name,
 		"state":      v.State,
 		"createTime": v.CreateTime,
 	}
+	if v.DestroyTime != "" {
+		out["destroyTime"] = v.DestroyTime
+	}
+	return out
 }

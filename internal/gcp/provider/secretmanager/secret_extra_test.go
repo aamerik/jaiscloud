@@ -107,19 +107,28 @@ func TestSecretVersionLifecycle(t *testing.T) {
 		t.Fatalf("addVersion: %v", err)
 	}
 
+	// Deterministic lifecycle (DESTROYED is terminal, so order matters).
 	nr = newNR(map[string]any{"name": "secrets/s/versions/1"})
-	for state, fn := range map[string]func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error){
-		"DISABLED":  p.DisableVersion,
-		"ENABLED":   p.EnableVersion,
-		"DESTROYED": p.DestroyVersion,
-	} {
-		resp, err := fn(ctx, nr)
+	steps := []struct {
+		state string
+		fn    func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error)
+	}{
+		{"DISABLED", p.DisableVersion},
+		{"ENABLED", p.EnableVersion},
+		{"DESTROYED", p.DestroyVersion},
+	}
+	for _, step := range steps {
+		resp, err := step.fn(ctx, nr)
 		if err != nil {
-			t.Fatalf("%s: %v", state, err)
+			t.Fatalf("%s: %v", step.state, err)
 		}
-		if resp.Data["state"] != state {
-			t.Errorf("expected state %s, got %v", state, resp.Data["state"])
+		if resp.Data["state"] != step.state {
+			t.Errorf("expected state %s, got %v", step.state, resp.Data["state"])
 		}
+	}
+	// A destroyed version cannot be re-enabled.
+	if _, err := p.EnableVersion(ctx, nr); err == nil {
+		t.Error("expected error re-enabling a destroyed version")
 	}
 
 	// 404 on a missing version.
@@ -435,5 +444,85 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	payloadResp := accessResp.Data["payload"].(map[string]any)
 	if payloadResp["data"] != payloadB64 {
 		t.Fatalf("expected payload %q, got %q", payloadB64, payloadResp["data"])
+	}
+}
+
+// TestSecretVersionStateEnforcement verifies Secret Manager lifecycle rules:
+// a DISABLED/DESTROYED version cannot be accessed, DESTROYED is terminal, and
+// destroyTime is emitted once destroyed.
+func TestSecretVersionStateEnforcement(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "state-secret"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := p.AddVersion(ctx, newNR(map[string]any{
+		"name": "secrets/state-secret", "body": map[string]any{"payload": map[string]any{"data": "aGVsbG8="}},
+	})); err != nil {
+		t.Fatalf("addVersion: %v", err)
+	}
+	version := "secrets/state-secret/versions/1"
+
+	// DISABLED version is not accessible.
+	if _, err := p.DisableVersion(ctx, newNR(map[string]any{"name": version})); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	_, err := p.Access(ctx, newNR(map[string]any{"name": version}))
+	requireProviderCode(t, err, "FailedPrecondition")
+
+	// Re-enabling restores access.
+	if _, err := p.EnableVersion(ctx, newNR(map[string]any{"name": version})); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := p.Access(ctx, newNR(map[string]any{"name": version})); err != nil {
+		t.Fatalf("access after enable: %v", err)
+	}
+
+	// Destroy sets DESTROYED and destroyTime.
+	resp, err := p.DestroyVersion(ctx, newNR(map[string]any{"name": version}))
+	if err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+	if resp.Data["state"] != "DESTROYED" {
+		t.Fatalf("state = %v, want DESTROYED", resp.Data["state"])
+	}
+	if dt, _ := resp.Data["destroyTime"].(string); dt == "" {
+		t.Fatalf("expected destroyTime on destroyed version, got %v", resp.Data["destroyTime"])
+	}
+
+	// DESTROYED is terminal.
+	_, err = p.Access(ctx, newNR(map[string]any{"name": version}))
+	requireProviderCode(t, err, "FailedPrecondition")
+	_, err = p.EnableVersion(ctx, newNR(map[string]any{"name": version}))
+	requireProviderCode(t, err, "FailedPrecondition")
+	_, err = p.DisableVersion(ctx, newNR(map[string]any{"name": version}))
+	requireProviderCode(t, err, "FailedPrecondition")
+}
+
+// TestSecretIAMRoutesRegistered pins the provider-side keys for the REST IAM
+// surface: the codec's bare GetIamPolicy/SetIamPolicy/TestIamPermissions actions
+// combine with the "Secret" service prefix to reach these.
+func TestSecretIAMRoutesRegistered(t *testing.T) {
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+	routes := p.Routes()
+	for _, k := range []string{"Secret.GetIamPolicy", "Secret.SetIamPolicy", "Secret.TestIamPermissions"} {
+		if routes[k] == nil {
+			t.Errorf("missing route %q", k)
+		}
+	}
+}
+
+func requireProviderCode(t *testing.T, err error, code string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error %s, got nil", code)
+	}
+	pe, ok := err.(*model.ProviderError)
+	if !ok {
+		t.Fatalf("expected *model.ProviderError, got %T (%v)", err, err)
+	}
+	if pe.Code != code {
+		t.Fatalf("expected code %s, got %s (%v)", code, pe.Code, err)
 	}
 }
