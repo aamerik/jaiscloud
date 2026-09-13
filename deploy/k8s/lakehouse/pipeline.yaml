@@ -1,0 +1,303 @@
+---
+# ConfigMap — the Medallion (multi-hop) ELT pipeline driver. Standard-library
+# Python only; it talks to the GCP emulator's GCS + Dataproc REST APIs.
+#
+#   Ingest    seed events            -> gs://lakehouse-raw/events
+#   Transform Spark (Dataproc job)   -> gs://lakehouse-conformed/events
+#   Derive    Spark (Dataproc job)   -> gs://lakehouse-curated/revenue_by_region
+#   Publish   serving copy + manifest-> gs://lakehouse-published
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lakehouse-pipeline-script
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-lakehouse-pipeline
+data:
+  pipeline.py: |
+    #!/usr/bin/env python3
+    """Vendor-neutral Medallion (multi-hop) ELT pipeline against the GCP emulator.
+
+    Stages: Ingest -> Transform -> Derive -> Publish.
+      Landing/Raw (bronze) : gs://lakehouse-raw/events          (seed JSON)
+      Conformed   (silver) : gs://lakehouse-conformed/events    (typed/cleaned, Spark)
+      Curated     (gold)   : gs://lakehouse-curated/revenue_by_region (aggregated, Spark)
+      Published   (serving): gs://lakehouse-published/          (+ manifest.json)
+
+    Transform and Derive run as real Apache Spark jobs submitted through the
+    emulator's Dataproc API (jobs:submit); on Kubernetes the emulator runs each
+    as a client-mode Spark pod. All input/output lives in the emulator's GCS.
+
+    Prints a JSON summary prefixed with PIPELINE_OK on success and exits 0;
+    any failure raises and exits non-zero.
+    """
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    BASE = os.environ.get(
+        "EMULATOR_URL", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080"
+    ).rstrip("/")
+    PROJECT = os.environ.get("PROJECT", "jaiscloud-project")
+    REGION = os.environ.get("REGION", "us-central1")
+    CLUSTER = os.environ.get("CLUSTER", "lakehouse-cluster")
+    JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
+    # Unique per run so a re-run never collides with an existing Dataproc job
+    # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
+    RUN_ID = os.environ.get("RUN_ID") or f"{int(time.time())}-{os.getpid()}"
+
+    RAW = "lakehouse-raw"
+    CONFORMED = "lakehouse-conformed"
+    CURATED = "lakehouse-curated"
+    PUBLISHED = "lakehouse-published"
+
+
+    def log(msg):
+        print(f"[lakehouse] {msg}", flush=True)
+
+
+    def _req(method, path, body=None, content_type="application/json"):
+        data = body
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode()
+        req = urllib.request.Request(
+            BASE + path, data=data, method=method,
+            headers={"Content-Type": content_type},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read()
+                return r.status, (json.loads(raw) if raw else {})
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except ValueError:
+                parsed = {"raw": raw.decode(errors="replace")}
+            return e.code, parsed
+
+
+    def _raw_get(path):
+        with urllib.request.urlopen(BASE + path, timeout=60) as r:
+            return r.read()
+
+
+    def ensure_bucket(name):
+        status, body = _req(
+            "POST", "/storage/v1/b?project=" + urllib.parse.quote(PROJECT), {"name": name}
+        )
+        # 409 == already exists (idempotent); any other non-2xx is fatal.
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create bucket {name}: HTTP {status} {body}")
+
+
+    def upload(bucket, name, data, content_type="application/octet-stream"):
+        if isinstance(data, str):
+            data = data.encode()
+        q = urllib.parse.urlencode({"uploadType": "media", "name": name})
+        status, body = _req("POST", f"/upload/storage/v1/b/{bucket}/o?{q}", data, content_type)
+        if status >= 300:
+            raise RuntimeError(f"upload {bucket}/{name}: HTTP {status} {body}")
+
+
+    def list_objects(bucket, prefix=""):
+        q = "?prefix=" + urllib.parse.quote(prefix) if prefix else ""
+        status, body = _req("GET", f"/storage/v1/b/{bucket}/o{q}")
+        if status >= 300:
+            raise RuntimeError(f"list {bucket}: HTTP {status} {body}")
+        return [o["name"] for o in body.get("items", [])]
+
+
+    def download_text(bucket, name):
+        path = f"/storage/v1/b/{bucket}/o/{urllib.parse.quote(name, safe='')}?alt=media"
+        return _raw_get(path).decode()
+
+
+    def ensure_cluster():
+        status, body = _req(
+            "POST",
+            f"/v1/projects/{PROJECT}/regions/{REGION}/clusters",
+            {"clusterName": CLUSTER, "config": {}},
+        )
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create cluster {CLUSTER}: HTTP {status} {body}")
+
+
+    def submit_job(job_id, script_uri):
+        body = {
+            "job": {
+                "placement": {"clusterName": CLUSTER},
+                "reference": {"jobId": job_id},
+                "pysparkJob": {"mainPythonFileUri": script_uri},
+            }
+        }
+        status, resp = _req("POST", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", body)
+        if status >= 300:
+            raise RuntimeError(f"submit {job_id}: HTTP {status} {resp}")
+        log(f"submitted job {job_id} (mainPythonFileUri={script_uri})")
+        return job_id
+
+
+    def wait_job(job_id):
+        deadline = time.time() + JOB_TIMEOUT_S
+        while time.time() < deadline:
+            status, body = _req("GET", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/{job_id}")
+            if status >= 300:
+                raise RuntimeError(f"get job {job_id}: HTTP {status} {body}")
+            state = body.get("status", {}).get("state")
+            if state in ("DONE", "CANCELLED", "ERROR"):
+                if state != "DONE":
+                    raise RuntimeError(f"job {job_id} ended {state}: {json.dumps(body)}")
+                log(f"job {job_id} DONE")
+                return
+            time.sleep(5)
+        raise RuntimeError(f"job {job_id} did not finish within {JOB_TIMEOUT_S}s")
+
+
+    TRANSFORM_PY = '''
+    from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
+
+    spark = SparkSession.builder.getOrCreate()
+    raw = spark.read.json("gs://lakehouse-raw/events/")
+    conformed = (
+        raw.withColumn("amount", F.col("amount").cast("double"))
+        .filter(F.col("amount").isNotNull())
+        .withColumn("region", F.upper(F.col("region")))
+    )
+    conformed.write.mode("overwrite").json("gs://lakehouse-conformed/events")
+    print("TRANSFORM_OK rows=", conformed.count())
+    '''
+
+    DERIVE_PY = '''
+    from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
+
+    spark = SparkSession.builder.getOrCreate()
+    conf = spark.read.json("gs://lakehouse-conformed/events/")
+    revenue = conf.groupBy("region").agg(
+        F.count("*").alias("orders"),
+        F.round(F.sum("amount"), 2).alias("revenue"),
+    )
+    revenue.write.mode("overwrite").json("gs://lakehouse-curated/revenue_by_region")
+    print("DERIVE_OK rows=", revenue.count())
+    '''
+
+
+    def seed_events():
+        regions = ["us", "eu", "us", "apac", "eu", "us"]
+        rows = [
+            {"event_id": f"e{i:04d}", "region": regions[i % len(regions)],
+             "amount": round(10 + (i * 7) % 90 + (i % 3) * 0.5, 2)}
+            for i in range(1, 25)
+        ]
+        return "\n".join(json.dumps(r) for r in rows) + "\n", rows
+
+
+    def main():
+        log(f"emulator={BASE} project={PROJECT} region={REGION} cluster={CLUSTER}")
+        for b in (RAW, CONFORMED, CURATED, PUBLISHED):
+            ensure_bucket(b)
+
+        # ---- Ingest ----------------------------------------------------------
+        seed, rows = seed_events()
+        upload(RAW, "events/events.json", seed, "application/json")
+        upload(RAW, "jobs/transform.py", TRANSFORM_PY, "text/x-python")
+        upload(RAW, "jobs/derive.py", DERIVE_PY, "text/x-python")
+        log(f"ingested {len(rows)} raw events -> gs://{RAW}/events/events.json")
+
+        ensure_cluster()
+
+        # ---- Transform (Spark) ----------------------------------------------
+        transform_job = f"lakehouse-transform-{RUN_ID}"
+        submit_job(transform_job, f"gs://{RAW}/jobs/transform.py")
+        wait_job(transform_job)
+
+        # ---- Derive (Spark) --------------------------------------------------
+        derive_job = f"lakehouse-derive-{RUN_ID}"
+        submit_job(derive_job, f"gs://{RAW}/jobs/derive.py")
+        wait_job(derive_job)
+
+        # ---- Publish ---------------------------------------------------------
+        curated_parts = sorted(
+            n for n in list_objects(CURATED, "revenue_by_region/") if n.endswith(".json")
+        )
+        if not curated_parts:
+            raise RuntimeError("no curated output to publish")
+        published = []
+        for name in curated_parts:
+            upload(PUBLISHED, name, download_text(CURATED, name), "application/json")
+            published.append(name)
+
+        manifest = {
+            "pipeline": "medallion-elt",
+            "run_id": RUN_ID,
+            "stages": ["ingest", "transform", "derive", "publish"],
+            "input_rows": len(rows),
+            "curated_objects": curated_parts,
+            "published_objects": sorted(published),
+        }
+        upload(PUBLISHED, "manifest.json",
+               json.dumps(manifest, indent=2, sort_keys=True), "application/json")
+        log(f"published {len(published)} object(s) + manifest.json")
+
+        summary = {"PIPELINE_OK": True, **manifest}
+        print(json.dumps(summary), flush=True)
+
+
+    if __name__ == "__main__":
+        try:
+            main()
+        except Exception as exc:  # noqa: BLE001 - surfaced to the Job logs
+            print(f"PIPELINE_FAILED: {exc}", file=sys.stderr, flush=True)
+            sys.exit(1)
+---
+# Job — runs the pipeline driver in-cluster. The driver only needs the emulator
+# (no Kubernetes API access), so it runs as a plain pod.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakehouse-pipeline
+  namespace: jaiscloud
+  labels:
+    app: jaiscloud-lakehouse-pipeline
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: jaiscloud-lakehouse-pipeline
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pipeline
+          image: python:3.12-slim
+          command: ["python", "/scripts/pipeline.py"]
+          env:
+            - name: EMULATOR_URL
+              value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+            - name: PROJECT
+              value: jaiscloud-project
+            - name: REGION
+              value: us-central1
+            - name: CLUSTER
+              value: lakehouse-cluster
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: lakehouse-pipeline-script
