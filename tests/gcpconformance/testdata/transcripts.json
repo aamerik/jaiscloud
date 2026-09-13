@@ -1,0 +1,1119 @@
+{
+  "entries": [
+    {
+      "service": "storage",
+      "method": "POST",
+      "path": "/storage/v1/b?project=jaiscloud-project",
+      "status": 200,
+      "body": {
+        "etag": "CAE=",
+        "generation": "0",
+        "iamConfiguration": {
+          "bucketPolicyOnly": {
+            "enabled": false
+          },
+          "publicAccessPrevention": "inherited",
+          "uniformBucketLevelAccess": {
+            "enabled": false
+          }
+        },
+        "id": "conf-bucket-1f2051ffc8bf",
+        "kind": "storage#bucket",
+        "location": "US",
+        "locationType": "multi-region",
+        "metageneration": "1",
+        "name": "conf-bucket-1f2051ffc8bf",
+        "projectNumber": "0",
+        "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf",
+        "storageClass": "STANDARD",
+        "timeCreated": "2026-09-13T22:27:14.545631249Z",
+        "updated": "2026-09-13T22:27:14.545631249Z",
+        "versioning": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "etag": "CAE=",
+        "generation": "0",
+        "iamConfiguration": {
+          "bucketPolicyOnly": {
+            "enabled": false
+          },
+          "publicAccessPrevention": "inherited",
+          "uniformBucketLevelAccess": {
+            "enabled": false
+          }
+        },
+        "id": "conf-bucket-1f2051ffc8bf",
+        "kind": "storage#bucket",
+        "location": "US",
+        "locationType": "multi-region",
+        "metageneration": "1",
+        "name": "conf-bucket-1f2051ffc8bf",
+        "projectNumber": "0",
+        "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf",
+        "storageClass": "STANDARD",
+        "timeCreated": "2026-09-13T22:27:14.545631249Z",
+        "updated": "2026-09-13T22:27:14.545631249Z",
+        "versioning": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b?project=jaiscloud-project",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "etag": "CAE=",
+            "generation": "0",
+            "iamConfiguration": {
+              "bucketPolicyOnly": {
+                "enabled": false
+              },
+              "publicAccessPrevention": "inherited",
+              "uniformBucketLevelAccess": {
+                "enabled": false
+              }
+            },
+            "id": "conf-bucket-1f2051ffc8bf",
+            "kind": "storage#bucket",
+            "location": "US",
+            "locationType": "multi-region",
+            "metageneration": "1",
+            "name": "conf-bucket-1f2051ffc8bf",
+            "projectNumber": "0",
+            "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf",
+            "storageClass": "STANDARD",
+            "timeCreated": "2026-09-13T22:27:14.545631249Z",
+            "updated": "2026-09-13T22:27:14.545631249Z",
+            "versioning": {
+              "enabled": false
+            }
+          }
+        ],
+        "kind": "storage#buckets"
+      }
+    },
+    {
+      "service": "storage",
+      "method": "POST",
+      "path": "/upload/storage/v1/b/conf-bucket-1f2051ffc8bf/o?uploadType=media\u0026name=hello.txt",
+      "status": 200,
+      "body": {
+        "bucket": "conf-bucket-1f2051ffc8bf",
+        "contentType": "text/plain",
+        "crc32c": "hRW89w==",
+        "etag": "CAE=",
+        "generation": "1789338427154998413",
+        "id": "conf-bucket-1f2051ffc8bf/hello.txt/1789338427154998413",
+        "kind": "storage#object",
+        "md5Hash": "NSHcq6bUS9AAll2B4g03Ew==",
+        "mediaLink": "http://localhost:18080/download/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt?alt=media",
+        "metageneration": "1",
+        "name": "hello.txt",
+        "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt",
+        "size": "15",
+        "storageClass": "STANDARD",
+        "timeCreated": "2026-09-13T22:27:14.546925209Z",
+        "updated": "2026-09-13T22:27:14.546925209Z"
+      }
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt",
+      "status": 200,
+      "body": {
+        "bucket": "conf-bucket-1f2051ffc8bf",
+        "contentType": "text/plain",
+        "crc32c": "hRW89w==",
+        "etag": "CAE=",
+        "generation": "1789338427154998413",
+        "id": "conf-bucket-1f2051ffc8bf/hello.txt/1789338427154998413",
+        "kind": "storage#object",
+        "md5Hash": "NSHcq6bUS9AAll2B4g03Ew==",
+        "mediaLink": "http://localhost:18080/download/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt?alt=media",
+        "metageneration": "1",
+        "name": "hello.txt",
+        "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt",
+        "size": "15",
+        "storageClass": "STANDARD",
+        "timeCreated": "2026-09-13T22:27:14.546925209Z",
+        "updated": "2026-09-13T22:27:14.546925209Z"
+      }
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf/o",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "bucket": "conf-bucket-1f2051ffc8bf",
+            "contentType": "text/plain",
+            "crc32c": "hRW89w==",
+            "etag": "CAE=",
+            "generation": "1789338427154998413",
+            "id": "conf-bucket-1f2051ffc8bf/hello.txt/1789338427154998413",
+            "kind": "storage#object",
+            "md5Hash": "NSHcq6bUS9AAll2B4g03Ew==",
+            "mediaLink": "http://localhost:18080/download/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt?alt=media",
+            "metageneration": "1",
+            "name": "hello.txt",
+            "selfLink": "http://localhost:18080/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt",
+            "size": "15",
+            "storageClass": "STANDARD",
+            "timeCreated": "2026-09-13T22:27:14.546925209Z",
+            "updated": "2026-09-13T22:27:14.546925209Z"
+          }
+        ],
+        "kind": "storage#objects"
+      }
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf/o/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "errors": [
+            {
+              "domain": "global",
+              "message": "object not found",
+              "reason": "notFound"
+            }
+          ],
+          "message": "object not found"
+        }
+      }
+    },
+    {
+      "service": "storage",
+      "method": "DELETE",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf/o/hello.txt",
+      "status": 204
+    },
+    {
+      "service": "storage",
+      "method": "DELETE",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf",
+      "status": 204
+    },
+    {
+      "service": "storage",
+      "method": "GET",
+      "path": "/storage/v1/b/conf-bucket-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "errors": [
+            {
+              "domain": "global",
+              "message": "bucket not found",
+              "reason": "notFound"
+            }
+          ],
+          "message": "bucket not found"
+        }
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "PUT",
+      "path": "/v1/projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "name": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "name": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/topics",
+      "status": 200,
+      "body": {
+        "topics": [
+          {
+            "name": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+          }
+        ]
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/topics/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "topic not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "PUT",
+      "path": "/v1/projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "ackDeadlineSeconds": 10,
+        "name": "projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+        "topic": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "ackDeadlineSeconds": 10,
+        "name": "projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+        "topic": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/subscriptions",
+      "status": 200,
+      "body": {
+        "subscriptions": [
+          {
+            "ackDeadlineSeconds": 10,
+            "name": "projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+            "topic": "projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf"
+          }
+        ]
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf:publish",
+      "status": 200,
+      "body": {
+        "messageIds": [
+          "1"
+        ]
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf:pull",
+      "status": 200,
+      "body": {
+        "receivedMessages": [
+          {
+            "ackId": "Y29uZi1zdWItMWYyMDUxZmZjOGJmLzE",
+            "deliveryAttempt": 1,
+            "message": {
+              "data": "aGVsbG8=",
+              "messageId": "1",
+              "publishTime": "2026-09-13T22:27:14.551861Z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "service": "pubsub",
+      "method": "DELETE",
+      "path": "/v1/projects/jaiscloud-project/subscriptions/conf-sub-1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "pubsub",
+      "method": "DELETE",
+      "path": "/v1/projects/jaiscloud-project/topics/conf-topic-1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "pubsub",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/subscriptions/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "subscription not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/secrets?secretId=conf-secret-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.553803629Z",
+        "etag": "7CBbq3rkaboR+txM+u9Xm5KMVCQ=",
+        "name": "projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf",
+        "replication": {
+          "automatic": {}
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.553803629Z",
+        "etag": "7CBbq3rkaboR+txM+u9Xm5KMVCQ=",
+        "name": "projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf",
+        "replication": {
+          "automatic": {}
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/secrets",
+      "status": 200,
+      "body": {
+        "secrets": [
+          {
+            "createTime": "2026-09-13T22:27:14.553803629Z",
+            "etag": "7CBbq3rkaboR+txM+u9Xm5KMVCQ=",
+            "name": "projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf",
+            "replication": {
+              "automatic": {}
+            }
+          }
+        ],
+        "totalSize": 1
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf:addVersion",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.554707419Z",
+        "name": "projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf/versions/1",
+        "state": "ENABLED"
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf/versions/1:access",
+      "status": 200,
+      "body": {
+        "name": "projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf/versions/1",
+        "payload": {
+          "data": "c2VjcmV0",
+          "dataCrc32c": "2956741965"
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf/versions",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "secret not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/secrets/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "secret not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "secretmanager",
+      "method": "DELETE",
+      "path": "/v1/projects/jaiscloud-project/secrets/conf-secret-1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "kms",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings?keyRingId=conf-ring-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.556175459Z",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.556175459Z",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings",
+      "status": 200,
+      "body": {
+        "keyRings": [
+          {
+            "createTime": "2026-09-13T22:27:14.556175459Z",
+            "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf"
+          }
+        ],
+        "totalSize": 1
+      }
+    },
+    {
+      "service": "kms",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys?cryptoKeyId=conf-key-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.557113769Z",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf",
+        "primary": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        },
+        "purpose": "ENCRYPT_DECRYPT",
+        "versionTemplate": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protectionLevel": "SOFTWARE"
+        }
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.557113769Z",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf",
+        "primary": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf/cryptoKeyVersions/1",
+          "state": "ENABLED"
+        },
+        "purpose": "ENCRYPT_DECRYPT",
+        "versionTemplate": {
+          "algorithm": "GOOGLE_SYMMETRIC_ENCRYPTION",
+          "protectionLevel": "SOFTWARE"
+        }
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys",
+      "status": 200,
+      "body": {
+        "cryptoKeys": [],
+        "totalSize": 0
+      }
+    },
+    {
+      "service": "kms",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf:encrypt",
+      "status": 200,
+      "body": {
+        "ciphertext": "MTr9MibTEEFvKDvqlLjlhC30iSzL3hZ8DAAT4Dbqamw0GmA=",
+        "ciphertextCrc32c": "594413481",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf/cryptoKeyVersions/1",
+        "protectionLevel": "SOFTWARE",
+        "verifiedAdditionalAuthenticatedDataCrc32c": false,
+        "verifiedPlaintextCrc32c": true
+      }
+    },
+    {
+      "service": "kms",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/conf-key-1f2051ffc8bf:decrypt",
+      "status": 200,
+      "body": {
+        "plaintext": "aGVsbG8=",
+        "plaintextCrc32c": "2591144780",
+        "protectionLevel": "SOFTWARE",
+        "usedPrimary": true
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf:getIamPolicy",
+      "status": 200,
+      "body": {
+        "createTime": "2026-09-13T22:27:14.556175459Z",
+        "name": "projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf"
+      }
+    },
+    {
+      "service": "kms",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/locations/global/keyRings/conf-ring-1f2051ffc8bf/cryptoKeys/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "crypto key not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "iam",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts?accountId=conf-sa-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "description": "",
+        "disabled": false,
+        "displayName": "Conformance SA",
+        "email": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+        "etag": "UUBwqj1WoZO4EoE42GT396J7Fng=",
+        "name": "projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+        "oauth2ClientId": "",
+        "projectId": "jaiscloud-project",
+        "uniqueId": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com"
+      }
+    },
+    {
+      "service": "iam",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+      "status": 200,
+      "body": {
+        "description": "",
+        "disabled": false,
+        "displayName": "Conformance SA",
+        "email": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+        "etag": "UUBwqj1WoZO4EoE42GT396J7Fng=",
+        "name": "projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+        "oauth2ClientId": "",
+        "projectId": "jaiscloud-project",
+        "uniqueId": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com"
+      }
+    },
+    {
+      "service": "iam",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts",
+      "status": 200,
+      "body": {
+        "accounts": [
+          {
+            "description": "",
+            "disabled": false,
+            "displayName": "Conformance SA",
+            "email": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+            "etag": "UUBwqj1WoZO4EoE42GT396J7Fng=",
+            "name": "projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+            "oauth2ClientId": "",
+            "projectId": "jaiscloud-project",
+            "uniqueId": "conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com"
+          }
+        ]
+      }
+    },
+    {
+      "service": "iam",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com/keys",
+      "status": 200,
+      "body": {
+        "keyAlgorithm": "KEY_ALG_RSA_2048",
+        "name": "projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com/keys/2feb67d56e1726f85a4301fff47f62f8",
+        "privateKeyData": "eyJhdXRoX3VyaSI6Imh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbS9vL29hdXRoMi9hdXRoIiwiY2xpZW50X2VtYWlsIjoiY29uZi1zYS0xZjIwNTFmZmM4YmZAamFpc2Nsb3VkLXByb2plY3QuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLCJjbGllbnRfaWQiOiIwIiwicHJpdmF0ZV9rZXkiOiItLS0tLUJFR0lOIFBSSVZBVEUgS0VZLS0tLS1cbk1JSUV2UUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktjd2dnU2pBZ0VBQW9JQkFRREo3TjEyMTYybVIzQ0ZcblRDSzkybDdXeER1Qy9vVlc0YXoyb1NwQ2VYZVcwMGlUa1kwcXEzamhBZXVZTER6SFZtNWdjbndaVDRYN2tGUnNcbmhnUHFqV3I0NmVEUFQwakJZa2ZWRGxyNlMrQWJzRDZHYWpzNWtoaDBlSk5xVTl3SkozOTc0RzY5Umg3UGlwWHhcblhBUk1YWHhVT21TOGRSUUhqZHZ4TGFrWENiajVDZ05sY3J6RmpOQ0N3Ly9pNVkwOTNMZEszQjduemVOdmlIVzVcbkZMaXplcVcydW9xUGEvM1ZzUmJiRnpERjdkOEdQSWJwczNtSkp6Yml5R09kZnpUVjJQOGpaU0YrYU5HQ1E1N2JcblYyK05zZHV3MnE4LzJSV1NQTS9QWlFZOFJxbnk3aEppb0U0bjEzU2VzeG9xYS92ZlZQVUp1RlhrUksvaU8wN0VcbmNBams1bGdCQWdNQkFBRUNnZ0VBQWd4RW50YTNNaElhcWZmVDRubVkzOHFYd1FYSVhLcjl1U25zSWhNMTJjT3NcbjIveDhXTFpxY2c3Q3padTRwaThDSm13ZE9YSEt0RFE2VzE2REZoc2ducGJPY3ZZMUJBVGlPdmg0ZWY0andsdFVcbnFwdkcyL0drUUdjbTlXVWlTV09VMW9xRXpEUVVvWkRnWVpWQm1tZGUwalgzczRoT2pFWEQrVU9rdzFxNk5zNzRcblFLelk4YjJkSjJkUTFYUmNveEFISzI1L3Nscnp6bG44b3lFTEZ6RUNxVjV5M2orRjFyNTIyTUZ2SDZUSXhLUC9cbjA4cS9jckxxYXpPZWF0TFZrYk00UFFVSXl6c2dPUHZON1lUR1BVemJLVzRBNUw1V0llKytLdy9oUkc1Q0tjczZcbkZ6QmV2MlVUcTJlYklPbkdpRjZQTDhwK0JyNTNxK1RLQXllR2ZuZUlJUUtCZ1FEZ2p2QjZpTFFSaU9MTHlyYXJcbnR0aTBtWkNNN3Fhd3YrRVFzZjNER0dUenpOSGZxR1RzMzlWRWMweEdCS005Nmc4a0xZSDY0cG84OFQ0VXNHTzNcbjlXckJ0QVhaOXBKemNHNDM3TUYreVNWVUxCUkpmM3dYQ3BJbDlmQVZVOURudWwyZlBRMU9uNlRFU2JHOGNlRVBcblNyVVNWVDhabDJGQVZIRFZFdmZQMWlsTGtRS0JnUURtTXFwc0pZcTU1NVpMNnZmV0ttajVsdlFTaEFVQWV2TGdcbi9lNDdWV1F3QUMrVUs0OGJRYmFCSHhMd1JYRjhpa0daWkMrMUpwSElyNG8wYVZqRW9HeEN5dkZRVGwvNi9Hc2Zcbi8yTVdmbEdGQjcvSzllV3ovQjNtRTFPT2N5Y0d6a2F1SUdGVUd2Z3dRZDl1WHdxdUlWOE5nVFZmL1dWTmRyZGhcbkV6SmJiMnV0Y1FLQmdIM0VjTGtnRVVIMDJaanIydTFIUmcyNEtEWldmek5rOUFlbXVJcHBBamx0a0dua1pVb3BcbmZzZU1qNzV6WUg0UHRoVThDNTFaQnF0MUxhRG12YUxOSjlKL0lmdldWbVdqSllmYTZQQTZkZGF6clZVUXVvNHBcbkZIdUFSOHVhR3RsK0RtdGVCVEx3eEpaTzgrV29Iald6VU1DSTBBTmtQa3FLUUh1RjJSY2xTaEdSQW9HQVA3b2hcbkFlVjJ2VGFHbmlmRFNxL2M5ZE83Wi9EU2JhcWIySHVUMnlzdG5EaEE4N1VIWGhWWUQvRHBUa2o3UE80TmNRaVNcblNJVVA4TTNmNWRpUU1ZYnowWjNiSms4OE5RQnlLNTZJOE80eFpUR2EvL1lKREVXc2hVZ3VabzRzYks3b1ZFWTBcbmk1TVh5RXhFTFlyMEt2YWtHTm4vUzc2YnI5RkF2UWdTZGN1bnRKRUNnWUVBdnVRdWpKcWt3Ymppc3FpdHlnU2FcbllmeCtTR0kzVE1MREVvMHh2TXhpU2p1UXBFb1pnSWRINlc2V2x4SGMyRE1lUmxBWnBWUzZYanUxTCtHUFBwQ1JcbjRwSnhjQWFmRE9QdWw0dmZ0ZFZxLzMxaTI1OFlQSzdTc0ZPL01LZE5TN29FZi96c3dQODlnckdhTUxOaFpJdEFcbjVIUXRRdklwdDVaemVzSTRKcGtqNUlnPVxuLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLVxuIiwicHJpdmF0ZV9rZXlfaWQiOiIyZmViNjdkNTZlMTcyNmY4NWE0MzAxZmZmNDdmNjJmOCIsInByb2plY3RfaWQiOiJqYWlzY2xvdWQtcHJvamVjdCIsInRva2VuX3VyaSI6Imh0dHBzOi8vb2F1dGgyLmdvb2dsZWFwaXMuY29tL3Rva2VuIiwidHlwZSI6InNlcnZpY2VfYWNjb3VudCIsInVuaXZlcnNlX2RvbWFpbiI6Imdvb2dsZWFwaXMuY29tIn0=",
+        "privateKeyType": "TYPE_GOOGLE_CREDENTIALS_FILE",
+        "publicKeyData": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUF5ZXpkZHRldHBrZHdoVXdpdmRwZQoxc1E3Z3Y2RlZ1R3M5cUVxUW5sM2x0TklrNUdOS3F0NDRRSHJtQ3c4eDFadVlISjhHVStGKzVCVWJJWUQ2bzFxCitPbmd6MDlJd1dKSDFRNWEra3ZnRzdBK2htbzdPWklZZEhpVGFsUGNDU2QvZStCdXZVWWV6NHFWOFZ3RVRGMTgKVkRwa3ZIVVVCNDNiOFMycEZ3bTQrUW9EWlhLOHhZelFnc1AvNHVXTlBkeTNTdHdlNTgzamI0aDF1UlM0czNxbAp0cnFLajJ2OTFiRVcyeGN3eGUzZkJqeUc2Yk41aVNjMjRzaGpuWDgwMWRqL0kyVWhmbWpSZ2tPZTIxZHZqYkhiCnNOcXZQOWtWa2p6UHoyVUdQRWFwOHU0U1lxQk9KOWQwbnJNYUttdjczMVQxQ2JoVjVFU3Y0anRPeEhBSTVPWlkKQVFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+        "validAfterTime": "2026-09-13T22:27:14.61270986Z"
+      }
+    },
+    {
+      "service": "iam",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com/keys",
+      "status": 200,
+      "body": {
+        "keys": [
+          {
+            "keyAlgorithm": "KEY_ALG_RSA_2048",
+            "name": "projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com/keys/2feb67d56e1726f85a4301fff47f62f8",
+            "privateKeyType": "TYPE_GOOGLE_CREDENTIALS_FILE",
+            "publicKeyData": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUF5ZXpkZHRldHBrZHdoVXdpdmRwZQoxc1E3Z3Y2RlZ1R3M5cUVxUW5sM2x0TklrNUdOS3F0NDRRSHJtQ3c4eDFadVlISjhHVStGKzVCVWJJWUQ2bzFxCitPbmd6MDlJd1dKSDFRNWEra3ZnRzdBK2htbzdPWklZZEhpVGFsUGNDU2QvZStCdXZVWWV6NHFWOFZ3RVRGMTgKVkRwa3ZIVVVCNDNiOFMycEZ3bTQrUW9EWlhLOHhZelFnc1AvNHVXTlBkeTNTdHdlNTgzamI0aDF1UlM0czNxbAp0cnFLajJ2OTFiRVcyeGN3eGUzZkJqeUc2Yk41aVNjMjRzaGpuWDgwMWRqL0kyVWhmbWpSZ2tPZTIxZHZqYkhiCnNOcXZQOWtWa2p6UHoyVUdQRWFwOHU0U1lxQk9KOWQwbnJNYUttdjczMVQxQ2JoVjVFU3Y0anRPeEhBSTVPWlkKQVFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+            "validAfterTime": "2026-09-13T22:27:14.61270986Z"
+          }
+        ]
+      }
+    },
+    {
+      "service": "iam",
+      "method": "POST",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com:signBlob",
+      "status": 200,
+      "body": {
+        "keyId": "2feb67d56e1726f85a4301fff47f62f8",
+        "signature": "uNvVW8mtcCBX9QBUv6h8ertakV+N+7EfTnE3XhX2p0cyDoxaGFPlhTbydDvHRAIcdMgbb8SQkIXAu1FXTRuDXFwALBFT/q7nDSbDT5I2nZIiEaFG7fOKh9gTK9m+qgXkfPpyk+09k2+3Lp/S5LqnPFj4lt4AZzLcBKVdvlQTHEDYDsSGv0OMxfknAd0PP2VgsRWBnJFlMJiMn9E1jnXAJwCKlAINE4q2StNT0dDrit/YkdbtnVJ00PQWWEtOxuXU7QWnMWw5HZz/Gbu1i5EKJTZdNTNZCnkjhnvKTbpw3gvIg56tIVTYZ5wgNaRyG3tPMxVP6n2+jjBTdBRG5wctsA=="
+      }
+    },
+    {
+      "service": "iam",
+      "method": "GET",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/missing-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "service account not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "iam",
+      "method": "DELETE",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com/keys/2feb67d56e1726f85a4301fff47f62f8",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "iam",
+      "method": "DELETE",
+      "path": "/v1/projects/jaiscloud-project/serviceAccounts/conf-sa-1f2051ffc8bf@jaiscloud-project.iam.gserviceaccount.com",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "clouddns",
+      "method": "POST",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones",
+      "status": 200,
+      "body": {
+        "creationTime": "2026-09-13T22:27:14.6161093Z",
+        "description": "conformance",
+        "dnsName": "conf1f2051ffc8bf.example.com.",
+        "id": "14780336816276900940",
+        "kind": "dns#managedZone",
+        "name": "conf-zone-1f2051ffc8bf",
+        "nameServers": [
+          "ns-cloud-a1.googledomains.com.",
+          "ns-cloud-b1.googledomains.com.",
+          "ns-cloud-c1.googledomains.com.",
+          "ns-cloud-d1.googledomains.com."
+        ],
+        "visibility": "public"
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "GET",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones/conf-zone-1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "creationTime": "2026-09-13T22:27:14.6161093Z",
+        "description": "conformance",
+        "dnsName": "conf1f2051ffc8bf.example.com.",
+        "id": "14780336816276900940",
+        "kind": "dns#managedZone",
+        "name": "conf-zone-1f2051ffc8bf",
+        "nameServers": [
+          "ns-cloud-a1.googledomains.com.",
+          "ns-cloud-b1.googledomains.com.",
+          "ns-cloud-c1.googledomains.com.",
+          "ns-cloud-d1.googledomains.com."
+        ],
+        "visibility": "public"
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "GET",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones",
+      "status": 200,
+      "body": {
+        "kind": "dns#managedZonesListResponse",
+        "managedZones": [
+          {
+            "creationTime": "2026-09-13T22:27:14.6161093Z",
+            "description": "conformance",
+            "dnsName": "conf1f2051ffc8bf.example.com.",
+            "id": "14780336816276900940",
+            "kind": "dns#managedZone",
+            "name": "conf-zone-1f2051ffc8bf",
+            "nameServers": [
+              "ns-cloud-a1.googledomains.com.",
+              "ns-cloud-b1.googledomains.com.",
+              "ns-cloud-c1.googledomains.com.",
+              "ns-cloud-d1.googledomains.com."
+            ],
+            "visibility": "public"
+          }
+        ]
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "GET",
+      "path": "/dns/v1/projects/jaiscloud-project",
+      "status": 200,
+      "body": {
+        "id": "jaiscloud-project",
+        "kind": "dns#project",
+        "number": "8748007587832360125",
+        "quota": {
+          "dnsKeysPerManagedZone": 2,
+          "gkeClustersPerManagedZone": 100,
+          "gkeClustersPerPolicy": 100,
+          "internetHealthChecksPerManagedZone": 100,
+          "kind": "dns#quota",
+          "managedZones": 10000,
+          "managedZonesPerNetwork": 1,
+          "nameserversPerDelegation": 6,
+          "networksPerManagedZone": 100,
+          "recordsPerRrset": 100,
+          "resourceRecordsPerRrset": 100,
+          "rrsetAdditionsPerChange": 100,
+          "rrsetDeletionsPerChange": 100,
+          "rrsetsPerManagedZone": 10000,
+          "totalRrdataSizePerChange": 10000
+        }
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "POST",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones/conf-zone-1f2051ffc8bf/rrsets",
+      "status": 200,
+      "body": {
+        "kind": "dns#resourceRecordSet",
+        "name": "www.conf1f2051ffc8bf.example.com.",
+        "rrdatas": [
+          "1.2.3.4"
+        ],
+        "ttl": 300,
+        "type": "A"
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "GET",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones/conf-zone-1f2051ffc8bf/rrsets",
+      "status": 200,
+      "body": {
+        "kind": "dns#resourceRecordSetsListResponse",
+        "rrsets": [
+          {
+            "kind": "dns#resourceRecordSet",
+            "name": "www.conf1f2051ffc8bf.example.com.",
+            "rrdatas": [
+              "1.2.3.4"
+            ],
+            "ttl": 300,
+            "type": "A"
+          }
+        ]
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "GET",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones/missing-1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "managed zone not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "clouddns",
+      "method": "DELETE",
+      "path": "/dns/v1/projects/jaiscloud-project/managedZones/conf-zone-1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "bigquery",
+      "method": "POST",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets",
+      "status": 200,
+      "body": {
+        "creationTime": "1789338434618",
+        "datasetReference": {
+          "datasetId": "conf_ds_1f2051ffc8bf",
+          "projectId": "jaiscloud-project"
+        },
+        "etag": "1789338434618",
+        "id": "jaiscloud-project:conf_ds_1f2051ffc8bf",
+        "kind": "bigquery#dataset",
+        "labels": {},
+        "lastModifiedTime": "1789338434618",
+        "location": "US"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "creationTime": "1789338434618",
+        "datasetReference": {
+          "datasetId": "conf_ds_1f2051ffc8bf",
+          "projectId": "jaiscloud-project"
+        },
+        "etag": "1789338434618",
+        "id": "jaiscloud-project:conf_ds_1f2051ffc8bf",
+        "kind": "bigquery#dataset",
+        "labels": {},
+        "lastModifiedTime": "1789338434618",
+        "location": "US"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets",
+      "status": 200,
+      "body": {
+        "datasets": [
+          {
+            "creationTime": "1789338434618",
+            "datasetReference": {
+              "datasetId": "conf_ds_1f2051ffc8bf",
+              "projectId": "jaiscloud-project"
+            },
+            "etag": "1789338434618",
+            "id": "jaiscloud-project:conf_ds_1f2051ffc8bf",
+            "kind": "bigquery#dataset",
+            "labels": {},
+            "lastModifiedTime": "1789338434618",
+            "location": "US"
+          }
+        ],
+        "kind": "bigquery#datasetList"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "POST",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables",
+      "status": 200,
+      "body": {
+        "creationTime": "1789338434619",
+        "etag": "1789338434619",
+        "id": "jaiscloud-project:conf_ds_1f2051ffc8bf.conf_tbl_1f2051ffc8bf",
+        "kind": "bigquery#table",
+        "labels": {},
+        "lastModifiedTime": "1789338434619",
+        "numRows": "0",
+        "schema": {
+          "fields": [
+            {
+              "mode": "REQUIRED",
+              "name": "id",
+              "type": "INTEGER"
+            }
+          ]
+        },
+        "tableReference": {
+          "datasetId": "conf_ds_1f2051ffc8bf",
+          "projectId": "jaiscloud-project",
+          "tableId": "conf_tbl_1f2051ffc8bf"
+        },
+        "type": "TABLE"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables/conf_tbl_1f2051ffc8bf",
+      "status": 200,
+      "body": {
+        "creationTime": "1789338434619",
+        "etag": "1789338434619",
+        "id": "jaiscloud-project:conf_ds_1f2051ffc8bf.conf_tbl_1f2051ffc8bf",
+        "kind": "bigquery#table",
+        "labels": {},
+        "lastModifiedTime": "1789338434619",
+        "numRows": "0",
+        "schema": {
+          "fields": [
+            {
+              "mode": "REQUIRED",
+              "name": "id",
+              "type": "INTEGER"
+            }
+          ]
+        },
+        "tableReference": {
+          "datasetId": "conf_ds_1f2051ffc8bf",
+          "projectId": "jaiscloud-project",
+          "tableId": "conf_tbl_1f2051ffc8bf"
+        },
+        "type": "TABLE"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables",
+      "status": 200,
+      "body": {
+        "kind": "bigquery#tableList",
+        "tables": [
+          {
+            "creationTime": "1789338434619",
+            "etag": "1789338434619",
+            "id": "jaiscloud-project:conf_ds_1f2051ffc8bf.conf_tbl_1f2051ffc8bf",
+            "kind": "bigquery#table",
+            "labels": {},
+            "lastModifiedTime": "1789338434619",
+            "numRows": "0",
+            "schema": {
+              "fields": [
+                {
+                  "mode": "REQUIRED",
+                  "name": "id",
+                  "type": "INTEGER"
+                }
+              ]
+            },
+            "tableReference": {
+              "datasetId": "conf_ds_1f2051ffc8bf",
+              "projectId": "jaiscloud-project",
+              "tableId": "conf_tbl_1f2051ffc8bf"
+            },
+            "type": "TABLE"
+          }
+        ],
+        "totalItems": 1
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "POST",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables/conf_tbl_1f2051ffc8bf/insertAll",
+      "status": 200,
+      "body": {
+        "insertErrors": [],
+        "kind": "bigquery#tableDataInsertAllResponse"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables/conf_tbl_1f2051ffc8bf/data",
+      "status": 200,
+      "body": {
+        "kind": "bigquery#tableDataList",
+        "rows": [
+          {
+            "f": [
+              {
+                "v": "1"
+              }
+            ]
+          }
+        ],
+        "startIndex": "0",
+        "totalRows": "1"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "POST",
+      "path": "/bigquery/v2/projects/jaiscloud-project/queries",
+      "status": 200,
+      "body": {
+        "jobComplete": true,
+        "jobReference": {
+          "jobId": "bqjob_34d64cb5a7266ebb",
+          "projectId": "jaiscloud-project"
+        },
+        "kind": "bigquery#queryResponse",
+        "rows": [],
+        "schema": {
+          "fields": []
+        },
+        "totalRows": "0"
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "GET",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/missing_1f2051ffc8bf",
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "dataset not found",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "service": "bigquery",
+      "method": "DELETE",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf/tables/conf_tbl_1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    },
+    {
+      "service": "bigquery",
+      "method": "DELETE",
+      "path": "/bigquery/v2/projects/jaiscloud-project/datasets/conf_ds_1f2051ffc8bf",
+      "status": 200,
+      "body": {}
+    }
+  ]
+}
