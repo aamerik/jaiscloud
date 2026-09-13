@@ -222,6 +222,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.ObjectsSetIamPolicy":         p.ObjectsSetIamPolicy,
 		"Storage.ObjectsDelete":               p.ObjectsDelete,
 		"Storage.ObjectsRewrite":              p.ObjectsRewrite,
+		"Storage.ObjectsCopy":                 p.ObjectsCopy,
 		"Storage.ObjectsCompose":              p.ObjectsCompose,
 		"Storage.ObjectACLList":               p.ObjectACLList,
 		"Storage.ObjectACLInsert":             p.ObjectACLInsert,
@@ -328,9 +329,31 @@ func toStoreObject(o objectMeta) gcs.ObjectMeta {
 	return m
 }
 
+// baseURL returns the request's absolute base ("scheme://host") for building
+// self/media links. Falls back to the emulator default when absent (unit tests
+// build requests without a base).
+func baseURL(nr *model.NormalizedRequest) string {
+	if b, _ := nr.Params[wire.BaseURLKey].(string); b != "" {
+		return b
+	}
+	return "http://localhost:8080"
+}
+
+func objectSelfLink(base, bucket, name string) string {
+	return base + "/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name)
+}
+
+func objectMediaLink(base, bucket, name string) string {
+	return base + "/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name) + "?alt=media"
+}
+
+func bucketSelfLink(base, name string) string {
+	return base + "/storage/v1/b/" + name
+}
+
 // fromStoreObject converts a stored ObjectMeta back into the wire objectMeta,
 // re-deriving the derived fields (kind/id/etag/selfLink/mediaLink).
-func fromStoreObject(m gcs.ObjectMeta) objectMeta {
+func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	o := objectMeta{
 		Kind:           "storage#object",
 		Name:           m.Name,
@@ -371,8 +394,9 @@ func fromStoreObject(m gcs.ObjectMeta) objectMeta {
 		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: m.CSEKeySHA256}
 	}
 	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
-	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + m.Bucket + "/o/" + url.PathEscape(m.Name)
-	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + m.Bucket + "/o/" + url.PathEscape(m.Name) + "?alt=media"
+	base := baseURL(nr)
+	o.SelfLink = objectSelfLink(base, m.Bucket, m.Name)
+	o.MediaLink = objectMediaLink(base, m.Bucket, m.Name)
 	return o
 }
 
@@ -513,7 +537,7 @@ func (p *Provider) BucketsList(ctx context.Context, nr *model.NormalizedRequest)
 	page, nextToken := paginateBuckets(buckets, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
-		items = append(items, toBucketMap(mapToBucket(m)))
+		items = append(items, toBucketMap(nr, mapToBucket(m)))
 	}
 	resp := map[string]any{"kind": "storage#buckets", "items": items}
 	if nextToken != "" {
@@ -553,7 +577,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
-	return provider.OK(toBucketMap(b)), nil
+	return provider.OK(toBucketMap(nr, b)), nil
 }
 
 func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -565,7 +589,7 @@ func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) 
 		}
 		return nil, err
 	}
-	return provider.OK(toBucketMap(mapToBucket(meta))), nil
+	return provider.OK(toBucketMap(nr, mapToBucket(meta))), nil
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -614,7 +638,7 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
-	return provider.OK(toBucketMap(mapToBucket(updated))), nil
+	return provider.OK(toBucketMap(nr, mapToBucket(updated))), nil
 }
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -705,7 +729,7 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 				}
 				continue
 			}
-			o := fromStoreObject(m)
+			o := fromStoreObject(nr, m)
 			all = append(all, listed{name: m.Name, item: toMap(o)})
 		}
 		sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
@@ -778,7 +802,7 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 
 	items := make([]any, 0, len(page))
 	for _, m := range page {
-		items = append(items, toMap(fromStoreObject(m)))
+		items = append(items, toMap(fromStoreObject(nr, m)))
 	}
 	resp := map[string]any{"kind": "storage#objects", "items": items}
 	if next != "" {
@@ -870,8 +894,9 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	}
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
-	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object)
-	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object) + "?alt=media"
+	base := baseURL(nr)
+	o.SelfLink = objectSelfLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object)
 
 	// Capture the prior live generation's blob key so a non-versioned overwrite
 	// can clean it up after the new generation is durably stored.
@@ -921,7 +946,7 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 		}
 		return o, err
 	}
-	return fromStoreObject(finalMeta), nil
+	return fromStoreObject(nr, finalMeta), nil
 }
 
 // PutObjectData writes an object's plaintext bytes through the shared envelope-
@@ -1116,6 +1141,12 @@ func mediaHeaders(m gcs.ObjectMeta) map[string]string {
 		"x-goog-metageneration":        m.Metageneration,
 		"x-goog-stored-content-length": strconv.FormatInt(m.Size, 10),
 	}
+	if m.StorageClass != "" {
+		h["x-goog-storage-class"] = m.StorageClass
+	}
+	// Real GCS media downloads carry an ETag header; the emulator uses the same
+	// constant object etag as the JSON metadata ("CAE=").
+	h["ETag"] = "CAE="
 	var hashes []string
 	if m.CRC32C != "" {
 		hashes = append(hashes, "crc32c="+m.CRC32C)
@@ -1243,6 +1274,35 @@ func (p *Provider) readDecrypt(ctx context.Context, project, bucket, object stri
 // metadata to the destination under a new generation, returning the
 // storage#rewriteResponse envelope.
 func (p *Provider) ObjectsRewrite(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	final, err := p.copyObject(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	resp := map[string]any{
+		"kind":                "storage#rewriteResponse",
+		"totalBytesRewritten": final.Size,
+		"objectSize":          final.Size,
+		"done":                true,
+		"resource":            toMap(final),
+	}
+	return provider.OK(resp), nil
+}
+
+// ObjectsCopy implements objects.copyTo: same copy as rewrite but returning the
+// destination storage#object directly (the GCS JSON API objects.copy action,
+// used by the Python SDK's Blob.copy_blob and the localgcp copy test).
+func (p *Provider) ObjectsCopy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	final, err := p.copyObject(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(toMap(final)), nil
+}
+
+// copyObject performs the shared copy/rewrite work: copy the source object's
+// bytes and metadata to the destination under a fresh generation, applying the
+// request body's writable overrides.
+func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) (objectMeta, error) {
 	srcBucket, _ := nr.Params["sourceBucket"].(string)
 	srcObject, _ := nr.Params["sourceObject"].(string)
 	dstBucket, _ := nr.Params["destinationBucket"].(string)
@@ -1252,13 +1312,13 @@ func (p *Provider) ObjectsRewrite(ctx context.Context, nr *model.NormalizedReque
 		dstObject, _ = body["name"].(string)
 	}
 	if srcBucket == "" || srcObject == "" || dstBucket == "" || dstObject == "" {
-		return nil, model.NewProviderError("InvalidRequest", "rewrite requires source and destination object names", 400)
+		return objectMeta{}, model.NewProviderError("InvalidRequest", "copy requires source and destination object names", 400)
 	}
 	if err := p.scopeToBucket(ctx, nr, dstBucket); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, model.NewProviderError("NotFound", "destination bucket not found", 404)
+			return objectMeta{}, model.NewProviderError("NotFound", "destination bucket not found", 404)
 		}
-		return nil, err
+		return objectMeta{}, err
 	}
 
 	srcParams := map[string]any{}
@@ -1267,13 +1327,13 @@ func (p *Provider) ObjectsRewrite(ctx context.Context, nr *model.NormalizedReque
 	}
 	srcMeta, raw, err := p.readSourceRaw(ctx, nr, srcBucket, srcObject, srcParams)
 	if err != nil {
-		return nil, err
+		return objectMeta{}, err
 	}
 
 	// Destination metadata starts as a copy of the source, overridden by the
 	// request body's writable fields, then stamped with a fresh generation.
 	now := clock.Now()
-	o := fromStoreObject(srcMeta)
+	o := fromStoreObject(nr, srcMeta)
 	o.Name = dstObject
 	o.Bucket = dstBucket
 	o.Generation = p.nextGen()
@@ -1295,22 +1355,15 @@ func (p *Provider) ObjectsRewrite(ctx context.Context, nr *model.NormalizedReque
 	}
 	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
 	o.Etag = "CAE="
-	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + dstBucket + "/o/" + url.PathEscape(dstObject)
-	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + dstBucket + "/o/" + url.PathEscape(dstObject) + "?alt=media"
+	base := baseURL(nr)
+	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
 
 	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
 	if err != nil {
-		return nil, err
+		return objectMeta{}, err
 	}
-
-	resp := map[string]any{
-		"kind":                "storage#rewriteResponse",
-		"totalBytesRewritten": final.Size,
-		"objectSize":          final.Size,
-		"done":                true,
-		"resource":            toMap(final),
-	}
-	return provider.OK(resp), nil
+	return final, nil
 }
 
 // ObjectsCompose implements objects.compose (the GCS JSON API compose action
@@ -1393,8 +1446,9 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	}
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
-	o.SelfLink = "https://www.googleapis.com/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object)
-	o.MediaLink = "https://www.googleapis.com/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object) + "?alt=media"
+	base := baseURL(nr)
+	o.SelfLink = objectSelfLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object)
 
 	final, err := p.writeObjectRaw(ctx, nr, bucket, object, o, buf.Bytes(), p.bucketVersioned(ctx, bucket), "", false)
 	if err != nil {
@@ -1484,7 +1538,7 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
-	o := fromStoreObject(meta)
+	o := fromStoreObject(nr, meta)
 
 	// Strict replace: writable metadata is taken verbatim from the request —
 	// omitted fields are cleared.
@@ -1524,7 +1578,7 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	}
 	// Preserve size/md5Hash/generation/storageClass/timeCreated; update only
 	// the fields present in the request and bump metageneration.
-	o := fromStoreObject(meta)
+	o := fromStoreObject(nr, meta)
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if ct, _ := body["contentType"].(string); ct != "" {
 			o.ContentType = ct
@@ -1733,7 +1787,7 @@ func toMap(o objectMeta) map[string]any {
 }
 
 // toBucketMap converts a bucketMeta struct into a map for JSON-encoding.
-func toBucketMap(b bucketMeta) map[string]any {
+func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	versioning := b.Versioning
 	if versioning == nil {
 		versioning = map[string]any{"enabled": false}
@@ -1754,7 +1808,7 @@ func toBucketMap(b bucketMeta) map[string]any {
 		"generation":     "0",
 		"metageneration": metageneration,
 		"projectNumber":  "0",
-		"selfLink":       "https://www.googleapis.com/storage/v1/b/" + b.Name,
+		"selfLink":       bucketSelfLink(baseURL(nr), b.Name),
 		"etag":           "CAE=",
 		"versioning":     versioning,
 		"iamConfiguration": map[string]any{
@@ -1808,7 +1862,7 @@ func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	o := fromStoreObject(meta)
+	o := fromStoreObject(nr, meta)
 	return provider.OK(toMap(o)), nil
 }
 
