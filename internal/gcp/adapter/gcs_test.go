@@ -311,3 +311,90 @@ func TestGCSCodecCopyToRouting(t *testing.T) {
 		t.Error("expected copy request body to be parsed")
 	}
 }
+
+func TestGCSCodecRestoreRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/o/dir/obj.txt/restore?generation=1234", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsRestore" {
+		t.Fatalf("expected ObjectsRestore, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["bucket"].(string); b != "bkt" {
+		t.Errorf("expected bucket bkt, got %q", b)
+	}
+	if o, _ := nr.Params["object"].(string); o != "dir/obj.txt" {
+		t.Errorf("expected object dir/obj.txt, got %q", o)
+	}
+	if g, _ := nr.Params["generation"].(string); g != "1234" {
+		t.Errorf("expected generation 1234, got %q", g)
+	}
+}
+
+func TestGCSCodecMoveRoutingSameBucket(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/o/dir/src.txt/moveTo/o/dir/dst.txt", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsMove" {
+		t.Fatalf("expected ObjectsMove, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["sourceBucket"].(string); b != "bkt" {
+		t.Errorf("expected sourceBucket bkt, got %q", b)
+	}
+	if o, _ := nr.Params["sourceObject"].(string); o != "dir/src.txt" {
+		t.Errorf("expected sourceObject dir/src.txt, got %q", o)
+	}
+	if b, _ := nr.Params["destinationBucket"].(string); b != "bkt" {
+		t.Errorf("expected destinationBucket bkt, got %q", b)
+	}
+	if o, _ := nr.Params["destinationObject"].(string); o != "dir/dst.txt" {
+		t.Errorf("expected destinationObject dir/dst.txt, got %q", o)
+	}
+}
+
+func TestGCSCodecMoveRoutingCrossBucket(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/srcbkt/o/src.txt/moveTo/b/dstbkt/o/dst.txt", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsMove" {
+		t.Fatalf("expected ObjectsMove, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["sourceBucket"].(string); b != "srcbkt" {
+		t.Errorf("expected sourceBucket srcbkt, got %q", b)
+	}
+	if o, _ := nr.Params["sourceObject"].(string); o != "src.txt" {
+		t.Errorf("expected sourceObject src.txt, got %q", o)
+	}
+	if b, _ := nr.Params["destinationBucket"].(string); b != "dstbkt" {
+		t.Errorf("expected destinationBucket dstbkt, got %q", b)
+	}
+	if o, _ := nr.Params["destinationObject"].(string); o != "dst.txt" {
+		t.Errorf("expected destinationObject dst.txt, got %q", o)
+	}
+}
+
+func TestGCSCodecLockRetentionPolicyRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/lockRetentionPolicy?ifMetagenerationMatch=1", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "BucketsLockRetentionPolicy" {
+		t.Fatalf("expected BucketsLockRetentionPolicy, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["bucket"].(string); b != "bkt" {
+		t.Errorf("expected bucket bkt, got %q", b)
+	}
+	if m, _ := nr.Params["ifMetagenerationMatch"].(string); m != "1" {
+		t.Errorf("expected ifMetagenerationMatch 1, got %q", m)
+	}
+}
