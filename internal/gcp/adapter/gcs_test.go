@@ -284,3 +284,30 @@ func TestGCSCodecEncodeForwardsHeaders(t *testing.T) {
 		t.Errorf("expected x-goog-meta-Foo header, got %q", hdr.Get("x-goog-meta-Foo"))
 	}
 }
+
+func TestGCSCodecCopyToRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/srcbkt/o/dir/src.txt/copyTo/b/dstbkt/o/dir/dst.txt", nil)
+	nr, err := c.Decode(r, []byte(`{"contentType":"text/plain"}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsCopy" {
+		t.Fatalf("expected ObjectsCopy, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["sourceBucket"].(string); b != "srcbkt" {
+		t.Errorf("expected sourceBucket srcbkt, got %q", b)
+	}
+	if o, _ := nr.Params["sourceObject"].(string); o != "dir/src.txt" {
+		t.Errorf("expected sourceObject dir/src.txt, got %q", o)
+	}
+	if b, _ := nr.Params["destinationBucket"].(string); b != "dstbkt" {
+		t.Errorf("expected destinationBucket dstbkt, got %q", b)
+	}
+	if o, _ := nr.Params["destinationObject"].(string); o != "dir/dst.txt" {
+		t.Errorf("expected destinationObject dir/dst.txt, got %q", o)
+	}
+	if _, ok := nr.Params["body"].(map[string]any); !ok {
+		t.Error("expected copy request body to be parsed")
+	}
+}

@@ -78,6 +78,10 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
 	metadataFromHeaders(r, nr.Params)
+	// The request's absolute base URL, used to build emulator-relative
+	// selfLink/mediaLink fields (the SDKs follow mediaLink, so it must point
+	// back at this emulator, not real GCS).
+	nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
 
 	switch {
 	case len(seg) == 1 && seg[0] == "b":
@@ -161,6 +165,25 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 			nr.Params["body"] = m
 		} else {
 			nr.Action = "ObjectsGetIamPolicy"
+		}
+	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o" && segmentIndex(seg, "copyTo") >= 0:
+		// /b/{srcBucket}/o/{srcObject...}/copyTo/b/{dstBucket}/o/{dstObject...}
+		// objects.copy returns the destination Object directly (unlike
+		// objects.rewrite's rewriteResponse envelope).
+		ci := segmentIndex(seg, "copyTo")
+		nr.Params["sourceBucket"] = seg[1]
+		nr.Params["sourceObject"] = strings.Join(seg[3:ci], "/")
+		if ci+3 < len(seg) && seg[ci+1] == "b" && seg[ci+3] == "o" {
+			nr.Params["destinationBucket"] = seg[ci+2]
+			nr.Params["destinationObject"] = strings.Join(seg[ci+4:], "/")
+		}
+		nr.Action = "ObjectsCopy"
+		m, err := parseJSON(body)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+		}
+		if m != nil {
+			nr.Params["body"] = m
 		}
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "o" && segmentIndex(seg, "rewriteTo") >= 0:
 		// /b/{srcBucket}/o/{srcObject...}/rewriteTo/b/{dstBucket}/o/{dstObject...}
@@ -261,6 +284,8 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 	queryToParams(r, nr.Params)
 	csekFromHeaders(r, nr.Params)
 	metadataFromHeaders(r, nr.Params)
+	// Emulator-relative self/media links for the created object.
+	nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
 	nr.Params["bucket"] = seg[1]
 
 	if len(seg) > 3 {
@@ -317,7 +342,6 @@ func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*mod
 			}
 			// The SDK expects an absolute Location header back, so pass the
 			// request base URL down for the provider to build it.
-			nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
 		}
 	default:
 		// No uploadType: treat POST body as raw media (defensive default).

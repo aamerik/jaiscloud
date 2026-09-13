@@ -293,3 +293,50 @@ func TestMediaDownloadHeaders(t *testing.T) {
 		t.Errorf("expected x-goog-meta-Foo header, got %q", hdr["x-goog-meta-Foo"])
 	}
 }
+
+// TestObjectsCopyReturnsObject covers objects.copyTo: it copies like rewrite but
+// returns the destination storage#object directly (not a rewrite envelope), and
+// leaves the source in place.
+func TestObjectsCopyReturnsObject(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertTestObject(t, p, "bkt", "src.txt", "text/plain", map[string]any{"keep": "yes"})
+
+	srcResp, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "src.txt"))
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	srcGen, _ := srcResp.Data["generation"].(string)
+
+	nr := bucketParams()
+	nr.Params["sourceBucket"] = "bkt"
+	nr.Params["sourceObject"] = "src.txt"
+	nr.Params["destinationBucket"] = "bkt"
+	nr.Params["destinationObject"] = "dst.txt"
+	resp, err := p.ObjectsCopy(ctx, nr)
+	if err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+
+	if resp.Data["kind"] != "storage#object" {
+		t.Errorf("expected kind storage#object, got %v", resp.Data["kind"])
+	}
+	if resp.Data["name"] != "dst.txt" {
+		t.Errorf("expected name dst.txt, got %v", resp.Data["name"])
+	}
+	dstGen, _ := resp.Data["generation"].(string)
+	if dstGen == "" || dstGen == srcGen {
+		t.Errorf("expected a new generation, got %q (source %q)", dstGen, srcGen)
+	}
+
+	media, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "dst.txt"))
+	if err != nil {
+		t.Fatalf("get media: %v", err)
+	}
+	if got := string(streamBytes(t, media)); got != "hello" {
+		t.Fatalf("expected copied content 'hello', got %q", got)
+	}
+	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "src.txt")); err != nil {
+		t.Fatalf("source should remain after copy: %v", err)
+	}
+}
