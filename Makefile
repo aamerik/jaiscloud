@@ -28,6 +28,10 @@ GCP_REGISTRY   ?= 10.0.100.21:5050
 GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
 # k3d's registry is plain HTTP; buildah defaults to HTTPS, so disable verify.
 GCP_PUSH_FLAGS ?= --tls-verify=false
+# Seed size for the k3d Lakehouse pipeline e2e. Rendered into the pipeline Job's
+# RECORDS env and asserted by the test, so override on the command line:
+#   make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=1000000
+LAKEHOUSE_RECORDS ?= 100000
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
@@ -542,7 +546,7 @@ test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tes
 
 test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medallion ELT pipeline e2e on k3d — rebuilds the emulator image first (tag: lakehouse_e2e)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE) LAKEHOUSE_RECORDS=$(LAKEHOUSE_RECORDS) \
 	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
 
 # Rebuild the emulator image from the working tree and roll the deployment so the

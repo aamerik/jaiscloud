@@ -13,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,10 +80,41 @@ func deleteJob(t *testing.T) {
 	}
 }
 
+// records is the seed size the run should use. Overridable via
+// LAKEHOUSE_RECORDS (the Makefile forwards it from its LAKEHOUSE_RECORDS var).
+func records() int {
+	if v := os.Getenv("LAKEHOUSE_RECORDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 100000
+}
+
+// recordsEnv matches the Job's RECORDS env value so the manifest can be
+// rendered with the requested count before it is applied.
+var recordsEnv = regexp.MustCompile(`(?m)(- name: RECORDS\n\s+value: )"[0-9]+"`)
+
+// applyPipeline applies the manifest with the RECORDS env rendered to
+// records(), so the pipeline ingests exactly what the assertions expect.
 func applyPipeline(t *testing.T) {
 	t.Helper()
-	if out, err := kubectl("apply", "-f", manifestPath()); err != nil {
-		t.Fatalf("apply pipeline manifest: %v\n%s", err, out)
+	raw, err := os.ReadFile(manifestPath())
+	if err != nil {
+		t.Fatalf("read manifest %s: %v", manifestPath(), err)
+	}
+	if !recordsEnv.Match(raw) {
+		t.Fatalf("RECORDS env not found in %s", manifestPath())
+	}
+	want := fmt.Sprintf(`${1}"%d"`, records())
+	rendered := recordsEnv.ReplaceAll(raw, []byte(want))
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = bytes.NewReader(rendered)
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("apply pipeline manifest: %v\n%s%s", err, out.String(), errb.String())
 	}
 }
 
