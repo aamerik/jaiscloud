@@ -8,7 +8,6 @@ import (
 
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
-	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -43,16 +42,16 @@ func tailPollInterval(bw *durationpb.Duration) time.Duration {
 	return d
 }
 
-// tailProject resolves the project from the request's resource_names, falling
-// back to routing metadata and then the configured default — the same
+// tailScope resolves the scope parent from the request's resource_names,
+// falling back to routing metadata and then the configured default — the same
 // resolution ListLogEntries uses.
-func (s *Service) tailProject(ctx context.Context, req *loggingpb.TailLogEntriesRequest) string {
+func (s *Service) tailScope(ctx context.Context, req *loggingpb.TailLogEntriesRequest) string {
 	for _, rn := range req.GetResourceNames() {
-		if p := projectFromResourceName(rn); p != "" {
-			return p
+		if scope, err := parseScopeParent(rn); err == nil {
+			return scope
 		}
 	}
-	return grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	return s.defaultScope(ctx)
 }
 
 // latestEntryID returns the highest stored entry id for the project, or -1 when
@@ -101,7 +100,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 	}
 
 	ctx := stream.Context()
-	project := s.tailProject(ctx, req)
+	project := s.tailScope(ctx, req)
 	lastID, err := s.latestEntryID(ctx, project)
 	if err != nil {
 		return mapError(err)
@@ -146,7 +145,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 			}
 			u := tailUpdate{
 				pred:     p,
-				project:  s.tailProject(ctx, r),
+				project:  s.tailScope(ctx, r),
 				interval: tailPollInterval(r.GetBufferWindow()),
 			}
 			select {

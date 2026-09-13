@@ -10,7 +10,7 @@ import (
 type MemoryStore struct {
 	mu      sync.RWMutex
 	nextID  int64
-	entries map[string][]LogEntry // projectID → entries
+	entries map[string][]LogEntry // scope → entries
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -18,19 +18,19 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{entries: make(map[string][]LogEntry)}
 }
 
-func (s *MemoryStore) Write(_ context.Context, projectID string, e LogEntry) error {
+func (s *MemoryStore) Write(_ context.Context, scope string, e LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e.ID = s.nextID
 	s.nextID++
-	s.entries[projectID] = append(s.entries[projectID], e)
+	s.entries[scope] = append(s.entries[scope], e)
 	return nil
 }
 
-func (s *MemoryStore) List(_ context.Context, projectID string) ([]LogEntry, error) {
+func (s *MemoryStore) List(_ context.Context, scope string) ([]LogEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	src := s.entries[projectID]
+	src := s.entries[scope]
 	result := make([]LogEntry, len(src))
 	copy(result, src)
 	sort.Slice(result, func(i, j int) bool {
@@ -42,11 +42,11 @@ func (s *MemoryStore) List(_ context.Context, projectID string) ([]LogEntry, err
 	return result, nil
 }
 
-func (s *MemoryStore) ListLogs(_ context.Context, projectID string) ([]string, error) {
+func (s *MemoryStore) ListLogs(_ context.Context, scope string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	seen := make(map[string]struct{})
-	for _, e := range s.entries[projectID] {
+	for _, e := range s.entries[scope] {
 		if e.LogName != "" {
 			seen[e.LogName] = struct{}{}
 		}
@@ -59,17 +59,17 @@ func (s *MemoryStore) ListLogs(_ context.Context, projectID string) ([]string, e
 	return result, nil
 }
 
-func (s *MemoryStore) DeleteLog(_ context.Context, projectID, logName string) error {
+func (s *MemoryStore) DeleteLog(_ context.Context, scope, logName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	src := s.entries[projectID]
+	src := s.entries[scope]
 	kept := src[:0]
 	for _, e := range src {
 		if e.LogName != logName {
 			kept = append(kept, e)
 		}
 	}
-	s.entries[projectID] = kept
+	s.entries[scope] = kept
 	return nil
 }
 

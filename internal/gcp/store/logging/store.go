@@ -27,15 +27,17 @@ type LogEntry struct {
 	Labels         map[string]string `json:"labels,omitempty"`
 }
 
-// Store is the Cloud Logging store. Entries are project-scoped; queries return
+// Store is the Cloud Logging store. Entries are isolated by scope parent, the
+// two-segment Cloud Logging resource container ("projects/p",
+// "organizations/123", "folders/f", "billingAccounts/b"); queries return
 // entries ordered by (timestamp, id) ascending.
 type Store interface {
-	Write(ctx context.Context, projectID string, e LogEntry) error
-	// List returns every entry in the project, ordered by (timestamp, id).
-	List(ctx context.Context, projectID string) ([]LogEntry, error)
-	// ListLogs returns the distinct full log names under the project, sorted.
-	ListLogs(ctx context.Context, projectID string) ([]string, error)
+	Write(ctx context.Context, scope string, e LogEntry) error
+	// List returns every entry in the scope, ordered by (timestamp, id).
+	List(ctx context.Context, scope string) ([]LogEntry, error)
+	// ListLogs returns the distinct full log names under the scope, sorted.
+	ListLogs(ctx context.Context, scope string) ([]string, error)
 	// DeleteLog deletes every entry whose log name equals logName.
-	DeleteLog(ctx context.Context, projectID, logName string) error
+	DeleteLog(ctx context.Context, scope, logName string) error
 	Reset(ctx context.Context)
 }
