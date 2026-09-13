@@ -55,4 +55,9 @@ const (
 	// media downloads can surface x-goog-hash / x-goog-generation /
 	// x-goog-meta-* etc. alongside the streamed bytes.
 	HeadersKey = "jaiscloud:headers"
+	// SignedURLKey carries a bool in NormalizedRequest.Params (codec → provider)
+	// indicating the request is a V4 signed-URL request (X-Goog-Signature query
+	// param present). The provider validates parameter format and expiry; the
+	// cryptographic signature itself is deliberately not verified.
+	SignedURLKey = "jaiscloud:signedURL"
 )

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -26,6 +25,10 @@ func (c *GCSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 	switch {
 	case strings.HasPrefix(path, "/upload/storage/v1/"):
 		return c.decodeUpload(r, body, strings.TrimPrefix(path, "/upload/storage/v1/"))
+	case strings.HasPrefix(path, "/resumable/upload/storage/v1/"):
+		// Discovery-documented resumable initiation path
+		// (mediaUpload.protocols.resumable.path) used by `gcloud storage cp`.
+		return c.decodeUpload(r, body, strings.TrimPrefix(path, "/resumable/upload/storage/v1/"))
 	case strings.HasPrefix(path, "/download/storage/v1/"):
 		return c.decodeDownload(r, body, strings.TrimPrefix(path, "/download/storage/v1/"))
 	case strings.HasPrefix(path, "/storage/v1/"):
@@ -50,12 +53,36 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	metadataFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[0]
 	nr.Params["object"] = strings.Join(seg[1:], "/")
+	signed := hasSignedSignature(r)
+	if signed {
+		nr.Params[wire.SignedURLKey] = true
+	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		nr.Action = "ObjectsGetMedia"
+	} else if signed && r.Method == http.MethodPut {
+		// V4 signed-URL upload: PUT stores the object through the media path.
+		nr.Action = "ObjectsInsert"
+		if body == nil {
+			nr.Params[wire.StreamKey] = r.Body
+		} else {
+			nr.Params[wire.MediaKey] = body
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			nr.Params[wire.ContentTypeKey] = ct
+		}
 	} else {
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}
 	return nr, nil
+}
+
+// hasSignedSignature reports whether the request carries a V4 signed-URL
+// signature query parameter (case-preserving key). Presence marks the request
+// as a signed URL; format/expiry validation happens in the storage provider,
+// which deliberately does not verify the cryptographic signature.
+func hasSignedSignature(r *http.Request) bool {
+	_, ok := r.URL.Query()["X-Goog-Signature"]
+	return ok
 }
 
 // decodeDownload handles /download/storage/v1/... — always a media download, so
@@ -82,6 +109,18 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 	// selfLink/mediaLink fields (the SDKs follow mediaLink, so it must point
 	// back at this emulator, not real GCS).
 	nr.Params[wire.BaseURLKey] = baseURLFromRequest(r)
+
+	// Resumable-session requests can arrive on the JSON path when a client
+	// rewrites the session URI's /upload/storage/v1/ prefix to /storage/v1/
+	// (emulator accommodation; real GCS serves sessions only at
+	// /upload/storage/v1/). Route before the generic switch so the object
+	// collection branch below does not swallow them.
+	if uploadType, _ := nr.Params["uploadType"].(string); uploadType == "resumable" {
+		return c.decodeStorageResumable(r, body, seg, nr)
+	}
+	if id, _ := nr.Params["upload_id"].(string); id != "" {
+		return c.decodeStorageResumable(r, body, seg, nr)
+	}
 
 	switch {
 	case len(seg) == 1 && seg[0] == "b":
@@ -301,6 +340,47 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 	return nr, nil
 }
 
+// decodeStorageResumable decodes a resumable-session request that arrived on
+// the JSON /storage/v1/ path (a client-rewritten session URI). Mirrors the
+// /upload/storage/v1/ resumable branch in decodeUpload: upload_id present →
+// chunk/status, absent → session start.
+func (c *GCSCodec) decodeStorageResumable(r *http.Request, body []byte, seg []string, nr *model.NormalizedRequest) (*model.NormalizedRequest, error) {
+	if !(len(seg) >= 3 && seg[0] == "b" && seg[2] == "o") {
+		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+	}
+	nr.Params["bucket"] = seg[1]
+	if len(seg) > 3 {
+		nr.Params["object"] = strings.Join(seg[3:], "/")
+	}
+	if n, _ := nr.Params["name"].(string); n != "" {
+		nr.Params["object"] = n
+	}
+	if id, _ := nr.Params["upload_id"].(string); id != "" {
+		nr.Action = "ObjectsInsertResumable"
+		nr.Params[wire.MediaKey] = body
+		if cr := r.Header.Get("Content-Range"); cr != "" {
+			nr.Params["contentRange"] = cr
+		}
+		if r.Header.Get("X-GUploader-No-308") == "yes" {
+			nr.Params[wire.No308Key] = true
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			nr.Params[wire.ContentTypeKey] = ct
+		}
+		return nr, nil
+	}
+	nr.Action = "ObjectsInsertStartResumable"
+	m, err := parseJSON(body)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	}
+	nr.Params["body"] = m
+	if ct := r.Header.Get("X-Upload-Content-Type"); ct != "" {
+		nr.Params[wire.ContentTypeKey] = ct
+	}
+	return nr, nil
+}
+
 // decodeUpload handles the media API under /upload/storage/v1/.
 func (c *GCSCodec) decodeUpload(r *http.Request, body []byte, rest string) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(rest)
@@ -414,6 +494,21 @@ func (c *GCSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 		return status, headers, nil
 	}
 
+	// A length-0 resume-incomplete response carries the status override but no
+	// Range header. The override must be emitted independently of Range — the Go
+	// SDK's only signal of resume-incomplete under X-GUploader-No-308 is this
+	// header — so decouple the two and return an empty body.
+	if so, ok := resp.Data[wire.StatusOverrideKey].(string); ok && so != "" {
+		headers.Set("X-Http-Status-Code-Override", so)
+		return status, headers, nil
+	}
+
+	// A 308 Resume Incomplete with no Range (empty session) must return an
+	// empty body, not the "{}" the generic JSON marshal would emit.
+	if status == http.StatusPermanentRedirect {
+		return status, headers, nil
+	}
+
 	// Streaming download — the gateway will io.Copy the reader; return headers only.
 	if _, ok := resp.Data["_stream"].(io.ReadCloser); ok {
 		if ct, _ := resp.Data[wire.ContentTypeKey].(string); ct != "" {
@@ -446,6 +541,30 @@ func (c *GCSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 		status = http.StatusInternalServerError
 	}
 	headers := http.Header{}
+	if perr.Data != nil {
+		switch perr.Data["errorFormat"] {
+		case "plain":
+			// Offset-past-end 503 (resumable): a plain-text body, no envelope.
+			headers.Set("Content-Type", "text/plain; charset=utf-8")
+			return status, headers, []byte(perr.Message)
+		case "xml":
+			// Signed-URL errors use the XML API error document.
+			headers.Set("Content-Type", "application/xml")
+			var b strings.Builder
+			b.WriteString("<?xml version='1.0' encoding='utf-8'?><Error><Code>")
+			b.WriteString(perr.Code)
+			b.WriteString("</Code><Message>")
+			b.WriteString(perr.Message)
+			b.WriteString("</Message>")
+			if param, _ := perr.Data["parameterName"].(string); param != "" {
+				b.WriteString("<ParameterName>")
+				b.WriteString(param)
+				b.WriteString("</ParameterName>")
+			}
+			b.WriteString("</Error>")
+			return status, headers, []byte(b.String())
+		}
+	}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
 	env := map[string]any{
 		"error": map[string]any{
@@ -615,15 +734,22 @@ func parseJSON(body []byte) (map[string]any, error) {
 // buffered in memory.
 func parseMultipart(r *http.Request, body []byte, params map[string]any) error {
 	ct := r.Header.Get("Content-Type")
-	mediaType, p, err := mime.ParseMediaType(ct)
-	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+	mediaType := strings.TrimSpace(ct)
+	if i := strings.IndexByte(mediaType, ';'); i >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:i])
+	}
+	if !strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
+		return model.NewProviderError("InvalidRequest", "expected multipart body", 400)
+	}
+	boundary := extractBoundary(ct)
+	if boundary == "" {
 		return model.NewProviderError("InvalidRequest", "expected multipart body", 400)
 	}
 	var src io.Reader = bytes.NewReader(body)
 	if body == nil {
 		src = r.Body
 	}
-	mr := multipart.NewReader(src, p["boundary"])
+	mr := multipart.NewReader(src, boundary)
 	for partIdx := 0; ; partIdx++ {
 		part, err := mr.NextPart()
 		if err != nil {
@@ -657,4 +783,31 @@ func parseMultipart(r *http.Request, body []byte, params map[string]any) error {
 		return model.NewProviderError("InvalidRequest", "multipart body missing media part", 400)
 	}
 	return nil
+}
+
+// extractBoundary extracts the multipart boundary from a Content-Type header,
+// accepting bare, double-quoted, and single-quoted values. mime.ParseMediaType
+// is deliberately avoided: it rejects single-quoted boundaries containing '='
+// (an RFC-2045 tspecial), which gcloud/apitools emits (boundary='===...==').
+func extractBoundary(ct string) string {
+	idx := strings.Index(strings.ToLower(ct), "boundary=")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(ct[idx+len("boundary="):])
+	if rest == "" {
+		return ""
+	}
+	if rest[0] == '"' || rest[0] == '\'' {
+		q := rest[0]
+		rest = rest[1:]
+		if j := strings.IndexByte(rest, q); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+	if j := strings.IndexByte(rest, ';'); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
 }

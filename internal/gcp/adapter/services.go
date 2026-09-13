@@ -30,7 +30,7 @@ type ServiceDescriptor struct {
 var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "storage",
-		PathPrefixes:   []string{"/storage/v1/", "/upload/storage/v1/", "/download/storage/v1/"},
+		PathPrefixes:   []string{"/storage/v1/", "/upload/storage/v1/", "/resumable/upload/storage/v1/", "/download/storage/v1/"},
 		ProviderPrefix: "Storage",
 		Codec:          func() adapter.Codec { return &GCSCodec{} },
 	},

@@ -74,9 +74,23 @@ type Provider struct {
 
 	mu      sync.Mutex
 	uploads map[string]*uploadSession // resumable upload sessions (in-memory)
+	// completed tombstones for finished resumable uploads, so a post-completion
+	// status query returns 200 + the object. Bounded and TTL-swept; lost on
+	// restart (an in-memory concern, not durably mirrored).
+	completed map[string]*completedSession
 
 	genMu sync.Mutex
 	gen   int64 // monotonically-increasing object generation counter
+}
+
+// completedSession is a lightweight tombstone for a finished resumable upload,
+// holding the finalized object resource so a post-completion status query can
+// replay it.
+type completedSession struct {
+	Bucket     string
+	Object     string
+	objectJSON map[string]any
+	lastAccess time.Time
 }
 
 // uploadSession holds the state of an in-progress resumable upload.
@@ -102,6 +116,7 @@ func New(objects gcs.ObjectStore, resources store.ResourceStore, blobs blobfs.Bl
 		blobs:     blobs,
 		encryptor: encryptor,
 		uploads:   make(map[string]*uploadSession),
+		completed: make(map[string]*completedSession),
 		gen:       clock.Now().UnixNano(),
 	}
 	p.seedGeneration(context.Background())
@@ -170,11 +185,13 @@ func (p *Provider) Reset(_ context.Context) {
 		}
 	}
 	p.uploads = make(map[string]*uploadSession)
+	p.completed = make(map[string]*completedSession)
 	p.mu.Unlock()
 }
 
 // sweepSessions removes stale in-memory resumable sessions, closing and
-// deleting any spill files. The caller must hold p.mu.
+// deleting any spill files, and evicts expired completion tombstones. The
+// caller must hold p.mu.
 func (p *Provider) sweepSessions() {
 	now := clock.RealNow()
 	for id, sess := range p.uploads {
@@ -184,6 +201,11 @@ func (p *Provider) sweepSessions() {
 				os.Remove(sess.tmpPath)
 			}
 			delete(p.uploads, id)
+		}
+	}
+	for id, done := range p.completed {
+		if now.Sub(done.lastAccess) > resumableSessionTTL {
+			delete(p.completed, id)
 		}
 	}
 }
@@ -892,6 +914,11 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 }
 
 func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if signed, _ := nr.Params[wire.SignedURLKey].(bool); signed {
+		if perr := p.validateSignedURL(nr); perr != nil {
+			return nil, perr
+		}
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
@@ -1104,7 +1131,42 @@ func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) 
 	return p.objectResponse(ctx, nr)
 }
 
+// validateSignedURL enforces V4 signed-URL parameter format and expiry. It
+// deliberately does not verify the cryptographic signature: the emulator
+// accepts any well-formed, unexpired signed URL (consistent with jaiscloud's
+// auth-bypass model, and the only approach compatible with SDK-signed URLs
+// whose key material never reaches the emulator).
+func (p *Provider) validateSignedURL(nr *model.NormalizedRequest) *model.ProviderError {
+	expiresStr, _ := nr.Params["X-Goog-Expires"].(string)
+	expires, err := strconv.ParseInt(expiresStr, 10, 64)
+	if err != nil || expires <= 0 || expires > 604800 {
+		return malformedSecurityHeader("Expires")
+	}
+	dateStr, _ := nr.Params["X-Goog-Date"].(string)
+	date, err := time.Parse("20060102T150405Z", dateStr)
+	if err != nil {
+		return malformedSecurityHeader("Date")
+	}
+	if date.Add(time.Duration(expires) * time.Second).Before(clock.Now()) {
+		return model.NewProviderError("ExpiredToken", "The provided token has expired.", 400).
+			WithData(map[string]any{"errorFormat": "xml"})
+	}
+	return nil
+}
+
+// malformedSecurityHeader builds the XML-API 400 error for a malformed signed
+// URL parameter (test-derived code/message shape).
+func malformedSecurityHeader(param string) *model.ProviderError {
+	return model.NewProviderError("MalformedSecurityHeader", "Your request has a malformed header.", 400).
+		WithData(map[string]any{"errorFormat": "xml", "parameterName": param})
+}
+
 func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if signed, _ := nr.Params[wire.SignedURLKey].(bool); signed {
+		if perr := p.validateSignedURL(nr); perr != nil {
+			return nil, perr
+		}
+	}
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
@@ -2559,6 +2621,10 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	p.mu.Lock()
 	sess, ok := p.uploads[uploadID]
 	if !ok {
+		if done, ok := p.completed[uploadID]; ok {
+			p.mu.Unlock()
+			return provider.OK(done.objectJSON), nil
+		}
 		p.mu.Unlock()
 		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
 	}
@@ -2566,7 +2632,7 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	if ct, _ := nr.Params[wire.ContentTypeKey].(string); ct != "" {
 		sess.ContentType = ct
 	}
-	start, end, total, hasTotal, isStatus := parseContentRange(cr)
+	start, end, total, hasTotal, isStatus, endUnknown := parseContentRange(cr)
 	complete := false
 	if isStatus {
 		// Status query (bytes */N): finalize once all N bytes are received, so a
@@ -2574,29 +2640,33 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 		// completion and receive the object resource.
 		complete = hasTotal && sess.length >= total
 	} else {
-		// Offset repair: only append a chunk that begins exactly where the
-		// accumulated bytes end; out-of-order/duplicate chunks are ignored.
-		if sess.length == start {
-			if sess.tmpFile != nil {
-				if _, err := sess.tmpFile.Write(media); err != nil {
-					p.mu.Unlock()
-					return nil, fmt.Errorf("resumable upload: write spill file: %w", err)
-				}
-			} else if int64(len(sess.buf))+int64(len(media)) > resumableSpillThreshold {
-				if err := spillSession(sess); err != nil {
-					p.mu.Unlock()
-					return nil, err
-				}
-				if _, err := sess.tmpFile.Write(media); err != nil {
-					p.mu.Unlock()
-					return nil, fmt.Errorf("resumable upload: write spill file: %w", err)
-				}
-			} else {
-				sess.buf = append(sess.buf, media...)
+		// A chunk starting past the persisted byte count is a client-side
+		// data-loss condition: reject with 503 (plain text).
+		if start > sess.length {
+			p.mu.Unlock()
+			return nil, offsetGapError(start, sess.length)
+		}
+		// Only append a chunk that begins exactly where the accumulated bytes
+		// end; a rewind (start < length) ignores re-sent bytes.
+		if start == sess.length {
+			if err := p.appendChunk(sess, media); err != nil {
+				p.mu.Unlock()
+				return nil, err
 			}
 			sess.length += int64(len(media))
 		}
-		complete = hasTotal && end+1 >= total && sess.length >= total
+		if endUnknown {
+			// Terminal unknown-end chunk (bytes <start>-*/<total>, emitted by the
+			// Node SDK in single-request mode): the whole object is in this
+			// request. Validate the declared total, if any, then finalize.
+			if hasTotal && sess.length != total {
+				p.mu.Unlock()
+				return nil, model.NewProviderError("InvalidRequest", "Invalid Content-Range", 400)
+			}
+			complete = true
+		} else {
+			complete = hasTotal && end+1 >= total && sess.length >= total
+		}
 	}
 	if complete {
 		delete(p.uploads, uploadID)
@@ -2639,11 +2709,10 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	}
 
 	if !complete {
-		rng := fmt.Sprintf("bytes=0-%d", length-1)
-		if length == 0 {
-			rng = "bytes=0-0"
+		data := map[string]any{}
+		if length > 0 {
+			data[wire.RangeKey] = fmt.Sprintf("bytes=0-%d", length-1)
 		}
-		data := map[string]any{wire.RangeKey: rng}
 		status := 308
 		if no308, _ := nr.Params[wire.No308Key].(bool); no308 {
 			// The SDK sets X-GUploader-No-308: yes; signal resume-incomplete
@@ -2667,7 +2736,54 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	if metadata != nil {
 		nr.Params[wire.MetaHeadersKey] = metadata
 	}
-	return p.ObjectsInsert(ctx, nr)
+	resp, err := p.ObjectsInsert(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	// Record a bounded completion tombstone so a post-completion status query
+	// returns 200 + the object (real GCS replays the completed resource).
+	p.mu.Lock()
+	if len(p.completed) < maxUploadSessions {
+		p.completed[uploadID] = &completedSession{
+			Bucket:     bucket,
+			Object:     object,
+			objectJSON: resp.Data,
+			lastAccess: clock.RealNow(),
+		}
+	}
+	p.mu.Unlock()
+	return resp, nil
+}
+
+// appendChunk appends media to an in-progress session, spilling to a temp file
+// once the in-memory buffer exceeds the threshold. The caller must hold p.mu.
+func (p *Provider) appendChunk(sess *uploadSession, media []byte) error {
+	if sess.tmpFile != nil {
+		if _, err := sess.tmpFile.Write(media); err != nil {
+			return fmt.Errorf("resumable upload: write spill file: %w", err)
+		}
+		return nil
+	}
+	if int64(len(sess.buf))+int64(len(media)) > resumableSpillThreshold {
+		if err := spillSession(sess); err != nil {
+			return err
+		}
+		if _, err := sess.tmpFile.Write(media); err != nil {
+			return fmt.Errorf("resumable upload: write spill file: %w", err)
+		}
+		return nil
+	}
+	sess.buf = append(sess.buf, media...)
+	return nil
+}
+
+// offsetGapError builds the plain-text 503 returned when a resumable chunk
+// starts past the persisted byte count. The message text matches live GCS
+// (double space after "request."), attested by the Java SDK's put task and SAP
+// KB 2840945.
+func offsetGapError(start, length int64) *model.ProviderError {
+	msg := fmt.Sprintf("Invalid request.  According to the Content-Range header, the upload offset is %d byte(s), which exceeds already uploaded size of %d byte(s).", start, length)
+	return model.NewProviderError("InvalidRequest", msg, 503).WithData(map[string]any{"errorFormat": "plain"})
 }
 
 // spillSession flushes the in-memory buffer to a temp file and switches the
@@ -2690,8 +2806,10 @@ func spillSession(sess *uploadSession) error {
 
 // parseContentRange parses a "bytes <start>-<end>/<total>" header, or a status
 // query "bytes */<total>". total may be "*" (unknown) in which case hasTotal is
-// false. isStatus is true for the "bytes *" status query.
-func parseContentRange(cr string) (start, end, total int64, hasTotal, isStatus bool) {
+// false. isStatus is true for the "bytes *" status query. endUnknown is true
+// when the end position is "*" (bytes <start>-*/<total>), the terminal
+// single-request form emitted by Google's Node SDK.
+func parseContentRange(cr string) (start, end, total int64, hasTotal, isStatus, endUnknown bool) {
 	rest := strings.TrimPrefix(cr, "bytes ")
 	rangePart, totalPart, _ := strings.Cut(rest, "/")
 	if rangePart == "*" {
@@ -2699,12 +2817,16 @@ func parseContentRange(cr string) (start, end, total int64, hasTotal, isStatus b
 			total, _ = strconv.ParseInt(totalPart, 10, 64)
 			hasTotal = true
 		}
-		return 0, 0, total, hasTotal, true
+		return 0, 0, total, hasTotal, true, false
 	}
 	se := strings.SplitN(rangePart, "-", 2)
 	if len(se) == 2 {
 		start, _ = strconv.ParseInt(se[0], 10, 64)
-		end, _ = strconv.ParseInt(se[1], 10, 64)
+		if se[1] == "*" {
+			endUnknown = true
+		} else {
+			end, _ = strconv.ParseInt(se[1], 10, 64)
+		}
 	}
 	if totalPart != "" && totalPart != "*" {
 		total, _ = strconv.ParseInt(totalPart, 10, 64)
