@@ -243,12 +243,22 @@ func (s *Service) Publish(ctx context.Context, req *pubsubpb.PublishRequest) (*p
 		if ok := m.GetOrderingKey(); ok != "" {
 			msg.OrderingKey = ok
 		}
-		if err := s.messages.Put(ctx, msg); err != nil {
-			return nil, mapError(err)
-		}
 		stored = append(stored, msg)
 		plainData = append(plainData, base64.StdEncoding.EncodeToString(m.GetData()))
 		ids = append(ids, id)
+	}
+
+	// Fan out: a copy per pull subscription so every subscription receives
+	// every message with independent delivery/ack state.
+	subIDs := s.pullSubscriptionIDs(ctx, project, t)
+	for _, msg := range stored {
+		for _, sid := range subIDs {
+			copy := msg
+			copy.Subscription = sid
+			if err := s.messages.Put(ctx, copy); err != nil {
+				return nil, mapError(err)
+			}
+		}
 	}
 
 	topicFull := topicName(project, t)
@@ -435,15 +445,15 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 
 	var msgs []pubsubstore.Message
 	if req.GetReturnImmediately() {
-		msgs, err = s.messages.Pull(ctx, topicID, maxMsgs, ackDeadline, retention, clock.Now())
+		msgs, err = s.messages.Pull(ctx, sub, maxMsgs, ackDeadline, retention, clock.Now())
 	} else {
-		msgs, err = s.longPoll(ctx, topicID, maxMsgs, ackDeadline, retention)
+		msgs, err = s.longPoll(ctx, sub, maxMsgs, ackDeadline, retention)
 	}
 	if err != nil {
 		return nil, mapError(err)
 	}
 
-	received, err := s.buildReceivedMessages(ctx, project, topicID, dlqTopic, maxDeliveryAttempts, msgs)
+	received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
 	if err != nil {
 		return nil, err
 	}
@@ -453,18 +463,20 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 // buildReceivedMessages transcodes claimed messages into wire ReceivedMessages,
 // applying DLQ republish + envelope decryption. Shared by Pull and StreamingPull
 // so both transports emit the same ack-id scheme and payload shape.
-func (s *Service) buildReceivedMessages(ctx context.Context, project, topicID, dlqTopic string, maxDeliveryAttempts int, msgs []pubsubstore.Message) ([]*pubsubpb.ReceivedMessage, error) {
+func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlqTopic string, maxDeliveryAttempts int, msgs []pubsubstore.Message) ([]*pubsubpb.ReceivedMessage, error) {
 	received := make([]*pubsubpb.ReceivedMessage, 0, len(msgs))
 	for _, m := range msgs {
 		// DLQ: once delivery attempts exceed maxDeliveryAttempts, republish to
 		// the dead-letter topic and drop the original.
 		if dlqTopic != "" && maxDeliveryAttempts > 0 && m.DeliveryAttempt > maxDeliveryAttempts {
-			_ = s.messages.Delete(ctx, topicID, m.MessageID)
-			_ = s.messages.Put(ctx, pubsubstore.Message{
-				Topic: dlqTopic, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
-				PublishTime: m.PublishTime, DeliveryAttempt: 0,
-				KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
-			})
+			_ = s.messages.Delete(ctx, queue, m.MessageID)
+			for _, sid := range s.pullSubscriptionIDs(ctx, project, dlqTopic) {
+				_ = s.messages.Put(ctx, pubsubstore.Message{
+					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
+					PublishTime: m.PublishTime, DeliveryAttempt: 0,
+					KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
+				})
+			}
 			continue
 		}
 
@@ -494,7 +506,7 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, topicID, d
 			pm.OrderingKey = m.OrderingKey
 		}
 		received = append(received, &pubsubpb.ReceivedMessage{
-			AckId:           encodeAckID(topicID, m.MessageID),
+			AckId:           encodeAckID(queue, m.MessageID),
 			Message:         pm,
 			DeliveryAttempt: int32(m.DeliveryAttempt),
 		})
@@ -504,10 +516,10 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, topicID, d
 
 // longPoll repeatedly claims messages until at least one is deliverable or the
 // bounded window elapses.
-func (s *Service) longPoll(ctx context.Context, topicID string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
+func (s *Service) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
 	deadline := clock.Now().Add(longPollTimeout)
 	for {
-		msgs, err := s.messages.Pull(ctx, topicID, maxMsgs, ackDeadline, retention, clock.Now())
+		msgs, err := s.messages.Pull(ctx, queue, maxMsgs, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -587,10 +599,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	flow := newStreamFlowControl(first.GetMaxOutstandingMessages(), first.GetMaxOutstandingBytes())
 
 	// Handle the initial request's control fields.
-	for _, id := range s.applyStreamAcks(ctx, topicID, first) {
+	for _, id := range s.applyStreamAcks(ctx, sub, first) {
 		flow.release(id)
 	}
-	for _, id := range s.applyStreamModifyDeadlines(ctx, topicID, first) {
+	for _, id := range s.applyStreamModifyDeadlines(ctx, sub, first) {
 		flow.release(id)
 	}
 
@@ -604,10 +616,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				recvErr <- err
 				return
 			}
-			for _, id := range s.applyStreamAcks(ctx, topicID, r) {
+			for _, id := range s.applyStreamAcks(ctx, sub, r) {
 				flow.release(id)
 			}
-			for _, id := range s.applyStreamModifyDeadlines(ctx, topicID, r) {
+			for _, id := range s.applyStreamModifyDeadlines(ctx, sub, r) {
 				flow.release(id)
 			}
 		}
@@ -620,7 +632,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 		if budget <= 0 || flow.bytesExhausted() {
 			// At the client's limit: release any messages acked out of band
 			// (another stream / unary Acknowledge) and wait for a slot.
-			if stored, err := s.messages.List(ctx, topicID); err == nil {
+			if stored, err := s.messages.List(ctx, sub); err == nil {
 				flow.reconcile(stored)
 			}
 			if flow.claimBudget(1) <= 0 || flow.bytesExhausted() {
@@ -640,12 +652,12 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 			budget = flow.claimBudget(streamPullBatch)
 		}
 
-		msgs, err := s.messages.Pull(ctx, topicID, budget, ackDeadline, retention, clock.Now())
+		msgs, err := s.messages.Pull(ctx, sub, budget, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return mapError(err)
 		}
 		if len(msgs) > 0 {
-			received, err := s.buildReceivedMessages(ctx, project, topicID, dlqTopic, maxDeliveryAttempts, msgs)
+			received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
 			if err != nil {
 				return err
 			}
@@ -663,7 +675,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				// immediately instead of stranding it until the ack deadline.
 				if decoded, ok := decodeAckID(rm.GetAckId()); ok {
 					if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
-						_ = s.messages.ModifyAckDeadline(ctx, topicID, []string{decoded}, 0, clock.Now())
+						_ = s.messages.ModifyAckDeadline(ctx, sub, []string{decoded}, 0, clock.Now())
 					}
 				}
 			}
@@ -700,7 +712,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 // applyStreamAcks acknowledges the ackIds in a StreamingPull request. It returns
 // the decoded message IDs so the caller can release them from the stream's
 // outstanding flow-control set.
-func (s *Service) applyStreamAcks(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamAcks(ctx context.Context, _ string, req *pubsubpb.StreamingPullRequest) []string {
 	var acked []string
 	for _, a := range req.GetAckIds() {
 		decoded, ok := decodeAckID(a)
@@ -721,7 +733,7 @@ func (s *Service) applyStreamAcks(ctx context.Context, topicID string, req *pubs
 // A deadline of 0 is a nack (immediately redeliverable), so those IDs are
 // returned for flow-control release; a positive extension keeps the message
 // outstanding.
-func (s *Service) applyStreamModifyDeadlines(ctx context.Context, topicID string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
 	ackIDs := req.GetModifyDeadlineAckIds()
 	seconds := req.GetModifyDeadlineSeconds()
 	n := len(seconds)
@@ -734,7 +746,7 @@ func (s *Service) applyStreamModifyDeadlines(ctx context.Context, topicID string
 		if !ok {
 			continue
 		}
-		_ = s.messages.ModifyAckDeadline(ctx, topicID, []string{decoded}, int(seconds[i]), clock.Now())
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{decoded}, int(seconds[i]), clock.Now())
 		if seconds[i] <= 0 {
 			if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
 				nacked = append(nacked, parts[1])
@@ -772,18 +784,13 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 	}
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
-	topic, _ := meta["topic"].(string)
-	topicID := topic
-	if i := strings.LastIndex(topicID, "/"); i >= 0 {
-		topicID = topicID[i+1:]
-	}
 	decoded := make([]string, 0, len(req.GetAckIds()))
 	for _, id := range req.GetAckIds() {
 		if d, ok := decodeAckID(id); ok {
 			decoded = append(decoded, d)
 		}
 	}
-	if err := s.messages.ModifyAckDeadline(ctx, topicID, decoded, int(req.GetAckDeadlineSeconds()), clock.Now()); err != nil {
+	if err := s.messages.ModifyAckDeadline(ctx, sub, decoded, int(req.GetAckDeadlineSeconds()), clock.Now()); err != nil {
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -1029,6 +1036,40 @@ func decodeAckID(s string) (string, bool) {
 
 // topicRetention resolves a topic's messageRetentionDuration in seconds,
 // defaulting to GCP's 7-day default.
+// pullSubscriptionIDs returns the IDs of a topic's pull subscriptions. Push
+// subscriptions are delivered over HTTP at publish time and are not queued.
+func (s *Service) pullSubscriptionIDs(ctx context.Context, accountID, topicID string) []string {
+	entries, err := s.resources.List(ctx, accountID, store.GlobalRegion, rtSubscription, "")
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, e := range entries {
+		var sub map[string]any
+		if json.Unmarshal(e.Data, &sub) != nil {
+			continue
+		}
+		st, _ := sub["topic"].(string)
+		if lastSegment(st) != topicID {
+			continue
+		}
+		if pc, _ := sub["pushConfig"].(map[string]any); pc != nil {
+			if ep, _ := pc["pushEndpoint"].(string); ep != "" {
+				continue
+			}
+		}
+		ids = append(ids, e.ID)
+	}
+	return ids
+}
+
+func lastSegment(s string) string {
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
 func (s *Service) topicRetention(ctx context.Context, account, topicID string) int {
 	const defaultRetentionSecs = 604800
 	e, err := s.resources.Get(ctx, account, store.GlobalRegion, rtTopic, topicID)

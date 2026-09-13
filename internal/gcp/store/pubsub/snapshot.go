@@ -37,10 +37,11 @@ func (s *MemoryMessages) Restore(_ context.Context, r io.Reader) error {
 	}
 	messages := make(map[string]map[string]Message)
 	for _, m := range snap.Messages {
-		if messages[m.Topic] == nil {
-			messages[m.Topic] = make(map[string]Message)
+		q := m.queueKey()
+		if messages[q] == nil {
+			messages[q] = make(map[string]Message)
 		}
-		messages[m.Topic][m.MessageID] = m
+		messages[q][m.MessageID] = m
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,7 +59,7 @@ func (s *PostgresMessages) IsEmpty(ctx context.Context) (bool, error) {
 }
 
 func (s *PostgresMessages) Snapshot(ctx context.Context, w io.Writer) error {
-	rows, err := s.pool.Query(ctx, `SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek FROM jc_pubsub_messages ORDER BY topic, message_id`)
+	rows, err := s.pool.Query(ctx, `SELECT topic, subscription, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek FROM jc_pubsub_messages ORDER BY subscription, message_id`)
 	if err != nil {
 		return err
 	}
@@ -68,7 +69,7 @@ func (s *PostgresMessages) Snapshot(ctx context.Context, w io.Writer) error {
 		var m Message
 		var attrs []byte
 		var visibleAt *time.Time
-		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.KmsKeyName, &m.WrappedDEK); err != nil {
+		if err := rows.Scan(&m.Topic, &m.Subscription, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			return err
 		}
 		json.Unmarshal(attrs, &m.Attributes)
@@ -98,8 +99,8 @@ func (s *PostgresMessages) Restore(ctx context.Context, r io.Reader) error {
 	}
 	for _, m := range snap.Messages {
 		attrs, _ := json.Marshal(m.Attributes)
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_pubsub_messages (topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			m.Topic, m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.KmsKeyName, m.WrappedDEK); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_pubsub_messages (topic, subscription, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, kms_key_name, wrapped_dek) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			m.Topic, m.queueKey(), m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.KmsKeyName, m.WrappedDEK); err != nil {
 			return err
 		}
 	}

@@ -92,6 +92,18 @@ func TestPubSubEndToEnd(t *testing.T) {
 		t.Fatalf("ListTopics = %v, want exactly [%s]", listed.GetTopics(), topic)
 	}
 
+	// Create the subscription before publishing (a subscription only receives
+	// messages published after it exists).
+	sub, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: subscription, Topic: topic, AckDeadlineSeconds: 30,
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if sub.GetTopic() != topic || sub.GetAckDeadlineSeconds() != 30 {
+		t.Fatalf("CreateSubscription = %+v, want topic=%s ackDeadline=30", sub, topic)
+	}
+
 	// Publish.
 	pubRes, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
 		Topic: topic,
@@ -104,17 +116,6 @@ func TestPubSubEndToEnd(t *testing.T) {
 	}
 	if len(pubRes.GetMessageIds()) != 1 {
 		t.Fatalf("Publish messageIds = %v, want 1 id", pubRes.GetMessageIds())
-	}
-
-	// Create subscription.
-	sub, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
-		Name: subscription, Topic: topic, AckDeadlineSeconds: 30,
-	})
-	if err != nil {
-		t.Fatalf("CreateSubscription: %v", err)
-	}
-	if sub.GetTopic() != topic || sub.GetAckDeadlineSeconds() != 30 {
-		t.Fatalf("CreateSubscription = %+v, want topic=%s ackDeadline=30", sub, topic)
 	}
 
 	// Pull (returnImmediately) → the published message.
@@ -431,5 +432,46 @@ func TestTestIamPermissionsFailsOpenOnMissingTopic(t *testing.T) {
 	}
 	if len(got.GetPermissions()) != 0 {
 		t.Fatalf("TestIamPermissions on missing topic = %v, want empty", got.GetPermissions())
+	}
+}
+
+// TestPubSubFanOutGRPC verifies per-subscription fan-out over gRPC: two pull
+// subscriptions of one topic both receive a copy of a published message.
+func TestPubSubFanOutGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/fan-grpc"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	subs := []string{
+		"projects/test/subscriptions/fan-grpc-a",
+		"projects/test/subscriptions/fan-grpc-b",
+	}
+	for _, s := range subs {
+		if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: s, Topic: topic, AckDeadlineSeconds: 30}); err != nil {
+			t.Fatalf("CreateSubscription %s: %v", s, err)
+		}
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic:    topic,
+		Messages: []*pubsubpb.PubsubMessage{{Data: []byte("broadcast")}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	for _, s := range subs {
+		pull, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: s, MaxMessages: 10, ReturnImmediately: true})
+		if err != nil {
+			t.Fatalf("Pull %s: %v", s, err)
+		}
+		if len(pull.GetReceivedMessages()) != 1 {
+			t.Fatalf("subscription %s: got %d messages, want 1", s, len(pull.GetReceivedMessages()))
+		}
+		if got := string(pull.GetReceivedMessages()[0].GetMessage().GetData()); got != "broadcast" {
+			t.Fatalf("subscription %s: data = %q, want broadcast", s, got)
+		}
 	}
 }
