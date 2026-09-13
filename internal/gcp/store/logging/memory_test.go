@@ -55,6 +55,47 @@ func TestMemoryStoreCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreScopeIsolation(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	base := time.Now().UTC()
+
+	if err := s.Write(ctx, "projects/p1", testEntry("projects/p1/logs/a", "proj-a", 200, base)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, "organizations/123", testEntry("organizations/123/logs/a", "org-a", 200, base)); err != nil {
+		t.Fatal(err)
+	}
+
+	proj, err := s.List(ctx, "projects/p1")
+	if err != nil || len(proj) != 1 || proj[0].TextPayload != "proj-a" {
+		t.Fatalf("projects/p1 list = %+v, %v", proj, err)
+	}
+	org, err := s.List(ctx, "organizations/123")
+	if err != nil || len(org) != 1 || org[0].TextPayload != "org-a" {
+		t.Fatalf("organizations/123 list = %+v, %v", org, err)
+	}
+
+	projLogs, err := s.ListLogs(ctx, "projects/p1")
+	if err != nil || len(projLogs) != 1 || projLogs[0] != "projects/p1/logs/a" {
+		t.Fatalf("projects/p1 logs = %v, %v", projLogs, err)
+	}
+	orgLogs, err := s.ListLogs(ctx, "organizations/123")
+	if err != nil || len(orgLogs) != 1 || orgLogs[0] != "organizations/123/logs/a" {
+		t.Fatalf("organizations/123 logs = %v, %v", orgLogs, err)
+	}
+
+	if err := s.DeleteLog(ctx, "organizations/123", "organizations/123/logs/a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.List(ctx, "organizations/123"); len(got) != 0 {
+		t.Fatalf("organizations/123 after delete = %+v, want empty", got)
+	}
+	if got, _ := s.List(ctx, "projects/p1"); len(got) != 1 {
+		t.Fatalf("projects/p1 must be untouched by org delete = %+v", got)
+	}
+}
+
 func TestMemoryStoreReset(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

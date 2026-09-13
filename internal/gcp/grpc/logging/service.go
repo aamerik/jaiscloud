@@ -29,6 +29,7 @@ package logging
 import (
 	"context"
 	"encoding/base64"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -70,29 +71,15 @@ func logName(project, id string) string {
 	return resource.ResourceID(project)("log", id)
 }
 
-// splitLogName parses "projects/{p}/logs/{l}".
-func splitLogName(name string) (project, logID string, ok bool) {
-	parts := strings.Split(name, "/")
-	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "logs" {
-		return "", "", false
-	}
-	return parts[1], parts[3], true
-}
-
-// projectFromResourceName extracts the project from "projects/{p}" (or a
-// longer "projects/{p}/logs/{l}" name) or a bare project id.
-func projectFromResourceName(name string) string {
-	if name == "" {
+// defaultScope resolves the scope parent used when a request omits its
+// resource name, from gRPC routing metadata or the configured default project.
+// It returns "" when nothing resolves (an empty store key lists nothing).
+func (s *Service) defaultScope(ctx context.Context) string {
+	scope, err := parseScopeParent(grpcutil.ProjectFromMetadata(ctx, s.defaultProj))
+	if err != nil {
 		return ""
 	}
-	parts := strings.Split(name, "/")
-	if len(parts) >= 2 && parts[0] == "projects" {
-		return parts[1]
-	}
-	if !strings.Contains(name, "/") {
-		return name
-	}
-	return ""
+	return scope
 }
 
 // ─── LoggingServiceV2 ─────────────────────────────────────────────────────────
@@ -138,10 +125,11 @@ func (s *Service) WriteLogEntries(ctx context.Context, req *loggingpb.WriteLogEn
 		if e.Timestamp.IsZero() {
 			e.Timestamp = clock.Now()
 		}
-		_, _, ok := splitLogName(e.LogName)
-		if !ok {
-			return nil, mapError(model.NewProviderError("InvalidArgument", "invalid log name: "+e.LogName, 400))
+		scope, logID, perr := parseLogName(e.LogName)
+		if perr != nil {
+			return nil, mapError(perr)
 		}
+		e.LogName = canonicalLogName(scope, logID)
 		entries = append(entries, e)
 	}
 
@@ -151,8 +139,8 @@ func (s *Service) WriteLogEntries(ctx context.Context, req *loggingpb.WriteLogEn
 
 	// Pass 2: write every validated entry.
 	for _, e := range entries {
-		project, _, _ := splitLogName(e.LogName)
-		if err := s.store.Write(ctx, project, e); err != nil {
+		scope, _, _ := parseLogName(e.LogName)
+		if err := s.store.Write(ctx, scope, e); err != nil {
 			return nil, mapError(err)
 		}
 	}
@@ -165,20 +153,39 @@ func (s *Service) ListLogEntries(ctx context.Context, req *loggingpb.ListLogEntr
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400))
 	}
 
-	project := ""
+	var scopes []string
+	seenScope := make(map[string]struct{}, len(req.GetResourceNames()))
 	for _, rn := range req.GetResourceNames() {
-		if p := projectFromResourceName(rn); p != "" {
-			project = p
-			break
+		scope, perr := parseScopeParent(rn)
+		if perr != nil {
+			return nil, mapError(perr)
+		}
+		if _, seen := seenScope[scope]; !seen {
+			seenScope[scope] = struct{}{}
+			scopes = append(scopes, scope)
 		}
 	}
-	if project == "" {
-		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	if len(scopes) == 0 {
+		if scope := s.defaultScope(ctx); scope != "" {
+			scopes = append(scopes, scope)
+		}
 	}
 
-	entries, err := s.store.List(ctx, project)
-	if err != nil {
-		return nil, mapError(err)
+	var entries []loggingstore.LogEntry
+	for _, scope := range scopes {
+		list, lerr := s.store.List(ctx, scope)
+		if lerr != nil {
+			return nil, mapError(lerr)
+		}
+		entries = append(entries, list...)
+	}
+	if len(scopes) > 1 {
+		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].Timestamp.Equal(entries[j].Timestamp) {
+				return entries[i].ID < entries[j].ID
+			}
+			return entries[i].Timestamp.Before(entries[j].Timestamp)
+		})
 	}
 	filtered := entries[:0]
 	for _, e := range entries {
@@ -203,11 +210,17 @@ func (s *Service) ListLogEntries(ctx context.Context, req *loggingpb.ListLogEntr
 }
 
 func (s *Service) ListLogs(ctx context.Context, req *loggingpb.ListLogsRequest) (*loggingpb.ListLogsResponse, error) {
-	project := projectFromResourceName(req.GetParent())
-	if project == "" {
-		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	scope := ""
+	if parent := req.GetParent(); parent == "" {
+		scope = s.defaultScope(ctx)
+	} else {
+		parsed, perr := parseScopeParent(parent)
+		if perr != nil {
+			return nil, mapError(perr)
+		}
+		scope = parsed
 	}
-	names, err := s.store.ListLogs(ctx, project)
+	names, err := s.store.ListLogs(ctx, scope)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -217,11 +230,11 @@ func (s *Service) ListLogs(ctx context.Context, req *loggingpb.ListLogsRequest) 
 }
 
 func (s *Service) DeleteLog(ctx context.Context, req *loggingpb.DeleteLogRequest) (*emptypb.Empty, error) {
-	project, _, ok := splitLogName(req.GetLogName())
-	if !ok {
-		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid log name: "+req.GetLogName(), 400))
+	scope, logID, perr := parseLogName(req.GetLogName())
+	if perr != nil {
+		return nil, mapError(perr)
 	}
-	if err := s.store.DeleteLog(ctx, project, req.GetLogName()); err != nil {
+	if err := s.store.DeleteLog(ctx, scope, canonicalLogName(scope, logID)); err != nil {
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil

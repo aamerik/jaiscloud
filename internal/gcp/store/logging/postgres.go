@@ -27,7 +27,7 @@ func nullableJSON(v any) any {
 	return json.RawMessage(b)
 }
 
-func (s *PostgresStore) Write(ctx context.Context, projectID string, e LogEntry) error {
+func (s *PostgresStore) Write(ctx context.Context, scope string, e LogEntry) error {
 	if e.Timestamp.IsZero() {
 		e.Timestamp = clock.Now()
 	}
@@ -35,16 +35,16 @@ func (s *PostgresStore) Write(ctx context.Context, projectID string, e LogEntry)
 		INSERT INTO jc_log_entries
 			(project_id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-	`, projectID, e.LogName, e.ResourceType, nullableJSON(e.ResourceLabels), e.Severity, e.PayloadType, e.TextPayload,
+	`, scope, e.LogName, e.ResourceType, nullableJSON(e.ResourceLabels), e.Severity, e.PayloadType, e.TextPayload,
 		nullableJSON(e.JsonPayload), e.Timestamp, e.InsertID, nullableJSON(e.Labels))
 	return err
 }
 
-func (s *PostgresStore) List(ctx context.Context, projectID string) ([]LogEntry, error) {
+func (s *PostgresStore) List(ctx context.Context, scope string) ([]LogEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
 		FROM jc_log_entries WHERE project_id=$1 ORDER BY timestamp, id
-	`, projectID)
+	`, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +70,10 @@ func (s *PostgresStore) List(ctx context.Context, projectID string) ([]LogEntry,
 	return result, rows.Err()
 }
 
-func (s *PostgresStore) ListLogs(ctx context.Context, projectID string) ([]string, error) {
+func (s *PostgresStore) ListLogs(ctx context.Context, scope string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT log_name FROM jc_log_entries WHERE project_id=$1 ORDER BY log_name
-	`, projectID)
+	`, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +89,8 @@ func (s *PostgresStore) ListLogs(ctx context.Context, projectID string) ([]strin
 	return result, rows.Err()
 }
 
-func (s *PostgresStore) DeleteLog(ctx context.Context, projectID, logName string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM jc_log_entries WHERE project_id=$1 AND log_name=$2`, projectID, logName)
+func (s *PostgresStore) DeleteLog(ctx context.Context, scope, logName string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM jc_log_entries WHERE project_id=$1 AND log_name=$2`, scope, logName)
 	return err
 }
 
