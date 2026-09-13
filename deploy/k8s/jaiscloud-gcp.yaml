@@ -1,4 +1,19 @@
 ---
+# PersistentVolumeClaim — object bytes survive pod restarts. Metadata lives in
+# Postgres, so an ephemeral blob dir lets a rolled pod leave behind objects
+# whose metadata outlives their bytes (a media read then 404s). The k3d test's
+# preflight rolls this Deployment every run, so persistence is required.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaiscloud-gcp-blobs-pvc
+  namespace: jaiscloud
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
 # Deployment — the GCP emulator (REST :8080, gRPC :8081) with the Dataproc
 # Spark-on-Kubernetes executor wired to the in-cluster GCS endpoint.
 #
@@ -43,12 +58,15 @@ spec:
             - --dsn
             - postgres://jaiscloud:jaiscloud@postgres.jaiscloud.svc.cluster.local:5432/jaiscloud
             - --blob-dir
-            - /tmp/blobs
+            - /data/blobs
           ports:
             - name: rest
               containerPort: 8080
             - name: grpc
               containerPort: 8081
+          volumeMounts:
+            - name: blobs
+              mountPath: /data/blobs
           env:
             # Dataproc submits Spark jobs as client-mode pods in this namespace.
             - name: JAISCLOUD_SPARK_EXECUTOR_MODE
@@ -76,6 +94,10 @@ spec:
             limits:
               cpu: "2"
               memory: 4Gi
+      volumes:
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: jaiscloud-gcp-blobs-pvc
 ---
 # Service — REST + gRPC entry point. Spark drivers/executors and the Lakehouse
 # pipeline Job address the emulator through this DNS name:

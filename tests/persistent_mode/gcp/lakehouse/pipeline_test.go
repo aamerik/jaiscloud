@@ -23,8 +23,8 @@ import (
 // through a port-forward), so a pipeline that "succeeds" without producing
 // data still fails.
 func TestLakehousePipelineK3d(t *testing.T) {
-	// Matches the pipeline's RECORDS default (deploy/k8s/lakehouse/pipeline.yaml).
-	const wantRecords = 100000
+	// The seed size, matching the RECORDS env the pipeline Job is rendered with.
+	wantRecords := records()
 
 	requireK3d(t)
 

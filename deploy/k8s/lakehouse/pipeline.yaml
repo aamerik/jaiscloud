@@ -50,6 +50,19 @@ data:
     # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
     RUN_ID = os.environ.get("RUN_ID") or f"{int(time.time())}-{os.getpid()}"
     RECORDS = int(os.environ.get("RECORDS", "100000"))
+    # Rows per ingested GCS object; also the Spark input-partition granularity.
+    SHARD_ROWS = int(os.environ.get("SHARD_ROWS", "250000"))
+
+    # Spark footprint for the two hops. The k3d node is capped at ~6Gi, so this
+    # stays lean: 2 executors + driver at >1g each tip the node cgroup into an
+    # OOM kill. 512m per JVM handles a 1M-row seed comfortably; the seed is
+    # streamed in SHARD_ROWS shards so no task sees more than a few 10s of MB.
+    SPARK_PROPERTIES = {
+        "spark.driver.memory": os.environ.get("SPARK_DRIVER_MEMORY", "512m"),
+        "spark.executor.memory": os.environ.get("SPARK_EXECUTOR_MEMORY", "512m"),
+        "spark.executor.instances": os.environ.get("SPARK_EXECUTOR_INSTANCES", "1"),
+        "spark.sql.shuffle.partitions": os.environ.get("SPARK_SHUFFLE_PARTITIONS", "8"),
+    }
 
     RAW = "lakehouse-raw"
     CONFORMED = "lakehouse-conformed"
@@ -118,6 +131,22 @@ data:
         return _raw_get(path).decode()
 
 
+    def delete_object(bucket, name):
+        path = f"/storage/v1/b/{bucket}/o/{urllib.parse.quote(name, safe='')}"
+        status, body = _req("DELETE", path)
+        if status >= 300 and status != 404:
+            raise RuntimeError(f"delete {bucket}/{name}: HTTP {status} {body}")
+
+
+    def purge_bucket(name):
+        """Delete every object in a bucket so a re-run starts from a clean slate.
+        Fixed bucket names otherwise accumulate objects across runs — and after
+        the emulator pod is rolled (blob dir is ephemeral) a stale object's
+        metadata outlives its bytes, which is exactly how a re-run 404s."""
+        for obj in list_objects(name):
+            delete_object(name, obj)
+
+
     def ensure_cluster():
         status, body = _req(
             "POST",
@@ -133,7 +162,10 @@ data:
             "job": {
                 "placement": {"clusterName": CLUSTER},
                 "reference": {"jobId": job_id},
-                "pysparkJob": {"mainPythonFileUri": script_uri},
+                "pysparkJob": {
+                    "mainPythonFileUri": script_uri,
+                    "properties": SPARK_PROPERTIES,
+                },
             }
         }
         status, resp = _req("POST", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", body)
@@ -164,7 +196,11 @@ data:
     from pyspark.sql import functions as F
 
     spark = SparkSession.builder.getOrCreate()
-    raw = spark.read.json("gs://lakehouse-raw/events/")
+    # Declare the schema explicitly: spark.read.json defaults to
+    # samplingRatio=1.0, which scans the whole dataset on the driver to infer
+    # types and OOM-kills it at scale. The seed shape is known here.
+    schema = "event_id STRING, region STRING, amount DOUBLE"
+    raw = spark.read.schema(schema).json("gs://lakehouse-raw/events/")
     conformed = (
         raw.withColumn("amount", F.col("amount").cast("double"))
         .filter(F.col("amount").isNotNull())
@@ -179,7 +215,8 @@ data:
     from pyspark.sql import functions as F
 
     spark = SparkSession.builder.getOrCreate()
-    conf = spark.read.json("gs://lakehouse-conformed/events/")
+    schema = "event_id STRING, region STRING, amount DOUBLE"
+    conf = spark.read.schema(schema).json("gs://lakehouse-conformed/events/")
     revenue = conf.groupBy("region").agg(
         F.count("*").alias("orders"),
         F.round(F.sum("amount"), 2).alias("revenue"),
@@ -189,31 +226,44 @@ data:
     '''
 
 
-    def seed_events():
+    def ingest_events():
+        """Write RECORDS seed events to gs://RAW/events/ in SHARD_ROWS-sized
+        objects and return (per-region tally, shard count). Streams one shard at
+        a time so driver memory stays bounded regardless of RECORDS, and each
+        shard becomes a Spark input partition."""
         regions = ["us", "eu", "us", "apac", "eu", "us"]
-        rows = [
-            {"event_id": f"e{i:06d}", "region": regions[i % len(regions)],
-             "amount": round(10 + (i * 7) % 90 + (i % 3) * 0.5, 2)}
-            for i in range(1, RECORDS + 1)
-        ]
-        return "\n".join(json.dumps(r) for r in rows) + "\n", rows
+        counts = {}
+        shard = []
+        shards = 0
+        for i in range(1, RECORDS + 1):
+            region = regions[i % len(regions)]
+            shard.append(json.dumps(
+                {"event_id": f"e{i:06d}", "region": region,
+                 "amount": round(10 + (i * 7) % 90 + (i % 3) * 0.5, 2)}))
+            counts[region.upper()] = counts.get(region.upper(), 0) + 1
+            if len(shard) >= SHARD_ROWS:
+                upload(RAW, f"events/part-{shards:04d}.json",
+                       "\n".join(shard) + "\n", "application/json")
+                shards += 1
+                shard = []
+        if shard:
+            upload(RAW, f"events/part-{shards:04d}.json",
+                   "\n".join(shard) + "\n", "application/json")
+            shards += 1
+        return counts, shards
 
 
     def main():
         log(f"emulator={BASE} project={PROJECT} region={REGION} cluster={CLUSTER}")
         for b in (RAW, CONFORMED, CURATED, PUBLISHED):
             ensure_bucket(b)
+            purge_bucket(b)
 
         # ---- Ingest ----------------------------------------------------------
-        seed, rows = seed_events()
-        upload(RAW, "events/events.json", seed, "application/json")
+        ingest_counts, shards = ingest_events()
         upload(RAW, "jobs/transform.py", TRANSFORM_PY, "text/x-python")
         upload(RAW, "jobs/derive.py", DERIVE_PY, "text/x-python")
-        ingest_counts = {}
-        for r in rows:
-            key = r["region"].upper()
-            ingest_counts[key] = ingest_counts.get(key, 0) + 1
-        log(f"ingested {len(rows)} raw events -> gs://{RAW}/events/events.json")
+        log(f"ingested {RECORDS} raw events in {shards} shard(s) -> gs://{RAW}/events/")
 
         ensure_cluster()
 
@@ -242,7 +292,8 @@ data:
             "pipeline": "medallion-elt",
             "run_id": RUN_ID,
             "stages": ["ingest", "transform", "derive", "publish"],
-            "input_rows": len(rows),
+            "input_rows": RECORDS,
+            "ingest_shards": shards,
             "ingest_region_counts": ingest_counts,
             "curated_objects": curated_parts,
             "published_objects": sorted(published),
@@ -293,16 +344,20 @@ spec:
               value: us-central1
             - name: CLUSTER
               value: lakehouse-cluster
+            # Record count; `make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=N`
+            # renders this value so the test's expectations match the run.
+            - name: RECORDS
+              value: "100000"
           volumeMounts:
             - name: scripts
               mountPath: /scripts
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: "1"
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: scripts
           configMap:
