@@ -54,14 +54,8 @@ func TestSDKPubSub(t *testing.T) {
 	_, err = svc.Projects.Topics.Create(topicName, &pubsub.Topic{Name: topicName}).Do()
 	require.NoError(t, err)
 
-	// Publish.
-	pub, err := svc.Projects.Topics.Publish(topicName, &pubsub.PublishRequest{
-		Messages: []*pubsub.PubsubMessage{{Data: "aGk="}},
-	}).Do()
-	require.NoError(t, err)
-	require.Len(t, pub.MessageIds, 1)
-
-	// Subscription + pull + ack.
+	// Create the subscription before publishing: Pub/Sub only delivers messages
+	// published after the subscription exists.
 	subName := "projects/proj/subscriptions/" + unique("s")
 	_, err = svc.Projects.Subscriptions.Create(subName, &pubsub.Subscription{
 		Name:  subName,
@@ -69,6 +63,14 @@ func TestSDKPubSub(t *testing.T) {
 	}).Do()
 	require.NoError(t, err)
 
+	// Publish.
+	pub, err := svc.Projects.Topics.Publish(topicName, &pubsub.PublishRequest{
+		Messages: []*pubsub.PubsubMessage{{Data: "aGk="}},
+	}).Do()
+	require.NoError(t, err)
+	require.Len(t, pub.MessageIds, 1)
+
+	// Pull + ack.
 	pull, err := svc.Projects.Subscriptions.Pull(subName, &pubsub.PullRequest{MaxMessages: 10}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, pull.ReceivedMessages)
