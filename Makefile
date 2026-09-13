@@ -68,10 +68,12 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-cloudformation test-e2e-kms test-e2e-ssm test-e2e-dynamodb test-e2e-persistence \
         test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
         test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
+        test-e2e-lakehouse-k3d \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
-        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq
+        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
+        _check-lakehouse-k3d-prereq
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -528,6 +530,12 @@ test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tes
 	@echo "Stopping jaiscloud-gcp..."
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
 
+##@ k3d (Kubernetes) e2e
+
+test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq ## Medallion ELT pipeline e2e on k3d — tests/persistent_mode/gcp/lakehouse/ (tag: lakehouse_e2e)
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
+
 ##@ Aggregate test targets
 
 test-e2e-docker-all: test-e2e-emr-docker test-e2e-dpc-docker test-e2e-lambda-docker test-e2e-eventbridge ## All Docker-based e2e suites
@@ -605,3 +613,10 @@ _check-iceberg-prereq:
 _check-iceberg-gcp-prereq:
 	@docker image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
+
+_check-lakehouse-k3d-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
