@@ -7,8 +7,12 @@
 package gcp
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/gcp/identity"
@@ -70,6 +74,10 @@ func (a *GCPAdapter) ServiceToProvider(service string) string {
 // DetectAndDecode implements adapter.CloudAdapter.
 // Identifies the service from the URL path, selects the codec, and decodes.
 func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, adapter.Codec, error) {
+	body, err := decodeGzippedBody(r, body)
+	if err != nil {
+		return nil, nil, err
+	}
 	service, source := DetectService(r)
 	if service == "" {
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target GCP service", 404)
@@ -85,6 +93,73 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 		return nil, codec, err
 	}
 	return nr, codec, nil
+}
+
+// decodeGzippedBody transparently decompresses a request whose
+// Content-Encoding is gzip. Google's JSON APIs accept gzip request bodies, and
+// the official SDKs rely on it: the Java google-http-client enables gzip by
+// default for every request body, so GCS bucket/object metadata writes,
+// multipart uploads and BigQuery jobs all arrive gzip-encoded. Without this a
+// JSON body fails to parse ("malformed JSON body", 400).
+//
+// GCS media uploads (uploadType=media) are deliberately excluded: there
+// Content-Encoding describes the stored object's own encoding (transcoding),
+// not the transport, so the bytes must reach the provider untouched.
+//
+// For non-streaming requests the decoded bytes are returned; for streaming
+// requests (e.g. multipart/related uploads) the request body is wrapped so the
+// codec reads decompressed bytes while Close still closes the original body.
+func decodeGzippedBody(r *http.Request, body []byte) ([]byte, error) {
+	if !strings.Contains(strings.ToLower(r.Header.Get("Content-Encoding")), "gzip") {
+		return body, nil
+	}
+	if r.URL.Query().Get("uploadType") == "media" {
+		return body, nil
+	}
+	r.Header.Del("Content-Encoding")
+
+	// Non-streaming: the gateway already buffered the body.
+	if body != nil {
+		if len(body) == 0 {
+			return body, nil
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed gzip request body", 400)
+		}
+		defer zr.Close()
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed gzip request body", 400)
+		}
+		return out, nil
+	}
+
+	// Streaming: leave r.Body readable by the codec, decompressed.
+	if r.Body != nil {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidRequest", "malformed gzip request body", 400)
+		}
+		r.Body = &gzipBody{Reader: zr, underlying: r.Body}
+		r.ContentLength = -1
+	}
+	return body, nil
+}
+
+// gzipBody adapts a gzip.Reader over an underlying request body so closing it
+// releases both (gzip.Reader.Close does not close its source).
+type gzipBody struct {
+	*gzip.Reader
+	underlying io.ReadCloser
+}
+
+func (g *gzipBody) Close() error {
+	err := g.Reader.Close()
+	if cerr := g.underlying.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // EnrichRequest implements adapter.CloudAdapter.
