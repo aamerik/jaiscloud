@@ -110,14 +110,17 @@ func cryptoKeyVersionName(nr *model.NormalizedRequest, loc, kr, key, version str
 }
 
 // cryptoKeyMap renders a CryptoKey as its GCP response object.
-func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey) map[string]any {
+func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryState string) map[string]any {
+	if primaryState == "" {
+		primaryState = "ENABLED"
+	}
 	out := map[string]any{
 		"name":       cryptoKeyName(nr, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
 		"createTime": k.CreateTime.UTC().Format(time.RFC3339Nano),
 		"primary": map[string]any{
 			"name":      cryptoKeyVersionName(nr, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
-			"state":     "ENABLED", // the emulator never disables a primary version
+			"state":     primaryState,
 			"algorithm": k.Algorithm,
 		},
 		"versionTemplate": map[string]any{
@@ -307,7 +310,7 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, err
 	}
-	return provider.OK(cryptoKeyMap(nr, ck)), nil
+	return provider.OK(cryptoKeyMap(nr, ck, "ENABLED")), nil
 }
 
 func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -323,7 +326,7 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, k := range page {
-		items = append(items, cryptoKeyMap(nr, k))
+		items = append(items, cryptoKeyMap(nr, k, p.primaryState(ctx, nr.AccountID, k)))
 	}
 	resp := map[string]any{"cryptoKeys": items, "totalSize": len(keys)}
 	if next != "" {
@@ -342,7 +345,7 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
-	return provider.OK(cryptoKeyMap(nr, k)), nil
+	return provider.OK(cryptoKeyMap(nr, k, p.primaryState(ctx, nr.AccountID, k))), nil
 }
 
 func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -354,6 +357,9 @@ func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedReq
 	ck, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)
+	}
+	if err := p.requireVersionEnabled(ctx, nr.AccountID, loc, kr, key, ck.PrimaryVersion); err != nil {
+		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	pt, err := base64.StdEncoding.DecodeString(body["plaintext"].(string))
@@ -389,6 +395,9 @@ func (p *Provider) CryptoKeyDecrypt(ctx context.Context, nr *model.NormalizedReq
 	ck, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)
+	}
+	if err := p.requireVersionEnabled(ctx, nr.AccountID, loc, kr, key, ck.PrimaryVersion); err != nil {
+		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	blob, err := base64.StdEncoding.DecodeString(body["ciphertext"].(string))
@@ -515,7 +524,7 @@ func (p *Provider) CryptoKeyUpdatePrimaryVersion(ctx context.Context, nr *model.
 		return nil, p.versionErr(err)
 	}
 	ck, _ := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
-	return provider.OK(cryptoKeyMap(nr, ck)), nil
+	return provider.OK(cryptoKeyMap(nr, ck, p.primaryState(ctx, nr.AccountID, ck))), nil
 }
 
 // defaultAlgorithmForPurpose maps a GCP KMS purpose to its default algorithm.
@@ -541,6 +550,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, versionNotEnabledErr(version, v.State)
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	// GCP's AsymmetricSignRequest carries the digest as an object with one of
@@ -596,6 +608,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 	if err != nil {
 		return nil, p.versionErr(err)
 	}
+	if v.State != "ENABLED" {
+		return nil, versionNotEnabledErr(version, v.State)
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	ct, err := base64.StdEncoding.DecodeString(body["ciphertext"].(string))
 	if err != nil {
@@ -629,6 +644,9 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, versionNotEnabledErr(version, v.State)
 	}
 	if !strings.HasPrefix(v.Algorithm, "HMAC_") {
 		return nil, model.NewProviderError("FailedPrecondition", "key is not for MAC", 400)
@@ -664,6 +682,9 @@ func (p *Provider) CryptoKeyVersionMacVerify(ctx context.Context, nr *model.Norm
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, versionNotEnabledErr(version, v.State)
 	}
 	if !strings.HasPrefix(v.Algorithm, "HMAC_") {
 		return nil, model.NewProviderError("FailedPrecondition", "key is not for MAC", 400)
@@ -701,6 +722,9 @@ func (p *Provider) CryptoKeyVersionGetPublicKey(ctx context.Context, nr *model.N
 	if err != nil {
 		return nil, p.versionErr(err)
 	}
+	if v.State != "ENABLED" {
+		return nil, versionNotEnabledErr(version, v.State)
+	}
 	pub, err := p.keys.PublicKey(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -729,6 +753,38 @@ func decodeAAD(v any) []byte {
 		return nil
 	}
 	return b
+}
+
+// requireVersionEnabled rejects use of a crypto-key version that is not
+// ENABLED (DISABLED/DESTROYED/PENDING) with FailedPrecondition.
+func (p *Provider) requireVersionEnabled(ctx context.Context, accountID, loc, kr, key, version string) error {
+	v, err := p.keys.GetVersion(ctx, accountID, loc, kr, key, version)
+	if err != nil {
+		return p.versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return versionNotEnabledErr(version, v.State)
+	}
+	return nil
+}
+
+// primaryState reports the current state of a crypto key's primary version.
+func (p *Provider) primaryState(ctx context.Context, accountID string, k kmsstore.CryptoKey) string {
+	if k.PrimaryVersion == "" {
+		return "ENABLED"
+	}
+	v, err := p.keys.GetVersion(ctx, accountID, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion)
+	if err != nil || v.State == "" {
+		return "ENABLED"
+	}
+	return v.State
+}
+
+func versionNotEnabledErr(version, state string) error {
+	return &model.ProviderError{
+		Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+		Message: "CryptoKeyVersion " + version + " is " + state,
+	}
 }
 
 // keyErr maps crypto-key store errors to GCP provider errors.

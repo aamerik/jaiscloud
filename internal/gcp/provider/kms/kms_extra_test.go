@@ -214,3 +214,47 @@ func TestKMSRotation(t *testing.T) {
 		t.Errorf("expected DESTROYED, got %v", dr.Data["state"])
 	}
 }
+
+// TestKMSDestroyedPrimaryUnusable verifies a DESTROYED primary version cannot
+// be used for encryption and that GetCryptoKey reports its real state.
+func TestKMSDestroyedPrimaryUnusable(t *testing.T) {
+	ctx := context.Background()
+	p := New(kmsstore.NewMemoryStore())
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{"name": "locations/global/keyRings/kr", "cryptoKeyId": "k"})); err != nil {
+		t.Fatalf("cryptokey: %v", err)
+	}
+	keyName := "locations/global/keyRings/kr/cryptoKeys/k"
+
+	// Encrypt works while the primary is ENABLED.
+	if _, err := p.CryptoKeyEncrypt(ctx, newNR(map[string]any{"name": keyName, "body": map[string]any{"plaintext": "aGVsbG8="}})); err != nil {
+		t.Fatalf("encrypt before destroy: %v", err)
+	}
+
+	// Destroy the primary version.
+	if _, err := p.CryptoKeyVersionDestroy(ctx, newNR(map[string]any{"name": keyName + "/cryptoKeyVersions/1"})); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+
+	// Encrypt must now fail with FailedPrecondition.
+	_, err := p.CryptoKeyEncrypt(ctx, newNR(map[string]any{"name": keyName, "body": map[string]any{"plaintext": "aGVsbG8="}}))
+	if err == nil {
+		t.Fatal("expected encrypt against destroyed primary to fail")
+	}
+	if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "FailedPrecondition" {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+
+	// GetCryptoKey reports the real primary state.
+	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	primary, _ := resp.Data["primary"].(map[string]any)
+	if primary["state"] != "DESTROYED" {
+		t.Fatalf("primary.state = %v, want DESTROYED", primary["state"])
+	}
+}

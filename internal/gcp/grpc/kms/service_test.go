@@ -485,6 +485,18 @@ func TestKMSDestroyVersion(t *testing.T) {
 		t.Fatalf("DestroyCryptoKeyVersion state = %v, want DESTROYED", destroyed.GetState())
 	}
 
+	// A destroyed version cannot be used, and the primary reports its state.
+	if _, err := client.Encrypt(ctx, &kmspb.EncryptRequest{Name: symKey, Plaintext: []byte("hi")}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Encrypt destroyed err = %v, want FailedPrecondition", err)
+	}
+	got, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
+	if err != nil {
+		t.Fatalf("GetCryptoKey: %v", err)
+	}
+	if got.GetPrimary().GetState() != kmspb.CryptoKeyVersion_DESTROYED {
+		t.Fatalf("primary.state = %v, want DESTROYED", got.GetPrimary().GetState())
+	}
+
 	// Restore brings it back to DISABLED (GCP semantics).
 	restored, err := client.RestoreCryptoKeyVersion(ctx, &kmspb.RestoreCryptoKeyVersionRequest{Name: verName})
 	if err != nil {
