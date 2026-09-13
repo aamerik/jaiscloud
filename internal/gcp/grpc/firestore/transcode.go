@@ -10,11 +10,11 @@
 //
 //   - Bounded history. The change-feed retains the most recent
 //     changeLogRetention events and drops older ones, advancing a floor. A resume
-//     token below the floor (or from before a Reset) is treated as expired: the
-//     target is not incrementally replayed and receives a fresh snapshot instead,
-//     which matches real Firestore's behavior for an expired resume token. A
-//     token of 0 is likewise not a resumable position, because the log records
-//     writes rather than a full document history.
+//     token below the floor (or from before a Reset), malformed, or of zero, is
+//     treated as expired: the target is reset (TargetChange_RESET) and receives a
+//     fresh snapshot, matching real Firestore's behavior for an un-honorable
+//     resume token. A token of 0 is likewise not a resumable position, because the
+//     log records writes rather than a full document history.
 //   - Per-target cursors. Each target tracks the last sequence delivered to it.
 //     Its TargetChange_CURRENT frame carries that target's own sequence. The
 //     empty-target_ids NO_CHANGE frame's token must cover all targets at once; it

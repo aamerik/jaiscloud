@@ -511,18 +511,21 @@ func TestListenResumeTokenFallsBackToSnapshot(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	responses := recvN(t, stream, 4, 3*time.Second) // ADD, a (full snapshot), CURRENT, NO_CHANGE
+	responses := recvN(t, stream, 5, 3*time.Second) // ADD, RESET, a (full snapshot), CURRENT, NO_CHANGE
 	if responses[0].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_ADD {
 		t.Fatal("expected ADD")
 	}
-	dc := responses[1].GetDocumentChange()
+	if responses[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_RESET {
+		t.Fatalf("expected RESET for un-honorable token, got %v", responses[1])
+	}
+	dc := responses[2].GetDocumentChange()
 	if dc == nil || dc.Document.Fields["v"].GetStringValue() != "1" {
 		t.Fatal("expected full snapshot with item a")
 	}
-	if responses[2].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_CURRENT {
+	if responses[3].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_CURRENT {
 		t.Fatal("expected CURRENT")
 	}
-	if responses[3].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
+	if responses[4].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
 		t.Fatal("expected NO_CHANGE")
 	}
 }
@@ -815,9 +818,9 @@ func TestListenResumeTokenBelowFloorFallsBackToSnapshot(t *testing.T) {
 		t.Fatalf("change floor = %d, want > 2 after eviction", floor)
 	}
 
-	// Resume from the now-expired token. A correct server falls back to a full
-	// snapshot (a1 + a2); a stale incremental replay would send no deltas at all
-	// because no "a" write happened after seq 2.
+	// Resume from the now-expired token. A correct server resets the target and
+	// falls back to a full snapshot (a1 + a2); a stale incremental replay would
+	// send no deltas at all because no "a" write happened after seq 2.
 	if err := stream.Send(removeTargetReq(1)); err != nil {
 		t.Fatalf("remove target: %v", err)
 	}
@@ -828,12 +831,15 @@ func TestListenResumeTokenBelowFloorFallsBackToSnapshot(t *testing.T) {
 	if err := stream.Send(addTargetReq(rt)); err != nil {
 		t.Fatalf("resume target: %v", err)
 	}
-	rs = recvN(t, stream, 5, 10*time.Second) // ADD, a1, a2, CURRENT, NO_CHANGE
+	rs = recvN(t, stream, 6, 10*time.Second) // ADD, RESET, a1, a2, CURRENT, NO_CHANGE
 	if rs[0].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_ADD {
 		t.Fatalf("frame 0: expected ADD, got %v", rs[0])
 	}
+	if rs[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_RESET {
+		t.Fatalf("frame 1: expected RESET, got %v", rs[1])
+	}
 	got := map[string]bool{}
-	for _, r := range rs[1:3] {
+	for _, r := range rs[2:4] {
 		dc := r.GetDocumentChange()
 		if dc == nil {
 			t.Fatalf("expected snapshot DocumentChange, got %v", r)
@@ -842,5 +848,185 @@ func TestListenResumeTokenBelowFloorFallsBackToSnapshot(t *testing.T) {
 	}
 	if !got[listenParent+"/a/a1"] || !got[listenParent+"/a/a2"] {
 		t.Fatalf("snapshot documents = %v, want a1 and a2", got)
+	}
+}
+
+func pbString(s string) *firestorepb.Value {
+	return &firestorepb.Value{ValueType: &firestorepb.Value_StringValue{StringValue: s}}
+}
+
+func pbBool(b bool) *firestorepb.Value {
+	return &firestorepb.Value{ValueType: &firestorepb.Value_BooleanValue{BooleanValue: b}}
+}
+
+// whereQueryTarget builds a single-collection query target with an EQUAL field
+// filter, so live deltas must honor the where predicate.
+func whereQueryTarget(tid int32, collection, field string, val *firestorepb.Value) *firestorepb.Target {
+	return &firestorepb.Target{
+		TargetId: tid,
+		TargetType: &firestorepb.Target_Query{
+			Query: &firestorepb.Target_QueryTarget{
+				Parent: listenParent,
+				QueryType: &firestorepb.Target_QueryTarget_StructuredQuery{
+					StructuredQuery: &firestorepb.StructuredQuery{
+						From: []*firestorepb.StructuredQuery_CollectionSelector{{CollectionId: collection}},
+						Where: &firestorepb.StructuredQuery_Filter{
+							FilterType: &firestorepb.StructuredQuery_Filter_FieldFilter{
+								FieldFilter: &firestorepb.StructuredQuery_FieldFilter{
+									Field: &firestorepb.StructuredQuery_FieldReference{FieldPath: field},
+									Op:    firestorepb.StructuredQuery_FieldFilter_EQUAL,
+									Value: val,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestListenQueryWhereLiveUpdateEmitsDocumentRemove asserts that a live update
+// which makes a document stop matching a query target's where predicate emits a
+// DocumentRemove naming that target, rather than a DocumentChange.
+func TestListenQueryWhereLiveUpdateEmitsDocumentRemove(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const tid int32 = 11
+	for _, id := range []string{"leave", "stay"} {
+		svc.CreateDocument(ctx, "test", "(default)", "items", id, map[string]*firestorestore.Value{
+			"active": firestorestore.BoolVal(true),
+		})
+	}
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := stream.Send(addTargetReq(whereQueryTarget(tid, "items", "active", pbBool(true)))); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	rs := recvN(t, stream, 5, 3*time.Second) // ADD, leave, stay, CURRENT, NO_CHANGE
+	if rs[0].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_ADD {
+		t.Fatalf("expected ADD, got %v", rs[0])
+	}
+	visible := map[string]bool{}
+	for _, r := range rs[1:3] {
+		dc := r.GetDocumentChange()
+		if dc == nil {
+			t.Fatalf("expected snapshot DocumentChange, got %v", r)
+		}
+		visible[dc.Document.Name] = true
+	}
+	if !visible[listenParent+"/items/leave"] || !visible[listenParent+"/items/stay"] {
+		t.Fatalf("snapshot = %v, want leave and stay", visible)
+	}
+
+	svc.PatchDocument(ctx, "test", "(default)", "items/leave", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(false),
+	}, nil, nil)
+
+	rs = recvN(t, stream, 2, 3*time.Second) // DocumentRemove + NO_CHANGE
+	dr := rs[0].GetDocumentRemove()
+	if dr == nil {
+		t.Fatalf("expected DocumentRemove, got %v", rs[0])
+	}
+	if dr.Document != listenParent+"/items/leave" {
+		t.Fatalf("DocumentRemove for %q, want %q", dr.Document, listenParent+"/items/leave")
+	}
+	if !containsTargetID(dr.RemovedTargetIds, tid) {
+		t.Fatalf("removed_target_ids = %v, want [%d]", dr.RemovedTargetIds, tid)
+	}
+	if rs[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
+	}
+}
+
+// TestListenQueryWhereLiveDeleteEmitsDocumentDelete asserts that deleting a
+// document that was in a where-filtered target's view emits DocumentDelete (not
+// DocumentRemove).
+func TestListenQueryWhereLiveDeleteEmitsDocumentDelete(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const tid int32 = 12
+	svc.CreateDocument(ctx, "test", "(default)", "items", "one", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(true),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := stream.Send(addTargetReq(whereQueryTarget(tid, "items", "active", pbBool(true)))); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	recvN(t, stream, 4, 3*time.Second) // ADD, one, CURRENT, NO_CHANGE
+
+	svc.DeleteDocument(ctx, "test", "(default)", "items/one", nil)
+
+	rs := recvN(t, stream, 2, 3*time.Second) // DocumentDelete + NO_CHANGE
+	dd := rs[0].GetDocumentDelete()
+	if dd == nil {
+		t.Fatalf("expected DocumentDelete, got %v", rs[0])
+	}
+	if dd.Document != listenParent+"/items/one" {
+		t.Fatalf("DocumentDelete for %q, want %q", dd.Document, listenParent+"/items/one")
+	}
+	if !containsTargetID(dd.RemovedTargetIds, tid) {
+		t.Fatalf("removed_target_ids = %v, want [%d]", dd.RemovedTargetIds, tid)
+	}
+	if rs[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
+	}
+}
+
+// TestListenUnresumableTokenEmitsReset asserts that a target whose resume token
+// cannot be honored is reset (TargetChange_RESET) before its fresh snapshot,
+// instead of silently falling back.
+func TestListenUnresumableTokenEmitsReset(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	svc.CreateDocument(ctx, "test", "(default)", "items", "a", map[string]*firestorestore.Value{
+		"v": firestorestore.StringVal("1"),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	rt := queryTarget(1, "items")
+	rt.ResumeType = &firestorepb.Target_ResumeToken{ResumeToken: []byte("bad")}
+	if err := stream.Send(addTargetReq(rt)); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	rs := recvN(t, stream, 5, 3*time.Second) // ADD, RESET, a, CURRENT, NO_CHANGE
+	if rs[0].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_ADD {
+		t.Fatalf("expected ADD, got %v", rs[0])
+	}
+	if tc := rs[1].GetTargetChange(); tc == nil || tc.TargetChangeType != firestorepb.TargetChange_RESET {
+		t.Fatalf("expected RESET, got %v", rs[1])
+	}
+	if dc := rs[2].GetDocumentChange(); dc == nil || dc.Document.Name != listenParent+"/items/a" {
+		t.Fatalf("expected snapshot DocumentChange for a, got %v", rs[2])
+	}
+	if rs[3].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_CURRENT {
+		t.Fatalf("expected CURRENT, got %v", rs[3])
+	}
+	if rs[4].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[4])
 	}
 }
