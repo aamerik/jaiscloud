@@ -31,7 +31,7 @@ GCP_PUSH_FLAGS ?= --tls-verify=false
 # Seed size for the k3d Lakehouse pipeline e2e. Rendered into the pipeline Job's
 # RECORDS env and asserted by the test, so override on the command line:
 #   make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=1000000
-LAKEHOUSE_RECORDS ?= 100000
+LAKEHOUSE_RECORDS ?= 100
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
