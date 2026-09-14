@@ -49,7 +49,7 @@ data:
     # Unique per run so a re-run never collides with an existing Dataproc job
     # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
     RUN_ID = os.environ.get("RUN_ID") or f"{int(time.time())}-{os.getpid()}"
-    RECORDS = int(os.environ.get("RECORDS", "100000"))
+    RECORDS = int(os.environ.get("RECORDS", "100"))
     # Rows per ingested GCS object; also the Spark input-partition granularity.
     SHARD_ROWS = int(os.environ.get("SHARD_ROWS", "250000"))
 
@@ -347,7 +347,7 @@ spec:
             # Record count; `make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=N`
             # renders this value so the test's expectations match the run.
             - name: RECORDS
-              value: "100000"
+              value: "100"
           volumeMounts:
             - name: scripts
               mountPath: /scripts

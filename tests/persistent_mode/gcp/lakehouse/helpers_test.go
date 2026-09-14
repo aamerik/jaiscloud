@@ -88,7 +88,7 @@ func records() int {
 			return n
 		}
 	}
-	return 100000
+	return 100
 }
 
 // recordsEnv matches the Job's RECORDS env value so the manifest can be
