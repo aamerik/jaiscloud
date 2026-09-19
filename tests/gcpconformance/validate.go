@@ -38,19 +38,34 @@ const (
 	kindBadErrorEnvelope = "bad_error_envelope"
 )
 
-// ValidateValue validates a decoded JSON value against a Discovery schema and
-// returns divergences. path is the JSON location used in divergence reporting.
-func ValidateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Divergence {
-	return validateValue(doc, schema, v, path)
+// validateOpts tunes validation for a request vs a response context.
+type validateOpts struct {
+	// requireRequired enforces Discovery `required` fields. Response bodies must
+	// have them; request bodies often do not (PATCH/partial updates, and the
+	// emulator is deliberately lenient), so request validation leaves it off.
+	requireRequired bool
 }
 
-func validateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Divergence {
+// ValidateValue validates a decoded RESPONSE body against a Discovery schema
+// and returns divergences. path is the JSON location used in reporting.
+func ValidateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Divergence {
+	return validateValueOpts(doc, schema, v, path, validateOpts{requireRequired: true})
+}
+
+// ValidateRequestValue validates a decoded REQUEST body: present-field types and
+// unknown fields are checked, but `required` is not enforced (partial bodies are
+// legitimate).
+func ValidateRequestValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Divergence {
+	return validateValueOpts(doc, schema, v, path, validateOpts{requireRequired: false})
+}
+
+func validateValueOpts(doc *DiscoveryDoc, schema *Schema, v any, path string, opts validateOpts) []Divergence {
 	if schema == nil {
 		return nil
 	}
 	if schema.Ref != "" {
 		if resolved, ok := doc.ResolveRef(schema.Ref); ok {
-			return validateValue(doc, resolved, v, path)
+			return validateValueOpts(doc, resolved, v, path, opts)
 		}
 		return nil
 	}
@@ -69,7 +84,7 @@ func validateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Dive
 		if !ok {
 			return []Divergence{wrongType(path, "object", v)}
 		}
-		return validateObject(doc, schema, obj, path)
+		return validateObject(doc, schema, obj, path, opts)
 	case "array":
 		arr, ok := v.([]any)
 		if !ok {
@@ -77,7 +92,7 @@ func validateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Dive
 		}
 		var divs []Divergence
 		for i, item := range arr {
-			divs = append(divs, validateValue(doc, schema.Items, item, fmt.Sprintf("%s[%d]", path, i))...)
+			divs = append(divs, validateValueOpts(doc, schema.Items, item, fmt.Sprintf("%s[%d]", path, i), opts)...)
 		}
 		return divs
 	case "string":
@@ -105,18 +120,20 @@ func validateValue(doc *DiscoveryDoc, schema *Schema, v any, path string) []Dive
 	}
 }
 
-func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path string) []Divergence {
+func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path string, opts validateOpts) []Divergence {
 	var divs []Divergence
 
-	for _, name := range schema.Required {
-		if _, ok := obj[name]; !ok {
-			divs = append(divs, Divergence{
-				Path:     joinPath(path, name),
-				Kind:     kindMissingRequired,
-				Expected: "required field present",
-				Actual:   "absent",
-				Severity: "high",
-			})
+	if opts.requireRequired {
+		for _, name := range schema.Required {
+			if _, ok := obj[name]; !ok {
+				divs = append(divs, Divergence{
+					Path:     joinPath(path, name),
+					Kind:     kindMissingRequired,
+					Expected: "required field present",
+					Actual:   "absent",
+					Severity: "high",
+				})
+			}
 		}
 	}
 
@@ -134,7 +151,7 @@ func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path 
 		if !known {
 			if schema.allowsAdditional() {
 				if additionalSchema != nil {
-					divs = append(divs, validateValue(doc, additionalSchema, val, joinPath(path, name))...)
+					divs = append(divs, validateValueOpts(doc, additionalSchema, val, joinPath(path, name), opts)...)
 				}
 				continue
 			}
@@ -147,7 +164,7 @@ func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path 
 			})
 			continue
 		}
-		divs = append(divs, validateValue(doc, prop, val, joinPath(path, name))...)
+		divs = append(divs, validateValueOpts(doc, prop, val, joinPath(path, name), opts)...)
 	}
 	return divs
 }
@@ -397,27 +414,33 @@ func ValidateErrorEnvelope(status int, body []byte) []Divergence {
 		})
 	}
 
-	// status must be the google.rpc.Code name for the HTTP status.
+	// GCP's JSON error envelope varies by API generation:
+	//   - legacy APIs (Cloud Storage) return errors[] with reason/domain/message
+	//     and omit the google.rpc "status";
+	//   - modern APIs (Pub/Sub, Secret Manager, KMS, IAM, Cloud DNS, BigQuery)
+	//     return "status" (plus "details"/ErrorInfo) and omit errors[].
+	//
+	// So neither component is individually required: a response must carry at
+	// least one of them, and whichever is present must be well-formed. Modeling
+	// the variance here (rather than suppressing findings via an allowlist) is
+	// the reconciliation that lets the allowlist go to zero.
 	statusAny, hasStatus := errObj["status"]
-	if !hasStatus {
-		divs = append(divs, Divergence{
-			Path: "error.status", Kind: kindBadErrorEnvelope,
-			Expected: rpcNamesFor(status), Actual: "absent", Severity: "medium",
-		})
-	} else if s, ok := statusAny.(string); !ok {
-		divs = append(divs, Divergence{
-			Path: "error.status", Kind: kindWrongType,
-			Expected: "string", Actual: typeName(statusAny), Severity: "medium",
-		})
-	} else if expected := httpToRPC[status]; len(expected) > 0 && !containsString(expected, s) {
-		divs = append(divs, Divergence{
-			Path: "error.status", Kind: kindBadEnum,
-			Expected: "one of [" + strings.Join(expected, ", ") + "]", Actual: s, Severity: "medium",
-		})
+	if hasStatus {
+		if s, ok := statusAny.(string); !ok {
+			divs = append(divs, Divergence{
+				Path: "error.status", Kind: kindWrongType,
+				Expected: "string", Actual: typeName(statusAny), Severity: "medium",
+			})
+		} else if expected := httpToRPC[status]; len(expected) > 0 && !containsString(expected, s) {
+			divs = append(divs, Divergence{
+				Path: "error.status", Kind: kindBadEnum,
+				Expected: "one of [" + strings.Join(expected, ", ") + "]", Actual: s, Severity: "medium",
+			})
+		}
 	}
 
-	// errors array (legacy GCP detail list).
-	if errsAny, ok := errObj["errors"]; ok {
+	errsAny, hasErrors := errObj["errors"]
+	if hasErrors {
 		errs, ok := errsAny.([]any)
 		if !ok {
 			divs = append(divs, Divergence{
@@ -452,21 +475,19 @@ func ValidateErrorEnvelope(status int, body []byte) []Divergence {
 				}
 			}
 		}
-	} else {
+	}
+
+	if !hasStatus && !hasErrors {
 		divs = append(divs, Divergence{
-			Path: "error.errors", Kind: kindBadErrorEnvelope,
-			Expected: "array of {reason,domain,message}", Actual: "absent", Severity: "medium",
+			Path:     "error",
+			Kind:     kindBadErrorEnvelope,
+			Expected: "google.rpc status and/or legacy errors[]",
+			Actual:   "neither present",
+			Severity: "medium",
 		})
 	}
 
 	return divs
-}
-
-func rpcNamesFor(status int) string {
-	if names := httpToRPC[status]; len(names) > 0 {
-		return "one of [" + strings.Join(names, ", ") + "]"
-	}
-	return "google.rpc.Code name"
 }
 
 func numberToInt(v any) (int, bool) {
