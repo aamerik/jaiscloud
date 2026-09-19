@@ -1,0 +1,484 @@
+service,operation,transport,state,reason
+bigquery,BigQuery.CancelJob,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.CreateDataset,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.CreateTable,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.DeleteDataset,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.DeleteJob,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.DeleteTable,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.GetDataset,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.GetJob,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.GetQueryResults,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.GetServiceAccount,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.GetTable,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.InsertAll,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.InsertJob,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.ListDatasets,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.ListJobs,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.ListRows,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.ListTables,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.Models,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.Query,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.Routines,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.RowAccessPolicies,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.UpdateDataset,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.UpdateTable,rest,preview,no SQL engine; metadata + stored rows only
+clouddns,CloudDNS.ChangeCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ChangeGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ChangeList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneDelete,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZonePatch,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ManagedZoneUpdate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ProjectGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetDelete,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.ResourceRecordSetPatch,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
+clouddns,CloudDNS.Unimplemented,rest,unsupported,explicit Unimplemented stub
+cloudsql,CloudSQL.ConnectGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesPatch,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.DatabasesUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.FlagsList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesPatch,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesRestart,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.InstancesUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.OperationsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.OperationsList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.TiersList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.Unimplemented,rest,unsupported,explicit Unimplemented stub
+cloudsql,CloudSQL.UsersDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersGet,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersList,rest,limited,metadata-only over ResourceStore (no control plane)
+cloudsql,CloudSQL.UsersUpdate,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.DisksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.FirewallsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesAggregatedList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesReset,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesStart,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.InstancesStop,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.MachineTypesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.MachineTypesList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.NetworksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.OperationsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.OperationsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.RegionsGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.RegionsList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksDelete,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksInsert,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.SubnetworksList,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.Unimplemented,rest,unsupported,explicit Unimplemented stub
+compute,Compute.ZonesGet,rest,limited,metadata-only over ResourceStore (no control plane)
+compute,Compute.ZonesList,rest,limited,metadata-only over ResourceStore (no control plane)
+dataproc,Dataproc.CancelJob,rest,ga,
+dataproc,Dataproc.CreateCluster,rest,ga,
+dataproc,Dataproc.DeleteCluster,rest,ga,
+dataproc,Dataproc.DeleteJob,rest,ga,
+dataproc,Dataproc.DiagnoseCluster,rest,ga,
+dataproc,Dataproc.GetCluster,rest,ga,
+dataproc,Dataproc.GetJob,rest,ga,
+dataproc,Dataproc.GetOperation,rest,ga,
+dataproc,Dataproc.ListClusters,rest,ga,
+dataproc,Dataproc.ListJobs,rest,ga,
+dataproc,Dataproc.StartCluster,rest,ga,
+dataproc,Dataproc.StopCluster,rest,ga,
+dataproc,Dataproc.SubmitJob,rest,ga,covered by the k3d Lakehouse e2e (real Spark on Kubernetes)
+dataproc,Dataproc.SubmitJobAsOperation,rest,ga,
+dataproc,Dataproc.UpdateCluster,rest,ga,
+datastore,AllocateIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,BeginTransaction,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,Commit,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,Lookup,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,ReserveIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,Rollback,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,RunAggregationQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,RunQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+eventarc,Eventarc.ChannelGetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelSetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelTestIamPermissions,rest,ga,
+eventarc,Eventarc.CreateChannel,rest,ga,
+eventarc,Eventarc.CreateTrigger,rest,ga,
+eventarc,Eventarc.DeleteChannel,rest,ga,
+eventarc,Eventarc.DeleteTrigger,rest,ga,
+eventarc,Eventarc.GetChannel,rest,ga,
+eventarc,Eventarc.GetProvider,rest,ga,
+eventarc,Eventarc.GetTrigger,rest,ga,
+eventarc,Eventarc.ListChannels,rest,ga,
+eventarc,Eventarc.ListProviders,rest,ga,
+eventarc,Eventarc.ListTriggers,rest,ga,
+eventarc,Eventarc.TriggerGetIamPolicy,rest,ga,
+eventarc,Eventarc.TriggerSetIamPolicy,rest,ga,
+eventarc,Eventarc.TriggerTestIamPermissions,rest,ga,
+eventarc,Eventarc.UpdateChannel,rest,ga,
+eventarc,Eventarc.UpdateTrigger,rest,ga,
+firestore,BatchGetDocuments,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,BatchWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,BeginTransaction,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Commit,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,CreateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,DeleteDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,ExecutePipeline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Firestore.BatchGet,rest,ga,
+firestore,Firestore.BatchWrite,rest,ga,
+firestore,Firestore.BeginTransaction,rest,ga,
+firestore,Firestore.Commit,rest,ga,
+firestore,Firestore.CreateDocument,rest,ga,
+firestore,Firestore.CreateIndex,rest,ga,
+firestore,Firestore.DeleteDocument,rest,ga,
+firestore,Firestore.DeleteIndex,rest,ga,
+firestore,Firestore.GetDocument,rest,ga,
+firestore,Firestore.GetIndex,rest,ga,
+firestore,Firestore.ListCollectionIds,rest,ga,
+firestore,Firestore.ListDocuments,rest,ga,
+firestore,Firestore.ListIndexes,rest,ga,
+firestore,Firestore.PatchDocument,rest,ga,
+firestore,Firestore.Rollback,rest,ga,
+firestore,Firestore.RunQuery,rest,ga,
+firestore,GetDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,ListCollectionIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,ListDocuments,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Listen,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,PartitionQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Rollback,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,RunAggregationQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,RunQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,UpdateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Write,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+functions,Function.CallFunction,rest,ga,
+functions,Function.CreateFunction,rest,ga,
+functions,Function.DeleteFunction,rest,ga,
+functions,Function.FunctionGetIamPolicy,rest,ga,
+functions,Function.FunctionSetIamPolicy,rest,ga,
+functions,Function.FunctionTestIamPermissions,rest,ga,
+functions,Function.GenerateDownloadUrl,rest,ga,
+functions,Function.GenerateUploadUrl,rest,ga,
+functions,Function.GetFunction,rest,ga,
+functions,Function.GetLocation,rest,limited,no matching Discovery method (unverified against the official schema)
+functions,Function.ListFunctions,rest,ga,
+functions,Function.ListLocations,rest,ga,
+functions,Function.UpdateFunction,rest,ga,
+iam,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,IAM.ServiceAccountCreate,rest,ga,
+iam,IAM.ServiceAccountDelete,rest,ga,
+iam,IAM.ServiceAccountGet,rest,ga,
+iam,IAM.ServiceAccountGetIamPolicy,rest,ga,
+iam,IAM.ServiceAccountKeyCreate,rest,ga,
+iam,IAM.ServiceAccountKeyDelete,rest,ga,
+iam,IAM.ServiceAccountKeyGet,rest,ga,
+iam,IAM.ServiceAccountKeyList,rest,ga,
+iam,IAM.ServiceAccountList,rest,ga,
+iam,IAM.ServiceAccountSetIamPolicy,rest,ga,
+iam,IAM.ServiceAccountSignBlob,rest,ga,
+iam,IAM.ServiceAccountSignJwt,rest,ga,
+iam,IAM.ServiceAccountTestIamPermissions,rest,ga,
+iam,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+iceberg,Iceberg.CommitTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.CreateNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.CreateTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.DropNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.DropTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.GetConfig,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.GetNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.ListNamespaces,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.ListTables,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.LoadTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.NamespaceExists,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.RenameTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.TableMetrics,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+iceberg,Iceberg.UpdateNamespaceProperties,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
+kms,AsymmetricDecrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,AsymmetricSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateKeyRing,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Decapsulate,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Decrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,DeleteCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,DeleteCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,DestroyCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Encrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GenerateRandomBytes,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetKeyRing,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetPublicKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetRetiredResource,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ImportCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ImportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,KMS.CryptoKeyCreate,rest,ga,
+kms,KMS.CryptoKeyDecrypt,rest,ga,
+kms,KMS.CryptoKeyEncrypt,rest,ga,
+kms,KMS.CryptoKeyGet,rest,ga,
+kms,KMS.CryptoKeyList,rest,ga,
+kms,KMS.CryptoKeyUpdatePrimaryVersion,rest,ga,
+kms,KMS.CryptoKeyVersionAsymmetricDecrypt,rest,ga,
+kms,KMS.CryptoKeyVersionAsymmetricSign,rest,ga,
+kms,KMS.CryptoKeyVersionCreate,rest,ga,
+kms,KMS.CryptoKeyVersionDestroy,rest,ga,
+kms,KMS.CryptoKeyVersionDisable,rest,limited,no matching Discovery method (unverified against the official schema)
+kms,KMS.CryptoKeyVersionEnable,rest,limited,no matching Discovery method (unverified against the official schema)
+kms,KMS.CryptoKeyVersionGet,rest,ga,
+kms,KMS.CryptoKeyVersionGetPublicKey,rest,ga,
+kms,KMS.CryptoKeyVersionList,rest,ga,
+kms,KMS.CryptoKeyVersionMacSign,rest,ga,
+kms,KMS.CryptoKeyVersionMacVerify,rest,ga,
+kms,KMS.KeyRingCreate,rest,ga,
+kms,KMS.KeyRingGet,rest,ga,
+kms,KMS.KeyRingList,rest,ga,
+kms,ListCryptoKeyVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListCryptoKeys,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListImportJobs,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListKeyRings,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListRetiredResources,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,MacSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,MacVerify,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,RawDecrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,RawEncrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,RestoreCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,UpdateCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,UpdateCryptoKeyPrimaryVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,UpdateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,DeleteLog,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,ListLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,ListLogs,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,ListMonitoredResourceDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,TailLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,WriteLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+managedkafka,ManagedKafka.CreateCluster,rest,ga,
+managedkafka,ManagedKafka.CreateTopic,rest,ga,
+managedkafka,ManagedKafka.DeleteCluster,rest,ga,
+managedkafka,ManagedKafka.DeleteConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.DeleteTopic,rest,ga,
+managedkafka,ManagedKafka.GetCluster,rest,ga,
+managedkafka,ManagedKafka.GetConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.GetOperation,rest,ga,
+managedkafka,ManagedKafka.GetTopic,rest,ga,
+managedkafka,ManagedKafka.ListClusters,rest,ga,
+managedkafka,ManagedKafka.ListConsumerGroups,rest,ga,
+managedkafka,ManagedKafka.ListOperations,rest,ga,
+managedkafka,ManagedKafka.ListTopics,rest,ga,
+managedkafka,ManagedKafka.UpdateCluster,rest,ga,
+managedkafka,ManagedKafka.UpdateConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.UpdateTopic,rest,ga,
+memorystore,Memorystore.CreateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.DeleteInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.GetInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.GetLocation,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.ListInstances,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.ListLocations,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.UpdateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+memorystore,Memorystore.UpgradeInstance,rest,limited,metadata-only over ResourceStore (no data plane)
+metastore,Metastore.AlterMetadataResourceLocation,rest,ga,
+metastore,Metastore.CreateBackup,rest,ga,
+metastore,Metastore.CreateMetadataImport,rest,ga,
+metastore,Metastore.CreateService,rest,ga,
+metastore,Metastore.DeleteBackup,rest,ga,
+metastore,Metastore.DeleteService,rest,ga,
+metastore,Metastore.ExportMetadata,rest,ga,
+metastore,Metastore.GetBackup,rest,ga,
+metastore,Metastore.GetMetadataImport,rest,ga,
+metastore,Metastore.GetOperation,rest,ga,
+metastore,Metastore.GetService,rest,ga,
+metastore,Metastore.ListBackups,rest,ga,
+metastore,Metastore.ListMetadataImports,rest,ga,
+metastore,Metastore.ListServices,rest,ga,
+metastore,Metastore.MoveTableToDatabase,rest,ga,
+metastore,Metastore.QueryMetadata,rest,ga,
+metastore,Metastore.RestoreService,rest,ga,
+metastore,Metastore.UpdateMetadataImport,rest,ga,
+metastore,Metastore.UpdateService,rest,ga,
+monitoring,CreateAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,CreateMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,CreateNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,CreateServiceTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,CreateTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,DeleteAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,DeleteMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,DeleteNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetMonitoredResourceDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetNotificationChannelDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,GetNotificationChannelVerificationCode,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListAlertPolicies,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListMetricDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListMonitoredResourceDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListNotificationChannelDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListNotificationChannels,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,ListTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,SendNotificationChannelVerificationCode,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,UpdateAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,UpdateNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,VerifyNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,CancelOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,DeleteOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,GetOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,ListOperations,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,WaitOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,Acknowledge,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,CreateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,CreateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,CreateTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DeleteSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DeleteSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DeleteTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DetachSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,GetSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,GetSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,GetTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListTopicSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListTopicSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListTopics,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ModifyAckDeadline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ModifyPushConfig,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,PubSub.SubscriptionAcknowledge,rest,ga,
+pubsub,PubSub.SubscriptionCreate,rest,ga,
+pubsub,PubSub.SubscriptionDelete,rest,ga,
+pubsub,PubSub.SubscriptionDetach,rest,ga,
+pubsub,PubSub.SubscriptionGet,rest,ga,
+pubsub,PubSub.SubscriptionGetIamPolicy,rest,ga,
+pubsub,PubSub.SubscriptionList,rest,ga,
+pubsub,PubSub.SubscriptionModifyAckDeadline,rest,ga,
+pubsub,PubSub.SubscriptionPull,rest,ga,
+pubsub,PubSub.SubscriptionSetIamPolicy,rest,ga,
+pubsub,PubSub.SubscriptionTestIamPermissions,rest,ga,
+pubsub,PubSub.TopicCreate,rest,ga,
+pubsub,PubSub.TopicDelete,rest,ga,
+pubsub,PubSub.TopicGet,rest,ga,
+pubsub,PubSub.TopicGetIamPolicy,rest,ga,
+pubsub,PubSub.TopicList,rest,ga,
+pubsub,PubSub.TopicPublish,rest,ga,
+pubsub,PubSub.TopicSetIamPolicy,rest,ga,
+pubsub,PubSub.TopicTestIamPermissions,rest,ga,
+pubsub,Publish,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,Pull,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,Seek,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,StreamingPull,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,UpdateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,UpdateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,UpdateTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,AccessSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,AddSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,CreateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,DeleteSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,DestroySecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,DisableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,EnableManagedRotation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,EnableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,GetSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,GetSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,ListSecretVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,ListSecrets,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,RotateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,Secret.Access,rest,ga,
+secretmanager,Secret.AddVersion,rest,ga,
+secretmanager,Secret.Create,rest,ga,
+secretmanager,Secret.Delete,rest,ga,
+secretmanager,Secret.DestroyVersion,rest,ga,
+secretmanager,Secret.DisableVersion,rest,ga,
+secretmanager,Secret.EnableVersion,rest,ga,
+secretmanager,Secret.Get,rest,ga,
+secretmanager,Secret.GetIamPolicy,rest,ga,
+secretmanager,Secret.GetVersion,rest,ga,
+secretmanager,Secret.List,rest,ga,
+secretmanager,Secret.SetIamPolicy,rest,ga,
+secretmanager,Secret.TestIamPermissions,rest,ga,
+secretmanager,Secret.Update,rest,ga,
+secretmanager,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,UpdateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,BidiReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,BidiWriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,CancelResumableWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ComposeObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,CreateBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,DeleteBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,DeleteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,GetBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,GetObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ListBuckets,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ListObjects,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,LockBucketRetentionPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,MoveObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,QueryWriteStatus,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,RestoreObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,RewriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,StartResumableWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,Storage.BucketACLInsert,rest,ga,
+storage,Storage.BucketACLList,rest,ga,
+storage,Storage.BucketsDelete,rest,ga,
+storage,Storage.BucketsGet,rest,ga,
+storage,Storage.BucketsGetIamPolicy,rest,ga,
+storage,Storage.BucketsInsert,rest,ga,
+storage,Storage.BucketsList,rest,ga,
+storage,Storage.BucketsLockRetentionPolicy,rest,ga,
+storage,Storage.BucketsSetIamPolicy,rest,ga,
+storage,Storage.BucketsUpdate,rest,ga,
+storage,Storage.ObjectACLInsert,rest,ga,
+storage,Storage.ObjectACLList,rest,ga,
+storage,Storage.ObjectsCompose,rest,ga,
+storage,Storage.ObjectsCopy,rest,ga,
+storage,Storage.ObjectsDelete,rest,ga,
+storage,Storage.ObjectsGet,rest,ga,
+storage,Storage.ObjectsGetIamPolicy,rest,ga,
+storage,Storage.ObjectsGetMedia,rest,ga,
+storage,Storage.ObjectsInsert,rest,ga,
+storage,Storage.ObjectsInsertResumable,rest,ga,
+storage,Storage.ObjectsInsertStartResumable,rest,ga,
+storage,Storage.ObjectsList,rest,ga,
+storage,Storage.ObjectsMove,rest,ga,
+storage,Storage.ObjectsPatch,rest,ga,
+storage,Storage.ObjectsRestore,rest,ga,
+storage,Storage.ObjectsRewrite,rest,ga,
+storage,Storage.ObjectsSetIamPolicy,rest,ga,
+storage,Storage.ObjectsUpdate,rest,ga,
+storage,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,UpdateBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,UpdateObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,WriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+workflowexecutions,WorkflowExecution.CancelExecution,rest,ga,
+workflowexecutions,WorkflowExecution.CreateExecution,rest,ga,
+workflowexecutions,WorkflowExecution.GetExecution,rest,ga,
+workflowexecutions,WorkflowExecution.ListExecutions,rest,ga,
+workflows,Workflow.CreateWorkflow,rest,ga,
+workflows,Workflow.DeleteWorkflow,rest,ga,
+workflows,Workflow.GetOperation,rest,ga,
+workflows,Workflow.GetWorkflow,rest,ga,
+workflows,Workflow.ListWorkflows,rest,ga,
+workflows,Workflow.UpdateWorkflow,rest,ga,

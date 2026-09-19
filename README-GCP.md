@@ -35,6 +35,20 @@
 | Cloud SQL Admin | REST | Metadata-only instances/databases/users — no SQL engine or data plane, see [Known Limitations](#known-limitations) |
 | Compute Engine | REST | Metadata-only instances/disks/networks/firewalls/subnetworks — no VM, disk, or network data plane, see [Known Limitations](#known-limitations) |
 
+### Fidelity matrix
+
+Every operation (per transport) is classified **ga / limited / preview / unsupported**. The
+matrix is *derived* — from the emulator's operation registry, the official Discovery schemas,
+and the wire-conformance harness — so it can't drift from the code:
+
+- [`docs/fidelity/fidelity-matrix.md`](docs/fidelity/fidelity-matrix.md) — human-readable, grouped by service
+- [`docs/fidelity/fidelity-matrix.json`](docs/fidelity/fidelity-matrix.json) — machine-readable canonical form
+- [`docs/fidelity/fidelity-matrix.csv`](docs/fidelity/fidelity-matrix.csv) — flat, for spreadsheets/CI
+- [`docs/fidelity-overrides.yaml`](docs/fidelity-overrides.yaml) — the curated contract (the only hand-maintained input)
+
+Regenerate with `make gen-gcp-fidelity-matrix`; CI fails (`make check-gcp-fidelity-matrix`) if the
+committed matrix drifts.
+
 ---
 
 ## Quick Start

@@ -86,7 +86,8 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _refresh-gcp-image \
-        test-gcp-wire-conformance record-gcp-wire-conformance
+        test-gcp-wire-conformance record-gcp-wire-conformance \
+        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -535,6 +536,14 @@ record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral e
 	  go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
 	@echo "Stopping jaiscloud-gcp..."
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
+gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
+	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
+
+check-gcp-fidelity-matrix: ## Fail if the committed fidelity matrix is stale (regenerate + git diff)
+	$(MAKE) gen-gcp-fidelity-matrix
+	@git diff --exit-code -- docs/fidelity || \
+	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock
