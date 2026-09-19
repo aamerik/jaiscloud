@@ -374,6 +374,9 @@ jobs:
       - name: Validate responses against Discovery schemas (fails on high severity)
         run: go test -tags gcp_conformance -run TestTranscriptsConform -v ./tests/gcpconformance/
 
+      - name: Check the fidelity matrix is up to date
+        run: make check-gcp-fidelity-matrix
+
       - name: Upload conformance report
         if: always()
         uses: actions/upload-artifact@v4

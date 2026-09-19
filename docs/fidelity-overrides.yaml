@@ -1,0 +1,53 @@
+# Curated fidelity overrides for the GCP emulator — the published contract.
+#
+# tools/fidelitygen merges these over the state it derives from the emulator's
+# registries and wire-conformance evidence. Overrides may only DOWNGRADE a cell
+# unless `allow_upgrade: true` is set.
+#
+# Rules enforced by the generator (it fails on violation):
+#   - every service / operation must exist in the enumerated registry;
+#   - `state` must be one of: ga | limited | preview | unsupported;
+#   - any non-`ga` state MUST carry a `reason`;
+#   - any `ga` override MUST set `allow_upgrade: true`.
+
+# Applied to every operation of a service unless overridden per-operation.
+defaults:
+  bigquery:
+    state: preview
+    reason: "no SQL engine; metadata + stored rows only"
+  cloudsql:
+    state: limited
+    reason: "metadata-only over ResourceStore (no control plane)"
+  compute:
+    state: limited
+    reason: "metadata-only over ResourceStore (no control plane)"
+  clouddns:
+    state: limited
+    reason: "metadata-only over ResourceStore (no private DNS resolution)"
+  memorystore:
+    state: limited
+    reason: "metadata-only over ResourceStore (no data plane)"
+  iceberg:
+    state: preview
+    reason: "BigLake Iceberg REST catalog; no official Discovery document"
+
+operations:
+  - service: dataproc
+    operation: Dataproc.SubmitJob
+    state: ga
+    allow_upgrade: true
+    reason: "covered by the k3d Lakehouse e2e (real Spark on Kubernetes)"
+
+  # Explicit Unimplemented stubs: enumerated but not implemented.
+  - service: clouddns
+    operation: CloudDNS.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: cloudsql
+    operation: CloudSQL.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: compute
+    operation: Compute.Unimplemented
+    state: unsupported
+    reason: "explicit Unimplemented stub"
