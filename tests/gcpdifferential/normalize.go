@@ -69,6 +69,10 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.DNSZone, "<dnsZone>"},
 		// Cloud Workflows run resource.
 		{names.Workflow, "<workflow>"},
+		// Firestore run resources. The document name embeds the collection, so
+		// the longest-first sort makes the collection win.
+		{names.FSCollection, "<fsCollection>"},
+		{names.FSDoc, "<fsDoc>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -259,6 +263,8 @@ var sortArrayKeys = map[string]bool{
 	"workflows":    true,
 	// IAM service-account list.
 	"accounts": true,
+	// Firestore document list.
+	"documents": true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -285,6 +291,8 @@ var scopedListPlaceholders = map[string]string{
 	"workflows": "<workflow>",
 	// IAM: scoped to this run's service account.
 	"accounts": "<serviceAccount>",
+	// Firestore: scoped to this run's collection.
+	"documents": "<fsCollection>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting

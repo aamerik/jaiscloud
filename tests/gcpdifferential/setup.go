@@ -97,6 +97,7 @@ func (t *Target) Cleanup() []string {
 		{"pubsub", "topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.Topic, ""},
 		{"secretmanager", "secret", http.MethodDelete, "/v1/projects/" + t.Project + "/secrets/" + n.Secret, ""},
 		{"iam", "service account", http.MethodDelete, "/v1/projects/" + t.Project + "/serviceAccounts/" + n.ServiceAccount + "@" + t.Project + ".iam.gserviceaccount.com", ""},
+		{"firestore", "document", http.MethodDelete, "/v1/projects/" + t.Project + "/databases/(default)/documents/" + n.FSCollection + "/" + n.FSDoc, ""},
 		{"workflows", "workflow", http.MethodDelete, "/v1/projects/" + t.Project + "/locations/us-central1/workflows/" + n.Workflow, ""},
 		// Cloud DNS mutations go through changes.create; deleting the record
 		// set first leaves the zone empty, which real GCP requires before the
@@ -132,6 +133,7 @@ func (t *Target) VerifyAbsent() []string {
 		{"secretmanager", "secret", "/v1/projects/" + t.Project + "/secrets/" + n.Secret},
 		{"bigquery", "dataset", "/bigquery/v2/projects/" + t.Project + "/datasets/" + n.DS},
 		{"iam", "service account", "/v1/projects/" + t.Project + "/serviceAccounts/" + n.ServiceAccount + "@" + t.Project + ".iam.gserviceaccount.com"},
+		{"firestore", "document", "/v1/projects/" + t.Project + "/databases/(default)/documents/" + n.FSCollection + "/" + n.FSDoc},
 		{"dns", "managed zone", "/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone},
 		{"workflows", "workflow", "/v1/projects/" + t.Project + "/locations/us-central1/workflows/" + n.Workflow},
 	}
