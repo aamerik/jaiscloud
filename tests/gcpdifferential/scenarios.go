@@ -83,6 +83,9 @@ var serviceBaseURL = map[string]string{
 	"workflows": "https://workflows.googleapis.com",
 	// IAM service accounts are served under /v1/projects/{project}/serviceAccounts.
 	"iam": "https://iam.googleapis.com",
+	// Firestore's REST surface is served under
+	// /v1/projects/{project}/databases/{database}/documents on this origin.
+	"firestore": "https://firestore.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -111,6 +114,9 @@ type ResourceNames struct {
 	// IAM: the accountId of one service account (the email is derived from it
 	// and the project).
 	ServiceAccount string
+	// Firestore: one collection and one document in the (default) database.
+	FSCollection string
+	FSDoc        string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -129,6 +135,9 @@ func Names(suffix string) ResourceNames {
 		Workflow: "conf-workflow-" + suffix,
 
 		ServiceAccount: "conf-sa-" + suffix,
+
+		FSCollection: "conf_docs_" + suffix,
+		FSDoc:        "doc_" + suffix,
 	}
 }
 
@@ -297,6 +306,21 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "sa_get_missing", Service: "iam", Method: "GET",
 			Path: saBase + "/missing-" + suffix + "@" + project + ".iam.gserviceaccount.com"},
 		Scenario{Op: "sa_delete", Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},
+	)
+
+	// ─── Firestore documents (REST) ──────────────────────────────────────────
+	// The (default) database's document CRUD. The document id is supplied via
+	// ?documentId= so the response name is deterministic; delete is last.
+	fsBase := "/v1/projects/" + project + "/databases/(default)/documents/" + n.FSCollection
+	fsDoc := fsBase + "/" + n.FSDoc
+	sc = append(sc,
+		Scenario{Op: "fs_doc_create", Service: "firestore", Method: "POST",
+			Path: fsBase + "?documentId=" + n.FSDoc,
+			Body: `{"fields":{"greeting":{"stringValue":"hello"},"count":{"integerValue":"1"}}}`},
+		Scenario{Op: "fs_doc_get", Service: "firestore", Method: "GET", Path: fsDoc},
+		Scenario{Op: "fs_docs_list", Service: "firestore", Method: "GET", Path: fsBase},
+		Scenario{Op: "fs_doc_get_missing", Service: "firestore", Method: "GET", Path: fsBase + "/missing-" + suffix},
+		Scenario{Op: "fs_doc_delete", Service: "firestore", Method: "DELETE", Path: fsDoc},
 	)
 
 	return sc
