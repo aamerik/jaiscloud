@@ -318,7 +318,13 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	loc, kr, _ := parseCryptoKey(name)
+	// The collection request targets the key-ring parent
+	// ("locations/{loc}/keyRings/{kr}/cryptoKeys"), which parseCryptoKey (five
+	// segments) cannot split. Parse the key ring itself instead.
+	loc, kr := parseKeyRing(strings.TrimSuffix(name, "/cryptoKeys"))
+	if loc == "" || kr == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing location/keyRing", 400)
+	}
 	keys, err := p.keys.ListCryptoKeys(ctx, nr.AccountID, loc, kr)
 	if err != nil {
 		return nil, err

@@ -57,6 +57,56 @@ func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCryptoKeyList verifies listing a key ring's crypto keys. The collection
+// request names the key-ring parent (.../keyRings/{kr}/cryptoKeys), which is
+// three path segments, so the handler must parse it as a key ring rather than
+// with the five-segment crypto-key parser (which returned empty loc/ring and
+// silently listed nothing).
+func TestCryptoKeyList(t *testing.T) {
+	ctx := context.Background()
+	p := New(kmsstore.NewMemoryStore())
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	for _, key := range []string{"key-a", "key-b"} {
+		if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+			"name":        "locations/global/keyRings/kr",
+			"cryptoKeyId": key,
+			"body":        map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+		})); err != nil {
+			t.Fatalf("cryptokey create %s: %v", key, err)
+		}
+	}
+
+	resp, err := p.CryptoKeyList(ctx, newNR(map[string]any{"name": "locations/global/keyRings/kr/cryptoKeys"}))
+	if err != nil {
+		t.Fatalf("cryptokey list: %v", err)
+	}
+	keys, _ := resp.Data["cryptoKeys"].([]any)
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 crypto keys, got %d (%v)", len(keys), resp.Data["cryptoKeys"])
+	}
+	if resp.Data["totalSize"] != 2 {
+		t.Errorf("totalSize = %v, want 2", resp.Data["totalSize"])
+	}
+	names := map[string]bool{}
+	for _, k := range keys {
+		km, _ := k.(map[string]any)
+		if n, _ := km["name"].(string); n != "" {
+			names[n] = true
+		}
+	}
+	for _, want := range []string{
+		"projects/proj/locations/global/keyRings/kr/cryptoKeys/key-a",
+		"projects/proj/locations/global/keyRings/kr/cryptoKeys/key-b",
+	} {
+		if !names[want] {
+			t.Errorf("listed key names = %v, missing %q", names, want)
+		}
+	}
+}
+
 // TestCryptoKeyPrimaryAlgorithm verifies the primary-version algorithm is
 // surfaced in the CryptoKey response (the version-template algorithm, which is
 // the primary version's algorithm).
