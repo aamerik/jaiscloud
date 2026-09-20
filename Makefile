@@ -1,6 +1,10 @@
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 .DEFAULT_GOAL := help
 
+# Python interpreter used to build the client-conformance venv (see
+# test-gcp-python-conformance). Override with `make ... PYTHON=python3.12`.
+PYTHON ?= python3
+
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
              grep -oP 'const version = "\K[^"]+' cmd/jaiscloud-aws/main.go 2>/dev/null || \
@@ -87,7 +91,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
-        test-gcp-gcloud-conformance \
+        test-gcp-gcloud-conformance test-gcp-python-conformance \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -561,6 +565,25 @@ test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs eph
 	  go test -tags gcloud_conformance -count=1 -v -timeout 600s ./...
 	@echo "Stopping jaiscloud-gcp (REST :8080)..."
 	@pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
+
+test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite vs ephemeral emulator (tests/clients/python)
+	@echo "Creating Python venv -> tests/clients/python/.venv ..."
+	@rm -rf tests/clients/python/.venv
+	@$(PYTHON) -m venv tests/clients/python/.venv >/dev/null 2>&1 && [ -x tests/clients/python/.venv/bin/pip ] \
+	  || (echo "  ensurepip unavailable; falling back to virtualenv"; rm -rf tests/clients/python/.venv; virtualenv -q tests/clients/python/.venv)
+	@tests/clients/python/.venv/bin/python -m pip install -q --upgrade pip
+	@tests/clients/python/.venv/bin/python -m pip install -q -r tests/clients/python/requirements.txt
+	@echo "Building jaiscloud-gcp -> /tmp/jc-py ..."
+	@go build -o /tmp/jc-py ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@/tmp/jc-py start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-python-conformance.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"
+	@tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python; status=$$?; \
+	  echo "Stopping jaiscloud-gcp (REST :8080)..."; \
+	  pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi; \
+	  exit $$status
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity

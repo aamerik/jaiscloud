@@ -54,5 +54,13 @@ tests/gcpconformance/testdata/report/
 tests/gcpconformance/grpc/testdata/report/
 tests/gcpconformance/gcloud/testdata/report/
 
+# Python SDK client-conformance venv + generated reports
+tests/clients/python/.venv/
+tests/clients/python/report/
+
+# Python bytecode caches
+__pycache__/
+.pytest_cache/
+
 .astra/
 .astraignore
