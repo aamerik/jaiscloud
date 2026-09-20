@@ -279,6 +279,14 @@ func TestKeyRingIamPolicy(t *testing.T) {
 	if etag, _ := get.Data["etag"].(string); etag == "" {
 		t.Fatalf("getIamPolicy returned no etag: %#v", get.Data)
 	}
+	// An empty policy renders as just {"etag": ...} (no version/bindings),
+	// matching the real Cloud KMS REST response.
+	if _, ok := get.Data["bindings"]; ok {
+		t.Fatalf("empty getIamPolicy must omit bindings: %#v", get.Data)
+	}
+	if _, ok := get.Data["version"]; ok {
+		t.Fatalf("empty getIamPolicy must omit version: %#v", get.Data)
+	}
 
 	set, err := p.SetIamPolicy(ctx, newNR(map[string]any{
 		"name": krName,
