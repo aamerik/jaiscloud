@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -207,8 +208,11 @@ func TestGoldensAreClean(t *testing.T) {
 		{"oauth access token", "ya29."},
 		{"private key marker", "PRIVATE KEY"},
 		{"service account email", ".iam.gserviceaccount.com"},
-		{"email address", "@"},
 	}
+	// A real email address is forbidden, but a bare "@" is too broad: OAuth2
+	// JSON uses "@type" discriminators (e.g. google.longrunning.Operation
+	// metadata), which are not secrets. Match email shapes specifically.
+	emailRE := regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	for _, f := range files {
 		data, err := os.ReadFile(filepath.Join(goldenDir(), f))
 		if err != nil {
@@ -218,6 +222,9 @@ func TestGoldensAreClean(t *testing.T) {
 			if strings.Contains(string(data), fb.needle) {
 				t.Errorf("golden %s contains forbidden %s (%q)", f, fb.name, fb.needle)
 			}
+		}
+		if m := emailRE.FindString(string(data)); m != "" {
+			t.Errorf("golden %s contains a forbidden email address (%q)", f, m)
 		}
 		var ex Exchange
 		if err := json.Unmarshal(data, &ex); err != nil {

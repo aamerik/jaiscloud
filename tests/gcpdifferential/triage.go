@@ -85,12 +85,36 @@ var triageRules = []TriageRule{
 	},
 	// The modern google.rpc error envelope carries code+message; the legacy
 	// errors[] array is per-generation shape variance, modeled as acceptable by
-	// the wire-conformance harness (tests/gcpconformance/allowlist.go).
+	// the wire-conformance harness (tests/gcpconformance/allowlist.go). The
+	// optional google.rpc error details[] (e.g. ResourceInfo) is the same class.
 	{
-		Service:  "bigquery",
 		Kind:     "missing_field",
 		Location: "response.error.errors",
 		Reason:   "modern google.rpc error envelope carries code+message; the legacy errors[] array is optional per-generation shape variance",
+	},
+	{
+		Kind:     "missing_field",
+		Location: "response.error.details",
+		Reason:   "google.rpc error details[] (e.g. ResourceInfo) is optional; the modern envelope's code+message+status match",
+	},
+	// Long-running operations complete synchronously in the emulator, so its
+	// create/update/delete operation is already done=true while real GCP
+	// returns done=false at submit time. The operation and its metadata are
+	// otherwise modeled; this is a completion-timing difference only.
+	{
+		Service:  "workflows",
+		Kind:     "value_mismatch",
+		Location: "response.done",
+		Reason:   "Workflows create/update/delete are LROs; the emulator completes them synchronously (done=true) whereas real GCP returns done=false at submit time",
+	},
+	// Cloud DNS applies changes asynchronously; real GCP reports a freshly
+	// submitted change as status=pending while the emulator applies it
+	// synchronously (done). The change contents and id match.
+	{
+		Service:  "dns",
+		Kind:     "value_mismatch",
+		Location: "response.status",
+		Reason:   "DNS changes are applied asynchronously; real GCP reports status=pending at submit time while the emulator applies synchronously (done)",
 	},
 	// Real GCP derives totalRows from table metadata that lags a just-streamed
 	// insert (it returned 0); the emulator's 1 is the stored row the preview

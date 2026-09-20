@@ -99,6 +99,21 @@ type ManagedZone struct {
 	Visibility   string            `json:"visibility,omitempty"`
 	CreationTime string            `json:"creationTime,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
+	// CloudLoggingConfig is output-only; real GCP always reports it (an empty
+	// config carrying only the kind). Modeled so the wire response matches.
+	CloudLoggingConfig map[string]any `json:"cloudLoggingConfig,omitempty"`
+}
+
+// withZoneDefaults fills the output-only managed-zone fields real GCP always
+// reports, so zones created before these fields existed still render fully.
+func withZoneDefaults(mz ManagedZone) ManagedZone {
+	if mz.Visibility == "" {
+		mz.Visibility = "public"
+	}
+	if mz.CloudLoggingConfig == nil {
+		mz.CloudLoggingConfig = map[string]any{"kind": "dns#managedZoneCloudLoggingConfig"}
+	}
+	return mz
 }
 
 // ResourceRecordSet is the dns#resourceRecordSet representation.
@@ -158,6 +173,7 @@ func (p *Provider) CreateManagedZone(ctx context.Context, nr *model.NormalizedRe
 	mz.ID = numericID(nr.AccountID + "/" + mz.Name)
 	mz.NameServers = nameServers()
 	mz.CreationTime = formatTimestamp(clock.Now())
+	mz = withZoneDefaults(mz)
 
 	data, err := json.Marshal(mz)
 	if err != nil {
@@ -170,7 +186,7 @@ func (p *Provider) CreateManagedZone(ctx context.Context, nr *model.NormalizedRe
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(mz)), nil
+	return provider.OK(toMap(withZoneDefaults(mz))), nil
 }
 
 func (p *Provider) GetManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -182,7 +198,7 @@ func (p *Provider) GetManagedZone(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(mz)), nil
+	return provider.OK(toMap(withZoneDefaults(mz))), nil
 }
 
 func (p *Provider) ListManagedZones(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -242,7 +258,7 @@ func (p *Provider) applyManagedZoneUpdate(ctx context.Context, nr *model.Normali
 	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtManagedZone, ID: mz.Name, Data: data}); err != nil {
 		return nil, storeError(err, "managed zone")
 	}
-	return provider.OK(toMap(mz)), nil
+	return provider.OK(toMap(withZoneDefaults(mz))), nil
 }
 
 func (p *Provider) DeleteManagedZone(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -275,7 +291,7 @@ func (p *Provider) pageManagedZones(nr *model.NormalizedRequest, zones []Managed
 	page, nextPageToken := paginate(zones, func(z ManagedZone) string { return z.Name }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, z := range page {
-		items = append(items, toMap(z))
+		items = append(items, toMap(withZoneDefaults(z)))
 	}
 	resp := map[string]any{"kind": kindManagedZoneList, "managedZones": items}
 	if nextPageToken != "" {
@@ -328,7 +344,7 @@ func (p *Provider) CreateResourceRecordSet(ctx context.Context, nr *model.Normal
 	if err := p.saveRRSet(ctx, nr.AccountID, zone, rr, true); err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(rr)), nil
+	return provider.OK(rrToMap(rr)), nil
 }
 
 func (p *Provider) GetResourceRecordSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -340,7 +356,7 @@ func (p *Provider) GetResourceRecordSet(ctx context.Context, nr *model.Normalize
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(rr)), nil
+	return provider.OK(rrToMap(rr)), nil
 }
 
 func (p *Provider) ListResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -393,7 +409,7 @@ func (p *Provider) PatchResourceRecordSet(ctx context.Context, nr *model.Normali
 	if err := p.saveRRSet(ctx, nr.AccountID, zone, rr, false); err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(rr)), nil
+	return provider.OK(rrToMap(rr)), nil
 }
 
 func (p *Provider) DeleteResourceRecordSet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -441,7 +457,7 @@ func (p *Provider) pageRRSets(nr *model.NormalizedRequest, sets []ResourceRecord
 	page, nextPageToken := paginate(sets, func(r ResourceRecordSet) string { return r.Name + "/" + r.Type }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, r := range page {
-		items = append(items, toMap(r))
+		items = append(items, rrToMap(r))
 	}
 	resp := map[string]any{"kind": kindResourceRecordList, "rrsets": items}
 	if nextPageToken != "" {
@@ -501,7 +517,7 @@ func (p *Provider) CreateChange(ctx context.Context, nr *model.NormalizedRequest
 	if err := p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, entry); err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(change)), nil
+	return provider.OK(changeToMap(change)), nil
 }
 
 func (p *Provider) GetChange(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -518,7 +534,7 @@ func (p *Provider) GetChange(ctx context.Context, nr *model.NormalizedRequest) (
 	if err := json.Unmarshal(e.Data, &s); err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(s.Change)), nil
+	return provider.OK(changeToMap(s.Change)), nil
 }
 
 func (p *Provider) ListChanges(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -544,7 +560,7 @@ func (p *Provider) pageChanges(nr *model.NormalizedRequest, changes []Change) ma
 	page, nextPageToken := paginate(changes, func(c Change) string { return c.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, c := range page {
-		items = append(items, toMap(c))
+		items = append(items, changeToMap(c))
 	}
 	resp := map[string]any{"kind": kindChangeList, "changes": items}
 	if nextPageToken != "" {
@@ -655,6 +671,54 @@ func stringMap(v any) map[string]string {
 		}
 	}
 	return out
+}
+
+// rrToMap renders a record set with the output-only fields real GCP always
+// includes: kind and an explicit (possibly empty) signatureRrdatas array.
+func rrToMap(rr ResourceRecordSet) map[string]any {
+	m := toMap(rr)
+	if _, ok := m["kind"]; !ok {
+		m["kind"] = kindResourceRecordSet
+	}
+	if _, ok := m["signatureRrdatas"]; !ok {
+		m["signatureRrdatas"] = []any{}
+	}
+	if _, ok := m["rrdatas"]; !ok {
+		m["rrdatas"] = []any{}
+	}
+	return m
+}
+
+// changeToMap renders a change with the output-only fields real GCP always
+// includes: explicit (possibly empty) additions/deletions arrays and
+// per-record kind/signatureRrdatas.
+func changeToMap(c Change) map[string]any {
+	m := toMap(c)
+	for _, key := range []string{"additions", "deletions"} {
+		arr, ok := m[key].([]any)
+		if !ok {
+			m[key] = []any{}
+			continue
+		}
+		for i, e := range arr {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := em["kind"]; !ok {
+				em["kind"] = kindResourceRecordSet
+			}
+			if _, ok := em["signatureRrdatas"]; !ok {
+				em["signatureRrdatas"] = []any{}
+			}
+			if _, ok := em["rrdatas"]; !ok {
+				em["rrdatas"] = []any{}
+			}
+			arr[i] = em
+		}
+		m[key] = arr
+	}
+	return m
 }
 
 // fqdn ensures a DNS name carries its trailing dot (Cloud DNS's canonical form).

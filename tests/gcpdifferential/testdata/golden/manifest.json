@@ -1,13 +1,17 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 50,
+  "ops": 75,
   "services": [
     "bigquery",
+    "dns",
+    "firestore",
+    "iam",
     "kms",
     "pubsub",
     "secretmanager",
-    "storage"
+    "storage",
+    "workflows"
   ],
   "files": [
     {
@@ -309,6 +313,156 @@
       "op": "dataset_delete",
       "sha256": "a3306554886d1cc3da194fcdb1ee36cb8be1e596dde2f76a60a9cf4f3027b631",
       "status": 204
+    },
+    {
+      "file": "050-dns-zone_create.json",
+      "op": "zone_create",
+      "sha256": "0fff50b71186d2d102be46c39441c4912b44f2e9342a1ef7650d9cef027e6ee3",
+      "status": 200
+    },
+    {
+      "file": "051-dns-zone_get.json",
+      "op": "zone_get",
+      "sha256": "b222287ed0785414e8570b2fa0d03603c1f38888ee729a079d4f46dbaef79677",
+      "status": 200
+    },
+    {
+      "file": "052-dns-zones_list.json",
+      "op": "zones_list",
+      "sha256": "2e1a45f501cb2117d31dc8a839cffdf342e45c1996c100d15e385dd1afddf8bc",
+      "status": 200
+    },
+    {
+      "file": "053-dns-change_create.json",
+      "op": "change_create",
+      "sha256": "27ef7537d659335fd5f9e857798df26662a80050afb20d55281d1073a2a91452",
+      "status": 200
+    },
+    {
+      "file": "054-dns-change_get.json",
+      "op": "change_get",
+      "sha256": "cbca3274aeb32446a5d28e5e9c1c9b56746b4c9cdb801bd2120d800f1a3c45b6",
+      "status": 200
+    },
+    {
+      "file": "055-dns-rrsets_list.json",
+      "op": "rrsets_list",
+      "sha256": "2e439f0ec80c9ff0fcc09678f4f8b10fb3eaf862b97ead06c5a9cd3ea843e990",
+      "status": 200
+    },
+    {
+      "file": "056-dns-rrset_get.json",
+      "op": "rrset_get",
+      "sha256": "f7d688c74699a8f461430f5c9f8478a017bae11667be48635ea870d04fd12197",
+      "status": 200
+    },
+    {
+      "file": "057-dns-zone_get_missing.json",
+      "op": "zone_get_missing",
+      "sha256": "af49a18db120ea6d6c0cda67abe40dd9165d5acff5e2150e15e5706825a636a7",
+      "status": 404
+    },
+    {
+      "file": "058-workflows-workflow_create.json",
+      "op": "workflow_create",
+      "sha256": "370951acbd6da72c123dbb21179f4ca22f4e35bb5c4210b8a8f7218893bbc936",
+      "status": 200
+    },
+    {
+      "file": "059-workflows-workflow_wait.json",
+      "op": "workflow_wait",
+      "sha256": "9cf7a369e195293037a05f360cd1c9cb35878dfb8d74b34ac654eb50b6da4b46",
+      "status": 200
+    },
+    {
+      "file": "060-workflows-workflow_get.json",
+      "op": "workflow_get",
+      "sha256": "29c6fd0773912a6f03b595df1fd098acb633699fb44a5f9d3edf38261ddd9756",
+      "status": 200
+    },
+    {
+      "file": "061-workflows-workflows_list.json",
+      "op": "workflows_list",
+      "sha256": "a54aa17bfab453ba609596d8b7bb387637980ab6e2ea8c5f8ea2021f48d3d2fc",
+      "status": 200
+    },
+    {
+      "file": "062-workflows-workflow_get_missing.json",
+      "op": "workflow_get_missing",
+      "sha256": "4fc525b6f75292cb22fd426d81f5fa263b0d364b5072b8336568a0f99b94b6b0",
+      "status": 404
+    },
+    {
+      "file": "063-workflows-workflow_delete.json",
+      "op": "workflow_delete",
+      "sha256": "b0e4fe2d5142a392bc410211a43de14b1e6043fe269ede661da161391158cd25",
+      "status": 200
+    },
+    {
+      "file": "064-iam-sa_create.json",
+      "op": "sa_create",
+      "sha256": "a2b8af960c09d231153238eeadc511f3e519b8930e278e07b14008c3388f869e",
+      "status": 200
+    },
+    {
+      "file": "065-iam-sa_get.json",
+      "op": "sa_get",
+      "sha256": "317dbed0facf6fd8af24676f4f8fb4b62ed08060683feff82ee2ca59090f9741",
+      "status": 200
+    },
+    {
+      "file": "066-iam-sas_list.json",
+      "op": "sas_list",
+      "sha256": "e093eb3222dc6dca2d83e1f12aea426d45fafea57a62a18500a809e202e2bd98",
+      "status": 200
+    },
+    {
+      "file": "067-iam-sa_iam_get.json",
+      "op": "sa_iam_get",
+      "sha256": "796f8e2488d3ce0b78a37adc4e84c25cdad80ca4f20ae86b872466e4f331637d",
+      "status": 200
+    },
+    {
+      "file": "068-iam-sa_get_missing.json",
+      "op": "sa_get_missing",
+      "sha256": "819917c321404ce2e3334891f3a256898bb03288120b1d210119e79ff54e5411",
+      "status": 404
+    },
+    {
+      "file": "069-iam-sa_delete.json",
+      "op": "sa_delete",
+      "sha256": "31b0e64c2934df908697ffc0df54a4d6c6eb57e0c86629f996a000ab86a86dd6",
+      "status": 200
+    },
+    {
+      "file": "070-firestore-fs_doc_create.json",
+      "op": "fs_doc_create",
+      "sha256": "66c6772a997dd32bf3d2f1def7963ca81a4f9b7cd4ce85581dbcae9d9c762afc",
+      "status": 200
+    },
+    {
+      "file": "071-firestore-fs_doc_get.json",
+      "op": "fs_doc_get",
+      "sha256": "7a694608db001eb18bf400f0e759ccb4d3d8f0392ed56710008ee6873e0af2fc",
+      "status": 200
+    },
+    {
+      "file": "072-firestore-fs_docs_list.json",
+      "op": "fs_docs_list",
+      "sha256": "e956ac5ac4936f6f42ac31cad43b3c669678972e3ee13903974cac0e5ee931ed",
+      "status": 200
+    },
+    {
+      "file": "073-firestore-fs_doc_get_missing.json",
+      "op": "fs_doc_get_missing",
+      "sha256": "f623d47c2ea813459af90fc4f41e37b8ff02368546c27e1b8760a0354159e8eb",
+      "status": 404
+    },
+    {
+      "file": "074-firestore-fs_doc_delete.json",
+      "op": "fs_doc_delete",
+      "sha256": "4193d621c27c5ec2a0fc4ed43374e5746d9d803e9e9a69b01a12257db14f6196",
+      "status": 200
     }
   ]
 }
