@@ -382,11 +382,12 @@ jobs:
       # Differential record/replay: replays the committed real-GCP goldens
       # against the already-running emulator and writes a divergence report.
       # Offline and credential-free; strict mode fails the build on any open
-      # (real-bug) divergence at/above high severity, so a regression against
+      # (real-bug) divergence at any severity, so a regression against
       # real GCP can't merge silently.
       - name: Run GCP differential replay (offline; strict)
         env:
           GCP_DIFFERENTIAL_STRICT: "1"
+          GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
         run: go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
 
       - name: Wait for gRPC listener
