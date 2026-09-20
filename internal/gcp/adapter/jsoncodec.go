@@ -348,6 +348,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyDecrypt"
 			case "updatePrimaryVersion":
 				return "CryptoKeyUpdatePrimaryVersion"
+			case "getIamPolicy":
+				return "CryptoKeyGetIamPolicy"
+			case "setIamPolicy":
+				return "CryptoKeySetIamPolicy"
+			case "testIamPermissions":
+				return "CryptoKeyTestIamPermissions"
 			}
 		case "cryptoKeyVersions":
 			switch custom {
@@ -365,6 +371,21 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyVersionMacSign"
 			case "macVerify":
 				return "CryptoKeyVersionMacVerify"
+			case "getIamPolicy":
+				return "CryptoKeyVersionGetIamPolicy"
+			case "setIamPolicy":
+				return "CryptoKeyVersionSetIamPolicy"
+			case "testIamPermissions":
+				return "CryptoKeyVersionTestIamPermissions"
+			}
+		case "keyRings":
+			switch custom {
+			case "getIamPolicy":
+				return "KeyRingGetIamPolicy"
+			case "setIamPolicy":
+				return "KeyRingSetIamPolicy"
+			case "testIamPermissions":
+				return "KeyRingTestIamPermissions"
 			}
 		case "serviceAccounts":
 			switch custom {

@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **488**
+Cells: **497**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 201 |
-| limited | 247 |
+| ga | 207 |
+| limited | 250 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -21,7 +21,7 @@ Cells: **488**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 201 | 83 | 37 | 3 |
+| rest | 207 | 86 | 37 | 3 |
 | grpc | 0 | 164 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
@@ -322,7 +322,7 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_55 cell(s): ga=18 limited=37 preview=0 unsupported=0_
+_64 cell(s): ga=24 limited=40 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -352,7 +352,10 @@ _55 cell(s): ga=18 limited=37 preview=0 unsupported=0_
 | KMS.CryptoKeyDecrypt | rest | ga | — |
 | KMS.CryptoKeyEncrypt | rest | ga | — |
 | KMS.CryptoKeyGet | rest | ga | — |
+| KMS.CryptoKeyGetIamPolicy | rest | ga | — |
 | KMS.CryptoKeyList | rest | ga | — |
+| KMS.CryptoKeySetIamPolicy | rest | ga | — |
+| KMS.CryptoKeyTestIamPermissions | rest | ga | — |
 | KMS.CryptoKeyUpdatePrimaryVersion | rest | ga | — |
 | KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | — |
 | KMS.CryptoKeyVersionAsymmetricSign | rest | ga | — |
@@ -361,13 +364,19 @@ _55 cell(s): ga=18 limited=37 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionDisable | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.CryptoKeyVersionEnable | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.CryptoKeyVersionGet | rest | ga | — |
+| KMS.CryptoKeyVersionGetIamPolicy | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.CryptoKeyVersionGetPublicKey | rest | ga | — |
 | KMS.CryptoKeyVersionList | rest | ga | — |
 | KMS.CryptoKeyVersionMacSign | rest | ga | — |
 | KMS.CryptoKeyVersionMacVerify | rest | ga | — |
+| KMS.CryptoKeyVersionSetIamPolicy | rest | limited | no matching Discovery method (unverified against the official schema) |
+| KMS.CryptoKeyVersionTestIamPermissions | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.KeyRingCreate | rest | ga | — |
 | KMS.KeyRingGet | rest | ga | — |
+| KMS.KeyRingGetIamPolicy | rest | ga | — |
 | KMS.KeyRingList | rest | ga | — |
+| KMS.KeyRingSetIamPolicy | rest | ga | — |
+| KMS.KeyRingTestIamPermissions | rest | ga | — |
 | ListCryptoKeyVersions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListCryptoKeys | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListImportJobs | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |

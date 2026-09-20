@@ -9,13 +9,11 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"testing"
-
-	kmsstore "jaiscloud/internal/gcp/store/kms"
 )
 
 func TestKMSAsymmetricSignAndPublicKey(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -56,7 +54,7 @@ func TestKMSAsymmetricSignAndPublicKey(t *testing.T) {
 
 func TestKMSMacSignVerify(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring: %v", err)

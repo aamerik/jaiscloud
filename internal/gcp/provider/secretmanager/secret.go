@@ -712,6 +712,13 @@ func versionToMap(v versionMeta) map[string]any {
 		"name":       v.Name,
 		"state":      v.State,
 		"createTime": v.CreateTime,
+		// etag is a stable hash of the version's identity and lifecycle state
+		// (GCP bumps a SecretVersion's etag on every state transition).
+		"etag": policy.Etag(v.Name + "|" + v.CreateTime + "|" + v.State),
+		// replicationStatus mirrors the parent secret's replication. JaisCloud
+		// only models automatic replication, which GCP renders as an empty
+		// automatic object.
+		"replicationStatus": map[string]any{"automatic": map[string]any{}},
 		// clientSpecifiedPayloadChecksum is the only integrity field the real
 		// SecretVersion carries: the Discovery schema and the v1 proto both
 		// define it and nothing else (no `checksum` property). gcloud's

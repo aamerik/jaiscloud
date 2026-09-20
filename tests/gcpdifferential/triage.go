@@ -47,10 +47,9 @@ func (r TriageRule) matches(d Divergence) bool {
 // mislead a client is deliberately left OUT so it stays in the open list.
 //
 // Deliberately NOT in this list (kept open as real bugs):
-//   - BigQuery dataset `access` and `maxTimeTravelHours` (functional metadata);
-//   - KMS `primary.createTime`/`generateTime` and key-ring IAM `etag`;
-//   - Pub/Sub `state`, `expirationPolicy`, `messageRetentionDuration`;
-//   - Secret Manager version `etag` and `replicationStatus`;
+//   - BigQuery dataset `maxTimeTravelHours` (functional metadata);
+//   - KMS `primary.createTime`/`generateTime`;
+//   - Pub/Sub `expirationPolicy`, `messageRetentionDuration`;
 //   - GCS bucket `softDeletePolicy` and object `timeFinalized` /
 //     `timeStorageClassUpdated`.
 var triageRules = []TriageRule{

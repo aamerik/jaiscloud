@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/gcp/identity"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/model"
 )
@@ -816,5 +817,67 @@ func TestInsertAllNoSchemaAcceptsAnyRow(t *testing.T) {
 	}
 	if got := rowDataCount(t, p, "d", "t"); got != 1 {
 		t.Fatalf("expected 1 stored row, got %d", got)
+	}
+}
+
+// TestDatasetDefaultAccess verifies that a dataset created without an explicit
+// access list renders the ACL real GCP applies by default, and that an explicit
+// access list is preserved.
+func TestDatasetDefaultAccess(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	create := newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "acl"},
+	}})
+	resp, err := p.CreateDataset(ctx, create)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	assertAccess := func(where string, data map[string]any) {
+		t.Helper()
+		access, ok := data["access"].([]any)
+		if !ok || len(access) != 4 {
+			t.Fatalf("%s: access = %#v, want 4 entries", where, data["access"])
+		}
+		want := []map[string]any{
+			{"role": "WRITER", "specialGroup": "projectWriters"},
+			{"role": "OWNER", "specialGroup": "projectOwners"},
+			{"role": "OWNER", "userByEmail": identity.DefaultServiceAccount},
+			{"role": "READER", "specialGroup": "projectReaders"},
+		}
+		for i, w := range want {
+			got, _ := access[i].(map[string]any)
+			for k, v := range w {
+				if got[k] != v {
+					t.Errorf("%s: access[%d][%s] = %v, want %v", where, i, k, got[k], v)
+				}
+			}
+		}
+	}
+	assertAccess("create", resp.Data)
+
+	got, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "acl"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	assertAccess("get", got.Data)
+
+	// An explicit access list must be preserved verbatim.
+	explicit := newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "acl2"},
+		"access":           []any{map[string]any{"role": "READER", "userByEmail": "reader@example.com"}},
+	}})
+	if _, err := p.CreateDataset(ctx, explicit); err != nil {
+		t.Fatalf("create explicit: %v", err)
+	}
+	got2, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "acl2"}))
+	if err != nil {
+		t.Fatalf("get explicit: %v", err)
+	}
+	access2, _ := got2.Data["access"].([]any)
+	if len(access2) != 1 {
+		t.Fatalf("explicit access overwritten: %#v", got2.Data["access"])
 	}
 }

@@ -526,3 +526,30 @@ func requireProviderCode(t *testing.T, err error, code string) {
 		t.Fatalf("expected code %s, got %s (%v)", code, pe.Code, err)
 	}
 }
+
+// TestVersionMapEtagAndReplicationStatus verifies the SecretVersion response
+// carries a non-empty etag (bumped on state change) and the automatic
+// replicationStatus object real GCP returns.
+func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
+	enabled := versionToMap(versionMeta{
+		Name:       "projects/p/secrets/s/versions/1",
+		State:      "ENABLED",
+		CreateTime: "2026-01-01T00:00:00Z",
+	})
+	if etag, _ := enabled["etag"].(string); etag == "" {
+		t.Fatalf("version map has no etag: %#v", enabled)
+	}
+	rs, _ := enabled["replicationStatus"].(map[string]any)
+	if _, ok := rs["automatic"]; !ok {
+		t.Fatalf("replicationStatus = %#v, want automatic", enabled["replicationStatus"])
+	}
+
+	disabled := versionToMap(versionMeta{
+		Name:       "projects/p/secrets/s/versions/1",
+		State:      "DISABLED",
+		CreateTime: "2026-01-01T00:00:00Z",
+	})
+	if enabled["etag"] == disabled["etag"] {
+		t.Errorf("etag should change with lifecycle state")
+	}
+}

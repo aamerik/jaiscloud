@@ -255,3 +255,45 @@ func TestPubSubCMEKRoundTrip(t *testing.T) {
 		t.Fatalf("expected data %q, got %q", payload, data)
 	}
 }
+
+// TestSubscriptionStateActive verifies a freshly created subscription reports
+// state ACTIVE on create, get and list (the real-GCP divergence this fixes).
+func TestSubscriptionStateActive(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/state-topic"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	created, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/state-sub",
+		"body": map[string]any{"topic": "projects/proj/topics/state-topic"},
+	}))
+	if err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+	if created.Data["state"] != "ACTIVE" {
+		t.Fatalf("create state = %v, want ACTIVE", created.Data["state"])
+	}
+
+	got, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/state-sub"}))
+	if err != nil {
+		t.Fatalf("subscription get: %v", err)
+	}
+	if got.Data["state"] != "ACTIVE" {
+		t.Fatalf("get state = %v, want ACTIVE", got.Data["state"])
+	}
+
+	list, err := p.SubscriptionList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("subscription list: %v", err)
+	}
+	items, _ := list.Data["subscriptions"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 subscription, got %d", len(items))
+	}
+	first, _ := items[0].(map[string]any)
+	if first["state"] != "ACTIVE" {
+		t.Fatalf("list state = %v, want ACTIVE", first["state"])
+	}
+}

@@ -12,42 +12,61 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/policy"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
+	"jaiscloud/internal/store"
+)
+
+// Policy resource types for KMS IAM (key rings, crypto keys and their versions).
+const (
+	rtKeyRingPolicy   = "gcp_keyring_policy"
+	rtCryptoKeyPolicy = "gcp_cryptokey_policy"
+	rtVersionPolicy   = "gcp_cryptokeyversion_policy"
 )
 
 // Provider handles Cloud KMS key rings, crypto keys, and crypto-key versions.
 type Provider struct {
-	keys kmsstore.Store
+	keys      kmsstore.Store
+	resources store.ResourceStore // IAM policies (control-plane)
 }
 
-func New(keys kmsstore.Store) *Provider {
-	return &Provider{keys: keys}
+func New(keys kmsstore.Store, resources store.ResourceStore) *Provider {
+	return &Provider{keys: keys, resources: resources}
 }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"KMS.KeyRingCreate":                     p.KeyRingCreate,
-		"KMS.KeyRingList":                       p.KeyRingList,
-		"KMS.KeyRingGet":                        p.KeyRingGet,
-		"KMS.CryptoKeyCreate":                   p.CryptoKeyCreate,
-		"KMS.CryptoKeyList":                     p.CryptoKeyList,
-		"KMS.CryptoKeyGet":                      p.CryptoKeyGet,
-		"KMS.CryptoKeyEncrypt":                  p.CryptoKeyEncrypt,
-		"KMS.CryptoKeyDecrypt":                  p.CryptoKeyDecrypt,
-		"KMS.CryptoKeyVersionCreate":            p.CryptoKeyVersionCreate,
-		"KMS.CryptoKeyVersionList":              p.CryptoKeyVersionList,
-		"KMS.CryptoKeyVersionGet":               p.CryptoKeyVersionGet,
-		"KMS.CryptoKeyVersionDestroy":           p.CryptoKeyVersionDestroy,
-		"KMS.CryptoKeyVersionDisable":           p.CryptoKeyVersionDisable,
-		"KMS.CryptoKeyVersionEnable":            p.CryptoKeyVersionEnable,
-		"KMS.CryptoKeyUpdatePrimaryVersion":     p.CryptoKeyUpdatePrimaryVersion,
-		"KMS.CryptoKeyVersionAsymmetricSign":    p.CryptoKeyVersionAsymmetricSign,
-		"KMS.CryptoKeyVersionAsymmetricDecrypt": p.CryptoKeyVersionAsymmetricDecrypt,
-		"KMS.CryptoKeyVersionMacSign":           p.CryptoKeyVersionMacSign,
-		"KMS.CryptoKeyVersionMacVerify":         p.CryptoKeyVersionMacVerify,
-		"KMS.CryptoKeyVersionGetPublicKey":      p.CryptoKeyVersionGetPublicKey,
+		"KMS.KeyRingCreate":                      p.KeyRingCreate,
+		"KMS.KeyRingList":                        p.KeyRingList,
+		"KMS.KeyRingGet":                         p.KeyRingGet,
+		"KMS.CryptoKeyCreate":                    p.CryptoKeyCreate,
+		"KMS.CryptoKeyList":                      p.CryptoKeyList,
+		"KMS.CryptoKeyGet":                       p.CryptoKeyGet,
+		"KMS.CryptoKeyEncrypt":                   p.CryptoKeyEncrypt,
+		"KMS.CryptoKeyDecrypt":                   p.CryptoKeyDecrypt,
+		"KMS.CryptoKeyVersionCreate":             p.CryptoKeyVersionCreate,
+		"KMS.CryptoKeyVersionList":               p.CryptoKeyVersionList,
+		"KMS.CryptoKeyVersionGet":                p.CryptoKeyVersionGet,
+		"KMS.CryptoKeyVersionDestroy":            p.CryptoKeyVersionDestroy,
+		"KMS.CryptoKeyVersionDisable":            p.CryptoKeyVersionDisable,
+		"KMS.CryptoKeyVersionEnable":             p.CryptoKeyVersionEnable,
+		"KMS.CryptoKeyUpdatePrimaryVersion":      p.CryptoKeyUpdatePrimaryVersion,
+		"KMS.CryptoKeyVersionAsymmetricSign":     p.CryptoKeyVersionAsymmetricSign,
+		"KMS.CryptoKeyVersionAsymmetricDecrypt":  p.CryptoKeyVersionAsymmetricDecrypt,
+		"KMS.CryptoKeyVersionMacSign":            p.CryptoKeyVersionMacSign,
+		"KMS.CryptoKeyVersionMacVerify":          p.CryptoKeyVersionMacVerify,
+		"KMS.CryptoKeyVersionGetPublicKey":       p.CryptoKeyVersionGetPublicKey,
+		"KMS.KeyRingGetIamPolicy":                p.GetIamPolicy,
+		"KMS.KeyRingSetIamPolicy":                p.SetIamPolicy,
+		"KMS.KeyRingTestIamPermissions":          p.TestIamPermissions,
+		"KMS.CryptoKeyGetIamPolicy":              p.GetIamPolicy,
+		"KMS.CryptoKeySetIamPolicy":              p.SetIamPolicy,
+		"KMS.CryptoKeyTestIamPermissions":        p.TestIamPermissions,
+		"KMS.CryptoKeyVersionGetIamPolicy":       p.GetIamPolicy,
+		"KMS.CryptoKeyVersionSetIamPolicy":       p.SetIamPolicy,
+		"KMS.CryptoKeyVersionTestIamPermissions": p.TestIamPermissions,
 	}
 }
 
@@ -759,6 +778,104 @@ func decodeAAD(v any) []byte {
 		return nil
 	}
 	return b
+}
+
+// ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys/versions) ────────────────
+
+// parseIamResource splits a relative KMS resource name into its policy resource
+// type and location-qualified id. cryptoKeyVersions is checked before
+// cryptoKeys because parseCryptoKey also matches a version's path segments.
+func parseIamResource(name string) (policyType, id string, ok bool) {
+	if loc, kr, key, version := parseVersion(name); loc != "" {
+		return rtVersionPolicy, loc + "/" + kr + "/" + key + "/" + version, true
+	}
+	if loc, kr, key := parseCryptoKey(name); loc != "" {
+		return rtCryptoKeyPolicy, loc + "/" + kr + "/" + key, true
+	}
+	if loc, kr := parseKeyRing(name); loc != "" {
+		return rtKeyRingPolicy, loc + "/" + kr, true
+	}
+	return "", "", false
+}
+
+// requireIamResource verifies the KMS resource backing an IAM request exists.
+func (p *Provider) requireIamResource(ctx context.Context, accountID, name string) error {
+	if loc, kr, key, version := parseVersion(name); loc != "" {
+		if _, err := p.keys.GetVersion(ctx, accountID, loc, kr, key, version); err != nil {
+			return p.versionErr(err)
+		}
+		return nil
+	}
+	if loc, kr, key := parseCryptoKey(name); loc != "" {
+		if _, err := p.keys.GetCryptoKey(ctx, accountID, loc, kr, key); err != nil {
+			return p.keyErr(err)
+		}
+		return nil
+	}
+	if loc, kr := parseKeyRing(name); loc != "" {
+		if _, err := p.keys.GetKeyRing(ctx, accountID, loc, kr); err != nil {
+			if errors.Is(err, kmsstore.ErrNoSuchKeyRing) {
+				return model.NewProviderError("NotFound", "key ring not found", 404)
+			}
+			return err
+		}
+		return nil
+	}
+	return model.NewProviderError("InvalidArgument", "invalid resource name", 400)
+}
+
+// GetIamPolicy implements getIamPolicy for key rings, crypto keys and versions.
+func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	policyType, id, ok := parseIamResource(name)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument", "invalid resource name", 400)
+	}
+	if err := p.requireIamResource(ctx, nr.AccountID, name); err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(policy.Load(ctx, p.resources, nr.AccountID, policyType, id))), nil
+}
+
+// SetIamPolicy implements setIamPolicy for key rings, crypto keys and versions.
+func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	policyType, id, ok := parseIamResource(name)
+	if !ok {
+		return nil, model.NewProviderError("InvalidArgument", "invalid resource name", 400)
+	}
+	if err := p.requireIamResource(ctx, nr.AccountID, name); err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	pol, err := policy.Set(ctx, p.resources, nr.AccountID, policyType, id, body)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(policy.ToMap(pol)), nil
+}
+
+// TestIamPermissions implements testIamPermissions for key rings, crypto keys
+// and versions.
+func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, ok := parseIamResource(name); !ok {
+		return nil, model.NewProviderError("InvalidArgument", "invalid resource name", 400)
+	}
+	if err := p.requireIamResource(ctx, nr.AccountID, name); err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
 }
 
 // requireVersionEnabled rejects use of a crypto-key version that is not

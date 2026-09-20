@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"testing"
 
-	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 )
 
@@ -18,7 +17,7 @@ func errStatus(err error) int {
 
 func TestKMSNegativesAndPagination(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	for _, kr := range []string{"kr-a", "kr-b", "kr-c"} {
 		nr := newNR(map[string]any{"location": "global", "keyRingId": kr})
@@ -93,7 +92,7 @@ func TestKMSNegativesAndPagination(t *testing.T) {
 // with 404 instead of silently operating on it.
 func TestKMSCryptoKeyNotFound(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	nr := newNR(map[string]any{"name": "locations/global/keyRings/kr-a/cryptoKeys/missing", "body": map[string]any{"plaintext": "aGk="}})
 	if _, err := p.CryptoKeyEncrypt(ctx, nr); err == nil || errStatus(err) != 404 {
@@ -109,7 +108,7 @@ func TestKMSCryptoKeyNotFound(t *testing.T) {
 // ciphertext and decryption failure on a wrong AAD.
 func TestKMSEncryptDecryptRealCrypto(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -153,7 +152,7 @@ func TestKMSEncryptDecryptRealCrypto(t *testing.T) {
 // ciphertext blob).
 func TestKMSRotation(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -219,7 +218,7 @@ func TestKMSRotation(t *testing.T) {
 // be used for encryption and that GetCryptoKey reports its real state.
 func TestKMSDestroyedPrimaryUnusable(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring: %v", err)
@@ -256,5 +255,67 @@ func TestKMSDestroyedPrimaryUnusable(t *testing.T) {
 	primary, _ := resp.Data["primary"].(map[string]any)
 	if primary["state"] != "DESTROYED" {
 		t.Fatalf("primary.state = %v, want DESTROYED", primary["state"])
+	}
+}
+
+// TestKeyRingIamPolicy covers the REST keyring IAM surface: getIamPolicy
+// returns a Policy with a non-empty etag (the real GCP divergence this fixes),
+// setIamPolicy persists bindings, a missing keyring 404s, and
+// testIamPermissions grants the requested permissions.
+func TestKeyRingIamPolicy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := newNR(map[string]any{"location": "global", "keyRingId": "iam-kr"})
+	if _, err := p.KeyRingCreate(ctx, nr); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	krName := "locations/global/keyRings/iam-kr"
+
+	get, err := p.GetIamPolicy(ctx, newNR(map[string]any{"name": krName}))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if etag, _ := get.Data["etag"].(string); etag == "" {
+		t.Fatalf("getIamPolicy returned no etag: %#v", get.Data)
+	}
+
+	set, err := p.SetIamPolicy(ctx, newNR(map[string]any{
+		"name": krName,
+		"body": map[string]any{"policy": map[string]any{
+			"bindings": []any{map[string]any{
+				"role":    "roles/cloudkms.cryptoKeyEncrypter",
+				"members": []any{"user:a@example.com"},
+			}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("setIamPolicy: %v", err)
+	}
+	if bindings, _ := set.Data["bindings"].([]any); len(bindings) != 1 {
+		t.Fatalf("setIamPolicy bindings = %#v, want 1", set.Data["bindings"])
+	}
+
+	// A stale etag must be rejected (ABORTED / HTTP 409).
+	if _, err := p.SetIamPolicy(ctx, newNR(map[string]any{
+		"name": krName,
+		"body": map[string]any{"policy": map[string]any{"etag": "stale", "bindings": []any{}}},
+	})); errStatus(err) != 409 {
+		t.Fatalf("stale etag: got %v, want 409", err)
+	}
+
+	if _, err := p.GetIamPolicy(ctx, newNR(map[string]any{"name": "locations/global/keyRings/missing"})); errStatus(err) != 404 {
+		t.Fatalf("missing keyring getIamPolicy: got %v, want 404", err)
+	}
+
+	tp, err := p.TestIamPermissions(ctx, newNR(map[string]any{
+		"name": krName,
+		"body": map[string]any{"permissions": []any{"cloudkms.cryptoKeys.get", "cloudkms.cryptoKeys.list"}},
+	}))
+	if err != nil {
+		t.Fatalf("testIamPermissions: %v", err)
+	}
+	if perms, _ := tp.Data["permissions"].([]string); len(perms) != 2 {
+		t.Fatalf("testIamPermissions = %#v, want 2", tp.Data["permissions"])
 	}
 }

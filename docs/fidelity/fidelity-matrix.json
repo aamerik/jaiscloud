@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 488,
+    "total": 497,
     "by_state": {
-      "ga": 201,
-      "limited": 247,
+      "ga": 207,
+      "limited": 250,
       "preview": 37,
       "unsupported": 3
     },
@@ -13,8 +13,8 @@
         "limited": 164
       },
       "rest": {
-        "ga": 201,
-        "limited": 83,
+        "ga": 207,
+        "limited": 86,
         "preview": 37,
         "unsupported": 3
       }
@@ -60,8 +60,8 @@
         "preview": 14
       },
       "kms": {
-        "ga": 18,
-        "limited": 37
+        "ga": 24,
+        "limited": 40
       },
       "logging": {
         "limited": 6
@@ -2771,11 +2771,42 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.CryptoKeyList",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeySetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.testIamPermissions",
         "postgres=yes"
       ]
     },
@@ -2865,6 +2896,16 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyVersionGetIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "no matching Discovery method (unverified against the official schema)",
+      "evidence": [
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.CryptoKeyVersionGetPublicKey",
       "transport": "rest",
       "state": "ga",
@@ -2905,6 +2946,27 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyVersionSetIamPolicy",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "no matching Discovery method (unverified against the official schema)",
+      "evidence": [
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionTestIamPermissions",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "no matching Discovery method (unverified against the official schema)",
+      "evidence": [
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.KeyRingCreate",
       "transport": "rest",
       "state": "ga",
@@ -2926,11 +2988,42 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.KeyRingGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.KeyRingList",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.KeyRingSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.KeyRingTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.testIamPermissions",
         "postgres=yes"
       ]
     },
