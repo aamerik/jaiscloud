@@ -92,6 +92,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-lakehouse-k3d-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
+        test-gcp-differential record-gcp-differential \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -543,6 +544,34 @@ record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral e
 	  go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
 	@echo "Stopping jaiscloud-gcp..."
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
+# Differential (record/replay) harness: commit goldens captured from REAL GCP,
+# then replay them offline against the emulator and report divergences.
+#
+# Capture requires Application Default Credentials (`gcloud auth
+# application-default login`) and a real project with the relevant APIs enabled.
+# Override the project with:
+#   GCP_DIFFERENTIAL_PROJECT=<project>  (default: parity-diff-jaiscloud)
+#   GCP_DIFFERENTIAL_PROJECT_NUMBER=<number>
+# All operations are global or multi-region (KMS location=global, BigQuery US),
+# so no region override is needed. Dataproc is intentionally excluded.
+# The recorder cleans up every created resource except a single fixed KMS
+# keyring/key, which GCP cannot delete.
+record-gcp-differential: ## Capture differential goldens from REAL GCP (needs ADC; see comment for project env)
+	@echo "Recording differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecord ./tests/gcpdifferential/ -record
+
+test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+	@echo "Building jaiscloud-gcp..."
+	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@/tmp/jc-differential start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"
+	@go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+	@echo "Stopping jaiscloud-gcp (REST :8080)..."
+	@pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
 
 test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."

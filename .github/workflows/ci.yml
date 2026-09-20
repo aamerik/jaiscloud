@@ -379,6 +379,12 @@ jobs:
       - name: Validate responses against Discovery schemas (fails on high severity)
         run: go test -tags gcp_conformance -run TestTranscriptsConform -v ./tests/gcpconformance/
 
+      # Differential record/replay: replays the committed real-GCP goldens
+      # against the already-running emulator and writes a divergence report.
+      # Offline and credential-free; divergences are reported, not fatal.
+      - name: Run GCP differential replay (offline; reports divergences)
+        run: go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+
       - name: Wait for gRPC listener
         run: |
           for i in $(seq 1 30); do
@@ -439,6 +445,7 @@ jobs:
             tests/gcpconformance/testdata/report/
             tests/gcpconformance/grpc/testdata/report/
             tests/gcpconformance/gcloud/testdata/report/
+            tests/gcpdifferential/testdata/report/
             tests/clients/python/report/
 
       - name: Upload GCP server log (on failure)
