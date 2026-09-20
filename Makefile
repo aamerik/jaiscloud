@@ -503,31 +503,33 @@ test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence test
 
 test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an ephemeral server (REST :8080 + gRPC :8081)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp.log 2>&1 & \
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"
-	@echo "Running raw-HTTP integration tests..."
-	@go test -race -count=1 -timeout 120s ./tests/integration/gcp/
-	@echo "Running REST SDK suites..."
-	@cd tests/integration/gcp/sdk && STORAGE_EMULATOR_HOST=http://localhost:8080 go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-rest && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-bigquery && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-clouddns && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-memorystore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-compute && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./...
-	@echo "Running gRPC SDK suites..."
-	@cd tests/integration/gcp/sdk-firestore && FIRESTORE_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
-	@cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./...
-	@echo "Stopping jaiscloud-gcp..."
-	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  echo "Running raw-HTTP integration tests..."; \
+	  go test -race -count=1 -timeout 120s ./tests/integration/gcp/; \
+	  echo "Running REST SDK suites..."; \
+	  ( cd tests/integration/gcp/sdk && STORAGE_EMULATOR_HOST=http://localhost:8080 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-rest && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-bigquery && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-clouddns && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-memorystore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-compute && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  echo "Running gRPC SDK suites..."; \
+	  ( cd tests/integration/gcp/sdk-firestore && FIRESTORE_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... )
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
@@ -536,14 +538,15 @@ record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral e
 	@echo "Building jaiscloud-gcp..."
 	@go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-conformance.log 2>&1 & \
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"
-	@GCP_CONFORMANCE_RECORD=1 GCP_CONFORMANCE_ENDPOINT=http://localhost:8080 \
-	  go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
-	@echo "Stopping jaiscloud-gcp..."
-	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  GCP_CONFORMANCE_RECORD=1 GCP_CONFORMANCE_ENDPOINT=http://localhost:8080 go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
 
 # Differential (record/replay) harness: commit goldens captured from REAL GCP,
 # then replay them offline against the emulator and report divergences.
@@ -572,37 +575,41 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	@echo "Building jaiscloud-gcp..."
 	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@/tmp/jc-differential start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential.log 2>&1 & \
+	@set -e; \
+	  /tmp/jc-differential start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"
-	@go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
-	@echo "Stopping jaiscloud-gcp (REST :8080)..."
-	@pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
+	  done; echo "  ready (REST :8080)"; \
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
 
 test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance.log 2>&1 & \
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8081 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-grpc-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"
-	@cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 \
-	  go test -count=1 -v -timeout 180s ./...
-	@echo "Stopping jaiscloud-gcp..."
-	@pid=$$(lsof -ti tcp:8081 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  ( cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 go test -count=1 -v -timeout 180s ./... )
 
 test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs ephemeral emulator (tag: gcloud_conformance)
 	@echo "Building jaiscloud-gcp -> /tmp/jc-gcloud ..."
 	@go build -o /tmp/jc-gcloud ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@/tmp/jc-gcloud start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-gcloud-conformance.log 2>&1 & \
+	@set -e; \
+	  /tmp/jc-gcloud start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-gcloud-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-gcloud-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080)"
-	@cd tests/gcpconformance/gcloud && GCP_EMULATOR_ENDPOINT=http://localhost:8080 \
-	  go test -tags gcloud_conformance -count=1 -v -timeout 600s ./...
-	@echo "Stopping jaiscloud-gcp (REST :8080)..."
-	@pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
+	  done; echo "  ready (REST :8080)"; \
+	  ( cd tests/gcpconformance/gcloud && GCP_EMULATOR_ENDPOINT=http://localhost:8080 go test -tags gcloud_conformance -count=1 -v -timeout 600s ./... )
 
 test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite vs ephemeral emulator (tests/clients/python)
 	@echo "Creating Python venv -> tests/clients/python/.venv ..."
@@ -614,14 +621,15 @@ test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite v
 	@echo "Building jaiscloud-gcp -> /tmp/jc-py ..."
 	@go build -o /tmp/jc-py ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
-	@/tmp/jc-py start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-python-conformance.log 2>&1 & \
+	@set -e; \
+	  /tmp/jc-py start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-python-conformance.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance.log; exit 1; fi; sleep 1; \
-	  done; echo "  ready (REST :8080, gRPC :8081)"
-	@tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python; status=$$?; \
-	  echo "Stopping jaiscloud-gcp (REST :8080)..."; \
-	  pid=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi; \
-	  exit $$status
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
