@@ -53,6 +53,8 @@ SEO_NEXT_STEPS.md
 tests/gcpconformance/testdata/report/
 tests/gcpconformance/grpc/testdata/report/
 tests/gcpconformance/gcloud/testdata/report/
+# GCP differential replay report (goldens under testdata/golden/ ARE committed)
+tests/gcpdifferential/testdata/report/
 
 # Python SDK client-conformance venv + generated reports
 tests/clients/python/.venv/
