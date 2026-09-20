@@ -274,6 +274,9 @@ type bucketMeta struct {
 	// maxAgeSeconds} rules. Stored verbatim so it round-trips through the
 	// bucket-meta JSON on both the memory and Postgres stores.
 	Cors []any `json:"cors,omitempty"`
+	// SoftDeletePolicy is the bucket's soft-delete config (GCS
+	// Bucket.softDeletePolicy). Nil means the GCS default (7 days) applies.
+	SoftDeletePolicy map[string]any `json:"softDeletePolicy,omitempty"`
 }
 
 type objectMeta struct {
@@ -294,6 +297,12 @@ type objectMeta struct {
 	StorageClass   string            `json:"storageClass,omitempty"`
 	TimeCreated    string            `json:"timeCreated,omitempty"`
 	Updated        string            `json:"updated,omitempty"`
+	// TimeFinalized is when the object's content was finalized (upload
+	// complete). TimeStorageClassUpdated is when the storage class was last
+	// set. The emulator does not track storage-class transitions separately,
+	// so both derive from the object's creation time.
+	TimeFinalized           string `json:"timeFinalized,omitempty"`
+	TimeStorageClassUpdated string `json:"timeStorageClassUpdated,omitempty"`
 	// ComponentCount is the number of source objects accumulated by compose
 	// operations (GCS Object.componentCount). Zero for non-composite objects.
 	ComponentCount int64 `json:"componentCount,omitempty"`
@@ -403,6 +412,8 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	}
 	if !m.TimeCreated.IsZero() {
 		o.TimeCreated = m.TimeCreated.Format(time.RFC3339Nano)
+		o.TimeFinalized = o.TimeCreated
+		o.TimeStorageClassUpdated = o.TimeCreated
 	}
 	if !m.Updated.IsZero() {
 		o.Updated = m.Updated.Format(time.RFC3339Nano)
@@ -598,6 +609,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Lifecycle = bodyMap(body, "lifecycle")
 	b.Encryption = bodyMap(body, "encryption")
 	b.Cors = bodySlice(body, "cors")
+	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
@@ -675,6 +687,9 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		if _, ok := body["cors"]; ok {
 			b.Cors = bodySlice(body, "cors")
+		}
+		if _, ok := body["softDeletePolicy"]; ok {
+			b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 		}
 		b.Metageneration = bumpMeta(gcs.BucketMetageneration(meta))
 		b.Updated = clock.Now().Format(time.RFC3339Nano)
@@ -2137,6 +2152,17 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	if b.Cors != nil {
 		out["cors"] = b.Cors
 	}
+	// Real GCS enables soft delete on every bucket with a 7-day retention
+	// window by default; effectiveTime is when the policy took effect. An
+	// explicit policy supplied at create/update is preserved.
+	softDelete := b.SoftDeletePolicy
+	if softDelete == nil {
+		softDelete = map[string]any{"retentionDurationSeconds": "604800"}
+	}
+	if _, ok := softDelete["effectiveTime"]; !ok && b.TimeCreated != "" {
+		softDelete["effectiveTime"] = b.TimeCreated
+	}
+	out["softDeletePolicy"] = softDelete
 	return out
 }
 

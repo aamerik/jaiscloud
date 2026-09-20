@@ -319,3 +319,50 @@ func TestKeyRingIamPolicy(t *testing.T) {
 		t.Fatalf("testIamPermissions = %#v, want 2", tp.Data["permissions"])
 	}
 }
+
+// TestPrimaryVersionTimes verifies a crypto key's primary reports createTime and
+// generateTime on create, get and list.
+func TestPrimaryVersionTimes(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "times-kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	created, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/times-kr",
+		"cryptoKeyId": "times-key",
+		"body":        map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+	}))
+	if err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+
+	assertTimes := func(where string, data map[string]any) {
+		t.Helper()
+		primary, _ := data["primary"].(map[string]any)
+		ct, _ := primary["createTime"].(string)
+		gt, _ := primary["generateTime"].(string)
+		if ct == "" || gt == "" {
+			t.Fatalf("%s: primary = %#v, want createTime/generateTime", where, data["primary"])
+		}
+	}
+	assertTimes("create", created.Data)
+
+	got, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": "locations/global/keyRings/times-kr/cryptoKeys/times-key"}))
+	if err != nil {
+		t.Fatalf("cryptokey get: %v", err)
+	}
+	assertTimes("get", got.Data)
+
+	list, err := p.CryptoKeyList(ctx, newNR(map[string]any{"name": "locations/global/keyRings/times-kr/cryptoKeys"}))
+	if err != nil {
+		t.Fatalf("cryptokey list: %v", err)
+	}
+	items, _ := list.Data["cryptoKeys"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 crypto key, got %d", len(items))
+	}
+	first, _ := items[0].(map[string]any)
+	assertTimes("list", first)
+}

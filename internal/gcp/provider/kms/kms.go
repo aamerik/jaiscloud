@@ -129,19 +129,31 @@ func cryptoKeyVersionName(nr *model.NormalizedRequest, loc, kr, key, version str
 }
 
 // cryptoKeyMap renders a CryptoKey as its GCP response object.
-func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryState string) map[string]any {
+// primaryCreateTime is the primary version's create time; it is used for the
+// primary's createTime/generateTime (GCP reports both as the version's
+// generation time). Zero falls back to the crypto key's own create time.
+func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryState string, primaryCreateTime time.Time) map[string]any {
 	if primaryState == "" {
 		primaryState = "ENABLED"
+	}
+	if primaryCreateTime.IsZero() {
+		primaryCreateTime = k.CreateTime
+	}
+	primary := map[string]any{
+		"name":      cryptoKeyVersionName(nr, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
+		"state":     primaryState,
+		"algorithm": k.Algorithm,
+	}
+	if !primaryCreateTime.IsZero() {
+		ts := primaryCreateTime.UTC().Format(time.RFC3339Nano)
+		primary["createTime"] = ts
+		primary["generateTime"] = ts
 	}
 	out := map[string]any{
 		"name":       cryptoKeyName(nr, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
 		"createTime": k.CreateTime.UTC().Format(time.RFC3339Nano),
-		"primary": map[string]any{
-			"name":      cryptoKeyVersionName(nr, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
-			"state":     primaryState,
-			"algorithm": k.Algorithm,
-		},
+		"primary":    primary,
 		"versionTemplate": map[string]any{
 			"algorithm":       k.Algorithm,
 			"protectionLevel": "SOFTWARE",
@@ -329,7 +341,7 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, err
 	}
-	return provider.OK(cryptoKeyMap(nr, ck, "ENABLED")), nil
+	return provider.OK(cryptoKeyMap(nr, ck, "ENABLED", ck.CreateTime)), nil
 }
 
 func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -351,7 +363,8 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, k := range page {
-		items = append(items, cryptoKeyMap(nr, k, p.primaryState(ctx, nr.AccountID, k)))
+		state, ct := p.primaryMeta(ctx, nr.AccountID, k)
+		items = append(items, cryptoKeyMap(nr, k, state, ct))
 	}
 	resp := map[string]any{"cryptoKeys": items, "totalSize": len(keys)}
 	if next != "" {
@@ -370,7 +383,8 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
-	return provider.OK(cryptoKeyMap(nr, k, p.primaryState(ctx, nr.AccountID, k))), nil
+	state, ct := p.primaryMeta(ctx, nr.AccountID, k)
+	return provider.OK(cryptoKeyMap(nr, k, state, ct)), nil
 }
 
 func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -549,7 +563,8 @@ func (p *Provider) CryptoKeyUpdatePrimaryVersion(ctx context.Context, nr *model.
 		return nil, p.versionErr(err)
 	}
 	ck, _ := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
-	return provider.OK(cryptoKeyMap(nr, ck, p.primaryState(ctx, nr.AccountID, ck))), nil
+	state, ct := p.primaryMeta(ctx, nr.AccountID, ck)
+	return provider.OK(cryptoKeyMap(nr, ck, state, ct)), nil
 }
 
 // defaultAlgorithmForPurpose maps a GCP KMS purpose to its default algorithm.
@@ -891,16 +906,22 @@ func (p *Provider) requireVersionEnabled(ctx context.Context, accountID, loc, kr
 	return nil
 }
 
-// primaryState reports the current state of a crypto key's primary version.
-func (p *Provider) primaryState(ctx context.Context, accountID string, k kmsstore.CryptoKey) string {
+// primaryMeta reports the current state and create time of a crypto key's
+// primary version. A missing/unknown primary falls back to ENABLED and the
+// key's own create time.
+func (p *Provider) primaryMeta(ctx context.Context, accountID string, k kmsstore.CryptoKey) (state string, createTime time.Time) {
 	if k.PrimaryVersion == "" {
-		return "ENABLED"
+		return "ENABLED", k.CreateTime
 	}
 	v, err := p.keys.GetVersion(ctx, accountID, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion)
 	if err != nil || v.State == "" {
-		return "ENABLED"
+		return "ENABLED", k.CreateTime
 	}
-	return v.State
+	ct := v.CreateTime
+	if ct.IsZero() {
+		ct = k.CreateTime
+	}
+	return v.State, ct
 }
 
 func versionNotEnabledErr(version, state string) error {

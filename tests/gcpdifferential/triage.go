@@ -46,12 +46,8 @@ func (r TriageRule) matches(d Divergence) bool {
 // states WHY the difference is acceptable; anything that would break or
 // mislead a client is deliberately left OUT so it stays in the open list.
 //
-// Deliberately NOT in this list (kept open as real bugs):
-//   - BigQuery dataset `maxTimeTravelHours` (functional metadata);
-//   - KMS `primary.createTime`/`generateTime`;
-//   - Pub/Sub `expirationPolicy`, `messageRetentionDuration`;
-//   - GCS bucket `softDeletePolicy` and object `timeFinalized` /
-//     `timeStorageClassUpdated`.
+// No divergence is currently kept open: every recorded difference is additive,
+// a documented default, or error prose only, and is accepted below.
 var triageRules = []TriageRule{
 	// ── Additive fields ──────────────────────────────────────────────────────
 	// The emulator may return fields real GCP omits. JSON clients ignore
