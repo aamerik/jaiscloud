@@ -86,7 +86,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _refresh-gcp-image \
-        test-gcp-wire-conformance record-gcp-wire-conformance \
+        test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -536,6 +536,17 @@ record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral e
 	  go test -tags gcp_conformance -count=1 -v -run TestRecord ./tests/gcpconformance/
 	@echo "Stopping jaiscloud-gcp..."
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
+
+test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-grpc-conformance.log 2>&1 & \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-grpc-conformance.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"
+	@cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 \
+	  go test -count=1 -v -timeout 180s ./...
+	@echo "Stopping jaiscloud-gcp..."
+	@pid=$$(lsof -ti tcp:8081 2>/dev/null || true); if [ -n "$$pid" ]; then kill $$pid 2>/dev/null || true; fi
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
