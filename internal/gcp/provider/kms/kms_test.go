@@ -7,6 +7,7 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 )
 
 func newNR(params map[string]any) *model.NormalizedRequest {
@@ -16,9 +17,14 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: params, ResourceID: resource.ResourceID("proj")}
 }
 
+// newTestProvider returns a KMS provider backed by fresh in-memory stores.
+func newTestProvider() *Provider {
+	return New(kmsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+}
+
 func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	// Create keyring.
 	nr := newNR(map[string]any{"location": "global", "keyRingId": "my-kr"})
@@ -64,7 +70,7 @@ func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
 // silently listed nothing).
 func TestCryptoKeyList(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring create: %v", err)
@@ -112,7 +118,7 @@ func TestCryptoKeyList(t *testing.T) {
 // the primary version's algorithm).
 func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring create: %v", err)
@@ -152,7 +158,7 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 // nextRotationTime) on get.
 func TestCryptoKeyLabelsRotationREST(t *testing.T) {
 	ctx := context.Background()
-	p := New(kmsstore.NewMemoryStore())
+	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring create: %v", err)

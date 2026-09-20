@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/gcp/paging"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/model"
@@ -178,12 +179,28 @@ func (p *Provider) datasetMap(projectID string, d bqstore.Dataset) map[string]an
 	if loc, _ := out["location"].(string); loc == "" {
 		out["location"] = "US"
 	}
+	if _, ok := out["access"]; !ok {
+		out["access"] = defaultDatasetAccess()
+	}
 	labels := d.Labels
 	if labels == nil {
 		labels = map[string]string{}
 	}
 	out["labels"] = labels
 	return out
+}
+
+// defaultDatasetAccess is the ACL real GCP assigns to a dataset created without
+// an explicit access list: project writers may edit, project owners own, the
+// creating user owns, and project readers may view. The user entry carries a
+// synthetic identity because the emulator has no per-request principal.
+func defaultDatasetAccess() []any {
+	return []any{
+		map[string]any{"role": "WRITER", "specialGroup": "projectWriters"},
+		map[string]any{"role": "OWNER", "specialGroup": "projectOwners"},
+		map[string]any{"role": "OWNER", "userByEmail": identity.DefaultServiceAccount},
+		map[string]any{"role": "READER", "specialGroup": "projectReaders"},
+	}
 }
 
 func (p *Provider) tableMap(projectID string, t bqstore.Table) map[string]any {

@@ -170,7 +170,7 @@ func startCmd() *cobra.Command {
 
 			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs, crypto.NewEnvelopeEncryptor(stores.keys))
 			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
-			kmsP := kmsprovider.New(stores.keys)
+			kmsP := kmsprovider.New(stores.keys, stores.resources)
 			iamP := iamprovider.New(stores.resources)
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)

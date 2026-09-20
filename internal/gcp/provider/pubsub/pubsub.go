@@ -393,6 +393,8 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		"name":               nr.ResourceID("pubsub-subscription", s),
 		"topic":              topic,
 		"ackDeadlineSeconds": ackDeadline,
+		// A freshly created subscription is immediately usable, i.e. ACTIVE.
+		"state": "ACTIVE",
 	}
 	if filter, _ := body["filter"].(string); filter != "" {
 		if _, err := pubsubfilter.Compile(filter); err != nil {
