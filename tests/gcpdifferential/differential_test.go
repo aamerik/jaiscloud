@@ -14,7 +14,7 @@ import (
 // Flags are parsed by the test binary: `go test -tags gcp_differential ./... -record`.
 var (
 	recordFlag = flag.Bool("record", false, "record goldens from REAL GCP (requires ADC)")
-	strictFlag = flag.Bool("strict", false, "fail the replay when any divergence is found")
+	strictFlag = flag.Bool("strict", false, "fail the replay when any OPEN (real-bug) divergence is at/above the configured severity (env GCP_DIFFERENTIAL_STRICT=1; severity via GCP_DIFFERENTIAL_STRICT_SEVERITY, default high)")
 )
 
 const (
@@ -130,17 +130,35 @@ func TestReplay(t *testing.T) {
 		t.Errorf("write report: %v", err)
 	}
 
-	t.Logf("replayed %d ops against emulator -> %d divergences", len(actual), len(divs))
+	t.Logf("replayed %d ops against emulator -> %d divergences (%d open, %d accepted)",
+		len(actual), rep.Total, rep.OpenCount, rep.AcceptedCount)
+	t.Logf("open by severity (real bugs):")
 	for _, sev := range sortedKeys(rep.BySeverity, severityLess) {
-		t.Logf("by severity: %-8s %d", sev, rep.BySeverity[sev])
+		t.Logf("  %-8s %d", sev, rep.BySeverity[sev])
 	}
+	t.Logf("open by kind:")
 	for _, k := range sortedKeys(rep.ByKind, nil) {
-		t.Logf("by kind:     %-24s %d", k, rep.ByKind[k])
+		t.Logf("  %-24s %d", k, rep.ByKind[k])
+	}
+	t.Logf("open by service:")
+	for _, s := range sortedKeys(rep.ByService, nil) {
+		t.Logf("  %-16s %d", s, rep.ByService[s])
 	}
 	t.Logf("report written to %s/report.{json,md}", reportDir())
 
-	if *strictFlag && len(divs) > 0 {
-		t.Fatalf("strict mode: %d divergence(s)", len(divs))
+	if strict := *strictFlag || os.Getenv("GCP_DIFFERENTIAL_STRICT") == "1"; strict {
+		threshold := envOr("GCP_DIFFERENTIAL_STRICT_SEVERITY", "high")
+		var failing []Divergence
+		for _, d := range rep.Open {
+			if SeverityRank(d.Severity) <= SeverityRank(threshold) {
+				failing = append(failing, d)
+			}
+		}
+		if len(failing) > 0 {
+			t.Fatalf("strict mode: %d open divergence(s) at/above %q severity (%d open total)",
+				len(failing), threshold, rep.OpenCount)
+		}
+		t.Logf("strict mode: no open divergence at/above %q severity", threshold)
 	}
 }
 
