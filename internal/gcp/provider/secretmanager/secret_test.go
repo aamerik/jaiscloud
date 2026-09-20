@@ -3,8 +3,6 @@ package secretmanager
 import (
 	"context"
 	"encoding/base64"
-	"hash/crc32"
-	"strconv"
 	"testing"
 
 	"jaiscloud/internal/gcp/crypto"
@@ -81,11 +79,13 @@ func TestSecretRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSecretVersionChecksum verifies every version resource carries
-// checksum.crc32c as the CRC32C-Castagnoli of the *plaintext* payload (not the
-// envelope-encrypted bytes the store holds). gcloud's `secrets versions add`
-// integrity check aborts when the AddVersion response omits this field.
-func TestSecretVersionChecksum(t *testing.T) {
+// TestSecretVersionIntegrity verifies every version resource returns the only
+// integrity field the real SecretVersion carries: clientSpecifiedPayloadChecksum.
+// The Discovery schema and the v1 proto define no `checksum` property, so the
+// emulator must not emit one (the wire-conformance harness would flag it as an
+// unknown field). gcloud's `secrets versions add` checks this boolean and aborts
+// with a false data-corruption warning when it is absent.
+func TestSecretVersionIntegrity(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
@@ -93,24 +93,17 @@ func TestSecretVersionChecksum(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	const plaintext = "hello, secrets"
-	payload := base64.StdEncoding.EncodeToString([]byte(plaintext))
-	want := strconv.FormatUint(uint64(crc32.Checksum([]byte(plaintext), crc32.MakeTable(crc32.Castagnoli))), 10)
-
-	assertChecksum := func(label string, resp *model.ProviderResponse) {
+	assert := func(label string, resp *model.ProviderResponse) {
 		t.Helper()
-		checksum, _ := resp.Data["checksum"].(map[string]any)
-		if checksum == nil {
-			t.Fatalf("%s: missing checksum object in %v", label, resp.Data)
-		}
-		if got, _ := checksum["crc32c"].(string); got != want {
-			t.Errorf("%s: checksum.crc32c = %q, want %q (CRC over the plaintext)", label, got, want)
-		}
 		if got, _ := resp.Data["clientSpecifiedPayloadChecksum"].(bool); !got {
 			t.Errorf("%s: clientSpecifiedPayloadChecksum = %v, want true", label, resp.Data["clientSpecifiedPayloadChecksum"])
 		}
+		if v, present := resp.Data["checksum"]; present {
+			t.Errorf("%s: unexpected `checksum` field (not in the Discovery schema/proto): %v", label, v)
+		}
 	}
 
+	payload := base64.StdEncoding.EncodeToString([]byte("hello, secrets"))
 	addResp, err := p.AddVersion(ctx, newNR(map[string]any{
 		"name": "secrets/s",
 		"body": map[string]any{"payload": map[string]any{"data": payload}},
@@ -118,18 +111,18 @@ func TestSecretVersionChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("addVersion: %v", err)
 	}
-	assertChecksum("addVersion", addResp)
+	assert("addVersion", addResp)
 
 	getResp, err := p.GetVersion(ctx, newNR(map[string]any{"name": "secrets/s/versions/1"}))
 	if err != nil {
 		t.Fatalf("getVersion: %v", err)
 	}
-	assertChecksum("getVersion", getResp)
+	assert("getVersion", getResp)
 
 	// Lifecycle responses (setVersionState) must stay consistent too.
 	disableResp, err := p.DisableVersion(ctx, newNR(map[string]any{"name": "secrets/s/versions/1"}))
 	if err != nil {
 		t.Fatalf("disableVersion: %v", err)
 	}
-	assertChecksum("disableVersion", disableResp)
+	assert("disableVersion", disableResp)
 }
