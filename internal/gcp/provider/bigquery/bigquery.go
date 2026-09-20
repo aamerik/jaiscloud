@@ -330,7 +330,11 @@ func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest
 	page, next := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
 	items := make([]any, 0, len(page))
 	for _, d := range page {
-		items = append(items, p.datasetMap(projectOf(nr), d))
+		m := p.datasetMap(projectOf(nr), d)
+		// datasets.list returns the summary subset; access is only carried on
+		// the full dataset resource (datasets.get/insert).
+		delete(m, "access")
+		items = append(items, m)
 	}
 	resp := map[string]any{"kind": kindPrefix + "datasetList", "datasets": items}
 	if next != "" {

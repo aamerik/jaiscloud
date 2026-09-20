@@ -839,6 +839,20 @@ func (p *Provider) requireIamResource(ctx context.Context, accountID, name strin
 	return model.NewProviderError("InvalidArgument", "invalid resource name", 400)
 }
 
+// iamPolicyMap renders a Policy the way Cloud KMS's REST API does: the etag is
+// always present, while version and bindings are omitted when empty/default —
+// an empty key-ring policy is just {"etag": "..."}.
+func iamPolicyMap(p policy.Policy) map[string]any {
+	out := map[string]any{"etag": p.Etag}
+	if p.Version > 1 {
+		out["version"] = p.Version
+	}
+	if len(p.Bindings) > 0 {
+		out["bindings"] = p.Bindings
+	}
+	return out
+}
+
 // GetIamPolicy implements getIamPolicy for key rings, crypto keys and versions.
 func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
@@ -852,7 +866,7 @@ func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err := p.requireIamResource(ctx, nr.AccountID, name); err != nil {
 		return nil, err
 	}
-	return provider.OK(policy.ToMap(policy.Load(ctx, p.resources, nr.AccountID, policyType, id))), nil
+	return provider.OK(iamPolicyMap(policy.Load(ctx, p.resources, nr.AccountID, policyType, id))), nil
 }
 
 // SetIamPolicy implements setIamPolicy for key rings, crypto keys and versions.
@@ -873,7 +887,7 @@ func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(policy.ToMap(pol)), nil
+	return provider.OK(iamPolicyMap(pol)), nil
 }
 
 // TestIamPermissions implements testIamPermissions for key rings, crypto keys

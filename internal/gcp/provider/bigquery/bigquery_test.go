@@ -864,6 +864,20 @@ func TestDatasetDefaultAccess(t *testing.T) {
 	}
 	assertAccess("get", got.Data)
 
+	// datasets.list returns the summary subset and must omit access.
+	list, err := p.ListDatasets(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := list.Data["datasets"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 dataset, got %d", len(items))
+	}
+	first, _ := items[0].(map[string]any)
+	if _, ok := first["access"]; ok {
+		t.Fatalf("datasets.list must omit access, got %#v", first["access"])
+	}
+
 	// An explicit access list must be preserved verbatim.
 	explicit := newNR(map[string]any{"body": map[string]any{
 		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "acl2"},
