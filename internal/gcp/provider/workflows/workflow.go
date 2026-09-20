@@ -129,12 +129,13 @@ func mapErr(err error) error {
 // workflowToMap renders a store Workflow as a workflows.v1.Workflow wire map.
 func (p *Provider) workflowToMap(nr *model.NormalizedRequest, w workflowsstore.Workflow) map[string]any {
 	out := map[string]any{
-		"name":        nr.ResourceID("workflow", w.Location+"/"+w.ID),
-		"state":       w.State,
-		"revisionId":  w.RevisionID,
-		"createTime":  w.CreateTime.Format(time.RFC3339Nano),
-		"updateTime":  w.UpdateTime.Format(time.RFC3339Nano),
-		"description": w.Description,
+		"name":               nr.ResourceID("workflow", w.Location+"/"+w.ID),
+		"state":              w.State,
+		"revisionId":         w.RevisionID,
+		"revisionCreateTime": w.UpdateTime.Format(time.RFC3339Nano),
+		"createTime":         w.CreateTime.Format(time.RFC3339Nano),
+		"updateTime":         w.UpdateTime.Format(time.RFC3339Nano),
+		"description":        w.Description,
 	}
 	if w.SourceContents != "" {
 		out["sourceContents"] = w.SourceContents
@@ -150,11 +151,25 @@ func (p *Provider) workflowToMap(nr *model.NormalizedRequest, w workflowsstore.W
 	}
 	if w.ServiceAccount != "" {
 		out["serviceAccount"] = w.ServiceAccount
+	} else {
+		// Real GCP defaults an unset serviceAccount to the project's Compute
+		// Engine default service account. The exact identity is normalized in
+		// the differential harness, so a synthetic default is sufficient.
+		out["serviceAccount"] = "projects/" + nr.AccountID + "/serviceAccounts/" +
+			nr.AccountID + "-compute@developer.gserviceaccount.com"
 	}
 	if w.CallLogLevel != "" {
 		out["callLogLevel"] = w.CallLogLevel
 	}
 	return out
+}
+
+// workflowOpResponse is the Workflow payload embedded in a create/update LRO's
+// response field, which real GCP tags with the Workflow @type discriminator.
+func (p *Provider) workflowOpResponse(nr *model.NormalizedRequest, w workflowsstore.Workflow) map[string]any {
+	resp := p.workflowToMap(nr, w)
+	resp["@type"] = "type.googleapis.com/google.cloud.workflows.v1.Workflow"
+	return resp
 }
 
 // workflowFromBody builds the store Workflow from a request body.
@@ -307,7 +322,7 @@ func (p *Provider) CreateWorkflow(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	target := nr.ResourceID("workflow", location+"/"+id)
-	op, err := p.storeOperation(ctx, nr, location, "create", target, p.workflowToMap(nr, w))
+	op, err := p.storeOperation(ctx, nr, location, "create", target, p.workflowOpResponse(nr, w))
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +385,7 @@ func (p *Provider) UpdateWorkflow(ctx context.Context, nr *model.NormalizedReque
 		return nil, mapErr(err)
 	}
 	target := nr.ResourceID("workflow", location+"/"+id)
-	op, err := p.storeOperation(ctx, nr, location, "update", target, p.workflowToMap(nr, w))
+	op, err := p.storeOperation(ctx, nr, location, "update", target, p.workflowOpResponse(nr, w))
 	if err != nil {
 		return nil, err
 	}

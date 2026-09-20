@@ -3,8 +3,13 @@
 package gcpdifferential
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestScenariosValid exercises the curated list contract: every scenario is
@@ -153,5 +158,79 @@ func TestMatchScenariosToGoldens(t *testing.T) {
 	)
 	if len(duplicates) != 1 || duplicates[0] != "dns/zone_get" {
 		t.Fatalf("duplicates = %v, want [dns/zone_get]", duplicates)
+	}
+}
+
+// TestWaitForPollsUntilDone verifies a Wait scenario keeps polling until the
+// configured field is truthy, then records the terminal response.
+func TestWaitForPollsUntilDone(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&calls, 1) < 3 {
+			_, _ = io.WriteString(w, `{"done":false}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"done":true}`)
+	}))
+	defer srv.Close()
+
+	tr := &Target{
+		Name:    "test",
+		Project: "proj",
+		HTTP:    srv.Client(),
+		URLFor:  func(_, path string) string { return srv.URL + path },
+	}
+	exs, err := tr.Run([]Scenario{{
+		Op: "wait", Service: "workflows", Method: http.MethodGet, Path: "/op",
+		Wait: &WaitSpec{Field: "done", Interval: time.Millisecond, Timeout: 2 * time.Second},
+	}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(exs) != 1 || exs[0].Status != 200 {
+		t.Fatalf("exchanges = %+v", exs)
+	}
+	if !strings.Contains(string(exs[0].Response), `"done":true`) {
+		t.Fatalf("terminal response not recorded: %s", exs[0].Response)
+	}
+	if got := atomic.LoadInt32(&calls); got < 3 {
+		t.Fatalf("polled %d times, want >= 3", got)
+	}
+}
+
+// TestWaitForContains verifies a Wait scenario can poll an eventually-consistent
+// list until it contains a specific resource.
+func TestWaitForContains(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&calls, 1) < 3 {
+			_, _ = io.WriteString(w, `{"accounts":[{"email":"other@example.com"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"accounts":[{"email":"target@example.com"}]}`)
+	}))
+	defer srv.Close()
+
+	tr := &Target{
+		Name:    "test",
+		Project: "proj",
+		HTTP:    srv.Client(),
+		URLFor:  func(_, path string) string { return srv.URL + path },
+	}
+	exs, err := tr.Run([]Scenario{{
+		Op: "list", Service: "iam", Method: http.MethodGet, Path: "/sa",
+		Wait: &WaitSpec{Field: "accounts", Contains: "target@example.com", Interval: time.Millisecond, Timeout: 2 * time.Second},
+	}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if exs[0].Status != 200 {
+		t.Fatalf("status = %d, want 200", exs[0].Status)
+	}
+	// It must poll until the target appears, then stop (three calls, not more).
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("polled %d times, want 3", got)
 	}
 }

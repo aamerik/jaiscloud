@@ -205,6 +205,9 @@ var volatileStringKeys = map[string]string{
 	// oauth2ClientId empty), so fold both sides to a placeholder.
 	"uniqueId":       "<uniqueId>",
 	"oauth2ClientId": "<oauth2ClientId>",
+	// Cloud Workflows reports a defaulted serviceAccount (a project SA email);
+	// fold it so no golden carries an email address.
+	"serviceAccount": "<serviceAccount>",
 	// BigQuery job/query scheduling is wall-clock dependent.
 	"startTime":   "<time>",
 	"endTime":     "<time>",

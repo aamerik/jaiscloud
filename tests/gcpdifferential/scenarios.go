@@ -64,6 +64,27 @@ type Scenario struct {
 	// scalar value is captured for use by later scenarios (e.g. the ciphertext
 	// returned by KMS encrypt feeding KMS decrypt).
 	Save map[string]string
+	// Wait, when non-nil, makes the run poll this scenario's Path (GET) until
+	// the JSON response's Wait.Field is truthy, then record the final response.
+	// It lets a scenario observe the result of an asynchronous (LRO) mutation,
+	// which real GCP completes after the create/delete call returns.
+	Wait *WaitSpec
+}
+
+// WaitSpec configures the polling behaviour for Scenario.Wait.
+type WaitSpec struct {
+	// Field is a dotted path into the JSON response (e.g. "done"). When set,
+	// the poll succeeds once that value is truthy.
+	Field string
+	// Contains, when non-empty, makes the poll succeed once the canonical JSON
+	// of the Field value contains this substring (e.g. a resource name inside a
+	// list). It is used for eventually-consistent list reads.
+	Contains string
+	// Interval is the delay between polls (default 1s).
+	Interval time.Duration
+	// Timeout bounds the wait (default 120s); on expiry the last response is
+	// recorded so the divergence surfaces rather than hanging.
+	Timeout time.Duration
 }
 
 // serviceBaseURL maps a service to its real-GCP REST origin. All path prefixes
@@ -282,7 +303,13 @@ func Scenarios(project, suffix string) []Scenario {
 	sc = append(sc,
 		Scenario{Op: "workflow_create", Service: "workflows", Method: "POST",
 			Path: wfBase + "?workflowId=" + n.Workflow,
-			Body: `{"description":"jaiscloud differential","sourceContents":"main:\n  steps:\n    - return: \"ok\"\n"}`},
+			Body: `{"description":"jaiscloud differential","sourceContents":"main:\n  steps:\n    - r:\n        return: 1\n"}`,
+			Save: map[string]string{"wfOp": "name"}},
+		// create/update/delete are LROs on real GCP: the workflow is not
+		// readable until the operation completes. Poll the saved operation name
+		// so the reads below observe the post-create state on both sides.
+		Scenario{Op: "workflow_wait", Service: "workflows", Method: "GET",
+			Path: "/v1/${wfOp}", Wait: &WaitSpec{Field: "done", Interval: time.Second, Timeout: 120 * time.Second}},
 		Scenario{Op: "workflow_get", Service: "workflows", Method: "GET", Path: wfBase + "/" + n.Workflow},
 		Scenario{Op: "workflows_list", Service: "workflows", Method: "GET", Path: wfBase},
 		Scenario{Op: "workflow_get_missing", Service: "workflows", Method: "GET", Path: wfBase + "/missing-" + suffix},
@@ -300,9 +327,12 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "sa_create", Service: "iam", Method: "POST",
 			Path: saBase + "?accountId=" + n.ServiceAccount,
 			Body: `{"serviceAccount":{"displayName":"jaiscloud differential"}}`},
-		Scenario{Op: "sa_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail},
-		Scenario{Op: "sas_list", Service: "iam", Method: "GET", Path: saBase},
-		Scenario{Op: "sa_iam_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail + ":getIamPolicy"},
+		Scenario{Op: "sa_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail,
+			Wait: &WaitSpec{Field: "email", Interval: time.Second, Timeout: 60 * time.Second}},
+		Scenario{Op: "sas_list", Service: "iam", Method: "GET", Path: saBase + "?pageSize=100",
+			Wait: &WaitSpec{Field: "accounts", Contains: n.ServiceAccount, Interval: time.Second, Timeout: 60 * time.Second}},
+		Scenario{Op: "sa_iam_get", Service: "iam", Method: "POST", Path: saBase + "/" + saEmail + ":getIamPolicy",
+			Wait: &WaitSpec{Field: "etag", Interval: time.Second, Timeout: 60 * time.Second}},
 		Scenario{Op: "sa_get_missing", Service: "iam", Method: "GET",
 			Path: saBase + "/missing-" + suffix + "@" + project + ".iam.gserviceaccount.com"},
 		Scenario{Op: "sa_delete", Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},
