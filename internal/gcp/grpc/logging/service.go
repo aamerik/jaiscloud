@@ -85,9 +85,11 @@ func (s *Service) defaultScope(ctx context.Context) string {
 // ─── LoggingServiceV2 ─────────────────────────────────────────────────────────
 
 func (s *Service) WriteLogEntries(ctx context.Context, req *loggingpb.WriteLogEntriesRequest) (*loggingpb.WriteLogEntriesResponse, error) {
-	if req.GetPartialSuccess() {
-		return nil, mapError(model.NewProviderError("UnsupportedOperation", "partial_success is not supported", 501))
-	}
+	// partial_success mirrors Cloud Logging: when set, entries that fail a
+	// permanent validation error are dropped and the valid ones are still
+	// written; when unset, any invalid entry rejects the whole batch atomically.
+	// The high-level google-cloud-logging client always sets it.
+	partial := req.GetPartialSuccess()
 
 	defaultLogName := req.GetLogName()
 	defaultResource := ""
@@ -127,6 +129,9 @@ func (s *Service) WriteLogEntries(ctx context.Context, req *loggingpb.WriteLogEn
 		}
 		scope, logID, perr := parseLogName(e.LogName)
 		if perr != nil {
+			if partial {
+				continue // drop the invalid entry, keep the rest of the batch
+			}
 			return nil, mapError(perr)
 		}
 		e.LogName = canonicalLogName(scope, logID)

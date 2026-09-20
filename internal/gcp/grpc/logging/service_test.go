@@ -315,16 +315,32 @@ func TestLoggingWriteAtomicReject(t *testing.T) {
 	}
 }
 
-func TestLoggingPartialSuccessUnimplemented(t *testing.T) {
+// TestLoggingPartialSuccessDropsInvalidEntries covers the field the
+// google-cloud-logging high-level client always sets: with partial_success the
+// valid entries are written and invalid ones dropped, rather than the whole
+// batch failing (contrast TestLoggingWriteAtomicReject).
+func TestLoggingPartialSuccessDropsInvalidEntries(t *testing.T) {
 	client, cleanup := loggingTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	_, err := client.WriteLogEntries(ctx, &loggingpb.WriteLogEntriesRequest{
+	if _, err := client.WriteLogEntries(ctx, &loggingpb.WriteLogEntriesRequest{
 		PartialSuccess: true,
-		Entries:        []*loggingpb.LogEntry{logEntry("projects/test/logs/ps", "x", ltype.LogSeverity_INFO)},
+		Entries: []*loggingpb.LogEntry{
+			logEntry("projects/test/logs/ps", "good", ltype.LogSeverity_INFO),
+			{LogName: "not-a-resource-name", Payload: &loggingpb.LogEntry_TextPayload{TextPayload: "bad"}},
+		},
+	}); err != nil {
+		t.Fatalf("partial_success write should succeed: %v", err)
+	}
+
+	resp, err := client.ListLogEntries(ctx, &loggingpb.ListLogEntriesRequest{
+		ResourceNames: []string{"projects/test"},
 	})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("partial_success err = %v, want Unimplemented", err)
+	if err != nil {
+		t.Fatalf("ListLogEntries: %v", err)
+	}
+	if len(resp.GetEntries()) != 1 {
+		t.Fatalf("partial_success must persist the valid entry only, got %d", len(resp.GetEntries()))
 	}
 }
