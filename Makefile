@@ -553,10 +553,17 @@ record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral e
 # Override the project with:
 #   GCP_DIFFERENTIAL_PROJECT=<project>  (default: parity-diff-jaiscloud)
 #   GCP_DIFFERENTIAL_PROJECT_NUMBER=<number>
-# All operations are global or multi-region (KMS location=global, BigQuery US),
-# so no region override is needed. Dataproc is intentionally excluded.
-# The recorder cleans up every created resource except a single fixed KMS
-# keyring/key, which GCP cannot delete.
+# All operations are global or multi-region (KMS location=global, BigQuery US,
+# Cloud DNS global, Cloud Workflows us-central1), so no region override is
+# needed. Dataproc is intentionally excluded. The recorder cleans up every
+# created resource except a single fixed KMS keyring/key, which GCP cannot
+# delete.
+#
+# The curated scenario list may grow ahead of a recording: any scenario without
+# a committed golden is reported as "pending recording" and skipped by the
+# offline replay, so `make test-gcp-differential` stays green until the next
+# capture folds it into a golden. Run this target to record (or refresh) all of
+# them at once.
 record-gcp-differential: ## Capture differential goldens from REAL GCP (needs ADC; see comment for project env)
 	@echo "Recording differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
 	go test -tags gcp_differential -count=1 -v -run TestRecord ./tests/gcpdifferential/ -record

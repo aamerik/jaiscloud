@@ -9,6 +9,17 @@
 // Default Credentials via the `gcloud` CLI (never printed, never written to
 // disk by this package); the offline replay touches no network beyond the
 // local emulator and requires no credentials.
+//
+// Scope: the recorded set covers the REST services both real GCP and the
+// emulator expose (storage, pubsub, secretmanager, kms, bigquery). The curated
+// Scenarios list may also contain operations that have not been recorded yet:
+// a scenario with no committed golden is reported as "pending recording" and
+// skipped by TestReplay, so new breadth can land in the tree without breaking
+// the offline gate before the next real-GCP capture. Once the user records,
+// every scenario gains a golden and starts being diffed.
+//
+// gRPC-only surfaces (Firestore, Datastore, Logging, Monitoring, Operations)
+// are out of scope for this REST differential.
 package gcpdifferential
 
 import (
@@ -64,6 +75,12 @@ var serviceBaseURL = map[string]string{
 	"secretmanager": "https://secretmanager.googleapis.com",
 	"kms":           "https://cloudkms.googleapis.com",
 	"bigquery":      "https://bigquery.googleapis.com",
+	// Cloud DNS serves its v1 REST surface under the /dns/v1/ path prefix on
+	// the dns.googleapis.com origin.
+	"dns": "https://dns.googleapis.com",
+	// Cloud Workflows serves /v1/projects/{project}/locations/{location}/...
+	// on the workflows.googleapis.com origin.
+	"workflows": "https://workflows.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -83,25 +100,39 @@ type ResourceNames struct {
 	Secret string
 	DS     string
 	Table  string
+	// Cloud DNS: a managed zone, its DNS name, and one record set in it.
+	DNSZone  string
+	DNSName  string
+	DNSRRSet string
+	// Cloud Workflows: one workflow definition.
+	Workflow string
 }
 
 // Names derives the run's resource identifiers from suffix.
 func Names(suffix string) ResourceNames {
+	dnsName := "conf-dns-" + suffix + ".example.com."
 	return ResourceNames{
-		Bucket: "conf-bucket-" + suffix,
-		Topic:  "conf-topic-" + suffix,
-		Sub:    "conf-sub-" + suffix,
-		Secret: "conf-secret-" + suffix,
-		DS:     "conf_ds_" + suffix,
-		Table:  "conf_tbl_" + suffix,
+		Bucket:   "conf-bucket-" + suffix,
+		Topic:    "conf-topic-" + suffix,
+		Sub:      "conf-sub-" + suffix,
+		Secret:   "conf-secret-" + suffix,
+		DS:       "conf_ds_" + suffix,
+		Table:    "conf_tbl_" + suffix,
+		DNSZone:  "conf-zone-" + suffix,
+		DNSName:  dnsName,
+		DNSRRSet: "www." + dnsName,
+		Workflow: "conf-workflow-" + suffix,
 	}
 }
 
 // Scenarios returns the curated request list for the given project and run
-// suffix. It covers storage, pubsub, secretmanager, kms and bigquery — the
-// services the emulator and real GCP both expose over REST. datastore, logging
-// and monitoring are gRPC-only in the emulator (see internal/gcp/adapter),
-// so they are out of scope for this REST differential and documented as such.
+// suffix. The recorded (golden-backed) services are storage, pubsub,
+// secretmanager, kms and bigquery. It additionally carries Cloud DNS and Cloud
+// Workflows scenarios that have not been recorded yet; those stay "pending
+// recording" (skipped by TestReplay) until a real-GCP capture folds them into
+// goldens. datastore, logging and monitoring are gRPC-only in the emulator
+// (see internal/gcp/adapter), so they are out of scope for this REST
+// differential and documented as such.
 //
 // The list is ordered so resources exist before they are read and are deleted
 // at the end; error (404) responses are included deliberately.
@@ -204,6 +235,42 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "dataset_get_missing", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/missing_" + suffix},
 		Scenario{Op: "table_delete", Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table},
 		Scenario{Op: "dataset_delete", Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + n.DS + "?deleteContents=true"},
+	)
+
+	// ─── Cloud DNS (v1 REST, /dns/v1/projects/{project}/managedZones) ─────────
+	// A run-suffixed managed zone, its record set (added through a change, the
+	// Cloud DNS mutation path), reads, a 404, and no delete scenario: deleting
+	// a managed zone answers 204 on real GCP while the emulator answers 200,
+	// so the mutation is left to Cleanup() (whose status is not recorded).
+	dnsBase := "/dns/v1/projects/" + project + "/managedZones"
+	dnsZone := n.DNSZone
+	sc = append(sc,
+		Scenario{Op: "zone_create", Service: "dns", Method: "POST", Path: dnsBase,
+			Body: fmt.Sprintf(`{"name":%q,"dnsName":%q,"description":"jaiscloud differential"}`, dnsZone, n.DNSName)},
+		Scenario{Op: "zone_get", Service: "dns", Method: "GET", Path: dnsBase + "/" + dnsZone},
+		Scenario{Op: "zones_list", Service: "dns", Method: "GET", Path: dnsBase},
+		Scenario{Op: "change_create", Service: "dns", Method: "POST", Path: dnsBase + "/" + dnsZone + "/changes",
+			Body: fmt.Sprintf(`{"additions":[{"name":%q,"type":"A","ttl":300,"rrdatas":["192.0.2.1"]}]}`, n.DNSRRSet),
+			Save: map[string]string{"changeId": "id"}},
+		Scenario{Op: "change_get", Service: "dns", Method: "GET", Path: dnsBase + "/" + dnsZone + "/changes/${changeId}"},
+		Scenario{Op: "rrsets_list", Service: "dns", Method: "GET", Path: dnsBase + "/" + dnsZone + "/rrsets"},
+		Scenario{Op: "rrset_get", Service: "dns", Method: "GET", Path: dnsBase + "/" + dnsZone + "/rrsets/" + n.DNSRRSet + "/A"},
+		Scenario{Op: "zone_get_missing", Service: "dns", Method: "GET", Path: dnsBase + "/missing-" + suffix},
+	)
+
+	// ─── Cloud Workflows (/v1/projects/{project}/locations/{location}/workflows) ─
+	// Create/update/delete return a done google.longrunning.Operation; the
+	// workflow's own get/list reads are plain resources. Delete is the last
+	// scenario so the workflow exists for every read above it.
+	wfBase := "/v1/projects/" + project + "/locations/us-central1/workflows"
+	sc = append(sc,
+		Scenario{Op: "workflow_create", Service: "workflows", Method: "POST",
+			Path: wfBase + "?workflowId=" + n.Workflow,
+			Body: `{"description":"jaiscloud differential","sourceContents":"main:\n  steps:\n    - return: \"ok\"\n"}`},
+		Scenario{Op: "workflow_get", Service: "workflows", Method: "GET", Path: wfBase + "/" + n.Workflow},
+		Scenario{Op: "workflows_list", Service: "workflows", Method: "GET", Path: wfBase},
+		Scenario{Op: "workflow_get_missing", Service: "workflows", Method: "GET", Path: wfBase + "/missing-" + suffix},
+		Scenario{Op: "workflow_delete", Service: "workflows", Method: "DELETE", Path: wfBase + "/" + n.Workflow},
 	)
 
 	return sc

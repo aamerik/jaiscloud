@@ -87,19 +87,27 @@ func (t *Target) EnsureKMS() error {
 func (t *Target) Cleanup() []string {
 	n := t.Names
 	type del struct {
-		service, desc, method, path string
+		service, desc, method, path, body string
 	}
 	ops := []del{
-		{"bigquery", "dataset", http.MethodDelete, "/bigquery/v2/projects/" + t.Project + "/datasets/" + n.DS + "?deleteContents=true"},
-		{"storage", "object", http.MethodDelete, "/storage/v1/b/" + n.Bucket + "/o/hello.txt"},
-		{"storage", "bucket", http.MethodDelete, "/storage/v1/b/" + n.Bucket},
-		{"pubsub", "subscription", http.MethodDelete, "/v1/projects/" + t.Project + "/subscriptions/" + n.Sub},
-		{"pubsub", "topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.Topic},
-		{"secretmanager", "secret", http.MethodDelete, "/v1/projects/" + t.Project + "/secrets/" + n.Secret},
+		{"bigquery", "dataset", http.MethodDelete, "/bigquery/v2/projects/" + t.Project + "/datasets/" + n.DS + "?deleteContents=true", ""},
+		{"storage", "object", http.MethodDelete, "/storage/v1/b/" + n.Bucket + "/o/hello.txt", ""},
+		{"storage", "bucket", http.MethodDelete, "/storage/v1/b/" + n.Bucket, ""},
+		{"pubsub", "subscription", http.MethodDelete, "/v1/projects/" + t.Project + "/subscriptions/" + n.Sub, ""},
+		{"pubsub", "topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.Topic, ""},
+		{"secretmanager", "secret", http.MethodDelete, "/v1/projects/" + t.Project + "/secrets/" + n.Secret, ""},
+		{"workflows", "workflow", http.MethodDelete, "/v1/projects/" + t.Project + "/locations/us-central1/workflows/" + n.Workflow, ""},
+		// Cloud DNS mutations go through changes.create; deleting the record
+		// set first leaves the zone empty, which real GCP requires before the
+		// zone itself can be deleted.
+		{"dns", "record set", http.MethodPost,
+			"/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone + "/changes",
+			fmt.Sprintf(`{"deletions":[{"name":%q,"type":"A","ttl":300,"rrdatas":["192.0.2.1"]}]}`, n.DNSRRSet)},
+		{"dns", "managed zone", http.MethodDelete, "/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone, ""},
 	}
 	var log []string
 	for _, op := range ops {
-		status, _, err := t.request(op.method, op.service, op.path, "", "")
+		status, _, err := t.request(op.method, op.service, op.path, op.body, "application/json")
 		if err != nil {
 			log = append(log, fmt.Sprintf("cleanup %s/%s: error: %v", op.service, op.desc, err))
 			continue
@@ -122,6 +130,8 @@ func (t *Target) VerifyAbsent() []string {
 		{"pubsub", "subscription", "/v1/projects/" + t.Project + "/subscriptions/" + n.Sub},
 		{"secretmanager", "secret", "/v1/projects/" + t.Project + "/secrets/" + n.Secret},
 		{"bigquery", "dataset", "/bigquery/v2/projects/" + t.Project + "/datasets/" + n.DS},
+		{"dns", "managed zone", "/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone},
+		{"workflows", "workflow", "/v1/projects/" + t.Project + "/locations/us-central1/workflows/" + n.Workflow},
 	}
 	var log []string
 	for _, c := range checks {
