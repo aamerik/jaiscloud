@@ -44,6 +44,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Secret.Delete":             p.Delete,
 		"Secret.AddVersion":         p.AddVersion,
 		"Secret.Access":             p.Access,
+		"Secret.ListVersions":       p.ListVersions,
 		"Secret.GetVersion":         p.GetVersion,
 		"Secret.DestroyVersion":     p.DestroyVersion,
 		"Secret.DisableVersion":     p.DisableVersion,
@@ -90,6 +91,11 @@ func parseSecretName(name string) (secret, version string) {
 	}
 	if i := strings.Index(name, "/versions/"); i >= 0 {
 		return name[:i], name[i+len("/versions/"):]
+	}
+	// A trailing "/versions" is the versions collection (secrets list), not a
+	// version resource; treat the secret as having no version component.
+	if strings.HasSuffix(name, "/versions") {
+		return strings.TrimSuffix(name, "/versions"), ""
 	}
 	return name, ""
 }
@@ -484,6 +490,33 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			"dataCrc32c": crc32c(m.Data),
 		},
 	}), nil
+}
+
+func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	secret, _ := parseSecretName(name)
+	// The parent secret must exist: listing the versions of a missing secret
+	// is a 404 at the parent, not an empty list.
+	if err := p.requireSecret(ctx, nr.AccountID, secret); err != nil {
+		return nil, err
+	}
+	versions, err := p.secrets.ListVersions(ctx, nr.AccountID, secret)
+	if err != nil {
+		return nil, err
+	}
+	page, next := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID }, nr.Params)
+	items := make([]any, 0, len(page))
+	for _, v := range page {
+		items = append(items, versionToMap(fromStoreVersion(nr, v)))
+	}
+	resp := map[string]any{"versions": items, "totalSize": len(versions)}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

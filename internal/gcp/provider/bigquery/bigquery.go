@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -349,7 +350,7 @@ func (p *Provider) DeleteDataset(ctx context.Context, nr *model.NormalizedReques
 	if err := p.store.DeleteDataset(ctx, projectOf(nr), datasetID); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(map[string]any{}), nil
+	return &model.ProviderResponse{HTTPStatus: http.StatusNoContent, Data: map[string]any{}}, nil
 }
 
 // --- Tables ---
@@ -474,7 +475,7 @@ func (p *Provider) DeleteTable(ctx context.Context, nr *model.NormalizedRequest)
 	if err := p.store.DeleteTable(ctx, projectOf(nr), datasetID, tableID); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(map[string]any{}), nil
+	return &model.ProviderResponse{HTTPStatus: http.StatusNoContent, Data: map[string]any{}}, nil
 }
 
 // --- Tabledata ---

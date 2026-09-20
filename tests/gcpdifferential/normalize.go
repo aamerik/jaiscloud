@@ -32,7 +32,12 @@ type Normalizer struct {
 func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *Normalizer {
 	repls := [][2]string{
 		{project, "<project>"},
-		{projectNumber, "<project_number>"},
+		// Real GCP canonicalizes resource names to the project *number* while
+		// clients address resources by project *id*; the emulator echoes
+		// whichever id it was given. Both are valid aliases for the same
+		// project, so they collapse to a single placeholder — otherwise the
+		// alias difference manufactures a false divergence.
+		{projectNumber, "<project>"},
 		// Fixed KMS names are stable but still project resources.
 		{FixedKMSKeyRing, "<keyRing>"},
 		{FixedKMSCryptoKey, "<cryptoKey>"},
@@ -157,6 +162,11 @@ var volatileStringKeys = map[string]string{
 	"ciphertextCrc32c": "<crc32c>",
 	// BigQuery dataset access carries the creating user's email.
 	"userByEmail": "<userByEmail>",
+	// GCS bucket.projectNumber is the project number; the emulator does not
+	// track one and emits "0". Collapse the field to the same <project>
+	// placeholder as the project id/number so the informational field cannot
+	// manufacture a divergence.
+	"projectNumber": "<project>",
 	// List counts are polluted by unrelated real-project resources; the element
 	// arrays are scoped to this harness's resources, so the raw count is noise.
 	"totalSize": "<totalSize>",
