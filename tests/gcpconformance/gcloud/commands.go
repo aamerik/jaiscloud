@@ -73,6 +73,7 @@ func commands(f fixtures) []Command {
 	workflow := f.sid + "-wf"
 	dataset := f.sid + "_ds"
 	cluster := f.sid + "-dp"
+	fn := f.sid + "-fn"
 
 	return []Command{
 		// ── Cloud Storage ────────────────────────────────────────────────────
@@ -268,16 +269,21 @@ func commands(f fixtures) []Command {
 		},
 
 		// ── Cloud Functions ──────────────────────────────────────────────────
+		// gcloud 585 speaks Cloud Functions v2 (paths under /v2/projects/...):
+		// list fans out to both the v2 (GEN_2 filter) and v1 list endpoints and
+		// merges them, so this exercises the v2 routing. The function is seeded
+		// directly against the emulator's v2 REST API before the table runs
+		// because `gcloud functions deploy` also requires /v2/.../runtimes and a
+		// resumable source upload, neither of which the emulator serves yet.
 		{
 			Name: "functions list", Service: "functions",
 			Args:   []string{"functions", "list", "--format=json"},
-			Expect: ExpectUnsupported,
-			Gap: "gcloud 585 uses the Cloud Functions v2 API (GET " +
-				"/v2/projects/{p}/locations/-/functions), but jaiscloud only routes " +
-				"the v1 surface (/v1/projects/{p}/locations/{l}/functions). The v2 " +
-				"path falls through to the raw-GCS media handler and returns HTTP 404 " +
-				"'object not found'. gcloud 585 no longer exposes a --v1/--no-gen2 " +
-				"switch, so no gcloud functions command can reach the emulator.",
+			Assert: jsonArray, Expect: ExpectPass,
+		},
+		{
+			Name: "functions describe", Service: "functions",
+			Args:   []string{"functions", "describe", fn, "--region=us-central1", "--format=json"},
+			Assert: contains(fn), Expect: ExpectPass,
 		},
 
 		// ── Workflows ────────────────────────────────────────────────────────

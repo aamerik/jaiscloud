@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ const rtFunctionPolicy = "gcp_function_policy"
 // OperationMetadata carried on the long-running operations that Create, Update,
 // and Delete return.
 const operationMetadataType = "type.googleapis.com/google.cloud.functions.v1.OperationMetadata"
+
+// operationMetadataTypeV2 is the v2 equivalent. A v2 client (e.g. gcloud 585)
+// rejects the v1 @type.
+const operationMetadataTypeV2 = "type.googleapis.com/google.cloud.functions.v2.OperationMetadata"
 
 // functionRegions is the synthesized set of locations the emulator advertises
 // for functions.location discovery. Real Cloud Functions v1 is available in
@@ -94,6 +99,10 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Function.FunctionGetIamPolicy":       p.FunctionGetIamPolicy,
 		"Function.FunctionSetIamPolicy":       p.FunctionSetIamPolicy,
 		"Function.FunctionTestIamPermissions": p.FunctionTestIamPermissions,
+		"Function.GetOperation":               p.GetOperation,
+		"Function.ListOperations":             p.ListOperations,
+		"Function.CancelOperation":            p.CancelOperation,
+		"Function.DeleteOperation":            p.DeleteOperation,
 	}
 }
 
@@ -173,8 +182,12 @@ func stringOf(v any) string {
 }
 
 // functionFromBody builds the store Function from a request body, deriving the
-// HTTPS trigger URL when no eventTrigger is present.
+// HTTPS trigger URL when no eventTrigger is present. v2 request bodies nest the
+// build/runtime fields under buildConfig and serviceConfig.
 func functionFromBody(nr *model.NormalizedRequest, body map[string]any, location, id string) functionsstore.Function {
+	if isV2(nr) {
+		return functionFromBodyV2(nr, body, location, id)
+	}
 	now := clock.Now().UTC()
 	f := functionsstore.Function{
 		ID:                   id,
@@ -204,6 +217,67 @@ func functionFromBody(nr *model.NormalizedRequest, body map[string]any, location
 		f.HttpsTriggerURL = defaultHttpsTriggerURL(nr.AccountID, location, id)
 	}
 	return f
+}
+
+// functionFromBodyV2 maps a Cloud Functions v2 CreateFunctionRequest into the
+// store shape: buildConfig.{runtime,entryPoint,source,environmentVariables} and
+// serviceConfig.{environmentVariables,availableMemory,timeoutSeconds}, with
+// top-level labels.
+func functionFromBodyV2(nr *model.NormalizedRequest, body map[string]any, location, id string) functionsstore.Function {
+	now := clock.Now().UTC()
+	bc := nestedMap(body, "buildConfig")
+	sc := nestedMap(body, "serviceConfig")
+	f := functionsstore.Function{
+		ID:                   id,
+		Location:             location,
+		Runtime:              bodyString(bc, "runtime"),
+		EntryPoint:           bodyString(bc, "entryPoint"),
+		EnvironmentVariables: bodyStringMap(bc, "environmentVariables"),
+		Status:               "ACTIVE",
+		CreateTime:           now,
+		UpdateTime:           now,
+		Labels:               bodyStringMap(body, "labels"),
+		AvailableMemoryMB:    256,
+		Timeout:              "60s",
+		Description:          bodyString(body, "description"),
+	}
+	if f.EnvironmentVariables == nil {
+		f.EnvironmentVariables = bodyStringMap(sc, "environmentVariables")
+	}
+	if mem := parseMemoryMB(bodyString(sc, "availableMemory")); mem > 0 {
+		f.AvailableMemoryMB = mem
+	}
+	if secs, ok := sc["timeoutSeconds"].(float64); ok && secs > 0 {
+		f.Timeout = fmt.Sprintf("%ds", int(secs))
+	}
+	if src := nestedMap(bc, "source"); src != nil {
+		if ss := nestedMap(src, "storageSource"); ss != nil {
+			bucket, object := bodyString(ss, "bucket"), bodyString(ss, "object")
+			if bucket != "" && object != "" {
+				f.SourceArchiveURL = "gs://" + bucket + "/" + object
+			}
+		}
+	}
+	if et := bodyEventTriggerV2(body); et != nil {
+		f.EventTrigger = et
+	} else {
+		f.HttpsTriggerURL = defaultHttpsTriggerURL(nr.AccountID, location, id)
+	}
+	return f
+}
+
+// bodyEventTriggerV2 maps the Cloud Functions v2 EventTrigger shape
+// ({eventType, pubsubTopic, serviceAccountEmail, ...}) into the store trigger.
+func bodyEventTriggerV2(body map[string]any) *functionsstore.EventTrigger {
+	et := nestedMap(body, "eventTrigger")
+	if et == nil {
+		return nil
+	}
+	return &functionsstore.EventTrigger{
+		EventType: stringOf(et["eventType"]),
+		Resource:  stringOf(et["pubsubTopic"]),
+		Service:   stringOf(et["serviceAccountEmail"]),
+	}
 }
 
 // functionToMap renders a store Function as a CloudFunction wire map.
@@ -257,6 +331,161 @@ func functionToMap(nr *model.NormalizedRequest, f functionsstore.Function) map[s
 	return out
 }
 
+// apiVersion returns the API version carried by the decoded request. v1 is the
+// default for every path that did not come from the /v2 Cloud Functions surface.
+func apiVersion(nr *model.NormalizedRequest) string {
+	if v, _ := nr.Params["apiVersion"].(string); v == "v2" {
+		return "v2"
+	}
+	return "v1"
+}
+
+func isV2(nr *model.NormalizedRequest) bool { return apiVersion(nr) == "v2" }
+
+// hasRuntime reports whether the request body carries a runtime under the
+// version-appropriate location (top-level for v1, buildConfig for v2).
+func hasRuntime(nr *model.NormalizedRequest, body map[string]any) bool {
+	if isV2(nr) {
+		return bodyString(nestedMap(body, "buildConfig"), "runtime") != ""
+	}
+	return bodyString(body, "runtime") != ""
+}
+
+// renderFunction serializes a stored Function in the wire shape matching the
+// request's API version.
+func renderFunction(nr *model.NormalizedRequest, f functionsstore.Function) map[string]any {
+	if isV2(nr) {
+		return functionToMapV2(nr, f)
+	}
+	return functionToMap(nr, f)
+}
+
+// nestedMap returns body[key] as a map, or nil when absent/malformed.
+func nestedMap(body map[string]any, key string) map[string]any {
+	if body == nil {
+		return nil
+	}
+	m, _ := body[key].(map[string]any)
+	return m
+}
+
+// parseMemoryMB parses a Cloud Functions v2 memory string ("256M", "1G",
+// "512Mi") into megabytes. Unknown forms return 0.
+func parseMemoryMB(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	mult := 1
+	switch {
+	case strings.HasSuffix(s, "Gi"):
+		mult, s = 1024, strings.TrimSuffix(s, "Gi")
+	case strings.HasSuffix(s, "Mi"):
+		s = strings.TrimSuffix(s, "Mi")
+	case strings.HasSuffix(s, "G"):
+		mult, s = 1024, strings.TrimSuffix(s, "G")
+	case strings.HasSuffix(s, "M"):
+		s = strings.TrimSuffix(s, "M")
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n * mult
+}
+
+// timeoutSeconds parses a duration string ("60s") into whole seconds. A
+// non-positive or unparsable value returns 0.
+func timeoutSeconds(s string) int {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return int(d.Seconds())
+}
+
+// functionSourceV2 renders the v2 BuildConfig.source oneof from the stored
+// source archive reference. A gs:// archive becomes a storageSource; anything
+// else yields nil (the field is omitted).
+func functionSourceV2(f functionsstore.Function) map[string]any {
+	ref := f.SourceArchiveURL
+	if !strings.HasPrefix(ref, "gs://") {
+		return nil
+	}
+	rest := strings.TrimPrefix(ref, "gs://")
+	i := strings.IndexByte(rest, '/')
+	if i <= 0 || i >= len(rest)-1 {
+		return nil
+	}
+	return map[string]any{
+		"storageSource": map[string]any{
+			"bucket": rest[:i],
+			"object": rest[i+1:],
+		},
+	}
+}
+
+// functionToMapV2 renders a store Function in the Cloud Functions v2 wire
+// shape: state, buildConfig (runtime/entryPoint/source), serviceConfig (uri),
+// and the shared metadata. functionToMap (v1) is deliberately left unchanged.
+func functionToMapV2(nr *model.NormalizedRequest, f functionsstore.Function) map[string]any {
+	out := map[string]any{
+		"name":  nr.ResourceID("cloud-function", f.Location+"/"+f.ID),
+		"state": f.Status,
+	}
+	if !f.CreateTime.IsZero() {
+		out["createTime"] = f.CreateTime.Format(time.RFC3339Nano)
+	}
+	if !f.UpdateTime.IsZero() {
+		out["updateTime"] = f.UpdateTime.Format(time.RFC3339Nano)
+	}
+	build := map[string]any{}
+	if f.Runtime != "" {
+		build["runtime"] = f.Runtime
+	}
+	if f.EntryPoint != "" {
+		build["entryPoint"] = f.EntryPoint
+	}
+	if src := functionSourceV2(f); src != nil {
+		build["source"] = src
+	}
+	if f.EnvironmentVariables != nil {
+		build["environmentVariables"] = f.EnvironmentVariables
+	}
+	if len(build) > 0 {
+		out["buildConfig"] = build
+	}
+	svc := map[string]any{}
+	if f.HttpsTriggerURL != "" {
+		svc["uri"] = f.HttpsTriggerURL
+	}
+	if f.EnvironmentVariables != nil {
+		svc["environmentVariables"] = f.EnvironmentVariables
+	}
+	if f.AvailableMemoryMB > 0 {
+		svc["availableMemory"] = fmt.Sprintf("%dM", f.AvailableMemoryMB)
+	}
+	if secs := timeoutSeconds(f.Timeout); secs > 0 {
+		svc["timeoutSeconds"] = secs
+	}
+	if len(svc) > 0 {
+		out["serviceConfig"] = svc
+	}
+	if f.Labels != nil {
+		out["labels"] = f.Labels
+	}
+	if f.Description != "" {
+		out["description"] = f.Description
+	}
+	if f.EventTrigger != nil {
+		out["eventTrigger"] = map[string]any{
+			"eventType":   f.EventTrigger.EventType,
+			"pubsubTopic": f.EventTrigger.Resource,
+		}
+	}
+	return out
+}
+
 func mapErr(err error) error {
 	if errors.Is(err, functionsstore.ErrNoSuchFunction) {
 		return model.NewProviderError("NotFound", "function not found", 404)
@@ -272,16 +501,20 @@ func mapErr(err error) error {
 // create/update and an empty object for delete, matching real Cloud Functions v1.
 func functionOperation(nr *model.NormalizedRequest, location, verb, target string, response map[string]any) map[string]any {
 	now := clock.Now().UTC()
+	metadataType := operationMetadataType
+	if isV2(nr) {
+		metadataType = operationMetadataTypeV2
+	}
 	return map[string]any{
 		"name": nr.ResourceID("cloud-function-operation", location+"/"+uuid.New().String()),
 		"metadata": map[string]any{
-			"@type":         operationMetadataType,
+			"@type":         metadataType,
 			"createTime":    now.Format(time.RFC3339Nano),
 			"endTime":       now.Format(time.RFC3339Nano),
 			"target":        target,
 			"verb":          verb,
 			"operationType": strings.ToUpper(verb) + "_FUNCTION",
-			"apiVersion":    "v1",
+			"apiVersion":    apiVersion(nr),
 		},
 		"done":     true,
 		"response": response,
@@ -348,6 +581,20 @@ var functionUpdateFields = map[string]string{
 	"available_memory_mb":   "availableMemoryMb",
 	"eventtrigger":          "eventTrigger",
 	"event_trigger":         "eventTrigger",
+	// Cloud Functions v2 nests the mutable fields under buildConfig and
+	// serviceConfig; accept those mask paths so v2 clients can PATCH them.
+	"buildconfig.runtime":                 "runtime",
+	"buildconfig.entrypoint":              "entryPoint",
+	"buildconfig.entry_point":             "entryPoint",
+	"buildconfig.environmentvariables":    "environmentVariables",
+	"buildconfig.environment_variables":   "environmentVariables",
+	"buildconfig.source":                  "source",
+	"serviceconfig.environmentvariables":  "environmentVariables",
+	"serviceconfig.environment_variables": "environmentVariables",
+	"serviceconfig.availablememory":       "availableMemoryMb",
+	"serviceconfig.available_memory":      "availableMemoryMb",
+	"serviceconfig.timeoutseconds":        "timeout",
+	"serviceconfig.timeout_seconds":       "timeout",
 }
 
 // canonicalMaskField normalizes an updateMask path to its canonical field name.
@@ -446,6 +693,87 @@ func applyFunctionUpdate(f *functionsstore.Function, body map[string]any, mask s
 	return nil
 }
 
+// applyFunctionUpdateV2 merges a Cloud Functions v2 PATCH body (nested under
+// buildConfig/serviceConfig) into f. Mask semantics match applyFunctionUpdate:
+// a non-empty mask names the paths to overlay; an empty mask overlays every
+// mutable field present. Unsupported mask paths fail loud with Unimplemented.
+func applyFunctionUpdateV2(f *functionsstore.Function, body map[string]any, mask string) error {
+	masked := splitMask(mask)
+	for _, m := range masked {
+		if _, ok := canonicalMaskField(m); !ok {
+			return model.NewProviderError("Unimplemented", "unsupported updateMask field "+m, 501)
+		}
+	}
+	apply := func(field string) bool {
+		if len(masked) == 0 {
+			return true
+		}
+		for _, m := range masked {
+			if c, ok := canonicalMaskField(m); ok && c == field {
+				return true
+			}
+		}
+		return false
+	}
+	bc := nestedMap(body, "buildConfig")
+	sc := nestedMap(body, "serviceConfig")
+	if apply("runtime") {
+		if v := bodyString(bc, "runtime"); v != "" {
+			f.Runtime = v
+		}
+	}
+	if apply("entryPoint") {
+		if v := bodyString(bc, "entryPoint"); v != "" {
+			f.EntryPoint = v
+		}
+	}
+	if apply("environmentVariables") {
+		env := bodyStringMap(bc, "environmentVariables")
+		if env == nil {
+			env = bodyStringMap(sc, "environmentVariables")
+		}
+		if env != nil {
+			f.EnvironmentVariables = env
+		}
+	}
+	if apply("labels") {
+		if labels := bodyStringMap(body, "labels"); labels != nil {
+			f.Labels = labels
+		}
+	}
+	if apply("description") {
+		if v := bodyString(body, "description"); v != "" {
+			f.Description = v
+		}
+	}
+	if apply("availableMemoryMb") {
+		if mem := parseMemoryMB(bodyString(sc, "availableMemory")); mem > 0 {
+			f.AvailableMemoryMB = mem
+		}
+	}
+	if apply("timeout") {
+		if secs, ok := sc["timeoutSeconds"].(float64); ok && secs > 0 {
+			f.Timeout = fmt.Sprintf("%ds", int(secs))
+		}
+	}
+	if apply("source") {
+		if src := nestedMap(bc, "source"); src != nil {
+			if ss := nestedMap(src, "storageSource"); ss != nil {
+				bucket, object := bodyString(ss, "bucket"), bodyString(ss, "object")
+				if bucket != "" && object != "" {
+					f.SourceArchiveURL = "gs://" + bucket + "/" + object
+				}
+			}
+		}
+	}
+	if apply("eventTrigger") {
+		if et := bodyEventTriggerV2(body); et != nil {
+			f.EventTrigger = et
+		}
+	}
+	return nil
+}
+
 func (p *Provider) CreateFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	location := strParam(nr, "location")
 	if location == "" {
@@ -462,7 +790,7 @@ func (p *Provider) CreateFunction(ctx context.Context, nr *model.NormalizedReque
 	if id == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing functionId", 400)
 	}
-	if bodyString(body, "runtime") == "" {
+	if !hasRuntime(nr, body) {
 		return nil, model.NewProviderError("InvalidArgument", "missing runtime", 400)
 	}
 	f := functionFromBody(nr, body, location, id)
@@ -473,7 +801,7 @@ func (p *Provider) CreateFunction(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	return provider.OK(functionOperation(nr, location, "create",
-		nr.ResourceID("cloud-function", location+"/"+id), functionToMap(nr, f))), nil
+		nr.ResourceID("cloud-function", location+"/"+id), renderFunction(nr, f))), nil
 }
 
 func (p *Provider) GetFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -489,7 +817,7 @@ func (p *Provider) GetFunction(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(functionToMap(nr, f)), nil
+	return provider.OK(renderFunction(nr, f)), nil
 }
 
 func (p *Provider) ListFunctions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -511,7 +839,7 @@ func (p *Provider) ListFunctions(ctx context.Context, nr *model.NormalizedReques
 	page, next := paging.Page(fns, func(f functionsstore.Function) string { return f.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, f := range page {
-		items = append(items, functionToMap(nr, f))
+		items = append(items, renderFunction(nr, f))
 	}
 	resp := map[string]any{"functions": items}
 	if next != "" {
@@ -536,8 +864,14 @@ func (p *Provider) UpdateFunction(ctx context.Context, nr *model.NormalizedReque
 		mask = strParam(nr, "update_mask")
 	}
 	f, err := p.functions.UpdateFunctionAtomic(ctx, nr.AccountID, location, id, func(f functionsstore.Function) (functionsstore.Function, error) {
-		if err := applyFunctionUpdate(&f, body, mask); err != nil {
-			return functionsstore.Function{}, err
+		var uerr error
+		if isV2(nr) {
+			uerr = applyFunctionUpdateV2(&f, body, mask)
+		} else {
+			uerr = applyFunctionUpdate(&f, body, mask)
+		}
+		if uerr != nil {
+			return functionsstore.Function{}, uerr
 		}
 		f.UpdateTime = clock.Now().UTC()
 		return f, nil
@@ -546,7 +880,7 @@ func (p *Provider) UpdateFunction(ctx context.Context, nr *model.NormalizedReque
 		return nil, mapErr(err)
 	}
 	return provider.OK(functionOperation(nr, location, "update",
-		nr.ResourceID("cloud-function", location+"/"+id), functionToMap(nr, f))), nil
+		nr.ResourceID("cloud-function", location+"/"+id), renderFunction(nr, f))), nil
 }
 
 func (p *Provider) DeleteFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -735,4 +1069,96 @@ func (p *Provider) FunctionTestIamPermissions(ctx context.Context, nr *model.Nor
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
+}
+
+// operationID extracts the operation ID from a relative or full operation name
+// ("locations/{l}/operations/{id}" or "projects/{p}/.../operations/{id}").
+func operationID(name string) string {
+	if i := strings.Index(name, "/operations/"); i >= 0 {
+		return name[i+len("/operations/"):]
+	}
+	return strings.TrimPrefix(name, "operations/")
+}
+
+// parseOperationResourceName validates an operation name and returns its
+// location and id. Both the full and relative forms are accepted.
+func parseOperationResourceName(name string) (location, id string, err error) {
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		switch parts[i] {
+		case "locations":
+			location = parts[i+1]
+		case "operations":
+			id = parts[i+1]
+		}
+	}
+	if location == "" || id == "" {
+		return "", "", model.NewProviderError("InvalidArgument",
+			"malformed operation resource name "+name, 400)
+	}
+	return location, id, nil
+}
+
+// GetOperation serves the Cloud Functions v2 long-running operations surface.
+// Function mutations complete synchronously and are returned inline (done:
+// true), so there is no persisted operation to look up; a done Operation is
+// synthesized for the requested name. A polling client never reaches this for
+// the mutations above because it already saw done:true.
+func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	location, id, err := parseOperationResourceName(name)
+	if err != nil {
+		return nil, err
+	}
+	now := clock.Now().UTC()
+	metadataType := operationMetadataType
+	if isV2(nr) {
+		metadataType = operationMetadataTypeV2
+	}
+	return provider.OK(map[string]any{
+		"name": nr.ResourceID("cloud-function-operation", location+"/"+id),
+		"metadata": map[string]any{
+			"@type":      metadataType,
+			"apiVersion": apiVersion(nr),
+		},
+		"done":       true,
+		"response":   map[string]any{},
+		"createTime": now.Format(time.RFC3339Nano),
+		"updateTime": now.Format(time.RFC3339Nano),
+	}), nil
+}
+
+// ListOperations lists the long-running operations for a location. Function
+// mutations are synchronous and not persisted, so the set is always empty.
+func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return provider.OK(map[string]any{"operations": []any{}}), nil
+}
+
+// CancelOperation cancels a long-running operation. Mutations are already
+// done:true, so cancellation is a no-op returning google.protobuf.Empty.
+func (p *Provider) CancelOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := parseOperationResourceName(name); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// DeleteOperation deletes a long-running operation. Nothing is persisted, so
+// this returns google.protobuf.Empty.
+func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := parseOperationResourceName(name); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }

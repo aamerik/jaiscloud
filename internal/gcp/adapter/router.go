@@ -43,6 +43,13 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			return svc, SourcePath
 		}
 	}
+	// Cloud Functions v2 only. Resolved before the raw-media fallback for the
+	// same reason as /v1/... above.
+	if strings.HasPrefix(p, "/v2/") {
+		if svc := detectV2Service(r.URL.EscapedPath()); svc != "" {
+			return svc, SourcePath
+		}
+	}
 	// GCS media downloads use the "raw" URL form /{bucket}/{object} (no JSON-API
 	// prefix). The storage client derives this base from the emulator endpoint.
 	// Recognise it as a storage media request when no other service prefix
@@ -172,6 +179,55 @@ func detectV1Service(path string) string {
 		return "workflowexecutions"
 	case "triggers", "channels", "providers":
 		return "eventarc"
+	}
+	return ""
+}
+
+// detectV2Service maps a /v2/projects/{project}/locations/{location}/... path
+// to a service name. Cloud Functions v2 is the only emulated service that
+// claims the /v2/projects/{project}/locations/... namespace: BigQuery uses
+// /bigquery/v2/projects/..., and every other location-scoped service uses the
+// shared /v1/ prefix. The functions and operations resource types are
+// unambiguous here, and the version segment means the shared
+// locations/{location}/operations/{id} path no longer collides with Workflows'
+// /v1 LRO surface.
+func detectV2Service(path string) string {
+	// SDK test clients may yield a leading "//"; collapse it as DetectService does.
+	path = "/" + strings.TrimLeft(path, "/")
+	if !strings.HasPrefix(path, "/v2/projects/") {
+		return ""
+	}
+	seg := splitEscaped(path)
+	pi := -1
+	for i, s := range seg {
+		if s == "projects" {
+			pi = i
+			break
+		}
+	}
+	if pi < 0 || pi+2 >= len(seg) {
+		return ""
+	}
+	rest := seg[pi+2:]
+	// Strip a trailing custom-method suffix (":cancel") from the last segment
+	// so it does not hide the resource type.
+	if len(rest) > 0 {
+		last := rest[len(rest)-1]
+		if i := strings.IndexByte(last, ':'); i >= 0 {
+			rest[len(rest)-1] = last[:i]
+		}
+	}
+	if len(rest) < 1 || rest[0] != "locations" {
+		return ""
+	}
+	// locations and locations/{location} are the shared google.cloud.location
+	// discovery paths; no other emulated service claims the /v2 namespace.
+	if len(rest) <= 2 {
+		return "functions"
+	}
+	switch rest[2] {
+	case "functions", "operations":
+		return "functions"
 	}
 	return ""
 }

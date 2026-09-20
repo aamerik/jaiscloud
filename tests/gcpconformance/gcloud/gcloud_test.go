@@ -51,6 +51,12 @@ func TestGcloudCLIConformance(t *testing.T) {
 	env := mergeEnv(os.Environ(), BuildEnv(endpoint, project, cfgDir, "dummy"))
 	runner := &Runner{Gcloud: bin, Env: env}
 
+	// Seed a Cloud Functions v2 function directly (gcloud functions deploy
+	// cannot reach the emulator yet), so functions list/describe have data.
+	if err := seedFunctionV2(endpoint, project, fx.sid+"-fn"); err != nil {
+		t.Fatalf("seed v2 function: %v", err)
+	}
+
 	version := gcloudVersion(bin, env)
 	t.Logf("gcloud: %s", version)
 	t.Logf("endpoint: %s  project: %s  run-id: %s", endpoint, project, fx.sid)
@@ -223,6 +229,31 @@ func mergeEnv(base, overrides []string) []string {
 		}
 	}
 	return append(out, overrides...)
+}
+
+// seedFunctionV2 creates a function through the emulator's Cloud Functions v2
+// REST API so the gcloud list/describe commands have a fixture. The emulator
+// accepts any bearer token (the suite does not need a real credential).
+func seedFunctionV2(endpoint, project, id string) error {
+	url := strings.TrimRight(endpoint, "/") +
+		"/v2/projects/" + project + "/locations/us-central1/functions?functionId=" + id
+	body := `{"buildConfig":{"runtime":"nodejs20","entryPoint":"helloWorld"}}`
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer dummy")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("seed function %s: HTTP %d", id, resp.StatusCode)
+	}
+	return nil
 }
 
 func envOr(key, def string) string {
