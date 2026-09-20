@@ -111,18 +111,48 @@ func TestReplay(t *testing.T) {
 	}
 
 	scenarios := Scenarios(emulatorProject, suffix)
-	if len(scenarios) != len(exs) {
-		t.Fatalf("scenario/golden mismatch: %d scenarios vs %d goldens (regenerate goldens?)", len(scenarios), len(exs))
+
+	// Match goldens to scenarios by (Service, Op) rather than by position. The
+	// golden filename embeds an index that shifts whenever the curated list
+	// grows, and the list is expected to grow ahead of the next real-GCP
+	// recording, so positional matching would fail spuriously. Scenarios with
+	// no committed golden are "pending recording" and skipped; a golden with no
+	// scenario is an orphan (a stale file or a dropped scenario) and is fatal,
+	// preserving the orphan-detection the positional count used to provide.
+	matched, pending, orphans, duplicates := matchScenariosToGoldens(scenarios, exs)
+	if len(duplicates) > 0 {
+		t.Fatalf("scenario/golden (Service, Op) collision: %v", duplicates)
+	}
+	if len(orphans) > 0 {
+		t.Fatalf("orphan golden(s) with no scenario: %v (delete the stale golden file(s) or restore the scenario)", orphans)
+	}
+	for _, p := range pending {
+		t.Logf("pending recording: %s", p)
 	}
 
-	actual, err := target.Run(scenarios)
+	// Run only the scenarios that have a golden. Pending scenarios are skipped
+	// so the offline gate stays green until the user records them.
+	runScenarios := make([]Scenario, 0, len(matched))
+	for _, m := range matched {
+		runScenarios = append(runScenarios, m.Scenario)
+	}
+	actual, err := target.Run(runScenarios)
 	if err != nil {
 		t.Fatalf("replay against emulator: %v", err)
 	}
+	actualByKey := make(map[string]Exchange, len(actual))
+	for _, ex := range actual {
+		actualByKey[scenarioKey(ex.Service, ex.Op)] = ex
+	}
 
 	var divs []Divergence
-	for i := range exs {
-		divs = append(divs, DiffExchanges(exs[i], actual[i])...)
+	for _, m := range matched {
+		a, ok := actualByKey[scenarioKey(m.Scenario.Service, m.Scenario.Op)]
+		if !ok {
+			t.Errorf("replayed exchange missing for %s/%s", m.Scenario.Service, m.Scenario.Op)
+			continue
+		}
+		divs = append(divs, DiffExchanges(m.Golden, a)...)
 	}
 
 	rep := BuildReport(target.Name, emulatorProject, len(actual), divs)
@@ -130,8 +160,8 @@ func TestReplay(t *testing.T) {
 		t.Errorf("write report: %v", err)
 	}
 
-	t.Logf("replayed %d ops against emulator -> %d divergences (%d open, %d accepted)",
-		len(actual), rep.Total, rep.OpenCount, rep.AcceptedCount)
+	t.Logf("replayed %d recorded ops against emulator (%d pending recording) -> %d divergences (%d open, %d accepted)",
+		len(actual), len(pending), rep.Total, rep.OpenCount, rep.AcceptedCount)
 	t.Logf("open by severity (real bugs):")
 	for _, sev := range sortedKeys(rep.BySeverity, severityLess) {
 		t.Logf("  %-8s %d", sev, rep.BySeverity[sev])

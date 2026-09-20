@@ -82,7 +82,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 			ex.Response = norm.Bytes(respBody)
 		}
 		if reqBody != "" {
-			ex.Request = norm.Bytes([]byte(reqBody))
+			ex.Request = norm.RequestBytes([]byte(reqBody))
 		}
 		exs = append(exs, ex)
 

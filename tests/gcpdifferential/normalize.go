@@ -15,6 +15,19 @@ import (
 // the embedded generation so it is stable across runs.
 var objectIDGeneration = regexp.MustCompile(`^(<bucket>/.*)/[0-9]+$`)
 
+// opaqueHexID matches a scalar id that is entirely hexadecimal/decimal. Such
+// ids are server-generated and differ between real GCP and the emulator (e.g.
+// Cloud DNS managed-zone ids are decimal, change ids are hex in the emulator
+// and decimal on real GCP). They are folded to <id> — but ONLY in responses:
+// request bodies are produced by the harness and must never be rewritten.
+var opaqueHexID = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+
+// operationName matches a resolved google.longrunning Operation resource name
+// ("projects/<project>/locations/{location}/operations/{id}"). The id is
+// server-generated and random on both sides, so it is folded to <operation>.
+// It is applied to every string value; only this exact name shape matches.
+var operationName = regexp.MustCompile(`^projects/<project>/locations/([^/]+)/operations/[^/]+$`)
+
 // Normalizer rewrites captured JSON so goldens are stable across runs and
 // contain no project-specific secrets. It performs two passes:
 //
@@ -48,6 +61,14 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.Secret, "<secret>"},
 		{names.DS, "<dataset>"},
 		{names.Table, "<table>"},
+		// Cloud DNS run resources. The record-set name embeds the zone's DNS
+		// name, so it must be listed first to win the longest-match ordering
+		// (the sort below also enforces this).
+		{names.DNSRRSet, "<rrset>"},
+		{names.DNSName, "<dnsName>"},
+		{names.DNSZone, "<dnsZone>"},
+		// Cloud Workflows run resource.
+		{names.Workflow, "<workflow>"},
 		{"missing-" + suffix, "<missing>"},
 		{"missing_" + suffix, "<missing>"},
 		// Fallback: any residual occurrence of the run suffix.
@@ -70,9 +91,17 @@ func (n *Normalizer) substitute(s string) string {
 	return s
 }
 
-// Bytes normalizes a raw response/request body. Invalid JSON is treated as a
-// plain string (e.g. XML/HTML error pages) and only textually substituted.
-func (n *Normalizer) Bytes(b []byte) json.RawMessage {
+// Bytes normalizes a raw response body. Invalid JSON is treated as a plain
+// string (e.g. XML/HTML error pages) and only textually substituted. Response
+// semantics are used, which permits folding server-generated opaque ids.
+func (n *Normalizer) Bytes(b []byte) json.RawMessage { return n.normalize(b, false) }
+
+// RequestBytes normalizes a raw request body. Request bodies are produced by
+// this harness, so server-generated-id folding is disabled: an id-shaped
+// client value (e.g. BigQuery's "id":"1" row key) must survive verbatim.
+func (n *Normalizer) RequestBytes(b []byte) json.RawMessage { return n.normalize(b, true) }
+
+func (n *Normalizer) normalize(b []byte, request bool) json.RawMessage {
 	trimmed := bytes.TrimSpace(b)
 	if len(trimmed) == 0 {
 		return nil
@@ -87,7 +116,7 @@ func (n *Normalizer) Bytes(b []byte) json.RawMessage {
 		out, _ := json.Marshal(n.substitute(string(trimmed)))
 		return out
 	}
-	norm := n.Value("", v)
+	norm := n.value("", v, request)
 	out, err := marshalCompact(norm)
 	if err != nil {
 		return nil
@@ -142,16 +171,20 @@ var volatileStringKeys = map[string]string{
 	"creationTime":     "<time>",
 	"lastModifiedTime": "<time>",
 	"lastModified":     "<time>",
-	"nextPageToken":    "<nextPageToken>",
-	"requestId":        "<requestId>",
-	"md5Hash":          "<md5Hash>",
-	"crc32c":           "<crc32c>",
-	"sha256Hash":       "<sha256Hash>",
-	"ciphertext":       "<ciphertext>",
-	"ackId":            "<ackId>",
-	"messageId":        "<messageId>",
-	"jobId":            "<jobId>",
-	"temporaryHold":    "<temporaryHold>",
+	// Cloud Workflows assigns a per-revision identifier (e.g. "000001-a4d")
+	// that changes on every source update and differs between real GCP and
+	// the emulator.
+	"revisionId":    "<revisionId>",
+	"nextPageToken": "<nextPageToken>",
+	"requestId":     "<requestId>",
+	"md5Hash":       "<md5Hash>",
+	"crc32c":        "<crc32c>",
+	"sha256Hash":    "<sha256Hash>",
+	"ciphertext":    "<ciphertext>",
+	"ackId":         "<ackId>",
+	"messageId":     "<messageId>",
+	"jobId":         "<jobId>",
+	"temporaryHold": "<temporaryHold>",
 	// BigQuery job/query scheduling is wall-clock dependent.
 	"startTime":   "<time>",
 	"endTime":     "<time>",
@@ -183,6 +216,10 @@ var volatileObjectKeys = map[string]bool{
 // whole array (used for arrays of opaque, per-run identifiers).
 var volatileArrayKeys = map[string]any{
 	"messageIds": []any{"<messageId>"},
+	// Cloud DNS synthesizes a delegation set per managed zone whose names
+	// differ between real GCP and the emulator; the count is not part of
+	// this harness's contract, so the whole array folds to one placeholder.
+	"nameServers": []any{"<nameServer>"},
 }
 
 // sortArrayKeys are collection fields whose element order is unspecified. Their
@@ -201,6 +238,9 @@ var sortArrayKeys = map[string]bool{
 	"versions":         true,
 	"receivedMessages": true,
 	"rrsets":           true,
+	// Cloud DNS and Cloud Workflows list responses.
+	"managedZones": true,
+	"workflows":    true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -218,11 +258,19 @@ var scopedListPlaceholders = map[string]string{
 	"datasets":      "<dataset>",
 	"tables":        "<table>",
 	"versions":      "<secret>",
+	// Cloud DNS: a real managed zone carries the zone's auto-created NS/SOA
+	// records plus any user records, so the rrset list is scoped to the record
+	// this harness creates; the zone list is scoped to this run's zone.
+	"rrsets":       "<rrset>",
+	"managedZones": "<dnsZone>",
+	// Cloud Workflows: scoped to this run's workflow.
+	"workflows": "<workflow>",
 }
 
-// Value normalizes a decoded JSON value, rewriting volatile fields and sorting
-// unspecified-order collections.
-func (n *Normalizer) Value(key string, v any) any {
+// value normalizes a decoded JSON value, rewriting volatile fields and sorting
+// unspecified-order collections. request is true when the value came from a
+// harness-authored request body; it suppresses server-generated-id folding.
+func (n *Normalizer) value(key string, v any, request bool) any {
 	if ph, ok := volatileStringKeys[key]; ok {
 		return ph
 	}
@@ -237,7 +285,14 @@ func (n *Normalizer) Value(key string, v any) any {
 		s := n.substitute(t)
 		if key == "id" {
 			s = objectIDGeneration.ReplaceAllString(s, "$1/<generation>")
+			// Server-generated opaque ids (Cloud DNS zone/change ids) are
+			// folded, but only in responses: request bodies are harness-authored.
+			if !request && opaqueHexID.MatchString(s) {
+				return "<id>"
+			}
 		}
+		// Cloud Workflows long-running-operation names carry a random id.
+		s = operationName.ReplaceAllString(s, "projects/<project>/locations/$1/operations/<operation>")
 		if looksLikeTimestamp(s) {
 			return "<time>"
 		}
@@ -245,7 +300,7 @@ func (n *Normalizer) Value(key string, v any) any {
 	case []any:
 		out := make([]any, 0, len(t))
 		for _, e := range t {
-			out = append(out, n.Value(key, e))
+			out = append(out, n.value(key, e, request))
 		}
 		if ph := scopedListPlaceholders[key]; ph != "" {
 			kept := out[:0]
@@ -265,7 +320,7 @@ func (n *Normalizer) Value(key string, v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, e := range t {
-			out[k] = n.Value(k, e)
+			out[k] = n.value(k, e, request)
 		}
 		return out
 	default:
