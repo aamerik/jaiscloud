@@ -275,6 +275,13 @@ func TestSubscriptionStateActive(t *testing.T) {
 	if created.Data["state"] != "ACTIVE" {
 		t.Fatalf("create state = %v, want ACTIVE", created.Data["state"])
 	}
+	if created.Data["messageRetentionDuration"] != "604800s" {
+		t.Fatalf("messageRetentionDuration = %v, want 604800s", created.Data["messageRetentionDuration"])
+	}
+	ep, _ := created.Data["expirationPolicy"].(map[string]any)
+	if ep["ttl"] != "2678400s" {
+		t.Fatalf("expirationPolicy = %#v, want ttl 2678400s", created.Data["expirationPolicy"])
+	}
 
 	got, err := p.SubscriptionGet(ctx, newNR(map[string]any{"name": "subscriptions/state-sub"}))
 	if err != nil {

@@ -203,6 +203,17 @@ func defaultDatasetAccess() []any {
 	}
 }
 
+// withMaxTimeTravel adds the default maxTimeTravelHours (7 days) to a full
+// dataset representation unless the caller configured one. Real GCP only
+// surfaces this on datasets.get/update — not on datasets.insert, whose
+// response omits it — so this is applied by the get/update handlers.
+func withMaxTimeTravel(out map[string]any) map[string]any {
+	if _, ok := out["maxTimeTravelHours"]; !ok {
+		out["maxTimeTravelHours"] = "168"
+	}
+	return out
+}
+
 func (p *Provider) tableMap(projectID string, t bqstore.Table) map[string]any {
 	out := map[string]any{}
 	if len(t.Config) > 0 {
@@ -308,7 +319,7 @@ func (p *Provider) GetDataset(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(p.datasetMap(projectOf(nr), d)), nil
+	return provider.OK(withMaxTimeTravel(p.datasetMap(projectOf(nr), d))), nil
 }
 
 func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -356,7 +367,7 @@ func (p *Provider) UpdateDataset(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(p.datasetMap(projectOf(nr), d)), nil
+	return provider.OK(withMaxTimeTravel(p.datasetMap(projectOf(nr), d))), nil
 }
 
 func (p *Provider) DeleteDataset(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

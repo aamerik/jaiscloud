@@ -396,6 +396,18 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		// A freshly created subscription is immediately usable, i.e. ACTIVE.
 		"state": "ACTIVE",
 	}
+	// Real Pub/Sub defaults: retain undelivered messages for 7 days and expire
+	// an inactive subscription after 31 days. Explicit request values win.
+	if ret, _ := body["messageRetentionDuration"].(string); ret != "" {
+		meta["messageRetentionDuration"] = ret
+	} else {
+		meta["messageRetentionDuration"] = "604800s"
+	}
+	if ep, ok := body["expirationPolicy"].(map[string]any); ok {
+		meta["expirationPolicy"] = ep
+	} else {
+		meta["expirationPolicy"] = map[string]any{"ttl": "2678400s"}
+	}
 	if filter, _ := body["filter"].(string); filter != "" {
 		if _, err := pubsubfilter.Compile(filter); err != nil {
 			return nil, model.NewProviderError("InvalidArgument", "invalid subscription filter: "+err.Error(), 400)

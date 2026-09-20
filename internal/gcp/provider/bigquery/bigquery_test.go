@@ -881,3 +881,28 @@ func TestDatasetDefaultAccess(t *testing.T) {
 		t.Fatalf("explicit access overwritten: %#v", got2.Data["access"])
 	}
 }
+
+// TestDatasetMaxTimeTravelHours verifies datasets.get reports the default
+// 7-day maxTimeTravelHours while datasets.insert omits it (matching real GCP).
+func TestDatasetMaxTimeTravelHours(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	created, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "tt"},
+	}}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, ok := created.Data["maxTimeTravelHours"]; ok {
+		t.Fatalf("create must omit maxTimeTravelHours, got %#v", created.Data["maxTimeTravelHours"])
+	}
+
+	got, err := p.GetDataset(ctx, newNR(map[string]any{"datasetId": "tt"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Data["maxTimeTravelHours"] != "168" {
+		t.Fatalf("maxTimeTravelHours = %#v, want 168", got.Data["maxTimeTravelHours"])
+	}
+}

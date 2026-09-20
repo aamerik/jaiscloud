@@ -2177,3 +2177,61 @@ func TestSignedURLTamperedSignatureAccepted(t *testing.T) {
 		t.Fatalf("tampered signature must be accepted (200), got %v / %v", resp, err)
 	}
 }
+
+// TestBucketSoftDeletePolicy verifies the default 7-day soft-delete policy is
+// emitted with an effectiveTime, and that an explicit policy is preserved.
+func TestBucketSoftDeletePolicy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "sd-bkt"}
+	resp, err := p.BucketsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	sd, _ := resp.Data["softDeletePolicy"].(map[string]any)
+	if sd["retentionDurationSeconds"] != "604800" {
+		t.Fatalf("softDeletePolicy = %#v, want retentionDurationSeconds 604800", resp.Data["softDeletePolicy"])
+	}
+	if sd["effectiveTime"] == nil || sd["effectiveTime"] == "" {
+		t.Fatalf("softDeletePolicy missing effectiveTime: %#v", sd)
+	}
+
+	// An explicit policy wins over the default.
+	nr = bucketParams()
+	nr.Params["body"] = map[string]any{
+		"name":             "sd-bkt-explicit",
+		"softDeletePolicy": map[string]any{"retentionDurationSeconds": "3600"},
+	}
+	resp, err = p.BucketsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("insert explicit: %v", err)
+	}
+	sd, _ = resp.Data["softDeletePolicy"].(map[string]any)
+	if sd["retentionDurationSeconds"] != "3600" {
+		t.Fatalf("explicit softDeletePolicy overwritten: %#v", resp.Data["softDeletePolicy"])
+	}
+}
+
+// TestObjectFinalizedTimes verifies object responses carry timeFinalized and
+// timeStorageClassUpdated.
+func TestObjectFinalizedTimes(t *testing.T) {
+	now := clock.Now().UTC()
+	m := gcs.ObjectMeta{
+		Bucket:         "b",
+		Name:           "o",
+		Generation:     "1",
+		Metageneration: "1",
+		StorageClass:   "STANDARD",
+		TimeCreated:    now,
+		Updated:        now,
+	}
+	o := toMap(fromStoreObject(bucketParams(), m))
+	if o["timeFinalized"] == nil || o["timeFinalized"] == "" {
+		t.Fatalf("timeFinalized missing: %#v", o)
+	}
+	if o["timeStorageClassUpdated"] == nil || o["timeStorageClassUpdated"] == "" {
+		t.Fatalf("timeStorageClassUpdated missing: %#v", o)
+	}
+}
