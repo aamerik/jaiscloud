@@ -158,17 +158,12 @@ func commands(f fixtures) []Command {
 		{
 			Name: "secrets versions add", Service: "secrets",
 			Args:   []string{"secrets", "versions", "add", secret, "--data-file=" + f.tmp, "--format=json"},
-			Expect: ExpectFail,
-			Gap: "emulator AddVersion response omits the checksum.crc32c field, so gcloud " +
-				"exits 1 with 'payload data corruption may have occurred' even though the " +
-				"version is created and readable (verified by the following access command). " +
-				"Secret Manager data integrity requires the create response to echo the " +
-				"CRC32C of the payload.",
+			Expect: ExpectPass,
 		},
 		{
-			// Depends on the version created above (which gcloud reports as
-			// corrupt). If it returns the plaintext, the payload is intact and
-			// the corruption warning is purely the missing checksum field.
+			// Depends on the version created above. The payload must come back
+			// intact; AddVersion now echoes checksum.crc32c so gcloud's integrity
+			// check passes instead of warning about possible corruption.
 			Name: "secrets versions access", Service: "secrets",
 			Args:   []string{"secrets", "versions", "access", "latest", "--secret=" + secret},
 			Assert: contains(ConformanceText), Expect: ExpectPass,
@@ -198,12 +193,7 @@ func commands(f fixtures) []Command {
 		{
 			Name: "kms keys list", Service: "kms",
 			Args:   []string{"kms", "keys", "list", "--location=global", "--keyring=" + ring, "--format=json"},
-			Assert: contains(key), Expect: ExpectFail,
-			Gap: "emulator KMS CryptoKeyList parses the keyring parent " +
-				"(.../keyRings/{ring}) with parseCryptoKey, which needs five path " +
-				"segments; it returns empty loc/ring and the store lookup finds " +
-				"nothing, so the list is empty (exit 0). CryptoKeyGet returns the " +
-				"same key correctly, so the key exists and only the list is broken.",
+			Assert: contains(key), Expect: ExpectPass,
 		},
 
 		// ── Cloud DNS ────────────────────────────────────────────────────────

@@ -69,7 +69,11 @@ type versionMeta struct {
 	State       string `json:"state"`
 	CreateTime  string `json:"createTime"`
 	DestroyTime string `json:"destroyTime,omitempty"` // only when DESTROYED
-	Data        string `json:"data"`                  // base64 payload
+	Data        string `json:"data"`                  // base64 payload (encrypted at rest)
+	// Crc32c is the CRC32C-Castagnoli of the *plaintext* payload as a decimal
+	// string (google.protobuf.Int64Value encoding), surfaced as the version's
+	// checksum.crc32c. Not persisted here; computed from the plaintext.
+	Crc32c string `json:"-"`
 }
 
 // resourceName returns the "name" path param, or a 400 when absent.
@@ -425,6 +429,7 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 		State:      "ENABLED",
 		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
 		Data:       encryptedPayloadBase64,
+		Crc32c:     crc32cInt64(payloadBytes),
 	}
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: version, State: "ENABLED",
@@ -500,7 +505,9 @@ func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
-	return provider.OK(versionToMap(fromStoreVersion(nr, v))), nil
+	m := fromStoreVersion(nr, v)
+	m.Crc32c = p.versionChecksum(ctx, nr.AccountID, v)
+	return provider.OK(versionToMap(m)), nil
 }
 
 // resolveVersion resolves the "latest" version alias to the highest existing
@@ -565,7 +572,9 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 	if err := p.secrets.UpdateVersion(ctx, nr.AccountID, v); err != nil {
 		return nil, mapVersionErr(err)
 	}
-	return provider.OK(versionToMap(fromStoreVersion(nr, v))), nil
+	m := fromStoreVersion(nr, v)
+	m.Crc32c = p.versionChecksum(ctx, nr.AccountID, v)
+	return provider.OK(versionToMap(m)), nil
 }
 
 func (p *Provider) requireSecret(ctx context.Context, account, id string) error {
@@ -643,7 +652,41 @@ func crc32c(b64 string) string {
 	if err != nil {
 		return "0"
 	}
-	return strconv.FormatUint(uint64(crc32.Checksum(raw, crc32.MakeTable(crc32.Castagnoli))), 10)
+	return crc32cInt64(raw)
+}
+
+// crc32cInt64 returns the CRC32C-Castagnoli checksum of plaintext as a decimal
+// string (google.protobuf.Int64Value encoding). The version resource's
+// checksum.crc32c is the checksum of the *plaintext* payload, not the
+// envelope-encrypted bytes the store keeps.
+func crc32cInt64(plaintext []byte) string {
+	return strconv.FormatUint(uint64(crc32.Checksum(plaintext, crc32.MakeTable(crc32.Castagnoli))), 10)
+}
+
+// versionChecksum returns the checksum.crc32c of a stored version, i.e. the
+// CRC32C of its plaintext payload. The store keeps the payload
+// envelope-encrypted (Version.Data), so it is decrypted with the same key that
+// wrapped it before checksumming. The checksum is version metadata that real
+// Secret Manager persists, so a payload that cannot be read back (an empty
+// auto-rotation version, or one whose CMEK is no longer usable) degrades to
+// the checksum of an empty payload rather than failing the metadata read.
+func (p *Provider) versionChecksum(ctx context.Context, account string, v secretmanagerstore.Version) string {
+	if v.Data == "" {
+		return crc32cInt64(nil)
+	}
+	encrypted, err := base64.StdEncoding.DecodeString(v.Data)
+	if err != nil {
+		return crc32cInt64(nil)
+	}
+	rawDEK, err := p.encryptor.Unwrap(ctx, account, v.KmsKeyName, v.WrappedDEK)
+	if err != nil {
+		return crc32cInt64(nil)
+	}
+	plaintext, err := kms.DecryptData(rawDEK, encrypted, nil)
+	if err != nil {
+		return crc32cInt64(nil)
+	}
+	return crc32cInt64(plaintext)
 }
 
 func secretToMap(m secretMeta) map[string]any {
@@ -677,6 +720,13 @@ func versionToMap(v versionMeta) map[string]any {
 		"name":       v.Name,
 		"state":      v.State,
 		"createTime": v.CreateTime,
+		// Every version resource carries its payload checksum; gcloud uses
+		// checksum.crc32c and clientSpecifiedPayloadChecksum together to decide
+		// whether the version it just created is trustworthy. Omitting either
+		// makes `secrets versions add` exit non-zero with a false data-
+		// corruption warning.
+		"checksum":                       map[string]any{"crc32c": v.Crc32c},
+		"clientSpecifiedPayloadChecksum": true,
 	}
 	if v.DestroyTime != "" {
 		out["destroyTime"] = v.DestroyTime
