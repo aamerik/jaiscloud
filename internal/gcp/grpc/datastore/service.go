@@ -491,10 +491,15 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 	if q != nil && len(q.GetKind()) > 0 {
 		kind = q.GetKind()[0].GetName()
 	}
+	offset, limit, err := queryWindow(q)
+	if err != nil {
+		return nil, mapError(err)
+	}
 	entities, err := s.store.ListKind(ctx, project, kind)
 	if err != nil {
 		return nil, mapError(err)
 	}
+	skipped := 0
 	for _, e := range entities {
 		if q != nil {
 			match, err := matchesFilter(e, q.GetFilter())
@@ -504,6 +509,20 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 			if !match {
 				continue
 			}
+		}
+		// Offset is applied after filtering: the skipped entities are counted
+		// in batch.SkippedResults so a cursor-based client can reconcile them.
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		// Limit caps the returned entities. The scan keeps going only far
+		// enough to learn whether a further match exists, so MoreResults can
+		// report MORE_RESULTS_AFTER_LIMIT (real Datastore's signal that a
+		// limit, not the data set, ended the batch).
+		if limit >= 0 && len(batch.EntityResults) == limit {
+			batch.MoreResults = datastorepb.QueryResultBatch_MORE_RESULTS_AFTER_LIMIT
+			break
 		}
 		// Internal approximation: real Datastore validates the query's read
 		// *range* at commit; the emulator records the version of every entity
@@ -515,7 +534,32 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 			Version: e.Version,
 		})
 	}
+	if skipped > 0 {
+		batch.SkippedResults = int32(skipped)
+	}
 	return &datastorepb.RunQueryResponse{Batch: batch}, nil
+}
+
+// queryWindow extracts a query's non-negative offset and limit. limit is -1
+// when the query carries no limit (unbounded). A negative offset or limit is
+// rejected with InvalidArgument, matching real Datastore rather than silently
+// treating it as unbounded.
+func queryWindow(q *datastorepb.Query) (offset, limit int, err error) {
+	limit = -1
+	if q == nil {
+		return 0, -1, nil
+	}
+	offset = int(q.GetOffset())
+	if offset < 0 {
+		return 0, 0, model.NewProviderError("InvalidArgument", "query offset must be non-negative", 400)
+	}
+	if q.GetLimit() != nil {
+		limit = int(q.GetLimit().GetValue())
+		if limit < 0 {
+			return 0, 0, model.NewProviderError("InvalidArgument", "query limit must be non-negative", 400)
+		}
+	}
+	return offset, limit, nil
 }
 
 // RunAggregationQuery implements the Datastore aggregation-query RPC over the
