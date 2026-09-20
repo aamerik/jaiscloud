@@ -88,7 +88,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-lakehouse-k3d-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-gcloud-conformance \
-        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix
+        gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -523,7 +523,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	@pkill -f "jaiscloud-gcp start" 2>/dev/null || true
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
-	go test -tags gcp_conformance ./tests/gcpconformance/
+	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
 
 record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
 	@echo "Building jaiscloud-gcp..."
@@ -565,10 +565,19 @@ test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs eph
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
 
-check-gcp-fidelity-matrix: ## Fail if the committed fidelity matrix is stale (regenerate + git diff)
+check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fidelity matrix is stale (regenerate + git diff)
 	$(MAKE) gen-gcp-fidelity-matrix
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
+
+# One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
+# The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
+# gcloud self-skips when it is not on PATH. Persistence/e2e are intentionally excluded.
+ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+	@echo ""
+	@echo "GA gate: offline + client conformance passed"
+	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"
+	@echo "  (persistence/e2e need Docker/Postgres/k8s: make test-e2e-gcp-persistence / test-e2e-lakehouse-k3d)"
 
 test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/persistent_mode/aws/iceberg/ (tag: iceberg_e2e)
 	$(MAKE) up-docker JAISCLOUD_EXECUTOR_MODE=mock

@@ -49,6 +49,12 @@ and the wire-conformance harness — so it can't drift from the code:
 Regenerate with `make gen-gcp-fidelity-matrix`; CI fails (`make check-gcp-fidelity-matrix`) if the
 committed matrix drifts.
 
+### GA readiness
+
+The published GA contract — what `ga` means here, the rollup, the CI gates, client
+compatibility, deploy artifacts, and the surfaces that are explicitly non-GA — is
+[`docs/GA.md`](docs/GA.md). The one-command aggregate gate is `make ga-check`.
+
 ---
 
 ## Quick Start
