@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func testServer(t *testing.T) (datastorepb.DatastoreClient, func()) {
@@ -529,6 +530,91 @@ func TestExplicitIDAdvancesAllocator(t *testing.T) {
 	got := resp.GetKeys()[0].GetPath()[0].GetId()
 	if got <= 100 {
 		t.Fatalf("allocated id = %d, want > 100", got)
+	}
+}
+
+// TestRunQueryLimitAndOffset verifies RunQuery honors a query's limit/offset
+// (the official client rejects a server that returns more than the requested
+// limit) and reports the skipped count and MoreResults.
+func TestRunQueryLimitAndOffset(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, name := range []string{"a", "b", "c"} {
+		if _, err := client.Commit(ctx, &datastorepb.CommitRequest{
+			ProjectId: "test",
+			Mutations: []*datastorepb.Mutation{{
+				Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", name), map[string]*datastorepb.Value{
+					"Group": strVal("g"),
+				})},
+			}},
+		}); err != nil {
+			t.Fatalf("put %s: %v", name, err)
+		}
+	}
+
+	filter := &datastorepb.Filter{FilterType: &datastorepb.Filter_PropertyFilter{PropertyFilter: &datastorepb.PropertyFilter{
+		Property: &datastorepb.PropertyReference{Name: "Group"},
+		Op:       datastorepb.PropertyFilter_EQUAL,
+		Value:    strVal("g"),
+	}}}
+	run := func(q *datastorepb.Query) *datastorepb.RunQueryResponse {
+		t.Helper()
+		resp, err := client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+			ProjectId: "test",
+			QueryType: &datastorepb.RunQueryRequest_Query{Query: q},
+		})
+		if err != nil {
+			t.Fatalf("runquery: %v", err)
+		}
+		return resp
+	}
+	names := func(resp *datastorepb.RunQueryResponse) []string {
+		var out []string
+		for _, e := range resp.GetBatch().GetEntityResults() {
+			out = append(out, e.GetEntity().GetKey().GetPath()[0].GetName())
+		}
+		return out
+	}
+
+	// Limit(1) caps the batch at one result and flags that a limit ended it.
+	limited := run(&datastorepb.Query{
+		Kind:   []*datastorepb.KindExpression{{Name: "Task"}},
+		Filter: filter,
+		Limit:  wrapperspb.Int32(1),
+	})
+	if got := names(limited); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("Limit(1) results = %v, want [a]", got)
+	}
+	if limited.GetBatch().GetMoreResults() != datastorepb.QueryResultBatch_MORE_RESULTS_AFTER_LIMIT {
+		t.Fatalf("MoreResults = %v, want MORE_RESULTS_AFTER_LIMIT", limited.GetBatch().GetMoreResults())
+	}
+
+	// Offset(1) skips one match and reports it in SkippedResults.
+	offset := run(&datastorepb.Query{
+		Kind:   []*datastorepb.KindExpression{{Name: "Task"}},
+		Filter: filter,
+		Offset: 1,
+		Limit:  wrapperspb.Int32(1),
+	})
+	if got := names(offset); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("Offset(1) results = %v, want [b]", got)
+	}
+	if offset.GetBatch().GetSkippedResults() != 1 {
+		t.Fatalf("SkippedResults = %d, want 1", offset.GetBatch().GetSkippedResults())
+	}
+
+	// A negative limit is rejected rather than treated as unbounded.
+	if _, err := client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+		ProjectId: "test",
+		QueryType: &datastorepb.RunQueryRequest_Query{Query: &datastorepb.Query{
+			Kind:   []*datastorepb.KindExpression{{Name: "Task"}},
+			Filter: filter,
+			Limit:  wrapperspb.Int32(-1),
+		}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("negative limit = %v, want InvalidArgument", err)
 	}
 }
 
