@@ -479,6 +479,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "Update"
 		case method == http.MethodDelete:
 			return "Delete"
+		case method == http.MethodGet && isSecretVersionsCollection(name):
+			return "ListVersions"
 		case method == http.MethodGet && strings.Contains(name, "/versions/"):
 			return "GetVersion"
 		case method == http.MethodGet:
@@ -675,6 +677,16 @@ func segmentAfter(segs []string, marker string) string {
 		}
 	}
 	return ""
+}
+
+// isSecretVersionsCollection reports whether name is a secret's versions
+// collection path ("secrets/{id}/versions"). It is distinct from a secret
+// literally named "versions" ("secrets/versions", two segments) and from a
+// single version ("secrets/{id}/versions/{v}", four segments), neither of which
+// is a versions list.
+func isSecretVersionsCollection(name string) bool {
+	parts := strings.Split(name, "/")
+	return len(parts) == 3 && parts[0] == "secrets" && parts[2] == "versions"
 }
 
 // segmentsAfterDocuments returns the number of path segments after the

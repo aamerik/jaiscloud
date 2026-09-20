@@ -79,6 +79,50 @@ func TestSecretRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSecretListVersions verifies the versions-collection route returns 200
+// with the created versions (regression: it was decoded as Secret.Get and
+// 404'd), and that a missing parent secret still 404s.
+func TestSecretListVersions(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "s"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := p.AddVersion(ctx, newNR(map[string]any{
+			"name": "secrets/s",
+			"body": map[string]any{"payload": map[string]any{"data": "aGVsbG8="}},
+		})); err != nil {
+			t.Fatalf("addVersion %d: %v", i, err)
+		}
+	}
+
+	resp, err := p.ListVersions(ctx, newNR(map[string]any{"name": "secrets/s/versions"}))
+	if err != nil {
+		t.Fatalf("listVersions: %v", err)
+	}
+	versions, _ := resp.Data["versions"].([]any)
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(versions))
+	}
+	if got := resp.Data["totalSize"]; got != 2 {
+		t.Errorf("totalSize = %v, want 2", got)
+	}
+	first, _ := versions[0].(map[string]any)
+	if first["name"] != "projects/proj/secrets/s/versions/1" {
+		t.Errorf("first version name = %v, want projects/proj/secrets/s/versions/1", first["name"])
+	}
+	if first["state"] != "ENABLED" {
+		t.Errorf("first version state = %v, want ENABLED", first["state"])
+	}
+
+	_, err = p.ListVersions(ctx, newNR(map[string]any{"name": "secrets/missing/versions"}))
+	if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 404 {
+		t.Fatalf("missing secret: err = %v, want 404 ProviderError", err)
+	}
+}
+
 // TestSecretVersionIntegrity verifies every version resource returns the only
 // integrity field the real SecretVersion carries: clientSpecifiedPayloadChecksum.
 // The Discovery schema and the v1 proto define no `checksum` property, so the

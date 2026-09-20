@@ -96,6 +96,50 @@ func TestDatasetCRUD(t *testing.T) {
 	}
 }
 
+// TestDeleteStatusCodes pins the delete contract: real BigQuery returns
+// 204 No Content with an empty body, not 200 with {}. The codec/framework
+// writes no body for a 204, so the provider response carries an empty map.
+func TestDeleteStatusCodes(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"datasetId": "d"},
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+	if _, err := p.CreateTable(ctx, newNR(map[string]any{
+		"datasetId": "d",
+		"body": map[string]any{
+			"tableReference": map[string]any{"datasetId": "d", "tableId": "t"},
+		},
+	})); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	tblResp, err := p.DeleteTable(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t"}))
+	if err != nil {
+		t.Fatalf("delete table: %v", err)
+	}
+	if tblResp.HTTPStatus != 204 {
+		t.Errorf("table delete status = %d, want 204", tblResp.HTTPStatus)
+	}
+	if len(tblResp.Data) != 0 {
+		t.Errorf("table delete body = %v, want empty", tblResp.Data)
+	}
+
+	dsResp, err := p.DeleteDataset(ctx, newNR(map[string]any{"datasetId": "d"}))
+	if err != nil {
+		t.Fatalf("delete dataset: %v", err)
+	}
+	if dsResp.HTTPStatus != 204 {
+		t.Errorf("dataset delete status = %d, want 204", dsResp.HTTPStatus)
+	}
+	if len(dsResp.Data) != 0 {
+		t.Errorf("dataset delete body = %v, want empty", dsResp.Data)
+	}
+}
+
 // delayedGetDatasetStore wraps a bqstore.Store, delaying every GetDataset
 // call to widen a TOCTOU race window in tests. It only affects the pre-fix
 // code path (UpdateDataset calling a standalone GetDataset);
