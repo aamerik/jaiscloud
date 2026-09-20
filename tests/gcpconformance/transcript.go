@@ -18,6 +18,7 @@ type Entry struct {
 	Method  string          `json:"method"`
 	Path    string          `json:"path"`
 	Status  int             `json:"status"`
+	Request json.RawMessage `json:"request,omitempty"`
 	Body    json.RawMessage `json:"body,omitempty"`
 }
 
@@ -75,6 +76,24 @@ func ValidateTranscripts(docs map[string]*DiscoveryDoc, tr Transcript) []Diverge
 				})
 				continue
 			}
+			// Request-side: validate the captured request body against the
+			// method's declared request schema. Types and unknown fields are
+			// checked; `required` is not enforced (partial/PATCH bodies are
+			// legitimate, and the emulator is deliberately lenient).
+			if m.Request != nil && m.Request.Ref != "" && len(bytes.TrimSpace(e.Request)) > 0 {
+				if reqSchema, ok := doc.ResolveRef(m.Request.Ref); ok {
+					var rv any
+					if err := json.Unmarshal(e.Request, &rv); err == nil {
+						for _, d := range ValidateRequestValue(doc, reqSchema, rv, m.ID+".request") {
+							d.Service = e.Service
+							d.Method = m.ID
+							d.Path = ctx + " " + d.Path
+							divs = append(divs, d)
+						}
+					}
+				}
+			}
+
 			var schema *Schema
 			if m.Response != nil && m.Response.Ref != "" {
 				schema, _ = doc.ResolveRef(m.Response.Ref)
@@ -96,7 +115,7 @@ func ValidateTranscripts(docs map[string]*DiscoveryDoc, tr Transcript) []Diverge
 				})
 				continue
 			}
-			for _, d := range validateValue(doc, schema, v, m.ID) {
+			for _, d := range ValidateValue(doc, schema, v, m.ID) {
 				d.Service = e.Service
 				d.Method = m.ID
 				d.Path = ctx + " " + d.Path
@@ -159,6 +178,11 @@ func Record(jaiscloudHost string) (Transcript, error) {
 		}
 		if len(bytes.TrimSpace(respBody)) > 0 {
 			entry.Body = json.RawMessage(respBody)
+		}
+		// Only JSON request bodies map to a Discovery `request` schema; media
+		// uploads and other raw bodies are skipped.
+		if reqBody != "" && json.Valid([]byte(reqBody)) {
+			entry.Request = json.RawMessage(reqBody)
 		}
 		if len(sc.Save) > 0 {
 			var decoded any

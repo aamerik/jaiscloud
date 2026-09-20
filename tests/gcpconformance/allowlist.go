@@ -31,52 +31,39 @@ func (r AllowRule) matches(d Divergence) bool {
 	return false
 }
 
-// errorEnvelopeAllowlist records the real, API-specific variance in GCP's JSON
-// error envelope. Our validator enforces one canonical shape
-// ({code,message,status,errors[]}), but that shape is not universal:
+// errorEnvelopeAllowlist is intentionally EMPTY.
 //
-//   - Cloud Storage (legacy JSON API) returns errors[] with
-//     reason/domain/message but omits google.rpc "status".
-//   - Modern APIs (Pub/Sub, Secret Manager, KMS, IAM, Cloud DNS, BigQuery)
-//     return "status" (plus "details"/ErrorInfo) and omit the legacy errors[]
-//     array entirely.
+// The envelope rule used to demand BOTH the google.rpc "status" and the legacy
+// errors[] array, which flagged correct responses from legacy APIs (Cloud
+// Storage: errors[] without status) and modern ones (Pub/Sub, Secret Manager,
+// KMS, IAM, Cloud DNS, BigQuery: status without errors[]). ValidateErrorEnvelope
+// now models that per-generation variance directly — requiring code + message,
+// validating whichever of status/errors[] is present, and demanding at least
+// one of them — so no shape-variance finding needs suppressing.
 //
-// Demanding both components therefore flags correct responses. Only these two
-// "absent optional component" findings are allowed; anything else about the
-// envelope (wrong code, missing message, non-object error, malformed errors[])
-// is still reported and can gate CI.
-var errorEnvelopeAllowlist = []AllowRule{
-	{
-		Kind:     kindBadErrorEnvelope,
-		Path:     "error.status",
-		Services: []string{"storage"},
-		Reason:   "Cloud Storage JSON errors omit the google.rpc status field",
-	},
-	{
-		Kind: kindBadErrorEnvelope,
-		Path: "error.errors",
-		Services: []string{
-			"pubsub", "secretmanager", "kms", "iam", "clouddns", "bigquery",
-		},
-		Reason: "modern GCP APIs omit the legacy errors[] array (they carry status + details)",
-	},
-}
+// The mechanism is kept for genuinely-divergent cases: add a rule here WITH a
+// reason, rather than weakening the validator.
+var errorEnvelopeAllowlist = []AllowRule{}
 
-// allowRuleFor returns the first allow rule matching d, or nil.
-func allowRuleFor(d Divergence) *AllowRule {
-	for i := range errorEnvelopeAllowlist {
-		if errorEnvelopeAllowlist[i].matches(d) {
-			return &errorEnvelopeAllowlist[i]
+// allowRuleFor returns the first rule in rules matching d, or nil.
+func allowRuleFor(d Divergence, rules []AllowRule) *AllowRule {
+	for i := range rules {
+		if rules[i].matches(d) {
+			return &rules[i]
 		}
 	}
 	return nil
 }
 
-// ApplyAllowlist partitions divergences into those to keep and those suppressed
-// by a documented allow rule.
+// ApplyAllowlist partitions divergences using the package allowlist.
 func ApplyAllowlist(divs []Divergence) (kept, suppressed []Divergence) {
+	return applyAllowlist(divs, errorEnvelopeAllowlist)
+}
+
+// applyAllowlist partitions divergences using an explicit rule set (testable).
+func applyAllowlist(divs []Divergence, rules []AllowRule) (kept, suppressed []Divergence) {
 	for _, d := range divs {
-		if allowRuleFor(d) != nil {
+		if allowRuleFor(d, rules) != nil {
 			suppressed = append(suppressed, d)
 			continue
 		}
