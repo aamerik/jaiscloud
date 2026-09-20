@@ -406,6 +406,27 @@ jobs:
           GCP_EMULATOR_PROJECT: jaiscloud-project
         run: go test -tags gcloud_conformance -count=1 -v -timeout 600s ./tests/gcpconformance/gcloud/
 
+      # Python client-conformance: drives the official google-cloud-* Python
+      # clients against the same running emulator — a separate language/codegen
+      # path from the Go SDKs and gcloud.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python client-conformance deps
+        run: |
+          python -m venv tests/clients/python/.venv
+          tests/clients/python/.venv/bin/python -m pip install --upgrade pip
+          tests/clients/python/.venv/bin/pip install -r tests/clients/python/requirements.txt
+
+      - name: Run Python SDK client-conformance
+        env:
+          PROJECT_ID: jaiscloud-project
+          EMULATOR_REST: http://localhost:8080
+          EMULATOR_GRPC: localhost:8081
+        run: tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python
+
       - name: Check the fidelity matrix is up to date
         run: make check-gcp-fidelity-matrix
 
@@ -418,6 +439,7 @@ jobs:
             tests/gcpconformance/testdata/report/
             tests/gcpconformance/grpc/testdata/report/
             tests/gcpconformance/gcloud/testdata/report/
+            tests/clients/python/report/
 
       - name: Upload GCP server log (on failure)
         if: failure()
