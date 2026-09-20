@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **487**
+Cells: **488**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 200 |
+| ga | 201 |
 | limited | 247 |
 | preview | 37 |
 | unsupported | 3 |
@@ -21,7 +21,7 @@ Cells: **487**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 200 | 83 | 37 | 3 |
+| rest | 201 | 83 | 37 | 3 |
 | grpc | 0 | 164 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
@@ -555,7 +555,7 @@ _44 cell(s): ga=19 limited=25 preview=0 unsupported=0_
 
 ## secretmanager
 
-_31 cell(s): ga=14 limited=17 preview=0 unsupported=0_
+_32 cell(s): ga=15 limited=17 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -584,6 +584,7 @@ _31 cell(s): ga=14 limited=17 preview=0 unsupported=0_
 | Secret.GetIamPolicy | rest | ga | — |
 | Secret.GetVersion | rest | ga | — |
 | Secret.List | rest | ga | — |
+| Secret.ListVersions | rest | ga | — |
 | Secret.SetIamPolicy | rest | ga | — |
 | Secret.TestIamPermissions | rest | ga | — |
 | Secret.Update | rest | ga | — |
