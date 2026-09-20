@@ -290,15 +290,7 @@ func (s *Service) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.
 		})
 	}
 
-	encrypted, err := base64.StdEncoding.DecodeString(v.Data)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	rawDEK, err := s.encryptor.Unwrap(ctx, project, v.KmsKeyName, v.WrappedDEK)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	plain, err := kmsstore.DecryptData(rawDEK, encrypted, nil)
+	plain, err := s.decryptVersion(ctx, project, v)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -526,6 +518,9 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 	out := &secretmanagerpb.SecretVersion{
 		Name:  versionName(project, v.SecretID, v.VersionID),
 		State: stateToProto(v.State),
+		// Mirror the REST provider's versionToMap: real Secret Manager marks
+		// version responses as carrying a client-specified payload checksum.
+		ClientSpecifiedPayloadChecksum: true,
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamppb.New(v.CreateTime)
@@ -600,6 +595,21 @@ func kmsKeyNameFromSecret(sec *secretmanagerpb.Secret) string {
 // (google.protobuf.Int64Value encoding).
 func crc32cOf(data []byte) int64 {
 	return int64(crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)))
+}
+
+// decryptVersion decrypts a stored version's envelope-encrypted payload with
+// the same Unwrap/DecryptData path AccessSecretVersion uses. Version.Data is
+// base64-encoded ciphertext wrapped with the secret's CMEK.
+func (s *Service) decryptVersion(ctx context.Context, project string, v secretmanagerstore.Version) ([]byte, error) {
+	encrypted, err := base64.StdEncoding.DecodeString(v.Data)
+	if err != nil {
+		return nil, err
+	}
+	rawDEK, err := s.encryptor.Unwrap(ctx, project, v.KmsKeyName, v.WrappedDEK)
+	if err != nil {
+		return nil, err
+	}
+	return kmsstore.DecryptData(rawDEK, encrypted, nil)
 }
 
 func protoPolicyToBody(p *iampb.Policy) map[string]any {

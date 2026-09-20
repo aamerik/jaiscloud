@@ -116,6 +116,18 @@ func TestSecretManagerEndToEnd(t *testing.T) {
 	if addRes.GetState() != secretmanagerpb.SecretVersion_ENABLED {
 		t.Fatalf("AddSecretVersion state = %v, want ENABLED", addRes.GetState())
 	}
+	if !addRes.GetClientSpecifiedPayloadChecksum() {
+		t.Fatal("AddSecretVersion clientSpecifiedPayloadChecksum = false, want true")
+	}
+
+	// GetSecretVersion carries the same integrity flag.
+	gotVer, err := client.GetSecretVersion(ctx, &secretmanagerpb.GetSecretVersionRequest{Name: secret + "/versions/1"})
+	if err != nil {
+		t.Fatalf("GetSecretVersion: %v", err)
+	}
+	if !gotVer.GetClientSpecifiedPayloadChecksum() {
+		t.Fatal("GetSecretVersion clientSpecifiedPayloadChecksum = false, want true")
+	}
 
 	// Access decrypts the payload and returns a matching crc32c.
 	access, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: secret + "/versions/1"})
@@ -138,6 +150,9 @@ func TestSecretManagerEndToEnd(t *testing.T) {
 	if len(versions.GetVersions()) != 1 || versions.GetVersions()[0].GetName() != secret+"/versions/1" {
 		t.Fatalf("ListSecretVersions = %v, want exactly [versions/1]", versions.GetVersions())
 	}
+	if !versions.GetVersions()[0].GetClientSpecifiedPayloadChecksum() {
+		t.Fatal("ListSecretVersions clientSpecifiedPayloadChecksum = false, want true")
+	}
 
 	// Disable → Enable → Destroy lifecycle.
 	dis, err := client.DisableSecretVersion(ctx, &secretmanagerpb.DisableSecretVersionRequest{Name: secret + "/versions/1"})
@@ -146,6 +161,9 @@ func TestSecretManagerEndToEnd(t *testing.T) {
 	}
 	if dis.GetState() != secretmanagerpb.SecretVersion_DISABLED {
 		t.Fatalf("DisableSecretVersion state = %v, want DISABLED", dis.GetState())
+	}
+	if !dis.GetClientSpecifiedPayloadChecksum() {
+		t.Fatal("DisableSecretVersion clientSpecifiedPayloadChecksum = false, want true")
 	}
 	// A disabled version cannot be accessed.
 	if _, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: secret + "/versions/1"}); status.Code(err) != codes.FailedPrecondition {
