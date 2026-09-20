@@ -142,6 +142,163 @@ func TestFunctionCRUD(t *testing.T) {
 	}
 }
 
+// newNRv2 builds a v2 request (apiVersion=v2) with the standard project wiring.
+func newNRv2(params map[string]any) *model.NormalizedRequest {
+	nr := newNR(params)
+	nr.Params["apiVersion"] = "v2"
+	return nr
+}
+
+// TestFunctionCRUDv2 exercises the Cloud Functions v2 wire shape end to end:
+// create (v2 buildConfig body) → get/list emit state/buildConfig/serviceConfig,
+// and update merges nested buildConfig fields.
+func TestFunctionCRUDv2(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	create := newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "hello",
+		"body": map[string]any{
+			"buildConfig": map[string]any{
+				"runtime":              "nodejs20",
+				"entryPoint":           "helloWorld",
+				"environmentVariables": map[string]any{"K": "V"},
+				"source": map[string]any{
+					"storageSource": map[string]any{"bucket": "bkt", "object": "src.zip"},
+				},
+			},
+			"serviceConfig": map[string]any{"availableMemory": "512M", "timeoutSeconds": float64(120)},
+			"labels":        map[string]any{"env": "test"},
+		},
+	})
+	resp, err := p.CreateFunction(ctx, create)
+	if err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
+		t.Fatalf("create v2 metadata @type = %q, want %q", got, operationMetadataTypeV2)
+	}
+	fn, _ := resp.Data["response"].(map[string]any)
+	if fn["state"] != "ACTIVE" {
+		t.Errorf("state = %v, want ACTIVE", fn["state"])
+	}
+	if _, ok := fn["status"]; ok {
+		t.Errorf("v2 response must not carry v1 status: %v", fn["status"])
+	}
+	bc, _ := fn["buildConfig"].(map[string]any)
+	if bc["runtime"] != "nodejs20" || bc["entryPoint"] != "helloWorld" {
+		t.Errorf("unexpected buildConfig: %v", bc)
+	}
+	if src, _ := bc["source"].(map[string]any); src["storageSource"] == nil {
+		t.Errorf("expected buildConfig.source.storageSource, got %v", bc["source"])
+	}
+	sc, _ := fn["serviceConfig"].(map[string]any)
+	if sc["uri"] == "" || sc["availableMemory"] != "512M" || sc["timeoutSeconds"] != 120 {
+		t.Errorf("unexpected serviceConfig: %v", sc)
+	}
+
+	// Get emits v2.
+	resp, err = p.GetFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/hello",
+	}))
+	if err != nil {
+		t.Fatalf("get v2: %v", err)
+	}
+	if resp.Data["state"] != "ACTIVE" || resp.Data["buildConfig"] == nil || resp.Data["serviceConfig"] == nil {
+		t.Errorf("unexpected v2 get: %v", resp.Data)
+	}
+	if _, ok := resp.Data["status"]; ok {
+		t.Errorf("v2 get must not carry v1 status")
+	}
+
+	// List emits v2 and supports the all-locations wildcard.
+	resp, err = p.ListFunctions(ctx, newNRv2(map[string]any{"location": "-"}))
+	if err != nil {
+		t.Fatalf("list v2: %v", err)
+	}
+	fns, _ := resp.Data["functions"].([]any)
+	if len(fns) != 1 {
+		t.Fatalf("expected 1 v2 function, got %d", len(fns))
+	}
+	if m, _ := fns[0].(map[string]any); m["state"] != "ACTIVE" || m["buildConfig"] == nil {
+		t.Errorf("unexpected v2 list item: %v", fns[0])
+	}
+
+	// Update merges a nested buildConfig path via the v2 updateMask.
+	resp, err = p.UpdateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/hello",
+		"updateMask": "buildConfig.runtime",
+		"body":       map[string]any{"buildConfig": map[string]any{"runtime": "nodejs22"}},
+	}))
+	if err != nil {
+		t.Fatalf("update v2: %v", err)
+	}
+	upd, _ := resp.Data["response"].(map[string]any)
+	if bc, _ := upd["buildConfig"].(map[string]any); bc["runtime"] != "nodejs22" {
+		t.Errorf("v2 update runtime = %v, want nodejs22", upd["buildConfig"])
+	}
+
+	// Delete returns a v2-done operation.
+	resp, err = p.DeleteFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/hello",
+	}))
+	if err != nil {
+		t.Fatalf("delete v2: %v", err)
+	}
+	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
+		t.Errorf("delete v2 metadata @type = %q", got)
+	}
+}
+
+// TestOperationsV2 pins the v2 LRO surface: get returns a done v2 Operation,
+// list is empty, and cancel/delete return empty objects.
+func TestOperationsV2(t *testing.T) {
+	ctx := context.Background()
+	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+
+	resp, err := p.GetOperation(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/operations/op1",
+	}))
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Errorf("expected done operation, got %v", resp.Data)
+	}
+	if resp.Data["name"] != "projects/proj/locations/us-central1/operations/op1" {
+		t.Errorf("unexpected operation name: %v", resp.Data["name"])
+	}
+	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
+		t.Errorf("operation metadata @type = %q, want v2", got)
+	}
+
+	resp, err = p.ListOperations(ctx, newNRv2(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if ops, _ := resp.Data["operations"].([]any); len(ops) != 0 {
+		t.Errorf("expected no operations, got %v", ops)
+	}
+
+	if _, err := p.CancelOperation(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/operations/op1",
+	})); err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	if _, err := p.DeleteOperation(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/operations/op1",
+	})); err != nil {
+		t.Fatalf("delete operation: %v", err)
+	}
+
+	// A malformed operation name is rejected.
+	if _, err := p.GetOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": "bogus"})); err == nil {
+		t.Errorf("expected InvalidArgument for malformed operation name")
+	}
+}
+
 // delayedGetStore wraps a functionsstore.Store, delaying every GetFunction
 // call to widen a TOCTOU race window in tests.
 type delayedGetStore struct {

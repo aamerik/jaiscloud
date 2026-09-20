@@ -170,8 +170,10 @@ firestore,RunQuery,grpc,limited,gRPC verified against proto descriptors only (pe
 firestore,UpdateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 firestore,Write,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 functions,Function.CallFunction,rest,ga,
+functions,Function.CancelOperation,rest,limited,no matching Discovery method (unverified against the official schema)
 functions,Function.CreateFunction,rest,ga,
 functions,Function.DeleteFunction,rest,ga,
+functions,Function.DeleteOperation,rest,limited,no matching Discovery method (unverified against the official schema)
 functions,Function.FunctionGetIamPolicy,rest,ga,
 functions,Function.FunctionSetIamPolicy,rest,ga,
 functions,Function.FunctionTestIamPermissions,rest,ga,
@@ -179,8 +181,10 @@ functions,Function.GenerateDownloadUrl,rest,ga,
 functions,Function.GenerateUploadUrl,rest,ga,
 functions,Function.GetFunction,rest,ga,
 functions,Function.GetLocation,rest,limited,no matching Discovery method (unverified against the official schema)
+functions,Function.GetOperation,rest,ga,
 functions,Function.ListFunctions,rest,ga,
 functions,Function.ListLocations,rest,ga,
+functions,Function.ListOperations,rest,ga,
 functions,Function.UpdateFunction,rest,ga,
 iam,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 iam,IAM.ServiceAccountCreate,rest,ga,

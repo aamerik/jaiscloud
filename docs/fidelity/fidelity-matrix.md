@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **483**
+Cells: **487**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 198 |
-| limited | 245 |
+| ga | 200 |
+| limited | 247 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -21,7 +21,7 @@ Cells: **483**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 198 | 81 | 37 | 3 |
+| rest | 200 | 83 | 37 | 3 |
 | grpc | 0 | 164 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
@@ -254,13 +254,15 @@ _33 cell(s): ga=16 limited=17 preview=0 unsupported=0_
 
 ## functions
 
-_13 cell(s): ga=12 limited=1 preview=0 unsupported=0_
+_17 cell(s): ga=14 limited=3 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | Function.CallFunction | rest | ga | — |
+| Function.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
 | Function.CreateFunction | rest | ga | — |
 | Function.DeleteFunction | rest | ga | — |
+| Function.DeleteOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
 | Function.FunctionGetIamPolicy | rest | ga | — |
 | Function.FunctionSetIamPolicy | rest | ga | — |
 | Function.FunctionTestIamPermissions | rest | ga | — |
@@ -268,8 +270,10 @@ _13 cell(s): ga=12 limited=1 preview=0 unsupported=0_
 | Function.GenerateUploadUrl | rest | ga | — |
 | Function.GetFunction | rest | ga | — |
 | Function.GetLocation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Function.GetOperation | rest | ga | — |
 | Function.ListFunctions | rest | ga | — |
 | Function.ListLocations | rest | ga | — |
+| Function.ListOperations | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
 
 ## iam

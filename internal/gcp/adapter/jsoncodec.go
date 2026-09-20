@@ -40,6 +40,13 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 
 	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
+	// Carry the API version so the provider can emit the right resource shape
+	// (v1 status vs v2 state/buildConfig/serviceConfig). v1 stays the default.
+	apiVersion := "v1"
+	if len(seg) > 0 && seg[0] == "v2" {
+		apiVersion = "v2"
+	}
+	nr.Params["apiVersion"] = apiVersion
 	queryToParams(r, nr.Params)
 	m, err := parseJSON(body)
 	if err != nil {
@@ -124,7 +131,7 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 
 	isCollection := len(rest) > 0 && rest[len(rest)-1] == resourceType
 
-	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom)
+	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom, apiVersion)
 	if nr.Action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
@@ -265,8 +272,25 @@ func detectResourceType(segs []string) string {
 }
 
 // deriveAction maps (resourceType, isCollection, name, method, custom method)
-// to an action name.
-func deriveAction(resourceType string, isCollection bool, name, method, custom string) string {
+// to an action name. apiVersion is "v1" or "v2"; only the Cloud Functions v2
+// LRO surface differs between the two (its operation verbs are location-scoped
+// and unambiguous, unlike the shared /v1 operations path).
+func deriveAction(resourceType string, isCollection bool, name, method, custom, apiVersion string) string {
+	// Cloud Functions v2 long-running operations. These reuse the standard
+	// google.longrunning action names; the v1 path is untouched because its
+	// operations route through the shared Workflows surface.
+	if apiVersion == "v2" && resourceType == "operations" {
+		switch {
+		case custom == "cancel":
+			return "CancelOperation"
+		case isCollection && method == http.MethodGet:
+			return "ListOperations"
+		case method == http.MethodGet:
+			return "GetOperation"
+		case method == http.MethodDelete:
+			return "DeleteOperation"
+		}
+	}
 	if custom != "" {
 		switch resourceType {
 		case "topics":

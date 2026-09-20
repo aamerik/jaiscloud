@@ -175,3 +175,76 @@ func TestJSONCodecSubscriptionDetachRouting(t *testing.T) {
 		t.Fatalf("expected SubscriptionDetach, got %q", nr.Action)
 	}
 }
+
+// TestFunctionsV2Decode pins the Cloud Functions v2 path→action mapping and
+// that the API version is carried on the request (v1 stays the default).
+func TestFunctionsV2Decode(t *testing.T) {
+	c := &JSONCodec{Service: "functions"}
+	cases := []struct {
+		method, path, action string
+	}{
+		{"POST", "/v2/projects/p/locations/us-central1/functions", "CreateFunction"},
+		{"GET", "/v2/projects/p/locations/us-central1/functions", "ListFunctions"},
+		{"GET", "/v2/projects/p/locations/-/functions", "ListFunctions"},
+		{"GET", "/v2/projects/p/locations/us-central1/functions/f", "GetFunction"},
+		{"PATCH", "/v2/projects/p/locations/us-central1/functions/f", "UpdateFunction"},
+		{"DELETE", "/v2/projects/p/locations/us-central1/functions/f", "DeleteFunction"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions:generateUploadUrl", "GenerateUploadUrl"},
+		{"GET", "/v2/projects/p/locations/us-central1/operations", "ListOperations"},
+		{"GET", "/v2/projects/p/locations/us-central1/operations/op1", "GetOperation"},
+		{"POST", "/v2/projects/p/locations/us-central1/operations/op1:cancel", "CancelOperation"},
+		{"DELETE", "/v2/projects/p/locations/us-central1/operations/op1", "DeleteOperation"},
+		{"GET", "/v2/projects/p/locations", "ListLocations"},
+		{"GET", "/v2/projects/p/locations/us-central1", "GetLocation"},
+	}
+	for _, tc := range cases {
+		nr, err := c.Decode(httptest.NewRequest(tc.method, tc.path, nil), nil)
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+		if nr.Params["apiVersion"] != "v2" {
+			t.Errorf("%s %s: apiVersion = %v, want v2", tc.method, tc.path, nr.Params["apiVersion"])
+		}
+		if tc.path != "/v2/projects/p/locations" && nr.Params["location"] == nil {
+			t.Errorf("%s %s: missing location param", tc.method, tc.path)
+		}
+	}
+
+	// v1 defaults to apiVersion v1 and derives the v1 actions unchanged.
+	nr, err := c.Decode(httptest.NewRequest("GET", "/v1/projects/p/locations/us-central1/functions/f", nil), nil)
+	if err != nil {
+		t.Fatalf("v1 decode: %v", err)
+	}
+	if nr.Params["apiVersion"] != "v1" || nr.Action != "GetFunction" {
+		t.Fatalf("v1 decode: apiVersion=%v action=%q, want v1/GetFunction", nr.Params["apiVersion"], nr.Action)
+	}
+}
+
+func TestDetectV2Service(t *testing.T) {
+	cases := map[string]string{
+		"/v2/projects/p/locations/us-central1/functions":                   "functions",
+		"/v2/projects/p/locations/-/functions":                             "functions",
+		"/v2/projects/p/locations/us-central1/functions/f":                 "functions",
+		"/v2/projects/p/locations/us-central1/functions:generateUploadUrl": "functions",
+		"/v2/projects/p/locations/us-central1/operations":                  "functions",
+		"/v2/projects/p/locations/us-central1/operations/op1":              "functions",
+		"/v2/projects/p/locations/us-central1/operations/op1:cancel":       "functions",
+		"/v2/projects/p/locations":                                         "functions",
+		"/v2/projects/p/locations/us-central1":                             "functions",
+		"/v2/projects/p/other/x":                                           "",
+		"/v1/projects/p/locations/us-central1/functions/f":                 "",
+		"/storage/v1/b/bkt/o":                                              "",
+	}
+	for path, want := range cases {
+		if got := detectV2Service(path); got != want {
+			t.Errorf("detectV2Service(%q) = %q, want %q", path, got, want)
+		}
+	}
+	if got, _ := DetectService(httptest.NewRequest("GET", "/v2/projects/p/locations/-/functions", nil)); got != "functions" {
+		t.Errorf("DetectService(v2 functions) = %q, want functions", got)
+	}
+}
