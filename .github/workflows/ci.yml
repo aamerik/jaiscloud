@@ -345,7 +345,12 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Download modules
-        run: go mod download
+        run: |
+          go mod download
+          for mod in tests/gcpconformance/grpc/go.mod; do
+            [ -f "$mod" ] || continue
+            (cd "${mod%/go.mod}" && go mod download)
+          done
 
       - name: Build jaiscloud-gcp
         run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -374,6 +379,23 @@ jobs:
       - name: Validate responses against Discovery schemas (fails on high severity)
         run: go test -tags gcp_conformance -run TestTranscriptsConform -v ./tests/gcpconformance/
 
+      - name: Wait for gRPC listener
+        run: |
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null; then
+              echo "grpc listener accepting connections"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-conformance.log
+          exit 1
+
+      - name: Run gRPC message-level conformance (official clients)
+        working-directory: tests/gcpconformance/grpc
+        env:
+          GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
+        run: go test -count=1 -v -timeout 180s ./...
+
       - name: Check the fidelity matrix is up to date
         run: make check-gcp-fidelity-matrix
 
@@ -382,7 +404,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gcp-conformance-report
-          path: tests/gcpconformance/testdata/report/
+          path: |
+            tests/gcpconformance/testdata/report/
+            tests/gcpconformance/grpc/testdata/report/
 
       - name: Upload GCP server log (on failure)
         if: failure()
