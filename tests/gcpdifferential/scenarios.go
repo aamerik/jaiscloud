@@ -81,6 +81,8 @@ var serviceBaseURL = map[string]string{
 	// Cloud Workflows serves /v1/projects/{project}/locations/{location}/...
 	// on the workflows.googleapis.com origin.
 	"workflows": "https://workflows.googleapis.com",
+	// IAM service accounts are served under /v1/projects/{project}/serviceAccounts.
+	"iam": "https://iam.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -106,6 +108,9 @@ type ResourceNames struct {
 	DNSRRSet string
 	// Cloud Workflows: one workflow definition.
 	Workflow string
+	// IAM: the accountId of one service account (the email is derived from it
+	// and the project).
+	ServiceAccount string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -122,6 +127,8 @@ func Names(suffix string) ResourceNames {
 		DNSName:  dnsName,
 		DNSRRSet: "www." + dnsName,
 		Workflow: "conf-workflow-" + suffix,
+
+		ServiceAccount: "conf-sa-" + suffix,
 	}
 }
 
@@ -271,6 +278,25 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "workflows_list", Service: "workflows", Method: "GET", Path: wfBase},
 		Scenario{Op: "workflow_get_missing", Service: "workflows", Method: "GET", Path: wfBase + "/missing-" + suffix},
 		Scenario{Op: "workflow_delete", Service: "workflows", Method: "DELETE", Path: wfBase + "/" + n.Workflow},
+	)
+
+	// ─── IAM service accounts (/v1/projects/{project}/serviceAccounts) ───────
+	// Create/get/list, the key-ring-style IAM policy read, a 404, then delete.
+	// Service-account keys are deliberately excluded: they return private-key
+	// material (and signBlob executes a crypto operation), which must not be
+	// committed to a golden.
+	saBase := "/v1/projects/" + project + "/serviceAccounts"
+	saEmail := n.ServiceAccount + "@" + project + ".iam.gserviceaccount.com"
+	sc = append(sc,
+		Scenario{Op: "sa_create", Service: "iam", Method: "POST",
+			Path: saBase + "?accountId=" + n.ServiceAccount,
+			Body: `{"serviceAccount":{"displayName":"jaiscloud differential"}}`},
+		Scenario{Op: "sa_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail},
+		Scenario{Op: "sas_list", Service: "iam", Method: "GET", Path: saBase},
+		Scenario{Op: "sa_iam_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail + ":getIamPolicy"},
+		Scenario{Op: "sa_get_missing", Service: "iam", Method: "GET",
+			Path: saBase + "/missing-" + suffix + "@" + project + ".iam.gserviceaccount.com"},
+		Scenario{Op: "sa_delete", Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},
 	)
 
 	return sc

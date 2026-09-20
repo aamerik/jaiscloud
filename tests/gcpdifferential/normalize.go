@@ -69,10 +69,22 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.DNSZone, "<dnsZone>"},
 		// Cloud Workflows run resource.
 		{names.Workflow, "<workflow>"},
+		// A missing service-account probe is an email-shaped 404 path; fold it
+		// too so a golden never carries an "@" or the gserviceaccount domain.
+		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{"missing-" + suffix, "<missing>"},
 		{"missing_" + suffix, "<missing>"},
 		// Fallback: any residual occurrence of the run suffix.
 		{suffix, "<suffix>"},
+	}
+	// IAM service account. Fold the full email before the project so a committed
+	// golden never contains an "@" or the .iam.gserviceaccount.com domain
+	// (TestGoldensAreClean forbids both).
+	if names.ServiceAccount != "" {
+		repls = append(repls,
+			[2]string{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
+			[2]string{names.ServiceAccount, "<serviceAccountId>"},
+		)
 	}
 	// Longest values first so a longer resource name is replaced before a
 	// shorter substring of it.
@@ -185,6 +197,10 @@ var volatileStringKeys = map[string]string{
 	"messageId":     "<messageId>",
 	"jobId":         "<jobId>",
 	"temporaryHold": "<temporaryHold>",
+	// IAM service accounts generate these server-side (the emulator leaves
+	// oauth2ClientId empty), so fold both sides to a placeholder.
+	"uniqueId":       "<uniqueId>",
+	"oauth2ClientId": "<oauth2ClientId>",
 	// BigQuery job/query scheduling is wall-clock dependent.
 	"startTime":   "<time>",
 	"endTime":     "<time>",
@@ -241,6 +257,8 @@ var sortArrayKeys = map[string]bool{
 	// Cloud DNS and Cloud Workflows list responses.
 	"managedZones": true,
 	"workflows":    true,
+	// IAM service-account list.
+	"accounts": true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -265,6 +283,8 @@ var scopedListPlaceholders = map[string]string{
 	"managedZones": "<dnsZone>",
 	// Cloud Workflows: scoped to this run's workflow.
 	"workflows": "<workflow>",
+	// IAM: scoped to this run's service account.
+	"accounts": "<serviceAccount>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting

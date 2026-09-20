@@ -20,7 +20,7 @@ func TestScenariosValid(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	var haveDNS, haveWorkflows bool
+	var haveDNS, haveWorkflows, haveIAM bool
 	for _, sc := range scenarios {
 		if sc.Service == "" || sc.Op == "" || sc.Method == "" || sc.Path == "" {
 			t.Errorf("scenario %+v has an empty required field", sc)
@@ -38,6 +38,8 @@ func TestScenariosValid(t *testing.T) {
 			haveDNS = true
 		case "workflows":
 			haveWorkflows = true
+		case "iam":
+			haveIAM = true
 		}
 	}
 	if !haveDNS {
@@ -45,6 +47,9 @@ func TestScenariosValid(t *testing.T) {
 	}
 	if !haveWorkflows {
 		t.Error("expected at least one workflows scenario")
+	}
+	if !haveIAM {
+		t.Error("expected at least one iam scenario")
 	}
 }
 
@@ -68,6 +73,9 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.DNSName, "<dnsName>"},
 		{names.DNSZone, "<dnsZone>"},
 		{names.Workflow, "<workflow>"},
+		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
+		{names.ServiceAccount, "<serviceAccountId>"},
+		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{"missing-" + suffix, "<missing>"},
 		{project, "<project>"},
 	}
