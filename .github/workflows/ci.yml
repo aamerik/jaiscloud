@@ -396,6 +396,16 @@ jobs:
           GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
         run: go test -count=1 -v -timeout 180s ./...
 
+      # Reporting suite: runs the real gcloud CLI (preinstalled on the runner)
+      # against the already-running emulator. It skips cleanly if gcloud is not
+      # on PATH and only fails on regressions in commands expected to pass —
+      # documented emulator/gcloud incompatibilities are recorded, not fatal.
+      - name: Run gcloud CLI client-conformance (reporting)
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080
+          GCP_EMULATOR_PROJECT: jaiscloud-project
+        run: go test -tags gcloud_conformance -count=1 -v -timeout 600s ./tests/gcpconformance/gcloud/
+
       - name: Check the fidelity matrix is up to date
         run: make check-gcp-fidelity-matrix
 
@@ -407,6 +417,7 @@ jobs:
           path: |
             tests/gcpconformance/testdata/report/
             tests/gcpconformance/grpc/testdata/report/
+            tests/gcpconformance/gcloud/testdata/report/
 
       - name: Upload GCP server log (on failure)
         if: failure()
