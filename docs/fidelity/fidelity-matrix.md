@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 237 |
-| limited | 220 |
+| ga | 242 |
+| limited | 215 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 30 | 134 | 0 | 0 |
+| grpc | 35 | 129 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -393,16 +393,16 @@ _64 cell(s): ga=30 limited=34 preview=0 unsupported=0_
 
 ## logging
 
-_6 cell(s): ga=0 limited=6 preview=0 unsupported=0_
+_6 cell(s): ga=5 limited=1 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| DeleteLog | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListLogEntries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListLogs | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListMonitoredResourceDescriptors | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteLog | grpc | ga | — |
+| ListLogEntries | grpc | ga | — |
+| ListLogs | grpc | ga | — |
+| ListMonitoredResourceDescriptors | grpc | ga | — |
 | TailLogEntries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| WriteLogEntries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| WriteLogEntries | grpc | ga | — |
 
 ## managedkafka
 

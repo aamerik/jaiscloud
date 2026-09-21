@@ -3,15 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 237,
-      "limited": 220,
+      "ga": 242,
+      "limited": 215,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "ga": 30,
-        "limited": 134
+        "ga": 35,
+        "limited": 129
       },
       "rest": {
         "ga": 207,
@@ -65,7 +65,8 @@
         "limited": 34
       },
       "logging": {
-        "limited": 6
+        "ga": 5,
+        "limited": 1
       },
       "managedkafka": {
         "ga": 16
@@ -3172,41 +3173,41 @@
       "service": "logging",
       "operation": "DeleteLog",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "ListLogEntries",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "ListLogs",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "ListMonitoredResourceDescriptors",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -3216,6 +3217,7 @@
       "state": "limited",
       "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
       "evidence": [
+        "postgres=yes",
         "transport=grpc (proto-conformance pending)"
       ]
     },
@@ -3223,10 +3225,10 @@
       "service": "logging",
       "operation": "WriteLogEntries",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

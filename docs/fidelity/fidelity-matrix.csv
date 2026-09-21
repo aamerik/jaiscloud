@@ -280,12 +280,12 @@ kms,RestoreCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors
 kms,UpdateCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,UpdateCryptoKeyPrimaryVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,UpdateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-logging,DeleteLog,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-logging,ListLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-logging,ListLogs,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-logging,ListMonitoredResourceDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,DeleteLog,grpc,ga,
+logging,ListLogEntries,grpc,ga,
+logging,ListLogs,grpc,ga,
+logging,ListMonitoredResourceDescriptors,grpc,ga,
 logging,TailLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-logging,WriteLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,WriteLogEntries,grpc,ga,
 managedkafka,ManagedKafka.CreateCluster,rest,ga,
 managedkafka,ManagedKafka.CreateTopic,rest,ga,
 managedkafka,ManagedKafka.DeleteCluster,rest,ga,

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 34,
-  "passed": 34,
+  "total": 39,
+  "passed": 39,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 6,
-    "checks": 34,
-    "passed": 34,
+    "services": 7,
+    "checks": 39,
+    "passed": 39,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -32,6 +32,13 @@
       "service": "kms",
       "total": 6,
       "passed": 6,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "logging",
+      "total": 5,
+      "passed": 5,
       "failed": 0,
       "unimplemented": 0
     },
@@ -295,6 +302,41 @@
       "method": "ReserveIds",
       "status": "pass",
       "key_field": "keys[].id \u003e reserved"
+    },
+    {
+      "service": "logging",
+      "rpc": "WriteLogEntries",
+      "method": "WriteLogEntries",
+      "status": "pass",
+      "key_field": "entry round-trips (logName/textPayload)"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListLogEntries",
+      "method": "ListLogEntries",
+      "status": "pass",
+      "key_field": "entries[].logName/textPayload"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListLogs",
+      "method": "ListLogs",
+      "status": "pass",
+      "key_field": "logNames[]"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListMonitoredResourceDescriptors",
+      "method": "ListMonitoredResourceDescriptors",
+      "status": "pass",
+      "key_field": "resourceDescriptors[].type/displayName/labels"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteLog",
+      "method": "DeleteLog",
+      "status": "pass",
+      "key_field": "log absent from ListLogs after delete"
     }
   ]
 }
