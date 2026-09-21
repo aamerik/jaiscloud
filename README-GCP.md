@@ -249,6 +249,10 @@ Alert policies are evaluated by a background worker (30s tick, matching the AWS 
 
 The gRPC KMS surface also implements the delete side (`DeleteCryptoKeyVersion`, `DeleteCryptoKey`, plus the `RetiredResource` records that block name reuse), the raw AES-GCM primitives (`RawEncrypt`/`RawDecrypt`, purpose `RAW_ENCRYPT_DECRYPT`), and the `ImportJob` control plane (`CreateImportJob`/`GetImportJob`/`ListImportJobs`). `ImportCryptoKeyVersion` (wrapped-key import), the trusted-key-wrapped import/export pair, and `Decapsulate` (no KEM algorithm support) are not implemented and return `Unimplemented`.
 
+### Secret Manager: scheduled rotation is stored, managed rotation is not implemented
+
+A `Secret`'s `rotation` schedule (`nextRotationTime` + `rotationPeriod`) is persisted and honored lazily: a read (`GetSecret`/`AccessSecretVersion`) after `nextRotationTime` creates a new version and advances the schedule. Cloud SQL **managed rotation**, however, is `Unimplemented` on the gRPC surface: `EnableManagedRotation` and `RotateSecret` generate a password, apply it to a Cloud SQL user, and store it as a new secret version, and the emulator has no Cloud SQL data plane to update. Both RPCs fail loud with `codes.Unimplemented` rather than fabricating a version.
+
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 
 `POST /_jaiscloud/reset` wipes the Dataproc store but does not cancel or wait for jobs currently executing (Docker/K8s executor mode). This matches AWS EMR's own `Reset` behaviour in this codebase, which is a no-op for the same reason — not a GCP-specific gap. If you reset while a job is mid-execution and then resubmit a job with the *same* `(project, region, jobId)` before the stale run finishes, the stale run's completion could overwrite the new job's state. Avoid reusing job IDs across a reset boundary while a prior run may still be in flight.

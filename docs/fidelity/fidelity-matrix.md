@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 351 |
-| limited | 106 |
+| ga | 360 |
+| limited | 97 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 144 | 20 | 0 | 0 |
+| grpc | 153 | 11 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -564,7 +564,7 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 ## secretmanager
 
-_32 cell(s): ga=21 limited=11 preview=0 unsupported=0_
+_32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -572,14 +572,14 @@ _32 cell(s): ga=21 limited=11 preview=0 unsupported=0_
 | AddSecretVersion | grpc | ga | — |
 | CreateSecret | grpc | ga | — |
 | DeleteSecret | grpc | ga | — |
-| DestroySecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DisableSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DestroySecretVersion | grpc | ga | — |
+| DisableSecretVersion | grpc | ga | — |
 | EnableManagedRotation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| EnableSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| EnableSecretVersion | grpc | ga | — |
+| GetIamPolicy | grpc | ga | — |
 | GetSecret | grpc | ga | — |
-| GetSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListSecretVersions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetSecretVersion | grpc | ga | — |
+| ListSecretVersions | grpc | ga | — |
 | ListSecrets | grpc | ga | — |
 | RotateSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | Secret.Access | rest | ga | — |
@@ -597,9 +597,9 @@ _32 cell(s): ga=21 limited=11 preview=0 unsupported=0_
 | Secret.SetIamPolicy | rest | ga | — |
 | Secret.TestIamPermissions | rest | ga | — |
 | Secret.Update | rest | ga | — |
-| SetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| TestIamPermissions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| SetIamPolicy | grpc | ga | — |
+| TestIamPermissions | grpc | ga | — |
+| UpdateSecret | grpc | ga | — |
 
 ## storage
 

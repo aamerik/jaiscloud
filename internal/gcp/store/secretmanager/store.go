@@ -26,6 +26,7 @@ type Rotation struct {
 type Secret struct {
 	ID             string
 	Labels         map[string]string
+	Annotations    map[string]string
 	CreateTime     time.Time
 	NextVer        int
 	Rotation       *Rotation      // nil when rotation is disabled

@@ -3,15 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 351,
-      "limited": 106,
+      "ga": 360,
+      "limited": 97,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "ga": 144,
-        "limited": 20
+        "ga": 153,
+        "limited": 11
       },
       "rest": {
         "ga": 207,
@@ -86,8 +86,8 @@
         "ga": 44
       },
       "secretmanager": {
-        "ga": 21,
-        "limited": 11
+        "ga": 30,
+        "limited": 2
       },
       "storage": {
         "ga": 51,
@@ -4450,30 +4450,28 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "DestroySecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "DisableSecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4492,23 +4490,21 @@
       "service": "secretmanager",
       "operation": "EnableSecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "GetIamPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4525,22 +4521,20 @@
       "service": "secretmanager",
       "operation": "GetSecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "ListSecretVersions",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4725,35 +4719,32 @@
       "service": "secretmanager",
       "operation": "SetIamPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "TestIamPermissions",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "UpdateSecret",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

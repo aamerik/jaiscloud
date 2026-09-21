@@ -146,6 +146,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 	}
 	if proto != nil {
 		sec.Labels = proto.GetLabels()
+		sec.Annotations = proto.GetAnnotations()
 		if r := proto.GetRotation(); r != nil {
 			sec.Rotation = rotationFromProto(r)
 		}
@@ -189,24 +190,49 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	// update_mask is required by the API: when present, only the listed fields
+	// are written (a masked field set to empty clears the stored value); when
+	// absent, every field present on the incoming Secret is applied (the
+	// legacy merge behavior).
+	mask := req.GetUpdateMask()
+	applyAll := mask == nil || len(mask.GetPaths()) == 0
+	fields := map[string]bool{}
+	for _, p := range mask.GetPaths() {
+		fields[p] = true
+	}
+	selected := func(name string) bool { return applyAll || fields[name] }
+
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land
 	// between our read and our write and get silently rolled back by it.
 	updated, err := s.secrets.UpdateSecretAtomic(ctx, project, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
-		if labels := proto.GetLabels(); labels != nil {
-			cur.Labels = labels
-		}
-		if r := proto.GetRotation(); r != nil {
-			cur.Rotation = rotationFromProto(r)
-		}
-		if va := proto.GetVersionAliases(); va != nil {
-			cur.VersionAliases = make(map[string]int, len(va))
-			for k, v := range va {
-				cur.VersionAliases[k] = int(v)
+		if selected("labels") {
+			if labels := proto.GetLabels(); labels != nil || !applyAll {
+				cur.Labels = labels
 			}
 		}
-		if kmsKeyName := kmsKeyNameFromSecret(proto); kmsKeyName != "" {
-			cur.KmsKeyName = kmsKeyName
+		if selected("annotations") {
+			if annotations := proto.GetAnnotations(); annotations != nil || !applyAll {
+				cur.Annotations = annotations
+			}
+		}
+		if selected("rotation") {
+			if r := proto.GetRotation(); r != nil {
+				cur.Rotation = rotationFromProto(r)
+			}
+		}
+		if selected("version_aliases") {
+			if va := proto.GetVersionAliases(); va != nil {
+				cur.VersionAliases = make(map[string]int, len(va))
+				for k, v := range va {
+					cur.VersionAliases[k] = int(v)
+				}
+			}
+		}
+		if selected("replication") {
+			if kmsKeyName := kmsKeyNameFromSecret(proto); kmsKeyName != "" {
+				cur.KmsKeyName = kmsKeyName
+			}
 		}
 		return cur, nil
 	})
@@ -501,6 +527,9 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 	}
 	if s.Labels != nil {
 		out.Labels = s.Labels
+	}
+	if s.Annotations != nil {
+		out.Annotations = s.Annotations
 	}
 	if s.Rotation != nil {
 		out.Rotation = rotationToProto(s.Rotation)

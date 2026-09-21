@@ -406,14 +406,14 @@ secretmanager,AccessSecretVersion,grpc,ga,
 secretmanager,AddSecretVersion,grpc,ga,
 secretmanager,CreateSecret,grpc,ga,
 secretmanager,DeleteSecret,grpc,ga,
-secretmanager,DestroySecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,DisableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,DestroySecretVersion,grpc,ga,
+secretmanager,DisableSecretVersion,grpc,ga,
 secretmanager,EnableManagedRotation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,EnableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,EnableSecretVersion,grpc,ga,
+secretmanager,GetIamPolicy,grpc,ga,
 secretmanager,GetSecret,grpc,ga,
-secretmanager,GetSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,ListSecretVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,GetSecretVersion,grpc,ga,
+secretmanager,ListSecretVersions,grpc,ga,
 secretmanager,ListSecrets,grpc,ga,
 secretmanager,RotateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,Secret.Access,rest,ga,
@@ -431,9 +431,9 @@ secretmanager,Secret.ListVersions,rest,ga,
 secretmanager,Secret.SetIamPolicy,rest,ga,
 secretmanager,Secret.TestIamPermissions,rest,ga,
 secretmanager,Secret.Update,rest,ga,
-secretmanager,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,UpdateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,SetIamPolicy,grpc,ga,
+secretmanager,TestIamPermissions,grpc,ga,
+secretmanager,UpdateSecret,grpc,ga,
 storage,BidiReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,BidiWriteObject,grpc,ga,
 storage,CancelResumableWrite,grpc,ga,
