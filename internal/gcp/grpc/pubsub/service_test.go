@@ -18,7 +18,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // pubsubTestService dials a real in-process gRPC server backed by the memory
@@ -627,5 +629,303 @@ func TestPubSubTopicDeleteOrphansGRPC(t *testing.T) {
 	}
 	if got.GetTopic() != "_deleted-topic_" {
 		t.Fatalf("topic = %q, want _deleted-topic_", got.GetTopic())
+	}
+}
+
+// pubsubSeedTopic creates a topic and a pull subscription for a test.
+func pubsubSeedTopic(t *testing.T, ctx context.Context, pub pubsubpb.PublisherClient, subc pubsubpb.SubscriberClient, topic, sub string) {
+	t.Helper()
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil && status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic, AckDeadlineSeconds: 10}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+}
+
+func pubsubPublishOne(t *testing.T, ctx context.Context, pub pubsubpb.PublisherClient, topic, data string) {
+	t.Helper()
+	resp, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte(data)}},
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if len(resp.GetMessageIds()) != 1 {
+		t.Fatalf("Publish messageIds = %v, want 1", resp.GetMessageIds())
+	}
+}
+
+// pubsubPullBody claims until it receives a message with the given body.
+func pubsubPullBody(t *testing.T, ctx context.Context, subc pubsubpb.SubscriberClient, sub, body string) *pubsubpb.ReceivedMessage {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 100, ReturnImmediately: true})
+		if err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		for _, rm := range resp.GetReceivedMessages() {
+			if string(rm.GetMessage().GetData()) == body {
+				return rm
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Pull never delivered body %q", body)
+	return nil
+}
+
+func TestPubSubUpdateTopicGRPC(t *testing.T) {
+	pub, _, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/update-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	const retention = 10 * time.Minute
+	updated, err := pub.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+		Topic:      &pubsubpb.Topic{Name: topic, Labels: map[string]string{"env": "test"}, MessageRetentionDuration: durationpb.New(retention)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels", "message_retention_duration"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if updated.GetLabels()["env"] != "test" {
+		t.Fatalf("labels = %v, want env=test", updated.GetLabels())
+	}
+	if got := updated.GetMessageRetentionDuration().AsDuration(); got != retention {
+		t.Fatalf("retention = %v, want %v", got, retention)
+	}
+	got, err := pub.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: topic})
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	if got.GetMessageRetentionDuration().AsDuration() != retention {
+		t.Fatalf("GetTopic retention = %v, want %v", got.GetMessageRetentionDuration().AsDuration(), retention)
+	}
+}
+
+func TestPubSubListTopicSubscriptionsGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/lts-topic"
+	const other = "projects/test/topics/lts-other"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, "projects/test/subscriptions/lts-a")
+	pubsubSeedTopic(t, ctx, pub, subc, topic, "projects/test/subscriptions/lts-b")
+	pubsubSeedTopic(t, ctx, pub, subc, other, "projects/test/subscriptions/lts-other")
+
+	resp, err := pub.ListTopicSubscriptions(ctx, &pubsubpb.ListTopicSubscriptionsRequest{Topic: topic})
+	if err != nil {
+		t.Fatalf("ListTopicSubscriptions: %v", err)
+	}
+	got := map[string]bool{}
+	for _, s := range resp.GetSubscriptions() {
+		got[s] = true
+	}
+	if !got["projects/test/subscriptions/lts-a"] || !got["projects/test/subscriptions/lts-b"] {
+		t.Fatalf("ListTopicSubscriptions = %v, want both lts-a and lts-b", resp.GetSubscriptions())
+	}
+	if got["projects/test/subscriptions/lts-other"] {
+		t.Fatalf("ListTopicSubscriptions leaked another topic's subscription: %v", resp.GetSubscriptions())
+	}
+}
+
+func TestPubSubModifyPushConfigGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/push-topic"
+	const sub = "projects/test/subscriptions/push-sub"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, sub)
+
+	const endpoint = "https://example.invalid/push"
+	if _, err := subc.ModifyPushConfig(ctx, &pubsubpb.ModifyPushConfigRequest{
+		Subscription: sub, PushConfig: &pubsubpb.PushConfig{PushEndpoint: endpoint},
+	}); err != nil {
+		t.Fatalf("ModifyPushConfig: %v", err)
+	}
+	got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: sub})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if got.GetPushConfig().GetPushEndpoint() != endpoint {
+		t.Fatalf("push endpoint = %q, want %q", got.GetPushConfig().GetPushEndpoint(), endpoint)
+	}
+	if _, err := subc.ModifyPushConfig(ctx, &pubsubpb.ModifyPushConfigRequest{Subscription: sub, PushConfig: &pubsubpb.PushConfig{}}); err != nil {
+		t.Fatalf("ModifyPushConfig(clear): %v", err)
+	}
+	cleared, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: sub})
+	if err != nil {
+		t.Fatalf("GetSubscription after clear: %v", err)
+	}
+	if ep := cleared.GetPushConfig().GetPushEndpoint(); ep != "" {
+		t.Fatalf("push endpoint = %q after clear, want empty", ep)
+	}
+}
+
+func TestPubSubSnapshotsGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/snap-topic"
+	const sub = "projects/test/subscriptions/snap-sub"
+	const snap = "projects/test/snapshots/snap-one"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, sub)
+	pubsubPublishOne(t, ctx, pub, topic, "snap-body")
+	pubsubPullBody(t, ctx, subc, sub, "snap-body")
+
+	created, err := subc.CreateSnapshot(ctx, &pubsubpb.CreateSnapshotRequest{Name: snap, Subscription: sub, Labels: map[string]string{"env": "test"}})
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if created.GetName() != snap || created.GetTopic() != topic || created.GetExpireTime() == nil {
+		t.Fatalf("CreateSnapshot = %+v, want name=%s topic=%s expire", created, snap, topic)
+	}
+	if got := created.GetLabels()["env"]; got != "test" {
+		t.Fatalf("CreateSnapshot labels = %v, want env=test", created.GetLabels())
+	}
+
+	got, err := subc.GetSnapshot(ctx, &pubsubpb.GetSnapshotRequest{Snapshot: snap})
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got.GetName() != snap {
+		t.Fatalf("GetSnapshot name = %q, want %q", got.GetName(), snap)
+	}
+
+	listed, err := subc.ListSnapshots(ctx, &pubsubpb.ListSnapshotsRequest{Project: "projects/test"})
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	found := false
+	for _, s := range listed.GetSnapshots() {
+		if s.GetName() == snap {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ListSnapshots did not include %q", snap)
+	}
+
+	byTopic, err := pub.ListTopicSnapshots(ctx, &pubsubpb.ListTopicSnapshotsRequest{Topic: topic})
+	if err != nil {
+		t.Fatalf("ListTopicSnapshots: %v", err)
+	}
+	if len(byTopic.GetSnapshots()) != 1 || byTopic.GetSnapshots()[0] != snap {
+		t.Fatalf("ListTopicSnapshots = %v, want [%s]", byTopic.GetSnapshots(), snap)
+	}
+
+	updated, err := subc.UpdateSnapshot(ctx, &pubsubpb.UpdateSnapshotRequest{
+		Snapshot:   &pubsubpb.Snapshot{Name: snap, Labels: map[string]string{"env": "updated"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSnapshot: %v", err)
+	}
+	if got := updated.GetLabels()["env"]; got != "updated" {
+		t.Fatalf("UpdateSnapshot labels = %v, want env=updated", updated.GetLabels())
+	}
+
+	if _, err := subc.DeleteSnapshot(ctx, &pubsubpb.DeleteSnapshotRequest{Snapshot: snap}); err != nil {
+		t.Fatalf("DeleteSnapshot: %v", err)
+	}
+	if _, err := subc.GetSnapshot(ctx, &pubsubpb.GetSnapshotRequest{Snapshot: snap}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetSnapshot after delete = %v, want NotFound", err)
+	}
+}
+
+func TestPubSubSeekTimeGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/seek-time-topic"
+	const sub = "projects/test/subscriptions/seek-time-sub"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, sub)
+
+	pubsubPublishOne(t, ctx, pub, topic, "seek-time-a")
+	rm := pubsubPullBody(t, ctx, subc, sub, "seek-time-a")
+	// Seek into the future acknowledges the retained message.
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{Subscription: sub, Target: &pubsubpb.SeekRequest_Time{Time: timestamppb.New(time.Now().Add(time.Hour))}}); err != nil {
+		t.Fatalf("Seek(future): %v", err)
+	}
+	if got := countBody(t, ctx, subc, sub, "seek-time-a"); got != 0 {
+		t.Fatalf("message redelivered after Seek(future): %d", got)
+	}
+	_ = rm
+
+	// Seek into the past makes a retained (unacked) message deliverable again.
+	pubsubPublishOne(t, ctx, pub, topic, "seek-time-b")
+	pubsubPullBody(t, ctx, subc, sub, "seek-time-b")
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{Subscription: sub, Target: &pubsubpb.SeekRequest_Time{Time: timestamppb.New(time.Now().Add(-time.Hour))}}); err != nil {
+		t.Fatalf("Seek(past): %v", err)
+	}
+	if got := countBody(t, ctx, subc, sub, "seek-time-b"); got != 1 {
+		t.Fatalf("message not redelivered after Seek(past): got %d, want 1", got)
+	}
+}
+
+// countBody drains the visible messages and counts those with the given body.
+func countBody(t *testing.T, ctx context.Context, subc pubsubpb.SubscriberClient, sub, body string) int {
+	t.Helper()
+	resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 100, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	n := 0
+	for _, rm := range resp.GetReceivedMessages() {
+		if string(rm.GetMessage().GetData()) == body {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPubSubSeekSnapshotGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/seek-snap-topic"
+	const sub = "projects/test/subscriptions/seek-snap-sub"
+	const snap = "projects/test/snapshots/seek-snap"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, sub)
+
+	pubsubPublishOne(t, ctx, pub, topic, "seek-snap-body")
+	rm := pubsubPullBody(t, ctx, subc, sub, "seek-snap-body")
+	if _, err := subc.CreateSnapshot(ctx, &pubsubpb.CreateSnapshotRequest{Name: snap, Subscription: sub}); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	// Ack after the snapshot: Seek must restore the captured backlog.
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{rm.GetAckId()}}); err != nil {
+		t.Fatalf("Acknowledge: %v", err)
+	}
+	if got := countBody(t, ctx, subc, sub, "seek-snap-body"); got != 0 {
+		t.Fatalf("message still delivered after ack: %d", got)
+	}
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{Subscription: sub, Target: &pubsubpb.SeekRequest_Snapshot{Snapshot: snap}}); err != nil {
+		t.Fatalf("Seek(snapshot): %v", err)
+	}
+	if got := countBody(t, ctx, subc, sub, "seek-snap-body"); got != 1 {
+		t.Fatalf("message not restored by Seek(snapshot): got %d, want 1", got)
+	}
+}
+
+func TestPubSubSeekMissingTargetGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/seek-missing-topic"
+	const sub = "projects/test/subscriptions/seek-missing-sub"
+	pubsubSeedTopic(t, ctx, pub, subc, topic, sub)
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{Subscription: sub}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Seek(no target) = %v, want InvalidArgument", err)
 	}
 }

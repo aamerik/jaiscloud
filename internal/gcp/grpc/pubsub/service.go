@@ -41,6 +41,7 @@ import (
 const (
 	rtTopic              = "gcp_topic"
 	rtSubscription       = "gcp_subscription"
+	rtSnapshot           = "gcp_snapshot"
 	rtTopicPolicy        = "gcp_topic_policy"
 	rtSubscriptionPolicy = "gcp_subscription_policy"
 
@@ -88,6 +89,19 @@ func topicName(project, id string) string {
 
 func subscriptionName(project, id string) string {
 	return "projects/" + project + "/subscriptions/" + id
+}
+
+func snapshotName(project, id string) string {
+	return "projects/" + project + "/snapshots/" + id
+}
+
+// splitSnapshotName parses "projects/{p}/snapshots/{s}".
+func splitSnapshotName(name string) (project, snap string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "snapshots" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
 }
 
 // splitTopicName parses "projects/{p}/topics/{t}".
@@ -949,6 +963,429 @@ func (s *Service) DetachSubscription(ctx context.Context, req *pubsubpb.DetachSu
 	return &pubsubpb.DetachSubscriptionResponse{}, nil
 }
 
+// UpdateTopic applies an update_mask to a topic's mutable fields. Labels and
+// message_retention_duration are supported; anything else is rejected rather
+// than silently ignored (mirrors UpdateSubscription).
+func (s *Service) UpdateTopic(ctx context.Context, req *pubsubpb.UpdateTopicRequest) (*pubsubpb.Topic, error) {
+	in := req.GetTopic()
+	if in == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "topic is required", 400))
+	}
+	project, id, ok := splitTopicName(in.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "topic not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+
+	paths := req.GetUpdateMask().GetPaths()
+	if len(paths) == 0 {
+		paths = []string{"labels"}
+	}
+	for _, p := range paths {
+		switch p {
+		case "labels":
+			if len(in.GetLabels()) == 0 {
+				delete(meta, "labels")
+			} else {
+				meta["labels"] = in.GetLabels()
+			}
+		case "message_retention_duration", "messageRetentionDuration":
+			if in.GetMessageRetentionDuration() == nil {
+				delete(meta, "messageRetentionDuration")
+			} else {
+				meta["messageRetentionDuration"] = in.GetMessageRetentionDuration().AsDuration().String()
+			}
+		default:
+			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
+		}
+	}
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: id, Data: data}); err != nil {
+		return nil, mapError(err)
+	}
+	return topicToProto(project, id, meta), nil
+}
+
+// ListTopicSubscriptions lists the full subscription names attached to a topic.
+// A detached subscription still references its topic in this emulator, so it is
+// included (real Pub/Sub keeps the resource until deleted).
+func (s *Service) ListTopicSubscriptions(ctx context.Context, req *pubsubpb.ListTopicSubscriptionsRequest) (*pubsubpb.ListTopicSubscriptionsResponse, error) {
+	project, topic, ok := splitTopicName(req.GetTopic())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic name", 400))
+	}
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, topic); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "topic not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtSubscription, "")
+	if err != nil {
+		return nil, mapError(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		var sub map[string]any
+		if json.Unmarshal(e.Data, &sub) != nil {
+			continue
+		}
+		if t, _ := sub["topic"].(string); lastSegment(t) != topic {
+			continue
+		}
+		names = append(names, subscriptionName(project, e.ID))
+	}
+	page, nextToken := paging.Page(names, func(s string) string { return s },
+		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	return &pubsubpb.ListTopicSubscriptionsResponse{Subscriptions: page, NextPageToken: nextToken}, nil
+}
+
+// ModifyPushConfig updates a subscription's stored push configuration. An empty
+// push_config clears it, which resumes pull delivery.
+func (s *Service) ModifyPushConfig(ctx context.Context, req *pubsubpb.ModifyPushConfigRequest) (*emptypb.Empty, error) {
+	project, id, ok := splitSubscriptionName(req.GetSubscription())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+
+	pc := req.GetPushConfig()
+	if pc == nil || pc.GetPushEndpoint() == "" {
+		delete(meta, "pushConfig")
+	} else {
+		pm := map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
+		if len(pc.GetAttributes()) > 0 {
+			pm["attributes"] = pc.GetAttributes()
+		}
+		if ot := pc.GetOidcToken(); ot != nil {
+			pm["oidcToken"] = map[string]any{
+				"audience":            ot.GetAudience(),
+				"serviceAccountEmail": ot.GetServiceAccountEmail(),
+			}
+		}
+		meta["pushConfig"] = pm
+	}
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: id, Data: data}); err != nil {
+		return nil, mapError(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// ─── snapshots + seek ─────────────────────────────────────────────────────────
+
+// snapshotLifetime is the (metadata) snapshot expiry: Pub/Sub snapshots live no
+// longer than 7 days from creation.
+const snapshotLifetime = 7 * 24 * time.Hour
+
+// snapshotMeta is the persisted form of a Snapshot resource. Backlog captures
+// the source subscription's unacked messages at creation so a later Seek to the
+// snapshot can faithfully restore the ack state (including messages acked
+// afterwards) — without it, snapshot-based Seek would silently diverge from
+// real Pub/Sub, which redelivers the snapshot backlog.
+type snapshotMeta struct {
+	Name         string                `json:"name"`
+	Topic        string                `json:"topic"`
+	Subscription string                `json:"subscription"`
+	CreatedAt    time.Time             `json:"createdAt"`
+	ExpireTime   time.Time             `json:"expireTime"`
+	Labels       map[string]string     `json:"labels,omitempty"`
+	Backlog      []pubsubstore.Message `json:"backlog,omitempty"`
+}
+
+// CreateSnapshot captures a subscription's backlog (unacked messages) into a
+// snapshot resource. Messages published to the topic after creation are also
+// retained by the subscription and are recovered by Seek.
+func (s *Service) CreateSnapshot(ctx context.Context, req *pubsubpb.CreateSnapshotRequest) (*pubsubpb.Snapshot, error) {
+	project, snap, ok := splitSnapshotName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
+	}
+	_, subID, ok := splitSubscriptionName(req.GetSubscription())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, subID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var sub map[string]any
+	json.Unmarshal(e.Data, &sub)
+	topic, _ := sub["topic"].(string)
+
+	backlog, err := s.messages.List(ctx, subID)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	now := clock.Now()
+	meta := snapshotMeta{
+		Name:         req.GetName(),
+		Topic:        topic,
+		Subscription: req.GetSubscription(),
+		CreatedAt:    now,
+		ExpireTime:   now.Add(snapshotLifetime),
+		Labels:       req.GetLabels(),
+		Backlog:      backlog,
+	}
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Create(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSnapshot, ID: snap, Data: data}); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, mapError(model.NewProviderError("AlreadyExists", "snapshot already exists", 409))
+		}
+		return nil, mapError(err)
+	}
+	return snapshotToProto(meta), nil
+}
+
+func (s *Service) GetSnapshot(ctx context.Context, req *pubsubpb.GetSnapshotRequest) (*pubsubpb.Snapshot, error) {
+	project, snap, ok := splitSnapshotName(req.GetSnapshot())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
+	}
+	meta, err := s.getSnapshotMeta(ctx, project, snap)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotToProto(meta), nil
+}
+
+func (s *Service) ListSnapshots(ctx context.Context, req *pubsubpb.ListSnapshotsRequest) (*pubsubpb.ListSnapshotsResponse, error) {
+	project := s.projectFromListProject(ctx, req.GetProject())
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtSnapshot, "")
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, nextToken := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	snaps := make([]*pubsubpb.Snapshot, 0, len(page))
+	for _, e := range page {
+		var meta snapshotMeta
+		if json.Unmarshal(e.Data, &meta) == nil {
+			snaps = append(snaps, snapshotToProto(meta))
+		}
+	}
+	return &pubsubpb.ListSnapshotsResponse{Snapshots: snaps, NextPageToken: nextToken}, nil
+}
+
+// UpdateSnapshot applies an update_mask (labels only) to a snapshot.
+func (s *Service) UpdateSnapshot(ctx context.Context, req *pubsubpb.UpdateSnapshotRequest) (*pubsubpb.Snapshot, error) {
+	in := req.GetSnapshot()
+	if in == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "snapshot is required", 400))
+	}
+	project, snap, ok := splitSnapshotName(in.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
+	}
+	meta, err := s.getSnapshotMeta(ctx, project, snap)
+	if err != nil {
+		return nil, err
+	}
+	paths := req.GetUpdateMask().GetPaths()
+	if len(paths) == 0 {
+		paths = []string{"labels"}
+	}
+	for _, p := range paths {
+		switch p {
+		case "labels":
+			if len(in.GetLabels()) == 0 {
+				meta.Labels = nil
+			} else {
+				meta.Labels = in.GetLabels()
+			}
+		default:
+			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
+		}
+	}
+	data, _ := json.Marshal(meta)
+	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSnapshot, ID: snap, Data: data}); err != nil {
+		return nil, mapError(err)
+	}
+	return snapshotToProto(meta), nil
+}
+
+func (s *Service) DeleteSnapshot(ctx context.Context, req *pubsubpb.DeleteSnapshotRequest) (*emptypb.Empty, error) {
+	project, snap, ok := splitSnapshotName(req.GetSnapshot())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
+	}
+	if err := s.resources.Delete(ctx, project, store.GlobalRegion, rtSnapshot, snap); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "snapshot not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// ListTopicSnapshots lists the full snapshot names retaining messages from a
+// topic.
+func (s *Service) ListTopicSnapshots(ctx context.Context, req *pubsubpb.ListTopicSnapshotsRequest) (*pubsubpb.ListTopicSnapshotsResponse, error) {
+	project, topic, ok := splitTopicName(req.GetTopic())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid topic name", 400))
+	}
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, topic); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "topic not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtSnapshot, "")
+	if err != nil {
+		return nil, mapError(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		var meta snapshotMeta
+		if json.Unmarshal(e.Data, &meta) != nil {
+			continue
+		}
+		if lastSegment(meta.Topic) != topic {
+			continue
+		}
+		names = append(names, meta.Name)
+	}
+	page, nextToken := paging.Page(names, func(s string) string { return s },
+		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	return &pubsubpb.ListTopicSnapshotsResponse{Snapshots: page, NextPageToken: nextToken}, nil
+}
+
+// Seek resets a subscription's ack state, either to a timestamp (messages
+// published before it are acknowledged, messages at/after it become
+// unacknowledged) or to a snapshot (whose captured backlog is restored,
+// including messages acked after the snapshot was created).
+func (s *Service) Seek(ctx context.Context, req *pubsubpb.SeekRequest) (*pubsubpb.SeekResponse, error) {
+	project, sub, ok := splitSubscriptionName(req.GetSubscription())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, sub)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+		}
+		return nil, mapError(err)
+	}
+	var meta map[string]any
+	json.Unmarshal(e.Data, &meta)
+
+	switch {
+	case req.GetTime() != nil:
+		if err := s.seekToTime(ctx, sub, req.GetTime().AsTime()); err != nil {
+			return nil, mapError(err)
+		}
+	case req.GetSnapshot() != "":
+		snapProject, snapID, ok := splitSnapshotName(req.GetSnapshot())
+		if !ok || snapProject != project {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
+		}
+		snap, err := s.getSnapshotMeta(ctx, project, snapID)
+		if err != nil {
+			return nil, err
+		}
+		subTopic, _ := meta["topic"].(string)
+		if snap.Topic != subTopic {
+			return nil, mapError(&model.ProviderError{
+				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+				Message: "snapshot topic " + snap.Topic + " does not match subscription topic " + subTopic,
+			})
+		}
+		if err := s.restoreSnapshot(ctx, sub, snap); err != nil {
+			return nil, mapError(err)
+		}
+	default:
+		return nil, mapError(model.NewProviderError("InvalidArgument", "seek target (time or snapshot) is required", 400))
+	}
+	return &pubsubpb.SeekResponse{}, nil
+}
+
+// seekToTime marks the subscription's retained messages published before t as
+// acknowledged (deleted) and makes those published at/after t visible again.
+// Already-acked messages are gone, so they are not restored (proto-documented).
+func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) error {
+	msgs, err := s.messages.List(ctx, queue)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		if m.PublishTime.Before(t) {
+			_ = s.messages.Delete(ctx, queue, m.MessageID)
+			continue
+		}
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{m.MessageID}, 0, clock.Now())
+	}
+	return nil
+}
+
+// restoreSnapshot resets the subscription to the state captured by snap: the
+// snapshot backlog is restored as unacknowledged, plus every message still
+// retained in the subscription that was published at/after the snapshot was
+// created. Messages acked before the snapshot are not restored.
+func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapshotMeta) error {
+	current, err := s.messages.List(ctx, queue)
+	if err != nil {
+		return err
+	}
+	for _, m := range current {
+		_ = s.messages.Delete(ctx, queue, m.MessageID)
+	}
+	restore := func(m pubsubstore.Message) error {
+		m.Subscription = queue
+		m.VisibleAt = time.Time{}
+		return s.messages.Put(ctx, m)
+	}
+	for _, m := range snap.Backlog {
+		if err := restore(m); err != nil {
+			return err
+		}
+	}
+	for _, m := range current {
+		if m.PublishTime.Before(snap.CreatedAt) {
+			continue
+		}
+		if err := restore(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getSnapshotMeta loads and decodes a snapshot resource, mapping ErrNotFound to
+// a gRPC NOT_FOUND.
+func (s *Service) getSnapshotMeta(ctx context.Context, project, snap string) (snapshotMeta, error) {
+	var meta snapshotMeta
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSnapshot, snap)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return meta, mapError(model.NewProviderError("NotFound", "snapshot not found", 404))
+		}
+		return meta, mapError(err)
+	}
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		return meta, mapError(model.NewProviderError("Internal", "corrupt snapshot metadata", 500))
+	}
+	return meta, nil
+}
+
 // ─── IAM (google.iam.v1.IAMPolicy over topics and subscriptions) ─────────────
 
 // Owns reports whether the Pub/Sub service handles IAM for this resource name.
@@ -1111,9 +1548,49 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 		if ep, _ := pc["pushEndpoint"].(string); ep != "" {
 			p.PushEndpoint = ep
 		}
+		switch attrs := pc["attributes"].(type) {
+		case map[string]string:
+			if len(attrs) > 0 {
+				p.Attributes = attrs
+			}
+		case map[string]any:
+			m := make(map[string]string, len(attrs))
+			for k, v := range attrs {
+				if s, ok := v.(string); ok {
+					m[k] = s
+				}
+			}
+			if len(m) > 0 {
+				p.Attributes = m
+			}
+		}
+		if ot, ok := pc["oidcToken"].(map[string]any); ok {
+			aud, _ := ot["audience"].(string)
+			email, _ := ot["serviceAccountEmail"].(string)
+			if aud != "" || email != "" {
+				p.AuthenticationMethod = &pubsubpb.PushConfig_OidcToken_{
+					OidcToken: &pubsubpb.PushConfig_OidcToken{
+						Audience:            aud,
+						ServiceAccountEmail: email,
+					},
+				}
+			}
+		}
 		sub.PushConfig = p
 	}
 	return sub
+}
+
+// snapshotToProto renders a persisted snapshot as its wire form.
+func snapshotToProto(meta snapshotMeta) *pubsubpb.Snapshot {
+	snap := &pubsubpb.Snapshot{Name: meta.Name, Topic: meta.Topic}
+	if !meta.ExpireTime.IsZero() {
+		snap.ExpireTime = timestamppb.New(meta.ExpireTime)
+	}
+	if len(meta.Labels) > 0 {
+		snap.Labels = meta.Labels
+	}
+	return snap
 }
 
 // asInt coerces a decoded JSON number (float64) or a freshly-built int into an
