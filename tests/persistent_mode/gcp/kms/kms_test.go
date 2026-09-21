@@ -221,3 +221,90 @@ func TestPostgresConcurrentCreateVersion(t *testing.T) {
 		t.Fatalf("expected %d total versions (primary + %d), got %d", n+1, n, len(all))
 	}
 }
+
+// TestPostgresDeleteVersionAndCryptoKey verifies the Postgres delete paths
+// (DeleteVersion / DeleteCryptoKey) and that both deletions survive a
+// snapshot → reset → restore.
+func TestPostgresDeleteVersionAndCryptoKey(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
+	}
+
+	ctx := context.Background()
+	s := newKMSStore(t, dsn)
+	project, location, keyring, key := kmsIDs()
+
+	if err := s.CreateKeyRing(ctx, project, location, keyring, kms.KeyRing{Location: location, ID: keyring}); err != nil {
+		t.Fatalf("create keyring: %v", err)
+	}
+	if err := s.CreateCryptoKey(ctx, project, location, keyring, key, kms.CryptoKey{
+		Location: location, KeyRingID: keyring, ID: key, Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION",
+	}); err != nil {
+		t.Fatalf("create cryptokey: %v", err)
+	}
+
+	// Delete a non-primary version; it must be gone and stay gone across a
+	// snapshot/restore.
+	extra, err := s.CreateVersion(ctx, project, location, keyring, key, kms.Version{})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := s.DeleteVersion(ctx, project, location, keyring, key, extra); err != nil {
+		t.Fatalf("delete version: %v", err)
+	}
+	if _, err := s.GetVersion(ctx, project, location, keyring, key, extra); err != kms.ErrNoSuchVersion {
+		t.Fatalf("get deleted version err = %v, want ErrNoSuchVersion", err)
+	}
+	if err := s.DeleteVersion(ctx, project, location, keyring, key, extra); err != kms.ErrNoSuchVersion {
+		t.Fatalf("re-delete version err = %v, want ErrNoSuchVersion", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := s.GetVersion(ctx, project, location, keyring, key, extra); err != kms.ErrNoSuchVersion {
+		t.Fatalf("restored deleted version err = %v, want ErrNoSuchVersion", err)
+	}
+
+	// Delete every remaining version, then the crypto key itself.
+	versions, err := s.ListVersions(ctx, project, location, keyring, key)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) == 0 {
+		t.Fatal("expected at least the primary version")
+	}
+	for _, v := range versions {
+		if err := s.DeleteVersion(ctx, project, location, keyring, key, v.Version); err != nil {
+			t.Fatalf("delete version %s: %v", v.Version, err)
+		}
+	}
+	if err := s.DeleteCryptoKey(ctx, project, location, keyring, key); err != nil {
+		t.Fatalf("delete cryptokey: %v", err)
+	}
+	if _, err := s.GetCryptoKey(ctx, project, location, keyring, key); err != kms.ErrNoSuchCryptoKey {
+		t.Fatalf("get deleted cryptokey err = %v, want ErrNoSuchCryptoKey", err)
+	}
+	if err := s.DeleteCryptoKey(ctx, project, location, keyring, key); err != kms.ErrNoSuchCryptoKey {
+		t.Fatalf("re-delete cryptokey err = %v, want ErrNoSuchCryptoKey", err)
+	}
+
+	// The key deletion must survive a snapshot/restore too.
+	var buf2 bytes.Buffer
+	if err := s.Snapshot(ctx, &buf2); err != nil {
+		t.Fatalf("snapshot 2: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf2); err != nil {
+		t.Fatalf("restore 2: %v", err)
+	}
+	if _, err := s.GetCryptoKey(ctx, project, location, keyring, key); err != kms.ErrNoSuchCryptoKey {
+		t.Fatalf("restored deleted cryptokey err = %v, want ErrNoSuchCryptoKey", err)
+	}
+}

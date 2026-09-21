@@ -1,14 +1,17 @@
 //go:build gcp_persistence
 
 // Package paritygrpc_test extends the GCP Postgres persistence-parity coverage
-// to the three services that are gRPC-only: datastore, logging, and monitoring.
+// to the gRPC service surfaces: datastore, logging, monitoring, KMS and
+// Pub/Sub.
 //
-// The REST parity suite (tests/persistent_mode/gcp/parity) covers every
-// REST-exposed provider over HTTP. These three have no usable REST surface
-// (/v1/projects/p:commit, /v2/entries:write and /v3/... all 404), so their
-// probes drive the official gRPC clients instead. Those clients live in a
-// separate Go module — the same reason as tests/integration/gcp/sdk-* — so the
-// heavy cloud.google.com/go dependency graph never enters the main module.
+// The REST parity suites (tests/persistent_mode/gcp/{core,parity}) cover the
+// REST-exposed providers over HTTP. Datastore, logging and monitoring have no
+// usable REST surface (/v1/projects/p:commit, /v2/entries:write and /v3/...
+// all 404), while KMS and Pub/Sub have gRPC-only state (RetiredResources /
+// ImportJobs, and snapshot/seek ack-state) that the REST probes do not touch.
+// All five therefore drive the official gRPC clients here. Those clients live
+// in a separate Go module — the same reason as tests/integration/gcp/sdk-* — so
+// the heavy cloud.google.com/go dependency graph never enters the main module.
 //
 // For each service the test:
 //
@@ -31,6 +34,8 @@
 //	DATASTORE_EMULATOR_HOST    — datastore client target (default localhost:8081)
 //	LOGGING_EMULATOR_HOST      — logging client target (default localhost:8081)
 //	MONITORING_EMULATOR_HOST   — monitoring client target (default localhost:8081)
+//	KMS_EMULATOR_HOST          — KMS client target (default localhost:8081)
+//	PUBSUB_EMULATOR_HOST       — Pub/Sub client target (default localhost:8081)
 package paritygrpc_test
 
 import (
@@ -66,6 +71,8 @@ var probes = []probe{
 	{"datastore", seedDatastore},
 	{"logging", seedLogging},
 	{"monitoring", seedMonitoring},
+	{"kms", seedKMS},
+	{"pubsub", seedPubSub},
 }
 
 // driver wraps the running emulator's admin URL, its gRPC address, and the HTTP

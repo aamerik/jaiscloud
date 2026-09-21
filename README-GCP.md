@@ -218,7 +218,7 @@ Documented approximations: the query read-set tracks the returned entities' vers
 
 ### BigQuery: metadata only, no SQL engine
 
-`jobs.query` never evaluates SQL — it stores the query and reports `jobComplete: true` with empty results. `tabledata.insertAll` streams rows without validating them against the table schema and does not honor `insertId`-based deduplication, `skipInvalidRows`, `ignoreUnknownValues`, or `templateSuffix`. `tabledata.list` ignores `startIndex`. `projects.getServiceAccount` returns a synthetic `bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com` rather than a real service account.
+`jobs.query` never evaluates SQL — it stores the query and reports `jobComplete: true` with empty results. `tabledata.insertAll` validates rows against the table schema (missing `REQUIRED` fields and unknown fields are rejected unless `ignoreUnknownValues` is set), honors `skipInvalidRows`, and best-effort suppresses duplicate `insertId`s over a bounded, in-memory window (the dedup state is not persisted across restarts). Field *types* are not enforced, and `templateSuffix` is not supported. `tabledata.list` honors `startIndex` (offset pagination). `projects.getServiceAccount` returns a synthetic `bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com` rather than a real service account.
 
 ### Managed Kafka: metadata only, no real broker
 
