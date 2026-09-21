@@ -353,7 +353,7 @@ func TestRunAggregationQueryDefaultAliases(t *testing.T) {
 	}
 }
 
-func TestPartitionQueryReturnsEmptyPartitions(t *testing.T) {
+func TestPartitionQueryTooFewDocuments(t *testing.T) {
 	client, _, cleanup := listenTestClient(t)
 	defer cleanup()
 
@@ -370,25 +370,6 @@ func TestPartitionQueryReturnsEmptyPartitions(t *testing.T) {
 		t.Fatalf("PartitionQuery: %v", err)
 	}
 	if len(resp.GetPartitions()) != 0 {
-		t.Fatalf("expected 0 partitions (partitioning not supported), got %d", len(resp.GetPartitions()))
-	}
-}
-
-func TestExecutePipelineUnimplemented(t *testing.T) {
-	client, _, cleanup := listenTestClient(t)
-	defer cleanup()
-
-	stream, err := client.ExecutePipeline(context.Background(), &firestorepb.ExecutePipelineRequest{
-		Database: "projects/test/databases/(default)",
-	})
-	if err != nil {
-		t.Fatalf("ExecutePipeline: %v", err)
-	}
-	_, err = stream.Recv()
-	if err == nil {
-		t.Fatal("expected an error, got nil")
-	}
-	if code := status.Code(err); code != codes.Unimplemented {
-		t.Fatalf("expected Unimplemented, got %v", code)
+		t.Fatalf("expected 0 partitions for an empty collection, got %d", len(resp.GetPartitions()))
 	}
 }

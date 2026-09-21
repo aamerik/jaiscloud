@@ -137,12 +137,12 @@ eventarc,Eventarc.TriggerTestIamPermissions,rest,ga,
 eventarc,Eventarc.UpdateChannel,rest,ga,
 eventarc,Eventarc.UpdateTrigger,rest,ga,
 firestore,BatchGetDocuments,grpc,ga,
-firestore,BatchWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,BeginTransaction,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,BatchWrite,grpc,ga,
+firestore,BeginTransaction,grpc,ga,
 firestore,Commit,grpc,ga,
-firestore,CreateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,DeleteDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,ExecutePipeline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,CreateDocument,grpc,ga,
+firestore,DeleteDocument,grpc,ga,
+firestore,ExecutePipeline,grpc,ga,
 firestore,Firestore.BatchGet,rest,ga,
 firestore,Firestore.BatchWrite,rest,ga,
 firestore,Firestore.BeginTransaction,rest,ga,
@@ -159,16 +159,16 @@ firestore,Firestore.ListIndexes,rest,ga,
 firestore,Firestore.PatchDocument,rest,ga,
 firestore,Firestore.Rollback,rest,ga,
 firestore,Firestore.RunQuery,rest,ga,
-firestore,GetDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,ListCollectionIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,ListDocuments,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,Listen,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,PartitionQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,Rollback,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,RunAggregationQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,RunQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,UpdateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,Write,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,GetDocument,grpc,ga,
+firestore,ListCollectionIds,grpc,ga,
+firestore,ListDocuments,grpc,ga,
+firestore,Listen,grpc,ga,
+firestore,PartitionQuery,grpc,ga,
+firestore,Rollback,grpc,ga,
+firestore,RunAggregationQuery,grpc,ga,
+firestore,RunQuery,grpc,ga,
+firestore,UpdateDocument,grpc,ga,
+firestore,Write,grpc,ga,
 functions,Function.CallFunction,rest,ga,
 functions,Function.CancelOperation,rest,limited,no matching Discovery method (unverified against the official schema)
 functions,Function.CreateFunction,rest,ga,

@@ -11,8 +11,6 @@ import (
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -164,21 +162,48 @@ func avgField(docs []firestorestore.Document, fieldPath string) *firestorestore.
 	return firestorestore.DoubleVal(sum / float64(count))
 }
 
-// PartitionQuery returns partition cursors for parallel reads. The emulator does
-// not partition: it returns an empty partitions list, which is the proto's
-// "not supported for partitioning" signal and lets the SDK fall back to a single
-// full-range partition.
+// PartitionQuery returns partition cursors for parallel reads. The request's
+// structured query is executed through the shared provider engine and the
+// ordered result set is split into up to partition_count partitions at even
+// document boundaries; each returned cursor is the full reference name of the
+// document starting that partition. Per the proto, an empty result is returned
+// when the query yields too few documents to partition (or when the caller asks
+// for a single partition), which the SDK treats as a single full-range
+// partition.
 func (s *Service) PartitionQuery(ctx context.Context, req *firestorepb.PartitionQueryRequest) (*firestorepb.PartitionQueryResponse, error) {
-	return &firestorepb.PartitionQueryResponse{}, nil
-}
-
-// ExecutePipeline fails loudly with Unimplemented, mirroring the AWS emulator's
-// "notImplemented" convention (fail rather than silently succeed). The pinned
-// firestorepb models it as a server-streaming RPC over a general-purpose
-// Pipeline DSL (StructuredPipeline → Pipeline → stages with arbitrary names and
-// args encoded as Value trees) whose stage vocabulary is open-ended and
-// version-dependent, so a partial implementation would fabricate an incorrect
-// wire shape.
-func (s *Service) ExecutePipeline(req *firestorepb.ExecutePipelineRequest, stream firestorepb.Firestore_ExecutePipelineServer) error {
-	return status.Error(codes.Unimplemented, "ExecutePipeline is not supported by this emulator")
+	project, database, rel, ok := splitParent(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	count := int(req.GetPartitionCount())
+	if count <= 1 {
+		return &firestorepb.PartitionQueryResponse{}, nil
+	}
+	q, err := decodeStructuredQuery(req.GetStructuredQuery())
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", err.Error(), 400))
+	}
+	if project == "" {
+		project = s.resolveProject(ctx)
+	}
+	docs, err := s.svc.RunQuery(ctx, project, database, rel, q, nil)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	if len(docs) < count {
+		return &firestorepb.PartitionQueryResponse{}, nil
+	}
+	partitions := make([]*firestorepb.Cursor, 0, count-1)
+	for i := 1; i < count; i++ {
+		idx := len(docs) * i / count
+		if idx >= len(docs) {
+			break
+		}
+		partitions = append(partitions, &firestorepb.Cursor{
+			Values: []*firestorepb.Value{{
+				ValueType: &firestorepb.Value_ReferenceValue{ReferenceValue: docs[idx].Name},
+			}},
+		})
+	}
+	return &firestorepb.PartitionQueryResponse{Partitions: partitions}, nil
 }
