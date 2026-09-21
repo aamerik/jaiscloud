@@ -132,6 +132,42 @@ func DecryptData(key, ct, additionalData []byte) ([]byte, error) {
 	return gcm.Open(nil, ct[:ivLen], ct[ivLen:], additionalData)
 }
 
+// RawEncryptGCM encrypts pt with AES-GCM using the caller-supplied nonce iv,
+// binding additionalData as the AEAD associated data. Unlike EncryptData the IV
+// is not prepended: the ciphertext is ct||tag and the IV is returned separately
+// by the caller (Cloud KMS RawEncrypt semantics). The nonce must be ivLen bytes.
+func RawEncryptGCM(key, pt, additionalData, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) != gcm.NonceSize() {
+		return nil, errors.New("kms: invalid initialization vector length")
+	}
+	return gcm.Seal(nil, iv, pt, additionalData), nil
+}
+
+// RawDecryptGCM decrypts a ct||tag blob produced by RawEncryptGCM using the
+// caller-supplied nonce iv.
+func RawDecryptGCM(key, ct, additionalData, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) != gcm.NonceSize() {
+		return nil, errors.New("kms: invalid initialization vector length")
+	}
+	return gcm.Open(nil, iv, ct, additionalData)
+}
+
 // EncodeVersionedCiphertext prefixes a version number to the encrypted blob so
 // Decrypt can select the correct key material after rotation. Format:
 //

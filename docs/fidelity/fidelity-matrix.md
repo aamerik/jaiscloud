@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 271 |
-| limited | 186 |
+| ga | 296 |
+| limited | 161 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 64 | 100 | 0 | 0 |
+| grpc | 89 | 75 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -322,30 +322,30 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_64 cell(s): ga=30 limited=34 preview=0 unsupported=0_
+_64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| AsymmetricDecrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| AsymmetricSign | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| AsymmetricDecrypt | grpc | ga | — |
+| AsymmetricSign | grpc | ga | — |
 | CreateCryptoKey | grpc | ga | — |
-| CreateCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateImportJob | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateCryptoKeyVersion | grpc | ga | — |
+| CreateImportJob | grpc | ga | — |
 | CreateKeyRing | grpc | ga | — |
 | Decapsulate | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Decrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteCryptoKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Decrypt | grpc | ga | — |
+| DeleteCryptoKey | grpc | ga | — |
+| DeleteCryptoKeyVersion | grpc | ga | — |
 | DestroyCryptoKeyVersion | grpc | ga | — |
-| Encrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Encrypt | grpc | ga | — |
 | ExportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GenerateRandomBytes | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GenerateRandomBytes | grpc | ga | — |
 | GetCryptoKey | grpc | ga | — |
-| GetCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetImportJob | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetCryptoKeyVersion | grpc | ga | — |
+| GetImportJob | grpc | ga | — |
 | GetKeyRing | grpc | ga | — |
-| GetPublicKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetRetiredResource | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetPublicKey | grpc | ga | — |
+| GetRetiredResource | grpc | ga | — |
 | ImportCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ImportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | KMS.CryptoKeyCreate | rest | ga | — |
@@ -377,19 +377,19 @@ _64 cell(s): ga=30 limited=34 preview=0 unsupported=0_
 | KMS.KeyRingList | rest | ga | — |
 | KMS.KeyRingSetIamPolicy | rest | ga | — |
 | KMS.KeyRingTestIamPermissions | rest | ga | — |
-| ListCryptoKeyVersions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListCryptoKeys | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListImportJobs | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListCryptoKeyVersions | grpc | ga | — |
+| ListCryptoKeys | grpc | ga | — |
+| ListImportJobs | grpc | ga | — |
 | ListKeyRings | grpc | ga | — |
-| ListRetiredResources | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| MacSign | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| MacVerify | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RawDecrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RawEncrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RestoreCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateCryptoKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateCryptoKeyPrimaryVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListRetiredResources | grpc | ga | — |
+| MacSign | grpc | ga | — |
+| MacVerify | grpc | ga | — |
+| RawDecrypt | grpc | ga | — |
+| RawEncrypt | grpc | ga | — |
+| RestoreCryptoKeyVersion | grpc | ga | — |
+| UpdateCryptoKey | grpc | ga | — |
+| UpdateCryptoKeyPrimaryVersion | grpc | ga | — |
+| UpdateCryptoKeyVersion | grpc | ga | — |
 
 ## logging
 

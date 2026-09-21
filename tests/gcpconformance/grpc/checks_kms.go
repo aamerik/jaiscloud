@@ -22,7 +22,7 @@ import (
 // destroys eagerly) so it asserts RPC availability + a well-formed result
 // rather than re-litigating the emulator's documented destruction semantics.
 func kmsChecks() []Check {
-	return []Check{
+	checks := []Check{
 		{Service: "kms", RPC: "CreateKeyRing", KeyField: "success", Run: checkKMSCreateKeyRing},
 		{Service: "kms", RPC: "GetKeyRing", KeyField: "name", Run: checkKMSGetKeyRing},
 		{Service: "kms", RPC: "ListKeyRings", KeyField: "keyRings[].name", Run: checkKMSListKeyRings},
@@ -30,6 +30,7 @@ func kmsChecks() []Check {
 		{Service: "kms", RPC: "GetCryptoKey", KeyField: "name/primary", Run: checkKMSGetCryptoKey},
 		{Service: "kms", RPC: "DestroyCryptoKeyVersion", KeyField: "name/state=destruction", Run: checkKMSDestroyCryptoKeyVersion},
 	}
+	return append(checks, kmsExtraChecks()...)
 }
 
 func newKMSClient(ctx context.Context, cfg Config) (*kms.KeyManagementClient, error) {

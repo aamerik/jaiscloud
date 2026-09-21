@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 68,
-  "passed": 68,
+  "total": 93,
+  "passed": 93,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 9,
-    "checks": 68,
-    "passed": 68,
+    "checks": 93,
+    "passed": 93,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -30,8 +30,8 @@
     },
     {
       "service": "kms",
-      "total": 6,
-      "passed": 6,
+      "total": 31,
+      "passed": 31,
       "failed": 0,
       "unimplemented": 0
     },
@@ -148,6 +148,181 @@
       "method": "DestroyCryptoKeyVersion",
       "status": "pass",
       "key_field": "name/state=destruction"
+    },
+    {
+      "service": "kms",
+      "rpc": "Encrypt",
+      "method": "Encrypt",
+      "status": "pass",
+      "key_field": "ciphertext non-empty, name=version"
+    },
+    {
+      "service": "kms",
+      "rpc": "Decrypt",
+      "method": "Decrypt",
+      "status": "pass",
+      "key_field": "plaintext round-trips"
+    },
+    {
+      "service": "kms",
+      "rpc": "GenerateRandomBytes",
+      "method": "GenerateRandomBytes",
+      "status": "pass",
+      "key_field": "length_bytes of non-zero data"
+    },
+    {
+      "service": "kms",
+      "rpc": "CreateCryptoKeyVersion",
+      "method": "CreateCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "version name/state=ENABLED"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetCryptoKeyVersion",
+      "method": "GetCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "version name/state"
+    },
+    {
+      "service": "kms",
+      "rpc": "ListCryptoKeyVersions",
+      "method": "ListCryptoKeyVersions",
+      "status": "pass",
+      "key_field": "cryptoKeyVersions[].name contains v1"
+    },
+    {
+      "service": "kms",
+      "rpc": "UpdateCryptoKeyVersion",
+      "method": "UpdateCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "state ENABLED\u003c-\u003eDISABLED"
+    },
+    {
+      "service": "kms",
+      "rpc": "RestoreCryptoKeyVersion",
+      "method": "RestoreCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "restored state=DISABLED"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetPublicKey",
+      "method": "GetPublicKey",
+      "status": "pass",
+      "key_field": "PEM/algorithm"
+    },
+    {
+      "service": "kms",
+      "rpc": "AsymmetricSign",
+      "method": "AsymmetricSign",
+      "status": "pass",
+      "key_field": "signature verifies with public key"
+    },
+    {
+      "service": "kms",
+      "rpc": "AsymmetricDecrypt",
+      "method": "AsymmetricDecrypt",
+      "status": "pass",
+      "key_field": "plaintext round-trips"
+    },
+    {
+      "service": "kms",
+      "rpc": "MacSign",
+      "method": "MacSign",
+      "status": "pass",
+      "key_field": "mac non-empty"
+    },
+    {
+      "service": "kms",
+      "rpc": "MacVerify",
+      "method": "MacVerify",
+      "status": "pass",
+      "key_field": "success=true; wrong data=false"
+    },
+    {
+      "service": "kms",
+      "rpc": "ListCryptoKeys",
+      "method": "ListCryptoKeys",
+      "status": "pass",
+      "key_field": "cryptoKeys[].name contains sym key"
+    },
+    {
+      "service": "kms",
+      "rpc": "UpdateCryptoKey",
+      "method": "UpdateCryptoKey",
+      "status": "pass",
+      "key_field": "masked labels applied"
+    },
+    {
+      "service": "kms",
+      "rpc": "UpdateCryptoKeyPrimaryVersion",
+      "method": "UpdateCryptoKeyPrimaryVersion",
+      "status": "pass",
+      "key_field": "primary version updated"
+    },
+    {
+      "service": "kms",
+      "rpc": "RawEncrypt",
+      "method": "RawEncrypt",
+      "status": "pass",
+      "key_field": "ciphertext/iv/tag_length"
+    },
+    {
+      "service": "kms",
+      "rpc": "RawDecrypt",
+      "method": "RawDecrypt",
+      "status": "pass",
+      "key_field": "plaintext round-trips with IV+AAD"
+    },
+    {
+      "service": "kms",
+      "rpc": "DeleteCryptoKeyVersion",
+      "method": "DeleteCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "version absent after delete"
+    },
+    {
+      "service": "kms",
+      "rpc": "DeleteCryptoKey",
+      "method": "DeleteCryptoKey",
+      "status": "pass",
+      "key_field": "key absent after delete"
+    },
+    {
+      "service": "kms",
+      "rpc": "ListRetiredResources",
+      "method": "ListRetiredResources",
+      "status": "pass",
+      "key_field": "retiredResources[] contains deleted key"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetRetiredResource",
+      "method": "GetRetiredResource",
+      "status": "pass",
+      "key_field": "originalResource/deleteTime"
+    },
+    {
+      "service": "kms",
+      "rpc": "CreateImportJob",
+      "method": "CreateImportJob",
+      "status": "pass",
+      "key_field": "name/importMethod/state=ACTIVE/publicKey"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetImportJob",
+      "method": "GetImportJob",
+      "status": "pass",
+      "key_field": "importMethod/state"
+    },
+    {
+      "service": "kms",
+      "rpc": "ListImportJobs",
+      "method": "ListImportJobs",
+      "status": "pass",
+      "key_field": "importJobs[] contains job"
     },
     {
       "service": "secretmanager",
