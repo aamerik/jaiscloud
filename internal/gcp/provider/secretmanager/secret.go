@@ -58,6 +58,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 type secretMeta struct {
 	Name           string
 	Labels         map[string]string
+	Annotations    map[string]string
 	CreateTime     string
 	NextVer        int
 	Rotation       *secretmanagerstore.Rotation
@@ -111,18 +112,33 @@ func secretID(name string) string {
 func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 	tc, _ := time.Parse(time.RFC3339Nano, m.CreateTime)
 	return secretmanagerstore.Secret{
-		ID: secretID(m.Name), Labels: m.Labels, CreateTime: tc, NextVer: m.NextVer,
+		ID: secretID(m.Name), Labels: m.Labels, Annotations: m.Annotations, CreateTime: tc, NextVer: m.NextVer,
 		Rotation: m.Rotation, VersionAliases: m.VersionAliases,
 		KmsKeyName: m.KmsKeyName,
 	}
 }
 
 func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) secretMeta {
-	m := secretMeta{Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, NextVer: s.NextVer, Rotation: s.Rotation, VersionAliases: s.VersionAliases, KmsKeyName: s.KmsKeyName}
+	m := secretMeta{Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, Annotations: s.Annotations, NextVer: s.NextVer, Rotation: s.Rotation, VersionAliases: s.VersionAliases, KmsKeyName: s.KmsKeyName}
 	if !s.CreateTime.IsZero() {
 		m.CreateTime = s.CreateTime.Format(time.RFC3339Nano)
 	}
 	return m
+}
+
+// annotationsFromBody extracts the annotations map from a request body.
+func annotationsFromBody(body map[string]any) map[string]string {
+	m, ok := body["annotations"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // rotationFromBody extracts the rotation schedule from a request body.
@@ -222,6 +238,9 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			}
 		}
 	}
+	if annotations := annotationsFromBody(body); annotations != nil {
+		m.Annotations = annotations
+	}
 	if r := rotationFromBody(body); r != nil {
 		m.Rotation = r
 	}
@@ -293,6 +312,9 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 						m.Labels[k] = sv
 					}
 				}
+			}
+			if annotations := annotationsFromBody(body); annotations != nil {
+				m.Annotations = annotations
 			}
 			if r := rotationFromBody(body); r != nil {
 				m.Rotation = r
@@ -694,6 +716,9 @@ func secretToMap(m secretMeta) map[string]any {
 	}
 	if m.Labels != nil {
 		out["labels"] = m.Labels
+	}
+	if m.Annotations != nil {
+		out["annotations"] = m.Annotations
 	}
 	if m.Rotation != nil {
 		out["rotation"] = map[string]any{

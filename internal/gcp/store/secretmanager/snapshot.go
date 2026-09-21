@@ -66,18 +66,19 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		Version   Version `json:"version"`
 	}
 	secrets := make([]secretRow, 0)
-	rows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases FROM jc_sm_secrets ORDER BY project_id, secret_id`)
+	rows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations FROM jc_sm_secrets ORDER BY project_id, secret_id`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var r secretRow
-		var labels, rotation, aliases []byte
-		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases); err != nil {
+		var labels, annotations, rotation, aliases []byte
+		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations); err != nil {
 			rows.Close()
 			return err
 		}
 		json.Unmarshal(labels, &r.Secret.Labels)
+		json.Unmarshal(annotations, &r.Secret.Annotations)
 		if len(rotation) > 0 {
 			json.Unmarshal(rotation, &r.Secret.Rotation)
 		}
@@ -145,15 +146,18 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	}
 	for _, r := range snap.Secrets {
 		labels, _ := json.Marshal(r.Secret.Labels)
-		var rotation, aliases []byte
+		var rotation, aliases, annotations []byte
 		if r.Secret.Rotation != nil {
 			rotation, _ = json.Marshal(r.Secret.Rotation)
 		}
 		if r.Secret.VersionAliases != nil {
 			aliases, _ = json.Marshal(r.Secret.VersionAliases)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases)); err != nil {
+		if r.Secret.Annotations != nil {
+			annotations, _ = json.Marshal(r.Secret.Annotations)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations)); err != nil {
 			return err
 		}
 	}

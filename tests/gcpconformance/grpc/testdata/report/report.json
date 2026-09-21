@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 148,
-  "passed": 148,
+  "total": 158,
+  "passed": 158,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 9,
-    "checks": 148,
-    "passed": 148,
+    "checks": 158,
+    "passed": 158,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -65,8 +65,8 @@
     },
     {
       "service": "secretmanager",
-      "total": 6,
-      "passed": 6,
+      "total": 16,
+      "passed": 16,
       "failed": 0,
       "unimplemented": 0
     },
@@ -498,6 +498,76 @@
       "method": "DeleteSecret",
       "status": "pass",
       "key_field": "success"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "GetSecretVersion",
+      "method": "GetSecretVersion",
+      "status": "pass",
+      "key_field": "name/state=ENABLED/client_specified_payload_checksum"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "ListSecretVersions",
+      "method": "ListSecretVersions",
+      "status": "pass",
+      "key_field": "versions[].name contains fixture version"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "EnableSecretVersion",
+      "method": "EnableSecretVersion",
+      "status": "pass",
+      "key_field": "state DISABLED-\u003eENABLED"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "DisableSecretVersion",
+      "method": "DisableSecretVersion",
+      "status": "pass",
+      "key_field": "state ENABLED-\u003eDISABLED"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "DestroySecretVersion",
+      "method": "DestroySecretVersion",
+      "status": "pass",
+      "key_field": "state=DESTROYED + destroy_time"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "existing secret returns an empty policy"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trips through GetIamPolicy"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "UpdateSecret (update_mask)",
+      "method": "UpdateSecret",
+      "status": "pass",
+      "key_field": "masked labels/annotations applied, unmasked field preserved"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "DeleteSecret",
+      "method": "DeleteSecret",
+      "status": "pass",
+      "key_field": "fixture secret absent after delete"
     },
     {
       "service": "pubsub",

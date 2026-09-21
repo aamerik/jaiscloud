@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // secretTestService dials a real in-process gRPC server backed by the memory
@@ -266,6 +267,70 @@ func TestSecretManagerIamPolicy(t *testing.T) {
 	// IAM on a missing secret → NotFound.
 	if _, err := iam.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: "projects/test/secrets/missing"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("GetIamPolicy missing err = %v, want NotFound", err)
+	}
+}
+
+func TestSecretManagerAnnotationsUpdateMask(t *testing.T) {
+	client, _, cleanup := secretTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const secret = "projects/test/secrets/annotated"
+
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "annotated",
+		Secret: &secretmanagerpb.Secret{
+			Labels:      map[string]string{"env": "dev"},
+			Annotations: map[string]string{"note": "fixture"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	// Mask "labels": only labels are written; the unmasked annotation survives
+	// even though the request Secret carries none.
+	updated, err := client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			Name:   secret,
+			Labels: map[string]string{"env": "prod"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSecret(labels): %v", err)
+	}
+	if updated.GetLabels()["env"] != "prod" {
+		t.Fatalf("UpdateSecret labels[env] = %q, want prod", updated.GetLabels()["env"])
+	}
+	if updated.GetAnnotations()["note"] != "fixture" {
+		t.Fatalf("UpdateSecret(labels) clobbered annotation: %v", updated.GetAnnotations())
+	}
+
+	// Mask "annotations": labels written above survive.
+	updated, err = client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			Name:        secret,
+			Annotations: map[string]string{"note": "updated"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"annotations"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSecret(annotations): %v", err)
+	}
+	if updated.GetAnnotations()["note"] != "updated" {
+		t.Fatalf("UpdateSecret annotations[note] = %q, want updated", updated.GetAnnotations()["note"])
+	}
+	if updated.GetLabels()["env"] != "prod" {
+		t.Fatalf("UpdateSecret(annotations) clobbered label: %v", updated.GetLabels())
+	}
+
+	// The masked writes must persist.
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: secret})
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	if got.GetAnnotations()["note"] != "updated" || got.GetLabels()["env"] != "prod" {
+		t.Fatalf("UpdateSecret not persisted: labels=%v annotations=%v", got.GetLabels(), got.GetAnnotations())
 	}
 }
 

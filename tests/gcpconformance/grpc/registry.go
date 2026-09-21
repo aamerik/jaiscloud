@@ -64,6 +64,7 @@ func Registry() []Check {
 	checks = append(checks, storageChecks()...)
 	checks = append(checks, kmsChecks()...)
 	checks = append(checks, secretManagerChecks()...)
+	checks = append(checks, secretManagerExtraChecks()...)
 	checks = append(checks, pubSubChecks()...)
 	checks = append(checks, pubSubExtraChecks()...)
 	checks = append(checks, firestoreChecks()...)
