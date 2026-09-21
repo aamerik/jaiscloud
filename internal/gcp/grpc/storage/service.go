@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"sort"
@@ -521,6 +522,9 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if req.GetBucket().GetVersioning() != nil && req.GetBucket().GetVersioning().GetEnabled() {
 		meta["versioning"] = map[string]any{"enabled": true}
 	}
+	if rp := bucketRetentionToMap(req.GetBucket().GetRetentionPolicy()); rp != nil {
+		meta["retentionPolicy"] = rp
+	}
 
 	if err := s.objects.CreateBucket(ctx, project, name, meta); err != nil {
 		if errors.Is(err, gcs.ErrAlreadyExists) {
@@ -634,6 +638,9 @@ func mapBucketMutationError(err error) error {
 // bucketRetentionToMap converts a proto bucket retention policy into the map
 // shape the REST provider persists (decimal-second retentionPeriod string,
 // optional effectiveTime RFC 3339, isLocked bool). Returns nil for a nil policy.
+// GCS populates effectiveTime server-side when a policy is applied, so an
+// absent request value is defaulted to now — the official Go client only
+// surfaces a retention policy whose effectiveTime is set.
 func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 	if rp == nil {
 		return nil
@@ -644,6 +651,8 @@ func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 	}
 	if et := rp.GetEffectiveTime(); et != nil {
 		out["effectiveTime"] = et.AsTime().Format(time.RFC3339Nano)
+	} else {
+		out["effectiveTime"] = clock.Now().Format(time.RFC3339Nano)
 	}
 	if rp.GetIsLocked() {
 		out["isLocked"] = true
@@ -658,13 +667,7 @@ func bucketRetentionToMap(rp *storagepb.Bucket_RetentionPolicy) map[string]any {
 // as a map/message (labels, versioning, retentionPolicy) and is otherwise left
 // untouched.
 func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) {
-	if maskIncludes(mask, "labels") {
-		if labels := pb.GetLabels(); len(labels) > 0 {
-			meta["labels"] = labels
-		} else {
-			delete(meta, "labels")
-		}
-	}
+	applyBucketLabelsMask(meta, pb, mask)
 	if maskIncludes(mask, "versioning") {
 		if v := pb.GetVersioning(); v != nil && v.GetEnabled() {
 			meta["versioning"] = map[string]any{"enabled": true}
@@ -684,6 +687,74 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 		} else {
 			delete(meta, "retentionPolicy")
 		}
+	}
+}
+
+// applyBucketLabelsMask applies the labels-related update-mask paths. The bare
+// "labels" (or "*") replaces the whole label map; per-key paths of the form
+// "labels.<key>" — the shape the official GCS clients send — merge an
+// individual label, or delete it when the request omits the key.
+func applyBucketLabelsMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) {
+	whole := false
+	var keys []string
+	for _, p := range mask.GetPaths() {
+		if p == "*" || p == "labels" {
+			whole = true
+			continue
+		}
+		if key, ok := strings.CutPrefix(p, "labels."); ok && key != "" {
+			keys = append(keys, key)
+		}
+	}
+	if whole {
+		if labels := pb.GetLabels(); len(labels) > 0 {
+			meta["labels"] = labels
+		} else {
+			delete(meta, "labels")
+		}
+		return
+	}
+	if len(keys) == 0 {
+		return
+	}
+	labels := bucketLabels(meta)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for _, key := range keys {
+		if v, ok := pb.GetLabels()[key]; ok {
+			labels[key] = v
+		} else {
+			delete(labels, key)
+		}
+	}
+	if len(labels) > 0 {
+		meta["labels"] = labels
+	} else {
+		delete(meta, "labels")
+	}
+}
+
+// bucketLabels normalizes the stored label map — map[string]string from a
+// create, or map[string]any after a snapshot/JSON round-trip — to string values.
+func bucketLabels(meta map[string]any) map[string]string {
+	switch v := meta["labels"].(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			out[k] = val
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			if s, ok := val.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -754,6 +825,9 @@ func (s *Service) LockBucketRetentionPolicy(ctx context.Context, req *storagepb.
 			next[k] = v
 		}
 		next["isLocked"] = true
+		if _, ok := next["effectiveTime"]; !ok {
+			next["effectiveTime"] = clock.Now().Format(time.RFC3339Nano)
+		}
 		meta["retentionPolicy"] = next
 		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
 		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
@@ -1670,21 +1744,33 @@ func (s *Service) ReadObject(req *storagepb.ReadObjectRequest, stream storagepb.
 	}
 	data := plain[start:end]
 
-	// Stream the data in bounded chunks.
+	// Stream the data in bounded chunks. Each chunk carries its own CRC32C of
+	// the content field: real GCS always sets it, and the official Go client's
+	// zero-copy ReadObject decoder requires a field to follow the content when
+	// the content ends exactly on a message boundary (otherwise it advances its
+	// buffer cursor past the last buffer and panics on the next read).
 	const chunk = 2 << 20 // 2 MiB
 	for len(data) > 0 {
 		n := chunk
 		if n > len(data) {
 			n = len(data)
 		}
+		content := data[:n]
+		crc := crc32cOf(content)
 		if err := stream.Send(&storagepb.ReadObjectResponse{
-			ChecksummedData: &storagepb.ChecksummedData{Content: data[:n]},
+			ChecksummedData: &storagepb.ChecksummedData{Content: content, Crc32C: &crc},
 		}); err != nil {
 			return err
 		}
 		data = data[n:]
 	}
 	return nil
+}
+
+// crc32cOf returns the CRC32C-Castagnoli checksum of data, the digest GCS
+// carries in ChecksummedData.crc32c.
+func crc32cOf(data []byte) uint32 {
+	return crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
 }
 
 // readRange resolves read_offset/read_limit into a [start,end) byte range.

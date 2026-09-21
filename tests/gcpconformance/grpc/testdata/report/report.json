@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 114,
-  "passed": 114,
+  "total": 133,
+  "passed": 133,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 9,
-    "checks": 114,
-    "passed": 114,
+    "checks": 133,
+    "passed": 133,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -72,8 +72,8 @@
     },
     {
       "service": "storage",
-      "total": 4,
-      "passed": 4,
+      "total": 23,
+      "passed": 23,
       "failed": 0,
       "unimplemented": 0
     }
@@ -106,6 +106,139 @@
       "method": "DeleteBucket",
       "status": "pass",
       "key_field": "success"
+    },
+    {
+      "service": "storage",
+      "rpc": "GetObject",
+      "method": "GetObject",
+      "status": "pass",
+      "key_field": "name/size/contentType"
+    },
+    {
+      "service": "storage",
+      "rpc": "DeleteObject",
+      "method": "DeleteObject",
+      "status": "pass",
+      "key_field": "object absent after delete"
+    },
+    {
+      "service": "storage",
+      "rpc": "ListObjects",
+      "method": "ListObjects",
+      "status": "pass",
+      "key_field": "objects[] contains prefixed fixture"
+    },
+    {
+      "service": "storage",
+      "rpc": "UpdateObject",
+      "method": "UpdateObject",
+      "status": "pass",
+      "key_field": "masked metadata applied"
+    },
+    {
+      "service": "storage",
+      "rpc": "ComposeObject",
+      "method": "ComposeObject",
+      "status": "pass",
+      "key_field": "componentCount=2, concatenated bytes"
+    },
+    {
+      "service": "storage",
+      "rpc": "RewriteObject",
+      "method": "RewriteObject",
+      "status": "pass",
+      "key_field": "done=true, copied bytes/metadata"
+    },
+    {
+      "service": "storage",
+      "rpc": "MoveObject",
+      "method": "MoveObject",
+      "status": "pass",
+      "key_field": "source gone, destination present"
+    },
+    {
+      "service": "storage",
+      "rpc": "RestoreObject",
+      "method": "RestoreObject",
+      "status": "pass",
+      "key_field": "restored generation live"
+    },
+    {
+      "service": "storage",
+      "rpc": "ReadObject",
+      "method": "ReadObject",
+      "status": "pass",
+      "key_field": "range bytes + contentRange"
+    },
+    {
+      "service": "storage",
+      "rpc": "WriteObject",
+      "method": "WriteObject",
+      "status": "pass",
+      "key_field": "client-stream resource name/size"
+    },
+    {
+      "service": "storage",
+      "rpc": "BidiWriteObject",
+      "method": "BidiWriteObject",
+      "status": "pass",
+      "key_field": "streamed bytes round-trip"
+    },
+    {
+      "service": "storage",
+      "rpc": "StartResumableWrite",
+      "method": "StartResumableWrite",
+      "status": "pass",
+      "key_field": "upload_id non-empty"
+    },
+    {
+      "service": "storage",
+      "rpc": "QueryWriteStatus",
+      "method": "QueryWriteStatus",
+      "status": "pass",
+      "key_field": "persisted_size=0 for fresh upload"
+    },
+    {
+      "service": "storage",
+      "rpc": "CancelResumableWrite",
+      "method": "CancelResumableWrite",
+      "status": "pass",
+      "key_field": "status after cancel = NotFound"
+    },
+    {
+      "service": "storage",
+      "rpc": "UpdateBucket",
+      "method": "UpdateBucket",
+      "status": "pass",
+      "key_field": "masked labels applied"
+    },
+    {
+      "service": "storage",
+      "rpc": "LockBucketRetentionPolicy",
+      "method": "LockBucketRetentionPolicy",
+      "status": "pass",
+      "key_field": "retentionPolicy.isLocked"
+    },
+    {
+      "service": "storage",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "default etag present"
+    },
+    {
+      "service": "storage",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trips"
+    },
+    {
+      "service": "storage",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions returned"
     },
     {
       "service": "kms",

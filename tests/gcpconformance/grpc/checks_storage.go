@@ -14,12 +14,13 @@ import (
 // storageChecks covers the Cloud Storage gRPC v2 surface (google.storage.v2.Storage)
 // via the official cloud.google.com/go/storage gRPC client.
 func storageChecks() []Check {
-	return []Check{
+	checks := []Check{
 		{Service: "storage", RPC: "CreateBucket", KeyField: "success", Run: checkStorageCreateBucket},
 		{Service: "storage", RPC: "GetBucket", KeyField: "name", Run: checkStorageGetBucket},
 		{Service: "storage", RPC: "ListBuckets", KeyField: "buckets[].name", Run: checkStorageListBuckets},
 		{Service: "storage", RPC: "DeleteBucket", KeyField: "success", Run: checkStorageDeleteBucket},
 	}
+	return append(checks, storageExtraChecks()...)
 }
 
 func storageBucketName(cfg Config) string { return cfg.ResourceName("gcpc-grpc-bucket") }

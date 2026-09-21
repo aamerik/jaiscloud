@@ -50,8 +50,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 317 |
-| limited | 140 |
+| ga | 336 |
+| limited | 121 |
 | preview | 37 |
 | unsupported | 3 |
 | **total** | **497** |
@@ -61,7 +61,7 @@ fails CI if the committed matrix drifts.
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 207 | 86 | 37 | 3 |
-| gRPC (proto descriptors + official-client conformance) | 110 | 54 | 0 | 0 |
+| gRPC (proto descriptors + official-client conformance) | 129 | 35 | 0 | 0 |
 
 gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,
 Operations (long-running)**.
@@ -130,9 +130,9 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **114/114 checks pass** (Datastore 11,
+- **gRPC** — official `cloud.google.com/go` clients: **133/133 checks pass** (Datastore 11,
   Firestore 3, KMS 31, Logging 5, Monitoring 24, Operations 5, Pub/Sub 25, Secret Manager 6,
-  Storage 4) against `:8081`.
+  Storage 23) against `:8081`.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
@@ -185,12 +185,12 @@ high-severity divergence, so these are recorded, not fatal.
   `gcloud functions list` and `gcloud functions describe` pass. v2 `deploy` is not supported —
   it additionally requires `/v2/.../runtimes` and a resumable source upload. `Function.GetLocation`
   is `limited` (no matching Discovery method).
-- **gRPC** — **54** of **164** cells remain `limited`: verified against proto descriptors only.
-  The other **110** are `ga`, verified with the official `cloud.google.com/go` clients against a
-  live emulator (Datastore 8, Storage 4, KMS 31, Secret Manager 6, Logging 5, Operations 5,
-  Pub/Sub 25, Firestore 2, Monitoring 24). The conformance harness exercises 114 checks over those
-  110 proto methods (Datastore 11, Firestore 3, KMS 31, Monitoring 24, Operations 5, the rest one
-  per method). KMS `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
+- **gRPC** — **35** of **164** cells remain `limited`: verified against proto descriptors only.
+  The other **129** are `ga`, verified with the official `cloud.google.com/go` clients against a
+  live emulator (Datastore 8, Storage 23, KMS 31, Secret Manager 6, Logging 5, Operations 5,
+  Pub/Sub 25, Firestore 2, Monitoring 24). The conformance harness exercises 133 checks over those
+  129 proto methods (Datastore 11, Firestore 3, KMS 31, Monitoring 24, Operations 5, Storage 23,
+  the rest one per method). KMS `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
   `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`.
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): GCS gRPC v2

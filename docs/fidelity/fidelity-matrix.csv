@@ -435,25 +435,25 @@ secretmanager,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors 
 secretmanager,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,UpdateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,BidiReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,BidiWriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,CancelResumableWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,ComposeObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,BidiWriteObject,grpc,ga,
+storage,CancelResumableWrite,grpc,ga,
+storage,ComposeObject,grpc,ga,
 storage,CreateBucket,grpc,ga,
 storage,DeleteBucket,grpc,ga,
-storage,DeleteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,DeleteObject,grpc,ga,
 storage,GetBucket,grpc,ga,
-storage,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,GetObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,GetIamPolicy,grpc,ga,
+storage,GetObject,grpc,ga,
 storage,ListBuckets,grpc,ga,
-storage,ListObjects,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,LockBucketRetentionPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,MoveObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,QueryWriteStatus,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,ReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,RestoreObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,RewriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,StartResumableWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ListObjects,grpc,ga,
+storage,LockBucketRetentionPolicy,grpc,ga,
+storage,MoveObject,grpc,ga,
+storage,QueryWriteStatus,grpc,ga,
+storage,ReadObject,grpc,ga,
+storage,RestoreObject,grpc,ga,
+storage,RewriteObject,grpc,ga,
+storage,SetIamPolicy,grpc,ga,
+storage,StartResumableWrite,grpc,ga,
 storage,Storage.BucketACLInsert,rest,ga,
 storage,Storage.BucketACLList,rest,ga,
 storage,Storage.BucketsDelete,rest,ga,
@@ -482,10 +482,10 @@ storage,Storage.ObjectsRestore,rest,ga,
 storage,Storage.ObjectsRewrite,rest,ga,
 storage,Storage.ObjectsSetIamPolicy,rest,ga,
 storage,Storage.ObjectsUpdate,rest,ga,
-storage,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,UpdateBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,UpdateObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,WriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,TestIamPermissions,grpc,ga,
+storage,UpdateBucket,grpc,ga,
+storage,UpdateObject,grpc,ga,
+storage,WriteObject,grpc,ga,
 workflowexecutions,WorkflowExecution.CancelExecution,rest,ga,
 workflowexecutions,WorkflowExecution.CreateExecution,rest,ga,
 workflowexecutions,WorkflowExecution.GetExecution,rest,ga,

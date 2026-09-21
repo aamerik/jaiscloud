@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 317 |
-| limited | 140 |
+| ga | 336 |
+| limited | 121 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 110 | 54 | 0 | 0 |
+| grpc | 129 | 35 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -603,30 +603,30 @@ _32 cell(s): ga=21 limited=11 preview=0 unsupported=0_
 
 ## storage
 
-_52 cell(s): ga=32 limited=20 preview=0 unsupported=0_
+_52 cell(s): ga=51 limited=1 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | BidiReadObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| BidiWriteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CancelResumableWrite | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ComposeObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| BidiWriteObject | grpc | ga | — |
+| CancelResumableWrite | grpc | ga | — |
+| ComposeObject | grpc | ga | — |
 | CreateBucket | grpc | ga | — |
 | DeleteBucket | grpc | ga | — |
-| DeleteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteObject | grpc | ga | — |
 | GetBucket | grpc | ga | — |
-| GetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetIamPolicy | grpc | ga | — |
+| GetObject | grpc | ga | — |
 | ListBuckets | grpc | ga | — |
-| ListObjects | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| LockBucketRetentionPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| MoveObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| QueryWriteStatus | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ReadObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RestoreObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RewriteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| SetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| StartResumableWrite | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListObjects | grpc | ga | — |
+| LockBucketRetentionPolicy | grpc | ga | — |
+| MoveObject | grpc | ga | — |
+| QueryWriteStatus | grpc | ga | — |
+| ReadObject | grpc | ga | — |
+| RestoreObject | grpc | ga | — |
+| RewriteObject | grpc | ga | — |
+| SetIamPolicy | grpc | ga | — |
+| StartResumableWrite | grpc | ga | — |
 | Storage.BucketACLInsert | rest | ga | — |
 | Storage.BucketACLList | rest | ga | — |
 | Storage.BucketsDelete | rest | ga | — |
@@ -655,10 +655,10 @@ _52 cell(s): ga=32 limited=20 preview=0 unsupported=0_
 | Storage.ObjectsRewrite | rest | ga | — |
 | Storage.ObjectsSetIamPolicy | rest | ga | — |
 | Storage.ObjectsUpdate | rest | ga | — |
-| TestIamPermissions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateBucket | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| WriteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| TestIamPermissions | grpc | ga | — |
+| UpdateBucket | grpc | ga | — |
+| UpdateObject | grpc | ga | — |
+| WriteObject | grpc | ga | — |
 
 ## workflowexecutions
 
