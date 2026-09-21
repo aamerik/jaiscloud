@@ -26,9 +26,11 @@
 //     and condition_sql are stored but never evaluated.
 //   - ListTimeSeries supports only the metric.type / resource.type equality
 //     filter subset.
-//   - NotificationChannelService supports CRUD only;
-//     ListNotificationChannelDescriptors, GetNotificationChannelDescriptor,
-//     and the verification-code RPCs are Unimplemented.
+//   - NotificationChannelService implements CRUD plus the descriptor catalog
+//     and verification-code RPCs. The descriptor catalog is a small static set
+//     of well-known channel types; SendNotificationChannelVerificationCode is
+//     a no-op success (no delivery) and GetNotificationChannelVerificationCode
+//     returns a deterministic synthetic code.
 package monitoring
 
 import (
@@ -179,6 +181,20 @@ func notificationChannelName(project, id string) string {
 func splitNotificationChannelName(name string) (project, id string, ok bool) {
 	parts := strings.Split(name, "/")
 	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "notificationChannels" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
+// splitNotificationChannelDescriptorName parses
+// "projects/{p}/notificationChannelDescriptors/{type}". Channel types contain
+// no slashes, so the name has exactly four segments.
+func splitNotificationChannelDescriptorName(name string) (project, typ string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "notificationChannelDescriptors" {
+		return "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" {
 		return "", "", false
 	}
 	return parts[1], parts[3], true
@@ -572,6 +588,108 @@ func (s *Service) DeleteNotificationChannel(ctx context.Context, req *monitoring
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// ListNotificationChannelDescriptors returns the static catalog of well-known
+// notification channel types (email, sms, pubsub, webhook_tokenauth, slack).
+// Channel descriptors are globally published and carry no per-project state, so
+// the catalog is served in-memory rather than persisted.
+func (s *Service) ListNotificationChannelDescriptors(ctx context.Context, req *monitoringpb.ListNotificationChannelDescriptorsRequest) (*monitoringpb.ListNotificationChannelDescriptorsResponse, error) {
+	project := s.project(ctx, req.GetName())
+	all := notificationChannelDescriptors(project)
+	page, next := pageSlice(all, req.GetPageSize(), req.GetPageToken())
+	return &monitoringpb.ListNotificationChannelDescriptorsResponse{
+		ChannelDescriptors: page,
+		NextPageToken:      next,
+	}, nil
+}
+
+// GetNotificationChannelDescriptor returns the canonical descriptor for a
+// notification channel type. An unknown type is NotFound, matching real Cloud
+// Monitoring.
+func (s *Service) GetNotificationChannelDescriptor(ctx context.Context, req *monitoringpb.GetNotificationChannelDescriptorRequest) (*monitoringpb.NotificationChannelDescriptor, error) {
+	project, typ, ok := splitNotificationChannelDescriptorName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel descriptor name: "+req.GetName(), 400))
+	}
+	d, ok := lookupNotificationChannelDescriptor(project, typ)
+	if !ok {
+		return nil, mapError(model.NewProviderError("NotFound", "notification channel descriptor not found: "+typ, 404))
+	}
+	return d, nil
+}
+
+// SendNotificationChannelVerificationCode resolves the target channel and
+// returns success. The emulator performs no delivery (there is no mail/SMS
+// gateway), but a missing channel is still NotFound so the call is not a blind
+// accept.
+func (s *Service) SendNotificationChannelVerificationCode(ctx context.Context, req *monitoringpb.SendNotificationChannelVerificationCodeRequest) (*emptypb.Empty, error) {
+	project, id, ok := splitNotificationChannelName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetName(), 400))
+	}
+	if _, err := s.store.GetNotificationChannel(ctx, project, id); err != nil {
+		return nil, mapError(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// verificationCodeTTL is the lifetime the emulator attaches to a synthesized
+// verification code when the request carries no expiration.
+const verificationCodeTTL = time.Hour
+
+// GetNotificationChannelVerificationCode returns a deterministic synthetic
+// verification code for an existing channel. The code is derived from the
+// channel id (so a given channel always yields the same code within a
+// process), and the expiration echoes the requested time when supplied,
+// otherwise now + verificationCodeTTL.
+func (s *Service) GetNotificationChannelVerificationCode(ctx context.Context, req *monitoringpb.GetNotificationChannelVerificationCodeRequest) (*monitoringpb.GetNotificationChannelVerificationCodeResponse, error) {
+	project, id, ok := splitNotificationChannelName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetName(), 400))
+	}
+	c, err := s.store.GetNotificationChannel(ctx, project, id)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	expire := clock.Now().Add(verificationCodeTTL)
+	if req.GetExpireTime() != nil {
+		expire = req.GetExpireTime().AsTime()
+	}
+	return &monitoringpb.GetNotificationChannelVerificationCodeResponse{
+		Code:       verificationCodeFor(c.ID),
+		ExpireTime: timestamppb.New(expire),
+	}, nil
+}
+
+// VerifyNotificationChannel marks the channel VERIFIED (the emulator's
+// synthetic code path always succeeds) and returns the updated channel, which
+// is what real Cloud Monitoring returns.
+func (s *Service) VerifyNotificationChannel(ctx context.Context, req *monitoringpb.VerifyNotificationChannelRequest) (*monitoringpb.NotificationChannel, error) {
+	project, id, ok := splitNotificationChannelName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid notification channel name: "+req.GetName(), 400))
+	}
+	c, err := s.store.UpdateNotificationChannelAtomic(ctx, project, id, func(stored monitoringstore.NotificationChannel) (monitoringstore.NotificationChannel, error) {
+		stored.VerificationStatus = int32(monitoringpb.NotificationChannel_VERIFIED)
+		stored.UpdateTime = clock.Now()
+		return stored, nil
+	})
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return notificationChannelToProto(c, project), nil
+}
+
+// verificationCodeFor derives a stable, non-empty synthetic verification code
+// from a channel id. It need not be cryptographically strong: the emulator
+// never delivers or compares it.
+func verificationCodeFor(id string) string {
+	compact := strings.ReplaceAll(id, "-", "")
+	if len(compact) > 10 {
+		compact = compact[:10]
+	}
+	return "JC-" + strings.ToUpper(compact)
 }
 
 // ─── proto ↔ internal transcoding ─────────────────────────────────────────────

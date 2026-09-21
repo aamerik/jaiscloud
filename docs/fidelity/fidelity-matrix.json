@@ -3,15 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 247,
-      "limited": 210,
+      "ga": 271,
+      "limited": 186,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "ga": 40,
-        "limited": 124
+        "ga": 64,
+        "limited": 100
       },
       "rest": {
         "ga": 207,
@@ -78,7 +78,7 @@
         "ga": 19
       },
       "monitoring": {
-        "limited": 24
+        "ga": 24
       },
       "operations": {
         "ga": 5
@@ -3695,250 +3695,250 @@
       "service": "monitoring",
       "operation": "CreateAlertPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "CreateMetricDescriptor",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "CreateNotificationChannel",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "CreateServiceTimeSeries",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "CreateTimeSeries",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "DeleteAlertPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "DeleteMetricDescriptor",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "DeleteNotificationChannel",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetAlertPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetMetricDescriptor",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetMonitoredResourceDescriptor",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetNotificationChannel",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetNotificationChannelDescriptor",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "GetNotificationChannelVerificationCode",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListAlertPolicies",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListMetricDescriptors",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListMonitoredResourceDescriptors",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListNotificationChannelDescriptors",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListNotificationChannels",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "ListTimeSeries",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "SendNotificationChannelVerificationCode",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "UpdateAlertPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "UpdateNotificationChannel",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "monitoring",
       "operation": "VerifyNotificationChannel",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

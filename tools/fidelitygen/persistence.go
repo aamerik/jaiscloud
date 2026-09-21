@@ -39,6 +39,7 @@ package main
 //	compute            -> internal/store (ResourceStore)
 //	memorystore        -> internal/store (ResourceStore)
 //	logging            -> internal/gcp/store/logging
+//	monitoring         -> internal/gcp/store/monitoring
 //
 // Every enumerated REST service therefore qualifies today, and the gRPC-only
 // data services (datastore, logging) qualify via their own dedicated stores, so
@@ -74,5 +75,6 @@ var persistentBackends = map[string]bool{
 	"compute":            true,
 	"memorystore":        true,
 	"logging":            true,
+	"monitoring":         true,
 	"operations":         true,
 }

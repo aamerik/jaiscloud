@@ -329,30 +329,30 @@ metastore,Metastore.QueryMetadata,rest,ga,
 metastore,Metastore.RestoreService,rest,ga,
 metastore,Metastore.UpdateMetadataImport,rest,ga,
 metastore,Metastore.UpdateService,rest,ga,
-monitoring,CreateAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,CreateMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,CreateNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,CreateServiceTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,CreateTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,DeleteAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,DeleteMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,DeleteNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetMetricDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetMonitoredResourceDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetNotificationChannelDescriptor,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,GetNotificationChannelVerificationCode,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListAlertPolicies,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListMetricDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListMonitoredResourceDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListNotificationChannelDescriptors,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListNotificationChannels,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,ListTimeSeries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,SendNotificationChannelVerificationCode,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,UpdateAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,UpdateNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-monitoring,VerifyNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+monitoring,CreateAlertPolicy,grpc,ga,
+monitoring,CreateMetricDescriptor,grpc,ga,
+monitoring,CreateNotificationChannel,grpc,ga,
+monitoring,CreateServiceTimeSeries,grpc,ga,
+monitoring,CreateTimeSeries,grpc,ga,
+monitoring,DeleteAlertPolicy,grpc,ga,
+monitoring,DeleteMetricDescriptor,grpc,ga,
+monitoring,DeleteNotificationChannel,grpc,ga,
+monitoring,GetAlertPolicy,grpc,ga,
+monitoring,GetMetricDescriptor,grpc,ga,
+monitoring,GetMonitoredResourceDescriptor,grpc,ga,
+monitoring,GetNotificationChannel,grpc,ga,
+monitoring,GetNotificationChannelDescriptor,grpc,ga,
+monitoring,GetNotificationChannelVerificationCode,grpc,ga,
+monitoring,ListAlertPolicies,grpc,ga,
+monitoring,ListMetricDescriptors,grpc,ga,
+monitoring,ListMonitoredResourceDescriptors,grpc,ga,
+monitoring,ListNotificationChannelDescriptors,grpc,ga,
+monitoring,ListNotificationChannels,grpc,ga,
+monitoring,ListTimeSeries,grpc,ga,
+monitoring,SendNotificationChannelVerificationCode,grpc,ga,
+monitoring,UpdateAlertPolicy,grpc,ga,
+monitoring,UpdateNotificationChannel,grpc,ga,
+monitoring,VerifyNotificationChannel,grpc,ga,
 operations,CancelOperation,grpc,ga,
 operations,DeleteOperation,grpc,ga,
 operations,GetOperation,grpc,ga,
