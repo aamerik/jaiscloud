@@ -25,16 +25,17 @@ func main() {
 	overridesPath := flag.String("overrides", "docs/fidelity-overrides.yaml", "curated overrides file")
 	discoveryDir := flag.String("discovery", "tests/gcpconformance/discovery", "vendored Discovery snapshots dir")
 	reportPath := flag.String("report", "tests/gcpconformance/testdata/report/report.json", "conformance report to consume")
+	grpcReportPath := flag.String("grpc-report", "tests/gcpconformance/grpc/testdata/report/report.json", "gRPC conformance report to consume")
 	strict := flag.Bool("strict", false, "also fail if a ga cell carries a non-allowlisted high/medium finding")
 	flag.Parse()
 
-	if err := run(*out, *overridesPath, *discoveryDir, *reportPath, *strict); err != nil {
+	if err := run(*out, *overridesPath, *discoveryDir, *reportPath, *grpcReportPath, *strict); err != nil {
 		fmt.Fprintln(os.Stderr, "fidelitygen:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, overridesPath, discoveryDir, reportPath string, strict bool) error {
+func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath string, strict bool) error {
 	ops := conf.Enumerate()
 
 	docs, err := conf.LoadSnapshots(discoveryDir)
@@ -45,12 +46,16 @@ func run(out, overridesPath, discoveryDir, reportPath string, strict bool) error
 	if err != nil {
 		return fmt.Errorf("read conformance report (%s): %w", reportPath, err)
 	}
+	grpcReport, err := ReadGRPCReport(grpcReportPath)
+	if err != nil {
+		return fmt.Errorf("read gRPC conformance report (%s): %w", grpcReportPath, err)
+	}
 	ov, err := LoadOverrides(overridesPath, ops)
 	if err != nil {
 		return err
 	}
 
-	grpcFacts := GRPCFacts(conf.EnumerateGRPC(), ov)
+	grpcFacts := GRPCFacts(conf.EnumerateGRPC(), ov, grpcReport)
 	all := append(RestFacts(ops, docs, report, ov), grpcFacts...)
 
 	cells := make([]Cell, 0, len(all))

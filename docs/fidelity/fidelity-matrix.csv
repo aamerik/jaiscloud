@@ -110,14 +110,14 @@ dataproc,Dataproc.StopCluster,rest,ga,
 dataproc,Dataproc.SubmitJob,rest,ga,covered by the k3d Lakehouse e2e (real Spark on Kubernetes)
 dataproc,Dataproc.SubmitJobAsOperation,rest,ga,
 dataproc,Dataproc.UpdateCluster,rest,ga,
-datastore,AllocateIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,BeginTransaction,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,Commit,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,Lookup,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,ReserveIds,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,Rollback,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,RunAggregationQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-datastore,RunQuery,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+datastore,AllocateIds,grpc,ga,
+datastore,BeginTransaction,grpc,ga,
+datastore,Commit,grpc,ga,
+datastore,Lookup,grpc,ga,
+datastore,ReserveIds,grpc,ga,
+datastore,Rollback,grpc,ga,
+datastore,RunAggregationQuery,grpc,ga,
+datastore,RunQuery,grpc,ga,
 eventarc,Eventarc.ChannelGetIamPolicy,rest,ga,
 eventarc,Eventarc.ChannelSetIamPolicy,rest,ga,
 eventarc,Eventarc.ChannelTestIamPermissions,rest,ga,
@@ -136,10 +136,10 @@ eventarc,Eventarc.TriggerSetIamPolicy,rest,ga,
 eventarc,Eventarc.TriggerTestIamPermissions,rest,ga,
 eventarc,Eventarc.UpdateChannel,rest,ga,
 eventarc,Eventarc.UpdateTrigger,rest,ga,
-firestore,BatchGetDocuments,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,BatchGetDocuments,grpc,ga,
 firestore,BatchWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 firestore,BeginTransaction,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-firestore,Commit,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+firestore,Commit,grpc,ga,
 firestore,CreateDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 firestore,DeleteDocument,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 firestore,ExecutePipeline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
@@ -218,22 +218,22 @@ iceberg,Iceberg.TableMetrics,rest,preview,BigLake Iceberg REST catalog; no offic
 iceberg,Iceberg.UpdateNamespaceProperties,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 kms,AsymmetricDecrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,AsymmetricSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,CreateCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateCryptoKey,grpc,ga,
 kms,CreateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,CreateImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,CreateKeyRing,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateKeyRing,grpc,ga,
 kms,Decapsulate,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,Decrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,DeleteCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,DeleteCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,DestroyCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,DestroyCryptoKeyVersion,grpc,ga,
 kms,Encrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,GenerateRandomBytes,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,GetCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetCryptoKey,grpc,ga,
 kms,GetCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,GetImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,GetKeyRing,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetKeyRing,grpc,ga,
 kms,GetPublicKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,GetRetiredResource,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,ImportCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
@@ -270,7 +270,7 @@ kms,KMS.KeyRingTestIamPermissions,rest,ga,
 kms,ListCryptoKeyVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,ListCryptoKeys,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,ListImportJobs,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,ListKeyRings,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListKeyRings,grpc,ga,
 kms,ListRetiredResources,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,MacSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,MacVerify,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
@@ -361,19 +361,19 @@ operations,WaitOperation,grpc,limited,gRPC verified against proto descriptors on
 pubsub,Acknowledge,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,CreateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,CreateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,CreateTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,CreateTopic,grpc,ga,
 pubsub,DeleteSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,DeleteSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,DeleteTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DeleteTopic,grpc,ga,
 pubsub,DetachSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,GetSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,GetSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,GetTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,GetTopic,grpc,ga,
 pubsub,ListSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,ListSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,ListTopicSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,ListTopicSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,ListTopics,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListTopics,grpc,ga,
 pubsub,ModifyAckDeadline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,ModifyPushConfig,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,PubSub.SubscriptionAcknowledge,rest,ga,
@@ -402,19 +402,19 @@ pubsub,StreamingPull,grpc,limited,gRPC verified against proto descriptors only (
 pubsub,UpdateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,UpdateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,UpdateTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,AccessSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,AddSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,CreateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,DeleteSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,AccessSecretVersion,grpc,ga,
+secretmanager,AddSecretVersion,grpc,ga,
+secretmanager,CreateSecret,grpc,ga,
+secretmanager,DeleteSecret,grpc,ga,
 secretmanager,DestroySecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,DisableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,EnableManagedRotation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,EnableSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,GetSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,GetSecret,grpc,ga,
 secretmanager,GetSecretVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,ListSecretVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-secretmanager,ListSecrets,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,ListSecrets,grpc,ga,
 secretmanager,RotateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 secretmanager,Secret.Access,rest,ga,
 secretmanager,Secret.AddVersion,rest,ga,
@@ -438,13 +438,13 @@ storage,BidiReadObject,grpc,limited,gRPC verified against proto descriptors only
 storage,BidiWriteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,CancelResumableWrite,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,ComposeObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,CreateBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,DeleteBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,CreateBucket,grpc,ga,
+storage,DeleteBucket,grpc,ga,
 storage,DeleteObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,GetBucket,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,GetBucket,grpc,ga,
 storage,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,GetObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-storage,ListBuckets,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,ListBuckets,grpc,ga,
 storage,ListObjects,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,LockBucketRetentionPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 storage,MoveObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)

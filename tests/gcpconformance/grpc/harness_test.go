@@ -46,6 +46,26 @@ func TestRunAllClassifies(t *testing.T) {
 	}
 }
 
+// TestRunAllSetsMethod verifies that Result.Method carries the exact proto
+// method when a check sets it, and falls back to the human RPC label (which is
+// already the proto method name) when it does not.
+func TestRunAllSetsMethod(t *testing.T) {
+	checks := []Check{
+		{Service: "svc", RPC: "GetWidget", Run: func(context.Context, Config) error { return nil }},
+		{Service: "datastore", RPC: "Commit (Put)", Method: "Commit", Run: func(context.Context, Config) error { return nil }},
+	}
+	results := RunAll(context.Background(), Config{}, checks)
+	if got, want := results[0].Method, "GetWidget"; got != want {
+		t.Errorf("fallback Method = %q, want %q", got, want)
+	}
+	if got, want := results[1].Method, "Commit"; got != want {
+		t.Errorf("explicit Method = %q, want %q", got, want)
+	}
+	if got, want := results[1].RPC, "Commit (Put)"; got != want {
+		t.Errorf("RPC label = %q, want %q", got, want)
+	}
+}
+
 // TestBuildReportRollup verifies the per-service summary and the suite rollup.
 func TestBuildReportRollup(t *testing.T) {
 	results := []Result{

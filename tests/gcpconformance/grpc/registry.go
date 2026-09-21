@@ -31,8 +31,15 @@ type Check struct {
 	// Service is the fidelity service name (storage, kms, secretmanager,
 	// pubsub, firestore).
 	Service string
-	// RPC is the wire RPC under test (e.g. CreateBucket, Doc.Set).
+	// RPC is the human label for the RPC under test (e.g. CreateBucket,
+	// Doc.Set (Commit), Lookup (missing)). It is what the report displays.
 	RPC string
+	// Method is the exact proto RPC method name (e.g. Commit, Lookup) that the
+	// check exercises. It is empty when RPC already IS the proto method name, in
+	// which case runOne falls back to RPC. fidelitygen keys cells by proto
+	// method, so every check whose RPC label is more descriptive than the wire
+	// method must set this.
+	Method string
 	// KeyField documents the field/predicate the probe asserts beyond a nil
 	// error, for the report.
 	KeyField string
@@ -45,6 +52,7 @@ type Check struct {
 type Result struct {
 	Service  string `json:"service"`
 	RPC      string `json:"rpc"`
+	Method   string `json:"method,omitempty"`
 	Status   Status `json:"status"`
 	KeyField string `json:"key_field,omitempty"`
 	Error    string `json:"error,omitempty"`
@@ -73,7 +81,11 @@ func RunAll(ctx context.Context, cfg Config, checks []Check) []Result {
 }
 
 func runOne(ctx context.Context, cfg Config, c Check) Result {
-	res := Result{Service: c.Service, RPC: c.RPC, KeyField: c.KeyField}
+	method := c.Method
+	if method == "" {
+		method = c.RPC
+	}
+	res := Result{Service: c.Service, RPC: c.RPC, Method: method, KeyField: c.KeyField}
 	err := c.Run(ctx, cfg)
 	switch {
 	case err == nil:

@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 207 |
-| limited | 250 |
+| ga | 237 |
+| limited | 220 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 0 | 164 | 0 | 0 |
+| grpc | 30 | 134 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -174,18 +174,18 @@ _15 cell(s): ga=15 limited=0 preview=0 unsupported=0_
 
 ## datastore
 
-_8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
+_8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| AllocateIds | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| BeginTransaction | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Commit | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Lookup | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ReserveIds | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Rollback | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RunAggregationQuery | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RunQuery | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| AllocateIds | grpc | ga | — |
+| BeginTransaction | grpc | ga | — |
+| Commit | grpc | ga | — |
+| Lookup | grpc | ga | — |
+| ReserveIds | grpc | ga | — |
+| Rollback | grpc | ga | — |
+| RunAggregationQuery | grpc | ga | — |
+| RunQuery | grpc | ga | — |
 
 ## eventarc
 
@@ -214,14 +214,14 @@ _18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_33 cell(s): ga=16 limited=17 preview=0 unsupported=0_
+_33 cell(s): ga=18 limited=15 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| BatchGetDocuments | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| BatchGetDocuments | grpc | ga | — |
 | BatchWrite | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | BeginTransaction | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Commit | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Commit | grpc | ga | — |
 | CreateDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | DeleteDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ExecutePipeline | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
@@ -322,28 +322,28 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_64 cell(s): ga=24 limited=40 preview=0 unsupported=0_
+_64 cell(s): ga=30 limited=34 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | AsymmetricDecrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | AsymmetricSign | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateCryptoKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateCryptoKey | grpc | ga | — |
 | CreateCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | CreateImportJob | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateKeyRing | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateKeyRing | grpc | ga | — |
 | Decapsulate | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | Decrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | DeleteCryptoKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | DeleteCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DestroyCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DestroyCryptoKeyVersion | grpc | ga | — |
 | Encrypt | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ExportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GenerateRandomBytes | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetCryptoKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetCryptoKey | grpc | ga | — |
 | GetCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetImportJob | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetKeyRing | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetKeyRing | grpc | ga | — |
 | GetPublicKey | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetRetiredResource | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ImportCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
@@ -380,7 +380,7 @@ _64 cell(s): ga=24 limited=40 preview=0 unsupported=0_
 | ListCryptoKeyVersions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListCryptoKeys | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListImportJobs | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListKeyRings | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListKeyRings | grpc | ga | — |
 | ListRetiredResources | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | MacSign | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | MacVerify | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
@@ -513,26 +513,26 @@ _5 cell(s): ga=0 limited=5 preview=0 unsupported=0_
 
 ## pubsub
 
-_44 cell(s): ga=19 limited=25 preview=0 unsupported=0_
+_44 cell(s): ga=23 limited=21 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | Acknowledge | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | CreateSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | CreateSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateTopic | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateTopic | grpc | ga | — |
 | DeleteSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | DeleteSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteTopic | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteTopic | grpc | ga | — |
 | DetachSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetTopic | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetTopic | grpc | ga | — |
 | ListSnapshots | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListSubscriptions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListTopicSnapshots | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListTopicSubscriptions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListTopics | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListTopics | grpc | ga | — |
 | ModifyAckDeadline | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ModifyPushConfig | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | PubSub.SubscriptionAcknowledge | rest | ga | — |
@@ -564,23 +564,23 @@ _44 cell(s): ga=19 limited=25 preview=0 unsupported=0_
 
 ## secretmanager
 
-_32 cell(s): ga=15 limited=17 preview=0 unsupported=0_
+_32 cell(s): ga=21 limited=11 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| AccessSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| AddSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| AccessSecretVersion | grpc | ga | — |
+| AddSecretVersion | grpc | ga | — |
+| CreateSecret | grpc | ga | — |
+| DeleteSecret | grpc | ga | — |
 | DestroySecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | DisableSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | EnableManagedRotation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | EnableSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetSecret | grpc | ga | — |
 | GetSecretVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ListSecretVersions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListSecrets | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListSecrets | grpc | ga | — |
 | RotateSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | Secret.Access | rest | ga | — |
 | Secret.AddVersion | rest | ga | — |
@@ -603,7 +603,7 @@ _32 cell(s): ga=15 limited=17 preview=0 unsupported=0_
 
 ## storage
 
-_52 cell(s): ga=28 limited=24 preview=0 unsupported=0_
+_52 cell(s): ga=32 limited=20 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -611,13 +611,13 @@ _52 cell(s): ga=28 limited=24 preview=0 unsupported=0_
 | BidiWriteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | CancelResumableWrite | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | ComposeObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateBucket | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteBucket | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateBucket | grpc | ga | — |
+| DeleteBucket | grpc | ga | — |
 | DeleteObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetBucket | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetBucket | grpc | ga | — |
 | GetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | GetObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListBuckets | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListBuckets | grpc | ga | — |
 | ListObjects | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | LockBucketRetentionPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
 | MoveObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |

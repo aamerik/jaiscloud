@@ -27,7 +27,7 @@ func TestGRPCFactsEveryMethod(t *testing.T) {
 		want += len(s.Methods)
 	}
 
-	facts := GRPCFacts(services, &Overrides{})
+	facts := GRPCFacts(services, &Overrides{}, nil)
 	if len(facts) != want {
 		t.Fatalf("got %d facts, want one per enumerated gRPC method (%d)", len(facts), want)
 	}
@@ -68,7 +68,7 @@ func TestGRPCFactDefaultsToLimited(t *testing.T) {
 	}}
 
 	for _, ov := range []*Overrides{nil, {}} {
-		facts := GRPCFacts(services, ov)
+		facts := GRPCFacts(services, ov, nil)
 		if len(facts) != 1 {
 			t.Fatalf("got %d facts, want 1", len(facts))
 		}
@@ -98,7 +98,7 @@ func TestGRPCFactOverrideWins(t *testing.T) {
 	upgrade := &Overrides{byOp: map[string]Override{
 		"storage/GetObject": {State: StateGA, Reason: "verified against proto", AllowUpgrade: true},
 	}}
-	facts := GRPCFacts(services, upgrade)
+	facts := GRPCFacts(services, upgrade, nil)
 	if got := facts[0].Override; got == nil || got.State != StateGA || !got.AllowUpgrade {
 		t.Fatalf("Override = %+v, want ga with AllowUpgrade", got)
 	}
@@ -109,16 +109,86 @@ func TestGRPCFactOverrideWins(t *testing.T) {
 	downgrade := &Overrides{byService: map[string]Override{
 		"storage": {State: StatePreview, Reason: "not yet conformance-tested"},
 	}}
-	facts = GRPCFacts(services, downgrade)
+	facts = GRPCFacts(services, downgrade, nil)
 	if cell := Classify(facts[0]); cell.State != StatePreview {
 		t.Errorf("state = %q, want preview", cell.State)
+	}
+}
+
+// TestGRPCFactsConsumesReport verifies evidence-driven classification: a
+// method whose checks all pass derives to ga, a method with a failing check is
+// downgraded with a high-severity finding, and an uncovered method keeps the
+// default limited override.
+func TestGRPCFactsConsumesReport(t *testing.T) {
+	services := []conf.GRPCService{{
+		WireService: "google.storage.v2.Storage",
+		Service:     "storage",
+		Methods:     []string{"GetObject", "PutObject", "DeleteObject"},
+	}}
+	report := &grpcReport{Results: []grpcResult{
+		// GetObject: two probes, both pass -> verified.
+		{Service: "storage", RPC: "GetObject", Status: "pass"},
+		{Service: "storage", RPC: "GetObject (raw)", Method: "GetObject", Status: "pass"},
+		// PutObject: one pass, one fail -> downgrade.
+		{Service: "storage", RPC: "PutObject", Status: "pass"},
+		{Service: "storage", RPC: "PutObject (chunked)", Method: "PutObject", Status: "fail"},
+		// DeleteObject: no report entry -> unverified.
+	}}
+
+	facts := GRPCFacts(services, &Overrides{}, report)
+	byOp := map[string]Facts{}
+	for _, f := range facts {
+		byOp[f.Operation] = f
+	}
+
+	verified := byOp["GetObject"]
+	if verified.Override != nil {
+		t.Errorf("GetObject: override = %+v, want nil (verified)", verified.Override)
+	}
+	if verified.GRPCChecksPassed != 2 || verified.GRPCChecksTotal != 2 {
+		t.Errorf("GetObject: evidence = %d/%d, want 2/2", verified.GRPCChecksPassed, verified.GRPCChecksTotal)
+	}
+	if c := Classify(verified); c.State != StateGA {
+		t.Errorf("GetObject: state = %q, want ga (reason %q)", c.State, c.Reason)
+	}
+
+	failed := byOp["PutObject"]
+	if failed.Override == nil || failed.Override.State != StateLimited {
+		t.Errorf("PutObject: override = %+v, want default limited", failed.Override)
+	}
+	if len(failed.Findings) != 1 || failed.Findings[0].Kind != "grpc_conformance" ||
+		failed.Findings[0].Severity != "high" || failed.Findings[0].Allowlisted {
+		t.Errorf("PutObject: findings = %+v, want one non-allowlisted high grpc_conformance", failed.Findings)
+	}
+	if c := Classify(failed); c.State != StateLimited {
+		t.Errorf("PutObject: state = %q, want limited (reason %q)", c.State, c.Reason)
+	}
+
+	uncovered := byOp["DeleteObject"]
+	if uncovered.Override == nil || uncovered.Override.State != StateLimited {
+		t.Errorf("DeleteObject: override = %+v, want default limited", uncovered.Override)
+	}
+	if uncovered.GRPCChecksTotal != 0 {
+		t.Errorf("DeleteObject: evidence total = %d, want 0", uncovered.GRPCChecksTotal)
+	}
+}
+
+// TestReadGRPCReportAbsent verifies the report is optional: a missing file
+// yields (nil, nil) so generation works without it.
+func TestReadGRPCReportAbsent(t *testing.T) {
+	rep, err := ReadGRPCReport("testdata/does-not-exist/report.json")
+	if err != nil {
+		t.Fatalf("ReadGRPCReport(absent) error = %v, want nil", err)
+	}
+	if rep != nil {
+		t.Fatalf("ReadGRPCReport(absent) = %+v, want nil", rep)
 	}
 }
 
 // TestGRPCOnlyServices checks the services reachable only over gRPC.
 func TestGRPCOnlyServices(t *testing.T) {
 	ops := conf.Enumerate()
-	facts := GRPCFacts(conf.EnumerateGRPC(), &Overrides{})
+	facts := GRPCFacts(conf.EnumerateGRPC(), &Overrides{}, nil)
 	only := GRPCOnlyServices(ops, facts)
 
 	got := map[string]bool{}
@@ -143,7 +213,7 @@ func TestGRPCOnlyServices(t *testing.T) {
 // has both transports being reported as gRPC-only.
 func TestGRPCOnlyServicesDoesNotClaimRestServices(t *testing.T) {
 	ops := conf.Enumerate()
-	facts := GRPCFacts(conf.EnumerateGRPC(), &Overrides{})
+	facts := GRPCFacts(conf.EnumerateGRPC(), &Overrides{}, nil)
 	for _, s := range GRPCOnlyServices(ops, facts) {
 		if s == "storage" || s == "pubsub" || s == "firestore" || s == "kms" || s == "secretmanager" || s == "iam" {
 			t.Errorf("%q has REST operations but was reported gRPC-only", s)

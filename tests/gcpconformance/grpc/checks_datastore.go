@@ -24,17 +24,17 @@ import (
 // cfg.ResourceName, so a long-lived emulator never sees cross-run collisions.
 func datastoreChecks() []Check {
 	return []Check{
-		{Service: "datastore", RPC: "Commit (Put)", KeyField: "mutation_results[].key", Run: checkDatastoreCommit},
-		{Service: "datastore", RPC: "Lookup (Get)", KeyField: "found[].properties.description", Run: checkDatastoreLookup},
-		{Service: "datastore", RPC: "Lookup (missing)", KeyField: "missing[].entity.key", Run: checkDatastoreLookupMissing},
-		{Service: "datastore", RPC: "RunQuery (filter)", KeyField: "batch.entity_results[]", Run: checkDatastoreRunQuery},
-		{Service: "datastore", RPC: "RunQuery (limit+offset)", KeyField: "batch.entity_results[] bounded", Run: checkDatastoreRunQueryWindow},
-		{Service: "datastore", RPC: "RunAggregationQuery (count)", KeyField: "batch.aggregation_results[].count", Run: checkDatastoreRunAggregationQuery},
-		{Service: "datastore", RPC: "Commit (Delete)", KeyField: "entity absent after delete", Run: checkDatastoreDelete},
-		{Service: "datastore", RPC: "BeginTransaction + Commit", KeyField: "txn commit persists entity", Run: checkDatastoreTxnCommit},
-		{Service: "datastore", RPC: "Rollback", KeyField: "entity absent after rollback", Run: checkDatastoreRollback},
-		{Service: "datastore", RPC: "AllocateIds", KeyField: "keys[].id", Run: checkDatastoreAllocateIDs},
-		{Service: "datastore", RPC: "ReserveIds", KeyField: "keys[].id > reserved", Run: checkDatastoreReserveIDs},
+		{Service: "datastore", RPC: "Commit (Put)", Method: "Commit", KeyField: "mutation_results[].key", Run: checkDatastoreCommit},
+		{Service: "datastore", RPC: "Lookup (Get)", Method: "Lookup", KeyField: "found[].properties.description", Run: checkDatastoreLookup},
+		{Service: "datastore", RPC: "Lookup (missing)", Method: "Lookup", KeyField: "missing[].entity.key", Run: checkDatastoreLookupMissing},
+		{Service: "datastore", RPC: "RunQuery (filter)", Method: "RunQuery", KeyField: "batch.entity_results[]", Run: checkDatastoreRunQuery},
+		{Service: "datastore", RPC: "RunQuery (limit+offset)", Method: "RunQuery", KeyField: "batch.entity_results[] bounded", Run: checkDatastoreRunQueryWindow},
+		{Service: "datastore", RPC: "RunAggregationQuery (count)", Method: "RunAggregationQuery", KeyField: "batch.aggregation_results[].count", Run: checkDatastoreRunAggregationQuery},
+		{Service: "datastore", RPC: "Commit (Delete)", Method: "Commit", KeyField: "entity absent after delete", Run: checkDatastoreDelete},
+		{Service: "datastore", RPC: "BeginTransaction + Commit", Method: "BeginTransaction", KeyField: "txn commit persists entity", Run: checkDatastoreTxnCommit},
+		{Service: "datastore", RPC: "Rollback", Method: "Rollback", KeyField: "entity absent after rollback", Run: checkDatastoreRollback},
+		{Service: "datastore", RPC: "AllocateIds", Method: "AllocateIds", KeyField: "keys[].id", Run: checkDatastoreAllocateIDs},
+		{Service: "datastore", RPC: "ReserveIds", Method: "ReserveIds", KeyField: "keys[].id > reserved", Run: checkDatastoreReserveIDs},
 	}
 }
 

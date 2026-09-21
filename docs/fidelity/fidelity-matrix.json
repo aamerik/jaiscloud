@@ -3,14 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 207,
-      "limited": 250,
+      "ga": 237,
+      "limited": 220,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "limited": 164
+        "ga": 30,
+        "limited": 134
       },
       "rest": {
         "ga": 207,
@@ -39,14 +40,14 @@
         "ga": 15
       },
       "datastore": {
-        "limited": 8
+        "ga": 8
       },
       "eventarc": {
         "ga": 18
       },
       "firestore": {
-        "ga": 16,
-        "limited": 17
+        "ga": 18,
+        "limited": 15
       },
       "functions": {
         "ga": 14,
@@ -60,8 +61,8 @@
         "preview": 14
       },
       "kms": {
-        "ga": 24,
-        "limited": 40
+        "ga": 30,
+        "limited": 34
       },
       "logging": {
         "limited": 6
@@ -82,16 +83,16 @@
         "limited": 5
       },
       "pubsub": {
-        "ga": 19,
-        "limited": 25
+        "ga": 23,
+        "limited": 21
       },
       "secretmanager": {
-        "ga": 15,
-        "limited": 17
+        "ga": 21,
+        "limited": 11
       },
       "storage": {
-        "ga": 28,
-        "limited": 24
+        "ga": 32,
+        "limited": 20
       },
       "workflowexecutions": {
         "ga": 4
@@ -1365,81 +1366,81 @@
       "service": "datastore",
       "operation": "AllocateIds",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "BeginTransaction",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "Commit",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "Lookup",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "ReserveIds",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "Rollback",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "RunAggregationQuery",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "datastore",
       "operation": "RunQuery",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -1634,11 +1635,10 @@
       "service": "firestore",
       "operation": "BatchGetDocuments",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -1667,12 +1667,11 @@
       "service": "firestore",
       "operation": "Commit",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -2502,12 +2501,11 @@
       "service": "kms",
       "operation": "CreateCryptoKey",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2538,12 +2536,11 @@
       "service": "kms",
       "operation": "CreateKeyRing",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2596,11 +2593,10 @@
       "service": "kms",
       "operation": "DestroyCryptoKeyVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2641,11 +2637,10 @@
       "service": "kms",
       "operation": "GetCryptoKey",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2675,11 +2670,10 @@
       "service": "kms",
       "operation": "GetKeyRing",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -3065,11 +3059,10 @@
       "service": "kms",
       "operation": "ListKeyRings",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4037,12 +4030,11 @@
       "service": "pubsub",
       "operation": "CreateTopic",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4073,12 +4065,11 @@
       "service": "pubsub",
       "operation": "DeleteTopic",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4119,11 +4110,10 @@
       "service": "pubsub",
       "operation": "GetTopic",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4174,11 +4164,10 @@
       "service": "pubsub",
       "operation": "ListTopics",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4486,47 +4475,43 @@
       "service": "secretmanager",
       "operation": "AccessSecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "AddSecretVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "CreateSecret",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "secretmanager",
       "operation": "DeleteSecret",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4591,11 +4576,10 @@
       "service": "secretmanager",
       "operation": "GetSecret",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4624,11 +4608,10 @@
       "service": "secretmanager",
       "operation": "ListSecrets",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4884,24 +4867,22 @@
       "service": "storage",
       "operation": "CreateBucket",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "storage",
       "operation": "DeleteBucket",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4920,11 +4901,10 @@
       "service": "storage",
       "operation": "GetBucket",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4953,11 +4933,10 @@
       "service": "storage",
       "operation": "ListBuckets",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
