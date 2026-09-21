@@ -176,9 +176,10 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 		"{}", "application/json"); code != http.StatusOK {
 		t.Fatalf("create topic: got HTTP %d", code)
 	}
-	// Secret Manager secret.
+	// Secret Manager secret, with annotations (exercises the annotations column
+	// and its migration surviving a restart).
 	if code, _ := doRequest(t, host, "POST", "/v1/projects/proj/secrets?secretId="+secret,
-		`{"replication":{"automatic":{}}}`, "application/json"); code != http.StatusOK {
+		`{"replication":{"automatic":{}},"annotations":{"persist":"yes","suite":"core"}}`, "application/json"); code != http.StatusOK {
 		t.Fatalf("create secret: got HTTP %d", code)
 	}
 	// KMS key ring.
@@ -202,8 +203,10 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	if code, _ := doRequest(t, host, "GET", "/v1/projects/proj/topics/"+topic, "", ""); code != http.StatusOK {
 		t.Fatalf("get topic after restart: got HTTP %d", code)
 	}
-	if code, _ := doRequest(t, host, "GET", "/v1/projects/proj/secrets/"+secret, "", ""); code != http.StatusOK {
+	if code, body := doRequest(t, host, "GET", "/v1/projects/proj/secrets/"+secret, "", ""); code != http.StatusOK {
 		t.Fatalf("get secret after restart: got HTTP %d", code)
+	} else if !strings.Contains(body, `"persist":"yes"`) {
+		t.Fatalf("secret annotations did not survive restart: %s", body)
 	}
 	if code, _ := doRequest(t, host, "GET", "/v1/projects/proj/locations/global/keyRings/"+keyring, "", ""); code != http.StatusOK {
 		t.Fatalf("get keyring after restart: got HTTP %d", code)
