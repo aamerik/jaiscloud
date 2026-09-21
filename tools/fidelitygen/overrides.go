@@ -44,7 +44,11 @@ type Overrides struct {
 // An override that names an unknown service/operation, uses an unknown state,
 // is non-ga without a reason, or upgrades to ga without allow_upgrade is an
 // error — the file is the published contract, so it must be exact.
-func LoadOverrides(path string, ops []conf.Operation) (*Overrides, error) {
+//
+// ops is the REST registry; grpc is the enumerated gRPC surface. Both are
+// validated so per-operation overrides may target either transport (gRPC
+// operations are keyed by their plain proto method name).
+func LoadOverrides(path string, ops []conf.Operation, grpc []conf.GRPCService) (*Overrides, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -59,6 +63,12 @@ func LoadOverrides(path string, ops []conf.Operation) (*Overrides, error) {
 	for _, o := range ops {
 		services[o.Service] = true
 		operations[o.Service+"/"+o.Key()] = true
+	}
+	for _, s := range grpc {
+		services[s.Service] = true
+		for _, m := range s.Methods {
+			operations[s.Service+"/"+m] = true
+		}
 	}
 
 	o := &Overrides{byService: map[string]Override{}, byOp: map[string]Override{}}
