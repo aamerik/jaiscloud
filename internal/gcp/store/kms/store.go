@@ -80,6 +80,13 @@ type Store interface {
 	ListVersions(ctx context.Context, projectID, location, keyringID, keyID string) ([]Version, error)
 	UpdateVersionState(ctx context.Context, projectID, location, keyringID, keyID, version, state string) error
 	UpdatePrimaryVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) error
+	// DeleteVersion permanently removes a crypto-key version. Returns
+	// ErrNoSuchVersion if it does not exist.
+	DeleteVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) error
+	// DeleteCryptoKey permanently removes a crypto key. Callers must ensure no
+	// versions remain (Cloud KMS requires deleting every version first).
+	// Returns ErrNoSuchCryptoKey if it does not exist.
+	DeleteCryptoKey(ctx context.Context, projectID, location, keyringID, id string) error
 
 	// KeyMaterial returns the raw AES-256 key material for a version,
 	// unwrapping the DEK-encrypted blob stored at rest.

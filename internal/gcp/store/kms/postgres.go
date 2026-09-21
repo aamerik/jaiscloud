@@ -416,6 +416,45 @@ func (s *PostgresStore) UpdatePrimaryVersion(ctx context.Context, projectID, loc
 	return nil
 }
 
+func (s *PostgresStore) DeleteVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_kms_cryptokey_versions
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
+	`, projectID, location, keyringID, keyID, version)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchVersion
+	}
+	return nil
+}
+
+func (s *PostgresStore) DeleteCryptoKey(ctx context.Context, projectID, location, keyringID, id string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM jc_kms_cryptokey_versions
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
+	`, projectID, location, keyringID, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM jc_kms_cryptokeys
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
+	`, projectID, location, keyringID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchCryptoKey
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) KeyMaterial(ctx context.Context, projectID, location, keyringID, keyID, version string) ([]byte, error) {
 	dek, err := s.dek(ctx)
 	if err != nil {

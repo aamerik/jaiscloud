@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"strings"
@@ -16,6 +17,9 @@ import (
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"jaiscloud/internal/clock"
 	gcpcrypto "jaiscloud/internal/gcp/crypto"
@@ -38,7 +42,38 @@ const (
 	rtKeyRingPolicy   = "gcp_keyring_policy"
 	rtCryptoKeyPolicy = "gcp_cryptokey_policy"
 	rtVersionPolicy   = "gcp_cryptokeyversion_policy"
+
+	// rtRetiredResource / rtImportJob live in the shared resource store (not the
+	// kmsstore) so their lifecycle persists identically in memory and postgres
+	// modes without a dedicated table.
+	rtRetiredResource = "gcp_kms_retiredresource"
+	rtImportJob       = "gcp_kms_importjob"
 )
+
+// retiredResourceData is the JSON payload stored for a RetiredResource. The
+// store id is "<location>/<cryptoKeyID>" so a location-scoped list is a prefix
+// scan.
+type retiredResourceData struct {
+	Name             string    `json:"name"`
+	OriginalResource string    `json:"originalResource"`
+	ResourceType     string    `json:"resourceType"`
+	DeleteTime       time.Time `json:"deleteTime"`
+}
+
+// importJobData is the JSON payload stored for an ImportJob. The store id is
+// "<location>/<keyringID>/<importJobID>". WrappedPrivateKey is the import job's
+// RSA private key, DEK-wrapped at rest like every other KMS key material.
+type importJobData struct {
+	Name              string    `json:"name"`
+	ImportMethod      string    `json:"importMethod"`
+	ProtectionLevel   int32     `json:"protectionLevel"`
+	CreateTime        time.Time `json:"createTime"`
+	GenerateTime      time.Time `json:"generateTime"`
+	ExpireTime        time.Time `json:"expireTime"`
+	State             string    `json:"state"`
+	PublicKeyPEM      string    `json:"publicKeyPem"`
+	WrappedPrivateKey []byte    `json:"wrappedPrivateKey,omitempty"`
+}
 
 // Service implements kmspb.KeyManagementServiceServer and
 // iampb.IAMPolicyServer over the shared stores. KMS generates and DEK-wraps its
@@ -309,6 +344,11 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 	if algorithm == "" {
 		algorithm = defaultAlgorithmForPurpose(purpose)
 	}
+	// A deleted CryptoKey leaves a RetiredResource behind; its name cannot be
+	// reused (Cloud KMS RetiredResource semantics).
+	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(loc, key)); err == nil {
+		return nil, mapError(model.NewProviderError("AlreadyExists", "crypto key name is retired and cannot be reused", 409))
+	}
 	now := clock.Now()
 	ck := kmsstore.CryptoKey{Location: loc, KeyRingID: kr, ID: key, Purpose: purpose, CreateTime: now, PrimaryVersion: "1", Algorithm: algorithm, Labels: labels, RotationPeriod: rotationPeriod}
 	if rotationPeriod > 0 {
@@ -573,6 +613,111 @@ func (s *Service) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmsp
 	}, nil
 }
 
+// RawEncrypt mirrors Encrypt for the portable AES-GCM primitive used by
+// purpose RAW_ENCRYPT_DECRYPT. Unlike Encrypt the emitted blob is not versioned
+// (RawDecrypt addresses the version explicitly) and the caller-supplied IV is
+// honored; when absent a random 12-byte nonce is generated and returned. The
+// authentication tag is appended to the ciphertext per Cloud KMS semantics.
+func (s *Service) RawEncrypt(ctx context.Context, req *kmspb.RawEncryptRequest) (*kmspb.RawEncryptResponse, error) {
+	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
+	}
+	if !strings.Contains(v.Algorithm, "GCM") {
+		return nil, mapError(model.NewProviderError("FailedPrecondition", "key is not for raw AES-GCM encryption", 400))
+	}
+	keyMat, err := s.keys.KeyMaterial(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	if err := verifyCRC("plaintext_crc32c", req.GetPlaintextCrc32C(), req.GetPlaintext()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("additional_authenticated_data_crc32c", req.GetAdditionalAuthenticatedDataCrc32C(), req.GetAdditionalAuthenticatedData()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("initialization_vector_crc32c", req.GetInitializationVectorCrc32C(), req.GetInitializationVector()); err != nil {
+		return nil, err
+	}
+	iv := req.GetInitializationVector()
+	if len(iv) == 0 {
+		iv = make([]byte, 12)
+		if _, err := rand.Read(iv); err != nil {
+			return nil, mapError(model.NewProviderError("Internal", "random generation failed", 500))
+		}
+	}
+	ct, err := kmsstore.RawEncryptGCM(keyMat, req.GetPlaintext(), req.GetAdditionalAuthenticatedData(), iv)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "encryption failed", 400))
+	}
+	return &kmspb.RawEncryptResponse{
+		Name:                       versionName(project, loc, kr, key, version),
+		Ciphertext:                 ct,
+		InitializationVector:       iv,
+		TagLength:                  16,
+		CiphertextCrc32C:           wrapperspb.Int64(crc32cOf(ct)),
+		InitializationVectorCrc32C: wrapperspb.Int64(crc32cOf(iv)),
+		VerifiedPlaintextCrc32C:    req.GetPlaintextCrc32C() != nil,
+		VerifiedAdditionalAuthenticatedDataCrc32C: req.GetAdditionalAuthenticatedDataCrc32C() != nil,
+		VerifiedInitializationVectorCrc32C:        req.GetInitializationVectorCrc32C() != nil,
+		ProtectionLevel:                           kmspb.ProtectionLevel_SOFTWARE,
+	}, nil
+}
+
+// RawDecrypt is the inverse of RawEncrypt: it uses the caller-supplied IV and
+// AAD to authenticate and recover the plaintext.
+func (s *Service) RawDecrypt(ctx context.Context, req *kmspb.RawDecryptRequest) (*kmspb.RawDecryptResponse, error) {
+	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	if v.State != "ENABLED" {
+		return nil, mapError(versionNotEnabledErr(version, v.State))
+	}
+	if !strings.Contains(v.Algorithm, "GCM") {
+		return nil, mapError(model.NewProviderError("FailedPrecondition", "key is not for raw AES-GCM decryption", 400))
+	}
+	if tl := req.GetTagLength(); tl != 0 && tl != 16 {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported tag_length", 400))
+	}
+	keyMat, err := s.keys.KeyMaterial(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	if err := verifyCRC("ciphertext_crc32c", req.GetCiphertextCrc32C(), req.GetCiphertext()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("additional_authenticated_data_crc32c", req.GetAdditionalAuthenticatedDataCrc32C(), req.GetAdditionalAuthenticatedData()); err != nil {
+		return nil, err
+	}
+	if err := verifyCRC("initialization_vector_crc32c", req.GetInitializationVectorCrc32C(), req.GetInitializationVector()); err != nil {
+		return nil, err
+	}
+	pt, err := kmsstore.RawDecryptGCM(keyMat, req.GetCiphertext(), req.GetAdditionalAuthenticatedData(), req.GetInitializationVector())
+	if err != nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "decryption failed", 400))
+	}
+	return &kmspb.RawDecryptResponse{
+		Plaintext:                pt,
+		PlaintextCrc32C:          wrapperspb.Int64(crc32cOf(pt)),
+		VerifiedCiphertextCrc32C: req.GetCiphertextCrc32C() != nil,
+		VerifiedAdditionalAuthenticatedDataCrc32C: req.GetAdditionalAuthenticatedDataCrc32C() != nil,
+		VerifiedInitializationVectorCrc32C:        req.GetInitializationVectorCrc32C() != nil,
+		ProtectionLevel:                           kmspb.ProtectionLevel_SOFTWARE,
+	}, nil
+}
+
 func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignRequest) (*kmspb.AsymmetricSignResponse, error) {
 	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
 	if !ok {
@@ -772,6 +917,290 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 	}, nil
 }
 
+// ─── Deletion + RetiredResources ──────────────────────────────────────────────
+
+// doneOperation is the terminal long-running operation shape the emulator
+// returns for delete RPCs: Cloud KMS models deletes as LROs, but the emulator
+// applies them synchronously. A non-nil Empty response is required so the
+// generated long-running client can unmarshal the terminal result.
+func doneOperation(name string) *longrunningpb.Operation {
+	resp, _ := anypb.New(&emptypb.Empty{})
+	return &longrunningpb.Operation{
+		Name:   name + "/operations/delete",
+		Done:   true,
+		Result: &longrunningpb.Operation_Response{Response: resp},
+	}
+}
+
+// DeleteCryptoKeyVersion permanently removes a crypto-key version. Mirroring
+// Cloud KMS, the version must already be DESTROYED, IMPORT_FAILED or
+// GENERATION_FAILED.
+func (s *Service) DeleteCryptoKeyVersion(ctx context.Context, req *kmspb.DeleteCryptoKeyVersionRequest) (*longrunningpb.Operation, error) {
+	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	switch v.State {
+	case "DESTROYED", "IMPORT_FAILED", "GENERATION_FAILED":
+	default:
+		return nil, mapError(model.NewProviderError("FailedPrecondition", "CryptoKeyVersion must be DESTROYED before deletion", 400))
+	}
+	if err := s.keys.DeleteVersion(ctx, project, loc, kr, key, version); err != nil {
+		return nil, versionErr(err)
+	}
+	return doneOperation(req.GetName()), nil
+}
+
+// DeleteCryptoKey permanently removes a crypto key after every version has been
+// deleted, and records a RetiredResource so the name cannot be reused.
+func (s *Service) DeleteCryptoKey(ctx context.Context, req *kmspb.DeleteCryptoKeyRequest) (*longrunningpb.Operation, error) {
+	project, loc, kr, key, ok := splitCryptoKeyName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if _, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key); err != nil {
+		return nil, keyErr(err)
+	}
+	versions, err := s.keys.ListVersions(ctx, project, loc, kr, key)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	if len(versions) > 0 {
+		return nil, mapError(model.NewProviderError("FailedPrecondition", "all CryptoKeyVersions must be deleted before the CryptoKey", 400))
+	}
+	if err := s.keys.DeleteCryptoKey(ctx, project, loc, kr, key); err != nil {
+		return nil, keyErr(err)
+	}
+	rr := retiredResourceData{
+		Name:             retiredResourceName(project, loc, key),
+		OriginalResource: req.GetName(),
+		ResourceType:     "CRYPTO_KEY",
+		DeleteTime:       clock.Now(),
+	}
+	data, _ := json.Marshal(rr)
+	if err := s.resources.Upsert(ctx, project, store.GlobalRegion, store.ResourceEntry{
+		Type: rtRetiredResource,
+		ID:   retiredResourceID(loc, key),
+		Data: data,
+	}); err != nil {
+		return nil, mapError(err)
+	}
+	return doneOperation(req.GetName()), nil
+}
+
+func retiredResourceID(location, keyID string) string { return location + "/" + keyID }
+
+func retiredResourceName(project, location, keyID string) string {
+	return "projects/" + project + "/locations/" + location + "/retiredResources/" + keyID
+}
+
+// splitRetiredResourceName parses
+// "projects/{p}/locations/{l}/retiredResources/{id}".
+func splitRetiredResourceName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) == 6 && parts[0] == "projects" && parts[2] == "locations" && parts[4] == "retiredResources" {
+		return parts[1], parts[3], parts[5], true
+	}
+	return "", "", "", false
+}
+
+func (s *Service) GetRetiredResource(ctx context.Context, req *kmspb.GetRetiredResourceRequest) (*kmspb.RetiredResource, error) {
+	project, loc, id, ok := splitRetiredResourceName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(loc, id))
+	if err != nil {
+		return nil, mapError(model.NewProviderError("NotFound", "retired resource not found", 404))
+	}
+	var rr retiredResourceData
+	if err := json.Unmarshal(e.Data, &rr); err != nil {
+		return nil, mapError(err)
+	}
+	return retiredResourceToProto(rr), nil
+}
+
+func (s *Service) ListRetiredResources(ctx context.Context, req *kmspb.ListRetiredResourcesRequest) (*kmspb.ListRetiredResourcesResponse, error) {
+	project, loc, ok := splitLocationName(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtRetiredResource, loc+"/")
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := make([]*kmspb.RetiredResource, 0, len(entries))
+	for _, e := range entries {
+		var rr retiredResourceData
+		if err := json.Unmarshal(e.Data, &rr); err != nil {
+			continue
+		}
+		out = append(out, retiredResourceToProto(rr))
+	}
+	return &kmspb.ListRetiredResourcesResponse{RetiredResources: out, TotalSize: int64(len(out))}, nil
+}
+
+func retiredResourceToProto(rr retiredResourceData) *kmspb.RetiredResource {
+	out := &kmspb.RetiredResource{
+		Name:             rr.Name,
+		OriginalResource: rr.OriginalResource,
+		ResourceType:     rr.ResourceType,
+	}
+	if !rr.DeleteTime.IsZero() {
+		out.DeleteTime = timestamppb.New(rr.DeleteTime)
+	}
+	return out
+}
+
+// ─── ImportJobs ───────────────────────────────────────────────────────────────
+
+// splitImportJobName parses
+// "projects/{p}/locations/{l}/keyRings/{kr}/importJobs/{id}".
+func splitImportJobName(name string) (project, location, kr, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) == 8 && parts[0] == "projects" && parts[2] == "locations" && parts[4] == "keyRings" && parts[6] == "importJobs" {
+		return parts[1], parts[3], parts[5], parts[7], true
+	}
+	return "", "", "", "", false
+}
+
+func importJobID(location, kr, id string) string { return location + "/" + kr + "/" + id }
+
+func importJobName(project, location, kr, id string) string {
+	return keyRingName(project, location, kr) + "/importJobs/" + id
+}
+
+// CreateImportJob generates an RSA-3072 wrapping key and stores the import job.
+// The private key is DEK-wrapped at rest; the public key is returned in PEM.
+// ImportCryptoKeyVersion (which would consume the wrapping key) is not
+// implemented, so the job is a real, addressable control-plane resource.
+func (s *Service) CreateImportJob(ctx context.Context, req *kmspb.CreateImportJobRequest) (*kmspb.ImportJob, error) {
+	project, loc, kr, ok := splitKeyRingName(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	id := req.GetImportJobId()
+	if id == "" {
+		if ij := req.GetImportJob(); ij != nil {
+			_, _, _, id, _ = splitImportJobName(ij.GetName())
+		}
+	}
+	if id == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "missing importJobId", 400))
+	}
+	method := req.GetImportJob().GetImportMethod()
+	if method == kmspb.ImportJob_IMPORT_METHOD_UNSPECIFIED {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "import_method is required", 400))
+	}
+	privDER, pubDER, err := kmsstore.GenerateRSAKeyPair(3072)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("Internal", "wrapping key generation failed", 500))
+	}
+	pemStr, err := kmsstore.PublicKeyPEM(pubDER)
+	if err != nil {
+		return nil, mapError(model.NewProviderError("Internal", "public key encode failed", 500))
+	}
+	dek, err := s.keys.ServerDEK(ctx)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	wrappedPriv, err := kmsstore.EncryptData(dek, privDER, []byte(id))
+	if err != nil {
+		return nil, mapError(model.NewProviderError("Internal", "wrapping key protection failed", 500))
+	}
+	now := clock.Now()
+	ij := importJobData{
+		Name:              importJobName(project, loc, kr, id),
+		ImportMethod:      method.String(),
+		ProtectionLevel:   int32(req.GetImportJob().GetProtectionLevel()),
+		CreateTime:        now,
+		GenerateTime:      now,
+		ExpireTime:        now.Add(72 * time.Hour),
+		State:             "ACTIVE",
+		PublicKeyPEM:      pemStr,
+		WrappedPrivateKey: wrappedPriv,
+	}
+	data, _ := json.Marshal(ij)
+	if err := s.resources.Upsert(ctx, project, store.GlobalRegion, store.ResourceEntry{
+		Type: rtImportJob,
+		ID:   importJobID(loc, kr, id),
+		Data: data,
+	}); err != nil {
+		return nil, mapError(err)
+	}
+	return importJobToProto(ij), nil
+}
+
+func (s *Service) GetImportJob(ctx context.Context, req *kmspb.GetImportJobRequest) (*kmspb.ImportJob, error) {
+	project, loc, kr, id, ok := splitImportJobName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtImportJob, importJobID(loc, kr, id))
+	if err != nil {
+		return nil, mapError(model.NewProviderError("NotFound", "import job not found", 404))
+	}
+	var ij importJobData
+	if err := json.Unmarshal(e.Data, &ij); err != nil {
+		return nil, mapError(err)
+	}
+	return importJobToProto(ij), nil
+}
+
+func (s *Service) ListImportJobs(ctx context.Context, req *kmspb.ListImportJobsRequest) (*kmspb.ListImportJobsResponse, error) {
+	project, loc, kr, ok := splitKeyRingName(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtImportJob, loc+"/"+kr+"/")
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := make([]*kmspb.ImportJob, 0, len(entries))
+	for _, e := range entries {
+		var ij importJobData
+		if err := json.Unmarshal(e.Data, &ij); err != nil {
+			continue
+		}
+		out = append(out, importJobToProto(ij))
+	}
+	return &kmspb.ListImportJobsResponse{ImportJobs: out, TotalSize: int32(len(out))}, nil
+}
+
+func importJobToProto(ij importJobData) *kmspb.ImportJob {
+	out := &kmspb.ImportJob{
+		Name:            ij.Name,
+		ImportMethod:    importMethodToProto(ij.ImportMethod),
+		ProtectionLevel: kmspb.ProtectionLevel(ij.ProtectionLevel),
+		State:           kmspb.ImportJob_ImportJobState(kmspb.ImportJob_ImportJobState_value[ij.State]),
+		PublicKeyFormat: kmspb.PublicKey_PEM,
+	}
+	if !ij.CreateTime.IsZero() {
+		out.CreateTime = timestamppb.New(ij.CreateTime)
+	}
+	if !ij.GenerateTime.IsZero() {
+		out.GenerateTime = timestamppb.New(ij.GenerateTime)
+	}
+	if !ij.ExpireTime.IsZero() {
+		out.ExpireTime = timestamppb.New(ij.ExpireTime)
+	}
+	if ij.PublicKeyPEM != "" {
+		out.PublicKey = &kmspb.ImportJob_WrappingPublicKey{Pem: ij.PublicKeyPEM}
+	}
+	return out
+}
+
+func importMethodToProto(s string) kmspb.ImportJob_ImportMethod {
+	if v, ok := kmspb.ImportJob_ImportMethod_value[s]; ok {
+		return kmspb.ImportJob_ImportMethod(v)
+	}
+	return kmspb.ImportJob_IMPORT_METHOD_UNSPECIFIED
+}
+
 // ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys/versions) ────────────────
 
 // Owns reports whether the KMS service handles IAM for this resource name.
@@ -931,6 +1360,8 @@ func defaultAlgorithmForPurpose(purpose string) string {
 		return "RSA_DECRYPT_OAEP_2048_SHA256"
 	case "MAC":
 		return "HMAC_SHA256"
+	case "RAW_ENCRYPT_DECRYPT":
+		return "AES_256_GCM"
 	default:
 		return "GOOGLE_SYMMETRIC_ENCRYPTION"
 	}

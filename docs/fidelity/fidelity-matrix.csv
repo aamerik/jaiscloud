@@ -216,26 +216,26 @@ iceberg,Iceberg.NamespaceExists,rest,preview,BigLake Iceberg REST catalog; no of
 iceberg,Iceberg.RenameTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.TableMetrics,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.UpdateNamespaceProperties,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
-kms,AsymmetricDecrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,AsymmetricSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,AsymmetricDecrypt,grpc,ga,
+kms,AsymmetricSign,grpc,ga,
 kms,CreateCryptoKey,grpc,ga,
-kms,CreateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,CreateImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,CreateCryptoKeyVersion,grpc,ga,
+kms,CreateImportJob,grpc,ga,
 kms,CreateKeyRing,grpc,ga,
 kms,Decapsulate,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,Decrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,DeleteCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,DeleteCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Decrypt,grpc,ga,
+kms,DeleteCryptoKey,grpc,ga,
+kms,DeleteCryptoKeyVersion,grpc,ga,
 kms,DestroyCryptoKeyVersion,grpc,ga,
-kms,Encrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Encrypt,grpc,ga,
 kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,GenerateRandomBytes,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GenerateRandomBytes,grpc,ga,
 kms,GetCryptoKey,grpc,ga,
-kms,GetCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,GetImportJob,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetCryptoKeyVersion,grpc,ga,
+kms,GetImportJob,grpc,ga,
 kms,GetKeyRing,grpc,ga,
-kms,GetPublicKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,GetRetiredResource,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,GetPublicKey,grpc,ga,
+kms,GetRetiredResource,grpc,ga,
 kms,ImportCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,ImportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 kms,KMS.CryptoKeyCreate,rest,ga,
@@ -267,19 +267,19 @@ kms,KMS.KeyRingGetIamPolicy,rest,ga,
 kms,KMS.KeyRingList,rest,ga,
 kms,KMS.KeyRingSetIamPolicy,rest,ga,
 kms,KMS.KeyRingTestIamPermissions,rest,ga,
-kms,ListCryptoKeyVersions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,ListCryptoKeys,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,ListImportJobs,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListCryptoKeyVersions,grpc,ga,
+kms,ListCryptoKeys,grpc,ga,
+kms,ListImportJobs,grpc,ga,
 kms,ListKeyRings,grpc,ga,
-kms,ListRetiredResources,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,MacSign,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,MacVerify,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,RawDecrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,RawEncrypt,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,RestoreCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,UpdateCryptoKey,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,UpdateCryptoKeyPrimaryVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,UpdateCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ListRetiredResources,grpc,ga,
+kms,MacSign,grpc,ga,
+kms,MacVerify,grpc,ga,
+kms,RawDecrypt,grpc,ga,
+kms,RawEncrypt,grpc,ga,
+kms,RestoreCryptoKeyVersion,grpc,ga,
+kms,UpdateCryptoKey,grpc,ga,
+kms,UpdateCryptoKeyPrimaryVersion,grpc,ga,
+kms,UpdateCryptoKeyVersion,grpc,ga,
 logging,DeleteLog,grpc,ga,
 logging,ListLogEntries,grpc,ga,
 logging,ListLogs,grpc,ga,

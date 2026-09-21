@@ -257,6 +257,29 @@ func (s *MemoryStore) UpdatePrimaryVersion(_ context.Context, projectID, locatio
 	return nil
 }
 
+func (s *MemoryStore) DeleteVersion(_ context.Context, projectID, location, keyringID, keyID, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vk := vKey(projectID, location, keyringID, keyID)
+	if _, ok := s.versions[vk][version]; !ok {
+		return ErrNoSuchVersion
+	}
+	delete(s.versions[vk], version)
+	return nil
+}
+
+func (s *MemoryStore) DeleteCryptoKey(_ context.Context, projectID, location, keyringID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := ckKey(projectID, location, keyringID)
+	if _, ok := s.cryptokeys[key][id]; !ok {
+		return ErrNoSuchCryptoKey
+	}
+	delete(s.cryptokeys[key], id)
+	delete(s.versions, vKey(projectID, location, keyringID, id))
+	return nil
+}
+
 func (s *MemoryStore) KeyMaterial(_ context.Context, projectID, location, keyringID, keyID, version string) ([]byte, error) {
 	dek, err := s.dek()
 	if err != nil {

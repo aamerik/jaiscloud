@@ -47,6 +47,41 @@ func TestDecryptDataShortCiphertext(t *testing.T) {
 	}
 }
 
+func TestRawEncryptDecryptGCMRoundTrip(t *testing.T) {
+	key, _ := Generate32()
+	pt := []byte("raw plaintext")
+	aad := []byte("raw-aad")
+	iv := make([]byte, ivLen)
+	for i := range iv {
+		iv[i] = byte(i)
+	}
+
+	ct, err := RawEncryptGCM(key, pt, aad, iv)
+	if err != nil {
+		t.Fatalf("raw encrypt: %v", err)
+	}
+	got, err := RawDecryptGCM(key, ct, aad, iv)
+	if err != nil {
+		t.Fatalf("raw decrypt: %v", err)
+	}
+	if !bytes.Equal(got, pt) {
+		t.Fatalf("round-trip mismatch: got %q, want %q", got, pt)
+	}
+	if _, err := RawDecryptGCM(key, ct, []byte("wrong"), iv); err == nil {
+		t.Fatal("expected raw decrypt to fail with wrong AAD")
+	}
+}
+
+func TestRawEncryptGCMRejectsBadIV(t *testing.T) {
+	key, _ := Generate32()
+	if _, err := RawEncryptGCM(key, []byte("pt"), nil, make([]byte, 8)); err == nil {
+		t.Fatal("expected error on wrong IV length")
+	}
+	if _, err := RawDecryptGCM(key, []byte("ct"), nil, make([]byte, 8)); err == nil {
+		t.Fatal("expected error on wrong IV length")
+	}
+}
+
 func TestWrapUnwrapDEK(t *testing.T) {
 	kek, _ := Generate32()
 	dek, _ := Generate32()
