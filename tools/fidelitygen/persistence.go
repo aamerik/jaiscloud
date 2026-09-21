@@ -38,13 +38,15 @@ package main
 //	cloudsql           -> internal/store (ResourceStore)
 //	compute            -> internal/store (ResourceStore)
 //	memorystore        -> internal/store (ResourceStore)
+//	logging            -> internal/gcp/store/logging
 //
-// Every enumerated REST service therefore qualifies today, and datastore (the
-// gRPC-only data service) qualifies via its own dedicated store, so no service
-// is listed false. The map is explicit rather than "true for everything" so a
-// future service that lands without a store defaults to false and its mutating
-// operations are downgraded until persistence parity exists. Truly stateless
-// services are also listed true (persistence is N/A for them, not a gap).
+// Every enumerated REST service therefore qualifies today, and the gRPC-only
+// data services (datastore, logging) qualify via their own dedicated stores, so
+// no service is listed false. The map is explicit rather than "true for
+// everything" so a future service that lands without a store defaults to false
+// and its mutating operations are downgraded until persistence parity exists.
+// Truly stateless services are also listed true (persistence is N/A for them,
+// not a gap).
 var persistentBackends = map[string]bool{
 	"storage":            true,
 	"secretmanager":      true,
@@ -66,4 +68,5 @@ var persistentBackends = map[string]bool{
 	"cloudsql":           true,
 	"compute":            true,
 	"memorystore":        true,
+	"logging":            true,
 }
