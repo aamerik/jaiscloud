@@ -332,13 +332,13 @@ _64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
 | CreateCryptoKeyVersion | grpc | ga | — |
 | CreateImportJob | grpc | ga | — |
 | CreateKeyRing | grpc | ga | — |
-| Decapsulate | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Decapsulate | grpc | limited | KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate |
 | Decrypt | grpc | ga | — |
 | DeleteCryptoKey | grpc | ga | — |
 | DeleteCryptoKeyVersion | grpc | ga | — |
 | DestroyCryptoKeyVersion | grpc | ga | — |
 | Encrypt | grpc | ga | — |
-| ExportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ExportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled |
 | GenerateRandomBytes | grpc | ga | — |
 | GetCryptoKey | grpc | ga | — |
 | GetCryptoKeyVersion | grpc | ga | — |
@@ -346,8 +346,8 @@ _64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
 | GetKeyRing | grpc | ga | — |
 | GetPublicKey | grpc | ga | — |
 | GetRetiredResource | grpc | ga | — |
-| ImportCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ImportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ImportCryptoKeyVersion | grpc | limited | key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping |
+| ImportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled |
 | KMS.CryptoKeyCreate | rest | ga | — |
 | KMS.CryptoKeyDecrypt | rest | ga | — |
 | KMS.CryptoKeyEncrypt | rest | ga | — |
@@ -401,7 +401,7 @@ _6 cell(s): ga=5 limited=1 preview=0 unsupported=0_
 | ListLogEntries | grpc | ga | — |
 | ListLogs | grpc | ga | — |
 | ListMonitoredResourceDescriptors | grpc | ga | — |
-| TailLogEntries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| TailLogEntries | grpc | limited | bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists |
 | WriteLogEntries | grpc | ga | — |
 
 ## managedkafka
@@ -574,14 +574,14 @@ _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 | DeleteSecret | grpc | ga | — |
 | DestroySecretVersion | grpc | ga | — |
 | DisableSecretVersion | grpc | ga | — |
-| EnableManagedRotation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| EnableManagedRotation | grpc | limited | managed rotation needs a rotation Cloud Function and config the emulator does not model |
 | EnableSecretVersion | grpc | ga | — |
 | GetIamPolicy | grpc | ga | — |
 | GetSecret | grpc | ga | — |
 | GetSecretVersion | grpc | ga | — |
 | ListSecretVersions | grpc | ga | — |
 | ListSecrets | grpc | ga | — |
-| RotateSecret | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| RotateSecret | grpc | limited | the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane |
 | Secret.Access | rest | ga | — |
 | Secret.AddVersion | rest | ga | — |
 | Secret.Create | rest | ga | — |
@@ -607,7 +607,7 @@ _52 cell(s): ga=51 limited=1 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| BidiReadObject | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| BidiReadObject | grpc | limited | bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served |
 | BidiWriteObject | grpc | ga | — |
 | CancelResumableWrite | grpc | ga | — |
 | ComposeObject | grpc | ga | — |

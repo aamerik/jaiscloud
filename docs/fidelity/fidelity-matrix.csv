@@ -222,13 +222,13 @@ kms,CreateCryptoKey,grpc,ga,
 kms,CreateCryptoKeyVersion,grpc,ga,
 kms,CreateImportJob,grpc,ga,
 kms,CreateKeyRing,grpc,ga,
-kms,Decapsulate,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,Decapsulate,grpc,limited,KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate
 kms,Decrypt,grpc,ga,
 kms,DeleteCryptoKey,grpc,ga,
 kms,DeleteCryptoKeyVersion,grpc,ga,
 kms,DestroyCryptoKeyVersion,grpc,ga,
 kms,Encrypt,grpc,ga,
-kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ExportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,"HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
 kms,GenerateRandomBytes,grpc,ga,
 kms,GetCryptoKey,grpc,ga,
 kms,GetCryptoKeyVersion,grpc,ga,
@@ -236,8 +236,8 @@ kms,GetImportJob,grpc,ga,
 kms,GetKeyRing,grpc,ga,
 kms,GetPublicKey,grpc,ga,
 kms,GetRetiredResource,grpc,ga,
-kms,ImportCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-kms,ImportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+kms,ImportCryptoKeyVersion,grpc,limited,key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping
+kms,ImportTrustedKeyWrappedCryptoKeyVersion,grpc,limited,"HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
 kms,KMS.CryptoKeyCreate,rest,ga,
 kms,KMS.CryptoKeyDecrypt,rest,ga,
 kms,KMS.CryptoKeyEncrypt,rest,ga,
@@ -284,7 +284,7 @@ logging,DeleteLog,grpc,ga,
 logging,ListLogEntries,grpc,ga,
 logging,ListLogs,grpc,ga,
 logging,ListMonitoredResourceDescriptors,grpc,ga,
-logging,TailLogEntries,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+logging,TailLogEntries,grpc,limited,bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists
 logging,WriteLogEntries,grpc,ga,
 managedkafka,ManagedKafka.CreateCluster,rest,ga,
 managedkafka,ManagedKafka.CreateTopic,rest,ga,
@@ -408,14 +408,14 @@ secretmanager,CreateSecret,grpc,ga,
 secretmanager,DeleteSecret,grpc,ga,
 secretmanager,DestroySecretVersion,grpc,ga,
 secretmanager,DisableSecretVersion,grpc,ga,
-secretmanager,EnableManagedRotation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,EnableManagedRotation,grpc,limited,managed rotation needs a rotation Cloud Function and config the emulator does not model
 secretmanager,EnableSecretVersion,grpc,ga,
 secretmanager,GetIamPolicy,grpc,ga,
 secretmanager,GetSecret,grpc,ga,
 secretmanager,GetSecretVersion,grpc,ga,
 secretmanager,ListSecretVersions,grpc,ga,
 secretmanager,ListSecrets,grpc,ga,
-secretmanager,RotateSecret,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+secretmanager,RotateSecret,grpc,limited,the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane
 secretmanager,Secret.Access,rest,ga,
 secretmanager,Secret.AddVersion,rest,ga,
 secretmanager,Secret.Create,rest,ga,
@@ -434,7 +434,7 @@ secretmanager,Secret.Update,rest,ga,
 secretmanager,SetIamPolicy,grpc,ga,
 secretmanager,TestIamPermissions,grpc,ga,
 secretmanager,UpdateSecret,grpc,ga,
-storage,BidiReadObject,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+storage,BidiReadObject,grpc,limited,bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served
 storage,BidiWriteObject,grpc,ga,
 storage,CancelResumableWrite,grpc,ga,
 storage,ComposeObject,grpc,ga,

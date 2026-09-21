@@ -50,7 +50,7 @@ func run(out, overridesPath, discoveryDir, reportPath, grpcReportPath string, st
 	if err != nil {
 		return fmt.Errorf("read gRPC conformance report (%s): %w", grpcReportPath, err)
 	}
-	ov, err := LoadOverrides(overridesPath, ops)
+	ov, err := LoadOverrides(overridesPath, ops, conf.EnumerateGRPC())
 	if err != nil {
 		return err
 	}

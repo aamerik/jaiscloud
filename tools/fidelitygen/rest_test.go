@@ -34,7 +34,7 @@ func loadReportForTest(t *testing.T) *conf.Report {
 
 func loadOverridesForTest(t *testing.T, ops []conf.Operation) *Overrides {
 	t.Helper()
-	ov, err := LoadOverrides(testOverridesPath, ops)
+	ov, err := LoadOverrides(testOverridesPath, ops, conf.EnumerateGRPC())
 	if err != nil {
 		t.Fatalf("LoadOverrides: %v", err)
 	}

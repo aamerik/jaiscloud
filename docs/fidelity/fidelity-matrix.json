@@ -2524,7 +2524,7 @@
       "operation": "Decapsulate",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate",
       "evidence": [
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"
@@ -2587,7 +2587,7 @@
       "operation": "ExportTrustedKeyWrappedCryptoKeyVersion",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled",
       "evidence": [
         "mutating",
         "postgres=yes",
@@ -2670,7 +2670,7 @@
       "operation": "ImportCryptoKeyVersion",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping",
       "evidence": [
         "mutating",
         "postgres=yes",
@@ -2682,7 +2682,7 @@
       "operation": "ImportTrustedKeyWrappedCryptoKeyVersion",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled",
       "evidence": [
         "mutating",
         "postgres=yes",
@@ -3169,7 +3169,7 @@
       "operation": "TailLogEntries",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists",
       "evidence": [
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"
@@ -4475,7 +4475,7 @@
       "operation": "EnableManagedRotation",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "managed rotation needs a rotation Cloud Function and config the emulator does not model",
       "evidence": [
         "mutating",
         "postgres=yes",
@@ -4548,7 +4548,7 @@
       "operation": "RotateSecret",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane",
       "evidence": [
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"
@@ -4748,7 +4748,7 @@
       "operation": "BidiReadObject",
       "transport": "grpc",
       "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "reason": "bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served",
       "evidence": [
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"

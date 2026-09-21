@@ -52,13 +52,13 @@ func TestLoadOverridesRegistryChecks(t *testing.T) {
 		return p
 	}
 
-	if _, err := LoadOverrides(write("defaults:\n  nosuchservice:\n    state: limited\n    reason: x\n"), ops); err == nil {
+	if _, err := LoadOverrides(write("defaults:\n  nosuchservice:\n    state: limited\n    reason: x\n"), ops, nil); err == nil {
 		t.Error("want error for unknown service in defaults")
 	}
-	if _, err := LoadOverrides(write("operations:\n  - service: storage\n    operation: Storage.Nope\n    state: limited\n    reason: x\n"), ops); err == nil {
+	if _, err := LoadOverrides(write("operations:\n  - service: storage\n    operation: Storage.Nope\n    state: limited\n    reason: x\n"), ops, nil); err == nil {
 		t.Error("want error for unknown operation")
 	}
-	if _, err := LoadOverrides(write("operations:\n  - service: dataproc\n    operation: Dataproc.SubmitJob\n    state: ga\n    allow_upgrade: true\n"), ops); err != nil {
+	if _, err := LoadOverrides(write("operations:\n  - service: dataproc\n    operation: Dataproc.SubmitJob\n    state: ga\n    allow_upgrade: true\n"), ops, nil); err != nil {
 		t.Errorf("valid override rejected: %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestLoadOverridesRegistryChecks(t *testing.T) {
 // registry and checks lookup precedence (operation over service default).
 func TestLoadOverridesSeed(t *testing.T) {
 	ops := conf.Enumerate()
-	ov, err := LoadOverrides(filepath.Join("..", "..", "docs", "fidelity-overrides.yaml"), ops)
+	ov, err := LoadOverrides(filepath.Join("..", "..", "docs", "fidelity-overrides.yaml"), ops, conf.EnumerateGRPC())
 	if err != nil {
 		t.Fatalf("LoadOverrides(seed): %v", err)
 	}
