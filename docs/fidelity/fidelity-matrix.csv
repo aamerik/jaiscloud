@@ -358,24 +358,24 @@ operations,DeleteOperation,grpc,ga,
 operations,GetOperation,grpc,ga,
 operations,ListOperations,grpc,ga,
 operations,WaitOperation,grpc,ga,
-pubsub,Acknowledge,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,CreateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,CreateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,Acknowledge,grpc,ga,
+pubsub,CreateSnapshot,grpc,ga,
+pubsub,CreateSubscription,grpc,ga,
 pubsub,CreateTopic,grpc,ga,
-pubsub,DeleteSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,DeleteSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DeleteSnapshot,grpc,ga,
+pubsub,DeleteSubscription,grpc,ga,
 pubsub,DeleteTopic,grpc,ga,
-pubsub,DetachSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,GetSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,GetSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,DetachSubscription,grpc,ga,
+pubsub,GetSnapshot,grpc,ga,
+pubsub,GetSubscription,grpc,ga,
 pubsub,GetTopic,grpc,ga,
-pubsub,ListSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,ListSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,ListTopicSnapshots,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,ListTopicSubscriptions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ListSnapshots,grpc,ga,
+pubsub,ListSubscriptions,grpc,ga,
+pubsub,ListTopicSnapshots,grpc,ga,
+pubsub,ListTopicSubscriptions,grpc,ga,
 pubsub,ListTopics,grpc,ga,
-pubsub,ModifyAckDeadline,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,ModifyPushConfig,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,ModifyAckDeadline,grpc,ga,
+pubsub,ModifyPushConfig,grpc,ga,
 pubsub,PubSub.SubscriptionAcknowledge,rest,ga,
 pubsub,PubSub.SubscriptionCreate,rest,ga,
 pubsub,PubSub.SubscriptionDelete,rest,ga,
@@ -395,13 +395,13 @@ pubsub,PubSub.TopicList,rest,ga,
 pubsub,PubSub.TopicPublish,rest,ga,
 pubsub,PubSub.TopicSetIamPolicy,rest,ga,
 pubsub,PubSub.TopicTestIamPermissions,rest,ga,
-pubsub,Publish,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,Pull,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,Seek,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,StreamingPull,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,UpdateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,UpdateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-pubsub,UpdateTopic,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+pubsub,Publish,grpc,ga,
+pubsub,Pull,grpc,ga,
+pubsub,Seek,grpc,ga,
+pubsub,StreamingPull,grpc,ga,
+pubsub,UpdateSnapshot,grpc,ga,
+pubsub,UpdateSubscription,grpc,ga,
+pubsub,UpdateTopic,grpc,ga,
 secretmanager,AccessSecretVersion,grpc,ga,
 secretmanager,AddSecretVersion,grpc,ga,
 secretmanager,CreateSecret,grpc,ga,

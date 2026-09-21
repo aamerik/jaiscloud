@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 93,
-  "passed": 93,
+  "total": 114,
+  "passed": 114,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 9,
-    "checks": 93,
-    "passed": 93,
+    "checks": 114,
+    "passed": 114,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -58,8 +58,8 @@
     },
     {
       "service": "pubsub",
-      "total": 4,
-      "passed": 4,
+      "total": 25,
+      "passed": 25,
       "failed": 0,
       "unimplemented": 0
     },
@@ -393,6 +393,153 @@
       "method": "DeleteTopic",
       "status": "pass",
       "key_field": "success"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "CreateSubscription",
+      "method": "CreateSubscription",
+      "status": "pass",
+      "key_field": "subscription.name/topic"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "GetSubscription",
+      "method": "GetSubscription",
+      "status": "pass",
+      "key_field": "subscription.name/topic"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ListSubscriptions",
+      "method": "ListSubscriptions",
+      "status": "pass",
+      "key_field": "subscriptions[].name"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "UpdateSubscription",
+      "method": "UpdateSubscription",
+      "status": "pass",
+      "key_field": "masked labels applied"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "UpdateTopic",
+      "method": "UpdateTopic",
+      "status": "pass",
+      "key_field": "masked labels + retention applied"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ListTopicSubscriptions",
+      "method": "ListTopicSubscriptions",
+      "status": "pass",
+      "key_field": "subscriptions[] contains fixture"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "Publish",
+      "method": "Publish",
+      "status": "pass",
+      "key_field": "messageIds has one non-empty id"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "Pull",
+      "method": "Pull",
+      "status": "pass",
+      "key_field": "receivedMessages[].message.data"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "Acknowledge",
+      "method": "Acknowledge",
+      "status": "pass",
+      "key_field": "acked message not redelivered"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ModifyAckDeadline",
+      "method": "ModifyAckDeadline",
+      "status": "pass",
+      "key_field": "deadline extension keeps message invisible"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ModifyPushConfig",
+      "method": "ModifyPushConfig",
+      "status": "pass",
+      "key_field": "push_config.push_endpoint round-trips"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "CreateSnapshot",
+      "method": "CreateSnapshot",
+      "status": "pass",
+      "key_field": "snapshot.name/topic/expire_time"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "GetSnapshot",
+      "method": "GetSnapshot",
+      "status": "pass",
+      "key_field": "snapshot.name/topic"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ListSnapshots",
+      "method": "ListSnapshots",
+      "status": "pass",
+      "key_field": "snapshots[] contains fixture"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "UpdateSnapshot",
+      "method": "UpdateSnapshot",
+      "status": "pass",
+      "key_field": "masked labels applied"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ListTopicSnapshots",
+      "method": "ListTopicSnapshots",
+      "status": "pass",
+      "key_field": "snapshots[] contains fixture"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "DeleteSnapshot",
+      "method": "DeleteSnapshot",
+      "status": "pass",
+      "key_field": "snapshot absent after delete"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "Seek",
+      "method": "Seek",
+      "status": "pass",
+      "key_field": "time + snapshot ack-state reset"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "DetachSubscription",
+      "method": "DetachSubscription",
+      "status": "pass",
+      "key_field": "detached=true; Pull FailedPrecondition"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "StreamingPull",
+      "method": "StreamingPull",
+      "status": "pass",
+      "key_field": "published message delivered over stream"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "DeleteSubscription",
+      "method": "DeleteSubscription",
+      "status": "pass",
+      "key_field": "subscription absent after delete"
     },
     {
       "service": "firestore",

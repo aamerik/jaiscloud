@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 296 |
-| limited | 161 |
+| ga | 317 |
+| limited | 140 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 89 | 75 | 0 | 0 |
+| grpc | 110 | 54 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -513,28 +513,28 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 ## pubsub
 
-_44 cell(s): ga=23 limited=21 preview=0 unsupported=0_
+_44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| Acknowledge | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Acknowledge | grpc | ga | — |
+| CreateSnapshot | grpc | ga | — |
+| CreateSubscription | grpc | ga | — |
 | CreateTopic | grpc | ga | — |
-| DeleteSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DeleteSnapshot | grpc | ga | — |
+| DeleteSubscription | grpc | ga | — |
 | DeleteTopic | grpc | ga | — |
-| DetachSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| DetachSubscription | grpc | ga | — |
+| GetSnapshot | grpc | ga | — |
+| GetSubscription | grpc | ga | — |
 | GetTopic | grpc | ga | — |
-| ListSnapshots | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListSubscriptions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListTopicSnapshots | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListTopicSubscriptions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ListSnapshots | grpc | ga | — |
+| ListSubscriptions | grpc | ga | — |
+| ListTopicSnapshots | grpc | ga | — |
+| ListTopicSubscriptions | grpc | ga | — |
 | ListTopics | grpc | ga | — |
-| ModifyAckDeadline | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ModifyPushConfig | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| ModifyAckDeadline | grpc | ga | — |
+| ModifyPushConfig | grpc | ga | — |
 | PubSub.SubscriptionAcknowledge | rest | ga | — |
 | PubSub.SubscriptionCreate | rest | ga | — |
 | PubSub.SubscriptionDelete | rest | ga | — |
@@ -554,13 +554,13 @@ _44 cell(s): ga=23 limited=21 preview=0 unsupported=0_
 | PubSub.TopicPublish | rest | ga | — |
 | PubSub.TopicSetIamPolicy | rest | ga | — |
 | PubSub.TopicTestIamPermissions | rest | ga | — |
-| Publish | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Pull | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Seek | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| StreamingPull | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateSnapshot | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateSubscription | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateTopic | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| Publish | grpc | ga | — |
+| Pull | grpc | ga | — |
+| Seek | grpc | ga | — |
+| StreamingPull | grpc | ga | — |
+| UpdateSnapshot | grpc | ga | — |
+| UpdateSubscription | grpc | ga | — |
+| UpdateTopic | grpc | ga | — |
 
 ## secretmanager
 
