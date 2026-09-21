@@ -14,9 +14,9 @@ import (
 // BatchGetDocuments RPC.
 func firestoreChecks() []Check {
 	return []Check{
-		{Service: "firestore", RPC: "Doc.Set (Commit)", KeyField: "success", Run: checkFirestoreSet},
-		{Service: "firestore", RPC: "Doc.Get (BatchGetDocuments)", KeyField: "field name", Run: checkFirestoreGet},
-		{Service: "firestore", RPC: "Doc.Delete (Commit)", KeyField: "success", Run: checkFirestoreDelete},
+		{Service: "firestore", RPC: "Doc.Set (Commit)", Method: "Commit", KeyField: "success", Run: checkFirestoreSet},
+		{Service: "firestore", RPC: "Doc.Get (BatchGetDocuments)", Method: "BatchGetDocuments", KeyField: "field name", Run: checkFirestoreGet},
+		{Service: "firestore", RPC: "Doc.Delete (Commit)", Method: "Commit", KeyField: "success", Run: checkFirestoreDelete},
 	}
 }
 

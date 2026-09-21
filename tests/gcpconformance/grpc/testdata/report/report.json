@@ -1,0 +1,300 @@
+{
+  "endpoint": "localhost:8081",
+  "project": "jaiscloud-project",
+  "total": 34,
+  "passed": 34,
+  "failed": 0,
+  "unimplemented": 0,
+  "rollup": {
+    "services": 6,
+    "checks": 34,
+    "passed": 34,
+    "failed": 0,
+    "unimplemented": 0,
+    "pass_rate": 100
+  },
+  "services": [
+    {
+      "service": "datastore",
+      "total": 11,
+      "passed": 11,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "firestore",
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "kms",
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "pubsub",
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "secretmanager",
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "storage",
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "unimplemented": 0
+    }
+  ],
+  "results": [
+    {
+      "service": "storage",
+      "rpc": "CreateBucket",
+      "method": "CreateBucket",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "storage",
+      "rpc": "GetBucket",
+      "method": "GetBucket",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "storage",
+      "rpc": "ListBuckets",
+      "method": "ListBuckets",
+      "status": "pass",
+      "key_field": "buckets[].name"
+    },
+    {
+      "service": "storage",
+      "rpc": "DeleteBucket",
+      "method": "DeleteBucket",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "kms",
+      "rpc": "CreateKeyRing",
+      "method": "CreateKeyRing",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetKeyRing",
+      "method": "GetKeyRing",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "kms",
+      "rpc": "ListKeyRings",
+      "method": "ListKeyRings",
+      "status": "pass",
+      "key_field": "keyRings[].name"
+    },
+    {
+      "service": "kms",
+      "rpc": "CreateCryptoKey",
+      "method": "CreateCryptoKey",
+      "status": "pass",
+      "key_field": "name/purpose"
+    },
+    {
+      "service": "kms",
+      "rpc": "GetCryptoKey",
+      "method": "GetCryptoKey",
+      "status": "pass",
+      "key_field": "name/primary"
+    },
+    {
+      "service": "kms",
+      "rpc": "DestroyCryptoKeyVersion",
+      "method": "DestroyCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "name/state=destruction"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "CreateSecret",
+      "method": "CreateSecret",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "GetSecret",
+      "method": "GetSecret",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "ListSecrets",
+      "method": "ListSecrets",
+      "status": "pass",
+      "key_field": "secrets[].name"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "AddSecretVersion",
+      "method": "AddSecretVersion",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "AccessSecretVersion",
+      "method": "AccessSecretVersion",
+      "status": "pass",
+      "key_field": "payload.data"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "DeleteSecret",
+      "method": "DeleteSecret",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "CreateTopic",
+      "method": "CreateTopic",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "GetTopic",
+      "method": "GetTopic",
+      "status": "pass",
+      "key_field": "name"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "ListTopics",
+      "method": "ListTopics",
+      "status": "pass",
+      "key_field": "topics[].name"
+    },
+    {
+      "service": "pubsub",
+      "rpc": "DeleteTopic",
+      "method": "DeleteTopic",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Doc.Set (Commit)",
+      "method": "Commit",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Doc.Get (BatchGetDocuments)",
+      "method": "BatchGetDocuments",
+      "status": "pass",
+      "key_field": "field name"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Doc.Delete (Commit)",
+      "method": "Commit",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Commit (Put)",
+      "method": "Commit",
+      "status": "pass",
+      "key_field": "mutation_results[].key"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Lookup (Get)",
+      "method": "Lookup",
+      "status": "pass",
+      "key_field": "found[].properties.description"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Lookup (missing)",
+      "method": "Lookup",
+      "status": "pass",
+      "key_field": "missing[].entity.key"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunQuery (filter)",
+      "method": "RunQuery",
+      "status": "pass",
+      "key_field": "batch.entity_results[]"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunQuery (limit+offset)",
+      "method": "RunQuery",
+      "status": "pass",
+      "key_field": "batch.entity_results[] bounded"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunAggregationQuery (count)",
+      "method": "RunAggregationQuery",
+      "status": "pass",
+      "key_field": "batch.aggregation_results[].count"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Commit (Delete)",
+      "method": "Commit",
+      "status": "pass",
+      "key_field": "entity absent after delete"
+    },
+    {
+      "service": "datastore",
+      "rpc": "BeginTransaction + Commit",
+      "method": "BeginTransaction",
+      "status": "pass",
+      "key_field": "txn commit persists entity"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Rollback",
+      "method": "Rollback",
+      "status": "pass",
+      "key_field": "entity absent after rollback"
+    },
+    {
+      "service": "datastore",
+      "rpc": "AllocateIds",
+      "method": "AllocateIds",
+      "status": "pass",
+      "key_field": "keys[].id"
+    },
+    {
+      "service": "datastore",
+      "rpc": "ReserveIds",
+      "method": "ReserveIds",
+      "status": "pass",
+      "key_field": "keys[].id \u003e reserved"
+    }
+  ]
+}

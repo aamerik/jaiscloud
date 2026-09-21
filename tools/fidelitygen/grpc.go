@@ -22,7 +22,8 @@ func grpcDefaultOverride() *Override {
 }
 
 // GRPCFacts builds one Facts per gRPC method from the enumerated service
-// surface (conf.EnumerateGRPC) and the curated overrides (ov).
+// surface (conf.EnumerateGRPC), the recorded gRPC conformance report, and the
+// curated overrides (ov).
 //
 // Every method yields exactly one fact with Transport "grpc" and Implemented
 // true. DiscoveryMethod is always empty: Discovery documents describe REST, not
@@ -30,17 +31,51 @@ func grpcDefaultOverride() *Override {
 // (persistentBackends and isMutating); a PascalCase RPC method name splits into
 // the same CamelCase words, so "GetObject" is not mistaken for a "Set".
 //
-// Override resolution: if the overrides file has an entry for (service, method)
-// it wins verbatim (including allow_upgrade); otherwise the default limited
-// override is attached so the cell starts "limited" per the plan.
+// Conformance resolution for (service, method):
 //
-// nil ov is tolerated (no overrides) and still yields the default limited cells,
-// which keeps the function testable without I/O.
-func GRPCFacts(services []conf.GRPCService, ov *Overrides) []Facts {
+//   - No report coverage: attach the default limited override (unverified, the
+//     pre-conformance-suite behaviour).
+//   - >=1 result and all pass: inject no override, so deriveState yields "ga";
+//     record the pass/total evidence on the fact.
+//   - any fail/unimplemented: attach the default limited override and a
+//     non-allowlisted high-severity finding, so deriveState downgrades with a
+//     wire-divergence reason.
+//
+// Report (service, method) pairs that don't correspond to an enumerated method
+// are never consulted (coverage is only queried per enumerated method).
+//
+// Override resolution: if the overrides file has an entry for (service, method)
+// it wins verbatim (including allow_upgrade), overriding both the default and
+// the verified no-override case.
+//
+// nil ov and nil report are tolerated (no overrides / report absent), yielding
+// the default limited cells, which keeps the function testable without I/O.
+func GRPCFacts(services []conf.GRPCService, ov *Overrides, report *grpcReport) []Facts {
 	var facts []Facts
 	for _, svc := range services {
 		for _, method := range svc.Methods {
-			override := grpcDefaultOverride()
+			cov := report.coverage(svc.Service, method)
+
+			var override *Override
+			var findings []Finding
+			var passed, total int
+			switch {
+			case cov.total > 0 && cov.failed == 0:
+				// Verified against the official client: leave override nil so the
+				// derived state is ga (mutating cells still need a backend).
+				passed, total = cov.passed, cov.total
+			case cov.total > 0:
+				findings = append(findings, Finding{
+					Severity: "high",
+					Kind:     "grpc_conformance",
+					Path:     cov.label,
+				})
+				total = cov.total
+				override = grpcDefaultOverride()
+			default:
+				override = grpcDefaultOverride()
+			}
+
 			if ov != nil {
 				if o := ov.For(svc.Service, method); o != nil {
 					override = o
@@ -54,7 +89,10 @@ func GRPCFacts(services []conf.GRPCService, ov *Overrides) []Facts {
 				DiscoveryMethod:   "",
 				PersistentBackend: persistentBackends[svc.Service],
 				Mutating:          isMutating(method),
+				Findings:          findings,
 				Override:          override,
+				GRPCChecksPassed:  passed,
+				GRPCChecksTotal:   total,
 			})
 		}
 	}

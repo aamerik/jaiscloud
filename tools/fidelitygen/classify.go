@@ -60,6 +60,13 @@ type Facts struct {
 	PersistentBackend bool // service has a Postgres backend + snapshot
 	Mutating          bool
 	Override          *Override
+	// GRPCChecksPassed / GRPCChecksTotal record the gRPC conformance evidence
+	// behind this cell: the pass count and total count of report checks for
+	// (service, operation). Total 0 means the report does not cover the method
+	// (unverified); Passed == Total > 0 means every check passed (verified).
+	// Both are zero for non-gRPC transports.
+	GRPCChecksPassed int
+	GRPCChecksTotal  int
 }
 
 // Cell is one row of the fidelity matrix.
@@ -141,7 +148,12 @@ func evidenceFor(f Facts) []string {
 		ev = append(ev, "not in registry")
 	}
 	if f.Transport == "grpc" {
-		ev = append(ev, "transport=grpc (proto-conformance pending)")
+		if f.GRPCChecksTotal > 0 {
+			ev = append(ev, fmt.Sprintf("transport=grpc (conformance=%d/%d pass)",
+				f.GRPCChecksPassed, f.GRPCChecksTotal))
+		} else {
+			ev = append(ev, "transport=grpc (proto-conformance pending)")
+		}
 	}
 	if f.DiscoveryMethod != "" {
 		ev = append(ev, "discovery="+f.DiscoveryMethod)
