@@ -3,15 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 242,
-      "limited": 215,
+      "ga": 247,
+      "limited": 210,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "ga": 35,
-        "limited": 129
+        "ga": 40,
+        "limited": 124
       },
       "rest": {
         "ga": 207,
@@ -81,7 +81,7 @@
         "limited": 24
       },
       "operations": {
-        "limited": 5
+        "ga": 5
       },
       "pubsub": {
         "ga": 23,
@@ -3945,52 +3945,52 @@
       "service": "operations",
       "operation": "CancelOperation",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "operations",
       "operation": "DeleteOperation",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "operations",
       "operation": "GetOperation",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "operations",
       "operation": "ListOperations",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "operations",
       "operation": "WaitOperation",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
-        "transport=grpc (proto-conformance pending)"
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

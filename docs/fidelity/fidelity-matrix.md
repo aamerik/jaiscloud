@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 242 |
-| limited | 215 |
+| ga | 247 |
+| limited | 210 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 35 | 129 | 0 | 0 |
+| grpc | 40 | 124 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -501,15 +501,15 @@ _24 cell(s): ga=0 limited=24 preview=0 unsupported=0_
 
 ## operations
 
-_5 cell(s): ga=0 limited=5 preview=0 unsupported=0_
+_5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| CancelOperation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteOperation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetOperation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListOperations | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| WaitOperation | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CancelOperation | grpc | ga | — |
+| DeleteOperation | grpc | ga | — |
+| GetOperation | grpc | ga | — |
+| ListOperations | grpc | ga | — |
+| WaitOperation | grpc | ga | — |
 
 ## pubsub
 

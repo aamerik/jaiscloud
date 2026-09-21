@@ -353,11 +353,11 @@ monitoring,SendNotificationChannelVerificationCode,grpc,limited,gRPC verified ag
 monitoring,UpdateAlertPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 monitoring,UpdateNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 monitoring,VerifyNotificationChannel,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-operations,CancelOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-operations,DeleteOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-operations,GetOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-operations,ListOperations,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-operations,WaitOperation,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+operations,CancelOperation,grpc,ga,
+operations,DeleteOperation,grpc,ga,
+operations,GetOperation,grpc,ga,
+operations,ListOperations,grpc,ga,
+operations,WaitOperation,grpc,ga,
 pubsub,Acknowledge,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,CreateSnapshot,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
 pubsub,CreateSubscription,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
