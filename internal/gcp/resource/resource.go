@@ -260,6 +260,9 @@ var formatters = map[string]func(project, name string) string{
 	"notification-channel": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/notificationChannels/%s", p, n)
 	},
+	"notification-channel-descriptor": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/notificationChannelDescriptors/%s", p, n)
+	},
 	"monitored-resource-descriptor": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/monitoredResourceDescriptors/%s", p, n)
 	},

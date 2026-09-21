@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 44,
-  "passed": 44,
+  "total": 68,
+  "passed": 68,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 8,
-    "checks": 44,
-    "passed": 44,
+    "services": 9,
+    "checks": 68,
+    "passed": 68,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -39,6 +39,13 @@
       "service": "logging",
       "total": 5,
       "passed": 5,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "monitoring",
+      "total": 24,
+      "passed": 24,
       "failed": 0,
       "unimplemented": 0
     },
@@ -379,6 +386,174 @@
       "method": "WaitOperation",
       "status": "pass",
       "key_field": "name round-trips with done=true"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateMetricDescriptor",
+      "method": "CreateMetricDescriptor",
+      "status": "pass",
+      "key_field": "metricDescriptor.name/type"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetMetricDescriptor",
+      "method": "GetMetricDescriptor",
+      "status": "pass",
+      "key_field": "metricDescriptor.type/unit"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListMetricDescriptors",
+      "method": "ListMetricDescriptors",
+      "status": "pass",
+      "key_field": "metricDescriptors[].type"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateTimeSeries",
+      "method": "CreateTimeSeries",
+      "status": "pass",
+      "key_field": "series round-trips with value"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateServiceTimeSeries",
+      "method": "CreateServiceTimeSeries",
+      "status": "pass",
+      "key_field": "series round-trips with value"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListTimeSeries",
+      "method": "ListTimeSeries",
+      "status": "pass",
+      "key_field": "timeSeries[].points[].value"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListMonitoredResourceDescriptors",
+      "method": "ListMonitoredResourceDescriptors",
+      "status": "pass",
+      "key_field": "resourceDescriptors[].type/name/labels"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetMonitoredResourceDescriptor",
+      "method": "GetMonitoredResourceDescriptor",
+      "status": "pass",
+      "key_field": "resourceDescriptor.type/name"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteMetricDescriptor",
+      "method": "DeleteMetricDescriptor",
+      "status": "pass",
+      "key_field": "descriptor absent after delete"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateAlertPolicy",
+      "method": "CreateAlertPolicy",
+      "status": "pass",
+      "key_field": "alertPolicy.name/display_name"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetAlertPolicy",
+      "method": "GetAlertPolicy",
+      "status": "pass",
+      "key_field": "alertPolicy.display_name/conditions"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListAlertPolicies",
+      "method": "ListAlertPolicies",
+      "status": "pass",
+      "key_field": "alertPolicies[] contains policy"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "UpdateAlertPolicy",
+      "method": "UpdateAlertPolicy",
+      "status": "pass",
+      "key_field": "masked user_labels applied"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteAlertPolicy",
+      "method": "DeleteAlertPolicy",
+      "status": "pass",
+      "key_field": "policy absent after delete"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateNotificationChannel",
+      "method": "CreateNotificationChannel",
+      "status": "pass",
+      "key_field": "channel.name/type/display_name"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetNotificationChannel",
+      "method": "GetNotificationChannel",
+      "status": "pass",
+      "key_field": "channel.display_name/labels"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListNotificationChannels",
+      "method": "ListNotificationChannels",
+      "status": "pass",
+      "key_field": "channels[] contains channel"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "UpdateNotificationChannel",
+      "method": "UpdateNotificationChannel",
+      "status": "pass",
+      "key_field": "masked description applied"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "VerifyNotificationChannel",
+      "method": "VerifyNotificationChannel",
+      "status": "pass",
+      "key_field": "verification_status=VERIFIED"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListNotificationChannelDescriptors",
+      "method": "ListNotificationChannelDescriptors",
+      "status": "pass",
+      "key_field": "channelDescriptors[].type/display_name/labels"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetNotificationChannelDescriptor",
+      "method": "GetNotificationChannelDescriptor",
+      "status": "pass",
+      "key_field": "descriptor.type=email"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "SendNotificationChannelVerificationCode",
+      "method": "SendNotificationChannelVerificationCode",
+      "status": "pass",
+      "key_field": "success (empty)"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetNotificationChannelVerificationCode",
+      "method": "GetNotificationChannelVerificationCode",
+      "status": "pass",
+      "key_field": "code non-empty"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteNotificationChannel",
+      "method": "DeleteNotificationChannel",
+      "status": "pass",
+      "key_field": "channel absent after delete"
     }
   ]
 }

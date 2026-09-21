@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 247 |
-| limited | 210 |
+| ga | 271 |
+| limited | 186 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 40 | 124 | 0 | 0 |
+| grpc | 64 | 100 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -470,34 +470,34 @@ _19 cell(s): ga=19 limited=0 preview=0 unsupported=0_
 
 ## monitoring
 
-_24 cell(s): ga=0 limited=24 preview=0 unsupported=0_
+_24 cell(s): ga=24 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| CreateAlertPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateMetricDescriptor | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateNotificationChannel | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateServiceTimeSeries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| CreateTimeSeries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteAlertPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteMetricDescriptor | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteNotificationChannel | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetAlertPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetMetricDescriptor | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetMonitoredResourceDescriptor | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetNotificationChannel | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetNotificationChannelDescriptor | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| GetNotificationChannelVerificationCode | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListAlertPolicies | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListMetricDescriptors | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListMonitoredResourceDescriptors | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListNotificationChannelDescriptors | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListNotificationChannels | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListTimeSeries | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| SendNotificationChannelVerificationCode | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateAlertPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateNotificationChannel | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| VerifyNotificationChannel | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateAlertPolicy | grpc | ga | — |
+| CreateMetricDescriptor | grpc | ga | — |
+| CreateNotificationChannel | grpc | ga | — |
+| CreateServiceTimeSeries | grpc | ga | — |
+| CreateTimeSeries | grpc | ga | — |
+| DeleteAlertPolicy | grpc | ga | — |
+| DeleteMetricDescriptor | grpc | ga | — |
+| DeleteNotificationChannel | grpc | ga | — |
+| GetAlertPolicy | grpc | ga | — |
+| GetMetricDescriptor | grpc | ga | — |
+| GetMonitoredResourceDescriptor | grpc | ga | — |
+| GetNotificationChannel | grpc | ga | — |
+| GetNotificationChannelDescriptor | grpc | ga | — |
+| GetNotificationChannelVerificationCode | grpc | ga | — |
+| ListAlertPolicies | grpc | ga | — |
+| ListMetricDescriptors | grpc | ga | — |
+| ListMonitoredResourceDescriptors | grpc | ga | — |
+| ListNotificationChannelDescriptors | grpc | ga | — |
+| ListNotificationChannels | grpc | ga | — |
+| ListTimeSeries | grpc | ga | — |
+| SendNotificationChannelVerificationCode | grpc | ga | — |
+| UpdateAlertPolicy | grpc | ga | — |
+| UpdateNotificationChannel | grpc | ga | — |
+| VerifyNotificationChannel | grpc | ga | — |
 
 ## operations
 
