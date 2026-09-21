@@ -186,7 +186,7 @@ functions,Function.ListFunctions,rest,ga,
 functions,Function.ListLocations,rest,ga,
 functions,Function.ListOperations,rest,ga,
 functions,Function.UpdateFunction,rest,ga,
-iam,GetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,GetIamPolicy,grpc,ga,
 iam,IAM.ServiceAccountCreate,rest,ga,
 iam,IAM.ServiceAccountDelete,rest,ga,
 iam,IAM.ServiceAccountGet,rest,ga,
@@ -200,8 +200,8 @@ iam,IAM.ServiceAccountSetIamPolicy,rest,ga,
 iam,IAM.ServiceAccountSignBlob,rest,ga,
 iam,IAM.ServiceAccountSignJwt,rest,ga,
 iam,IAM.ServiceAccountTestIamPermissions,rest,ga,
-iam,SetIamPolicy,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
-iam,TestIamPermissions,grpc,limited,gRPC verified against proto descriptors only (pending proto-conformance)
+iam,SetIamPolicy,grpc,ga,
+iam,TestIamPermissions,grpc,ga,
 iceberg,Iceberg.CommitTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.CreateNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.CreateTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document

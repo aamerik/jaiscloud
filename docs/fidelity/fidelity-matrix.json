@@ -3,15 +3,15 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 360,
-      "limited": 97,
+      "ga": 363,
+      "limited": 94,
       "preview": 37,
       "unsupported": 3
     },
     "by_transport": {
       "grpc": {
-        "ga": 153,
-        "limited": 11
+        "ga": 156,
+        "limited": 8
       },
       "rest": {
         "ga": 207,
@@ -53,8 +53,7 @@
         "limited": 3
       },
       "iam": {
-        "ga": 13,
-        "limited": 3
+        "ga": 16
       },
       "iceberg": {
         "preview": 14
@@ -2150,11 +2149,10 @@
       "service": "iam",
       "operation": "GetIamPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2296,23 +2294,21 @@
       "service": "iam",
       "operation": "SetIamPolicy",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "iam",
       "operation": "TestIamPermissions",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

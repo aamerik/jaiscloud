@@ -50,8 +50,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 360 |
-| limited | 97 |
+| ga | 363 |
+| limited | 94 |
 | preview | 37 |
 | unsupported | 3 |
 | **total** | **497** |
@@ -61,7 +61,7 @@ fails CI if the committed matrix drifts.
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 207 | 86 | 37 | 3 |
-| gRPC (proto descriptors + official-client conformance) | 153 | 11 | 0 | 0 |
+| gRPC (proto descriptors + official-client conformance) | 156 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,
 Operations (long-running)**.
@@ -95,7 +95,7 @@ verified against the proto descriptors only (see §7).
   `google.cloud.kms.v1.KeyManagementService`,
   `google.cloud.secretmanager.v1.SecretManagerService`,
   `google.logging.v2.LoggingServiceV2`, `google.monitoring.v3.*`,
-  `google.longrunning.Operations`.
+  `google.iam.v1.IAMPolicy`, `google.longrunning.Operations`.
 - **No breaking wire change to a `ga` cell without a major version bump.** The fidelity matrix
   and the CI conformance gates are part of that promise.
 - **`preview` and `limited` cells may change** (added, removed, or re-graded) in a minor release,
@@ -130,9 +130,9 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **158/158 checks pass** (Datastore 11,
-  Firestore 18, KMS 31, Logging 5, Monitoring 24, Operations 5, Pub/Sub 25, Secret Manager 16,
-  Storage 23) against `:8081`.
+- **gRPC** — official `cloud.google.com/go` clients: **161/161 checks pass** (Datastore 11,
+  Firestore 18, IAM 3, KMS 31, Logging 5, Monitoring 24, Operations 5, Pub/Sub 25,
+  Secret Manager 16, Storage 23) against `:8081`.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
@@ -185,16 +185,16 @@ high-severity divergence, so these are recorded, not fatal.
   `gcloud functions list` and `gcloud functions describe` pass. v2 `deploy` is not supported —
   it additionally requires `/v2/.../runtimes` and a resumable source upload. `Function.GetLocation`
   is `limited` (no matching Discovery method).
-- **gRPC** — **11** of **164** cells remain `limited`: verified against proto descriptors only.
-  The other **153** are `ga`, verified with the official `cloud.google.com/go` clients against a
-  live emulator (Datastore 8, Storage 23, KMS 31, Secret Manager 15, Logging 5, Operations 5,
-  Pub/Sub 25, Firestore 17, Monitoring 24). The conformance harness exercises 158 checks over those
-  153 proto methods (Datastore 11, Firestore 18, KMS 31, Monitoring 24, Operations 5, Storage 23,
-  Secret Manager 16, the rest one per method). KMS `ImportCryptoKeyVersion`,
-  `ImportTrustedKeyWrappedCryptoKeyVersion`, `ExportTrustedKeyWrappedCryptoKeyVersion` and
-  `Decapsulate` remain `limited`, as do Secret Manager `RotateSecret`/`EnableManagedRotation`
-  (Cloud SQL managed rotation with no data plane to update), the standalone IAM
-  `GetIamPolicy`/`SetIamPolicy`/`TestIamPermissions` router cells, and Storage `BidiReadObject`.
+- **gRPC** — **8** of **164** cells remain `limited`: verified against proto descriptors only.
+  The other **156** are `ga`, verified with the official `cloud.google.com/go` clients against a
+  live emulator (Datastore 8, Storage 23, IAM 3, KMS 31, Secret Manager 15, Logging 5,
+  Operations 5, Pub/Sub 25, Firestore 17, Monitoring 24). The conformance harness exercises 161
+  checks over those 156 proto methods (Datastore 11, Firestore 18, IAM 3, KMS 31, Monitoring 24,
+  Operations 5, Storage 23, Secret Manager 16, the rest one per method). KMS
+  `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
+  `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`, as do Secret
+  Manager `RotateSecret`/`EnableManagedRotation` (Cloud SQL managed rotation with no data plane
+  to update), and Storage `BidiReadObject`.
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): GCS gRPC v2
   `BidiReadObject` is unimplemented; Firestore `ExecutePipeline` implements the read-only

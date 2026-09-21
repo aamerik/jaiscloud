@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 360 |
-| limited | 97 |
+| ga | 363 |
+| limited | 94 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 153 | 11 | 0 | 0 |
+| grpc | 156 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -278,11 +278,11 @@ _17 cell(s): ga=14 limited=3 preview=0 unsupported=0_
 
 ## iam
 
-_16 cell(s): ga=13 limited=3 preview=0 unsupported=0_
+_16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| GetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetIamPolicy | grpc | ga | — |
 | IAM.ServiceAccountCreate | rest | ga | — |
 | IAM.ServiceAccountDelete | rest | ga | — |
 | IAM.ServiceAccountGet | rest | ga | — |
@@ -296,8 +296,8 @@ _16 cell(s): ga=13 limited=3 preview=0 unsupported=0_
 | IAM.ServiceAccountSignBlob | rest | ga | — |
 | IAM.ServiceAccountSignJwt | rest | ga | — |
 | IAM.ServiceAccountTestIamPermissions | rest | ga | — |
-| SetIamPolicy | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| TestIamPermissions | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| SetIamPolicy | grpc | ga | — |
+| TestIamPermissions | grpc | ga | — |
 
 ## iceberg
 

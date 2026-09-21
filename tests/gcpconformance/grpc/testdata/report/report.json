@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 158,
-  "passed": 158,
+  "total": 161,
+  "passed": 161,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 9,
-    "checks": 158,
-    "passed": 158,
+    "services": 10,
+    "checks": 161,
+    "passed": 161,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -25,6 +25,13 @@
       "service": "firestore",
       "total": 18,
       "passed": 18,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "iam",
+      "total": 3,
+      "passed": 3,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1184,6 +1191,27 @@
       "method": "DeleteNotificationChannel",
       "status": "pass",
       "key_field": "channel absent after delete"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "policy present, empty bindings by default"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "role+member binding round-trips via GetIamPolicy"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back"
     }
   ]
 }
