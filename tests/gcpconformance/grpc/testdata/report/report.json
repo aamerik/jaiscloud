@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 133,
-  "passed": 133,
+  "total": 148,
+  "passed": 148,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 9,
-    "checks": 133,
-    "passed": 133,
+    "checks": 148,
+    "passed": 148,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "firestore",
-      "total": 3,
-      "passed": 3,
+      "total": 18,
+      "passed": 18,
       "failed": 0,
       "unimplemented": 0
     },
@@ -694,6 +694,111 @@
       "method": "Commit",
       "status": "pass",
       "key_field": "success"
+    },
+    {
+      "service": "firestore",
+      "rpc": "CreateDocument",
+      "method": "CreateDocument",
+      "status": "pass",
+      "key_field": "document.name/fields"
+    },
+    {
+      "service": "firestore",
+      "rpc": "GetDocument",
+      "method": "GetDocument",
+      "status": "pass",
+      "key_field": "document.name/fields"
+    },
+    {
+      "service": "firestore",
+      "rpc": "UpdateDocument (update_mask)",
+      "method": "UpdateDocument",
+      "status": "pass",
+      "key_field": "masked field updated, unmasked preserved"
+    },
+    {
+      "service": "firestore",
+      "rpc": "ListDocuments",
+      "method": "ListDocuments",
+      "status": "pass",
+      "key_field": "documents[] contains fixture"
+    },
+    {
+      "service": "firestore",
+      "rpc": "ListCollectionIds",
+      "method": "ListCollectionIds",
+      "status": "pass",
+      "key_field": "collectionIds[] contains fixture"
+    },
+    {
+      "service": "firestore",
+      "rpc": "RunQuery (structured)",
+      "method": "RunQuery",
+      "status": "pass",
+      "key_field": "streamed document matches filter"
+    },
+    {
+      "service": "firestore",
+      "rpc": "RunAggregationQuery (COUNT)",
+      "method": "RunAggregationQuery",
+      "status": "pass",
+      "key_field": "aggregate_fields.count"
+    },
+    {
+      "service": "firestore",
+      "rpc": "PartitionQuery",
+      "method": "PartitionQuery",
+      "status": "pass",
+      "key_field": "partitions[].values reference cursors"
+    },
+    {
+      "service": "firestore",
+      "rpc": "ExecutePipeline",
+      "method": "ExecutePipeline",
+      "status": "pass",
+      "key_field": "results[] + execution_time"
+    },
+    {
+      "service": "firestore",
+      "rpc": "BatchWrite",
+      "method": "BatchWrite",
+      "status": "pass",
+      "key_field": "write_results[] + OK statuses"
+    },
+    {
+      "service": "firestore",
+      "rpc": "BeginTransaction + Commit",
+      "method": "BeginTransaction",
+      "status": "pass",
+      "key_field": "transaction id; committed write persists"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Rollback",
+      "method": "Rollback",
+      "status": "pass",
+      "key_field": "rolled-back write absent, committed present"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Write",
+      "method": "Write",
+      "status": "pass",
+      "key_field": "stream_id/stream_token + write_results"
+    },
+    {
+      "service": "firestore",
+      "rpc": "Listen",
+      "method": "Listen",
+      "status": "pass",
+      "key_field": "ADD, DocumentChange, CURRENT, NO_CHANGE frames"
+    },
+    {
+      "service": "firestore",
+      "rpc": "DeleteDocument",
+      "method": "DeleteDocument",
+      "status": "pass",
+      "key_field": "document absent after delete"
     },
     {
       "service": "datastore",

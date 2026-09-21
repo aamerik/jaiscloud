@@ -12,8 +12,8 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 336 |
-| limited | 121 |
+| ga | 351 |
+| limited | 106 |
 | preview | 37 |
 | unsupported | 3 |
 
@@ -22,7 +22,7 @@ Cells: **497**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 207 | 86 | 37 | 3 |
-| grpc | 129 | 35 | 0 | 0 |
+| grpc | 144 | 20 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
 
@@ -214,17 +214,17 @@ _18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_33 cell(s): ga=18 limited=15 preview=0 unsupported=0_
+_33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | BatchGetDocuments | grpc | ga | — |
-| BatchWrite | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| BeginTransaction | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| BatchWrite | grpc | ga | — |
+| BeginTransaction | grpc | ga | — |
 | Commit | grpc | ga | — |
-| CreateDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| DeleteDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ExecutePipeline | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| CreateDocument | grpc | ga | — |
+| DeleteDocument | grpc | ga | — |
+| ExecutePipeline | grpc | ga | — |
 | Firestore.BatchGet | rest | ga | — |
 | Firestore.BatchWrite | rest | ga | — |
 | Firestore.BeginTransaction | rest | ga | — |
@@ -241,16 +241,16 @@ _33 cell(s): ga=18 limited=15 preview=0 unsupported=0_
 | Firestore.PatchDocument | rest | ga | — |
 | Firestore.Rollback | rest | ga | — |
 | Firestore.RunQuery | rest | ga | — |
-| GetDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListCollectionIds | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| ListDocuments | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Listen | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| PartitionQuery | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Rollback | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RunAggregationQuery | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| RunQuery | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| UpdateDocument | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| Write | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| GetDocument | grpc | ga | — |
+| ListCollectionIds | grpc | ga | — |
+| ListDocuments | grpc | ga | — |
+| Listen | grpc | ga | — |
+| PartitionQuery | grpc | ga | — |
+| Rollback | grpc | ga | — |
+| RunAggregationQuery | grpc | ga | — |
+| RunQuery | grpc | ga | — |
+| UpdateDocument | grpc | ga | — |
+| Write | grpc | ga | — |
 
 ## functions
 
