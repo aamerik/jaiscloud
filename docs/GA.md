@@ -50,8 +50,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 242 |
-| limited | 215 |
+| ga | 247 |
+| limited | 210 |
 | preview | 37 |
 | unsupported | 3 |
 | **total** | **497** |
@@ -61,7 +61,7 @@ fails CI if the committed matrix drifts.
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 207 | 86 | 37 | 3 |
-| gRPC (proto descriptors + official-client conformance) | 35 | 129 | 0 | 0 |
+| gRPC (proto descriptors + official-client conformance) | 40 | 124 | 0 | 0 |
 
 gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,
 Operations (long-running)**.
@@ -94,7 +94,8 @@ verified against the proto descriptors only (see §7).
   `google.firestore.v1.Firestore`, `google.datastore.v1.Datastore`,
   `google.cloud.kms.v1.KeyManagementService`,
   `google.cloud.secretmanager.v1.SecretManagerService`,
-  `google.logging.v2.LoggingServiceV2`, `google.monitoring.v3.*`.
+  `google.logging.v2.LoggingServiceV2`, `google.monitoring.v3.*`,
+  `google.longrunning.Operations`.
 - **No breaking wire change to a `ga` cell without a major version bump.** The fidelity matrix
   and the CI conformance gates are part of that promise.
 - **`preview` and `limited` cells may change** (added, removed, or re-graded) in a minor release,
@@ -129,8 +130,8 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **39/39 checks pass** (Datastore 11,
-  Firestore 3, KMS 6, Logging 5, Pub/Sub 4, Secret Manager 6, Storage 4) against `:8081`.
+- **gRPC** — official `cloud.google.com/go` clients: **44/44 checks pass** (Datastore 11,
+  Firestore 3, KMS 6, Logging 5, Operations 5, Pub/Sub 4, Secret Manager 6, Storage 4) against `:8081`.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
@@ -183,11 +184,11 @@ high-severity divergence, so these are recorded, not fatal.
   `gcloud functions list` and `gcloud functions describe` pass. v2 `deploy` is not supported —
   it additionally requires `/v2/.../runtimes` and a resumable source upload. `Function.GetLocation`
   is `limited` (no matching Discovery method).
-- **gRPC** — **129** of **164** cells remain `limited`: verified against proto descriptors only.
-  The other **35** are `ga`, verified with the official `cloud.google.com/go` clients against a
-  live emulator (Datastore 8, Storage 4, KMS 6, Secret Manager 6, Logging 5, Pub/Sub 4,
-  Firestore 2). The conformance harness exercises 39 checks over those 35 proto methods
-  (Datastore 11, Firestore 3, the rest one per method).
+- **gRPC** — **124** of **164** cells remain `limited`: verified against proto descriptors only.
+  The other **40** are `ga`, verified with the official `cloud.google.com/go` clients against a
+  live emulator (Datastore 8, Storage 4, KMS 6, Secret Manager 6, Logging 5, Operations 5,
+  Pub/Sub 4, Firestore 2). The conformance harness exercises 44 checks over those 40 proto methods
+  (Datastore 11, Firestore 3, Operations 5, the rest one per method).
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): GCS gRPC v2
   `BidiReadObject` is unimplemented; Firestore optimistic-concurrency conflict detection can miss

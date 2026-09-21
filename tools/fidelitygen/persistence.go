@@ -47,6 +47,11 @@ package main
 // and its mutating operations are downgraded until persistence parity exists.
 // Truly stateless services are also listed true (persistence is N/A for them,
 // not a gap).
+//
+// operations -> stateless: the google.longrunning.Operations stub keeps no
+// operation registry (every operation is synchronously terminal), so
+// DeleteOperation/CancelOperation have no state to persist and are not
+// mutating-without-a-backend gaps.
 var persistentBackends = map[string]bool{
 	"storage":            true,
 	"secretmanager":      true,
@@ -69,4 +74,5 @@ var persistentBackends = map[string]bool{
 	"compute":            true,
 	"memorystore":        true,
 	"logging":            true,
+	"operations":         true,
 }

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 39,
-  "passed": 39,
+  "total": 44,
+  "passed": 44,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 7,
-    "checks": 39,
-    "passed": 39,
+    "services": 8,
+    "checks": 44,
+    "passed": 44,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -37,6 +37,13 @@
     },
     {
       "service": "logging",
+      "total": 5,
+      "passed": 5,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "operations",
       "total": 5,
       "passed": 5,
       "failed": 0,
@@ -337,6 +344,41 @@
       "method": "DeleteLog",
       "status": "pass",
       "key_field": "log absent from ListLogs after delete"
+    },
+    {
+      "service": "operations",
+      "rpc": "GetOperation",
+      "method": "GetOperation",
+      "status": "pass",
+      "key_field": "name round-trips with done=true"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "well-formed empty list"
+    },
+    {
+      "service": "operations",
+      "rpc": "DeleteOperation",
+      "method": "DeleteOperation",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "operations",
+      "rpc": "CancelOperation",
+      "method": "CancelOperation",
+      "status": "pass",
+      "key_field": "success"
+    },
+    {
+      "service": "operations",
+      "rpc": "WaitOperation",
+      "method": "WaitOperation",
+      "status": "pass",
+      "key_field": "name round-trips with done=true"
     }
   ]
 }

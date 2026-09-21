@@ -25,10 +25,24 @@ func New() *Service { return &Service{} }
 // GetOperation reports any operation as done with no result body, so SDK init
 // paths that poll Operations for a terminal state terminate cleanly.
 func (s *Service) GetOperation(_ context.Context, req *longrunningpb.GetOperationRequest) (*longrunningpb.Operation, error) {
+	return terminalOperation(req.GetName()), nil
+}
+
+// WaitOperation returns the same terminal operation GetOperation would, without
+// blocking: every emulator operation completes synchronously, so there is never
+// an in-flight operation to wait on and the requested name is already done. The
+// request's timeout is ignored because the wait returns immediately.
+func (s *Service) WaitOperation(_ context.Context, req *longrunningpb.WaitOperationRequest) (*longrunningpb.Operation, error) {
+	return terminalOperation(req.GetName()), nil
+}
+
+// terminalOperation is the shared shape every Operations RPC reports: the
+// requested name marked done, with no result or error body.
+func terminalOperation(name string) *longrunningpb.Operation {
 	return &longrunningpb.Operation{
-		Name: req.GetName(),
+		Name: name,
 		Done: true,
-	}, nil
+	}
 }
 
 // ListOperations reports no operations (the emulator persists none).
