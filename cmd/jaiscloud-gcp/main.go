@@ -535,8 +535,8 @@ func startCmd() *cobra.Command {
 			// Serve the Hive Metastore (Thrift) serving plane on its own TCP
 			// listener. Thrift is a binary protocol over raw TCP — it does not
 			// flow through the HTTP gateway or the gRPC server. The catalog is
-			// single-global (gcp-dpms-hms-thrift.md §2.4/F6): the per-Service
-			// endpoint_uri emitted by the control plane is cosmetic.
+			// single-global: the per-Service endpoint_uri emitted by the
+			// control plane is cosmetic.
 			hmsPort, _ := cmd.Flags().GetInt("hms-port")
 			hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
 			go func() {

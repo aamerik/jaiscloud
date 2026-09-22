@@ -21,12 +21,11 @@ var testRunID string
 // Divergence from the AWS harness: the AWS TestMain also pre-creates the Glue
 // database via the Go Glue SDK. There is no Go-side Hive metastore client, so
 // the run-scoped Hive database is instead created idempotently from Spark SQL
-// (ensureDatabaseSQL) inside each test — see helpers_test.go and
-// plan_docs/gcp-iceberg-dataproc-e2e.md §7 D4.
+// (ensureDatabaseSQL) inside each test — see helpers_test.go.
 //
 // The lock manager is left at Spark's default (InMemoryLockManager): each
 // Docker container runs its own JVM, and the HiveCatalog lock path runs against
-// Phase 4's real jc_hms_locks state machine on the default lock-enabled=true.
+// the real jc_hms_locks state machine on the default lock-enabled=true.
 func TestMain(m *testing.M) {
 	testRunID = fmt.Sprintf("%06x", rand.Uint32())
 

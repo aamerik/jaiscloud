@@ -3,12 +3,11 @@
 // Metastore protocol (hive_metastore.thrift) rather than Glue's REST surface.
 //
 // The serving plane is a single global catalog: databases and tables are keyed
-// by name only, not by projects/{p}/locations/{l}/services/{s} (the per-Service
-// endpoint_uri emitted by the control plane is cosmetic — see
-// gcp-dpms-hms-thrift.md §2.4/F6). Databases are decomposed columns; tables are
-// stored as the full, round-trippable Hive Table JSON blob (F5). Locks are the
-// minimal jc_hms_locks state machine that backs Iceberg's lock/check_lock/
-// unlock flow (D2).
+// by name only, not by projects/{p}/locations/{l}/services/{s}; the per-Service
+// endpoint_uri emitted by the control plane is cosmetic. Databases are
+// decomposed columns; tables are stored as the full, round-trippable Hive
+// Table JSON blob. Locks are the minimal jc_hms_locks state machine that backs
+// Iceberg's lock/check_lock/unlock flow.
 package hms
 
 import (

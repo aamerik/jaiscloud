@@ -7,8 +7,9 @@
 //
 //	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity
 //
-// See plan_docs/gcp-fidelity-matrix-plan.md and
-// plan_docs/gcp-fidelity-matrix-tasks.md.
+// Each operation/transport cell is classified ga/limited/preview/unsupported
+// from the emulator's operation registry, the vendored Discovery schemas, and
+// the wire-conformance evidence.
 package main
 
 import (
