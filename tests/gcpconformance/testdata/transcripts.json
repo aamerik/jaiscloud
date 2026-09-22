@@ -947,7 +947,6 @@
           "managedZonesPerNetwork": 1,
           "nameserversPerDelegation": 6,
           "networksPerManagedZone": 100,
-          "recordsPerRrset": 100,
           "resourceRecordsPerRrset": 100,
           "rrsetAdditionsPerChange": 100,
           "rrsetDeletionsPerChange": 100,
@@ -1110,16 +1109,13 @@
       "body": {
         "datasets": [
           {
-            "creationTime": "1789980165147",
             "datasetReference": {
               "datasetId": "conf_ds_0415c7ca30e9",
               "projectId": "jaiscloud-project"
             },
-            "etag": "1789980165147",
             "id": "jaiscloud-project:conf_ds_0415c7ca30e9",
             "kind": "bigquery#dataset",
             "labels": {},
-            "lastModifiedTime": "1789980165147",
             "location": "US"
           }
         ],
@@ -1212,21 +1208,9 @@
         "tables": [
           {
             "creationTime": "1789980165147",
-            "etag": "1789980165147",
             "id": "jaiscloud-project:conf_ds_0415c7ca30e9.conf_tbl_0415c7ca30e9",
             "kind": "bigquery#table",
             "labels": {},
-            "lastModifiedTime": "1789980165147",
-            "numRows": "0",
-            "schema": {
-              "fields": [
-                {
-                  "mode": "REQUIRED",
-                  "name": "id",
-                  "type": "INTEGER"
-                }
-              ]
-            },
             "tableReference": {
               "datasetId": "conf_ds_0415c7ca30e9",
               "projectId": "jaiscloud-project",
@@ -1274,7 +1258,6 @@
             ]
           }
         ],
-        "startIndex": "0",
         "totalRows": "1"
       }
     },

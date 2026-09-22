@@ -140,12 +140,13 @@ surface and durability.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
-- **Conformance harnesses** — REST wire-conformance (**9 `info` findings, all `unknown_field`,
-  zero high-severity**), gRPC message-level, gcloud CLI, and the fidelity-matrix drift check.
+- **Conformance harnesses** — REST wire-conformance (**clean: 0 divergences, 0 high-severity**),
+  gRPC message-level, gcloud CLI, and the fidelity-matrix drift check.
 
-The 9 REST findings are all `info`: BigQuery list responses (8) and a Cloud DNS project quota
-field (1) the emulator emits beyond the Discovery schema's modelled set. The gate fails only on
-high-severity divergence, so these are recorded, not fatal.
+The REST wire harness now reports zero divergences. The BigQuery list methods emit the Discovery
+summary subsets (`datasets.list`/`tables.list`) and the `ListFormatJob` projection (`jobs.list`);
+`tabledata.list` no longer echoes `startIndex`, and the Cloud DNS project quota no longer emits
+the non-Discovery `recordsPerRrset` field. The gate still fails on any high-severity divergence.
 
 ---
 

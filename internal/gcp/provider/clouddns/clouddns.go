@@ -585,7 +585,6 @@ func (p *Provider) GetProject(ctx context.Context, nr *model.NormalizedRequest) 
 			"rrsetDeletionsPerChange":            100,
 			"totalRrdataSizePerChange":           10000,
 			"dnsKeysPerManagedZone":              2,
-			"recordsPerRrset":                    100,
 			"resourceRecordsPerRrset":            100,
 			"nameserversPerDelegation":           6,
 			"networksPerManagedZone":             100,
