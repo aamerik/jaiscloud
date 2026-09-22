@@ -332,7 +332,7 @@ func sortStrings(xs []string) {
 
 // httpToRPC maps an HTTP status to the accepted google.rpc.Code status name(s).
 var httpToRPC = map[int][]string{
-	400: {"INVALID_ARGUMENT"},
+	400: {"INVALID_ARGUMENT", "FAILED_PRECONDITION", "OUT_OF_RANGE"}, // google.rpc.Code: all three map to HTTP 400.
 	401: {"UNAUTHENTICATED"},
 	403: {"PERMISSION_DENIED"},
 	404: {"NOT_FOUND"},

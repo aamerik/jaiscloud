@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
@@ -313,10 +314,7 @@ func (c *ComputeCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Prov
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
-	statusStr := perr.Status
-	if statusStr == "" {
-		statusStr = gcpStatusString(status)
-	}
+	statusStr, _ := gcperr.Resolve(perr)
 	env := map[string]any{
 		"error": map[string]any{
 			"code":    status,

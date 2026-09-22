@@ -799,8 +799,18 @@ func TestObjectChecksumAndIdentityFields(t *testing.T) {
 	if mg, _ := bresp.Data["metageneration"].(string); mg == "" {
 		t.Error("expected bucket metageneration")
 	}
-	if _, ok := bresp.Data["projectNumber"]; !ok {
-		t.Error("expected bucket projectNumber")
+	if pn, _ := bresp.Data["projectNumber"].(string); pn != resource.ProjectNumber("proj") {
+		t.Errorf("expected synthesized projectNumber %q, got %q", resource.ProjectNumber("proj"), pn)
+	}
+	if pn, _ := bresp.Data["projectNumber"].(string); len(pn) != 12 || strings.Trim(pn, "0123456789") != "" {
+		t.Errorf("expected 12-digit projectNumber, got %q", pn)
+	}
+	bresp2, err := p.BucketsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get bucket (second): %v", err)
+	}
+	if pn1, pn2 := bresp.Data["projectNumber"], bresp2.Data["projectNumber"]; pn1 != pn2 {
+		t.Errorf("projectNumber not stable across reads: %v vs %v", pn1, pn2)
 	}
 }
 

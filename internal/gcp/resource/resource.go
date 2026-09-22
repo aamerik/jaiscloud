@@ -8,6 +8,7 @@ package resource
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"strings"
 )
@@ -266,6 +267,16 @@ var formatters = map[string]func(project, name string) string{
 	"monitored-resource-descriptor": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/monitoredResourceDescriptors/%s", p, n)
 	},
+}
+
+// ProjectNumber returns a synthesized, stable 12-digit decimal project number
+// derived from the project ID via FNV-1a. The emulator has no real GCP project
+// number, so the value is informational only — used for fields such as
+// storage#bucket.projectNumber where the wire shape requires a number.
+func ProjectNumber(project string) string {
+	h := fnv.New64a()
+	h.Write([]byte(project))
+	return fmt.Sprintf("%012d", h.Sum64()%1_000_000_000_000)
 }
 
 // ResourceID returns a function that formats GCP resource names for a project.
