@@ -23,7 +23,7 @@
 | Cloud Functions (v1) | REST | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |
 | Cloud Workflows | REST | Workflow definitions + executions, real YAML expression engine |
 | Cloud Dataproc | REST | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
-| Dataproc Metastore | REST | Control-plane CRUD (services/backups/metadata-imports) — no Hive Thrift / Iceberg table-metadata plane, see [Known Limitations](#known-limitations) |
+| Dataproc Metastore | REST | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); partitions/Hive-3.x stubbed, see [Known Limitations](#known-limitations) |
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
@@ -34,6 +34,8 @@
 | Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
 | Cloud SQL Admin | REST | Metadata-only instances/databases/users — no SQL engine or data plane, see [Known Limitations](#known-limitations) |
 | Compute Engine | REST | Metadata-only instances/disks/networks/firewalls/subnetworks — no VM, disk, or network data plane, see [Known Limitations](#known-limitations) |
+
+**Not implemented (out of scope):** Artifact Registry, Cloud Run, Cloud Endpoints, Deployment Manager.
 
 ### Fidelity matrix
 
@@ -258,13 +260,21 @@ The gRPC KMS surface also implements the delete side (`DeleteCryptoKeyVersion`, 
 
 A `Secret`'s `rotation` schedule (`nextRotationTime` + `rotationPeriod`) is persisted and honored lazily: a read (`GetSecret`/`AccessSecretVersion`) after `nextRotationTime` creates a new version and advances the schedule. Cloud SQL **managed rotation**, however, is `Unimplemented` on the gRPC surface: `EnableManagedRotation` and `RotateSecret` generate a password, apply it to a Cloud SQL user, and store it as a new secret version, and the emulator has no Cloud SQL data plane to update. Both RPCs fail loud with `codes.Unimplemented` rather than fabricating a version.
 
+### Cloud Workflows: synchronous execution, no filter/orderBy
+
+Cloud Workflows is implemented over a real YAML expression engine: workflow definitions and executions are stored, and `executions.create` runs the workflow synchronously and returns it already in a terminal state (there is no asynchronous execution queue). List `filter`/`orderBy` are ignored; a `switch` with no matching condition fails the execution loudly; `http.*` auth is not modelled; `retry.predicate` fails loud; and subworkflows, `listRevisions`, IAM, and CMEK are not implemented.
+
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 
 `POST /_jaiscloud/reset` wipes the Dataproc store but does not cancel or wait for jobs currently executing (Docker/K8s executor mode). This matches AWS EMR's own `Reset` behaviour in this codebase, which is a no-op for the same reason — not a GCP-specific gap. If you reset while a job is mid-execution and then resubmit a job with the *same* `(project, region, jobId)` before the stale run finishes, the stale run's completion could overwrite the new job's state. Avoid reusing job IDs across a reset boundary while a prior run may still be in flight.
 
-### Dataproc Metastore: control plane only, no table-metadata plane
+### Dataproc Serverless: not implemented
 
-Only the management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The actual table-metadata plane — the Hive Metastore **Thrift** server that Spark's Hive/Iceberg clients talk to on `endpoint_uri:9083` — is not implemented; `endpointUri` is a synthesized placeholder. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
+The Dataproc Serverless (Batch) API is not implemented. Dataproc is clusters + jobs with mock, Docker, or K8s executors only; serverless batches have no emulator surface.
+
+### Dataproc Metastore: control plane + Hive Thrift serving plane (partitions stubbed)
+
+The management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The table-metadata plane is served by a Hive Metastore **Thrift** listener on `:9083` (a single global catalog) that answers the database, table, and lock methods Spark's Hive/Iceberg clients use; the per-Service `endpointUri` is synthesized (`thrift://<id>.<location>.metastore.jaiscloud.local:9083`) because the listener is shared, not per-service. Partition methods, `get_table_meta`/Hive-3.x paths, and the Metastore gRPC transport are not implemented. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
 
 ### BigLake Iceberg REST Catalog: DB-backed, standard REST spec
 
