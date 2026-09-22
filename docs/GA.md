@@ -1,6 +1,6 @@
 # GCP emulator — GA readiness
 
-Status: **GA contract for `jaiscloud-gcp` (v0.2.0)**.
+Status: **GA contract for `jaiscloud-gcp` (v1.0.0)**.
 
 This document states what GA means for this emulator. It is a **fidelity contract** — a
 declaration of which operation/transport cells are supported and wire-conformant — **not** a
@@ -87,7 +87,7 @@ verified against the proto descriptors only (see §7).
 
 ## 3. Stability & versioning
 
-- **Emulator version:** `0.2.0` (`cmd/jaiscloud-gcp/main.go`).
+- **Emulator version:** `1.0.0` (`cmd/jaiscloud-gcp/main.go`).
 - **Pinned to official artifacts.** REST is validated against the vendored Discovery documents —
   BigQuery `v2`; Cloud DNS `v1`; Cloud SQL Admin `v1`; Compute Engine `v1`; Dataproc `v1`;
   Datastore `v1`; Eventarc `v1`; Firestore `v1`; Cloud Functions `v1`; IAM `v1`; Cloud KMS `v1`;
@@ -214,8 +214,22 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   creating a new primary and advancing the schedule — there is no background scheduler); Logging
   `TailLogEntries` is a bounded, at-most-once poll;
   Eventarc and Managed Kafka are metadata-only (no event-delivery engine, no real broker);
-  Dataproc `Reset` does not drain in-flight Spark job goroutines; Metastore has no Hive Thrift
-  table-metadata plane.
+  Dataproc `Reset` does not drain in-flight Spark job goroutines; Metastore's Hive Thrift
+  serving plane (:9083) implements databases/tables/locks (a single global catalog), but
+  partition methods and get_table_meta/Hive-3.x are stubbed and the gRPC transport is not
+  implemented.
+- **Not implemented at all (out of scope for v1.0)** — Artifact Registry, Cloud Run, Cloud
+  Endpoints, Deployment Manager: no emulator surface (requests are unhandled). Artifact Registry
+  and Cloud Run are engine-bearing (registry proxy / container executor) and are deliberately not
+  emulated.
+- **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
+  `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`;
+  Dataproc `DiagnoseCluster`; Managed Kafka consumer-group `Get`/`Update`/`Delete`. These fail loud
+  with an explicit `Unimplemented` error rather than a plausible empty response.
+- **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
+  `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
+  and has no subworkflows/`listRevisions`/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
+  Eventarc has no event-delivery engine.
 
 ---
 
@@ -232,14 +246,18 @@ and `test-gcp-gcloud-conformance` (the two client suites build and self-start an
 emulator; `gcloud` self-skips if it is not on `PATH`), then prints what the infrastructure-backed
 gates need.
 
-Full-system verification needs Docker/Postgres/k3d and is deliberately **not** part of `ga-check`:
+For a GA release the following are also required (they need real clients, Docker,
+Postgres, or k3d, so they are not part of `ga-check`):
 
 ```bash
-make test-e2e-gcp-persistence   # Postgres (Docker): state survives restarts
-make test-e2e-lakehouse-k3d     # k3d cluster + emulator image: real Spark ELT pipeline
+GCP_DIFFERENTIAL_STRICT=1 make test-gcp-differential   # 0 open divergences vs real-GCP goldens
+make test-gcp-python-conformance                       # Python google-cloud-* clients
+make test-e2e-gcp-persistence                          # Postgres mode survives restarts
+make test-e2e-lakehouse-k3d                            # real Medallion Spark ELT on k3d
+make test-e2e-iceberg-gcp                              # Iceberg-on-Hive (Docker Spark + HMS Thrift)
 ```
 
-The same gates run on every PR as the `test-gcp-*` CI jobs in §4. The fidelity check
+The `ga-check` gates and the Postgres persistence job run on every PR as the `test-gcp-*` CI jobs in §4. The fidelity check
 consumes the generated conformance report under `tests/gcpconformance/testdata/report/`
 (gitignored); `check-gcp-fidelity-matrix` regenerates it from the committed transcript via
 `test-gcp-wire-conformance`, so `make ga-check` works on a fresh clone with no setup. (CI, by
