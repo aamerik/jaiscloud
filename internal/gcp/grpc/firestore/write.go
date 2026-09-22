@@ -16,8 +16,7 @@ import (
 )
 
 // writeStream carries the per-stream Write state. The Write RPC is a
-// bidirectional stream with a strict handshake (see plan_docs/gcp-grpc-transport.md
-// § "Write handshake"):
+// bidirectional stream with a strict handshake:
 //
 //  1. First client msg: database set; stream_id empty (new) or set (resume);
 //     writes empty; stream_token empty.

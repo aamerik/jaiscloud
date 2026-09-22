@@ -102,8 +102,7 @@ func tablePrefix(table, subdir string) string {
 // Divergence from the AWS harness (which pre-creates the Glue DB via the Go
 // Glue SDK in TestMain): there is no Go-side Hive metastore client, and
 // HiveCatalog (unlike GlueCatalog) does not auto-create the namespace. So the
-// run-scoped database is created from Spark SQL instead (idempotent). See
-// plan_docs/gcp-iceberg-dataproc-e2e.md §7 D4.
+// run-scoped database is created from Spark SQL instead (idempotent).
 func ensureDatabaseSQL() string {
 	return fmt.Sprintf("CREATE DATABASE IF NOT EXISTS hms.%s;", icebergDB())
 }
@@ -149,7 +148,7 @@ func runSparkSQLOnHost(t *testing.T, host string, job SparkJob) {
 		// No GCP env vars are required: the harness uses anonymous auth
 		// (fs.gs.auth.null.enable=true + fs.gs.project.id) and the explicit
 		// fs.gs.storage.root.url — no Workload Identity, no
-		// GOOGLE_APPLICATION_CREDENTIALS (plan_docs §7 D5).
+		// GOOGLE_APPLICATION_CREDENTIALS.
 		"-v", sqlFile.Name() + ":/tmp/job.sql:ro",
 		icebergImage(),
 		"/opt/spark/bin/spark-sql",
@@ -210,9 +209,8 @@ func icebergSparkConf() []string {
 //   - GCS (JSON API, :8080) — both Iceberg's HadoopFileIO data path AND Spark's
 //     INSERT OVERWRITE DIRECTORY use the gcs-connector's gs:// filesystem.
 //
-// The conf block is the §3.4 block from plan_docs/gcp-iceberg-dataproc-e2e.md,
-// with one deliberate omission: lock-enabled is left at its default (true) so
-// Spark runs on the real jc_hms_locks path (Phase 4) — see §7 D2.
+// The conf block below deliberately omits one setting: lock-enabled is left at
+// its default (true) so Spark runs on the real jc_hms_locks path.
 func icebergSparkConfForHost(host string) []string {
 	dockerHost := strings.Replace(host, "localhost", "host.docker.internal", 1)
 	return []string{
@@ -222,9 +220,8 @@ func icebergSparkConfForHost(host string) []string {
 		fmt.Sprintf("spark.sql.catalog.hms.warehouse=gs://iceberg-warehouse/%s/", testRunID),
 		"spark.sql.catalog.hms.io-impl=org.apache.iceberg.hadoop.HadoopFileIO",
 		// NOTE: no lock-enabled override. Running on the default
-		// iceberg.engine.hive.lock-enabled=true path, backed by Phase 4's real
-		// jc_hms_locks state machine. lock-enabled=false is documented as a
-		// fallback only (plan_docs/gcp-iceberg-dataproc-e2e.md §7 D2).
+		// iceberg.engine.hive.lock-enabled=true path, backed by the real
+		// jc_hms_locks state machine. lock-enabled=false is a fallback only.
 
 		// GCS Hadoop connector (gs:// filesystem) — HadoopFileIO data path AND
 		// INSERT OVERWRITE DIRECTORY both flow through here.
@@ -244,8 +241,7 @@ func icebergSparkConfForHost(host string) []string {
 // Modeled on tests/persistent_mode/gcp/storage/persistence_test.go (raw HTTP
 // against /storage/v1/...) rather than the AWS S3 SDK. There is deliberately no
 // Go-side Hive metastore client: metadata_location/table_type assertions are
-// replaced by GCS object-count assertions (plan_docs/gcp-iceberg-dataproc-e2e.md
-// §7 D4).
+// replaced by GCS object-count assertions.
 
 // gcsRequest performs a raw HTTP request against the emulator's GCS REST surface.
 func gcsRequest(host, method, path, body string) (int, []byte, error) {
@@ -410,8 +406,7 @@ func persistPort() int {
 // exec.Cmd. Callers are responsible for killing it when done.
 //
 // There is deliberately no --mode flag: the GCP binary persists via --dsn +
-// --blob-dir (the AWS --mode full invocation is dead code on its own binary —
-// plan_docs/gcp-iceberg-dataproc-e2e.md finding F9).
+// --blob-dir (the AWS --mode full invocation is dead code on its own binary).
 func startGCPProcess(t *testing.T, port int, dsn, blobDir string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(gcpBin(),

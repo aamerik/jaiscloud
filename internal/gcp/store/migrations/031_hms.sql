@@ -4,7 +4,7 @@
 -- non-framed TSocket), not Glue's REST/JSON surface. Unlike the project-scoped
 -- GCP v1 services, the serving plane is a single global catalog: databases and
 -- tables are keyed by name only (the per-Service endpoint_uri emitted by the
--- control plane is cosmetic — see gcp-dpms-hms-thrift.md §2.4/F6).
+-- control plane is cosmetic).
 --
 -- Three logical tables:
 --

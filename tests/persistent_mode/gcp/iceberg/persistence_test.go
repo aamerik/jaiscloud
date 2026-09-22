@@ -14,8 +14,7 @@ import (
 //
 // The test manages its own jaiscloud-gcp server instance on a separate port so
 // it can control the lifecycle independently of the shared test server. It is
-// built directly from --dsn + --blob-dir (the GCP binary has no --mode flag;
-// see plan_docs/gcp-iceberg-dataproc-e2e.md finding F9).
+// built directly from --dsn + --blob-dir (the GCP binary has no --mode flag).
 //
 // Required env vars:
 //

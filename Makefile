@@ -21,8 +21,8 @@ SPARK_IMAGE             ?= apache/spark:3.5.0
 LAMBDA_IMAGE            ?= public.ecr.aws/lambda/python:3.12
 # Custom Iceberg-enabled Spark image (must be built locally before use)
 SPARK_E2E_ICEBERG_IMAGE ?= spark-iceberg-test
-# GCP variant: apache/spark:3.5.0 + iceberg-spark-runtime + gcs-connector (hadoop3),
-# NO iceberg-gcp-bundle (HadoopFileIO data path — plan_docs/gcp-iceberg-dataproc-e2e.md §7 D1).
+# GCP variant: apache/spark:3.5.0 + iceberg-spark-runtime + gcs-connector (hadoop3);
+# the data path is HadoopFileIO, so the iceberg-gcp-bundle is intentionally absent.
 SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 
 # GCP emulator image deployed to the k3d cluster (deploy/k8s/jaiscloud-gcp.yaml).
@@ -656,9 +656,9 @@ test-e2e-iceberg: _check-iceberg-prereq ## Iceberg Glue Catalog tests — tests/
 	$(MAKE) down-docker
 
 # Iceberg-on-Dataproc E2E — external Docker Spark against the emulator's Hive
-# Metastore Thrift listener (:9083, Phase 4) + GCS (:8080). Blocked on Phase 4:
-# the tests compile under the iceberg_e2e tag but will not pass until the Thrift
-# listener merges (plan_docs/gcp-iceberg-dataproc-e2e.md §7 D3).
+# Metastore Thrift listener (:9083) + GCS (:8080). The tests run under the
+# iceberg_e2e tag and require the Thrift listener, which serves a single global
+# catalog.
 test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tests — tests/persistent_mode/gcp/iceberg/ (tag: iceberg_e2e)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-iceberg.log 2>&1 & \
