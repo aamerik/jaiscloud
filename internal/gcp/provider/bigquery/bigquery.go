@@ -3,9 +3,11 @@
 // datasets/tables/jobs are logical records only, jobs.query never evaluates
 // SQL (it stores the query and reports jobComplete=true with empty results),
 // and tabledata.insertAll stores streamed rows that tabledata.list reads back.
-// tabledata.list honors startIndex (offset pagination) and echoes it in the
-// response. routines/models/rowAccessPolicies are deferred and route to an
-// explicit Unimplemented (501) rather than the codec's 404.
+// tabledata.list honors startIndex as an offset into the row set but does not
+// echo it in the response (startIndex is a request-only parameter in the
+// Discovery TableDataList schema). routines/models/rowAccessPolicies are
+// deferred and route to an explicit Unimplemented (501) rather than the
+// codec's 404.
 //
 // Known limitations (emulator simplifications, documented rather than fixed):
 //   - tabledata.insertAll honors insertId (best-effort duplicate suppression
@@ -15,9 +17,9 @@
 //     process-local and not persisted across store snapshots/restarts.
 //     templateSuffix is not supported and field *types* are not enforced (only
 //     presence/unknown-field checks).
-//   - List methods (datasets/tables/jobs) return full resource objects rather
-//     than the discovery-doc summary subsets (over-inclusion, tolerated by the
-//     SDK).
+//   - List methods emit the Discovery summary subsets: datasets.list uses
+//     DatasetList.datasets, tables.list uses TableList.tables, and jobs.list
+//     uses JobList.jobs (ListFormatJob, which omits etag).
 //   - projects.getServiceAccount returns a synthetic
 //     bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com email rather than a
 //     real service account.
@@ -190,6 +192,24 @@ func (p *Provider) datasetMap(projectID string, d bqstore.Dataset) map[string]an
 	return out
 }
 
+// datasetSummaryMap renders the DatasetList summary subset the Discovery
+// schema models for datasets[]. The full dataset resource (datasets.get/
+// insert/update) carries additional fields (creationTime, etag,
+// lastModifiedTime, access) that do not appear in a datasets.list response.
+func (p *Provider) datasetSummaryMap(projectID string, d bqstore.Dataset) map[string]any {
+	full := p.datasetMap(projectID, d)
+	out := map[string]any{}
+	for _, k := range []string{
+		"kind", "id", "datasetReference", "labels", "location",
+		"friendlyName", "type", "catalogSource", "externalDatasetReference",
+	} {
+		if v, ok := full[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // defaultDatasetAccess is the ACL real GCP assigns to a dataset created without
 // an explicit access list: project writers may edit, project owners own, the
 // creating user owns, and project readers may view. The user entry carries a
@@ -243,6 +263,25 @@ func (p *Provider) tableMap(projectID string, t bqstore.Table) map[string]any {
 	return out
 }
 
+// tableSummaryMap renders the TableList summary subset the Discovery schema
+// models for tables[]. The full table resource (tables.get/insert/update)
+// carries additional fields (etag, lastModifiedTime, numRows, schema) that do
+// not appear in a tables.list response.
+func (p *Provider) tableSummaryMap(projectID string, t bqstore.Table) map[string]any {
+	full := p.tableMap(projectID, t)
+	out := map[string]any{}
+	for _, k := range []string{
+		"kind", "id", "tableReference", "labels", "type", "creationTime",
+		"friendlyName", "timePartitioning", "view", "clustering",
+		"rangePartitioning", "requirePartitionFilter", "expirationTime",
+	} {
+		if v, ok := full[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func (p *Provider) jobMap(projectID string, j bqstore.Job) map[string]any {
 	out := map[string]any{}
 	if len(j.Config) > 0 {
@@ -262,6 +301,15 @@ func (p *Provider) jobMap(projectID string, j bqstore.Job) map[string]any {
 		out["configuration"] = map[string]any{}
 	}
 	out["status"] = map[string]any{"state": "DONE"}
+	return out
+}
+
+// jobSummaryMap projects a job onto the Discovery JobList.jobs item schema
+// (ListFormatJob), which omits etag. The full Job schema returned by
+// jobs.get/insert does model etag, so only jobs.list uses this projection.
+func (p *Provider) jobSummaryMap(projectID string, j bqstore.Job) map[string]any {
+	out := p.jobMap(projectID, j)
+	delete(out, "etag")
 	return out
 }
 
@@ -330,11 +378,7 @@ func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest
 	page, next := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
 	items := make([]any, 0, len(page))
 	for _, d := range page {
-		m := p.datasetMap(projectOf(nr), d)
-		// datasets.list returns the summary subset; access is only carried on
-		// the full dataset resource (datasets.get/insert).
-		delete(m, "access")
-		items = append(items, m)
+		items = append(items, p.datasetSummaryMap(projectOf(nr), d))
 	}
 	resp := map[string]any{"kind": kindPrefix + "datasetList", "datasets": items}
 	if next != "" {
@@ -452,7 +496,7 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	page, next := paging.Page(tables, func(t bqstore.Table) string { return t.TableID }, pagingParams(nr.Params))
 	items := make([]any, 0, len(page))
 	for _, t := range page {
-		items = append(items, p.tableMap(projectOf(nr), t))
+		items = append(items, p.tableSummaryMap(projectOf(nr), t))
 	}
 	resp := map[string]any{"kind": kindPrefix + "tableList", "tables": items, "totalItems": len(tables)}
 	if next != "" {
@@ -759,10 +803,9 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 		items = append(items, rowToTableRow(r.Data, fields))
 	}
 	resp := map[string]any{
-		"kind":       kindPrefix + "tableDataList",
-		"rows":       items,
-		"totalRows":  strconv.FormatInt(total, 10),
-		"startIndex": strconv.Itoa(startIndex),
+		"kind":      kindPrefix + "tableDataList",
+		"rows":      items,
+		"totalRows": strconv.FormatInt(total, 10),
 	}
 	if next != "" {
 		resp["pageToken"] = next
@@ -828,7 +871,7 @@ func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*
 	page, next := paging.Page(jobs, func(j bqstore.Job) string { return j.JobID }, pagingParams(nr.Params))
 	items := make([]any, 0, len(page))
 	for _, j := range page {
-		items = append(items, p.jobMap(projectOf(nr), j))
+		items = append(items, p.jobSummaryMap(projectOf(nr), j))
 	}
 	resp := map[string]any{"kind": kindPrefix + "jobList", "jobs": items}
 	if next != "" {

@@ -338,8 +338,16 @@ func TestProjectGetAndUnimplemented(t *testing.T) {
 	if resp.Data["number"] == "" || resp.Data["number"] == nil {
 		t.Errorf("expected numeric project number, got %v", resp.Data["number"])
 	}
-	if _, ok := resp.Data["quota"].(map[string]any); !ok {
+	quota, ok := resp.Data["quota"].(map[string]any)
+	if !ok {
 		t.Errorf("expected a quota block, got %v", resp.Data["quota"])
+	} else {
+		if _, has := quota["recordsPerRrset"]; has {
+			t.Errorf("quota must not carry the non-Discovery recordsPerRrset field")
+		}
+		if _, has := quota["resourceRecordsPerRrset"]; !has {
+			t.Errorf("quota must carry resourceRecordsPerRrset, got %v", quota)
+		}
 	}
 
 	if _, err := p.Unimplemented(context.Background(), newNR(nil)); !isCode(err, "Unimplemented") {

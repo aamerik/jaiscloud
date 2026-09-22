@@ -356,13 +356,14 @@ func TestListRowsStartIndex(t *testing.T) {
 		return cell["v"]
 	}
 
-	// startIndex=2 returns rows from index 2 and echoes startIndex.
+	// startIndex=2 returns rows from index 2; startIndex is a request-only
+	// parameter and is not echoed in the response.
 	list, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "startIndex": "2"}))
 	if err != nil {
 		t.Fatalf("list rows startIndex=2: %v", err)
 	}
-	if list.Data["startIndex"] != "2" {
-		t.Errorf("startIndex echo = %v, want 2", list.Data["startIndex"])
+	if _, ok := list.Data["startIndex"]; ok {
+		t.Errorf("startIndex must not be echoed, got %v", list.Data["startIndex"])
 	}
 	if list.Data["totalRows"] != "5" {
 		t.Errorf("totalRows = %v, want 5", list.Data["totalRows"])
@@ -383,8 +384,8 @@ func TestListRowsStartIndex(t *testing.T) {
 	if rows, _ := empty.Data["rows"].([]any); len(rows) != 0 {
 		t.Errorf("expected no rows for out-of-range startIndex, got %d", len(rows))
 	}
-	if empty.Data["startIndex"] != "99" {
-		t.Errorf("startIndex echo = %v, want 99", empty.Data["startIndex"])
+	if _, ok := empty.Data["startIndex"]; ok {
+		t.Errorf("startIndex must not be echoed, got %v", empty.Data["startIndex"])
 	}
 
 	// Invalid startIndex → 400 InvalidArgument.
@@ -918,5 +919,121 @@ func TestDatasetMaxTimeTravelHours(t *testing.T) {
 	}
 	if got.Data["maxTimeTravelHours"] != "168" {
 		t.Fatalf("maxTimeTravelHours = %#v, want 168", got.Data["maxTimeTravelHours"])
+	}
+}
+
+// TestListSummariesOmitFullResourceFields pins the Discovery summary subsets:
+// datasets.list and tables.list must carry only the DatasetList/TableList item
+// fields and must not leak full-resource fields.
+func TestListSummariesOmitFullResourceFields(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "d"},
+		"friendlyName":     "D",
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+	if _, err := p.CreateTable(ctx, newNR(map[string]any{
+		"datasetId": "d",
+		"body": map[string]any{
+			"tableReference": map[string]any{"tableId": "t"},
+			"friendlyName":   "T",
+			"timePartitioning": map[string]any{
+				"type": "DAY",
+			},
+			"schema": map[string]any{
+				"fields": []any{map[string]any{"name": "id", "type": "INTEGER"}},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	ds, err := p.ListDatasets(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list datasets: %v", err)
+	}
+	datasets, _ := ds.Data["datasets"].([]any)
+	if len(datasets) != 1 {
+		t.Fatalf("expected 1 dataset, got %d", len(datasets))
+	}
+	dm, _ := datasets[0].(map[string]any)
+	for _, k := range []string{"creationTime", "etag", "lastModifiedTime", "access"} {
+		if _, ok := dm[k]; ok {
+			t.Errorf("datasets.list must omit %q, got %#v", k, dm[k])
+		}
+	}
+	for _, k := range []string{"kind", "id", "datasetReference", "labels", "location"} {
+		if _, ok := dm[k]; !ok {
+			t.Errorf("datasets.list missing summary field %q", k)
+		}
+	}
+	if dm["friendlyName"] != "D" {
+		t.Errorf("datasets.list must retain allowed friendlyName, got %#v", dm["friendlyName"])
+	}
+
+	tbls, err := p.ListTables(ctx, newNR(map[string]any{"datasetId": "d"}))
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	tables, _ := tbls.Data["tables"].([]any)
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	tm, _ := tables[0].(map[string]any)
+	for _, k := range []string{"schema", "numRows", "etag", "lastModifiedTime"} {
+		if _, ok := tm[k]; ok {
+			t.Errorf("tables.list must omit %q, got %#v", k, tm[k])
+		}
+	}
+	for _, k := range []string{"kind", "tableReference", "id", "creationTime", "type", "labels"} {
+		if _, ok := tm[k]; !ok {
+			t.Errorf("tables.list missing summary field %q", k)
+		}
+	}
+	if tm["friendlyName"] != "T" {
+		t.Errorf("tables.list must retain allowed friendlyName, got %#v", tm["friendlyName"])
+	}
+	if _, ok := tm["timePartitioning"]; !ok {
+		t.Errorf("tables.list must retain allowed timePartitioning, got %#v", tm)
+	}
+}
+
+// TestListJobsOmitsEtag pins the ListFormatJob projection: jobs.list items
+// omit etag, while the full Job resource returned by jobs.get still has it.
+func TestListJobsOmitsEtag(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	if _, err := p.InsertJob(ctx, newNR(map[string]any{"body": map[string]any{
+		"jobReference": map[string]any{"jobId": "j1"},
+	}})); err != nil {
+		t.Fatalf("insert job: %v", err)
+	}
+
+	list, err := p.ListJobs(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	jobs, _ := list.Data["jobs"].([]any)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	jm, _ := jobs[0].(map[string]any)
+	if _, ok := jm["etag"]; ok {
+		t.Errorf("jobs.list must omit etag (ListFormatJob), got %#v", jm["etag"])
+	}
+	if jm["kind"] != "bigquery#job" || jm["id"] != "proj:j1" {
+		t.Errorf("jobs.list item malformed: %#v", jm)
+	}
+
+	got, err := p.GetJob(ctx, newNR(map[string]any{"jobId": "j1"}))
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if _, ok := got.Data["etag"]; !ok {
+		t.Errorf("jobs.get must include etag, got %#v", got.Data)
 	}
 }
