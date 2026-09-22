@@ -12,16 +12,16 @@ Cells: **497**
 
 | state | count |
 | --- | --- |
-| ga | 363 |
-| limited | 94 |
+| ga | 353 |
+| limited | 95 |
 | preview | 37 |
-| unsupported | 3 |
+| unsupported | 12 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 207 | 86 | 37 | 3 |
+| rest | 197 | 87 | 37 | 12 |
 | grpc | 156 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
@@ -152,7 +152,7 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 ## dataproc
 
-_15 cell(s): ga=15 limited=0 preview=0 unsupported=0_
+_15 cell(s): ga=14 limited=0 preview=0 unsupported=1_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -160,7 +160,7 @@ _15 cell(s): ga=15 limited=0 preview=0 unsupported=0_
 | Dataproc.CreateCluster | rest | ga | — |
 | Dataproc.DeleteCluster | rest | ga | — |
 | Dataproc.DeleteJob | rest | ga | — |
-| Dataproc.DiagnoseCluster | rest | ga | — |
+| Dataproc.DiagnoseCluster | rest | unsupported | explicit Unimplemented stub |
 | Dataproc.GetCluster | rest | ga | — |
 | Dataproc.GetJob | rest | ga | — |
 | Dataproc.GetOperation | rest | ga | — |
@@ -406,25 +406,25 @@ _6 cell(s): ga=5 limited=1 preview=0 unsupported=0_
 
 ## managedkafka
 
-_16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
+_16 cell(s): ga=12 limited=1 preview=0 unsupported=3_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | ManagedKafka.CreateCluster | rest | ga | — |
 | ManagedKafka.CreateTopic | rest | ga | — |
 | ManagedKafka.DeleteCluster | rest | ga | — |
-| ManagedKafka.DeleteConsumerGroup | rest | ga | — |
+| ManagedKafka.DeleteConsumerGroup | rest | unsupported | explicit Unimplemented stub |
 | ManagedKafka.DeleteTopic | rest | ga | — |
 | ManagedKafka.GetCluster | rest | ga | — |
-| ManagedKafka.GetConsumerGroup | rest | ga | — |
+| ManagedKafka.GetConsumerGroup | rest | unsupported | explicit Unimplemented stub |
 | ManagedKafka.GetOperation | rest | ga | — |
 | ManagedKafka.GetTopic | rest | ga | — |
 | ManagedKafka.ListClusters | rest | ga | — |
-| ManagedKafka.ListConsumerGroups | rest | ga | — |
+| ManagedKafka.ListConsumerGroups | rest | limited | no broker data plane; consumer-group listing returns an empty set |
 | ManagedKafka.ListOperations | rest | ga | — |
 | ManagedKafka.ListTopics | rest | ga | — |
 | ManagedKafka.UpdateCluster | rest | ga | — |
-| ManagedKafka.UpdateConsumerGroup | rest | ga | — |
+| ManagedKafka.UpdateConsumerGroup | rest | unsupported | explicit Unimplemented stub |
 | ManagedKafka.UpdateTopic | rest | ga | — |
 
 ## memorystore
@@ -444,17 +444,17 @@ _8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
 
 ## metastore
 
-_19 cell(s): ga=19 limited=0 preview=0 unsupported=0_
+_19 cell(s): ga=14 limited=0 preview=0 unsupported=5_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| Metastore.AlterMetadataResourceLocation | rest | ga | — |
+| Metastore.AlterMetadataResourceLocation | rest | unsupported | explicit Unimplemented stub |
 | Metastore.CreateBackup | rest | ga | — |
 | Metastore.CreateMetadataImport | rest | ga | — |
 | Metastore.CreateService | rest | ga | — |
 | Metastore.DeleteBackup | rest | ga | — |
 | Metastore.DeleteService | rest | ga | — |
-| Metastore.ExportMetadata | rest | ga | — |
+| Metastore.ExportMetadata | rest | unsupported | explicit Unimplemented stub |
 | Metastore.GetBackup | rest | ga | — |
 | Metastore.GetMetadataImport | rest | ga | — |
 | Metastore.GetOperation | rest | ga | — |
@@ -462,9 +462,9 @@ _19 cell(s): ga=19 limited=0 preview=0 unsupported=0_
 | Metastore.ListBackups | rest | ga | — |
 | Metastore.ListMetadataImports | rest | ga | — |
 | Metastore.ListServices | rest | ga | — |
-| Metastore.MoveTableToDatabase | rest | ga | — |
-| Metastore.QueryMetadata | rest | ga | — |
-| Metastore.RestoreService | rest | ga | — |
+| Metastore.MoveTableToDatabase | rest | unsupported | explicit Unimplemented stub |
+| Metastore.QueryMetadata | rest | unsupported | explicit Unimplemented stub |
+| Metastore.RestoreService | rest | unsupported | explicit Unimplemented stub |
 | Metastore.UpdateMetadataImport | rest | ga | — |
 | Metastore.UpdateService | rest | ga | — |
 

@@ -3,10 +3,10 @@
   "summary": {
     "total": 497,
     "by_state": {
-      "ga": 363,
-      "limited": 94,
+      "ga": 353,
+      "limited": 95,
       "preview": 37,
-      "unsupported": 3
+      "unsupported": 12
     },
     "by_transport": {
       "grpc": {
@@ -14,10 +14,10 @@
         "limited": 8
       },
       "rest": {
-        "ga": 207,
-        "limited": 86,
+        "ga": 197,
+        "limited": 87,
         "preview": 37,
-        "unsupported": 3
+        "unsupported": 12
       }
     },
     "by_service": {
@@ -37,7 +37,8 @@
         "unsupported": 1
       },
       "dataproc": {
-        "ga": 15
+        "ga": 14,
+        "unsupported": 1
       },
       "datastore": {
         "ga": 8
@@ -67,13 +68,16 @@
         "limited": 1
       },
       "managedkafka": {
-        "ga": 16
+        "ga": 12,
+        "limited": 1,
+        "unsupported": 3
       },
       "memorystore": {
         "limited": 8
       },
       "metastore": {
-        "ga": 19
+        "ga": 14,
+        "unsupported": 5
       },
       "monitoring": {
         "ga": 24
@@ -1248,7 +1252,8 @@
       "service": "dataproc",
       "operation": "Dataproc.DiagnoseCluster",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=dataproc.projects.regions.clusters.diagnose",
         "postgres=yes"
@@ -3222,7 +3227,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.DeleteConsumerGroup",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.delete",
         "mutating",
@@ -3254,7 +3260,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.GetConsumerGroup",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.get",
         "postgres=yes"
@@ -3294,7 +3301,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.ListConsumerGroups",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "no broker data plane; consumer-group listing returns an empty set",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.list",
         "postgres=yes"
@@ -3335,7 +3343,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.UpdateConsumerGroup",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.patch",
         "mutating",
@@ -3448,7 +3457,8 @@
       "service": "metastore",
       "operation": "Metastore.AlterMetadataResourceLocation",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=metastore.projects.locations.services.alterLocation",
         "postgres=yes"
@@ -3513,7 +3523,8 @@
       "service": "metastore",
       "operation": "Metastore.ExportMetadata",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=metastore.projects.locations.services.exportMetadata",
         "mutating",
@@ -3595,7 +3606,8 @@
       "service": "metastore",
       "operation": "Metastore.MoveTableToDatabase",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=metastore.projects.locations.services.moveTableToDatabase",
         "mutating",
@@ -3606,7 +3618,8 @@
       "service": "metastore",
       "operation": "Metastore.QueryMetadata",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=metastore.projects.locations.services.queryMetadata",
         "postgres=yes"
@@ -3616,7 +3629,8 @@
       "service": "metastore",
       "operation": "Metastore.RestoreService",
       "transport": "rest",
-      "state": "ga",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
       "evidence": [
         "discovery=metastore.projects.locations.services.restore",
         "mutating",

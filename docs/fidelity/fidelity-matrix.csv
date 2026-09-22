@@ -99,7 +99,7 @@ dataproc,Dataproc.CancelJob,rest,ga,
 dataproc,Dataproc.CreateCluster,rest,ga,
 dataproc,Dataproc.DeleteCluster,rest,ga,
 dataproc,Dataproc.DeleteJob,rest,ga,
-dataproc,Dataproc.DiagnoseCluster,rest,ga,
+dataproc,Dataproc.DiagnoseCluster,rest,unsupported,explicit Unimplemented stub
 dataproc,Dataproc.GetCluster,rest,ga,
 dataproc,Dataproc.GetJob,rest,ga,
 dataproc,Dataproc.GetOperation,rest,ga,
@@ -289,18 +289,18 @@ logging,WriteLogEntries,grpc,ga,
 managedkafka,ManagedKafka.CreateCluster,rest,ga,
 managedkafka,ManagedKafka.CreateTopic,rest,ga,
 managedkafka,ManagedKafka.DeleteCluster,rest,ga,
-managedkafka,ManagedKafka.DeleteConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.DeleteConsumerGroup,rest,unsupported,explicit Unimplemented stub
 managedkafka,ManagedKafka.DeleteTopic,rest,ga,
 managedkafka,ManagedKafka.GetCluster,rest,ga,
-managedkafka,ManagedKafka.GetConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.GetConsumerGroup,rest,unsupported,explicit Unimplemented stub
 managedkafka,ManagedKafka.GetOperation,rest,ga,
 managedkafka,ManagedKafka.GetTopic,rest,ga,
 managedkafka,ManagedKafka.ListClusters,rest,ga,
-managedkafka,ManagedKafka.ListConsumerGroups,rest,ga,
+managedkafka,ManagedKafka.ListConsumerGroups,rest,limited,no broker data plane; consumer-group listing returns an empty set
 managedkafka,ManagedKafka.ListOperations,rest,ga,
 managedkafka,ManagedKafka.ListTopics,rest,ga,
 managedkafka,ManagedKafka.UpdateCluster,rest,ga,
-managedkafka,ManagedKafka.UpdateConsumerGroup,rest,ga,
+managedkafka,ManagedKafka.UpdateConsumerGroup,rest,unsupported,explicit Unimplemented stub
 managedkafka,ManagedKafka.UpdateTopic,rest,ga,
 memorystore,Memorystore.CreateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.DeleteInstance,rest,limited,metadata-only over ResourceStore (no data plane)
@@ -310,13 +310,13 @@ memorystore,Memorystore.ListInstances,rest,limited,metadata-only over ResourceSt
 memorystore,Memorystore.ListLocations,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.UpdateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.UpgradeInstance,rest,limited,metadata-only over ResourceStore (no data plane)
-metastore,Metastore.AlterMetadataResourceLocation,rest,ga,
+metastore,Metastore.AlterMetadataResourceLocation,rest,unsupported,explicit Unimplemented stub
 metastore,Metastore.CreateBackup,rest,ga,
 metastore,Metastore.CreateMetadataImport,rest,ga,
 metastore,Metastore.CreateService,rest,ga,
 metastore,Metastore.DeleteBackup,rest,ga,
 metastore,Metastore.DeleteService,rest,ga,
-metastore,Metastore.ExportMetadata,rest,ga,
+metastore,Metastore.ExportMetadata,rest,unsupported,explicit Unimplemented stub
 metastore,Metastore.GetBackup,rest,ga,
 metastore,Metastore.GetMetadataImport,rest,ga,
 metastore,Metastore.GetOperation,rest,ga,
@@ -324,9 +324,9 @@ metastore,Metastore.GetService,rest,ga,
 metastore,Metastore.ListBackups,rest,ga,
 metastore,Metastore.ListMetadataImports,rest,ga,
 metastore,Metastore.ListServices,rest,ga,
-metastore,Metastore.MoveTableToDatabase,rest,ga,
-metastore,Metastore.QueryMetadata,rest,ga,
-metastore,Metastore.RestoreService,rest,ga,
+metastore,Metastore.MoveTableToDatabase,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.QueryMetadata,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.RestoreService,rest,unsupported,explicit Unimplemented stub
 metastore,Metastore.UpdateMetadataImport,rest,ga,
 metastore,Metastore.UpdateService,rest,ga,
 monitoring,CreateAlertPolicy,grpc,ga,

@@ -68,13 +68,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 497 | 363 | 94 | 37 | 3 | 73% |
+| **Overall** | 497 | 353 | 95 | 37 | 12 | 71% |
 | **gRPC** (official clients) | 164 | 156 | 8 | 0 | 0 | 95% |
-| **REST** (Discovery-backed) | 333 | 207 | 86 | 37 | 3 | 62% |
+| **REST** (Discovery-backed) | 333 | 197 | 87 | 37 | 12 | 59% |
 
 - gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,
   Operations (long-running)**.
-- gRPC split = 156 `ga` + 8 `limited` = 164. REST split = 207 + 86 + 37 + 3 = 333.
+- gRPC split = 156 `ga` + 8 `limited` = 164. REST split = 197 + 87 + 37 + 12 = 333.
   Overall = 164 + 333 = 497.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
@@ -102,9 +102,9 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `logging` | grpc | 5/6 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
 | `iam` | grpc, rest | 16/16 | 🟢 | Shape only | Shape only | Service accounts + policy: authz is **not enforced**. |
 | `eventarc` | rest | 18/18 | 🟢 | Shape only | Shape only | Metadata only; no event-delivery engine. |
-| `managedkafka` | rest | 16/16 | 🟢 | Shape only | Shape only | Metadata only; no real broker. |
-| `metastore` | rest | 19/19 | 🟢 | Shape only | Shape only | Control plane only; no Hive Thrift table plane. |
-| `dataproc` | rest | 15/15 | 🟢 | Shape only | Shape only | REST metadata + real Spark on Docker/K8s executors. |
+| `managedkafka` | rest | 12/16 | 🟢 | Shape only | Shape only | Metadata only; no real broker. Consumer-group `get`/`update`/`delete` are unsupported stubs; `list` returns an empty set. |
+| `metastore` | rest | 14/19 | 🟢 | Shape only | Shape only | Control plane only; no Hive Thrift table plane. Metadata import/export, restore, query and relocation are unsupported stubs. |
+| `dataproc` | rest | 14/15 | 🟢 | Shape only | Shape only | REST metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub. |
 | `workflows` | rest | 6/6 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. |
 | `workflowexecutions` | rest | 4/4 | 🟢 | Shape only | Shape only | Executions are synchronous. |
