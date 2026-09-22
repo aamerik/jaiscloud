@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -120,6 +121,39 @@ func splitSubscriptionName(name string) (project, sub string, ok bool) {
 		return "", "", false
 	}
 	return parts[1], parts[3], true
+}
+
+// normalizeDeadLetterPolicy validates and canonicalizes a subscription's
+// dead_letter_policy: a configured dead_letter_topic must already exist in the
+// same project (NotFound otherwise), and max_delivery_attempts must be between
+// 5 and 100 (0 selects the 5 default).
+func (s *Service) normalizeDeadLetterPolicy(ctx context.Context, project string, dlp *pubsubpb.DeadLetterPolicy) (map[string]any, error) {
+	out := map[string]any{}
+	if dt := dlp.GetDeadLetterTopic(); dt != "" {
+		dtProject, dtID, ok := splitTopicName(dt)
+		if !ok {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "invalid dead letter topic name", 400))
+		}
+		if dtProject != project {
+			return nil, mapError(model.NewProviderError("NotFound", "dead letter topic not found", 404))
+		}
+		if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtTopic, dtID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, mapError(model.NewProviderError("NotFound", "dead letter topic not found", 404))
+			}
+			return nil, mapError(err)
+		}
+		out["deadLetterTopic"] = dt
+	}
+	attempts := int(dlp.GetMaxDeliveryAttempts())
+	if attempts != 0 && (attempts < 5 || attempts > 100) {
+		return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("maxDeliveryAttempts must be between 5 and 100 (got %d)", attempts), 400))
+	}
+	if attempts == 0 {
+		attempts = 5
+	}
+	out["maxDeliveryAttempts"] = attempts
+	return out, nil
 }
 
 // projectFromListProject resolves the project for a List* request, which
@@ -365,8 +399,13 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		return nil, mapError(err)
 	}
 	ackDeadline := 10
-	if req.GetAckDeadlineSeconds() != 0 {
-		ackDeadline = int(req.GetAckDeadlineSeconds())
+	if v := req.GetAckDeadlineSeconds(); v != 0 {
+		// Proto: the value must be between 10 and 600 seconds; 0 selects the
+		// 10-second default.
+		if v < 10 || v > 600 {
+			return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 10 and 600 (got %d)", v), 400))
+		}
+		ackDeadline = int(v)
 	}
 	meta := map[string]any{
 		"name":               subscriptionName(project, sub),
@@ -383,10 +422,11 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		meta["labels"] = req.GetLabels()
 	}
 	if dlp := req.GetDeadLetterPolicy(); dlp != nil {
-		meta["deadLetterPolicy"] = map[string]any{
-			"deadLetterTopic":     dlp.GetDeadLetterTopic(),
-			"maxDeliveryAttempts": int(dlp.GetMaxDeliveryAttempts()),
+		normalized, err := s.normalizeDeadLetterPolicy(ctx, project, dlp)
+		if err != nil {
+			return nil, err
 		}
+		meta["deadLetterPolicy"] = normalized
 	}
 	if pc := req.GetPushConfig(); pc != nil && pc.GetPushEndpoint() != "" {
 		meta["pushConfig"] = map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
@@ -479,15 +519,17 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 	// Dead-letter policy (mirrors SQS RedrivePolicy/maxReceiveCount).
 	dlqTopic := ""
 	maxDeliveryAttempts := 0
+	hasDeadLetterPolicy := false
 	if dp, ok := meta["deadLetterPolicy"].(map[string]any); ok {
+		hasDeadLetterPolicy = true
 		if dt, _ := dp["deadLetterTopic"].(string); dt != "" {
 			dlqTopic = dt
 			if i := strings.LastIndex(dlqTopic, "/"); i >= 0 {
 				dlqTopic = dlqTopic[i+1:]
 			}
 		}
-		if mda, ok := dp["maxDeliveryAttempts"].(float64); ok {
-			maxDeliveryAttempts = int(mda)
+		if mda, ok := asInt(dp["maxDeliveryAttempts"]); ok {
+			maxDeliveryAttempts = mda
 		}
 	}
 
@@ -513,7 +555,7 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 	}
 
 	msgs = s.filterMessages(ctx, sub, subFilter, msgs)
-	received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
+	received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, hasDeadLetterPolicy, msgs)
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +565,7 @@ func (s *Service) Pull(ctx context.Context, req *pubsubpb.PullRequest) (*pubsubp
 // buildReceivedMessages transcodes claimed messages into wire ReceivedMessages,
 // applying DLQ republish + envelope decryption. Shared by Pull and StreamingPull
 // so both transports emit the same ack-id scheme and payload shape.
-func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlqTopic string, maxDeliveryAttempts int, msgs []pubsubstore.Message) ([]*pubsubpb.ReceivedMessage, error) {
+func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlqTopic string, maxDeliveryAttempts int, hasDeadLetterPolicy bool, msgs []pubsubstore.Message) ([]*pubsubpb.ReceivedMessage, error) {
 	received := make([]*pubsubpb.ReceivedMessage, 0, len(msgs))
 	for _, m := range msgs {
 		// DLQ: once delivery attempts exceed maxDeliveryAttempts, republish to
@@ -565,10 +607,16 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 		if m.OrderingKey != "" {
 			pm.OrderingKey = m.OrderingKey
 		}
+		// Proto: delivery_attempt is 0 unless the subscription has a
+		// DeadLetterPolicy; with one it reflects the attempt count (>= 1).
+		attempt := int32(0)
+		if hasDeadLetterPolicy {
+			attempt = int32(m.DeliveryAttempt)
+		}
 		received = append(received, &pubsubpb.ReceivedMessage{
 			AckId:           encodeAckID(queue, m.MessageID),
 			Message:         pm,
-			DeliveryAttempt: int32(m.DeliveryAttempt),
+			DeliveryAttempt: attempt,
 		})
 	}
 	return received, nil
@@ -636,15 +684,17 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	// Dead-letter policy (mirrors Pull).
 	dlqTopic := ""
 	maxDeliveryAttempts := 0
+	hasDeadLetterPolicy := false
 	if dp, ok := meta["deadLetterPolicy"].(map[string]any); ok {
+		hasDeadLetterPolicy = true
 		if dt, _ := dp["deadLetterTopic"].(string); dt != "" {
 			dlqTopic = dt
 			if i := strings.LastIndex(dlqTopic, "/"); i >= 0 {
 				dlqTopic = dlqTopic[i+1:]
 			}
 		}
-		if mda, ok := dp["maxDeliveryAttempts"].(float64); ok {
-			maxDeliveryAttempts = int(mda)
+		if mda, ok := asInt(dp["maxDeliveryAttempts"]); ok {
+			maxDeliveryAttempts = mda
 		}
 	}
 
@@ -725,7 +775,7 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 		}
 		if len(msgs) > 0 {
 			msgs = s.filterMessages(ctx, sub, subFilter, msgs)
-			received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, msgs)
+			received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, hasDeadLetterPolicy, msgs)
 			if err != nil {
 				return err
 			}
@@ -852,6 +902,10 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 	}
 	var meta map[string]any
 	json.Unmarshal(e.Data, &meta)
+	// Proto ModifyAckDeadline: valid values are 0 to 600 seconds.
+	if v := req.GetAckDeadlineSeconds(); v < 0 || v > 600 {
+		return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 0 and 600 (got %d)", v), 400))
+	}
 	decoded := make([]string, 0, len(req.GetAckIds()))
 	for _, id := range req.GetAckIds() {
 		if d, ok := decodeAckID(id); ok {
@@ -921,7 +975,26 @@ func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSu
 				meta["labels"] = in.GetLabels()
 			}
 		case "ack_deadline_seconds", "ackDeadlineSeconds":
-			meta["ackDeadlineSeconds"] = int(in.GetAckDeadlineSeconds())
+			v := int(in.GetAckDeadlineSeconds())
+			// Proto: the value must be between 10 and 600 seconds; 0 selects
+			// the 10-second default.
+			if v != 0 && (v < 10 || v > 600) {
+				return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 10 and 600 (got %d)", v), 400))
+			}
+			if v == 0 {
+				v = 10
+			}
+			meta["ackDeadlineSeconds"] = v
+		case "dead_letter_policy", "deadLetterPolicy":
+			if in.GetDeadLetterPolicy() == nil {
+				delete(meta, "deadLetterPolicy")
+				break
+			}
+			normalized, err := s.normalizeDeadLetterPolicy(ctx, project, in.GetDeadLetterPolicy())
+			if err != nil {
+				return nil, err
+			}
+			meta["deadLetterPolicy"] = normalized
 		default:
 			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
 		}
