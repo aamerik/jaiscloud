@@ -2,6 +2,8 @@ package kms
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
@@ -109,6 +111,77 @@ func TestCryptoKeyList(t *testing.T) {
 	} {
 		if !names[want] {
 			t.Errorf("listed key names = %v, missing %q", names, want)
+		}
+	}
+}
+
+// TestCryptoKeyVersionListNumericOrder verifies crypto key versions are ordered
+// and paginated numerically (1,2,...,12), not lexicographically
+// (1,10,11,12,2,...). With pageSize=5 the pre-fix key skipped versions across
+// page boundaries because the decimal-string cursor compared lexicographically.
+func TestCryptoKeyVersionListNumericOrder(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "k",
+		"body":        map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+	// CryptoKeyCreate creates version 1; add 11 more for 12 total.
+	for i := 0; i < 11; i++ {
+		if _, err := p.CryptoKeyVersionCreate(ctx, newNR(map[string]any{
+			"name": "locations/global/keyRings/kr/cryptoKeys/k/cryptoKeyVersions",
+		})); err != nil {
+			t.Fatalf("version create %d: %v", i, err)
+		}
+	}
+
+	var got []int
+	token := ""
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		params := map[string]any{
+			"name":     "locations/global/keyRings/kr/cryptoKeys/k/cryptoKeyVersions",
+			"pageSize": "5",
+		}
+		if token != "" {
+			params["pageToken"] = token
+		}
+		resp, err := p.CryptoKeyVersionList(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("list page %d: %v", page, err)
+		}
+		items, _ := resp.Data["cryptoKeyVersions"].([]any)
+		for _, it := range items {
+			m := it.(map[string]any)
+			name, _ := m["name"].(string)
+			n, err := strconv.Atoi(name[strings.LastIndex(name, "/")+1:])
+			if err != nil {
+				t.Fatalf("bad version name %q: %v", name, err)
+			}
+			got = append(got, n)
+		}
+		next, _ := resp.Data["nextPageToken"].(string)
+		if next == "" {
+			break
+		}
+		token = next
+	}
+
+	if len(got) != 12 {
+		t.Fatalf("expected 12 versions across pages, got %d (%v)", len(got), got)
+	}
+	for i, n := range got {
+		if n != i+1 {
+			t.Fatalf("version order = %v, want 1..12", got)
 		}
 	}
 }

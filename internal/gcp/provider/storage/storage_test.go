@@ -286,6 +286,44 @@ func TestObjectsListPagination(t *testing.T) {
 	}
 }
 
+// TestObjectsListMaxResultsCappedAt1000 verifies maxResults is capped at 1000:
+// real GCS uses "this parameter or 1,000 items, whichever is smaller".
+func TestObjectsListMaxResultsCappedAt1000(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	const total = 1001
+	for i := 0; i < total; i++ {
+		nr = bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = fmt.Sprintf("obj-%04d", i)
+		nr.Params[wire.MediaKey] = []byte("x")
+		if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["maxResults"] = "5000"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := resp.Data["items"].([]any)
+	if len(items) != 1000 {
+		t.Fatalf("expected 1000 items (maxResults clamp), got %d", len(items))
+	}
+	if token, _ := resp.Data["nextPageToken"].(string); token == "" {
+		t.Error("expected nextPageToken when more than 1000 objects remain")
+	}
+}
+
 func TestObjectsListPrefixFilter(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
