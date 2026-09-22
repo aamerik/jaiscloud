@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,6 +61,31 @@ type listenTarget struct {
 
 func (t listenTarget) isQuery() bool { return t.query != nil }
 
+// deltaKind classifies a per-document delta observed by one target while
+// diffing a live change against its view.
+type deltaKind int
+
+const (
+	// deltaChange means the document is (now) present in the target's result
+	// set: an add, or a content update to a document already in it.
+	deltaChange deltaKind = iota
+	// deltaRemove means the document left the target's result set while still
+	// existing in the store (e.g. it stopped matching a where predicate).
+	deltaRemove
+	// deltaDelete means the document was deleted from the store.
+	deltaDelete
+)
+
+// listenDelta is the per-target effect of one live change on one document.
+// handleChange collects these across every target before emitting canonical
+// frames, so a document's deltas on all targets are aggregated into a single
+// change epoch (see handleChange).
+type listenDelta struct {
+	kind deltaKind
+	name string
+	doc  *firestorestore.Document
+}
+
 // listenSession carries the per-stream target registry plus a helper to send
 // responses. All sends happen from the single Listen loop goroutine, so the
 // stream is never written concurrently.
@@ -92,8 +118,10 @@ func (ls *listenSession) nextReadTime() time.Time {
 
 // Listen implements the bidirectional streaming Firestore.Listen RPC. For each
 // added target it streams an initial snapshot (or incremental deltas when a
-// valid resume token is supplied), then real-time DocumentChange/DocumentDelete
-// events as writes are published by the shared provider Service's change-feed.
+// valid resume token is supplied), then real-time
+// DocumentChange/DocumentDelete/DocumentRemove frames as writes are published
+// by the shared provider Service's change-feed. A change epoch's frames are
+// aggregated per document across every target on the stream (see handleChange).
 func (s *Service) Listen(stream firestorepb.Firestore_ListenServer) error {
 	ctx := stream.Context()
 	ls := &listenSession{
@@ -298,19 +326,78 @@ func (ls *listenSession) handleRemoveTarget(id int32) error {
 	}})
 }
 
+// handleChange applies one live change to every target on the stream, then
+// emits one canonical frame per affected document aggregating that document's
+// deltas across all targets (real Firestore's change-epoch semantics): a
+// DocumentChange carries its target_ids plus any removed_target_ids, a
+// DocumentRemove carries the targets it left, and a DocumentDelete carries the
+// targets it was removed from. Accumulating per target and flushing once avoids
+// the per-target duplicate frames an emulator would otherwise emit when a
+// document is watched by more than one target.
 func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
-	sent := false
+	// agg is a document's accumulated state across every target that observed
+	// the change. doc is the last non-nil body seen (the present state);
+	// deleted records that some target saw the document deleted.
+	type agg struct {
+		doc        *firestorestore.Document
+		deleted    bool
+		targetIDs  map[int32]bool
+		removedIDs map[int32]bool
+	}
+
+	aggs := make(map[string]*agg)
+	anyChanged := false
 	for id, t := range ls.targets {
-		if ls.applyChange(id, t, ev) {
-			if ev.Seq > t.seq {
-				t.seq = ev.Seq
+		deltas, changed := ls.computeChange(t, ev)
+		if !changed {
+			continue
+		}
+		if ev.Seq > t.seq {
+			t.seq = ev.Seq
+		}
+		anyChanged = true
+		for _, d := range deltas {
+			a := aggs[d.name]
+			if a == nil {
+				a = &agg{targetIDs: map[int32]bool{}, removedIDs: map[int32]bool{}}
+				aggs[d.name] = a
 			}
-			sent = true
+			switch d.kind {
+			case deltaChange:
+				a.doc = d.doc
+				a.targetIDs[id] = true
+			case deltaRemove:
+				a.removedIDs[id] = true
+			case deltaDelete:
+				a.deleted = true
+				a.removedIDs[id] = true
+			}
 		}
 	}
-	if !sent {
+	if !anyChanged {
 		return
 	}
+
+	// Flush in sorted document-name order so the frame order is deterministic
+	// across runs (the target map is unordered).
+	names := make([]string, 0, len(aggs))
+	for name := range aggs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		a := aggs[name]
+		removed := sortedTargetIDs(a.removedIDs)
+		switch {
+		case a.deleted:
+			_ = ls.sendDocumentDelete(removed, name)
+		case len(a.targetIDs) > 0:
+			_ = ls.sendDocumentChange(sortedTargetIDs(a.targetIDs), removed, *a.doc)
+		default:
+			_ = ls.sendDocumentRemove(removed, name)
+		}
+	}
+
 	// Conclude the change epoch with a NO_CHANGE frame so the SDK returns the
 	// next snapshot: the SDK concludes every snapshot (initial and subsequent)
 	// on NO_CHANGE, so real-time deltas would otherwise never surface through
@@ -318,20 +405,37 @@ func (ls *listenSession) handleChange(ev firestoreprovider.ChangeEvent) {
 	_ = ls.sendNoChange()
 }
 
-// applyChange diffs one live change against a target's current view and emits
-// the resulting deltas (DocumentChange on entry/update, DocumentRemove on
-// exit, DocumentDelete on delete). It reports whether any frame was sent.
-func (ls *listenSession) applyChange(id int32, t *listenTarget, ev firestoreprovider.ChangeEvent) bool {
+// sortedTargetIDs returns the sorted, de-duplicated target ids in m (nil when
+// empty) for a canonical, deterministic wire frame.
+func sortedTargetIDs(m map[int32]bool) []int32 {
+	if len(m) == 0 {
+		return nil
+	}
+	ids := make([]int32, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+// computeChange diffs one live change against a target's current view, updating
+// the view and returning the deltas it produced. changed reports whether the
+// target observed anything at all (a non-empty delta list). It does not send:
+// handleChange aggregates the returned deltas across every target on the stream
+// before emitting canonical frames, so a document's target_ids and
+// removed_target_ids land on a single frame.
+func (ls *listenSession) computeChange(t *listenTarget, ev firestoreprovider.ChangeEvent) (deltas []listenDelta, changed bool) {
 	if !ls.targetMatches(*t, ev) {
-		return false
+		return nil, false
 	}
 	if !t.isQuery() {
 		if ev.Doc == nil {
 			delete(t.view, ev.Name)
-			return ls.sendDocumentDelete(id, ev.Name) == nil
+			return []listenDelta{{kind: deltaDelete, name: ev.Name}}, true
 		}
 		t.view[ev.Name] = struct{}{}
-		return ls.sendDocumentChange(id, *ev.Doc) == nil
+		return []listenDelta{{kind: deltaChange, name: ev.Name, doc: ev.Doc}}, true
 	}
 
 	// Re-run the target's query so where/order_by/limit apply to the delta: a
@@ -340,36 +444,29 @@ func (ls *listenSession) applyChange(id int32, t *listenTarget, ev firestoreprov
 	// is. A delete is delivered by scope alone (below) because its body is gone.
 	docs, err := ls.queryDocs(t)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	newView := make(map[string]firestorestore.Document, len(docs))
 	for _, d := range docs {
 		newView[d.Name] = d
 	}
 
-	changed := false
 	for name := range t.view {
 		if _, ok := newView[name]; ok {
 			continue
 		}
 		if ev.Doc == nil && name == ev.Name {
-			continue // emitted as DocumentDelete below
+			continue // emitted as a delete below
 		}
-		if ls.sendDocumentRemove(id, name) == nil {
-			changed = true
-		}
+		deltas = append(deltas, listenDelta{kind: deltaRemove, name: name})
 	}
 	if ev.Doc == nil {
-		if ls.sendDocumentDelete(id, ev.Name) == nil {
-			changed = true
-		}
+		deltas = append(deltas, listenDelta{kind: deltaDelete, name: ev.Name})
 	}
 	for name, d := range newView {
 		if _, ok := t.view[name]; ok {
 			if name == ev.Name && ev.Doc != nil {
-				if ls.sendDocumentChange(id, *ev.Doc) == nil {
-					changed = true
-				}
+				deltas = append(deltas, listenDelta{kind: deltaChange, name: name, doc: ev.Doc})
 			}
 			continue
 		}
@@ -377,16 +474,14 @@ func (ls *listenSession) applyChange(id int32, t *listenTarget, ev firestoreprov
 		if name == ev.Name && ev.Doc != nil {
 			doc = *ev.Doc
 		}
-		if ls.sendDocumentChange(id, doc) == nil {
-			changed = true
-		}
+		deltas = append(deltas, listenDelta{kind: deltaChange, name: name, doc: &doc})
 	}
 
 	t.view = make(map[string]struct{}, len(newView))
 	for name := range newView {
 		t.view[name] = struct{}{}
 	}
-	return changed
+	return deltas, len(deltas) > 0
 }
 
 func (ls *listenSession) assignTargetID() int32 {
@@ -421,7 +516,7 @@ func (ls *listenSession) sendSnapshot(id int32, t *listenTarget) error {
 			return mapError(err)
 		}
 		for _, d := range docs {
-			if err := ls.sendDocumentChange(id, d); err != nil {
+			if err := ls.sendDocumentChange([]int32{id}, nil, d); err != nil {
 				return err
 			}
 			t.view[d.Name] = struct{}{}
@@ -437,7 +532,7 @@ func (ls *listenSession) sendSnapshot(id int32, t *listenTarget) error {
 			}
 			return mapError(err)
 		}
-		if err := ls.sendDocumentChange(id, doc); err != nil {
+		if err := ls.sendDocumentChange([]int32{id}, nil, doc); err != nil {
 			return err
 		}
 		t.view[doc.Name] = struct{}{}
@@ -495,38 +590,51 @@ func (ls *listenSession) sendReset(id int32) error {
 	}})
 }
 
-func (ls *listenSession) sendDocumentChange(id int32, d firestorestore.Document) error {
+// sendDocumentChange emits one DocumentChange. targetIDs is the set of targets
+// the document is (now) in; removedTargetIDs, when non-empty, names the targets
+// the same change removes it from. The Go SDK watches a single target per
+// stream, so it observes a one-element target_ids and an empty
+// removed_target_ids.
+func (ls *listenSession) sendDocumentChange(targetIDs, removedTargetIDs []int32, d firestorestore.Document) error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentChange{
 		DocumentChange: &firestorepb.DocumentChange{
-			Document:  encodeDocument(d),
-			TargetIds: []int32{id},
+			Document:         encodeDocument(d),
+			TargetIds:        targetIDs,
+			RemovedTargetIds: removedTargetIDs,
 		},
 	}})
 }
 
-func (ls *listenSession) sendDocumentDelete(id int32, name string) error {
+// sendDocumentDelete emits one DocumentDelete for a document removed from the
+// store, naming every target that was watching it in removed_target_ids.
+func (ls *listenSession) sendDocumentDelete(targetIDs []int32, name string) error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentDelete{
 		DocumentDelete: &firestorepb.DocumentDelete{
 			Document:         name,
-			RemovedTargetIds: []int32{id},
+			RemovedTargetIds: targetIDs,
 		},
 	}})
 }
 
-func (ls *listenSession) sendDocumentRemove(id int32, name string) error {
+// sendDocumentRemove emits one DocumentRemove for a document that left the
+// target(s)' result set but still exists, naming them in removed_target_ids.
+func (ls *listenSession) sendDocumentRemove(targetIDs []int32, name string) error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_DocumentRemove{
 		DocumentRemove: &firestorepb.DocumentRemove{
 			Document:         name,
-			RemovedTargetIds: []int32{id},
+			RemovedTargetIds: targetIDs,
 		},
 	}})
 }
 
+// sendChange emits the resume-replay delta for one target: a DocumentDelete
+// when the replayed event was a deletion, otherwise a DocumentChange. It is the
+// single-target analogue of the live handleChange path.
 func (ls *listenSession) sendChange(id int32, ev firestoreprovider.ChangeEvent) error {
 	if ev.Doc == nil {
-		return ls.sendDocumentDelete(id, ev.Name)
+		return ls.sendDocumentDelete([]int32{id}, ev.Name)
 	}
-	return ls.sendDocumentChange(id, *ev.Doc)
+	return ls.sendDocumentChange([]int32{id}, nil, *ev.Doc)
 }
 
 func (ls *listenSession) targetMatches(t listenTarget, ev firestoreprovider.ChangeEvent) bool {
