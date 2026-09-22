@@ -210,7 +210,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   approximations; **KMS destruction timing** — the emulator destroys eagerly and reports
   `DESTROYED`, whereas real KMS first reports `DESTROY_SCHEDULED` and only reaches `DESTROYED`
   after the window, so the gRPC conformance probe accepts either state; KMS rotation schedules
-  are stored but never executed; Logging `TailLogEntries` is a bounded, at-most-once poll;
+  execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
+  creating a new primary and advancing the schedule — there is no background scheduler); Logging
+  `TailLogEntries` is a bounded, at-most-once poll;
   Eventarc and Managed Kafka are metadata-only (no event-delivery engine, no real broker);
   Dataproc `Reset` does not drain in-flight Spark job goroutines; Metastore has no Hive Thrift
   table-metadata plane.

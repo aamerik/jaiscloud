@@ -466,6 +466,60 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 	}
 }
 
+// TestKMSCryptoKeyRotationExecutesOnRead verifies the gRPC surface executes a
+// due rotation schedule lazily: once the clock advances past nextRotationTime,
+// GetCryptoKey creates version 2, makes it primary, and advances the schedule.
+func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "sym",
+		CryptoKey: &kmspb.CryptoKey{
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+
+	// Before the due time (nextRotationTime = t0+1h) nothing rotates.
+	got, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
+	if err != nil {
+		t.Fatalf("GetCryptoKey (not due): %v", err)
+	}
+	if got.GetPrimary().GetName() != symKey+"/cryptoKeyVersions/1" {
+		t.Fatalf("primary before rotation = %q, want version 1", got.GetPrimary().GetName())
+	}
+
+	// Advance past nextRotationTime and read again: rotation runs.
+	due := t0.Add(2 * time.Hour)
+	clock.SetGlobalClock(clock.FixedClock{T: due})
+	got, err = client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
+	if err != nil {
+		t.Fatalf("GetCryptoKey (due): %v", err)
+	}
+	if got.GetPrimary().GetName() != symKey+"/cryptoKeyVersions/2" {
+		t.Fatalf("primary after rotation = %q, want version 2", got.GetPrimary().GetName())
+	}
+	if !got.GetNextRotationTime().AsTime().Equal(due.Add(time.Hour)) {
+		t.Fatalf("nextRotationTime = %v, want %v", got.GetNextRotationTime().AsTime(), due.Add(time.Hour))
+	}
+	vers, err := client.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: symKey})
+	if err != nil {
+		t.Fatalf("ListCryptoKeyVersions: %v", err)
+	}
+	if len(vers.GetCryptoKeyVersions()) != 2 {
+		t.Fatalf("versions after rotation = %d, want 2", len(vers.GetCryptoKeyVersions()))
+	}
+}
+
 func TestKMSDestroyVersion(t *testing.T) {
 	client, _, cleanup := kmsTestService(t)
 	defer cleanup()

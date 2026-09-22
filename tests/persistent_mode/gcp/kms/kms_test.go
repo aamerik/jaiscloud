@@ -163,6 +163,63 @@ func TestPostgresCryptoKeyLabelsRotation(t *testing.T) {
 	}
 }
 
+// TestPostgresRotateIfDue verifies lazy rotation persists the new primary and
+// advanced schedule through UpdateCryptoKeyAtomic. This specifically covers the
+// atomic UPDATE writing primary_version (not just labels/rotation), which the
+// memory store already did.
+func TestPostgresRotateIfDue(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping persistence test")
+	}
+
+	ctx := context.Background()
+	s := newKMSStore(t, dsn)
+	project, location, keyring, key := kmsIDs()
+	t0 := time.Now().UTC().Truncate(time.Second)
+
+	if err := s.CreateKeyRing(ctx, project, location, keyring, kms.KeyRing{Location: location, ID: keyring, CreateTime: t0}); err != nil {
+		t.Fatalf("create keyring: %v", err)
+	}
+	if err := s.CreateCryptoKey(ctx, project, location, keyring, key, kms.CryptoKey{
+		Location: location, KeyRingID: keyring, ID: key, Purpose: "ENCRYPT_DECRYPT",
+		CreateTime: t0, PrimaryVersion: "1", Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION",
+		RotationPeriod: time.Hour, NextRotationTime: t0.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("create cryptokey: %v", err)
+	}
+
+	due := t0.Add(2 * time.Hour)
+	if v := kms.RotateIfDue(ctx, s, project, location, keyring, key, due); v != "2" {
+		t.Fatalf("RotateIfDue = %q, want 2", v)
+	}
+	ck, err := s.GetCryptoKey(ctx, project, location, keyring, key)
+	if err != nil {
+		t.Fatalf("get cryptokey: %v", err)
+	}
+	if ck.PrimaryVersion != "2" {
+		t.Fatalf("primary_version = %q, want 2 (atomic update dropped it?)", ck.PrimaryVersion)
+	}
+	if !ck.NextRotationTime.Equal(t0.Add(3 * time.Hour)) {
+		t.Fatalf("nextRotationTime = %v, want %v", ck.NextRotationTime, t0.Add(3*time.Hour))
+	}
+	vers, err := s.ListVersions(ctx, project, location, keyring, key)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(vers) != 2 {
+		t.Fatalf("versions after rotation = %d, want 2", len(vers))
+	}
+
+	// Idempotent: the same `now` is no longer due once the schedule advanced.
+	if v := kms.RotateIfDue(ctx, s, project, location, keyring, key, due); v != "" {
+		t.Fatalf("second RotateIfDue = %q, want empty", v)
+	}
+	if vers, _ := s.ListVersions(ctx, project, location, keyring, key); len(vers) != 2 {
+		t.Fatalf("versions after second call = %d, want 2", len(vers))
+	}
+}
+
 // TestPostgresConcurrentCreateVersion verifies concurrent CreateVersion calls
 // allocate distinct version numbers without a unique-violation.
 func TestPostgresConcurrentCreateVersion(t *testing.T) {

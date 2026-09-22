@@ -35,8 +35,9 @@ type CryptoKey struct {
 	// Labels is the user-supplied key metadata. Nil/empty means none.
 	Labels map[string]string
 	// RotationPeriod is the manual rotation schedule. Zero means rotation is
-	// disabled. The emulator stores the schedule and derives NextRotationTime,
-	// but does not execute rotations.
+	// disabled. The schedule is executed lazily on read: when NextRotationTime
+	// is reached, RotateIfDue creates a new ENABLED version, makes it primary,
+	// and advances NextRotationTime by the period.
 	RotationPeriod time.Duration
 	// NextRotationTime is when the next rotation is scheduled. Zero means no
 	// rotation is scheduled (RotationPeriod is zero).
