@@ -1192,6 +1192,9 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
+	if resp, perr := checkReadPreconditions(meta, objectPrecondition(nr)); resp != nil || perr != nil {
+		return resp, perr
+	}
 	id := blobKey(bucket, object, meta.Generation)
 	rc, err := p.blobs.GetStream(ctx, blobsNamespace, id, 0, -1)
 	if err != nil {
@@ -1512,6 +1515,9 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return objectMeta{}, err
 	}
+	if !objectMetaPreconditionMatches(srcMeta, sourcePrecondition(nr)) {
+		return objectMeta{}, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+	}
 
 	// Destination metadata starts as a copy of the source, overridden by the
 	// request body's writable fields, then stamped with a fresh generation.
@@ -1600,6 +1606,29 @@ func objectMetaPreconditionMatches(m gcs.ObjectMeta, p *gcs.Precondition) bool {
 		return false
 	}
 	return true
+}
+
+// checkReadPreconditions evaluates the GCS read (GET) preconditions on an
+// already-resolved object: a generation/metageneration *match* mismatch is 412
+// Precondition Failed, while a generation/metageneration *not-match* match is
+// 304 Not Modified (the conditional-download idiom). Returns (nil, nil) when
+// the read may proceed, a 304 ProviderResponse when not-modified, or a 412
+// ProviderError otherwise.
+func checkReadPreconditions(m gcs.ObjectMeta, pre *gcs.Precondition) (*model.ProviderResponse, error) {
+	if pre == nil {
+		return nil, nil
+	}
+	gen, _ := strconv.ParseInt(m.Generation, 10, 64)
+	metagen, _ := strconv.ParseInt(m.Metageneration, 10, 64)
+	if (pre.GenerationMatch != nil && gen != *pre.GenerationMatch) ||
+		(pre.MetagenerationMatch != nil && metagen != *pre.MetagenerationMatch) {
+		return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+	}
+	if (pre.GenerationNotMatch != nil && gen == *pre.GenerationNotMatch) ||
+		(pre.MetagenerationNotMatch != nil && metagen == *pre.MetagenerationNotMatch) {
+		return &model.ProviderResponse{HTTPStatus: http.StatusNotModified, Data: map[string]any{}}, nil
+	}
+	return nil, nil
 }
 
 // ObjectsMove implements objects.move. It copies the source object's bytes and
@@ -2229,6 +2258,9 @@ func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedReque
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
 	if err != nil {
 		return nil, err
+	}
+	if resp, perr := checkReadPreconditions(meta, objectPrecondition(nr)); resp != nil || perr != nil {
+		return resp, perr
 	}
 	o := fromStoreObject(nr, meta)
 	return provider.OK(toMap(o)), nil

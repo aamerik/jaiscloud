@@ -289,3 +289,128 @@ func TestBucketsUpdate_MetagenerationPrecondition(t *testing.T) {
 		t.Fatalf("unconditional update metageneration = %q, want \"4\"", metagen)
 	}
 }
+
+// TestObjectsGet_ReadPreconditions verifies objects.get honors read
+// preconditions: a stale ifGenerationMatch/ifMetagenerationMatch is 412, while
+// an ifGenerationNotMatch matching the current generation is 304 Not Modified
+// (the conditional-download idiom), not 412.
+func TestObjectsGet_ReadPreconditions(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertResp := insertTestObject(t, p, "bkt", "obj.txt", "text/plain", nil)
+	gen, _ := insertResp.Data["generation"].(string)
+	if gen == "" {
+		t.Fatal("expected a generation on the inserted object")
+	}
+
+	// Stale ifGenerationMatch on a metadata read: 412.
+	stale := bucketParamsWithObj("bkt", "obj.txt")
+	stale.Params["ifGenerationMatch"] = "999999"
+	if _, err := p.ObjectsGet(ctx, stale); err == nil {
+		t.Fatal("expected stale ifGenerationMatch read to fail, got nil")
+	} else {
+		assertPrecondition412(t, err)
+	}
+
+	// Stale ifMetagenerationMatch: 412.
+	staleMeta := bucketParamsWithObj("bkt", "obj.txt")
+	staleMeta.Params["ifMetagenerationMatch"] = "999"
+	if _, err := p.ObjectsGet(ctx, staleMeta); err == nil {
+		t.Fatal("expected stale ifMetagenerationMatch read to fail, got nil")
+	} else {
+		assertPrecondition412(t, err)
+	}
+
+	// ifGenerationNotMatch matching the current generation: 304, not 412.
+	notMod := bucketParamsWithObj("bkt", "obj.txt")
+	notMod.Params["ifGenerationNotMatch"] = gen
+	resp, err := p.ObjectsGet(ctx, notMod)
+	if err != nil {
+		t.Fatalf("ifGenerationNotMatch read must not error, got %v", err)
+	}
+	if resp.HTTPStatus != 304 {
+		t.Fatalf("ifGenerationNotMatch match = HTTP %d, want 304", resp.HTTPStatus)
+	}
+
+	// ifGenerationNotMatch against a different generation: normal 200 read.
+	fresh := bucketParamsWithObj("bkt", "obj.txt")
+	fresh.Params["ifGenerationNotMatch"] = "999999"
+	resp, err = p.ObjectsGet(ctx, fresh)
+	if err != nil {
+		t.Fatalf("ifGenerationNotMatch mismatch read: %v", err)
+	}
+	if resp.HTTPStatus != 200 {
+		t.Fatalf("ifGenerationNotMatch mismatch = HTTP %d, want 200", resp.HTTPStatus)
+	}
+}
+
+// TestObjectsGetMedia_ReadPreconditions verifies the same read preconditions on
+// the media (download) path: a not-match read returns 304 without a body, and a
+// matching read returns the bytes.
+func TestObjectsGetMedia_ReadPreconditions(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertResp := insertTestObject(t, p, "bkt", "obj.txt", "text/plain", nil)
+	gen, _ := insertResp.Data["generation"].(string)
+
+	notMod := bucketParamsWithObj("bkt", "obj.txt")
+	notMod.Params["ifGenerationNotMatch"] = gen
+	resp, err := p.ObjectsGetMedia(ctx, notMod)
+	if err != nil {
+		t.Fatalf("conditional media read must not error, got %v", err)
+	}
+	if resp.HTTPStatus != 304 {
+		t.Fatalf("ifGenerationNotMatch media read = HTTP %d, want 304", resp.HTTPStatus)
+	}
+
+	ok := bucketParamsWithObj("bkt", "obj.txt")
+	ok.Params["ifGenerationMatch"] = gen
+	resp, err = p.ObjectsGetMedia(ctx, ok)
+	if err != nil {
+		t.Fatalf("matching media read: %v", err)
+	}
+	if resp.HTTPStatus != 200 {
+		t.Fatalf("matching media read = HTTP %d, want 200", resp.HTTPStatus)
+	}
+	if got := string(streamBytes(t, resp)); got == "" {
+		t.Fatal("expected media bytes on a matching read")
+	}
+}
+
+// TestObjectsCopy_SourcePrecondition verifies objects.copy enforces the
+// ifSourceGenerationMatch/NotMatch preconditions against the source object, as
+// the GCS JSON API documents for rewrite/copy source preconditions.
+func TestObjectsCopy_SourcePrecondition(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertResp := insertTestObject(t, p, "bkt", "src.txt", "text/plain", nil)
+	gen, _ := insertResp.Data["generation"].(string)
+
+	copy := func(srcGen string) (*model.ProviderResponse, error) {
+		nr := bucketParams()
+		nr.Params["sourceBucket"] = "bkt"
+		nr.Params["sourceObject"] = "src.txt"
+		nr.Params["destinationBucket"] = "bkt"
+		nr.Params["destinationObject"] = "dst.txt"
+		nr.Params["ifSourceGenerationMatch"] = srcGen
+		return p.ObjectsCopy(ctx, nr)
+	}
+
+	// Stale source generation: 412, destination not created.
+	if _, err := copy("999999"); err == nil {
+		t.Fatal("expected stale ifSourceGenerationMatch copy to fail, got nil")
+	} else {
+		assertPrecondition412(t, err)
+	}
+	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "dst.txt")); err == nil {
+		t.Fatal("destination must not exist after a rejected copy")
+	}
+
+	// Matching source generation: copy succeeds.
+	if _, err := copy(gen); err != nil {
+		t.Fatalf("matching ifSourceGenerationMatch copy: %v", err)
+	}
+	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "dst.txt")); err != nil {
+		t.Fatalf("destination must exist after a successful copy: %v", err)
+	}
+}
