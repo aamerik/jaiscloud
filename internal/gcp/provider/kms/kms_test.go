@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
@@ -269,5 +271,133 @@ func TestCryptoKeyLabelsRotationREST(t *testing.T) {
 		"body":        map[string]any{"rotationPeriod": "-1h"},
 	})); err == nil || errStatus(err) != 400 {
 		t.Fatalf("negative rotationPeriod err = %v, want 400", err)
+	}
+}
+
+// TestCryptoKeyRotationExecutesOnReadREST verifies a due rotation schedule is
+// executed lazily: after the fixed clock advances past nextRotationTime, a
+// CryptoKeyGet creates version 2, makes it primary, and advances the schedule
+// by the period.
+func TestCryptoKeyRotationExecutesOnReadREST(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "rot",
+		"body":        map[string]any{"rotationPeriod": "3600s"},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+
+	getName := "locations/global/keyRings/kr/cryptoKeys/rot"
+
+	// Before the due time (nextRotationTime = t0+1h) nothing rotates.
+	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": getName}))
+	if err != nil {
+		t.Fatalf("cryptokey get (not due): %v", err)
+	}
+	if n := primaryName(t, resp); n != "projects/proj/locations/global/keyRings/kr/cryptoKeys/rot/cryptoKeyVersions/1" {
+		t.Fatalf("primary before rotation = %q, want version 1", n)
+	}
+
+	// Advance the clock past nextRotationTime and read again: rotation runs.
+	due := t0.Add(2 * time.Hour)
+	clock.SetGlobalClock(clock.FixedClock{T: due})
+	resp, err = p.CryptoKeyGet(ctx, newNR(map[string]any{"name": getName}))
+	if err != nil {
+		t.Fatalf("cryptokey get (due): %v", err)
+	}
+	if n := primaryName(t, resp); n != "projects/proj/locations/global/keyRings/kr/cryptoKeys/rot/cryptoKeyVersions/2" {
+		t.Fatalf("primary after rotation = %q, want version 2", n)
+	}
+	if next, _ := resp.Data["nextRotationTime"].(string); next != due.Add(time.Hour).UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q", next, due.Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	}
+
+	// The rotation produced a second, ENABLED version.
+	resp, err = p.CryptoKeyVersionList(ctx, newNR(map[string]any{"name": getName + "/cryptoKeyVersions"}))
+	if err != nil {
+		t.Fatalf("version list: %v", err)
+	}
+	versions, _ := resp.Data["cryptoKeyVersions"].([]any)
+	if len(versions) != 2 {
+		t.Fatalf("versions after rotation = %d, want 2", len(versions))
+	}
+}
+
+// primaryName extracts the crypto key response's primary version name.
+func primaryName(t *testing.T, resp *model.ProviderResponse) string {
+	t.Helper()
+	primary, _ := resp.Data["primary"].(map[string]any)
+	n, _ := primary["name"].(string)
+	return n
+}
+
+// TestCryptoKeyRotationOnEncrypt verifies Encrypt triggers a due rotation and
+// that a ciphertext produced before rotation still decrypts afterwards: the
+// versioned blob resolves its own version, independent of the primary.
+func TestCryptoKeyRotationOnEncrypt(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "rot",
+		"body":        map[string]any{"rotationPeriod": "3600s"},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+	keyPath := "locations/global/keyRings/kr/cryptoKeys/rot"
+
+	encrypt := func() *model.ProviderResponse {
+		resp, err := p.CryptoKeyEncrypt(ctx, newNR(map[string]any{
+			"name": keyPath,
+			"body": map[string]any{"plaintext": "aGVsbG8="},
+		}))
+		if err != nil {
+			t.Fatalf("encrypt: %v", err)
+		}
+		return resp
+	}
+
+	// Before the due time the primary is version 1.
+	first := encrypt()
+	if name, _ := first.Data["name"].(string); !strings.HasSuffix(name, "/cryptoKeyVersions/1") {
+		t.Fatalf("first encrypt name = %q, want version 1", name)
+	}
+	firstCT, _ := first.Data["ciphertext"].(string)
+
+	// Advance past nextRotationTime: Encrypt rotates and uses version 2.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(2 * time.Hour)})
+	second := encrypt()
+	if name, _ := second.Data["name"].(string); !strings.HasSuffix(name, "/cryptoKeyVersions/2") {
+		t.Fatalf("second encrypt name = %q, want version 2", name)
+	}
+
+	// The pre-rotation ciphertext still decrypts (it names version 1).
+	resp, err := p.CryptoKeyDecrypt(ctx, newNR(map[string]any{
+		"name": keyPath,
+		"body": map[string]any{"ciphertext": firstCT},
+	}))
+	if err != nil {
+		t.Fatalf("decrypt old ciphertext: %v", err)
+	}
+	if pt, _ := resp.Data["plaintext"].(string); pt != "aGVsbG8=" {
+		t.Fatalf("decrypted plaintext = %q, want aGVsbG8=", pt)
 	}
 }

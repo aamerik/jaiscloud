@@ -373,6 +373,14 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
+	// Lazily execute any due rotation schedules before paging, then re-list so
+	// the page reflects the rotated primaries.
+	for _, k := range keys {
+		kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, k.ID, clock.Now())
+	}
+	if keys, err = p.keys.ListCryptoKeys(ctx, nr.AccountID, loc, kr); err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, k := range page {
@@ -392,6 +400,7 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKey(name)
+	kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, key, clock.Now())
 	k, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)
@@ -406,6 +415,7 @@ func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedReq
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKey(name)
+	kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, key, clock.Now())
 	ck, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)

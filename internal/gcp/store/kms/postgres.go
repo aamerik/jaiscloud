@@ -286,9 +286,9 @@ func (s *PostgresStore) UpdateCryptoKeyAtomic(ctx context.Context, projectID, lo
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_kms_cryptokeys SET labels=$5, rotation_period=$6, next_rotation_time=$7
+		UPDATE jc_kms_cryptokeys SET labels=$5, rotation_period=$6, next_rotation_time=$7, primary_version=$8
 		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
-	`, projectID, location, keyringID, id, labelsJSON(next.Labels), rotationSeconds(next.RotationPeriod), nullableTime(next.NextRotationTime)); err != nil {
+	`, projectID, location, keyringID, id, labelsJSON(next.Labels), rotationSeconds(next.RotationPeriod), nullableTime(next.NextRotationTime), next.PrimaryVersion); err != nil {
 		return CryptoKey{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

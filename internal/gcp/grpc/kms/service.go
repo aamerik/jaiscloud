@@ -298,6 +298,14 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 	if err != nil {
 		return nil, mapError(err)
 	}
+	// Lazily execute any due rotation schedules before paging, then re-list so
+	// the page reflects the rotated primaries.
+	for _, k := range keys {
+		kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, k.ID, clock.Now())
+	}
+	if keys, err = s.keys.ListCryptoKeys(ctx, project, loc, kr); err != nil {
+		return nil, mapError(err)
+	}
 	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
 	out := make([]*kmspb.CryptoKey, 0, len(page))
@@ -368,6 +376,7 @@ func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, key, clock.Now())
 	k, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
 		return nil, keyErr(err)
@@ -546,6 +555,7 @@ func (s *Service) Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmsp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, key, clock.Now())
 	ck, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
 		return nil, keyErr(err)
