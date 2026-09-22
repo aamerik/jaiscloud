@@ -859,6 +859,16 @@ func pbBool(b bool) *firestorepb.Value {
 	return &firestorepb.Value{ValueType: &firestorepb.Value_BooleanValue{BooleanValue: b}}
 }
 
+// documentTarget builds a target watching an explicit set of document names.
+func documentTarget(tid int32, names ...string) *firestorepb.Target {
+	return &firestorepb.Target{
+		TargetId: tid,
+		TargetType: &firestorepb.Target_Documents{
+			Documents: &firestorepb.Target_DocumentsTarget{Documents: names},
+		},
+	}
+}
+
 // whereQueryTarget builds a single-collection query target with an EQUAL field
 // filter, so live deltas must honor the where predicate.
 func whereQueryTarget(tid int32, collection, field string, val *firestorepb.Value) *firestorepb.Target {
@@ -985,6 +995,184 @@ func TestListenQueryWhereLiveDeleteEmitsDocumentDelete(t *testing.T) {
 		t.Fatalf("removed_target_ids = %v, want [%d]", dd.RemovedTargetIds, tid)
 	}
 	if rs[1].GetTargetChange().GetTargetChangeType() != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
+	}
+}
+
+// TestListenMultiTargetAggregatesDocumentChangeRemovedTargetIds asserts that a
+// change epoch aggregates one document's deltas across every target on the
+// stream into a single canonical DocumentChange: a document watched by a
+// document target and a where-filtered query target, which the change pushes
+// out of the query but not the document target, yields one DocumentChange with
+// target_ids naming the document target and removed_target_ids naming the query
+// target (real Firestore epoch semantics).
+func TestListenMultiTargetAggregatesDocumentChangeRemovedTargetIds(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		docTargetID   int32 = 1
+		queryTargetID int32 = 2
+	)
+	leavePath := listenParent + "/items/leave"
+	svc.CreateDocument(ctx, "test", "(default)", "items", "leave", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(true),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	if err := stream.Send(addTargetReq(documentTarget(docTargetID, leavePath))); err != nil {
+		t.Fatalf("send document target: %v", err)
+	}
+	recvN(t, stream, 4, 3*time.Second) // ADD, leave, CURRENT, NO_CHANGE
+
+	if err := stream.Send(addTargetReq(whereQueryTarget(queryTargetID, "items", "active", pbBool(true)))); err != nil {
+		t.Fatalf("send query target: %v", err)
+	}
+	recvN(t, stream, 4, 3*time.Second) // ADD, leave, CURRENT, NO_CHANGE
+
+	// leave stops matching the query's where predicate but is still present, so
+	// it stays in the document target and leaves the query target.
+	svc.PatchDocument(ctx, "test", "(default)", "items/leave", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(false),
+	}, nil, nil)
+
+	rs := recvN(t, stream, 2, 3*time.Second) // DocumentChange + NO_CHANGE
+	dc := rs[0].GetDocumentChange()
+	if dc == nil {
+		t.Fatalf("expected a single DocumentChange, got %v", rs[0])
+	}
+	if dc.Document.Name != leavePath {
+		t.Fatalf("DocumentChange for %q, want %q", dc.Document.Name, leavePath)
+	}
+	if len(dc.TargetIds) != 1 || dc.TargetIds[0] != docTargetID {
+		t.Fatalf("target_ids = %v, want [%d]", dc.TargetIds, docTargetID)
+	}
+	if len(dc.RemovedTargetIds) != 1 || dc.RemovedTargetIds[0] != queryTargetID {
+		t.Fatalf("removed_target_ids = %v, want [%d]", dc.RemovedTargetIds, queryTargetID)
+	}
+	if tc := rs[1].GetTargetChange(); tc == nil || tc.TargetChangeType != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
+	}
+}
+
+// TestListenMultiTargetAggregatesDocumentRemove asserts that when a document
+// leaves the result set of every target watching it, the epoch emits one
+// DocumentRemove whose removed_target_ids aggregates all of them.
+func TestListenMultiTargetAggregatesDocumentRemove(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		t1 int32 = 1
+		t2 int32 = 2
+	)
+	leavePath := listenParent + "/items/leave"
+	svc.CreateDocument(ctx, "test", "(default)", "items", "leave", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(true),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	for _, tid := range []int32{t1, t2} {
+		if err := stream.Send(addTargetReq(whereQueryTarget(tid, "items", "active", pbBool(true)))); err != nil {
+			t.Fatalf("send query target %d: %v", tid, err)
+		}
+		recvN(t, stream, 4, 3*time.Second) // ADD, leave, CURRENT, NO_CHANGE
+	}
+
+	svc.PatchDocument(ctx, "test", "(default)", "items/leave", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(false),
+	}, nil, nil)
+
+	rs := recvN(t, stream, 2, 3*time.Second) // DocumentRemove + NO_CHANGE
+	dr := rs[0].GetDocumentRemove()
+	if dr == nil {
+		t.Fatalf("expected a single DocumentRemove, got %v", rs[0])
+	}
+	if dr.Document != leavePath {
+		t.Fatalf("DocumentRemove for %q, want %q", dr.Document, leavePath)
+	}
+	want := []int32{t1, t2}
+	if len(dr.RemovedTargetIds) != len(want) {
+		t.Fatalf("removed_target_ids = %v, want %v", dr.RemovedTargetIds, want)
+	}
+	for i, id := range want {
+		if dr.RemovedTargetIds[i] != id {
+			t.Fatalf("removed_target_ids = %v, want %v", dr.RemovedTargetIds, want)
+		}
+	}
+	if tc := rs[1].GetTargetChange(); tc == nil || tc.TargetChangeType != firestorepb.TargetChange_NO_CHANGE {
+		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
+	}
+}
+
+// TestListenMultiTargetAggregatesDocumentDelete asserts that deleting a
+// document watched by both a document target and a matching query target
+// emits one DocumentDelete whose removed_target_ids aggregates both targets.
+func TestListenMultiTargetAggregatesDocumentDelete(t *testing.T) {
+	client, svc, cleanup := listenTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		docTargetID   int32 = 1
+		queryTargetID int32 = 2
+	)
+	onePath := listenParent + "/items/one"
+	svc.CreateDocument(ctx, "test", "(default)", "items", "one", map[string]*firestorestore.Value{
+		"active": firestorestore.BoolVal(true),
+	})
+
+	lctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.Listen(lctx)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+
+	if err := stream.Send(addTargetReq(documentTarget(docTargetID, onePath))); err != nil {
+		t.Fatalf("send document target: %v", err)
+	}
+	recvN(t, stream, 4, 3*time.Second) // ADD, one, CURRENT, NO_CHANGE
+
+	if err := stream.Send(addTargetReq(whereQueryTarget(queryTargetID, "items", "active", pbBool(true)))); err != nil {
+		t.Fatalf("send query target: %v", err)
+	}
+	recvN(t, stream, 4, 3*time.Second) // ADD, one, CURRENT, NO_CHANGE
+
+	svc.DeleteDocument(ctx, "test", "(default)", "items/one", nil)
+
+	rs := recvN(t, stream, 2, 3*time.Second) // DocumentDelete + NO_CHANGE
+	dd := rs[0].GetDocumentDelete()
+	if dd == nil {
+		t.Fatalf("expected a single DocumentDelete, got %v", rs[0])
+	}
+	if dd.Document != onePath {
+		t.Fatalf("DocumentDelete for %q, want %q", dd.Document, onePath)
+	}
+	want := []int32{docTargetID, queryTargetID}
+	if len(dd.RemovedTargetIds) != len(want) {
+		t.Fatalf("removed_target_ids = %v, want %v", dd.RemovedTargetIds, want)
+	}
+	for i, id := range want {
+		if dd.RemovedTargetIds[i] != id {
+			t.Fatalf("removed_target_ids = %v, want %v", dd.RemovedTargetIds, want)
+		}
+	}
+	if tc := rs[1].GetTargetChange(); tc == nil || tc.TargetChangeType != firestorepb.TargetChange_NO_CHANGE {
 		t.Fatalf("expected NO_CHANGE, got %v", rs[1])
 	}
 }
