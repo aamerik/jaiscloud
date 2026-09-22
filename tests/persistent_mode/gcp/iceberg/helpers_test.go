@@ -126,21 +126,16 @@ func runSparkSQL(t *testing.T, job SparkJob) {
 }
 
 // runSparkSQLOnHost submits a Spark SQL job via Docker pointing at a specific
-// JaisCloud host. The SQL is written to a temp file and mounted read-only into
-// the container.
+// JaisCloud host. The SQL is passed inline via spark-sql -e.
+//
+// -e is deliberate: it keeps the harness daemon-location-agnostic. A bind mount
+// (-v tmp.sql:/tmp/job.sql) resolves on the Docker daemon's filesystem, so it
+// silently becomes an empty directory against a remote daemon. Passing the SQL
+// on the command line avoids the daemon needing to see the test process's
+// filesystem at all.
 func runSparkSQLOnHost(t *testing.T, host string, job SparkJob) {
 	t.Helper()
 	requireIcebergEnv(t)
-
-	sqlFile, err := os.CreateTemp("", fmt.Sprintf("iceberg-%s-*.sql", job.Name))
-	if err != nil {
-		t.Fatalf("create temp SQL file: %v", err)
-	}
-	defer os.Remove(sqlFile.Name())
-	if _, err := sqlFile.WriteString(job.SQL); err != nil {
-		t.Fatalf("write SQL: %v", err)
-	}
-	sqlFile.Close()
 
 	args := []string{
 		"docker", "run", "--rm",
@@ -149,7 +144,6 @@ func runSparkSQLOnHost(t *testing.T, host string, job SparkJob) {
 		// (fs.gs.auth.null.enable=true + fs.gs.project.id) and the explicit
 		// fs.gs.storage.root.url — no Workload Identity, no
 		// GOOGLE_APPLICATION_CREDENTIALS.
-		"-v", sqlFile.Name() + ":/tmp/job.sql:ro",
 		icebergImage(),
 		"/opt/spark/bin/spark-sql",
 		"--master", "local[2]",
@@ -160,7 +154,7 @@ func runSparkSQLOnHost(t *testing.T, host string, job SparkJob) {
 	for _, c := range job.ExtraConf {
 		args = append(args, "--conf", c)
 	}
-	args = append(args, "-f", "/tmp/job.sql")
+	args = append(args, "-e", job.SQL)
 
 	t.Logf("running spark-sql job %q on %s", job.Name, host)
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout())

@@ -32,11 +32,12 @@ download \
 # gcs-connector hadoop3 (shaded). Data path is HadoopFileIO + gcs-connector;
 # iceberg-gcp-bundle is not used.
 #
-# TODO(unconfirmed pin): gcs-connector-hadoop3-2.2.11-shaded.jar is the
-# starting pin only. It must be confirmed empirically via the spark-sql boot
-# spike (spark-sql boots with it on the classpath + a gs:// round-trip works)
-# before the full harness runs. The spike cannot run here (needs Docker Spark
-# + the Hive Metastore Thrift listener).
+# CONFIRMED pin (2026-09-22): gcs-connector-hadoop3-2.2.11-shaded.jar boots
+# with spark-sql 3.5.0 and iceberg-spark-runtime-3.5_2.12-1.5.2, and runs a
+# full gs:// round-trip (CREATE TABLE ... USING iceberg LOCATION 'gs://...',
+# INSERT, SELECT) against jaiscloud-gcp (GCS JSON API + Hive Metastore Thrift
+# :9083). This includes against a remote Docker daemon — the harness passes SQL
+# via spark-sql -e, not a bind mount — so the pin is trustworthy.
 download \
     "$BASE/com/google/cloud/bigdataoss/gcs-connector/hadoop3-2.2.11/gcs-connector-hadoop3-2.2.11-shaded.jar" \
     "$DEST/gcs-connector-hadoop3-2.2.11-shaded.jar"
