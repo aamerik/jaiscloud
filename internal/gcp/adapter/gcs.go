@@ -603,36 +603,6 @@ func gcpReason(code string) string {
 	}
 }
 
-// gcpStatusString maps an HTTP status to the google.rpc.Code status string.
-func gcpStatusString(code int) string {
-	switch code {
-	case 400:
-		return "INVALID_ARGUMENT"
-	case 401:
-		return "UNAUTHENTICATED"
-	case 403:
-		return "PERMISSION_DENIED"
-	case 404:
-		return "NOT_FOUND"
-	case 409:
-		return "ALREADY_EXISTS"
-	case 412:
-		return "FAILED_PRECONDITION"
-	case 429:
-		return "RESOURCE_EXHAUSTED"
-	case 499:
-		return "CANCELLED"
-	case 500:
-		return "INTERNAL"
-	case 501:
-		return "UNIMPLEMENTED"
-	case 503:
-		return "UNAVAILABLE"
-	default:
-		return "UNKNOWN"
-	}
-}
-
 // splitEscaped splits an escaped URL path on "/" and unescapes each segment, so
 // %2F within a segment (a slash in an object name) survives as part of the name.
 func splitEscaped(path string) []string {

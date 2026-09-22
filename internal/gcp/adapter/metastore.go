@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
@@ -206,10 +207,7 @@ func (c *MetastoreCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Pr
 	}
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
-	statusStr := perr.Status
-	if statusStr == "" {
-		statusStr = gcpStatusString(status)
-	}
+	statusStr, _ := gcperr.Resolve(perr)
 	env := map[string]any{
 		"error": map[string]any{
 			"code":    status,

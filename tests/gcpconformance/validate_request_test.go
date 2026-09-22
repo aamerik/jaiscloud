@@ -35,3 +35,15 @@ func TestValidateRequestValue(t *testing.T) {
 		t.Fatal("response validation should flag the missing required field")
 	}
 }
+
+// TestValidateErrorEnvelopeStatusForHTTP400 proves the 400 map accepts every
+// google.rpc status that maps to HTTP 400, not only INVALID_ARGUMENT, so a
+// FAILED_PRECONDITION body is not reported as error.status divergence.
+func TestValidateErrorEnvelopeStatusForHTTP400(t *testing.T) {
+	body := []byte(`{"error":{"code":400,"message":"offset out of range","status":"FAILED_PRECONDITION"}}`)
+	for _, d := range ValidateErrorEnvelope(400, body) {
+		if d.Path == "error.status" && (d.Severity == "high" || d.Severity == "medium") {
+			t.Fatalf("FAILED_PRECONDITION must be accepted for HTTP 400: %+v", d)
+		}
+	}
+}

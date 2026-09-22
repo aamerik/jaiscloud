@@ -28,6 +28,8 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/gcperr"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/wire"
@@ -2130,7 +2132,7 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 		"updated":        b.Updated,
 		"generation":     "0",
 		"metageneration": metageneration,
-		"projectNumber":  "0",
+		"projectNumber":  resource.ProjectNumber(nr.AccountID),
 		"selfLink":       bucketSelfLink(baseURL(nr), b.Name),
 		"etag":           "CAE=",
 		"versioning":     versioning,
@@ -2809,7 +2811,7 @@ func (p *Provider) appendChunk(sess *uploadSession, media []byte) error {
 // KB 2840945.
 func offsetGapError(start, length int64) *model.ProviderError {
 	msg := fmt.Sprintf("Invalid request.  According to the Content-Range header, the upload offset is %d byte(s), which exceeds already uploaded size of %d byte(s).", start, length)
-	return model.NewProviderError("InvalidRequest", msg, 503).WithData(map[string]any{"errorFormat": "plain"})
+	return (&model.ProviderError{Code: "InvalidRequest", Message: msg, HTTPStatus: 503, Status: gcperr.Unavailable}).WithData(map[string]any{"errorFormat": "plain"})
 }
 
 // spillSession flushes the in-memory buffer to a temp file and switches the
