@@ -87,7 +87,8 @@ func TestSDKPubSubOrderingKeyAndAttributes(t *testing.T) {
 
 // TestSDKPubSubModifyAckDeadlineRedelivery exercises ack-deadline reset: a
 // claimed message whose deadline is dropped to 0 becomes immediately pullable
-// again (redelivery without a dead-letter policy).
+// again (redelivery without a dead-letter policy). Without a DeadLetterPolicy
+// the wire deliveryAttempt is always 0 (proto-documented).
 func TestSDKPubSubModifyAckDeadlineRedelivery(t *testing.T) {
 	ctx := context.Background()
 	svc, err := pubsub.NewService(ctx, opts()...)
@@ -110,7 +111,7 @@ func TestSDKPubSubModifyAckDeadlineRedelivery(t *testing.T) {
 	require.Len(t, pull.ReceivedMessages, 1)
 	first := pull.ReceivedMessages[0]
 	require.Equal(t, b64("once"), first.Message.Data)
-	require.Equal(t, int64(1), first.DeliveryAttempt)
+	require.Equal(t, int64(0), first.DeliveryAttempt)
 
 	// Reset the ack deadline to 0 → the message is immediately visible again.
 	_, err = svc.Projects.Subscriptions.ModifyAckDeadline(sub, &pubsub.ModifyAckDeadlineRequest{
@@ -122,7 +123,7 @@ func TestSDKPubSubModifyAckDeadlineRedelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pull.ReceivedMessages, 1)
 	require.Equal(t, b64("once"), pull.ReceivedMessages[0].Message.Data)
-	require.Equal(t, int64(2), pull.ReceivedMessages[0].DeliveryAttempt, "redelivery must bump delivery attempt")
+	require.Equal(t, int64(0), pull.ReceivedMessages[0].DeliveryAttempt, "no-DLQ subscription must report deliveryAttempt 0")
 
 	_, err = svc.Projects.Subscriptions.Acknowledge(sub, &pubsub.AcknowledgeRequest{
 		AckIds: []string{pull.ReceivedMessages[0].AckId},
@@ -130,9 +131,9 @@ func TestSDKPubSubModifyAckDeadlineRedelivery(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSDKPubSubShortAckDeadline verifies a custom ackDeadlineSeconds is stored
-// and read back on the subscription.
-func TestSDKPubSubShortAckDeadline(t *testing.T) {
+// TestSDKPubSubCustomAckDeadline verifies a custom (non-default)
+// ackDeadlineSeconds is stored and read back on the subscription.
+func TestSDKPubSubCustomAckDeadline(t *testing.T) {
 	ctx := context.Background()
 	svc, err := pubsub.NewService(ctx, opts()...)
 	require.NoError(t, err)
@@ -143,13 +144,13 @@ func TestSDKPubSubShortAckDeadline(t *testing.T) {
 
 	sub := "projects/proj/subscriptions/" + unique("deadline-sub")
 	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{
-		Name: sub, Topic: topic, AckDeadlineSeconds: 5,
+		Name: sub, Topic: topic, AckDeadlineSeconds: 30,
 	}).Do()
 	require.NoError(t, err)
 
 	got, err := svc.Projects.Subscriptions.Get(sub).Do()
 	require.NoError(t, err)
-	require.Equal(t, int64(5), got.AckDeadlineSeconds)
+	require.Equal(t, int64(30), got.AckDeadlineSeconds)
 }
 
 // TestSDKPubSubDeleteNotFound verifies topic and subscription deletion, plus

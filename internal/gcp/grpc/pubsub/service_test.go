@@ -929,3 +929,138 @@ func TestPubSubSeekMissingTargetGRPC(t *testing.T) {
 		t.Fatalf("Seek(no target) = %v, want InvalidArgument", err)
 	}
 }
+
+// TestPubSubDeliveryAttemptRequiresDLQGRPC verifies delivery_attempt is
+// reported only when the subscription has a DeadLetterPolicy (0 otherwise).
+func TestPubSubDeliveryAttemptRequiresDLQGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/da-src"
+	const dlq = "projects/test/topics/da-dlq"
+	for _, tp := range []string{topic, dlq} {
+		if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: tp}); err != nil {
+			t.Fatalf("CreateTopic %s: %v", tp, err)
+		}
+	}
+	const plainSub = "projects/test/subscriptions/da-plain"
+	const dlqSub = "projects/test/subscriptions/da-dlq"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: plainSub, Topic: topic}); err != nil {
+		t.Fatalf("plain sub: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: dlqSub, Topic: topic,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: dlq, MaxDeliveryAttempts: 10},
+	}); err != nil {
+		t.Fatalf("dlq sub: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("hi")}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	pull := func(sub string) *pubsubpb.ReceivedMessage {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 1, ReturnImmediately: true})
+		if err != nil {
+			t.Fatalf("Pull %s: %v", sub, err)
+		}
+		if len(resp.GetReceivedMessages()) != 1 {
+			t.Fatalf("Pull %s: got %d messages, want 1", sub, len(resp.GetReceivedMessages()))
+		}
+		return resp.GetReceivedMessages()[0]
+	}
+	if got := pull(plainSub).GetDeliveryAttempt(); got != 0 {
+		t.Fatalf("no-DLQ deliveryAttempt = %d, want 0", got)
+	}
+	if got := pull(dlqSub).GetDeliveryAttempt(); got < 1 {
+		t.Fatalf("DLQ deliveryAttempt = %d, want >= 1", got)
+	}
+}
+
+// TestPubSubAckDeadlineValidationGRPC verifies the [10,600] create bounds, the
+// 0→10 default, the [0,600] ModifyAckDeadline bounds, and the same bounds on
+// UpdateSubscription.
+func TestPubSubAckDeadlineValidationGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/ad"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	for _, v := range []int32{1, 601} {
+		_, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+			Name: "projects/test/subscriptions/ad-bad", Topic: topic, AckDeadlineSeconds: v,
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("CreateSubscription ackDeadline=%d err = %v, want InvalidArgument", v, err)
+		}
+	}
+	const sub = "projects/test/subscriptions/ad-zero"
+	created, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic, AckDeadlineSeconds: 0})
+	if err != nil {
+		t.Fatalf("CreateSubscription 0: %v", err)
+	}
+	if created.GetAckDeadlineSeconds() != 10 {
+		t.Fatalf("ackDeadlineSeconds = %d, want 10", created.GetAckDeadlineSeconds())
+	}
+	if _, err := subc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
+		Subscription: sub, AckDeadlineSeconds: 601,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ModifyAckDeadline 601 err = %v, want InvalidArgument", err)
+	}
+	if _, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+		Subscription: &pubsubpb.Subscription{Name: sub, AckDeadlineSeconds: 601},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"ack_deadline_seconds"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateSubscription ackDeadline=601 err = %v, want InvalidArgument", err)
+	}
+	updated, err := subc.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+		Subscription: &pubsubpb.Subscription{Name: sub, AckDeadlineSeconds: 0},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"ack_deadline_seconds"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSubscription ackDeadline=0: %v", err)
+	}
+	if updated.GetAckDeadlineSeconds() != 10 {
+		t.Fatalf("updated ackDeadlineSeconds = %d, want 10", updated.GetAckDeadlineSeconds())
+	}
+}
+
+// TestPubSubDeadLetterPolicyValidationGRPC verifies the dead-letter topic
+// existence check and the [5,100] maxDeliveryAttempts bounds (0→5).
+func TestPubSubDeadLetterPolicyValidationGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/dlv"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/dlv-missing", Topic: topic,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: "projects/test/topics/nope"},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing DLQ topic err = %v, want NotFound", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/dlv-low", Topic: topic,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: topic, MaxDeliveryAttempts: 3},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("maxDeliveryAttempts=3 err = %v, want InvalidArgument", err)
+	}
+	created, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/dlv-default", Topic: topic,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: topic},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription default DLQ: %v", err)
+	}
+	if got := created.GetDeadLetterPolicy().GetMaxDeliveryAttempts(); got != 5 {
+		t.Fatalf("maxDeliveryAttempts default = %d, want 5", got)
+	}
+}

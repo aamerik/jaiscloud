@@ -239,7 +239,7 @@ func TestSDKPubSubDLQ(t *testing.T) {
 		Topic: src,
 		DeadLetterPolicy: &pubsub.DeadLetterPolicy{
 			DeadLetterTopic:     dlq,
-			MaxDeliveryAttempts: 2,
+			MaxDeliveryAttempts: 5,
 		},
 	}).Do()
 	require.NoError(t, err)
@@ -267,12 +267,12 @@ func TestSDKPubSubDLQ(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	n, ids := pull()
-	require.Equal(t, 1, n)
-	forceRedelivery(ids)
-	n, ids = pull()
-	require.Equal(t, 1, n)
-	forceRedelivery(ids)
-	n, _ = pull()
+	// Delivered maxDeliveryAttempts (5) times, then moved to the DLQ.
+	for i := 0; i < 5; i++ {
+		n, ids := pull()
+		require.Equal(t, 1, n)
+		forceRedelivery(ids)
+	}
+	n, _ := pull()
 	require.Equal(t, 0, n)
 }

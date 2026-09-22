@@ -387,7 +387,15 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	}
 	ackDeadline := 10
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
-		ackDeadline = int(ad)
+		v := int(ad)
+		// Proto: the value must be between 10 and 600 seconds; 0 selects the
+		// 10-second default. Anything else (including negatives) is invalid.
+		if v != 0 && (v < 10 || v > 600) {
+			return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 10 and 600 (got %d)", v), 400)
+		}
+		if v != 0 {
+			ackDeadline = v
+		}
 	}
 	meta := map[string]any{
 		"name":               nr.ResourceID("pubsub-subscription", s),
@@ -415,7 +423,11 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		meta["filter"] = filter
 	}
 	if dp, ok := body["deadLetterPolicy"].(map[string]any); ok {
-		meta["deadLetterPolicy"] = dp
+		normalized, err := p.normalizeDeadLetterPolicy(ctx, nr.AccountID, dp)
+		if err != nil {
+			return nil, err
+		}
+		meta["deadLetterPolicy"] = normalized
 	}
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		meta["pushConfig"] = pc
@@ -513,18 +525,25 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		topicID = topicID[i+1:]
 	}
 
-	// Dead-letter policy (mirrors SQS RedrivePolicy/maxReceiveCount).
+	// Dead-letter policy (mirrors SQS RedrivePolicy/maxReceiveCount). Its mere
+	// presence controls whether deliveryAttempt is reported (proto: 0 when no
+	// DeadLetterPolicy is set).
 	dlqTopic := ""
 	maxDeliveryAttempts := 0
+	hasDeadLetterPolicy := false
 	if dp, ok := sub["deadLetterPolicy"].(map[string]any); ok {
+		hasDeadLetterPolicy = true
 		if dt, _ := dp["deadLetterTopic"].(string); dt != "" {
 			dlqTopic = dt
 			if i := strings.LastIndex(dlqTopic, "/"); i >= 0 {
 				dlqTopic = dlqTopic[i+1:]
 			}
 		}
-		if mda, ok := dp["maxDeliveryAttempts"].(float64); ok {
+		switch mda := dp["maxDeliveryAttempts"].(type) {
+		case float64:
 			maxDeliveryAttempts = int(mda)
+		case int:
+			maxDeliveryAttempts = mda
 		}
 	}
 
@@ -609,7 +628,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		received = append(received, map[string]any{
 			"ackId":           encodeAckID(s, m.MessageID),
 			"message":         msg,
-			"deliveryAttempt": m.DeliveryAttempt,
+			"deliveryAttempt": deliveryAttempt(m.DeliveryAttempt, hasDeadLetterPolicy),
 		})
 	}
 	return provider.OK(map[string]any{"receivedMessages": received}), nil
@@ -675,6 +694,10 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 	seconds := 0
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		seconds = int(ad)
+		// Proto ModifyAckDeadline: valid values are 0 to 600 seconds.
+		if seconds < 0 || seconds > 600 {
+			return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 0 and 600 (got %d)", seconds), 400)
+		}
 	}
 	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, clock.Now()); err != nil {
 		return nil, err
@@ -728,6 +751,45 @@ func lastSegment(s string) string {
 		return s[i+1:]
 	}
 	return s
+}
+
+// deliveryAttempt reports the wire delivery_attempt. Per the proto, it is 0
+// unless the subscription has a DeadLetterPolicy; with one it is the number of
+// delivery attempts made so far (>= 1).
+func deliveryAttempt(attempt int, hasDeadLetterPolicy bool) int {
+	if !hasDeadLetterPolicy {
+		return 0
+	}
+	return attempt
+}
+
+// normalizeDeadLetterPolicy validates and canonicalizes a subscription's
+// deadLetterPolicy: a configured dead_letter_topic must already exist in the
+// same project (NotFound otherwise), and max_delivery_attempts must be between
+// 5 and 100 (0 selects the 5 default).
+func (p *Provider) normalizeDeadLetterPolicy(ctx context.Context, account string, dp map[string]any) (map[string]any, error) {
+	out := map[string]any{}
+	if topic, _ := dp["deadLetterTopic"].(string); topic != "" {
+		if !p.topicExists(ctx, account, lastSegment(topic)) {
+			return nil, model.NewProviderError("NotFound", "dead letter topic not found", 404)
+		}
+		out["deadLetterTopic"] = topic
+	}
+	attempts := 0
+	switch mda := dp["maxDeliveryAttempts"].(type) {
+	case float64:
+		attempts = int(mda)
+	case int:
+		attempts = mda
+	}
+	if attempts != 0 && (attempts < 5 || attempts > 100) {
+		return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("maxDeliveryAttempts must be between 5 and 100 (got %d)", attempts), 400)
+	}
+	if attempts == 0 {
+		attempts = 5
+	}
+	out["maxDeliveryAttempts"] = attempts
+	return out, nil
 }
 
 // topicRetention resolves a topic's messageRetentionDuration in seconds,

@@ -96,14 +96,14 @@ func TestPubSubDLQ(t *testing.T) {
 		}
 	}
 
-	// Subscription with DLQ (maxDeliveryAttempts=2).
+	// Subscription with DLQ (maxDeliveryAttempts=5, the proto minimum).
 	nr := newNR(map[string]any{
 		"name": "subscriptions/sub",
 		"body": map[string]any{
 			"topic": "projects/proj/topics/src",
 			"deadLetterPolicy": map[string]any{
 				"deadLetterTopic":     "projects/proj/topics/dlq",
-				"maxDeliveryAttempts": float64(2),
+				"maxDeliveryAttempts": float64(5),
 			},
 		},
 	})
@@ -146,16 +146,15 @@ func TestPubSubDLQ(t *testing.T) {
 		_ = p.messages.ModifyAckDeadline(ctx, "sub", ids, 0, time.Now())
 	}
 
-	if got := pull(); got != 1 {
-		t.Fatalf("pull 1 expected 1 message, got %d", got)
+	// The message is delivered maxDeliveryAttempts (5) times, then moved.
+	for i := 1; i <= 5; i++ {
+		if got := pull(); got != 1 {
+			t.Fatalf("pull %d expected 1 message, got %d", i, got)
+		}
+		redeliver()
 	}
-	redeliver()
-	if got := pull(); got != 1 {
-		t.Fatalf("pull 2 expected 1 message, got %d", got)
-	}
-	redeliver()
 	if got := pull(); got != 0 {
-		t.Fatalf("pull 3 expected 0 messages (moved to DLQ), got %d", got)
+		t.Fatalf("pull 6 expected 0 messages (moved to DLQ), got %d", got)
 	}
 
 	// The message now lives on the DLQ topic's subscription queue.
@@ -519,5 +518,148 @@ func TestPubSubTopicDeleteOrphansSubscription(t *testing.T) {
 	}
 	if get.Data["topic"] != "_deleted-topic_" {
 		t.Fatalf("expected topic _deleted-topic_, got %v", get.Data["topic"])
+	}
+}
+
+// TestPubSubDeliveryAttemptRequiresDLQ verifies deliveryAttempt is reported
+// only when the subscription has a DeadLetterPolicy (proto: 0 otherwise).
+func TestPubSubDeliveryAttemptRequiresDLQ(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	for _, id := range []string{"da-src", "da-dlq"} {
+		if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/" + id})); err != nil {
+			t.Fatalf("topic %s: %v", id, err)
+		}
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/da-plain",
+		"body": map[string]any{"topic": "projects/proj/topics/da-src"},
+	})); err != nil {
+		t.Fatalf("plain sub: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/da-dlq",
+		"body": map[string]any{
+			"topic": "projects/proj/topics/da-src",
+			"deadLetterPolicy": map[string]any{
+				"deadLetterTopic":     "projects/proj/topics/da-dlq",
+				"maxDeliveryAttempts": float64(10),
+			},
+		},
+	})); err != nil {
+		t.Fatalf("dlq sub: %v", err)
+	}
+	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
+		"name": "topics/da-src",
+		"body": map[string]any{"messages": []any{map[string]any{"data": "aGk="}}},
+	})); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	plain := pubsubPull(t, p, "da-plain")
+	if len(plain) != 1 {
+		t.Fatalf("plain sub: expected 1 message, got %d", len(plain))
+	}
+	if got := plain[0].(map[string]any)["deliveryAttempt"]; got != 0 {
+		t.Fatalf("no-DLQ deliveryAttempt = %v, want 0", got)
+	}
+
+	dlq := pubsubPull(t, p, "da-dlq")
+	if len(dlq) != 1 {
+		t.Fatalf("dlq sub: expected 1 message, got %d", len(dlq))
+	}
+	if got, _ := dlq[0].(map[string]any)["deliveryAttempt"].(int); got < 1 {
+		t.Fatalf("DLQ deliveryAttempt = %v, want >= 1", dlq[0].(map[string]any)["deliveryAttempt"])
+	}
+}
+
+// TestPubSubAckDeadlineValidation verifies the [10,600] create bounds, the
+// 0→10 default, and the [0,600] ModifyAckDeadline bounds.
+func TestPubSubAckDeadlineValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/ad"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+
+	for _, v := range []float64{1, 601} {
+		_, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+			"name": "subscriptions/ad-bad",
+			"body": map[string]any{"topic": "projects/proj/topics/ad", "ackDeadlineSeconds": v},
+		}))
+		if err == nil || errStatus(err) != 400 {
+			t.Fatalf("ackDeadlineSeconds=%v: expected 400, got %v", v, err)
+		}
+	}
+
+	created, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/ad-zero",
+		"body": map[string]any{"topic": "projects/proj/topics/ad", "ackDeadlineSeconds": float64(0)},
+	}))
+	if err != nil {
+		t.Fatalf("create with 0: %v", err)
+	}
+	if created.Data["ackDeadlineSeconds"] != 10 {
+		t.Fatalf("ackDeadlineSeconds with 0 = %v, want 10", created.Data["ackDeadlineSeconds"])
+	}
+
+	_, err = p.SubscriptionModifyAckDeadline(ctx, newNR(map[string]any{
+		"name": "subscriptions/ad-zero",
+		"body": map[string]any{"ackIds": []any{}, "ackDeadlineSeconds": float64(601)},
+	}))
+	if err == nil || errStatus(err) != 400 {
+		t.Fatalf("ModifyAckDeadline=601: expected 400, got %v", err)
+	}
+}
+
+// TestPubSubDeadLetterPolicyValidation verifies the dead-letter topic existence
+// check and the [5,100] maxDeliveryAttempts bounds (0→5).
+func TestPubSubDeadLetterPolicyValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/dlv"})); err != nil {
+		t.Fatalf("topic: %v", err)
+	}
+
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/dlv-missing",
+		"body": map[string]any{
+			"topic":            "projects/proj/topics/dlv",
+			"deadLetterPolicy": map[string]any{"deadLetterTopic": "projects/proj/topics/nope"},
+		},
+	})); err == nil || errStatus(err) != 404 {
+		t.Fatalf("missing DLQ topic: expected 404, got %v", err)
+	}
+
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/dlv-low",
+		"body": map[string]any{
+			"topic": "projects/proj/topics/dlv",
+			"deadLetterPolicy": map[string]any{
+				"deadLetterTopic":     "projects/proj/topics/dlv",
+				"maxDeliveryAttempts": float64(3),
+			},
+		},
+	})); err == nil || errStatus(err) != 400 {
+		t.Fatalf("maxDeliveryAttempts=3: expected 400, got %v", err)
+	}
+
+	created, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/dlv-default",
+		"body": map[string]any{
+			"topic": "projects/proj/topics/dlv",
+			"deadLetterPolicy": map[string]any{
+				"deadLetterTopic":     "projects/proj/topics/dlv",
+				"maxDeliveryAttempts": float64(0),
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create default DLQ: %v", err)
+	}
+	dp, _ := created.Data["deadLetterPolicy"].(map[string]any)
+	if dp["maxDeliveryAttempts"] != 5 {
+		t.Fatalf("maxDeliveryAttempts default = %v, want 5", dp["maxDeliveryAttempts"])
 	}
 }

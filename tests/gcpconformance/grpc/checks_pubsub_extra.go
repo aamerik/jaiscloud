@@ -437,10 +437,11 @@ func checkPubSubModifyAckDeadline(ctx context.Context, cfg Config) error {
 	if err := pubSubEnsureTopic(ctx, client, pubSubExtraTopic(cfg)); err != nil {
 		return err
 	}
-	// A 1-second ack deadline makes an ignored ModifyAckDeadline observable:
-	// without the extension the message becomes visible again after ~1s.
+	// The minimum valid ack deadline (10s) makes an ignored ModifyAckDeadline
+	// observable: without the extension the message becomes visible again after
+	// ~10s. A shorter value is rejected by real Pub/Sub (proto: 10–600s).
 	sub := pubSubSubName(cfg, "gcpc-grpc-mad-sub")
-	if err := pubSubEnsureSubscription(ctx, client, sub, pubSubExtraTopic(cfg), 1); err != nil {
+	if err := pubSubEnsureSubscription(ctx, client, sub, pubSubExtraTopic(cfg), 10); err != nil {
 		return err
 	}
 	body := []byte("gcpc-pubsub-modify-ack-deadline")
@@ -456,9 +457,9 @@ func checkPubSubModifyAckDeadline(ctx context.Context, cfg Config) error {
 	}); err != nil {
 		return fmt.Errorf("ModifyAckDeadline: %w", err)
 	}
-	// Wait out the original 1s deadline; the extended deadline must keep the
+	// Wait out the original 10s deadline; the extended deadline must keep the
 	// message invisible.
-	time.Sleep(1300 * time.Millisecond)
+	time.Sleep(10500 * time.Millisecond)
 	resp, err := client.SubscriptionAdminClient.Pull(ctx, &pubsubpb.PullRequest{
 		Subscription: sub, MaxMessages: 10, ReturnImmediately: true,
 	})
