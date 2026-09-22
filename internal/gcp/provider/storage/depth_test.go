@@ -125,6 +125,72 @@ func TestVersioningRetainReadGenerationAndListVersions(t *testing.T) {
 	}
 }
 
+// TestObjectsListVersionsPaginationNoDataLoss verifies that walking every page
+// of a ?versions=true listing with maxResults=1 returns each generation exactly
+// once. A name's generations are ordered newest-first, so a name-only cursor
+// (the pre-fix behaviour) skipped the remaining generations of the name whose
+// generation straddled a page boundary — silent data loss.
+func TestObjectsListVersionsPaginationNoDataLoss(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt", "versioning": map[string]any{"enabled": true}}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	gens := make([]string, 0, 3)
+	for _, data := range []string{"one", "two", "three"} {
+		gens = append(gens, insertDepthObject(t, p, "bkt", "v.txt", data, nil))
+	}
+	if len(gens) != 3 || gens[0] == gens[1] || gens[1] == gens[2] || gens[0] == gens[2] {
+		t.Fatalf("expected 3 distinct generations, got %v", gens)
+	}
+
+	seen := map[string]int{}
+	token := ""
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["versions"] = "true"
+		nr.Params["maxResults"] = "1"
+		if token != "" {
+			nr.Params["pageToken"] = token
+		}
+		resp, err := p.ObjectsList(ctx, nr)
+		if err != nil {
+			t.Fatalf("list page %d: %v", page, err)
+		}
+		items, _ := resp.Data["items"].([]any)
+		if len(items) == 0 {
+			t.Fatalf("page %d returned no items", page)
+		}
+		for _, it := range items {
+			m := it.(map[string]any)
+			g, _ := m["generation"].(string)
+			seen[g]++
+		}
+		next, _ := resp.Data["nextPageToken"].(string)
+		if next == "" {
+			break
+		}
+		token = next
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 distinct generations across pages, got %d (%v)", len(seen), seen)
+	}
+	for _, g := range gens {
+		if seen[g] != 1 {
+			t.Errorf("generation %s returned %d times, want exactly 1", g, seen[g])
+		}
+	}
+}
+
 func TestRetentionDeleteForbidden(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()

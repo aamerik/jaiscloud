@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"strconv"
 	"strings"
@@ -217,6 +218,18 @@ func versionMap(nr *model.NormalizedRequest, loc, kr, key, version, state, algor
 		"algorithm":  algorithm,
 		"createTime": ct.UTC().Format(time.RFC3339Nano),
 	}
+}
+
+// versionPageKey renders a version number zero-padded to a fixed width so
+// paging.Page sorts and cursors numerically (1, 2, ..., 12) instead of
+// lexicographically (1, 10, 11, 12, 2, ...). Real KMS orders crypto key
+// versions numerically by version number.
+func versionPageKey(v kmsstore.Version) string {
+	n, err := strconv.ParseInt(v.Version, 10, 64)
+	if err != nil {
+		return v.Version
+	}
+	return fmt.Sprintf("%020d", n)
 }
 
 func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -498,7 +511,7 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 	if err != nil {
 		return nil, p.versionErr(err)
 	}
-	page, next := paging.Page(versions, func(v kmsstore.Version) string { return v.Version }, nr.Params)
+	page, next := paging.Page(versions, versionPageKey, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, v := range page {
 		items = append(items, versionMap(nr, loc, kr, key, v.Version, v.State, v.Algorithm, v.CreateTime))

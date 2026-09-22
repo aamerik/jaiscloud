@@ -3,8 +3,13 @@ package secretmanager
 import (
 	"context"
 	"encoding/base64"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/kms"
@@ -120,6 +125,83 @@ func TestSecretListVersions(t *testing.T) {
 	_, err = p.ListVersions(ctx, newNR(map[string]any{"name": "secrets/missing/versions"}))
 	if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 404 {
 		t.Fatalf("missing secret: err = %v, want 404 ProviderError", err)
+	}
+}
+
+// tickingClock advances by one second on every read, so sequentially created
+// secrets get strictly increasing create times deterministically.
+type tickingClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *tickingClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(time.Second)
+	return c.t
+}
+
+// TestSecretListNewestFirst verifies ListSecrets returns secrets newest-first
+// (reverse order by createTime), matching the official ordering, and that the
+// order is stable across pagination. The pre-fix code sorted by name ascending.
+func TestSecretListNewestFirst(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	clock.SetGlobalClock(&tickingClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	// Created in order alpha, bravo, charlie → charlie is newest.
+	for _, id := range []string{"alpha", "bravo", "charlie"} {
+		if _, err := p.Create(ctx, newNR(map[string]any{"secretId": id})); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
+	var ids []string
+	var createTimes []time.Time
+	token := ""
+	for page := 0; ; page++ {
+		if page > 5 {
+			t.Fatal("pagination did not terminate")
+		}
+		params := map[string]any{"pageSize": "2"}
+		if token != "" {
+			params["pageToken"] = token
+		}
+		resp, err := p.List(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("list page %d: %v", page, err)
+		}
+		if resp.Data["totalSize"] != 3 {
+			t.Errorf("page %d totalSize = %v, want 3", page, resp.Data["totalSize"])
+		}
+		items, _ := resp.Data["secrets"].([]any)
+		for _, it := range items {
+			m := it.(map[string]any)
+			name, _ := m["name"].(string)
+			ids = append(ids, name[strings.LastIndex(name, "/")+1:])
+			ct, err := time.Parse(time.RFC3339Nano, m["createTime"].(string))
+			if err != nil {
+				t.Fatalf("parse createTime %v: %v", m["createTime"], err)
+			}
+			createTimes = append(createTimes, ct)
+		}
+		next, _ := resp.Data["nextPageToken"].(string)
+		if next == "" {
+			break
+		}
+		token = next
+	}
+
+	if want := []string{"charlie", "bravo", "alpha"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("secret order = %v, want %v (newest first)", ids, want)
+	}
+	for i := 1; i < len(createTimes); i++ {
+		if !createTimes[i].Before(createTimes[i-1]) {
+			t.Fatalf("createTimes not strictly descending: %v", createTimes)
+		}
 	}
 }
 

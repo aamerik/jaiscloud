@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"strconv"
 	"strings"
@@ -124,6 +125,22 @@ func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) s
 		m.CreateTime = s.CreateTime.Format(time.RFC3339Nano)
 	}
 	return m
+}
+
+// secretListKey orders secrets newest-first. paging.Page sorts ascending by
+// this key, so the create time is inverted (a newer time maps to a smaller
+// key) and the secret ID breaks ties deterministically. The fixed-width
+// numeric prefix keeps lexicographic string comparison identical to numeric
+// comparison, and the NUL separator avoids collisions between the time and ID
+// components. Official Secret Manager docs: secrets are "sorted in reverse by
+// createTime (newest first)".
+func secretListKey(s secretmanagerstore.Secret) string {
+	const maxInt64 = int64(1<<63 - 1)
+	inv := maxInt64 // a zero create time sorts last (treated as oldest)
+	if !s.CreateTime.IsZero() {
+		inv = maxInt64 - s.CreateTime.UnixNano()
+	}
+	return fmt.Sprintf("%020d", inv) + "\x00" + s.ID
 }
 
 // annotationsFromBody extracts the annotations map from a request body.
@@ -264,7 +281,7 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(secrets, func(s secretmanagerstore.Secret) string { return s.ID }, nr.Params)
+	page, next := paging.Page(secrets, secretListKey, nr.Params)
 
 	items := make([]any, 0, len(page))
 	for _, s := range page {

@@ -899,11 +899,33 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		}
 	}
 
-	// Cursor pagination over object names.
+	// Cursor pagination over object names. The versions listing is ordered by
+	// name ascending, then generation descending, so its cursor must also carry
+	// the generation: a page boundary landing in the middle of a name's
+	// generations would otherwise skip every remaining generation of that name.
 	limit := maxResults(nr.Params)
 	start := 0
 	if tok, _ := nr.Params["pageToken"].(string); tok != "" {
-		if cursor := decodeCursor(tok); cursor != "" {
+		if versions == "true" {
+			if cur, ok := decodeVersionCursor(tok); ok {
+				for start < len(filtered) {
+					m := filtered[start]
+					if m.Name < cur.Name {
+						start++
+						continue
+					}
+					if m.Name == cur.Name {
+						mg, _ := strconv.ParseInt(m.Generation, 10, 64)
+						cg, _ := strconv.ParseInt(cur.Generation, 10, 64)
+						if mg >= cg {
+							start++
+							continue
+						}
+					}
+					break
+				}
+			}
+		} else if cursor := decodeCursor(tok); cursor != "" {
 			for start < len(filtered) && filtered[start].Name <= cursor {
 				start++
 			}
@@ -916,7 +938,12 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	page := filtered[start:end]
 	next := ""
 	if end < len(filtered) {
-		next = encodeCursor(page[len(page)-1].Name)
+		if versions == "true" {
+			last := page[len(page)-1]
+			next = encodeVersionCursor(last.Name, last.Generation)
+		} else {
+			next = encodeCursor(page[len(page)-1].Name)
+		}
 	}
 
 	items := make([]any, 0, len(page))
@@ -2309,9 +2336,43 @@ func decodeCursor(token string) string {
 	return string(b)
 }
 
+// versionCursor is the composite cursor for ?versions=true listings, which are
+// ordered by name ascending then generation descending. Object names may
+// contain any character, so the pair is JSON-encoded before base64 rather than
+// concatenated with a delimiter.
+type versionCursor struct {
+	Name       string `json:"n"`
+	Generation string `json:"g"`
+}
+
+func encodeVersionCursor(name, generation string) string {
+	b, err := json.Marshal(versionCursor{Name: name, Generation: generation})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeVersionCursor(token string) (versionCursor, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return versionCursor{}, false
+	}
+	var c versionCursor
+	if err := json.Unmarshal(b, &c); err != nil {
+		return versionCursor{}, false
+	}
+	return c, true
+}
+
 func maxResults(params map[string]any) int {
 	if v, ok := params["maxResults"].(string); ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			// Real GCS caps the page at "this parameter or 1,000 items,
+			// whichever is smaller".
+			if n > 1000 {
+				return 1000
+			}
 			return n
 		}
 	}
