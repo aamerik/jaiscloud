@@ -54,17 +54,17 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 363 |
-| limited | 94 |
+| ga | 353 |
+| limited | 95 |
 | preview | 37 |
-| unsupported | 3 |
+| unsupported | 12 |
 | **total** | **497** |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 207 | 86 | 37 | 3 |
+| REST (JSON, Discovery-backed) | 197 | 87 | 37 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 156 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,

@@ -51,6 +51,49 @@ operations:
     operation: Compute.Unimplemented
     state: unsupported
     reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.ExportMetadata
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.RestoreService
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.QueryMetadata
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.MoveTableToDatabase
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: metastore
+    operation: Metastore.AlterMetadataResourceLocation
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: dataproc
+    operation: Dataproc.DiagnoseCluster
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: managedkafka
+    operation: ManagedKafka.GetConsumerGroup
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: managedkafka
+    operation: ManagedKafka.UpdateConsumerGroup
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+  - service: managedkafka
+    operation: ManagedKafka.DeleteConsumerGroup
+    state: unsupported
+    reason: "explicit Unimplemented stub"
+
+  # REST operations deliberately left limited: implemented to the extent the
+  # emulator models the subsystem, with the missing plane named in the reason.
+  - service: managedkafka
+    operation: ManagedKafka.ListConsumerGroups
+    state: limited
+    reason: "no broker data plane; consumer-group listing returns an empty set"
 
   # gRPC methods deliberately left limited: each is gated on a subsystem the
   # emulator does not model, so implementing it would fabricate a wire-divergent
