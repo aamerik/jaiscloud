@@ -114,6 +114,75 @@ func TestBucketRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBucketLabels verifies that GCS bucket labels round-trip through
+// create/get/list and that a PATCH-style update replaces the label set. Bucket
+// labels were previously dropped (missing from bucketMeta), which produced a
+// perpetual terraform plan diff.
+func TestBucketLabels(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{
+		"name":   "labeled",
+		"labels": map[string]any{"env": "compat-test", "team": "core"},
+	}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "labeled"
+	resp, err := p.BucketsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	labels, ok := resp.Data["labels"].(map[string]string)
+	if !ok {
+		t.Fatalf("expected labels map in GET response, got %T (%v)", resp.Data["labels"], resp.Data["labels"])
+	}
+	if labels["env"] != "compat-test" || labels["team"] != "core" {
+		t.Fatalf("labels not preserved: %v", labels)
+	}
+
+	// A PATCH supplying labels replaces the whole set (real GCS semantics for a
+	// map field): the omitted "team" label is removed.
+	nr = bucketParams()
+	nr.Params["bucket"] = "labeled"
+	nr.Params["body"] = map[string]any{"labels": map[string]any{"env": "updated"}}
+	if _, err := p.BucketsUpdate(ctx, nr); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "labeled"
+	resp, err = p.BucketsGet(ctx, nr)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	labels, _ = resp.Data["labels"].(map[string]string)
+	if labels["env"] != "updated" {
+		t.Fatalf("expected env=updated, got %v", labels)
+	}
+	if _, present := labels["team"]; present {
+		t.Fatalf("expected team label removed by replacement, got %v", labels)
+	}
+
+	// Labels also appear in list output.
+	list, err := p.BucketsList(ctx, bucketParams())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := list.Data["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 bucket, got %d", len(items))
+	}
+	item := items[0].(map[string]any)
+	lm, _ := item["labels"].(map[string]string)
+	if lm == nil || lm["env"] != "updated" {
+		t.Fatalf("expected labels in list output, got %v", item["labels"])
+	}
+}
+
 func TestObjectRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
