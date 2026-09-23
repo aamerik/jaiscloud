@@ -26,7 +26,6 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
-	grpclogging "jaiscloud/internal/gcp/grpc/logging"
 	grpcmonitoring "jaiscloud/internal/gcp/grpc/monitoring"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
@@ -56,6 +55,7 @@ import (
 	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
+	loggingcore "jaiscloud/internal/gcp/service/logging"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -76,7 +76,9 @@ import (
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
+	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -201,6 +203,12 @@ func startCmd() *cobra.Command {
 			// transaction read-set registry and cannot drift.
 			datastoreCore := datastorecore.NewService(stores.entities, cfg.ProjectID)
 			datastoreRestP := restdatastore.NewProvider(datastoreCore, cfg.ProjectID)
+
+			// Cloud Logging's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports use one
+			// log store and cannot drift.
+			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID)
+			loggingRestP := restlogging.NewProvider(loggingCore, cfg.ProjectID)
 
 			// Cloud Functions reuses the Lambda executor: mock echo by default,
 			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The executor (warm
@@ -339,6 +347,7 @@ func startCmd() *cobra.Command {
 				{"serviceusage", serviceusageP},
 				{"resourcemanager", resourcemanagerP},
 				{"datastore", datastoreRestP},
+				{"logging", loggingRestP},
 			} {
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
@@ -353,7 +362,7 @@ func startCmd() *cobra.Command {
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
-			loggingGRPC := grpclogging.NewService(stores.logEntries, cfg.ProjectID)
+			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			monitoringGRPC := grpcmonitoring.NewService(stores.monitoring, cfg.ProjectID)
 			// The background evaluator evaluates alert-policy condition_threshold
 			// conditions, opens/closes incidents, and publishes notifications to

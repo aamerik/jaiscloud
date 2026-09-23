@@ -13,11 +13,11 @@ func entry(severity int, logName string, ts time.Time) loggingstore.LogEntry {
 
 func eval(t *testing.T, filter string, e loggingstore.LogEntry) bool {
 	t.Helper()
-	pred, err := compileFilter(filter)
+	pred, err := CompileFilter(filter)
 	if err != nil {
-		t.Fatalf("compileFilter(%q): %v", filter, err)
+		t.Fatalf("CompileFilter(%q): %v", filter, err)
 	}
-	return pred.match(e)
+	return pred.Match(e)
 }
 
 func TestFilterLogNameEquality(t *testing.T) {
@@ -183,7 +183,7 @@ func TestFilterEmptyAndErrors(t *testing.T) {
 		`resource.type>"x"`,     // supported field, but > isn't implemented for it
 		`timestamp:"x"`,         // supported field, but : isn't implemented for it
 	} {
-		if _, err := compileFilter(bad); err == nil {
+		if _, err := CompileFilter(bad); err == nil {
 			t.Errorf("expected error for filter %q", bad)
 		}
 	}

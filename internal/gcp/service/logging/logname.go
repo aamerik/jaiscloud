@@ -17,6 +17,14 @@ var logScopes = map[string]struct{}{
 	"billingAccounts": {},
 }
 
+// IsLogScope reports whether name is one of the Cloud Logging resource
+// containers (projects, organizations, folders, billingAccounts). It is used by
+// the REST router to recognize the /v2/{scope}/{id}/logs path family.
+func IsLogScope(name string) bool {
+	_, ok := logScopes[name]
+	return ok
+}
+
 func invalidLogName(name string) error {
 	return model.NewProviderError("InvalidArgument", "invalid log name: "+name, 400)
 }
@@ -25,7 +33,7 @@ func invalidParent(name string) error {
 	return model.NewProviderError("InvalidArgument", "invalid resource name: "+name, 400)
 }
 
-// parseLogName parses a Cloud Logging log resource name of the form
+// ParseLogName parses a Cloud Logging log resource name of the form
 // {scope}/{scopeID}/logs/{LOG_ID}, where {scope} is one of "projects",
 // "organizations", "folders", or "billingAccounts". The route uses non-empty
 // segments ([^/]+) and LOG_ID is URL-encoded, so it is URL-decoded here.
@@ -38,7 +46,7 @@ func invalidParent(name string) error {
 // A leading "/" is stripped for backward compatibility with clients that send
 // "/projects/..." (real Cloud Logging processes such names after removing the
 // leading slash).
-func parseLogName(name string) (scopeParent, logID string, err error) {
+func ParseLogName(name string) (scopeParent, logID string, err error) {
 	trimmed := strings.TrimPrefix(name, "/")
 	parts := strings.Split(trimmed, "/")
 	if len(parts) != 4 || parts[2] != "logs" {
@@ -54,21 +62,21 @@ func parseLogName(name string) (scopeParent, logID string, err error) {
 	return parts[0] + "/" + parts[1], decoded, nil
 }
 
-// canonicalLogName builds the canonical log resource name for a scope parent
+// CanonicalLogName builds the canonical log resource name for a scope parent
 // and a decoded log ID. The LOG_ID is re-encoded so equivalent spellings
 // (for example "%2f" vs "%2F", or a leading slash) collapse to one stored form
 // and appear URL-encoded in ListLogs, matching real Cloud Logging.
-func canonicalLogName(scopeParent, logID string) string {
+func CanonicalLogName(scopeParent, logID string) string {
 	return scopeParent + "/logs/" + url.PathEscape(logID)
 }
 
-// parseScopeParent normalizes a parent resource name used by ListLogs (parent)
+// ParseScopeParent normalizes a parent resource name used by ListLogs (parent)
 // and ListLogEntries (resource_names) to a canonical two-segment scope parent.
 // It accepts a container parent ("projects/p", "organizations/123",
 // "folders/f", "billingAccounts/b"), a full log name (the parent portion is
 // returned), or a bare project ID (legacy "p" -> "projects/p"). Malformed names
 // return an InvalidArgument error.
-func parseScopeParent(name string) (string, error) {
+func ParseScopeParent(name string) (string, error) {
 	trimmed := strings.TrimPrefix(name, "/")
 	parts := strings.Split(trimmed, "/")
 	switch len(parts) {
@@ -83,7 +91,7 @@ func parseScopeParent(name string) (string, error) {
 		}
 		return parts[0] + "/" + parts[1], nil
 	case 4:
-		scopeParent, _, perr := parseLogName(trimmed)
+		scopeParent, _, perr := ParseLogName(trimmed)
 		if perr != nil {
 			return "", perr
 		}

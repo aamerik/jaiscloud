@@ -29,6 +29,46 @@ type Descriptor struct {
 // Type returns the monitored resource type (e.g. "gce_instance").
 func (d Descriptor) Type() string { return d.typ }
 
+// DisplayName returns the descriptor's human-readable display name.
+func (d Descriptor) DisplayName() string { return d.displayName }
+
+// Description returns the descriptor's human-readable description.
+func (d Descriptor) Description() string { return d.description }
+
+// Label is a transport-neutral view of one label descriptor. ValueType is the
+// proto enum name ("STRING", "BOOL", or "INT64"), so a transport can render the
+// label without importing the protobuf label package.
+type Label struct {
+	Key         string
+	ValueType   string
+	Description string
+}
+
+// Labels returns a copy of the descriptor's labels as neutral values.
+func (d Descriptor) Labels() []Label {
+	out := make([]Label, 0, len(d.labels))
+	for _, l := range d.labels {
+		out = append(out, Label{
+			Key:         l.GetKey(),
+			ValueType:   labelValueTypeName(l.GetValueType()),
+			Description: l.GetDescription(),
+		})
+	}
+	return out
+}
+
+// labelValueTypeName maps a label descriptor value type to its proto enum name.
+func labelValueTypeName(v labelpb.LabelDescriptor_ValueType) string {
+	switch v {
+	case labelpb.LabelDescriptor_BOOL:
+		return "BOOL"
+	case labelpb.LabelDescriptor_INT64:
+		return "INT64"
+	default:
+		return "STRING"
+	}
+}
+
 func strLabel(key, description string) *labelpb.LabelDescriptor {
 	return &labelpb.LabelDescriptor{
 		Key:         key,

@@ -8,6 +8,7 @@ import (
 
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
+	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 
 	mrpb "google.golang.org/genproto/googleapis/api/monitoredres"
@@ -27,7 +28,7 @@ func loggingTestService(t *testing.T) (loggingpb.LoggingServiceV2Client, func())
 
 func loggingTestServiceWithStore(t *testing.T, store loggingstore.Store) (loggingpb.LoggingServiceV2Client, func()) {
 	t.Helper()
-	svc := NewService(store, "test")
+	svc := NewService(core.NewService(store, "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {

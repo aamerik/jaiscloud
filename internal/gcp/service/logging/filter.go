@@ -23,9 +23,21 @@ var severityNames = map[string]int{
 	"EMERGENCY": 800,
 }
 
-// severityValue resolves a severity operand to its numeric value. It accepts a
+// SeverityName returns the google.logging.type.LogSeverity enum name for a
+// numeric severity value, or "DEFAULT" for an unknown/zero value. The REST
+// transport uses it to render the severity enum as protojson does.
+func SeverityName(v int) string {
+	for n, nv := range severityNames {
+		if nv == v {
+			return n
+		}
+	}
+	return "DEFAULT"
+}
+
+// SeverityValue resolves a severity operand to its numeric value. It accepts a
 // severity name (WARNING) or a bare integer.
-func severityValue(s string) (int, bool) {
+func SeverityValue(s string) (int, bool) {
 	if v, ok := severityNames[strings.ToUpper(s)]; ok {
 		return v, true
 	}
@@ -35,26 +47,26 @@ func severityValue(s string) (int, bool) {
 	return 0, false
 }
 
-// filterExpr is a compiled filter predicate over a stored log entry.
-type filterExpr interface {
-	match(e loggingstore.LogEntry) bool
+// Predicate matches a stored log entry against a compiled filter.
+type Predicate interface {
+	Match(e loggingstore.LogEntry) bool
 }
 
 type matchAll struct{}
 
-func (matchAll) match(loggingstore.LogEntry) bool { return true }
+func (matchAll) Match(loggingstore.LogEntry) bool { return true }
 
-type andExpr struct{ l, r filterExpr }
+type andExpr struct{ l, r Predicate }
 
-func (a *andExpr) match(e loggingstore.LogEntry) bool { return a.l.match(e) && a.r.match(e) }
+func (a *andExpr) Match(e loggingstore.LogEntry) bool { return a.l.Match(e) && a.r.Match(e) }
 
-type orExpr struct{ l, r filterExpr }
+type orExpr struct{ l, r Predicate }
 
-func (o *orExpr) match(e loggingstore.LogEntry) bool { return o.l.match(e) || o.r.match(e) }
+func (o *orExpr) Match(e loggingstore.LogEntry) bool { return o.l.Match(e) || o.r.Match(e) }
 
-type notExpr struct{ inner filterExpr }
+type notExpr struct{ inner Predicate }
 
-func (n *notExpr) match(e loggingstore.LogEntry) bool { return !n.inner.match(e) }
+func (n *notExpr) Match(e loggingstore.LogEntry) bool { return !n.inner.Match(e) }
 
 // cmpExpr is a comparison between a supported field and a literal value. The
 // value is kept as a raw token (string/number/ident) and coerced per-field at
@@ -66,7 +78,7 @@ type cmpExpr struct {
 	valueKind string // "string", "number", "ident"
 }
 
-func (c *cmpExpr) match(e loggingstore.LogEntry) bool {
+func (c *cmpExpr) Match(e loggingstore.LogEntry) bool {
 	switch c.field {
 	case "logName", "log_name":
 		switch c.op {
@@ -77,7 +89,7 @@ func (c *cmpExpr) match(e loggingstore.LogEntry) bool {
 		}
 		return false
 	case "severity":
-		rhs, ok := severityValue(c.value)
+		rhs, ok := SeverityValue(c.value)
 		if !ok {
 			return false
 		}
@@ -265,7 +277,7 @@ func (p *filterParser) isKeyword(kw string) bool {
 	return t.kind == "ident" && strings.EqualFold(t.text, kw)
 }
 
-func (p *filterParser) parse() (filterExpr, error) {
+func (p *filterParser) parse() (Predicate, error) {
 	e, err := p.parseAnd()
 	if err != nil {
 		return nil, err
@@ -276,7 +288,7 @@ func (p *filterParser) parse() (filterExpr, error) {
 	return e, nil
 }
 
-func (p *filterParser) parseAnd() (filterExpr, error) {
+func (p *filterParser) parseAnd() (Predicate, error) {
 	l, err := p.parseOr()
 	if err != nil {
 		return nil, err
@@ -292,7 +304,7 @@ func (p *filterParser) parseAnd() (filterExpr, error) {
 	return l, nil
 }
 
-func (p *filterParser) parseOr() (filterExpr, error) {
+func (p *filterParser) parseOr() (Predicate, error) {
 	l, err := p.parseUnary()
 	if err != nil {
 		return nil, err
@@ -308,7 +320,7 @@ func (p *filterParser) parseOr() (filterExpr, error) {
 	return l, nil
 }
 
-func (p *filterParser) parseUnary() (filterExpr, error) {
+func (p *filterParser) parseUnary() (Predicate, error) {
 	if p.isKeyword("NOT") {
 		p.next()
 		inner, err := p.parseUnary()
@@ -320,7 +332,7 @@ func (p *filterParser) parseUnary() (filterExpr, error) {
 	return p.parsePrimary()
 }
 
-func (p *filterParser) parsePrimary() (filterExpr, error) {
+func (p *filterParser) parsePrimary() (Predicate, error) {
 	if p.peek().kind == "(" {
 		p.next()
 		e, err := p.parseAnd()
@@ -348,7 +360,7 @@ func supportedFilterField(field string) bool {
 }
 
 // supportedFilterOp reports whether op is implemented for field by
-// cmpExpr.match. The tokenizer accepts >, <, >=, <=, and : for any field, but
+// cmpExpr.Match. The tokenizer accepts >, <, >=, <=, and : for any field, but
 // only a subset of (field, op) combinations are actually evaluated — without
 // this check, e.g. "logName>\"x\"" or "severity:5" would compile successfully
 // and then silently match zero entries at evaluation time instead of being
@@ -374,7 +386,7 @@ func supportedFilterOp(field, op string) bool {
 	return false
 }
 
-func (p *filterParser) parseComparison() (filterExpr, error) {
+func (p *filterParser) parseComparison() (Predicate, error) {
 	field := p.next()
 	if field.kind != "ident" {
 		return nil, fmt.Errorf("expected field name, got %q", field.text)
@@ -398,10 +410,10 @@ func (p *filterParser) parseComparison() (filterExpr, error) {
 	return &cmpExpr{field: field.text, op: op.text, value: value.text, valueKind: value.kind}, nil
 }
 
-// compileFilter parses a ListLogEntriesRequest filter into a predicate. An
+// CompileFilter parses a ListLogEntriesRequest filter into a predicate. An
 // empty/blank filter matches everything. Unsupported or malformed constructs
 // return an error (faithful InvalidArgument), never a silent match-all.
-func compileFilter(filter string) (filterExpr, error) {
+func CompileFilter(filter string) (Predicate, error) {
 	if strings.TrimSpace(filter) == "" {
 		return matchAll{}, nil
 	}
