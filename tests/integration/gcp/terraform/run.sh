@@ -61,6 +61,25 @@ check() {
   PASS=$((PASS + 1))
 }
 
+# check_post NAME URL SUBSTRING [SUBSTRING...] — POST an empty JSON body (the
+# project IAM read is a POST custom method) and require every substring.
+check_post() {
+  local name="$1" url="$2"
+  shift 2
+  local body want
+  body="$(curl -sf -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' "$url" 2>/dev/null || true)"
+  for want in "$@"; do
+    if [[ "$body" != *"$want"* ]]; then
+      printf '  [FAIL] %s (missing: %s)\n' "$name" "$want"
+      FAIL=$((FAIL + 1))
+      return 0
+    fi
+  done
+  printf '  [PASS] %s\n' "$name"
+  PASS=$((PASS + 1))
+}
+
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
 DESTROYED=0
@@ -85,6 +104,7 @@ SA_EMAIL="$(out service_account_email)"
 SQL_INSTANCE="$(out sql_instance_name)"
 SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
+ENABLED_SERVICE="$(out enabled_service)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -123,6 +143,15 @@ check "Pub/Sub subscription IAM grant" \
 check "Secret Manager IAM accessor grant" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret:getIamPolicy" \
   'roles/secretmanager.secretAccessor'
+check "CRM project lookup reports ACTIVE" \
+  "$ENDPOINT/v1/projects/$PROJECT" '"lifecycleState":"ACTIVE"'
+check_post "Project IAM grant present" \
+  "$ENDPOINT/v1/projects/$PROJECT:getIamPolicy" \
+  'roles/pubsub.publisher' 'jaiscloud-tf-sa@'
+check "Service Usage service enabled" \
+  "$ENDPOINT/v1/projects/$PROJECT/services/$ENABLED_SERVICE" '"state":"ENABLED"'
+check "Service Usage enabled list includes service" \
+  "$ENDPOINT/v1/projects/$PROJECT/services?filter=state:ENABLED" "$ENABLED_SERVICE"
 check "Cloud SQL instance created" \
   "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE" \
   '"kind":"sql#instance"' '"state":"RUNNABLE"'

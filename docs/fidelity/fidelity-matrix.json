@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 497,
+    "total": 506,
     "by_state": {
-      "ga": 353,
+      "ga": 362,
       "limited": 95,
       "preview": 37,
       "unsupported": 12
@@ -14,7 +14,7 @@
         "limited": 8
       },
       "rest": {
-        "ga": 197,
+        "ga": 206,
         "limited": 87,
         "preview": 37,
         "unsupported": 12
@@ -88,9 +88,15 @@
       "pubsub": {
         "ga": 44
       },
+      "resourcemanager": {
+        "ga": 4
+      },
       "secretmanager": {
         "ga": 30,
         "limited": 2
+      },
+      "serviceusage": {
+        "ga": 5
       },
       "storage": {
         "ga": 51,
@@ -4421,6 +4427,47 @@
       ]
     },
     {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
       "service": "secretmanager",
       "operation": "AccessSecretVersion",
       "transport": "grpc",
@@ -4755,6 +4802,59 @@
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesBatchEnable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.batchEnable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesDisable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.disable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesEnable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.enable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.list",
+        "postgres=yes"
       ]
     },
     {

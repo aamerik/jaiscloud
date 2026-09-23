@@ -120,6 +120,15 @@ func detectV1Service(path string) string {
 			break
 		}
 	}
+	// Cloud Resource Manager project surface: when the project segment is the
+	// LAST segment there is no trailing resource type — either the bare project
+	// resource (GET /v1/projects/{project} → projects.get) or a project-segment
+	// custom method (POST /v1/projects/{project}:getIamPolicy|setIamPolicy|
+	// testIamPermissions). This must run before the pi+2 guard below, which
+	// assumes a trailing resource-type segment and would otherwise return "".
+	if pi >= 0 && pi+1 == len(seg)-1 {
+		return "resourcemanager"
+	}
 	if pi < 0 || pi+2 >= len(seg) {
 		return ""
 	}
@@ -132,6 +141,14 @@ func detectV1Service(path string) string {
 		if i := strings.IndexByte(last, ':'); i >= 0 {
 			rest[len(rest)-1] = last[:i]
 		}
+	}
+	// Service Usage v1: /v1/projects/{project}/services[/{service}][:verb]. The
+	// bare "services" resource segment is claimed here before the generic
+	// resource-type switch — and, crucially, before the GCS raw-media fallback,
+	// which would otherwise serve a /v1/projects/... path as a media download
+	// (a GET would be mislogged as service=storage action=ObjectsGetMedia).
+	if len(rest) > 0 && rest[0] == "services" {
+		return "serviceusage"
 	}
 	// Dataproc lives under /v1/projects/{project}/regions/{region}/{clusters|jobs|operations}
 	// — detect it before the generic resource-type switch (its "operations"

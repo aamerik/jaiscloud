@@ -27,7 +27,9 @@ import (
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
+	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
+	serviceusageprovider "jaiscloud/internal/gcp/provider/serviceusage"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
@@ -66,6 +68,8 @@ var providerPrefixes = map[string]string{
 	"Memorystore":       "memorystore",
 	"CloudSQL":          "cloudsql",
 	"Compute":           "compute",
+	"ServiceUsage":      "serviceusage",
+	"ResourceManager":   "resourcemanager",
 }
 
 // providers returns zero-value provider instances. Routes() only builds a map
@@ -91,6 +95,8 @@ func providers() []provider.Provider {
 		&memorystoreprovider.Provider{},
 		&cloudsqlprovider.Provider{},
 		&computeprovider.Provider{},
+		&serviceusageprovider.Provider{},
+		&resourcemanagerprovider.Provider{},
 	}
 }
 

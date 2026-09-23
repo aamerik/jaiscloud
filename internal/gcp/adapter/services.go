@@ -137,6 +137,23 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "Compute",
 		Codec:          func() adapter.Codec { return &ComputeCodec{Service: "compute"} },
 	},
+	{
+		// Service Usage v1 shares the /v1/ prefix and is claimed by segment
+		// detection (detectV1Service) on the "services" resource segment, so it
+		// has no PathPrefixes. See ServiceUsageCodec.
+		ServiceName:    "serviceusage",
+		ProviderPrefix: "ServiceUsage",
+		Codec:          func() adapter.Codec { return &ServiceUsageCodec{Service: "serviceusage"} },
+	},
+	{
+		// Cloud Resource Manager v1 project surface shares /v1/ and is claimed
+		// by segment detection (a project segment that is the last segment, with
+		// or without a ':' custom verb), so it has no PathPrefixes. See
+		// ResourceManagerCodec.
+		ServiceName:    "resourcemanager",
+		ProviderPrefix: "ResourceManager",
+		Codec:          func() adapter.Codec { return &ResourceManagerCodec{Service: "resourcemanager"} },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.

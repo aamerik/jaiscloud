@@ -18,14 +18,14 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud KMS (key ring + crypto key)
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
 - Cloud SQL for PostgreSQL (instance + database + user)
+- Cloud Resource Manager project-level IAM
+  (`/v1/projects/{project}:getIamPolicy`) and project lookup
+- Service Usage (`/v1/projects/{project}/services`)
 
-Deliberately **excluded** because they make `apply` fail (and abort the run):
+Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
 - **Cloud Run v2** — not implemented; declared out of scope for v1.0 in
   `docs/GA.md` §7.
-- **Service Usage** (`/v1/projects/{project}/services`) — not implemented.
-- **Cloud Resource Manager project-level IAM**
-  (`/v1/projects/{project}:getIamPolicy`) — not implemented.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
@@ -74,6 +74,12 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
   `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC)
 - Pub/Sub subscription and Secret Manager IAM grants are present
 - Cloud SQL instance is `RUNNABLE`, database and user exist
+- The CRM project lookup resolves (`lifecycleState: ACTIVE`)
+- The project IAM policy keeps the `google_project_iam_member` grant across
+  the provider's `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC),
+  and project `:getIamPolicy` accepts the provider's POST
+- The `google_project_service` API is `ENABLED` and appears in
+  `GET .../services?filter=state:ENABLED`
 
 ## Provenance
 

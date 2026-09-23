@@ -48,4 +48,10 @@ provider "google" {
   sql_custom_endpoint            = "${var.endpoint}/sql/v1beta4/"
   kms_custom_endpoint            = "${var.endpoint}/v1/"
   pubsub_custom_endpoint         = "${var.endpoint}/v1/"
+
+  # Service Usage + the Cloud Resource Manager v1 project lookup that
+  # google_project_service performs on every read, and project-level IAM for
+  # google_project_iam_member.
+  service_usage_custom_endpoint    = "${var.endpoint}/v1/"
+  resource_manager_custom_endpoint = "${var.endpoint}/v1/"
 }

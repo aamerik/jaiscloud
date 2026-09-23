@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **497**
+Cells: **506**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 353 |
+| ga | 362 |
 | limited | 95 |
 | preview | 37 |
 | unsupported | 12 |
@@ -21,7 +21,7 @@ Cells: **497**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 197 | 87 | 37 | 12 |
+| rest | 206 | 87 | 37 | 12 |
 | grpc | 156 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): datastore, logging, monitoring, operations.
@@ -562,6 +562,17 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 | UpdateSubscription | grpc | ga | — |
 | UpdateTopic | grpc | ga | — |
 
+## resourcemanager
+
+_4 cell(s): ga=4 limited=0 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| ResourceManager.ProjectGet | rest | ga | — |
+| ResourceManager.ProjectGetIamPolicy | rest | ga | — |
+| ResourceManager.ProjectSetIamPolicy | rest | ga | — |
+| ResourceManager.ProjectTestIamPermissions | rest | ga | — |
+
 ## secretmanager
 
 _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
@@ -600,6 +611,18 @@ _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
 | UpdateSecret | grpc | ga | — |
+
+## serviceusage
+
+_5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| ServiceUsage.ServicesBatchEnable | rest | ga | — |
+| ServiceUsage.ServicesDisable | rest | ga | — |
+| ServiceUsage.ServicesEnable | rest | ga | — |
+| ServiceUsage.ServicesGet | rest | ga | — |
+| ServiceUsage.ServicesList | rest | ga | — |
 
 ## storage
 
