@@ -26,7 +26,6 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
-	grpcmonitoring "jaiscloud/internal/gcp/grpc/monitoring"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -56,6 +55,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
+	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -77,8 +77,10 @@ import (
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
+	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
+	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -209,6 +211,12 @@ func startCmd() *cobra.Command {
 			// log store and cannot drift.
 			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID)
 			loggingRestP := restlogging.NewProvider(loggingCore, cfg.ProjectID)
+
+			// Cloud Monitoring's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter (and the background evaluator)
+			// below, so every surface reads and writes one store.
+			monitoringCore := monitoringcore.NewService(stores.monitoring, cfg.ProjectID)
+			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions reuses the Lambda executor: mock echo by default,
 			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The executor (warm
@@ -348,6 +356,7 @@ func startCmd() *cobra.Command {
 				{"resourcemanager", resourcemanagerP},
 				{"datastore", datastoreRestP},
 				{"logging", loggingRestP},
+				{"monitoring", monitoringRestP},
 			} {
 				if serviceEnabled(sp.name) {
 					reg.Register(sp.p)
@@ -363,7 +372,7 @@ func startCmd() *cobra.Command {
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
-			monitoringGRPC := grpcmonitoring.NewService(stores.monitoring, cfg.ProjectID)
+			monitoringGRPC := grpcmonitoring.NewService(monitoringCore, cfg.ProjectID)
 			// The background evaluator evaluates alert-policy condition_threshold
 			// conditions, opens/closes incidents, and publishes notifications to
 			// pubsub notification channels via the emulator's Pub/Sub store.
@@ -618,10 +627,11 @@ func startCmd() *cobra.Command {
 
 			// Background Cloud Monitoring alert-policy evaluator (30s ticker,
 			// matching the AWS CloudWatch alarm evaluator). Stopped cleanly when
-			// the server shuts down. Only relevant when the gRPC Monitoring
-			// surface is exposed (alert policies are managed over gRPC).
+			// the server shuts down. Runs whenever the Monitoring service is
+			// exposed on either transport (REST or gRPC), since alert policies
+			// can be managed over either.
 			evalCtx, evalCancel := context.WithCancel(ctx)
-			if transports.GRPCFor("monitoring") {
+			if serviceEnabled("monitoring") {
 				go monitoringEval.Run(evalCtx)
 			}
 			defer evalCancel()

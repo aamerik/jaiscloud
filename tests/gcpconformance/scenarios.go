@@ -5,6 +5,7 @@ package gcpconformance
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -228,6 +229,47 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logName},
 		Scenario{Service: "logging", Method: "POST", Path: "/v2/entries:list",
 			Body: fmt.Sprintf(`{"resourceNames":["projects/%s"],"filter":"%s"}`, p, logFilter)},
+	)
+
+	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
+	mType := "conf.metric_" + suffix
+	tsType := "conf.ts_" + suffix
+	tsFilter := url.QueryEscape(`metric.type="` + tsType + `"`)
+	monBase := "/v3/projects/" + p
+	sc = append(sc,
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/metricDescriptors",
+			Body: fmt.Sprintf(`{"type":%q,"metricKind":"GAUGE","valueType":"INT64","description":"conformance","displayName":"Conf Metric","labels":[{"key":"env","valueType":"STRING","description":"environment"}]}`, mType)},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/metricDescriptors"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/metricDescriptors/" + mType},
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/timeSeries",
+			Body: fmt.Sprintf(`{"timeSeries":[{"metric":{"type":%q,"labels":{"k":"v"}},"resource":{"type":"global"},"metricKind":"GAUGE","valueType":"DOUBLE","points":[{"interval":{"endTime":"2026-01-01T00:00:00Z"},"value":{"doubleValue":1.5}}]}]}`, tsType)},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/timeSeries?filter=" + tsFilter},
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/timeSeries:createService",
+			Body: fmt.Sprintf(`{"timeSeries":[{"metric":{"type":%q},"resource":{"type":"global"},"metricKind":"GAUGE","valueType":"DOUBLE","points":[{"interval":{"endTime":"2026-01-01T00:00:00Z"},"value":{"doubleValue":2.5}}]}]}`, tsType)},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/monitoredResourceDescriptors"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/monitoredResourceDescriptors/gce_instance"},
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/alertPolicies",
+			Body: fmt.Sprintf(`{"displayName":"Conf Policy %s","combiner":"OR","conditions":[{"displayName":"cond","conditionThreshold":{"filter":%q,"comparison":"COMPARISON_GT","thresholdValue":1,"duration":"60s","trigger":{"count":1}}}]}`, suffix, `metric.type="`+tsType+`"`),
+			Save: map[string]string{"policyName": "name"}},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v3/${policyName}"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/alertPolicies"},
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v3/${policyName}?updateMask=displayName",
+			Body: `{"displayName":"Updated Conf Policy"}`},
+		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/notificationChannels",
+			Body: fmt.Sprintf(`{"type":"email","displayName":"Conf Channel %s","labels":{"email_address":"conf@example.com"}}`, suffix),
+			Save: map[string]string{"channelName": "name"}},
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v3/${channelName}"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/notificationChannels"},
+		Scenario{Service: "monitoring", Method: "POST", Path: "/v3/${channelName}:sendVerificationCode"},
+		Scenario{Service: "monitoring", Method: "POST", Path: "/v3/${channelName}:getVerificationCode"},
+		Scenario{Service: "monitoring", Method: "POST", Path: "/v3/${channelName}:verify"},
+		Scenario{Service: "monitoring", Method: "PATCH", Path: "/v3/${channelName}?updateMask=description",
+			Body: `{"description":"updated description"}`},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/notificationChannelDescriptors"},
+		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/notificationChannelDescriptors/email"},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: "/v3/${channelName}"},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: "/v3/${policyName}"},
+		Scenario{Service: "monitoring", Method: "DELETE", Path: monBase + "/metricDescriptors/" + mType},
 	)
 
 	return sc

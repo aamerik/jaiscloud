@@ -35,6 +35,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
+	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 )
 
 // Operation is one entry in the emulator's dispatch registry, keyed by
@@ -74,6 +75,7 @@ var providerPrefixes = map[string]string{
 	"ResourceManager":   "resourcemanager",
 	"Datastore":         "datastore",
 	"Logging":           "logging",
+	"Monitoring":        "monitoring",
 }
 
 // providers returns zero-value provider instances. Routes() only builds a map
@@ -103,6 +105,7 @@ func providers() []provider.Provider {
 		&resourcemanagerprovider.Provider{},
 		&restdatastore.Provider{},
 		&restlogging.Provider{},
+		&restmonitoring.Provider{},
 	}
 }
 

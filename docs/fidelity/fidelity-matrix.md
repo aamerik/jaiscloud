@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **519**
+Cells: **543**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 375 |
+| ga | 399 |
 | limited | 95 |
 | preview | 37 |
 | unsupported | 12 |
@@ -21,10 +21,10 @@ Cells: **519**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 219 | 87 | 37 | 12 |
+| rest | 243 | 87 | 37 | 12 |
 | grpc | 156 | 8 | 0 | 0 |
 
-gRPC-only services (no REST transport): monitoring, operations.
+gRPC-only services (no REST transport): operations.
 
 ## bigquery
 
@@ -483,7 +483,7 @@ _19 cell(s): ga=14 limited=0 preview=0 unsupported=5_
 
 ## monitoring
 
-_24 cell(s): ga=24 limited=0 preview=0 unsupported=0_
+_48 cell(s): ga=48 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -507,6 +507,30 @@ _24 cell(s): ga=24 limited=0 preview=0 unsupported=0_
 | ListNotificationChannelDescriptors | grpc | ga | — |
 | ListNotificationChannels | grpc | ga | — |
 | ListTimeSeries | grpc | ga | — |
+| Monitoring.CreateAlertPolicy | rest | ga | — |
+| Monitoring.CreateMetricDescriptor | rest | ga | — |
+| Monitoring.CreateNotificationChannel | rest | ga | — |
+| Monitoring.CreateServiceTimeSeries | rest | ga | — |
+| Monitoring.CreateTimeSeries | rest | ga | — |
+| Monitoring.DeleteAlertPolicy | rest | ga | — |
+| Monitoring.DeleteMetricDescriptor | rest | ga | — |
+| Monitoring.DeleteNotificationChannel | rest | ga | — |
+| Monitoring.GetAlertPolicy | rest | ga | — |
+| Monitoring.GetMetricDescriptor | rest | ga | — |
+| Monitoring.GetMonitoredResourceDescriptor | rest | ga | — |
+| Monitoring.GetNotificationChannel | rest | ga | — |
+| Monitoring.GetNotificationChannelDescriptor | rest | ga | — |
+| Monitoring.GetNotificationChannelVerificationCode | rest | ga | — |
+| Monitoring.ListAlertPolicies | rest | ga | — |
+| Monitoring.ListMetricDescriptors | rest | ga | — |
+| Monitoring.ListMonitoredResourceDescriptors | rest | ga | — |
+| Monitoring.ListNotificationChannelDescriptors | rest | ga | — |
+| Monitoring.ListNotificationChannels | rest | ga | — |
+| Monitoring.ListTimeSeries | rest | ga | — |
+| Monitoring.SendNotificationChannelVerificationCode | rest | ga | — |
+| Monitoring.UpdateAlertPolicy | rest | ga | — |
+| Monitoring.UpdateNotificationChannel | rest | ga | — |
+| Monitoring.VerifyNotificationChannel | rest | ga | — |
 | SendNotificationChannelVerificationCode | grpc | ga | — |
 | UpdateAlertPolicy | grpc | ga | — |
 | UpdateNotificationChannel | grpc | ga | — |

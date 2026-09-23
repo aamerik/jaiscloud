@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
 
@@ -33,7 +34,7 @@ func testServer(t *testing.T) (monitoringpb.MetricServiceClient, monitoringpb.Al
 
 func testServerWithStore(t *testing.T, store monitoringstore.Store) (monitoringpb.MetricServiceClient, monitoringpb.AlertPolicyServiceClient, func()) {
 	t.Helper()
-	svc := NewService(store, "test")
+	svc := NewService(core.NewService(store, "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -57,7 +58,7 @@ func testServerWithStore(t *testing.T, store monitoringstore.Store) (monitoringp
 func testChannelServer(t *testing.T) (monitoringpb.NotificationChannelServiceClient, func()) {
 	t.Helper()
 	store := monitoringstore.NewMemoryStore()
-	svc := NewService(store, "test")
+	svc := NewService(core.NewService(store, "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {

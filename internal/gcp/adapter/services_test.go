@@ -64,6 +64,32 @@ func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
 	}
 }
 
+// TestDetectServiceMonitoringV3 locks the /v3/ namespace to Cloud Monitoring:
+// every v3 path (metric descriptors, time series, alert policies, notification
+// channels/descriptors, monitored resource descriptors) resolves to
+// "monitoring".
+func TestDetectServiceMonitoringV3(t *testing.T) {
+	paths := []struct{ method, path string }{
+		{http.MethodGet, "/v3/projects/p/metricDescriptors"},
+		{http.MethodGet, "/v3/projects/p/metricDescriptors/custom.googleapis.com/foo"},
+		{http.MethodDelete, "/v3/projects/p/metricDescriptors/custom.googleapis.com/foo"},
+		{http.MethodPost, "/v3/projects/p/timeSeries"},
+		{http.MethodPost, "/v3/projects/p/timeSeries:createService"},
+		{http.MethodGet, "/v3/projects/p/alertPolicies"},
+		{http.MethodPatch, "/v3/projects/p/alertPolicies/abc"},
+		{http.MethodGet, "/v3/projects/p/notificationChannels"},
+		{http.MethodPost, "/v3/projects/p/notificationChannels/abc:verify"},
+		{http.MethodGet, "/v3/projects/p/notificationChannelDescriptors"},
+		{http.MethodGet, "/v3/projects/p/monitoredResourceDescriptors"},
+	}
+	for _, tc := range paths {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != "monitoring" {
+			t.Errorf("%s %s detected as %q, want monitoring", tc.method, tc.path, svc)
+		}
+	}
+}
+
 // TestKnownServiceNamesIncludesGRPConly guards the transport-selection set: the
 // gRPC-only services must be present, otherwise a default "grpc" selection
 // would silently disable their gRPC surface.

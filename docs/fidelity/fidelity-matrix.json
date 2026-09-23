@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 519,
+    "total": 543,
     "by_state": {
-      "ga": 375,
+      "ga": 399,
       "limited": 95,
       "preview": 37,
       "unsupported": 12
@@ -14,7 +14,7 @@
         "limited": 8
       },
       "rest": {
-        "ga": 219,
+        "ga": 243,
         "limited": 87,
         "preview": 37,
         "unsupported": 12
@@ -80,7 +80,7 @@
         "unsupported": 5
       },
       "monitoring": {
-        "ga": 24
+        "ga": 48
       },
       "operations": {
         "ga": 5
@@ -110,7 +110,6 @@
       }
     },
     "grpc_only_services": [
-      "monitoring",
       "operations"
     ]
   },
@@ -4001,6 +4000,256 @@
       "evidence": [
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateAlertPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.alertPolicies.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateMetricDescriptor",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.metricDescriptors.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateNotificationChannel",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateServiceTimeSeries",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.timeSeries.createService",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateTimeSeries",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.timeSeries.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteAlertPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.alertPolicies.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteMetricDescriptor",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.metricDescriptors.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteNotificationChannel",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetAlertPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.alertPolicies.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetMetricDescriptor",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.metricDescriptors.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetMonitoredResourceDescriptor",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.monitoredResourceDescriptors.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetNotificationChannel",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetNotificationChannelDescriptor",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannelDescriptors.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetNotificationChannelVerificationCode",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.getVerificationCode",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListAlertPolicies",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.alertPolicies.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListMetricDescriptors",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.metricDescriptors.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListMonitoredResourceDescriptors",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.monitoredResourceDescriptors.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListNotificationChannelDescriptors",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannelDescriptors.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListNotificationChannels",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListTimeSeries",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.folders.timeSeries.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.SendNotificationChannelVerificationCode",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.sendVerificationCode",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.UpdateAlertPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.alertPolicies.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.UpdateNotificationChannel",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.VerifyNotificationChannel",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.projects.notificationChannels.verify",
+        "postgres=yes"
       ]
     },
     {
