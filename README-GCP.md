@@ -18,6 +18,8 @@
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation |
 | Cloud IAM | REST | Service accounts, service account keys |
+| Service Usage | REST | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
+| Cloud Resource Manager | REST | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, structured/aggregation/partition queries, composite indexes, `BatchWrite`/`Write`/`Listen` streaming, pipelines (read-only subset) |
 | Cloud Datastore mode | gRPC | Entities, queries, ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1) | REST | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |

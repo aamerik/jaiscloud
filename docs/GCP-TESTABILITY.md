@@ -68,14 +68,14 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 497 | 353 | 95 | 37 | 12 | 71% |
+| **Overall** | 506 | 362 | 95 | 37 | 12 | 72% |
 | **gRPC** (official clients) | 164 | 156 | 8 | 0 | 0 | 95% |
-| **REST** (Discovery-backed) | 333 | 197 | 87 | 37 | 12 | 59% |
+| **REST** (Discovery-backed) | 342 | 206 | 87 | 37 | 12 | 60% |
 
 - gRPC-only services (no REST transport): **Datastore, Cloud Logging, Cloud Monitoring,
   Operations (long-running)**.
-- gRPC split = 156 `ga` + 8 `limited` = 164. REST split = 197 + 87 + 37 + 12 = 333.
-  Overall = 164 + 333 = 497.
+- gRPC split = 156 `ga` + 8 `limited` = 164. REST split = 206 + 87 + 37 + 12 = 342.
+  Overall = 164 + 342 = 506.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -106,6 +106,8 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `metastore` | rest | 14/19 | 🟢 | Shape only | Shape only | Control plane only; no Hive Thrift table plane. Metadata import/export, restore, query and relocation are unsupported stubs. |
 | `dataproc` | rest | 14/15 | 🟢 | Shape only | Shape only | REST metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub. |
+| `serviceusage` | rest | 5/5 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. |
+| `resourcemanager` | rest | 4/4 | 🟢 | Shape only | Shape only | Project lookup + project IAM (etag OCC); authz not enforced. |
 | `workflows` | rest | 6/6 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. |
 | `workflowexecutions` | rest | 4/4 | 🟢 | Shape only | Shape only | Executions are synchronous. |
 | `functions` | rest | 14/17 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call; v2 deploy unsupported. |
@@ -116,9 +118,10 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `bigquery` | rest | 0/23 | 🔴 | None | No | No SQL engine; `jobs.query` evaluates nothing. |
 | `iceberg` | rest | 0/14 | 🔴 | None | No | BigLake Iceberg REST catalog; `preview`. |
 
-Tier groups: **Green (16)** `dataproc`, `datastore`, `eventarc`, `firestore`, `iam`,
+Tier groups: **Green (18)** `dataproc`, `datastore`, `eventarc`, `firestore`, `iam`,
 `kms`, `logging`, `managedkafka`, `metastore`, `monitoring`, `operations`, `pubsub`,
-`secretmanager`, `storage`, `workflowexecutions`, `workflows`. **Yellow (5)** `clouddns`,
+`resourcemanager`, `secretmanager`, `serviceusage`, `storage`, `workflowexecutions`,
+`workflows`. **Yellow (5)** `clouddns`,
 `cloudsql`, `compute`, `functions`, `memorystore`. **Red (2)** `bigquery`, `iceberg`.
 
 ---
@@ -131,7 +134,7 @@ behind a wire-conformant API.
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |
-| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `eventarc` (no delivery engine), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no v2 deploy) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
+| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (no delivery engine), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no v2 deploy) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
 | **Metadata only** | `compute`, `cloudsql`, `clouddns`, `memorystore` | Resource records + `get`/`list`; nothing actually runs. |
 | **None (preview)** | `bigquery` (no SQL engine), `iceberg` | Nothing local counts as evidence. |
 
