@@ -624,6 +624,40 @@ func TestKMSKeyRingIamPolicy(t *testing.T) {
 	}
 }
 
+// TestKMSVersionIamRejected pins that IAM is scoped to key rings and crypto
+// keys only: real KMS has no version-level IAM, so a cryptoKeyVersions resource
+// must be rejected rather than accepted (the pre-removal emulator served it).
+func TestKMSVersionIamRejected(t *testing.T) {
+	client, iam, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{Parent: keyRing, CryptoKeyId: "sym"}); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	verName := symKey + "/cryptoKeyVersions/1"
+
+	if _, err := iam.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: verName}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("GetIamPolicy(version) err = %v, want InvalidArgument", err)
+	}
+	if _, err := iam.SetIamPolicy(ctx, &iampb.SetIamPolicyRequest{
+		Resource: verName,
+		Policy:   &iampb.Policy{Bindings: []*iampb.Binding{{Role: "roles/viewer", Members: []string{"allUsers"}}}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SetIamPolicy(version) err = %v, want InvalidArgument", err)
+	}
+	if _, err := iam.TestIamPermissions(ctx, &iampb.TestIamPermissionsRequest{
+		Resource: verName, Permissions: []string{"cloudkms.cryptoKeyVersions.get"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("TestIamPermissions(version) err = %v, want InvalidArgument", err)
+	}
+
+	// The crypto key itself still supports IAM.
+	if _, err := iam.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: symKey}); err != nil {
+		t.Fatalf("GetIamPolicy(cryptoKey): %v", err)
+	}
+}
+
 func TestKMSGenerateRandomBytes(t *testing.T) {
 	client, _, cleanup := kmsTestService(t)
 	defer cleanup()

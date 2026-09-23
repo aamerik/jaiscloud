@@ -374,3 +374,70 @@ func TestPrimaryVersionTimes(t *testing.T) {
 	first, _ := items[0].(map[string]any)
 	assertTimes("list", first)
 }
+
+// TestCryptoKeyVersionUpdate pins cryptoKeyVersions.patch as the real KMS way
+// to change a version's state (there is no :disable/:enable custom method), and
+// that version-level IAM is rejected (real KMS scopes IAM to key rings/keys).
+func TestCryptoKeyVersionUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr", "cryptoKeyId": "k",
+		"body": map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+	verName := "locations/global/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/1"
+
+	// cryptoKeyVersions.patch to DISABLED (update mask names state).
+	resp, err := p.CryptoKeyVersionUpdate(ctx, newNR(map[string]any{
+		"name": verName, "updateMask": "state",
+		"body": map[string]any{"state": "DISABLED"},
+	}))
+	if err != nil {
+		t.Fatalf("update to DISABLED: %v", err)
+	}
+	if got, _ := resp.Data["state"].(string); got != "DISABLED" {
+		t.Fatalf("state = %q, want DISABLED", got)
+	}
+	if got, _ := resp.Data["name"].(string); got != "projects/proj/locations/global/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/1" {
+		t.Fatalf("name = %q, want full version resource name", got)
+	}
+
+	// Back to ENABLED with no update mask.
+	resp, err = p.CryptoKeyVersionUpdate(ctx, newNR(map[string]any{
+		"name": verName, "body": map[string]any{"state": "ENABLED"},
+	}))
+	if err != nil {
+		t.Fatalf("update to ENABLED: %v", err)
+	}
+	if got, _ := resp.Data["state"].(string); got != "ENABLED" {
+		t.Fatalf("state = %q, want ENABLED", got)
+	}
+
+	// Unsupported mask, unsupported state, and a missing state are all 400.
+	if _, err := p.CryptoKeyVersionUpdate(ctx, newNR(map[string]any{
+		"name": verName, "updateMask": "algorithm", "body": map[string]any{"state": "DISABLED"},
+	})); errStatus(err) != 400 {
+		t.Fatalf("bad mask: status = %d (%v), want 400", errStatus(err), err)
+	}
+	if _, err := p.CryptoKeyVersionUpdate(ctx, newNR(map[string]any{
+		"name": verName, "body": map[string]any{"state": "DESTROYED"},
+	})); errStatus(err) != 400 {
+		t.Fatalf("bad state: status = %d (%v), want 400", errStatus(err), err)
+	}
+	if _, err := p.CryptoKeyVersionUpdate(ctx, newNR(map[string]any{
+		"name": verName, "body": map[string]any{},
+	})); errStatus(err) != 400 {
+		t.Fatalf("missing state: status = %d (%v), want 400", errStatus(err), err)
+	}
+
+	// Version-level IAM is not a real KMS resource.
+	if _, err := p.GetIamPolicy(ctx, newNR(map[string]any{"name": verName})); errStatus(err) != 400 {
+		t.Fatalf("version getIamPolicy: status = %d (%v), want 400", errStatus(err), err)
+	}
+}

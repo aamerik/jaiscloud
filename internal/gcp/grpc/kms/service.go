@@ -36,12 +36,11 @@ import (
 )
 
 // Resource-type strings for KMS IAM policies stored in the shared resource
-// store. These mirror the Pub/Sub / Secret Manager policy types; KMS has no
-// REST IAM provider, so these types are gRPC-only.
+// store. These mirror the Pub/Sub / Secret Manager policy types. IAM is scoped
+// to key rings and crypto keys only — real KMS has no version-level IAM.
 const (
 	rtKeyRingPolicy   = "gcp_keyring_policy"
 	rtCryptoKeyPolicy = "gcp_cryptokey_policy"
-	rtVersionPolicy   = "gcp_cryptokeyversion_policy"
 
 	// rtRetiredResource / rtImportJob live in the shared resource store (not the
 	// kmsstore) so their lifecycle persists identically in memory and postgres
@@ -1211,7 +1210,7 @@ func importMethodToProto(s string) kmspb.ImportJob_ImportMethod {
 	return kmspb.ImportJob_IMPORT_METHOD_UNSPECIFIED
 }
 
-// ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys/versions) ────────────────
+// ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys) ─────────────────────────
 
 // Owns reports whether the KMS service handles IAM for this resource name.
 func (s *Service) Owns(resource string) bool {
@@ -1219,18 +1218,16 @@ func (s *Service) Owns(resource string) bool {
 	return ok
 }
 
-// parseIamResource resolves a keyring/crypto-key/version IAM resource name to
-// its policy resource type + id (location-qualified so IDs stay unique within a
-// project).
+// parseIamResource resolves a keyring/crypto-key IAM resource name to its
+// policy resource type + id (location-qualified so IDs stay unique within a
+// project). Version names are not IAM resources (real KMS has no version-level
+// IAM), so they resolve to ok=false.
 func (s *Service) parseIamResource(resource string) (project, policyType, id string, ok bool) {
 	if p, l, kr, ok := splitKeyRingName(resource); ok {
 		return p, rtKeyRingPolicy, l + "/" + kr, true
 	}
 	if p, l, kr, k, ok := splitCryptoKeyName(resource); ok {
 		return p, rtCryptoKeyPolicy, l + "/" + kr + "/" + k, true
-	}
-	if p, l, kr, k, v, ok := splitVersionName(resource); ok {
-		return p, rtVersionPolicy, l + "/" + kr + "/" + k + "/" + v, true
 	}
 	return "", "", "", false
 }
@@ -1250,15 +1247,6 @@ func (s *Service) requireIamResource(ctx context.Context, resource string) error
 		if _, err := s.keys.GetCryptoKey(ctx, p, l, kr, k); err != nil {
 			if errors.Is(err, kmsstore.ErrNoSuchCryptoKey) {
 				return model.NewProviderError("NotFound", "crypto key not found", 404)
-			}
-			return err
-		}
-		return nil
-	}
-	if p, l, kr, k, v, ok := splitVersionName(resource); ok {
-		if _, err := s.keys.GetVersion(ctx, p, l, kr, k, v); err != nil {
-			if errors.Is(err, kmsstore.ErrNoSuchVersion) {
-				return model.NewProviderError("NotFound", "crypto key version not found", 404)
 			}
 			return err
 		}

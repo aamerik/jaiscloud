@@ -20,11 +20,10 @@ import (
 	"jaiscloud/internal/store"
 )
 
-// Policy resource types for KMS IAM (key rings, crypto keys and their versions).
+// Policy resource types for KMS IAM (key rings and crypto keys).
 const (
 	rtKeyRingPolicy   = "gcp_keyring_policy"
 	rtCryptoKeyPolicy = "gcp_cryptokey_policy"
-	rtVersionPolicy   = "gcp_cryptokeyversion_policy"
 )
 
 // Provider handles Cloud KMS key rings, crypto keys, and crypto-key versions.
@@ -39,35 +38,31 @@ func New(keys kmsstore.Store, resources store.ResourceStore) *Provider {
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"KMS.KeyRingCreate":                      p.KeyRingCreate,
-		"KMS.KeyRingList":                        p.KeyRingList,
-		"KMS.KeyRingGet":                         p.KeyRingGet,
-		"KMS.CryptoKeyCreate":                    p.CryptoKeyCreate,
-		"KMS.CryptoKeyList":                      p.CryptoKeyList,
-		"KMS.CryptoKeyGet":                       p.CryptoKeyGet,
-		"KMS.CryptoKeyEncrypt":                   p.CryptoKeyEncrypt,
-		"KMS.CryptoKeyDecrypt":                   p.CryptoKeyDecrypt,
-		"KMS.CryptoKeyVersionCreate":             p.CryptoKeyVersionCreate,
-		"KMS.CryptoKeyVersionList":               p.CryptoKeyVersionList,
-		"KMS.CryptoKeyVersionGet":                p.CryptoKeyVersionGet,
-		"KMS.CryptoKeyVersionDestroy":            p.CryptoKeyVersionDestroy,
-		"KMS.CryptoKeyVersionDisable":            p.CryptoKeyVersionDisable,
-		"KMS.CryptoKeyVersionEnable":             p.CryptoKeyVersionEnable,
-		"KMS.CryptoKeyUpdatePrimaryVersion":      p.CryptoKeyUpdatePrimaryVersion,
-		"KMS.CryptoKeyVersionAsymmetricSign":     p.CryptoKeyVersionAsymmetricSign,
-		"KMS.CryptoKeyVersionAsymmetricDecrypt":  p.CryptoKeyVersionAsymmetricDecrypt,
-		"KMS.CryptoKeyVersionMacSign":            p.CryptoKeyVersionMacSign,
-		"KMS.CryptoKeyVersionMacVerify":          p.CryptoKeyVersionMacVerify,
-		"KMS.CryptoKeyVersionGetPublicKey":       p.CryptoKeyVersionGetPublicKey,
-		"KMS.KeyRingGetIamPolicy":                p.GetIamPolicy,
-		"KMS.KeyRingSetIamPolicy":                p.SetIamPolicy,
-		"KMS.KeyRingTestIamPermissions":          p.TestIamPermissions,
-		"KMS.CryptoKeyGetIamPolicy":              p.GetIamPolicy,
-		"KMS.CryptoKeySetIamPolicy":              p.SetIamPolicy,
-		"KMS.CryptoKeyTestIamPermissions":        p.TestIamPermissions,
-		"KMS.CryptoKeyVersionGetIamPolicy":       p.GetIamPolicy,
-		"KMS.CryptoKeyVersionSetIamPolicy":       p.SetIamPolicy,
-		"KMS.CryptoKeyVersionTestIamPermissions": p.TestIamPermissions,
+		"KMS.KeyRingCreate":                     p.KeyRingCreate,
+		"KMS.KeyRingList":                       p.KeyRingList,
+		"KMS.KeyRingGet":                        p.KeyRingGet,
+		"KMS.CryptoKeyCreate":                   p.CryptoKeyCreate,
+		"KMS.CryptoKeyList":                     p.CryptoKeyList,
+		"KMS.CryptoKeyGet":                      p.CryptoKeyGet,
+		"KMS.CryptoKeyEncrypt":                  p.CryptoKeyEncrypt,
+		"KMS.CryptoKeyDecrypt":                  p.CryptoKeyDecrypt,
+		"KMS.CryptoKeyVersionCreate":            p.CryptoKeyVersionCreate,
+		"KMS.CryptoKeyVersionList":              p.CryptoKeyVersionList,
+		"KMS.CryptoKeyVersionGet":               p.CryptoKeyVersionGet,
+		"KMS.CryptoKeyVersionUpdate":            p.CryptoKeyVersionUpdate,
+		"KMS.CryptoKeyVersionDestroy":           p.CryptoKeyVersionDestroy,
+		"KMS.CryptoKeyUpdatePrimaryVersion":     p.CryptoKeyUpdatePrimaryVersion,
+		"KMS.CryptoKeyVersionAsymmetricSign":    p.CryptoKeyVersionAsymmetricSign,
+		"KMS.CryptoKeyVersionAsymmetricDecrypt": p.CryptoKeyVersionAsymmetricDecrypt,
+		"KMS.CryptoKeyVersionMacSign":           p.CryptoKeyVersionMacSign,
+		"KMS.CryptoKeyVersionMacVerify":         p.CryptoKeyVersionMacVerify,
+		"KMS.CryptoKeyVersionGetPublicKey":      p.CryptoKeyVersionGetPublicKey,
+		"KMS.KeyRingGetIamPolicy":               p.GetIamPolicy,
+		"KMS.KeyRingSetIamPolicy":               p.SetIamPolicy,
+		"KMS.KeyRingTestIamPermissions":         p.TestIamPermissions,
+		"KMS.CryptoKeyGetIamPolicy":             p.GetIamPolicy,
+		"KMS.CryptoKeySetIamPolicy":             p.SetIamPolicy,
+		"KMS.CryptoKeyTestIamPermissions":       p.TestIamPermissions,
 	}
 }
 
@@ -550,12 +545,38 @@ func (p *Provider) CryptoKeyVersionDestroy(ctx context.Context, nr *model.Normal
 	return p.setVersionState(ctx, nr, "DESTROYED")
 }
 
-func (p *Provider) CryptoKeyVersionDisable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setVersionState(ctx, nr, "DISABLED")
+// CryptoKeyVersionUpdate implements cryptoKeyVersions.patch. Real KMS exposes
+// no :disable/:enable custom methods; a version's state is changed here, and
+// `state` is the only mutable field (ENABLED or DISABLED). The update_mask,
+// when supplied, may name only `state`.
+func (p *Provider) CryptoKeyVersionUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	state, err := versionStateFromPatch(nr)
+	if err != nil {
+		return nil, err
+	}
+	return p.setVersionState(ctx, nr, state)
 }
 
-func (p *Provider) CryptoKeyVersionEnable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setVersionState(ctx, nr, "ENABLED")
+// versionStateFromPatch extracts and validates the `state` field of a
+// cryptoKeyVersions.patch request body, enforcing that updateMask (if present)
+// names only `state` and that the state is one KMS allows updating to.
+func versionStateFromPatch(nr *model.NormalizedRequest) (string, error) {
+	if mask, _ := nr.Params["updateMask"].(string); mask != "" && mask != "state" {
+		return "", model.NewProviderError("InvalidArgument",
+			"unsupported update_mask path "+mask+"; cryptoKeyVersions.patch only supports state", 400)
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	state, _ := body["state"].(string)
+	if state == "" {
+		return "", model.NewProviderError("InvalidArgument", "cryptoKeyVersion.state is required", 400)
+	}
+	switch state {
+	case "ENABLED", "DISABLED":
+		return state, nil
+	default:
+		return "", model.NewProviderError("InvalidArgument",
+			"cryptoKeyVersion.state must be ENABLED or DISABLED, got "+state, 400)
+	}
 }
 
 func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequest, state string) (*model.ProviderResponse, error) {
@@ -818,14 +839,16 @@ func decodeAAD(v any) []byte {
 	return b
 }
 
-// ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys/versions) ────────────────
+// ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys) ─────────────────────────
 
 // parseIamResource splits a relative KMS resource name into its policy resource
-// type and location-qualified id. cryptoKeyVersions is checked before
-// cryptoKeys because parseCryptoKey also matches a version's path segments.
+// type and location-qualified id. Real KMS scopes IAM to key rings and crypto
+// keys (versions have no IAM), so a cryptoKeyVersions name is rejected. It must
+// be tested before cryptoKeys because parseCryptoKey also matches a version's
+// path segments.
 func parseIamResource(name string) (policyType, id string, ok bool) {
-	if loc, kr, key, version := parseVersion(name); loc != "" {
-		return rtVersionPolicy, loc + "/" + kr + "/" + key + "/" + version, true
+	if _, _, _, version := parseVersion(name); version != "" {
+		return "", "", false
 	}
 	if loc, kr, key := parseCryptoKey(name); loc != "" {
 		return rtCryptoKeyPolicy, loc + "/" + kr + "/" + key, true
@@ -838,11 +861,8 @@ func parseIamResource(name string) (policyType, id string, ok bool) {
 
 // requireIamResource verifies the KMS resource backing an IAM request exists.
 func (p *Provider) requireIamResource(ctx context.Context, accountID, name string) error {
-	if loc, kr, key, version := parseVersion(name); loc != "" {
-		if _, err := p.keys.GetVersion(ctx, accountID, loc, kr, key, version); err != nil {
-			return p.versionErr(err)
-		}
-		return nil
+	if _, _, _, version := parseVersion(name); version != "" {
+		return model.NewProviderError("InvalidArgument", "invalid resource name", 400)
 	}
 	if loc, kr, key := parseCryptoKey(name); loc != "" {
 		if _, err := p.keys.GetCryptoKey(ctx, accountID, loc, kr, key); err != nil {

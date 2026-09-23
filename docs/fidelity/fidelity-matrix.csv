@@ -357,16 +357,12 @@ kms,KMS.CryptoKeyVersionAsymmetricDecrypt,rest,ga,
 kms,KMS.CryptoKeyVersionAsymmetricSign,rest,ga,
 kms,KMS.CryptoKeyVersionCreate,rest,ga,
 kms,KMS.CryptoKeyVersionDestroy,rest,ga,
-kms,KMS.CryptoKeyVersionDisable,rest,limited,no matching Discovery method (unverified against the official schema)
-kms,KMS.CryptoKeyVersionEnable,rest,limited,no matching Discovery method (unverified against the official schema)
 kms,KMS.CryptoKeyVersionGet,rest,ga,
-kms,KMS.CryptoKeyVersionGetIamPolicy,rest,limited,no matching Discovery method (unverified against the official schema)
 kms,KMS.CryptoKeyVersionGetPublicKey,rest,ga,
 kms,KMS.CryptoKeyVersionList,rest,ga,
 kms,KMS.CryptoKeyVersionMacSign,rest,ga,
 kms,KMS.CryptoKeyVersionMacVerify,rest,ga,
-kms,KMS.CryptoKeyVersionSetIamPolicy,rest,limited,no matching Discovery method (unverified against the official schema)
-kms,KMS.CryptoKeyVersionTestIamPermissions,rest,limited,no matching Discovery method (unverified against the official schema)
+kms,KMS.CryptoKeyVersionUpdate,rest,ga,
 kms,KMS.KeyRingCreate,rest,ga,
 kms,KMS.KeyRingGet,rest,ga,
 kms,KMS.KeyRingGetIamPolicy,rest,ga,

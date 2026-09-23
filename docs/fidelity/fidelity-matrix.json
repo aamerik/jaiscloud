@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 715,
+    "total": 711,
     "by_state": {
-      "ga": 491,
-      "limited": 106,
+      "ga": 492,
+      "limited": 101,
       "preview": 37,
       "unsupported": 81
     },
@@ -15,8 +15,8 @@
         "unsupported": 72
       },
       "rest": {
-        "ga": 247,
-        "limited": 94,
+        "ga": 248,
+        "limited": 89,
         "preview": 37,
         "unsupported": 9
       }
@@ -67,8 +67,8 @@
         "preview": 14
       },
       "kms": {
-        "ga": 55,
-        "limited": 9
+        "ga": 56,
+        "limited": 4
       },
       "logging": {
         "ga": 10,
@@ -4020,43 +4020,11 @@
     },
     {
       "service": "kms",
-      "operation": "KMS.CryptoKeyVersionDisable",
-      "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
-      "evidence": [
-        "mutating",
-        "postgres=yes"
-      ]
-    },
-    {
-      "service": "kms",
-      "operation": "KMS.CryptoKeyVersionEnable",
-      "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
-      "evidence": [
-        "mutating",
-        "postgres=yes"
-      ]
-    },
-    {
-      "service": "kms",
       "operation": "KMS.CryptoKeyVersionGet",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.get",
-        "postgres=yes"
-      ]
-    },
-    {
-      "service": "kms",
-      "operation": "KMS.CryptoKeyVersionGetIamPolicy",
-      "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
-      "evidence": [
         "postgres=yes"
       ]
     },
@@ -4102,22 +4070,12 @@
     },
     {
       "service": "kms",
-      "operation": "KMS.CryptoKeyVersionSetIamPolicy",
+      "operation": "KMS.CryptoKeyVersionUpdate",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
       "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.patch",
         "mutating",
-        "postgres=yes"
-      ]
-    },
-    {
-      "service": "kms",
-      "operation": "KMS.CryptoKeyVersionTestIamPermissions",
-      "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
-      "evidence": [
         "postgres=yes"
       ]
     },
