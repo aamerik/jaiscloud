@@ -279,6 +279,8 @@ type bucketMeta struct {
 	// SoftDeletePolicy is the bucket's soft-delete config (GCS
 	// Bucket.softDeletePolicy). Nil means the GCS default (7 days) applies.
 	SoftDeletePolicy map[string]any `json:"softDeletePolicy,omitempty"`
+	// Labels is the bucket's user-defined label set (GCS Bucket.labels).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type objectMeta struct {
@@ -612,6 +614,7 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Encryption = bodyMap(body, "encryption")
 	b.Cors = bodySlice(body, "cors")
 	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
+	b.Labels = bodyStringMap(body, "labels")
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
@@ -693,9 +696,20 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		if _, ok := body["softDeletePolicy"]; ok {
 			b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 		}
+		if _, ok := body["labels"]; ok {
+			b.Labels = bodyStringMap(body, "labels")
+		}
 		b.Metageneration = bumpMeta(gcs.BucketMetageneration(meta))
 		b.Updated = clock.Now().Format(time.RFC3339Nano)
-		return bucketToMap(b), nil
+		next := bucketToMap(b)
+		// projectId is store-owned (set by CreateBucket) and not part of
+		// bucketMeta, so re-attach it after round-tripping through the struct —
+		// otherwise the memory ObjectStore's project-scoped ListBuckets stops
+		// returning a bucket once it has been updated.
+		if pid, ok := meta["projectId"]; ok {
+			next["projectId"] = pid
+		}
+		return next, nil
 	})
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
@@ -2221,6 +2235,9 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 		softDelete["effectiveTime"] = b.TimeCreated
 	}
 	out["softDeletePolicy"] = softDelete
+	if b.Labels != nil {
+		out["labels"] = b.Labels
+	}
 	return out
 }
 
@@ -2231,6 +2248,24 @@ func bodyMap(body map[string]any, key string) map[string]any {
 	}
 	m, _ := body[key].(map[string]any)
 	return m
+}
+
+// bodyStringMap returns the named object-valued field from the request body as
+// a string map (GCS labels carry string keys and values), or nil. Non-string
+// values are skipped; a nil/absent field yields nil so callers can distinguish
+// "not supplied" from an explicitly empty map.
+func bodyStringMap(body map[string]any, key string) map[string]string {
+	m := bodyMap(body, key)
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // bodySlice returns the named array-valued field from the request body, or nil.
