@@ -1,6 +1,8 @@
 package gcp
 
 import (
+	"sort"
+
 	"jaiscloud/internal/adapter"
 )
 
@@ -165,4 +167,15 @@ func init() {
 	for _, svc := range gcpServices {
 		serviceProviderMap[svc.ServiceName] = svc.ProviderPrefix
 	}
+}
+
+// ServiceNames returns the sorted wire service names this adapter knows.
+// It is the validation set for per-service transport overrides.
+func ServiceNames() []string {
+	names := make([]string, 0, len(gcpServices))
+	for _, svc := range gcpServices {
+		names = append(names, svc.ServiceName)
+	}
+	sort.Strings(names)
+	return names
 }

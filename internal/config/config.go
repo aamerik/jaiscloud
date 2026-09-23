@@ -72,6 +72,12 @@ type Config struct {
 	// GCPMetadataEnabled turns on the GCP metadata-server emulator at the
 	// gateway (analogue of AWS IMDS). Requires Cloud == "gcp".
 	GCPMetadataEnabled bool
+	// GCPTransports selects the enabled GCP wire transports globally
+	// ("rest,grpc" default; also "rest", "grpc", "both", "none").
+	GCPTransports string
+	// GCPTransportOverrides refines GCPTransports per service, e.g.
+	// "storage=grpc,pubsub=rest,memorystore=none".
+	GCPTransportOverrides string
 
 	// OIDCIssuers maps OIDC issuer URLs to their JWKS endpoint URLs.
 	// Used by AssumeRoleWithWebIdentity to verify JWT signatures.
@@ -184,6 +190,8 @@ func Load(cloud model.Cloud) (*Config, error) {
 		viper.SetDefault("gcp_project_id", "jaiscloud-project")
 		viper.SetDefault("gcp_service_account", "jaiscloud@example.iam.gserviceaccount.com")
 		viper.SetDefault("gcp_metadata_enabled", false)
+		viper.SetDefault("transports", "rest,grpc")
+		viper.SetDefault("transport_overrides", "")
 	}
 
 	viper.SetEnvPrefix("JAISCLOUD")
@@ -248,6 +256,8 @@ func Load(cloud model.Cloud) (*Config, error) {
 		cfg.ProjectID = viper.GetString("gcp_project_id")
 		cfg.GCPServiceAccount = viper.GetString("gcp_service_account")
 		cfg.GCPMetadataEnabled = viper.GetBool("gcp_metadata_enabled")
+		cfg.GCPTransports = viper.GetString("transports")
+		cfg.GCPTransportOverrides = viper.GetString("transport_overrides")
 	}
 
 	if cfg.Ephemeral && cfg.DSN != "" {

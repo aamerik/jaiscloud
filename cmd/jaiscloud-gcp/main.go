@@ -75,6 +75,7 @@ import (
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
@@ -146,6 +147,15 @@ func startCmd() *cobra.Command {
 				cfg.Port = 8080
 			}
 			clock.SetGlobalClock(cfg.Clock)
+
+			// Resolve which wire transports to expose. Only the selected
+			// listeners/routes are started, so a REST-only or gRPC-only user
+			// never runs the other transport's listener.
+			transports, err := transportcfg.Parse(cfg.GCPTransports, cfg.GCPTransportOverrides, gcpadapter.ServiceNames())
+			if err != nil {
+				return err
+			}
+			slog.Info("gcp transports selected", "rest", transports.REST(), "grpc", transports.GRPC(), "selection", transports.String())
 
 			ctx := context.Background()
 
@@ -317,29 +327,35 @@ func startCmd() *cobra.Command {
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(stores.entities, cfg.ProjectID)
-			gserv := grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
-			firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
-			datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
-			pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
-			pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
-			kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
-			loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
-			monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
-			monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
-			monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
-			grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
-			// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
-			// TestIamPermissions) is served by the SecretManagerService itself
-			// (its proto embeds the methods), so it does not re-register the
-			// standalone google.iam.v1.IAMPolicy service that Pub/Sub and KMS own.
-			// Pub/Sub and KMS share the single IAMPolicy service, so their IAM
-			// surfaces are dispatched through one router.
-			secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
-			iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
-			// google.longrunning.Operations is a stub: the emulator completes
-			// operations synchronously, so SDK init paths that poll Operations
-			// observe a terminal (done=true) state instead of erroring.
-			longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New())
+			// The gRPC listener is built and bound only when the gRPC transport
+			// is selected for at least one service; otherwise no :grpc-port
+			// socket is opened.
+			var gserv *grpcserver.Server
+			if transports.GRPC() {
+				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
+				firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+				datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
+				pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
+				pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
+				kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
+				loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
+				monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
+				monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
+				monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
+				grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
+				// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
+				// TestIamPermissions) is served by the SecretManagerService itself
+				// (its proto embeds the methods), so it does not re-register the
+				// standalone google.iam.v1.IAMPolicy service that Pub/Sub and KMS own.
+				// Pub/Sub and KMS share the single IAMPolicy service, so their IAM
+				// surfaces are dispatched through one router.
+				secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
+				iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
+				// google.longrunning.Operations is a stub: the emulator completes
+				// operations synchronously, so SDK init paths that poll Operations
+				// observe a terminal (done=true) state instead of erroring.
+				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New())
+			}
 
 			adminHandler := admin.NewHandler()
 			adminHandler.RegisterResetter(stores.objects)
@@ -448,6 +464,11 @@ func startCmd() *cobra.Command {
 			var gatewayOpts []func(*gateway.Server)
 			gatewayOpts = append(gatewayOpts, gateway.WithBarrier(barrier))
 			gatewayOpts = append(gatewayOpts, gateway.WithGCSCORSLookup(storageP.GetBucketCORSRules))
+			if !transports.REST() {
+				// gRPC-only: keep the always-on admin/health/metrics listener but
+				// do not expose the GCP REST API on it.
+				gatewayOpts = append(gatewayOpts, gateway.WithCloudRoutesDisabled())
+			}
 			if cfg.GCPMetadataEnabled {
 				metaCfg := gcpadapter.MetadataConfig{
 					ProjectID:      cfg.ProjectID,
@@ -528,20 +549,26 @@ func startCmd() *cobra.Command {
 
 			// Background Cloud Monitoring alert-policy evaluator (30s ticker,
 			// matching the AWS CloudWatch alarm evaluator). Stopped cleanly when
-			// the server shuts down.
+			// the server shuts down. Only relevant when the gRPC Monitoring
+			// surface is exposed.
 			evalCtx, evalCancel := context.WithCancel(ctx)
-			go monitoringEval.Run(evalCtx)
+			if transports.GRPC() {
+				go monitoringEval.Run(evalCtx)
+			}
 			defer evalCancel()
 
 			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
 			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.
-			go func() {
-				slog.Info("grpc server starting", "grpc_port", grpcPort)
-				if err := gserv.Serve(); err != nil {
-					slog.Error("grpc server error", "err", err)
-				}
-			}()
-			defer gserv.Stop()
+			// Skipped entirely when the gRPC transport is not selected.
+			if gserv != nil {
+				go func() {
+					slog.Info("grpc server starting", "grpc_port", grpcPort)
+					if err := gserv.Serve(); err != nil {
+						slog.Error("grpc server error", "err", err)
+					}
+				}()
+				defer gserv.Stop()
+			}
 
 			// Serve the Hive Metastore (Thrift) serving plane on its own TCP
 			// listener. Thrift is a binary protocol over raw TCP — it does not
@@ -577,6 +604,8 @@ func startCmd() *cobra.Command {
 	cmd.Flags().String("kms-master-key", "", "32-byte hex KEK for KMS envelope encryption")
 	cmd.Flags().Int("grpc-port", 8081, "gRPC (h2c) listen port")
 	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
+	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
+	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
 	return cmd
 }
 
@@ -595,6 +624,8 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("blob_dir", cmd.Flags().Lookup("blob-dir"))
 	viper.BindPFlag("gcp_metadata_enabled", cmd.Flags().Lookup("gcp-metadata"))
 	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
+	viper.BindPFlag("transports", cmd.Flags().Lookup("transports"))
+	viper.BindPFlag("transport_overrides", cmd.Flags().Lookup("transport-overrides"))
 }
 
 // pubsubNotificationPublisher adapts the emulator's Pub/Sub message store to

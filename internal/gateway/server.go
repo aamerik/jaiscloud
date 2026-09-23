@@ -52,6 +52,10 @@ type Server struct {
 	gcsCorsLookup func(bucket string) []map[string]any
 	// barrier gates cloud requests during import/reset (503 while write-lock held).
 	barrier middleware.BarrierMiddleware
+	// cloudRoutesDisabled suppresses the cloud catch-all route, leaving only the
+	// admin/control plane on this listener. The GCP binary sets it when the REST
+	// transport is disabled (gRPC-only deployment).
+	cloudRoutesDisabled bool
 }
 
 // WithBarrier wires the persistence barrier into the gateway.
@@ -68,6 +72,17 @@ func WithBarrier(b middleware.BarrierMiddleware) func(*Server) {
 func WithExtraRoutes(attach func(chi.Router)) func(*Server) {
 	return func(s *Server) {
 		s.extraRoutes = append(s.extraRoutes, attach)
+	}
+}
+
+// WithCloudRoutesDisabled suppresses the cloud catch-all route so this listener
+// serves only the admin/control plane (/_jaiscloud/*, /metrics). The GCP binary
+// uses it when the REST transport is disabled, so a gRPC-only deployment never
+// exposes the GCP REST API. Default (unset) keeps the cloud routes, so the AWS
+// binary is unaffected.
+func WithCloudRoutesDisabled() func(*Server) {
+	return func(s *Server) {
+		s.cloudRoutesDisabled = true
 	}
 }
 
@@ -159,11 +174,13 @@ func (s *Server) buildRouter() {
 	}
 
 	// Cloud catch-all: wrap with barrier middleware when configured.
-	var cloudHandler http.Handler = http.HandlerFunc(s.handleCloudRequest)
-	if s.barrier != nil {
-		cloudHandler = middleware.Persistence(s.barrier)(cloudHandler)
+	if !s.cloudRoutesDisabled {
+		var cloudHandler http.Handler = http.HandlerFunc(s.handleCloudRequest)
+		if s.barrier != nil {
+			cloudHandler = middleware.Persistence(s.barrier)(cloudHandler)
+		}
+		r.Handle("/*", cloudHandler)
 	}
-	r.Handle("/*", cloudHandler)
 
 	s.router = r
 }
