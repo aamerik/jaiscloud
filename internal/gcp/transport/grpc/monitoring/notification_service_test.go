@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 )
 
@@ -20,7 +21,7 @@ import (
 // an UNVERIFIED channel) that the public API cannot produce.
 func channelServerForStore(t *testing.T, store monitoringstore.Store) (monitoringpb.NotificationChannelServiceClient, func()) {
 	t.Helper()
-	svc := NewService(store, "test")
+	svc := NewService(core.NewService(store, "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {

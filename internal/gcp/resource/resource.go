@@ -263,9 +263,9 @@ var formatters = map[string]func(project, name string) string{
 	"serviceusage-operation": func(_, n string) string {
 		return "operations/" + n
 	},
-	// Cloud Logging (gRPC-only; no REST wire equivalent in this emulator).
+	// Cloud Logging v2 (gRPC and REST).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
-	// Cloud Monitoring (gRPC-only; no REST wire equivalent in this emulator).
+	// Cloud Monitoring v3 (gRPC and REST).
 	"metric-descriptor": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/metricDescriptors/%s", p, n)
 	},

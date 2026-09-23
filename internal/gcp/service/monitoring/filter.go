@@ -29,7 +29,7 @@ func compileTSFilter(s string) (tsFilter, error) {
 		return f, fmt.Errorf("filter must not be empty")
 	}
 	for _, clause := range strings.Split(s, " AND ") {
-		key, val, ok := parseEquality(strings.TrimSpace(clause))
+		key, val, ok := ParseEquality(strings.TrimSpace(clause))
 		if !ok {
 			return f, fmt.Errorf("unsupported filter clause %q", clause)
 		}
@@ -45,8 +45,8 @@ func compileTSFilter(s string) (tsFilter, error) {
 	return f, nil
 }
 
-// parseEquality parses `key = "value"` into key and the unquoted value.
-func parseEquality(clause string) (key, val string, ok bool) {
+// ParseEquality parses `key = "value"` into key and the unquoted value.
+func ParseEquality(clause string) (key, val string, ok bool) {
 	key, rhs, found := strings.Cut(clause, "=")
 	if !found {
 		return "", "", false

@@ -59,6 +59,12 @@ var actionOverrides = map[string]string{
 	"ServiceUsage.ServicesEnable":      "serviceusage.services.enable",
 	"ServiceUsage.ServicesDisable":     "serviceusage.services.disable",
 
+	// Monitoring's custom-verb and verification-code actions do not derive
+	// from the CamelCase heuristic.
+	"Monitoring.CreateServiceTimeSeries":                 "monitoring.projects.timeSeries.createService",
+	"Monitoring.SendNotificationChannelVerificationCode": "monitoring.projects.notificationChannels.sendVerificationCode",
+	"Monitoring.GetNotificationChannelVerificationCode":  "monitoring.projects.notificationChannels.getVerificationCode",
+
 	// Cloud Resource Manager v1 project surface (the discovery document's
 	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
 	// emulator's wire service name "resourcemanager").

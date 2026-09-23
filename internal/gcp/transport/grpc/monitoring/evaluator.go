@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"jaiscloud/internal/clock"
+	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 
 	"github.com/google/uuid"
@@ -430,7 +431,7 @@ type metricFilter struct {
 func compileMetricFilter(s string) metricFilter {
 	f := metricFilter{}
 	for _, clause := range strings.Split(s, " AND ") {
-		key, val, ok := parseEquality(strings.TrimSpace(clause))
+		key, val, ok := core.ParseEquality(strings.TrimSpace(clause))
 		if !ok {
 			continue
 		}
@@ -564,7 +565,7 @@ func (e *Evaluator) deliver(ctx context.Context, project string, p monitoringsto
 	now := clock.Now()
 	out := make([]monitoringstore.IncidentNotification, 0, len(p.NotificationChannels))
 	for _, name := range p.NotificationChannels {
-		cp, id, ok := splitNotificationChannelName(name)
+		cp, id, ok := core.SplitNotificationChannelName(name)
 		if !ok {
 			out = append(out, monitoringstore.IncidentNotification{ChannelName: name, Status: "skipped", Detail: "invalid channel name", DeliveredAt: now})
 			continue
@@ -630,7 +631,7 @@ func notificationPayload(project string, p monitoringstore.AlertPolicy, inc moni
 			"incident": map[string]any{
 				"incidentId":        inc.ID,
 				"policyId":          p.ID,
-				"policyName":        alertPolicyName(project, p.ID),
+				"policyName":        core.AlertPolicyName(project, p.ID),
 				"policyDisplayName": p.DisplayName,
 				"conditionName":     inc.ConditionName,
 				"state":             string(inc.State),

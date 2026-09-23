@@ -21,7 +21,6 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
-	grpcmonitoring "jaiscloud/internal/gcp/grpc/monitoring"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -29,6 +28,7 @@ import (
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
+	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 )
 
 // GRPCService is one gRPC service the emulator registers, read back from the

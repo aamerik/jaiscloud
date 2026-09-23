@@ -1,0 +1,366 @@
+package monitoring
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+
+	core "jaiscloud/internal/gcp/service/monitoring"
+	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/model"
+)
+
+func newTestProvider(t *testing.T) (*Codec, *Provider) {
+	t.Helper()
+	return NewCodec(), NewProvider(core.NewService(monitoringstore.NewMemoryStore(), "test"), "test")
+}
+
+// call decodes a synthetic REST request through the codec and dispatches it to
+// the provider, mirroring the gateway's request flow.
+func call(t *testing.T, c *Codec, p *Provider, method, path string, body any) (*model.ProviderResponse, error) {
+	t.Helper()
+	var raw []byte
+	if body != nil {
+		var err error
+		raw, err = json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+	}
+	req, err := http.NewRequest(method, path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	nr, err := c.Decode(req, raw)
+	if err != nil {
+		return nil, err
+	}
+	return p.Routes()["Monitoring."+nr.Action](context.Background(), nr)
+}
+
+func wireData(t *testing.T, resp *model.ProviderResponse) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return m
+}
+
+func TestRESTMetricDescriptorRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+	const mtype = "custom.googleapis.com/conf/foo"
+
+	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/metricDescriptors", map[string]any{
+		"type":        mtype,
+		"metricKind":  "GAUGE",
+		"valueType":   "INT64",
+		"displayName": "Foo",
+		"labels":      []any{map[string]any{"key": "env", "valueType": "STRING", "description": "env"}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	data := wireData(t, created)
+	if data["name"] != "projects/test/metricDescriptors/"+mtype || data["metricKind"] != "GAUGE" || data["valueType"] != "INT64" {
+		t.Fatalf("created = %+v", data)
+	}
+
+	list, err := call(t, c, p, http.MethodGet, "/v3/projects/test/metricDescriptors", nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	descs, _ := wireData(t, list)["metricDescriptors"].([]any)
+	if len(descs) != 1 {
+		t.Fatalf("list = %+v, want 1", wireData(t, list))
+	}
+
+	got, err := call(t, c, p, http.MethodGet, "/v3/projects/test/metricDescriptors/"+mtype, nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if wireData(t, got)["type"] != mtype {
+		t.Fatalf("get = %+v", wireData(t, got))
+	}
+
+	if _, err := call(t, c, p, http.MethodDelete, "/v3/projects/test/metricDescriptors/"+mtype, nil); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ = call(t, c, p, http.MethodGet, "/v3/projects/test/metricDescriptors", nil)
+	if wireData(t, list)["metricDescriptors"] != nil {
+		t.Fatalf("after delete = %+v, want empty", wireData(t, list))
+	}
+}
+
+func TestRESTTimeSeriesRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+	const tstype = "custom.googleapis.com/conf/ts"
+	const distType = "custom.googleapis.com/conf/dist"
+
+	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries", map[string]any{
+		"timeSeries": []any{
+			map[string]any{
+				"metric":     map[string]any{"type": tstype, "labels": map[string]any{"k": "v"}},
+				"resource":   map[string]any{"type": "global"},
+				"metricKind": "GAUGE", "valueType": "DOUBLE",
+				"points": []any{map[string]any{
+					"interval": map[string]any{"endTime": "2026-01-01T00:00:00Z"},
+					"value":    map[string]any{"doubleValue": 1.5},
+				}},
+			},
+			map[string]any{
+				"metric":     map[string]any{"type": distType},
+				"resource":   map[string]any{"type": "global"},
+				"metricKind": "GAUGE", "valueType": "DISTRIBUTION",
+				"points": []any{map[string]any{
+					"interval": map[string]any{"endTime": "2026-01-01T00:00:00Z"},
+					"value": map[string]any{"distributionValue": map[string]any{
+						"count": "2", "mean": 1.5, "bucketCounts": []any{"1", "1"},
+						"bucketOptions": map[string]any{"explicitBuckets": map[string]any{"bounds": []any{1.0}}},
+					}},
+				}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create timeSeries: %v", err)
+	}
+
+	list, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?filter="+`metric.type%3D%22`+tstype+`%22`, nil)
+	if err != nil {
+		t.Fatalf("list timeSeries: %v", err)
+	}
+	series, _ := wireData(t, list)["timeSeries"].([]any)
+	if len(series) != 1 {
+		t.Fatalf("timeSeries = %+v, want 1", wireData(t, list))
+	}
+	s := series[0].(map[string]any)
+	metric := s["metric"].(map[string]any)
+	if metric["type"] != tstype {
+		t.Fatalf("metric = %+v", metric)
+	}
+	points := s["points"].([]any)
+	if len(points) != 1 {
+		t.Fatalf("points = %+v", points)
+	}
+	val := points[0].(map[string]any)["value"].(map[string]any)
+	if val["doubleValue"] != 1.5 {
+		t.Fatalf("value = %+v", val)
+	}
+
+	// createService mirrors create.
+	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries:createService", map[string]any{
+		"timeSeries": []any{map[string]any{
+			"metric":   map[string]any{"type": "custom.googleapis.com/conf/svc"},
+			"resource": map[string]any{"type": "global"},
+			"points":   []any{map[string]any{"interval": map[string]any{"endTime": "2026-01-01T00:00:00Z"}, "value": map[string]any{"int64Value": "42"}}},
+		}},
+	}); err != nil {
+		t.Fatalf("createService: %v", err)
+	}
+}
+
+func TestRESTAlertPolicyRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/alertPolicies", map[string]any{
+		"displayName": "Conf Policy",
+		"combiner":    "OR",
+		"conditions": []any{map[string]any{
+			"displayName": "cond",
+			"conditionThreshold": map[string]any{
+				"filter": `metric.type="custom.googleapis.com/conf/ts"`, "comparison": "COMPARISON_GT",
+				"thresholdValue": 1, "duration": "60s",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create alert policy: %v", err)
+	}
+	data := wireData(t, created)
+	name, _ := data["name"].(string)
+	if name == "" || data["combiner"] != "OR" || data["enabled"] != true {
+		t.Fatalf("created = %+v", data)
+	}
+	conds, _ := data["conditions"].([]any)
+	if len(conds) != 1 {
+		t.Fatalf("conditions = %+v", data["conditions"])
+	}
+
+	got, err := call(t, c, p, http.MethodGet, "/v3/"+name, nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if wireData(t, got)["displayName"] != "Conf Policy" {
+		t.Fatalf("get = %+v", wireData(t, got))
+	}
+
+	patched, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=displayName", map[string]any{
+		"displayName": "Updated Policy",
+	})
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	// The mask preserves the stored combiner/conditions while replacing the name.
+	pd := wireData(t, patched)
+	if pd["displayName"] != "Updated Policy" || pd["combiner"] != "OR" {
+		t.Fatalf("patched = %+v", pd)
+	}
+
+	// A nested camelCase mask path (documentation.content) is accepted and
+	// updates the documentation sub-message.
+	docPatch, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=documentation.content", map[string]any{
+		"documentation": map[string]any{"content": "runbook"},
+	})
+	if err != nil {
+		t.Fatalf("patch documentation.content: %v", err)
+	}
+	doc, _ := wireData(t, docPatch)["documentation"].(map[string]any)
+	if doc["content"] != "runbook" {
+		t.Fatalf("documentation = %+v", doc)
+	}
+
+	list, err := call(t, c, p, http.MethodGet, "/v3/projects/test/alertPolicies", nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if pols, _ := wireData(t, list)["alertPolicies"].([]any); len(pols) != 1 {
+		t.Fatalf("list = %+v", wireData(t, list))
+	}
+
+	if _, err := call(t, c, p, http.MethodDelete, "/v3/"+name, nil); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := call(t, c, p, http.MethodGet, "/v3/"+name, nil); err == nil {
+		t.Fatal("get after delete should be NotFound")
+	}
+}
+
+func TestRESTNotificationChannelRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/notificationChannels", map[string]any{
+		"type":        "email",
+		"displayName": "Conf Channel",
+		"labels":      map[string]any{"email_address": "conf@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	data := wireData(t, created)
+	name, _ := data["name"].(string)
+	if name == "" || data["type"] != "email" || data["enabled"] != true {
+		t.Fatalf("created = %+v", data)
+	}
+
+	if _, err := call(t, c, p, http.MethodPost, "/v3/"+name+":sendVerificationCode", nil); err != nil {
+		t.Fatalf("sendVerificationCode: %v", err)
+	}
+	codeResp, err := call(t, c, p, http.MethodPost, "/v3/"+name+":getVerificationCode", nil)
+	if err != nil {
+		t.Fatalf("getVerificationCode: %v", err)
+	}
+	if wireData(t, codeResp)["code"] == "" {
+		t.Fatalf("verification code = %+v", wireData(t, codeResp))
+	}
+	// A supplied expireTime is echoed back (not the default now+1h).
+	exp, err := call(t, c, p, http.MethodPost, "/v3/"+name+":getVerificationCode", map[string]any{
+		"expireTime": "2030-01-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("getVerificationCode(expire): %v", err)
+	}
+	if wireData(t, exp)["expireTime"] != "2030-01-01T00:00:00Z" {
+		t.Fatalf("expireTime = %+v, want 2030-01-01T00:00:00Z", wireData(t, exp)["expireTime"])
+	}
+	verified, err := call(t, c, p, http.MethodPost, "/v3/"+name+":verify", nil)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if wireData(t, verified)["verificationStatus"] != "VERIFIED" {
+		t.Fatalf("verify = %+v", wireData(t, verified))
+	}
+
+	patched, err := call(t, c, p, http.MethodPatch, "/v3/"+name+"?updateMask=description", map[string]any{
+		"description": "updated",
+	})
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if wireData(t, patched)["description"] != "updated" {
+		t.Fatalf("patched = %+v", wireData(t, patched))
+	}
+
+	descs, err := call(t, c, p, http.MethodGet, "/v3/projects/test/notificationChannelDescriptors", nil)
+	if err != nil {
+		t.Fatalf("descriptors: %v", err)
+	}
+	if ds, _ := wireData(t, descs)["channelDescriptors"].([]any); len(ds) == 0 {
+		t.Fatalf("descriptors = %+v", wireData(t, descs))
+	}
+	email, err := call(t, c, p, http.MethodGet, "/v3/projects/test/notificationChannelDescriptors/email", nil)
+	if err != nil {
+		t.Fatalf("descriptor get: %v", err)
+	}
+	if wireData(t, email)["type"] != "email" {
+		t.Fatalf("descriptor = %+v", wireData(t, email))
+	}
+
+	if _, err := call(t, c, p, http.MethodDelete, "/v3/"+name, nil); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestRESTMonitoredResourceDescriptors(t *testing.T) {
+	c, p := newTestProvider(t)
+	list, err := call(t, c, p, http.MethodGet, "/v3/projects/test/monitoredResourceDescriptors", nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	descs, _ := wireData(t, list)["resourceDescriptors"].([]any)
+	if len(descs) < 10 {
+		t.Fatalf("descriptors = %d, want >= 10", len(descs))
+	}
+	got, err := call(t, c, p, http.MethodGet, "/v3/projects/test/monitoredResourceDescriptors/gce_instance", nil)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if wireData(t, got)["type"] != "gce_instance" {
+		t.Fatalf("get = %+v", wireData(t, got))
+	}
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/monitoredResourceDescriptors/nope", nil); err == nil {
+		t.Fatal("unknown descriptor should be NotFound")
+	}
+}
+
+func TestRESTErrorsAndCodecRouting(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?filter="+`bad`, nil); err == nil {
+		t.Fatal("invalid time series filter should error")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid filter err = %v", err)
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		wantStatus   int
+	}{
+		{http.MethodGet, "/v3/projects/test/dashboards", 404},
+		{http.MethodGet, "/v3/uptimeCheckIps", 501},
+		{http.MethodGet, "/v3/projects/test/unknownThing", 404},
+		{http.MethodPost, "/v2/entries:list", 404},
+	} {
+		req, _ := http.NewRequest(tc.method, tc.path, nil)
+		_, err := c.Decode(req, nil)
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.HTTPStatus != tc.wantStatus {
+			t.Errorf("%s %s err = %v, want status %d", tc.method, tc.path, err, tc.wantStatus)
+		}
+	}
+}
