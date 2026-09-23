@@ -251,6 +251,18 @@ var formatters = map[string]func(project, name string) string{
 	"compute-global-operation": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/global/operations/%s", p, n)
 	},
+	// Service Usage v1 — a service is "projects/{project}/services/{service}";
+	// the parent is "projects/{project}", and mutations return a globally-named
+	// google.longrunning Operation "operations/{id}".
+	"serviceusage-service": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/services/%s", p, n)
+	},
+	"serviceusage-parent": func(p, _ string) string {
+		return fmt.Sprintf("projects/%s", p)
+	},
+	"serviceusage-operation": func(_, n string) string {
+		return "operations/" + n
+	},
 	// Cloud Logging (gRPC-only; no REST wire equivalent in this emulator).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
 	// Cloud Monitoring (gRPC-only; no REST wire equivalent in this emulator).

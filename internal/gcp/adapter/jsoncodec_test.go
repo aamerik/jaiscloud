@@ -166,7 +166,18 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us-central1/triggers/t":                          "eventarc",
 		"/v1/projects/p/locations/us-central1/channels/c":                          "eventarc",
 		"/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com":     "eventarc",
-		"/storage/v1/b/bkt/o":                                                      "",
+		// Service Usage v1 (services collection + service custom verbs).
+		"/v1/projects/p/services":                            "serviceusage",
+		"/v1/projects/p/services/run.googleapis.com":         "serviceusage",
+		"/v1/projects/p/services:batchEnable":                "serviceusage",
+		"/v1/projects/p/services/run.googleapis.com:enable":  "serviceusage",
+		"/v1/projects/p/services/run.googleapis.com:disable": "serviceusage",
+		// Cloud Resource Manager v1 project surface (project segment is last).
+		"/v1/projects/p":                    "resourcemanager",
+		"/v1/projects/p:getIamPolicy":       "resourcemanager",
+		"/v1/projects/p:setIamPolicy":       "resourcemanager",
+		"/v1/projects/p:testIamPermissions": "resourcemanager",
+		"/storage/v1/b/bkt/o":               "",
 	}
 	for path, want := range cases {
 		if got := detectV1Service(path); got != want {

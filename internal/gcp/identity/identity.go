@@ -31,8 +31,11 @@ const (
 // projectPathRE matches the project segment of GCP resource-name URLs.
 // Handles /v1/projects/{project}/... and /v2/projects/{project}/.... The
 // optional beta suffix covers versioned beta APIs such as Cloud SQL's
-// /sql/v1beta4/projects/{project}/... surface.
-var projectPathRE = regexp.MustCompile(`/v[0-9]+(?:beta[0-9]*)?/projects/([^/]+)`)
+// /sql/v1beta4/projects/{project}/... surface. The project capture excludes
+// ':' so a project-segment custom method (Cloud Resource Manager's
+// /v1/projects/{project}:getIamPolicy) yields the project id rather than
+// "{project}:getIamPolicy".
+var projectPathRE = regexp.MustCompile(`/v[0-9]+(?:beta[0-9]*)?/projects/([^/:]+)`)
 
 // Source describes how the identity was derived.
 type Source uint8

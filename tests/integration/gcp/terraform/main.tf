@@ -1,9 +1,9 @@
 # Resources exercised by the jaiscloud-gcp Terraform / OpenTofu compat suite.
 #
 # Scope: only services jaiscloud-gcp implements. Adding a resource whose service
-# is unimplemented (Cloud Run v2, Service Usage, Cloud Resource Manager project
-# IAM) makes `apply` fail and aborts the whole run — keep this file in sync with
-# the emulator's supported surface. See README.md.
+# is unimplemented (currently Cloud Run v2) makes `apply` fail and aborts the
+# whole run — keep this file in sync with the emulator's supported surface. See
+# README.md.
 
 # ── Cloud Storage ─────────────────────────────────────────────────────────────
 resource "google_storage_bucket" "compat" {
@@ -99,6 +99,27 @@ resource "google_pubsub_subscription_iam_member" "subscriber" {
   member       = "serviceAccount:${google_service_account.compat.email}"
 }
 
+# ── Cloud Resource Manager — project-level IAM ────────────────────────────────
+# Exercises the project getIamPolicy -> merge -> setIamPolicy read-modify-write
+# (fresh-etag OCC) that google_project_iam_member performs.
+resource "google_project_iam_member" "publisher" {
+  project = var.project
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.compat.email}"
+}
+
+# ── Service Usage ─────────────────────────────────────────────────────────────
+# google_project_service enables the API on create (services.enable; the
+# emulator also serves services:batchEnable for multi-service batches) and reads
+# back via the CRM project lookup + services list with filter=state:ENABLED.
+# disable_on_destroy exercises services:disable on destroy.
+resource "google_project_service" "run_api" {
+  project = var.project
+  service = "run.googleapis.com"
+
+  disable_on_destroy = true
+}
+
 # ── Cloud SQL for PostgreSQL ──────────────────────────────────────────────────
 resource "google_sql_database_instance" "compat" {
   name                = "jaiscloud-tf-postgres"
@@ -168,4 +189,8 @@ output "sql_database_name" {
 
 output "sql_user_name" {
   value = google_sql_user.compat.name
+}
+
+output "enabled_service" {
+  value = google_project_service.run_api.service
 }

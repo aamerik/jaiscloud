@@ -41,6 +41,9 @@ func TestProjectFromPath(t *testing.T) {
 		"/v2/projects/another/secrets/s": "another",
 		"/storage/v1/b/bkt/o":            "",
 		"/v1beta/projects/beta/topics/t": "beta",
+		// Project-segment custom method (Cloud Resource Manager): the ':' must
+		// not be captured as part of the project id.
+		"/v1/projects/p:getIamPolicy": "p",
 	}
 	for in, want := range cases {
 		if got := ProjectFromPath(in); got != want {

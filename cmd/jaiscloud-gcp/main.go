@@ -50,7 +50,9 @@ import (
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
+	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
+	serviceusageprovider "jaiscloud/internal/gcp/provider/serviceusage"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
@@ -266,6 +268,13 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
+			// Service Usage v1 is metadata-only over the shared ResourceStore.
+			serviceusageP := serviceusageprovider.New(stores.resources)
+
+			// Cloud Resource Manager v1 project IAM is metadata-only over the
+			// shared ResourceStore (policies via internal/gcp/policy).
+			resourcemanagerP := resourcemanagerprovider.New(stores.resources)
+
 			reg := provider.NewRegistry().
 				Register(storageP).
 				Register(secretP).
@@ -285,7 +294,9 @@ func startCmd() *cobra.Command {
 				Register(clouddnsP).
 				Register(memorystoreP).
 				Register(cloudsqlP).
-				Register(computeP)
+				Register(computeP).
+				Register(serviceusageP).
+				Register(resourcemanagerP)
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set

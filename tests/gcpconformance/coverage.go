@@ -51,6 +51,21 @@ var actionOverrides = map[string]string{
 	"BigQuery.Query":             "bigquery.jobs.query",
 	"BigQuery.GetQueryResults":   "bigquery.jobs.getQueryResults",
 	"BigQuery.GetServiceAccount": "bigquery.projects.getServiceAccount",
+
+	// Service Usage v1 services.* verbs.
+	"ServiceUsage.ServicesList":        "serviceusage.services.list",
+	"ServiceUsage.ServicesGet":         "serviceusage.services.get",
+	"ServiceUsage.ServicesBatchEnable": "serviceusage.services.batchEnable",
+	"ServiceUsage.ServicesEnable":      "serviceusage.services.enable",
+	"ServiceUsage.ServicesDisable":     "serviceusage.services.disable",
+
+	// Cloud Resource Manager v1 project surface (the discovery document's
+	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
+	// emulator's wire service name "resourcemanager").
+	"ResourceManager.ProjectGet":                "cloudresourcemanager.projects.get",
+	"ResourceManager.ProjectGetIamPolicy":       "cloudresourcemanager.projects.getIamPolicy",
+	"ResourceManager.ProjectSetIamPolicy":       "cloudresourcemanager.projects.setIamPolicy",
+	"ResourceManager.ProjectTestIamPermissions": "cloudresourcemanager.projects.testIamPermissions",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within
