@@ -8,10 +8,18 @@ import (
 
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
+	core "jaiscloud/internal/gcp/service/logging"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+// invalidFilterError wraps a CompileFilter parse error as the canonical
+// InvalidArgument the gRPC layer maps to codes.InvalidArgument, matching the
+// core's ListEntries error message.
+func invalidFilterError(err error) error {
+	return model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400)
+}
 
 const (
 	// defaultTailBufferWindow mirrors real Cloud Logging's default buffer_window.
@@ -47,28 +55,11 @@ func tailPollInterval(bw *durationpb.Duration) time.Duration {
 // resolution ListLogEntries uses.
 func (s *Service) tailScope(ctx context.Context, req *loggingpb.TailLogEntriesRequest) string {
 	for _, rn := range req.GetResourceNames() {
-		if scope, err := parseScopeParent(rn); err == nil {
+		if scope, err := core.ParseScopeParent(rn); err == nil {
 			return scope
 		}
 	}
 	return s.defaultScope(ctx)
-}
-
-// latestEntryID returns the highest stored entry id for the project, or -1 when
-// there are no entries. It seeds the tail's "new since stream start" cursor;
-// -1 (not 0) is required because the in-memory store's first entry gets id 0.
-func (s *Service) latestEntryID(ctx context.Context, project string) (int64, error) {
-	entries, err := s.store.List(ctx, project)
-	if err != nil {
-		return -1, err
-	}
-	max := int64(-1)
-	for _, e := range entries {
-		if e.ID > max {
-			max = e.ID
-		}
-	}
-	return max, nil
 }
 
 // TailLogEntries implements a bounded, store-polling approximation of Cloud
@@ -77,7 +68,7 @@ func (s *Service) latestEntryID(ctx context.Context, project string) (int64, err
 // engine ListLogEntries uses. A client may send further requests to change the
 // filter (and project); they are applied to subsequent polls.
 //
-// Approximation (documented in the package doc): real Logging guarantees
+// Approximation (documented in the core package): real Logging guarantees
 // at-least-once delivery with per-response timestamp ordering and uses
 // buffer_window to reorder late arrivals. The emulator instead records the
 // store's monotonic write id at stream start and, on each poll, emits every
@@ -94,14 +85,14 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 		return err
 	}
 
-	pred, err := compileFilter(req.GetFilter())
+	pred, err := core.CompileFilter(req.GetFilter())
 	if err != nil {
-		return mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+err.Error(), 400))
+		return mapError(invalidFilterError(err))
 	}
 
 	ctx := stream.Context()
 	project := s.tailScope(ctx, req)
-	lastID, err := s.latestEntryID(ctx, project)
+	lastID, err := s.core.LatestEntryID(ctx, project)
 	if err != nil {
 		return mapError(err)
 	}
@@ -115,7 +106,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 	// reader goroutine can always deliver one update and exit, even after the
 	// main loop has returned.
 	type tailUpdate struct {
-		pred     filterExpr
+		pred     core.Predicate
 		project  string
 		interval time.Duration
 		err      error
@@ -135,10 +126,10 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 				}
 				return
 			}
-			p, perr := compileFilter(r.GetFilter())
+			p, perr := core.CompileFilter(r.GetFilter())
 			if perr != nil {
 				select {
-				case updates <- tailUpdate{err: mapError(model.NewProviderError("InvalidArgument", "invalid filter: "+perr.Error(), 400))}:
+				case updates <- tailUpdate{err: mapError(invalidFilterError(perr))}:
 				case <-ctx.Done():
 				}
 				return
@@ -171,7 +162,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 			// would replay the new project's pre-existing backlog.
 			if u.project != project {
 				project = u.project
-				lastID, err = s.latestEntryID(ctx, project)
+				lastID, err = s.core.LatestEntryID(ctx, project)
 				if err != nil {
 					return mapError(err)
 				}
@@ -182,7 +173,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 				ticker.Reset(interval)
 			}
 		case <-ticker.C:
-			entries, lerr := s.store.List(ctx, project)
+			entries, lerr := s.core.ListScope(ctx, project)
 			if lerr != nil {
 				return mapError(lerr)
 			}
@@ -195,7 +186,7 @@ func (s *Service) TailLogEntries(stream loggingpb.LoggingServiceV2_TailLogEntrie
 				if e.ID > newLast {
 					newLast = e.ID
 				}
-				if pred.match(e) {
+				if pred.Match(e) {
 					batch = append(batch, entryToProto(e))
 				}
 			}

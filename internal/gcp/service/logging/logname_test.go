@@ -20,13 +20,13 @@ func TestParseLogNameScopes(t *testing.T) {
 		{"/projects/p/logs/leading", "projects/p", "leading"},
 	}
 	for _, tc := range cases {
-		scope, logID, err := parseLogName(tc.name)
+		scope, logID, err := ParseLogName(tc.name)
 		if err != nil {
-			t.Errorf("parseLogName(%q) error = %v", tc.name, err)
+			t.Errorf("ParseLogName(%q) error = %v", tc.name, err)
 			continue
 		}
 		if scope != tc.scope || logID != tc.logID {
-			t.Errorf("parseLogName(%q) = (%q, %q), want (%q, %q)", tc.name, scope, logID, tc.scope, tc.logID)
+			t.Errorf("ParseLogName(%q) = (%q, %q), want (%q, %q)", tc.name, scope, logID, tc.scope, tc.logID)
 		}
 	}
 }
@@ -49,8 +49,8 @@ func TestParseLogNameRejectsMalformed(t *testing.T) {
 		"billingAccounts/1/logs/x/y",
 	}
 	for _, name := range bad {
-		if _, _, err := parseLogName(name); err == nil {
-			t.Errorf("parseLogName(%q) succeeded, want InvalidArgument", name)
+		if _, _, err := ParseLogName(name); err == nil {
+			t.Errorf("ParseLogName(%q) succeeded, want InvalidArgument", name)
 		}
 	}
 }
@@ -64,8 +64,8 @@ func TestCanonicalLogName(t *testing.T) {
 		{"folders/9", "a/b", "folders/9/logs/a%2Fb"},
 	}
 	for _, tc := range cases {
-		if got := canonicalLogName(tc.scope, tc.logID); got != tc.want {
-			t.Errorf("canonicalLogName(%q, %q) = %q, want %q", tc.scope, tc.logID, got, tc.want)
+		if got := CanonicalLogName(tc.scope, tc.logID); got != tc.want {
+			t.Errorf("CanonicalLogName(%q, %q) = %q, want %q", tc.scope, tc.logID, got, tc.want)
 		}
 	}
 }
@@ -81,13 +81,13 @@ func TestParseScopeParent(t *testing.T) {
 		"legacy-bare-project":    "projects/legacy-bare-project",
 	}
 	for in, want := range good {
-		got, err := parseScopeParent(in)
+		got, err := ParseScopeParent(in)
 		if err != nil {
-			t.Errorf("parseScopeParent(%q) error = %v", in, err)
+			t.Errorf("ParseScopeParent(%q) error = %v", in, err)
 			continue
 		}
 		if got != want {
-			t.Errorf("parseScopeParent(%q) = %q, want %q", in, got, want)
+			t.Errorf("ParseScopeParent(%q) = %q, want %q", in, got, want)
 		}
 	}
 
@@ -101,8 +101,8 @@ func TestParseScopeParent(t *testing.T) {
 		"a/b/c",
 	}
 	for _, in := range bad {
-		if _, err := parseScopeParent(in); err == nil {
-			t.Errorf("parseScopeParent(%q) succeeded, want InvalidArgument", in)
+		if _, err := ParseScopeParent(in); err == nil {
+			t.Errorf("ParseScopeParent(%q) succeeded, want InvalidArgument", in)
 		}
 	}
 }

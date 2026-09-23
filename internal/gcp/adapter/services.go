@@ -5,6 +5,7 @@ import (
 
 	"jaiscloud/internal/adapter"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
+	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 )
 
 // ServiceDescriptor captures the per-service metadata needed by the router and
@@ -167,6 +168,17 @@ var gcpServices = []ServiceDescriptor{
 		ProviderPrefix: "Datastore",
 		Codec:          func() adapter.Codec { return restdatastore.NewCodec() },
 	},
+	{
+		// Cloud Logging v2 shares the /v2/ namespace; its REST data methods are
+		// /v2/entries:write, /v2/entries:list, /v2/{parent}/logs,
+		// /v2/{logName}, and /v2/monitoredResourceDescriptors, claimed by
+		// segment detection (detectV2Service), so it has no PathPrefixes. The
+		// codec lives with the REST transport package that adapts it to the
+		// shared core.
+		ServiceName:    "logging",
+		ProviderPrefix: "Logging",
+		Codec:          func() adapter.Codec { return restlogging.NewCodec() },
+	},
 }
 
 // serviceProviderMap maps wire service name → provider registry prefix.
@@ -193,7 +205,7 @@ func ServiceNames() []string {
 
 // grpcOnlyServices are wire services with a gRPC surface but no REST descriptor
 // in gcpServices (the emulator implements them only over gRPC).
-var grpcOnlyServices = []string{"logging", "monitoring"}
+var grpcOnlyServices = []string{"monitoring"}
 
 // KnownServiceNames returns the union of the REST service names and the
 // gRPC-only services. It is the validation/enablement set for transport

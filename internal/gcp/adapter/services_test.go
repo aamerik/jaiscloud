@@ -27,6 +27,43 @@ func TestDetectServiceDatastoreVerbs(t *testing.T) {
 	}
 }
 
+// TestDetectServiceLoggingAndFunctionsV2 locks the /v2/ namespace split: Cloud
+// Logging's entries/logs/descriptors paths resolve to "logging", while Cloud
+// Functions v2's project-location paths still resolve to "functions".
+func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
+	loggingPaths := []struct{ method, path string }{
+		{http.MethodPost, "/v2/entries:write"},
+		{http.MethodPost, "/v2/entries:list"},
+		{http.MethodGet, "/v2/monitoredResourceDescriptors"},
+		{http.MethodGet, "/v2/projects/p/logs"},
+		{http.MethodGet, "/v2/organizations/123/logs"},
+		{http.MethodGet, "/v2/folders/9/logs"},
+		{http.MethodGet, "/v2/billingAccounts/b/logs"},
+		{http.MethodDelete, "/v2/projects/p/logs/mylog"},
+		{http.MethodDelete, "/v2/folders/9/logs/a%2Fb"},
+	}
+	for _, tc := range loggingPaths {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != "logging" {
+			t.Errorf("%s %s detected as %q, want logging", tc.method, tc.path, svc)
+		}
+	}
+
+	functionsPaths := []struct{ method, path string }{
+		{http.MethodGet, "/v2/projects/p/locations"},
+		{http.MethodGet, "/v2/projects/p/locations/us-central1"},
+		{http.MethodGet, "/v2/projects/p/locations/us-central1/functions"},
+		{http.MethodGet, "/v2/projects/p/locations/us-central1/functions/myfn"},
+		{http.MethodGet, "/v2/projects/p/locations/us-central1/operations/op"},
+	}
+	for _, tc := range functionsPaths {
+		r, _ := http.NewRequest(tc.method, tc.path, nil)
+		if svc, _ := DetectService(r); svc != "functions" {
+			t.Errorf("%s %s detected as %q, want functions", tc.method, tc.path, svc)
+		}
+	}
+}
+
 // TestKnownServiceNamesIncludesGRPConly guards the transport-selection set: the
 // gRPC-only services must be present, otherwise a default "grpc" selection
 // would silently disable their gRPC surface.

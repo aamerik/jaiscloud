@@ -3,6 +3,8 @@ package gcp
 import (
 	"net/http"
 	"strings"
+
+	servicelogging "jaiscloud/internal/gcp/service/logging"
 )
 
 // DetectionSource indicates how the service was identified.
@@ -236,21 +238,37 @@ func isDatastoreVerb(seg string) bool {
 	return datastoreVerbs[seg[i+1:]]
 }
 
-// detectV2Service maps a /v2/projects/{project}/locations/{location}/... path
-// to a service name. Cloud Functions v2 is the only emulated service that
-// claims the /v2/projects/{project}/locations/... namespace: BigQuery uses
-// /bigquery/v2/projects/..., and every other location-scoped service uses the
-// shared /v1/ prefix. The functions and operations resource types are
-// unambiguous here, and the version segment means the shared
-// locations/{location}/operations/{id} path no longer collides with Workflows'
-// /v1 LRO surface.
+// detectV2Service maps a /v2/... path to a service name. Cloud Logging v2 and
+// Cloud Functions v2 are the two emulated services that claim the /v2/
+// namespace: Logging owns the entries custom methods
+// (POST /v2/entries:write|:list), the descriptor catalog
+// (/v2/monitoredResourceDescriptors), and the {scope}/{scopeID}/logs family
+// (logs.list / logs.delete); Cloud Functions owns
+// /v2/projects/{project}/locations/... (functions/operations). The two do not
+// collide: Logging's log paths sit directly under a project, while Functions
+// always has a locations segment next.
 func detectV2Service(path string) string {
 	// SDK test clients may yield a leading "//"; collapse it as DetectService does.
 	path = "/" + strings.TrimLeft(path, "/")
-	if !strings.HasPrefix(path, "/v2/projects/") {
+	if !strings.HasPrefix(path, "/v2/") {
 		return ""
 	}
 	seg := splitEscaped(path)
+
+	// Cloud Logging entry custom methods and the global descriptor catalog.
+	if len(seg) >= 2 {
+		if strings.HasPrefix(seg[1], "entries:") || seg[1] == "monitoredResourceDescriptors" {
+			return "logging"
+		}
+	}
+	// Cloud Logging log listing/deletion: /v2/{scope}/{scopeID}/logs[/{logId}].
+	if isLoggingLogsPath(seg) {
+		return "logging"
+	}
+
+	if !strings.HasPrefix(path, "/v2/projects/") {
+		return ""
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {
@@ -283,6 +301,16 @@ func detectV2Service(path string) string {
 		return "functions"
 	}
 	return ""
+}
+
+// isLoggingLogsPath reports whether seg is /v2/{scope}/{scopeID}/logs[/...],
+// where scope is a Cloud Logging resource container (projects, organizations,
+// folders, billingAccounts).
+func isLoggingLogsPath(seg []string) bool {
+	if len(seg) < 4 || !servicelogging.IsLogScope(seg[1]) || seg[2] == "" {
+		return false
+	}
+	return seg[3] == "logs"
 }
 
 // detectDataprocResourceType returns "clusters", "jobs", or "operations" when

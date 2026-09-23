@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **514**
+Cells: **519**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 370 |
+| ga | 375 |
 | limited | 95 |
 | preview | 37 |
 | unsupported | 12 |
@@ -21,10 +21,10 @@ Cells: **514**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 214 | 87 | 37 | 12 |
+| rest | 219 | 87 | 37 | 12 |
 | grpc | 156 | 8 | 0 | 0 |
 
-gRPC-only services (no REST transport): logging, monitoring, operations.
+gRPC-only services (no REST transport): monitoring, operations.
 
 ## bigquery
 
@@ -401,7 +401,7 @@ _64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
 
 ## logging
 
-_6 cell(s): ga=5 limited=1 preview=0 unsupported=0_
+_11 cell(s): ga=10 limited=1 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -409,6 +409,11 @@ _6 cell(s): ga=5 limited=1 preview=0 unsupported=0_
 | ListLogEntries | grpc | ga | — |
 | ListLogs | grpc | ga | — |
 | ListMonitoredResourceDescriptors | grpc | ga | — |
+| Logging.EntryList | rest | ga | — |
+| Logging.EntryWrite | rest | ga | — |
+| Logging.LogDelete | rest | ga | — |
+| Logging.LogList | rest | ga | — |
+| Logging.MonitoredResourceDescriptorList | rest | ga | — |
 | TailLogEntries | grpc | limited | bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists |
 | WriteLogEntries | grpc | ga | — |
 

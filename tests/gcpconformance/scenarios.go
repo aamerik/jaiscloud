@@ -214,6 +214,22 @@ func Scenarios(suffix string) []Scenario {
 			Body: `{"gqlQuery":{"queryString":"SELECT * FROM ConfDsTask"}}`},
 	)
 
+	// ─── Cloud Logging (REST data plane) ──────────────────────────────────────
+	logID := "conf-log-" + suffix
+	logName := "projects/" + p + "/logs/" + logID
+	logFilter := fmt.Sprintf(`logName=\"%s\"`, logName)
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/entries:write",
+			Body: fmt.Sprintf(`{"logName":%q,"resource":{"type":"global"},"labels":{"suite":"conformance"},"entries":[{"severity":"INFO","textPayload":"hello"},{"severity":"ERROR","jsonPayload":{"msg":"boom"}}]}`, logName)},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/entries:list",
+			Body: fmt.Sprintf(`{"resourceNames":["projects/%s"],"filter":"%s"}`, p, logFilter)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/logs"},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/monitoredResourceDescriptors?pageSize=5"},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logName},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/entries:list",
+			Body: fmt.Sprintf(`{"resourceNames":["projects/%s"],"filter":"%s"}`, p, logFilter)},
+	)
+
 	return sc
 }
 
