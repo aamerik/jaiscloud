@@ -37,6 +37,16 @@ GCP_PUSH_FLAGS ?= --tls-verify=false
 #   make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=1000000
 LAKEHOUSE_RECORDS ?= 100
 
+# Spring Cloud GCP sample applications (deploy/k8s/gcp-samples) used by the
+# application-level emulator e2e. The manifest hardcodes
+# <registry>/jaiscloud-sample-<svc>:<tag>; keep GCP_SAMPLES_TAG in sync with it
+# when bumping the upstream release.
+GCP_SAMPLES_REGISTRY ?= $(GCP_REGISTRY)
+GCP_SAMPLES_TAG      ?= 8.2.1
+GCP_SAMPLES_MODULES  := pubsub:spring-cloud-gcp-pubsub-sample \
+                        firestore:spring-cloud-gcp-data-firestore-sample \
+                        datastore:spring-cloud-gcp-data-datastore-basic-sample
+
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
 JAISCLOUD_K8S_APISERVER ?= $(shell kubectl config view --context docker-desktop --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
@@ -72,7 +82,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build build-all docker docker-all test test-aws test-gcp clean \
+.PHONY: lint lint-pagination help build build-all docker docker-all docker-gcp-samples test test-aws test-gcp clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         stop-server up-docker down-docker up-k8s down-k8s \
@@ -85,14 +95,16 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
         test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
         test-e2e-lakehouse-k3d \
+        test-e2e-gcp-samples-k3d \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
-        _check-lakehouse-k3d-prereq _refresh-gcp-image \
+        _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
+        test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
@@ -149,6 +161,19 @@ ifdef REGISTRY
 	docker tag jaiscloud-$*:$(VERSION) $(REGISTRY)/jaiscloud-$*:$(VERSION)
 	docker tag jaiscloud-$*:latest     $(REGISTRY)/jaiscloud-$*:latest
 endif
+
+docker-gcp-samples: ## Build+push the Spring Cloud GCP sample images (pin: GCP_SAMPLES_TAG)
+	@for pair in $(GCP_SAMPLES_MODULES); do \
+	  name=$${pair%%:*}; mod=$${pair#*:}; \
+	  echo "== build jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) ($$mod) =="; \
+	  docker build --build-arg MODULE=$$mod \
+	    -t jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) \
+	    -f deploy/docker/gcp-samples/Dockerfile deploy/docker/gcp-samples || exit 1; \
+	  docker tag jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) \
+	    $(GCP_SAMPLES_REGISTRY)/jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG); \
+	  docker push $(GCP_PUSH_FLAGS) \
+	    $(GCP_SAMPLES_REGISTRY)/jaiscloud-sample-$$name:$(GCP_SAMPLES_TAG) || exit 1; \
+	done
 
 clean: ## Remove compiled binaries
 	rm -f jaiscloud-aws jaiscloud-azure jaiscloud-gcp
@@ -585,6 +610,39 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	  done; echo "  ready (REST :8080)"; \
 	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
 
+# Opt-in Terraform / OpenTofu compatibility suites — drive the real
+# hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).
+# Skipped when the toolchain is absent, so they are safe to invoke unconditionally.
+test-gcp-terraform: ## Opt-in GCP Terraform compat suite (requires terraform; skips if absent)
+	@set -e; \
+	  command -v terraform >/dev/null 2>&1 || { echo "SKIP: terraform not installed"; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-terraform.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-terraform.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN=terraform tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+
+test-gcp-opentofu: ## Opt-in GCP OpenTofu compat suite (requires tofu; skips if absent)
+	@set -e; \
+	  command -v tofu >/dev/null 2>&1 || { echo "SKIP: tofu not installed"; exit 0; }; \
+	  echo "Building jaiscloud-gcp..."; \
+	  go build -o ./jaiscloud-gcp ./cmd/jaiscloud-gcp/; \
+	  echo "Starting jaiscloud-gcp (ephemeral)..."; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-opentofu.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-opentofu.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  TF_BIN=tofu tests/integration/gcp/terraform/run.sh http://localhost:8080 test-project
+
 test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via the official Google clients (tests/gcpconformance/grpc)
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
 	@set -e; \
@@ -678,6 +736,11 @@ test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medall
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) LAKEHOUSE_RECORDS=$(LAKEHOUSE_RECORDS) \
 	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
+
+test-e2e-gcp-samples-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Spring Cloud GCP sample apps e2e on k3d (tag: gcpsamples_e2e; run `make docker-gcp-samples` first; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags gcpsamples_e2e -timeout 15m ./tests/persistent_mode/gcp/gcpsamples/
 
 # Rebuild the emulator image from the working tree and roll the deployment so the
 # pipeline always runs against the code under test, not whatever happens to be in
@@ -773,6 +836,13 @@ _check-iceberg-gcp-prereq:
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
 
 _check-lakehouse-k3d-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+_check-gcp-samples-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
 	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
 	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
