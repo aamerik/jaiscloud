@@ -1,6 +1,8 @@
 package gcp
 
 import (
+	"sort"
+
 	"jaiscloud/internal/adapter"
 )
 
@@ -165,4 +167,28 @@ func init() {
 	for _, svc := range gcpServices {
 		serviceProviderMap[svc.ServiceName] = svc.ProviderPrefix
 	}
+}
+
+// ServiceNames returns the sorted wire service names this adapter knows.
+// It is the validation set for per-service transport overrides.
+func ServiceNames() []string {
+	names := make([]string, 0, len(gcpServices))
+	for _, svc := range gcpServices {
+		names = append(names, svc.ServiceName)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// grpcOnlyServices are wire services with a gRPC surface but no REST descriptor
+// in gcpServices (the emulator implements them only over gRPC).
+var grpcOnlyServices = []string{"datastore", "logging", "monitoring"}
+
+// KnownServiceNames returns the union of the REST service names and the
+// gRPC-only services. It is the validation/enablement set for transport
+// selection, so a global "grpc" default enables the gRPC-only surfaces too.
+func KnownServiceNames() []string {
+	names := append(ServiceNames(), grpcOnlyServices...)
+	sort.Strings(names)
+	return names
 }
