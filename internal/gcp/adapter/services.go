@@ -179,3 +179,16 @@ func ServiceNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// grpcOnlyServices are wire services with a gRPC surface but no REST descriptor
+// in gcpServices (the emulator implements them only over gRPC).
+var grpcOnlyServices = []string{"datastore", "logging", "monitoring"}
+
+// KnownServiceNames returns the union of the REST service names and the
+// gRPC-only services. It is the validation/enablement set for transport
+// selection, so a global "grpc" default enables the gRPC-only surfaces too.
+func KnownServiceNames() []string {
+	names := append(ServiceNames(), grpcOnlyServices...)
+	sort.Strings(names)
+	return names
+}

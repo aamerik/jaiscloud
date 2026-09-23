@@ -151,7 +151,7 @@ func startCmd() *cobra.Command {
 			// Resolve which wire transports to expose. Only the selected
 			// listeners/routes are started, so a REST-only or gRPC-only user
 			// never runs the other transport's listener.
-			transports, err := transportcfg.Parse(cfg.GCPTransports, cfg.GCPTransportOverrides, gcpadapter.ServiceNames())
+			transports, err := transportcfg.Parse(cfg.GCPTransports, cfg.GCPTransportOverrides, gcpadapter.KnownServiceNames())
 			if err != nil {
 				return err
 			}
