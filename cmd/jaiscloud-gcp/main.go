@@ -157,6 +157,13 @@ func startCmd() *cobra.Command {
 			}
 			slog.Info("gcp transports selected", "rest", transports.REST(), "grpc", transports.GRPC(), "selection", transports.String())
 
+			// serviceEnabled reports whether a wire service is exposed on at
+			// least one transport. Disabled services are neither constructed
+			// (for the heavyweight ones) nor registered.
+			serviceEnabled := func(name string) bool {
+				return transports.RESTFor(name) || transports.GRPCFor(name)
+			}
+
 			ctx := context.Background()
 
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
@@ -188,17 +195,22 @@ func startCmd() *cobra.Command {
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Functions reuses the Lambda executor: mock echo by default,
-			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE.
-			lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
-			lambdaCfg := lambdaexec.DefaultLambdaConfig()
-			lambdaCfg.Mode = lambdaMode
-			lambdaCfg.Region = cfg.Region
-			lambdaCfg.InstanceID = instanceID
-			lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
-			lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
-			defer lambdaExec.Close()
-			slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
-			functionsP := functionsprovider.New(stores.functions, stores.resources, lambdaExec)
+			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The executor (warm
+			// container pool / K8s client) is only built when functions is
+			// enabled.
+			var functionsP provider.Provider
+			if serviceEnabled("functions") {
+				lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
+				lambdaCfg := lambdaexec.DefaultLambdaConfig()
+				lambdaCfg.Mode = lambdaMode
+				lambdaCfg.Region = cfg.Region
+				lambdaCfg.InstanceID = instanceID
+				lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
+				defer lambdaExec.Close()
+				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
+				functionsP = functionsprovider.New(stores.functions, stores.resources, lambdaExec)
+			}
 
 			workflowsEngine := workflowengine.New()
 			workflowsP := workflowsprovider.New(stores.workflows)
@@ -206,55 +218,59 @@ func startCmd() *cobra.Command {
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
-			// for Spark is out of scope (Phase A) — mock only.
-			sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
-			if sparkMode == "docker" {
-				slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
-				sparkMode = "mock"
-			}
-			dataprocOpts := []dataprocprovider.Option{
-				dataprocprovider.WithInstanceID(instanceID),
-				dataprocprovider.WithProjectID(cfg.ProjectID),
-			}
-			if cfg.K8sSparkSA != "" {
-				dataprocOpts = append(dataprocOpts, dataprocprovider.WithServiceAccountName(cfg.K8sSparkSA))
-			}
-			if cfg.K8sSparkSubmitPath != "" {
-				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkSubmitPath(cfg.K8sSparkSubmitPath))
-			}
-			gcpEmulatorCfg := &sparkgcp.GCPEmulatorConfig{ProjectID: cfg.ProjectID, Region: "global"}
-			if v := os.Getenv("STORAGE_EMULATOR_HOST"); v != "" {
-				gcpEmulatorCfg.GCSEndpoint = v
-			} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
-				gcpEmulatorCfg.GCSEndpoint = v
-			}
-			dataprocOpts = append(dataprocOpts, dataprocprovider.WithGCPEmulator(gcpEmulatorCfg))
-			if sparkMode == "k8s" {
-				sparkImage := cfg.K8sSparkImage
-				if sparkImage == "" {
-					slog.Error("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required when executor mode is k8s")
-					os.Exit(1)
+			// for Spark is out of scope (Phase A) — mock only. The executor (and
+			// its K8s client) is only built when dataproc is enabled.
+			var dataprocP *dataprocprovider.Provider
+			if serviceEnabled("dataproc") {
+				sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
+				if sparkMode == "docker" {
+					slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
+					sparkMode = "mock"
 				}
-				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
-				k8sNS := cfg.K8sNamespace
-				if k8sNS == "" {
-					k8sNS = "jaiscloud"
+				dataprocOpts := []dataprocprovider.Option{
+					dataprocprovider.WithInstanceID(instanceID),
+					dataprocprovider.WithProjectID(cfg.ProjectID),
 				}
-				platformCfg, err := platform.LoadFromEnv()
-				if err != nil {
-					return fmt.Errorf("platform config: %w", err)
+				if cfg.K8sSparkSA != "" {
+					dataprocOpts = append(dataprocOpts, dataprocprovider.WithServiceAccountName(cfg.K8sSparkSA))
 				}
-				if k8sClient, err := buildK8sClient(); err != nil {
-					slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
-				} else {
-					dataprocOpts = append(dataprocOpts, dataprocprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+				if cfg.K8sSparkSubmitPath != "" {
+					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkSubmitPath(cfg.K8sSparkSubmitPath))
 				}
-			} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
-				dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+				gcpEmulatorCfg := &sparkgcp.GCPEmulatorConfig{ProjectID: cfg.ProjectID, Region: "global"}
+				if v := os.Getenv("STORAGE_EMULATOR_HOST"); v != "" {
+					gcpEmulatorCfg.GCSEndpoint = v
+				} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
+					gcpEmulatorCfg.GCSEndpoint = v
+				}
+				dataprocOpts = append(dataprocOpts, dataprocprovider.WithGCPEmulator(gcpEmulatorCfg))
+				if sparkMode == "k8s" {
+					sparkImage := cfg.K8sSparkImage
+					if sparkImage == "" {
+						slog.Error("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required when executor mode is k8s")
+						os.Exit(1)
+					}
+					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+					k8sNS := cfg.K8sNamespace
+					if k8sNS == "" {
+						k8sNS = "jaiscloud"
+					}
+					platformCfg, err := platform.LoadFromEnv()
+					if err != nil {
+						return fmt.Errorf("platform config: %w", err)
+					}
+					if k8sClient, err := buildK8sClient(); err != nil {
+						slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
+					} else {
+						dataprocOpts = append(dataprocOpts, dataprocprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+					}
+				} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
+					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+				}
+				slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
+				dataprocP = dataprocprovider.New(stores.dataproc, stores.resources, dataprocOpts...)
+				defer dataprocP.Shutdown(context.Background())
 			}
-			slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
-			dataprocP := dataprocprovider.New(stores.dataproc, stores.resources, dataprocOpts...)
-			defer dataprocP.Shutdown(context.Background())
 
 			managedkafkaP := managedkafkaprovider.New(stores.managedkafka)
 
@@ -285,28 +301,40 @@ func startCmd() *cobra.Command {
 			// shared ResourceStore (policies via internal/gcp/policy).
 			resourcemanagerP := resourcemanagerprovider.New(stores.resources)
 
-			reg := provider.NewRegistry().
-				Register(storageP).
-				Register(secretP).
-				Register(kmsP).
-				Register(iamP).
-				Register(pubsubP).
-				Register(firestoreP).
-				Register(functionsP).
-				Register(workflowsP).
-				Register(workflowExecutionsP).
-				Register(dataprocP).
-				Register(managedkafkaP).
-				Register(bigqueryP).
-				Register(metastoreP).
-				Register(icebergP).
-				Register(eventarcP).
-				Register(clouddnsP).
-				Register(memorystoreP).
-				Register(cloudsqlP).
-				Register(computeP).
-				Register(serviceusageP).
-				Register(resourcemanagerP)
+			// Register only services enabled on at least one transport, so a
+			// per-service `none` override removes both its REST and gRPC surface
+			// (an unregistered provider falls through to a 404/unknown-action).
+			reg := provider.NewRegistry()
+			for _, sp := range []struct {
+				name string
+				p    provider.Provider
+			}{
+				{"storage", storageP},
+				{"pubsub", pubsubP},
+				{"secretmanager", secretP},
+				{"kms", kmsP},
+				{"iam", iamP},
+				{"firestore", firestoreP},
+				{"functions", functionsP},
+				{"workflows", workflowsP},
+				{"workflowexecutions", workflowExecutionsP},
+				{"dataproc", dataprocP},
+				{"managedkafka", managedkafkaP},
+				{"bigquery", bigqueryP},
+				{"metastore", metastoreP},
+				{"iceberg", icebergP},
+				{"eventarc", eventarcP},
+				{"dns", clouddnsP},
+				{"redis", memorystoreP},
+				{"sqladmin", cloudsqlP},
+				{"compute", computeP},
+				{"serviceusage", serviceusageP},
+				{"resourcemanager", resourcemanagerP},
+			} {
+				if serviceEnabled(sp.name) {
+					reg.Register(sp.p)
+				}
+			}
 
 			// gRPC transport shares the SAME Firestore provider Service as the
 			// REST adapter, so both transports use one transaction read-set
@@ -333,24 +361,42 @@ func startCmd() *cobra.Command {
 			var gserv *grpcserver.Server
 			if transports.GRPC() {
 				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
-				firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
-				datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
-				pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
-				pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
-				kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
-				loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
-				monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
-				monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
-				monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
-				grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
+				if transports.GRPCFor("firestore") {
+					firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+				}
+				if transports.GRPCFor("datastore") {
+					datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
+				}
+				if transports.GRPCFor("pubsub") {
+					pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
+					pubsubpb.RegisterSubscriberServer(gserv.GRPC(), pubsubGRPC)
+				}
+				if transports.GRPCFor("kms") {
+					kmspb.RegisterKeyManagementServiceServer(gserv.GRPC(), kmsGRPC)
+				}
+				if transports.GRPCFor("logging") {
+					loggingpb.RegisterLoggingServiceV2Server(gserv.GRPC(), loggingGRPC)
+				}
+				if transports.GRPCFor("monitoring") {
+					monitoringpb.RegisterMetricServiceServer(gserv.GRPC(), monitoringGRPC)
+					monitoringpb.RegisterAlertPolicyServiceServer(gserv.GRPC(), monitoringGRPC)
+					monitoringpb.RegisterNotificationChannelServiceServer(gserv.GRPC(), monitoringGRPC)
+				}
+				if transports.GRPCFor("storage") {
+					grpcstoragepb.RegisterStorageServer(gserv.GRPC(), storageGRPC)
+				}
 				// Secret Manager's IAM surface (GetIamPolicy/SetIamPolicy/
 				// TestIamPermissions) is served by the SecretManagerService itself
 				// (its proto embeds the methods), so it does not re-register the
 				// standalone google.iam.v1.IAMPolicy service that Pub/Sub and KMS own.
+				if transports.GRPCFor("secretmanager") {
+					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
+				}
 				// Pub/Sub and KMS share the single IAMPolicy service, so their IAM
 				// surfaces are dispatched through one router.
-				secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
-				iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") {
+					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
+				}
 				// google.longrunning.Operations is a stub: the emulator completes
 				// operations synchronously, so SDK init paths that poll Operations
 				// observe a terminal (done=true) state instead of erroring.
@@ -550,9 +596,9 @@ func startCmd() *cobra.Command {
 			// Background Cloud Monitoring alert-policy evaluator (30s ticker,
 			// matching the AWS CloudWatch alarm evaluator). Stopped cleanly when
 			// the server shuts down. Only relevant when the gRPC Monitoring
-			// surface is exposed.
+			// surface is exposed (alert policies are managed over gRPC).
 			evalCtx, evalCancel := context.WithCancel(ctx)
-			if transports.GRPC() {
+			if transports.GRPCFor("monitoring") {
 				go monitoringEval.Run(evalCtx)
 			}
 			defer evalCancel()
@@ -574,16 +620,18 @@ func startCmd() *cobra.Command {
 			// listener. Thrift is a binary protocol over raw TCP — it does not
 			// flow through the HTTP gateway or the gRPC server. The catalog is
 			// single-global: the per-Service endpoint_uri emitted by the
-			// control plane is cosmetic.
-			hmsPort, _ := cmd.Flags().GetInt("hms-port")
-			hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
-			go func() {
-				slog.Info("hive metastore (thrift) server starting", "hms_port", hmsPort)
-				if err := hmsServer.Serve(); err != nil {
-					slog.Error("hive metastore server error", "err", err)
-				}
-			}()
-			defer hmsServer.Stop()
+			// control plane is cosmetic. Only started when metastore is enabled.
+			if serviceEnabled("metastore") {
+				hmsPort, _ := cmd.Flags().GetInt("hms-port")
+				hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
+				go func() {
+					slog.Info("hive metastore (thrift) server starting", "hms_port", hmsPort)
+					if err := hmsServer.Serve(); err != nil {
+						slog.Error("hive metastore server error", "err", err)
+					}
+				}()
+				defer hmsServer.Stop()
+			}
 
 			return srv.ListenAndServe()
 		},
