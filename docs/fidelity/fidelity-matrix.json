@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 683,
+    "total": 715,
     "by_state": {
-      "ga": 487,
+      "ga": 491,
       "limited": 106,
       "preview": 37,
-      "unsupported": 53
+      "unsupported": 81
     },
     "by_transport": {
       "grpc": {
-        "ga": 240,
+        "ga": 244,
         "limited": 12,
-        "unsupported": 44
+        "unsupported": 72
       },
       "rest": {
         "ga": 247,
@@ -50,6 +50,10 @@
       },
       "firestore": {
         "ga": 33
+      },
+      "firestoreadmin": {
+        "ga": 4,
+        "unsupported": 28
       },
       "functions": {
         "ga": 24,
@@ -116,6 +120,7 @@
       }
     },
     "grpc_only_services": [
+      "firestoreadmin",
       "operations"
     ]
   },
@@ -2661,6 +2666,376 @@
       "evidence": [
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "BulkDeleteDocuments",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "CloneDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "CreateBackupSchedule",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "CreateDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "CreateIndex",
+      "transport": "grpc",
+      "state": "ga",
+      "reason": "covered by the official admin-client gRPC conformance suite",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "CreateUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DeleteBackup",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DeleteBackupSchedule",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DeleteDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DeleteIndex",
+      "transport": "grpc",
+      "state": "ga",
+      "reason": "covered by the official admin-client gRPC conformance suite",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DeleteUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "DisableUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "EnableUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ExportDocuments",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetBackup",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetBackupSchedule",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetField",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetIndex",
+      "transport": "grpc",
+      "state": "ga",
+      "reason": "covered by the official admin-client gRPC conformance suite",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "GetUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ImportDocuments",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListBackupSchedules",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListBackups",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListDatabases",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListFields",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListIndexes",
+      "transport": "grpc",
+      "state": "ga",
+      "reason": "covered by the official admin-client gRPC conformance suite",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ListUserCreds",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "ResetUserPassword",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "RestoreDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "UpdateBackupSchedule",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "UpdateDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "firestoreadmin",
+      "operation": "UpdateField",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
       ]
     },
     {

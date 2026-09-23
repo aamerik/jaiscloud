@@ -25,6 +25,7 @@ import (
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
+	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
@@ -112,6 +113,7 @@ import (
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
+	firestoreadminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -439,6 +441,7 @@ func startCmd() *cobra.Command {
 			// registry.
 			grpcPort, _ := cmd.Flags().GetInt("grpc-port")
 			firestoreGRPC := grpcfirestore.NewService(firestoreP.Service, cfg.ProjectID)
+			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
@@ -471,6 +474,9 @@ func startCmd() *cobra.Command {
 				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
 				if transports.GRPCFor("firestore") {
 					firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
+				}
+				if transports.GRPCFor("firestoreadmin") {
+					firestoreadminpb.RegisterFirestoreAdminServer(gserv.GRPC(), firestoreAdminGRPC)
 				}
 				if transports.GRPCFor("datastore") {
 					datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
@@ -570,6 +576,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(storageGRPC)
 			adminHandler.RegisterResetter(firestoreP)
 			adminHandler.RegisterResetter(firestoreGRPC)
+			adminHandler.RegisterResetter(firestoreAdminGRPC)
 			// The Datastore core owns the in-memory transaction read-set
 			// registry; register it so /_jaiscloud/reset clears open
 			// transactions. Its entity store (stores.entities) is registered

@@ -766,10 +766,12 @@ func (s *Service) hasIndex(ctx context.Context, project, database string, requir
 	return false, nil
 }
 
-// CreateIndex registers a composite index and returns its operation wrapper.
-func (s *Service) CreateIndex(ctx context.Context, project, database, cg string, idx indexDef) (map[string]any, error) {
+// CreateIndexDef registers a composite index and returns the stored definition
+// together with its long-running operation name. It is the shared core behind
+// both the REST CreateIndex wrapper and the FirestoreAdmin gRPC transport.
+func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg string, idx IndexDef) (IndexDef, string, error) {
 	if len(idx.Fields) < 2 {
-		return nil, model.NewProviderError("InvalidArgument", "a composite index requires at least 2 fields", 400)
+		return IndexDef{}, "", model.NewProviderError("InvalidArgument", "a composite index requires at least 2 fields", 400)
 	}
 
 	id := randomHex(12)
@@ -782,19 +784,29 @@ func (s *Service) CreateIndex(ctx context.Context, project, database, cg string,
 	if s.resources != nil {
 		if err := s.resources.Create(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtIndex, ID: indexRelName(database, cg, id), Data: data}); err != nil {
 			if errors.Is(err, store.ErrAlreadyExists) {
-				return nil, model.NewProviderError("AlreadyExists", "index already exists", 409)
+				return IndexDef{}, "", model.NewProviderError("AlreadyExists", "index already exists", 409)
 			}
-			return nil, err
+			return IndexDef{}, "", err
 		}
+	}
+	// The operation name is the google.longrunning.Operation the index creation
+	// is wrapped in (done=true); both transports complete it synchronously.
+	opName := "projects/" + project + "/databases/" + database + "/operations/" + randomHex(12)
+	return idx, opName, nil
+}
+
+// CreateIndex registers a composite index and returns its operation wrapper.
+func (s *Service) CreateIndex(ctx context.Context, project, database, cg string, idx IndexDef) (map[string]any, error) {
+	created, opName, err := s.CreateIndexDef(ctx, project, database, cg, idx)
+	if err != nil {
+		return nil, err
 	}
 	// CreateIndex returns a google.longrunning.Operation wrapping the created
 	// index (done=true), not the bare index body.
-	opID := randomHex(12)
-	opName := "projects/" + project + "/databases/" + database + "/operations/" + opID
 	return map[string]any{
 		"name":     opName,
 		"done":     true,
-		"response": indexMap(idx),
+		"response": indexMap(created),
 	}, nil
 }
 

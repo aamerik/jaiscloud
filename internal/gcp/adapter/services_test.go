@@ -99,7 +99,7 @@ func TestKnownServiceNamesIncludesGRPConly(t *testing.T) {
 	for _, n := range names {
 		set[n] = true
 	}
-	for _, want := range []string{"storage", "datastore", "logging", "monitoring"} {
+	for _, want := range []string{"storage", "datastore", "logging", "monitoring", "firestoreadmin"} {
 		if !set[want] {
 			t.Errorf("KnownServiceNames() missing %q", want)
 		}

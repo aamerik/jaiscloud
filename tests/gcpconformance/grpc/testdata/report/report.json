@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 257,
-  "passed": 257,
+  "total": 261,
+  "passed": 261,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 19,
-    "checks": 257,
-    "passed": 257,
+    "services": 20,
+    "checks": 261,
+    "passed": 261,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -39,6 +39,13 @@
       "service": "firestore",
       "total": 18,
       "passed": 18,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "firestoreadmin",
+      "total": 4,
+      "passed": 4,
       "failed": 0,
       "unimplemented": 0
     },
@@ -939,6 +946,34 @@
       "method": "DeleteDocument",
       "status": "pass",
       "key_field": "document absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateIndex",
+      "method": "CreateIndex",
+      "status": "pass",
+      "key_field": "operation done=true; index state READY"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetIndex",
+      "method": "GetIndex",
+      "status": "pass",
+      "key_field": "index fields/state"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListIndexes",
+      "method": "ListIndexes",
+      "status": "pass",
+      "key_field": "pageSize/pageToken pages over two indexes"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteIndex",
+      "method": "DeleteIndex",
+      "status": "pass",
+      "key_field": "index absent after delete"
     },
     {
       "service": "datastore",

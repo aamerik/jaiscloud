@@ -11,6 +11,7 @@ import (
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
+	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -30,6 +31,7 @@ import (
 
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
+	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
 	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
@@ -76,6 +78,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.functions.v2.FunctionService":          "functions",
 	"google.storage.v2.Storage":                          "storage",
 	"google.firestore.v1.Firestore":                      "firestore",
+	"google.firestore.admin.v1.FirestoreAdmin":           "firestoreadmin",
 	"google.datastore.v1.Datastore":                      "datastore",
 	"google.pubsub.v1.Publisher":                         "pubsub",
 	"google.pubsub.v1.Subscriber":                        "pubsub",
@@ -115,6 +118,7 @@ func EnumerateGRPC() []GRPCService {
 	reg := grpc.NewServer()
 
 	firestorepb.RegisterFirestoreServer(reg, &grpcfirestore.Service{})
+	adminpb.RegisterFirestoreAdminServer(reg, &grpcfirestoreadmin.Service{})
 	datastorepb.RegisterDatastoreServer(reg, &grpcdatastore.Service{})
 	pubsubpb.RegisterPublisherServer(reg, &grpcpubsub.Service{})
 	pubsubpb.RegisterSubscriberServer(reg, &grpcpubsub.Service{})

@@ -30,6 +30,11 @@ type (
 	PreconditionWire      = preconditionWire
 	FieldTransformWire    = fieldTransformWire
 	DocumentTransformWire = documentTransformWire
+
+	// Composite-index wire shapes (indexes.go), shared with the FirestoreAdmin
+	// gRPC transport (internal/gcp/grpc/firestoreadmin).
+	IndexDef   = indexDef
+	IndexField = indexField
 )
 
 // NewPageParams returns pagination inputs for a Service list method. The

@@ -197,9 +197,10 @@ func TestGRPCOnlyServices(t *testing.T) {
 	for _, s := range only {
 		got[s] = true
 	}
-	// After the Phase 1/2 REST additions, only the long-running Operations
-	// service remains gRPC-only (Workflow Executions gained gRPC in Phase 3).
-	for _, want := range []string{"operations"} {
+	// After the Phase 1/2 REST additions, the long-running Operations service
+	// and the Firestore Admin surface (REST under `firestore`, gRPC under the
+	// distinct `firestoreadmin` wire service) remain gRPC-only.
+	for _, want := range []string{"operations", "firestoreadmin"} {
 		if !got[want] {
 			t.Errorf("GRPCOnlyServices missing %q (got %v)", want, only)
 		}
