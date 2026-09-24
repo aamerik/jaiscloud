@@ -5,6 +5,7 @@ go 1.26
 require (
 	cloud.google.com/go/dataproc/v2 v2.25.0
 	cloud.google.com/go/datastore v1.22.0
+	cloud.google.com/go/eventarc v1.25.0
 	cloud.google.com/go/firestore v1.25.0
 	cloud.google.com/go/functions v1.25.0
 	cloud.google.com/go/iam v1.11.0

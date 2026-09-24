@@ -36,7 +36,6 @@ import (
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
 	computeprovider "jaiscloud/internal/gcp/provider/compute"
-	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
@@ -47,6 +46,7 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
+	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
@@ -77,6 +77,7 @@ import (
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
@@ -88,6 +89,7 @@ import (
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
+	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
@@ -109,6 +111,7 @@ import (
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
+	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -355,7 +358,15 @@ func startCmd() *cobra.Command {
 
 			bigqueryP := bigqueryprovider.New(stores.bigquery)
 
-			eventarcP := eventarcprovider.New(stores.eventarc, stores.resources, stores.workflows)
+			// Eventarc's transport-neutral core is shared by the REST provider
+			// and the gRPC adapter below, so both transports run against one
+			// store and cannot drift. The core is only built when eventarc is
+			// enabled.
+			var eventarcCore *eventarccore.Service
+			if serviceEnabled("eventarc") {
+				eventarcCore = eventarccore.NewService(stores.eventarc, stores.resources, stores.workflows)
+			}
+			eventarcP := resteventarc.NewProvider(eventarcCore, cfg.ProjectID)
 
 			// Cloud DNS is metadata-only over the shared ResourceStore.
 			clouddnsP := clouddnsprovider.New(stores.resources)
@@ -445,6 +456,7 @@ func startCmd() *cobra.Command {
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
 			metastoreGRPC := grpcmetastore.NewService(metastoreCore, cfg.ProjectID)
+			eventarcGRPC := grpceventarc.NewService(eventarcCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
@@ -474,6 +486,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("metastore") {
 					metastorepb.RegisterDataprocMetastoreServer(gserv.GRPC(), metastoreGRPC)
+				}
+				if transports.GRPCFor("eventarc") {
+					eventarcpb.RegisterEventarcServer(gserv.GRPC(), eventarcGRPC)
 				}
 				if transports.GRPCFor("serviceusage") {
 					serviceusagepb.RegisterServiceUsageServer(gserv.GRPC(), serviceUsageGRPC)
@@ -514,10 +529,16 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub and KMS share the single IAMPolicy service, so their IAM
-				// surfaces are dispatched through one router.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") {
-					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(pubsubGRPC, kmsGRPC))
+				// Pub/Sub, KMS and Eventarc share the single IAMPolicy service, so
+				// their IAM surfaces are dispatched through one router. Eventarc
+				// only joins the router when its gRPC transport is selected, so a
+				// trigger/channel IAM name cannot reach a nil core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") {
+					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
+					if transports.GRPCFor("eventarc") {
+						iamHandlers = append(iamHandlers, eventarcGRPC)
+					}
+					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
 				// google.longrunning.Operations is a stub: the emulator completes
 				// operations synchronously, so SDK init paths that poll Operations

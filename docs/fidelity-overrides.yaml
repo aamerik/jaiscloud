@@ -225,6 +225,119 @@ operations:
     state: unsupported
     reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
 
+  # Eventarc gRPC is trigger/channel/provider control-plane only: the emulator
+  # models no event-delivery engine, so every other Eventarc RPC is an explicit
+  # Unimplemented stub. (Trigger/Channel IAM is served through the shared
+  # google.iam.v1.IAMPolicy router.)
+  - service: eventarc
+    operation: GetChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListChannelConnections
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteChannelConnection
+    state: unsupported
+    reason: "SaaS channel connections require a connected provider; explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetGoogleChannelConfig
+    state: unsupported
+    reason: "Google-channel CMEK config is not modelled; explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateGoogleChannelConfig
+    state: unsupported
+    reason: "Google-channel CMEK config is not modelled; explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListMessageBuses
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListMessageBusEnrollments
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteMessageBus
+    state: unsupported
+    reason: "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListEnrollments
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteEnrollment
+    state: unsupported
+    reason: "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetPipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListPipelines
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreatePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdatePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeletePipeline
+    state: unsupported
+    reason: "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: GetGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: ListGoogleApiSources
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: CreateGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: UpdateGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+  - service: eventarc
+    operation: DeleteGoogleApiSource
+    state: unsupported
+    reason: "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub"
+
   # gRPC methods deliberately left limited: each is gated on a subsystem the
   # emulator does not model, so implementing it would fabricate a wire-divergent
   # result. They fail loudly with codes.Unimplemented rather than silently

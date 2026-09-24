@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 644,
+    "total": 683,
     "by_state": {
-      "ga": 475,
+      "ga": 487,
       "limited": 106,
       "preview": 37,
-      "unsupported": 26
+      "unsupported": 53
     },
     "by_transport": {
       "grpc": {
-        "ga": 228,
+        "ga": 240,
         "limited": 12,
-        "unsupported": 17
+        "unsupported": 44
       },
       "rest": {
         "ga": 247,
@@ -45,7 +45,8 @@
         "ga": 16
       },
       "eventarc": {
-        "ga": 18
+        "ga": 30,
+        "unsupported": 27
       },
       "firestore": {
         "ga": 33
@@ -1698,6 +1699,170 @@
     },
     {
       "service": "eventarc",
+      "operation": "CreateChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreateChannelConnection",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreateEnrollment",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreateGoogleApiSource",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreateMessageBus",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreatePipeline",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "CreateTrigger",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteChannelConnection",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteEnrollment",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteGoogleApiSource",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteMessageBus",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeletePipeline",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "DeleteTrigger",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.ChannelGetIamPolicy",
       "transport": "rest",
       "state": "ga",
@@ -1882,6 +2047,280 @@
         "discovery=eventarc.projects.locations.triggers.patch",
         "mutating",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetChannelConnection",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetEnrollment",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetGoogleApiSource",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetGoogleChannelConfig",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google-channel CMEK config is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetMessageBus",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetPipeline",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetProvider",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "GetTrigger",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListChannelConnections",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListChannels",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListEnrollments",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListGoogleApiSources",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListMessageBusEnrollments",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListMessageBuses",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListPipelines",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListProviders",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "ListTriggers",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateEnrollment",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateGoogleApiSource",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateGoogleChannelConfig",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Google-channel CMEK config is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateMessageBus",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdatePipeline",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "UpdateTrigger",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2533,7 +2972,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -2679,7 +3118,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -2689,7 +3128,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {

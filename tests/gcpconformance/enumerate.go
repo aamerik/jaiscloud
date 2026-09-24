@@ -16,7 +16,6 @@ import (
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
 	computeprovider "jaiscloud/internal/gcp/provider/compute"
-	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
@@ -27,6 +26,7 @@ import (
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
+	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
@@ -96,7 +96,7 @@ func providers() []provider.Provider {
 		&restmetastore.Provider{},
 		&icebergprovider.Provider{},
 		&bigqueryprovider.Provider{},
-		&eventarcprovider.Provider{},
+		&resteventarc.Provider{},
 		&clouddnsprovider.Provider{},
 		&memorystoreprovider.Provider{},
 		&cloudsqlprovider.Provider{},
