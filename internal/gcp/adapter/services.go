@@ -8,6 +8,7 @@ import (
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
+	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
@@ -106,7 +107,7 @@ var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "metastore",
 		ProviderPrefix: "Metastore",
-		Codec:          func() adapter.Codec { return &MetastoreCodec{Service: "metastore"} },
+		Codec:          func() adapter.Codec { return restmetastore.NewCodec() },
 	},
 	{
 		ServiceName:    "eventarc",

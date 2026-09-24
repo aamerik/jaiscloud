@@ -187,6 +187,44 @@ operations:
     state: limited
     reason: "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
 
+  # Metastore's operations surface shares the locations/{location}/operations
+  # path with Cloud Workflows and routes to workflows on the single emulator
+  # host, so the Get/List handlers are reachable only by direct dispatch
+  # (mutations return operations inline done:true, so no client needs to poll).
+  - service: metastore
+    operation: Metastore.GetOperation
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+  - service: metastore
+    operation: Metastore.ListOperations
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+
+  # Dataproc Metastore gRPC is control-plane only: the deferred control-plane
+  # RPCs (export/restore/query/move/alter) are gated on a Hive Thrift data plane
+  # the emulator does not model per service, so each is an explicit
+  # Unimplemented stub.
+  - service: metastore
+    operation: ExportMetadata
+    state: unsupported
+    reason: "Hive Thrift metadata export is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: RestoreService
+    state: unsupported
+    reason: "Hive Thrift metadata restore is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: QueryMetadata
+    state: unsupported
+    reason: "the gRPC metadata query plane is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: MoveTableToDatabase
+    state: unsupported
+    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
+  - service: metastore
+    operation: AlterMetadataResourceLocation
+    state: unsupported
+    reason: "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub"
+
   # gRPC methods deliberately left limited: each is gated on a subsystem the
   # emulator does not model, so implementing it would fabricate a wire-divergent
   # result. They fail loudly with codes.Unimplemented rather than silently

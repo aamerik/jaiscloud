@@ -42,7 +42,6 @@ import (
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
-	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
@@ -51,6 +50,7 @@ import (
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
+	metastorecore "jaiscloud/internal/gcp/service/metastore"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
@@ -80,6 +80,7 @@ import (
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
+	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
@@ -90,6 +91,7 @@ import (
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
+	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
@@ -115,6 +117,7 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
+	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
@@ -342,7 +345,11 @@ func startCmd() *cobra.Command {
 			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka)
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
-			metastoreP := metastoreprovider.New(stores.metastore)
+			// Dataproc Metastore's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports run against
+			// one store and cannot drift.
+			metastoreCore := metastorecore.NewService(stores.metastore)
+			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
 
@@ -437,6 +444,7 @@ func startCmd() *cobra.Command {
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
+			metastoreGRPC := grpcmetastore.NewService(metastoreCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
@@ -463,6 +471,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("managedkafka") {
 					managedkafkapb.RegisterManagedKafkaServer(gserv.GRPC(), managedKafkaGRPC)
+				}
+				if transports.GRPCFor("metastore") {
+					metastorepb.RegisterDataprocMetastoreServer(gserv.GRPC(), metastoreGRPC)
 				}
 				if transports.GRPCFor("serviceusage") {
 					serviceusagepb.RegisterServiceUsageServer(gserv.GRPC(), serviceUsageGRPC)

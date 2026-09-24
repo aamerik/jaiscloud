@@ -18,6 +18,7 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
+	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
@@ -39,6 +40,7 @@ import (
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
+	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
@@ -84,6 +86,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
 	"google.cloud.workflows.v1.Workflows":                "workflows",
 	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
+	"google.cloud.metastore.v1.DataprocMetastore":        "metastore",
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
 	"google.iam.v1.IAMPolicy":                            "iam",
@@ -122,6 +125,7 @@ func EnumerateGRPC() []GRPCService {
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
 	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
+	metastorepb.RegisterDataprocMetastoreServer(reg, &grpcmetastore.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})

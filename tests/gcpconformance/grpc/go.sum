@@ -27,6 +27,8 @@ cloud.google.com/go/longrunning v1.2.0 h1:WjYH3YHBGCxGJP9M4dWGHBfXr/cFIjMkNgWcJj
 cloud.google.com/go/longrunning v1.2.0/go.mod h1:5KMQALFGOCtFoi2xSOA1u3H7WKlhmckgiyFw7+LGQp0=
 cloud.google.com/go/managedkafka v1.1.0 h1:acW5yoyJ3DIlZjWG8Azu+mPCkjXj1/ofvu+Ir3xwJEw=
 cloud.google.com/go/managedkafka v1.1.0/go.mod h1:dnj7gGhSkyYEVYc8isjid/MzU+tJtv5FyFrvRr7Tt0A=
+cloud.google.com/go/metastore v1.20.0 h1:kz0XBkP531MB1IR9jTY6/DB33UFP5Df1vFpPNgW1iPk=
+cloud.google.com/go/metastore v1.20.0/go.mod h1:/bhZoizjM5iOrqWJeAFDw7c16C783wEftqofnJgKKYI=
 cloud.google.com/go/monitoring v1.24.3 h1:dde+gMNc0UhPZD1Azu6at2e79bfdztVDS5lvhOdsgaE=
 cloud.google.com/go/monitoring v1.24.3/go.mod h1:nYP6W0tm3N9H/bOw8am7t62YTzZY+zUeQ+Bi6+2eonI=
 cloud.google.com/go/pubsub/v2 v2.7.0 h1:MFrBTZZa6PDWZzCi4NJRsHKMm2w0a4oAaYNqwjgbQTE=

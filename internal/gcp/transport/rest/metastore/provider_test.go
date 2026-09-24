@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
+	metastorecore "jaiscloud/internal/gcp/service/metastore"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	"jaiscloud/internal/model"
 )
@@ -17,7 +18,7 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 }
 
 func newProvider() *Provider {
-	return New(metastorestore.NewMemoryStore())
+	return NewProvider(metastorecore.NewService(metastorestore.NewMemoryStore()), "proj")
 }
 
 func createServiceParams(location, serviceID string, body map[string]any) map[string]any {
@@ -51,6 +52,9 @@ func TestServiceCRUDAndLROShape(t *testing.T) {
 	}
 	created, _ := resp.Data["response"].(map[string]any)
 	wantName := "projects/proj/locations/us-central1/services/svc1"
+	if created["@type"] != "type.googleapis.com/google.cloud.metastore.v1.Service" {
+		t.Errorf("LRO response @type = %v, want the metastore Service type URL", created["@type"])
+	}
 	if created["name"] != wantName {
 		t.Errorf("service name = %v, want %v", created["name"], wantName)
 	}
@@ -140,6 +144,16 @@ func TestGetOperationRoundTrip(t *testing.T) {
 	}
 	if opResp.Data["done"] != true {
 		t.Errorf("operation done = %v, want true", opResp.Data["done"])
+	}
+
+	// ListOperations includes the create operation.
+	listResp, err := p.ListOperations(ctx, newNR(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("ListOperations: %v", err)
+	}
+	ops, _ := listResp.Data["operations"].([]any)
+	if len(ops) != 1 {
+		t.Errorf("ListOperations returned %d operations, want 1", len(ops))
 	}
 
 	// Missing op → NotFound.
@@ -358,7 +372,7 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 		"Metastore.CreateBackup", "Metastore.GetBackup", "Metastore.ListBackups", "Metastore.DeleteBackup",
 		"Metastore.CreateMetadataImport", "Metastore.GetMetadataImport", "Metastore.ListMetadataImports",
 		"Metastore.UpdateMetadataImport",
-		"Metastore.GetOperation",
+		"Metastore.GetOperation", "Metastore.ListOperations",
 		"Metastore.ExportMetadata", "Metastore.RestoreService", "Metastore.QueryMetadata",
 		"Metastore.MoveTableToDatabase", "Metastore.AlterMetadataResourceLocation",
 	}
@@ -478,7 +492,7 @@ func TestCreateServiceEndpointProtocol(t *testing.T) {
 		t.Fatalf("THRIFT endpointProtocol should be accepted: %v", err)
 	}
 
-	// GRPC rejected with InvalidArgument (gRPC serving plane deferred — D4).
+	// GRPC rejected with InvalidArgument (per-service gRPC serving plane deferred — D4).
 	p = newProvider()
 	_, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc3", map[string]any{
 		"hiveMetastoreConfig": map[string]any{"version": "3.1.2", "endpointProtocol": "GRPC"},

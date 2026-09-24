@@ -12,6 +12,7 @@ require (
 	cloud.google.com/go/logging v1.19.1
 	cloud.google.com/go/longrunning v1.2.0
 	cloud.google.com/go/managedkafka v1.1.0
+	cloud.google.com/go/metastore v1.20.0
 	cloud.google.com/go/monitoring v1.30.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/resourcemanager v1.16.0
