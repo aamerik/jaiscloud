@@ -36,7 +36,6 @@ import (
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
 	computeprovider "jaiscloud/internal/gcp/provider/compute"
-	dataprocprovider "jaiscloud/internal/gcp/provider/dataproc"
 	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	functionsprovider "jaiscloud/internal/gcp/provider/functions"
@@ -51,6 +50,7 @@ import (
 	serviceusageprovider "jaiscloud/internal/gcp/provider/serviceusage"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
+	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
@@ -75,11 +75,13 @@ import (
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
+	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
@@ -95,6 +97,7 @@ import (
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
 
+	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
@@ -252,24 +255,26 @@ func startCmd() *cobra.Command {
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
-			// for Spark is out of scope (Phase A) — mock only. The executor (and
-			// its K8s client) is only built when dataproc is enabled.
-			var dataprocP *dataprocprovider.Provider
+			// for Spark is out of scope (Phase A) — mock only. The core (and its
+			// K8s client) is only built when dataproc is enabled, and it is
+			// shared by the REST provider and the gRPC adapter below so both
+			// transports own one cluster/job state and one executor.
+			var dataprocCore *dataproccore.Service
 			if serviceEnabled("dataproc") {
 				sparkMode, sparkModeSrc := config.ExecutorMode("spark", "mock")
 				if sparkMode == "docker" {
 					slog.Warn("dataproc: docker Spark executor not supported, falling back to mock")
 					sparkMode = "mock"
 				}
-				dataprocOpts := []dataprocprovider.Option{
-					dataprocprovider.WithInstanceID(instanceID),
-					dataprocprovider.WithProjectID(cfg.ProjectID),
+				dataprocOpts := []dataproccore.Option{
+					dataproccore.WithInstanceID(instanceID),
+					dataproccore.WithProjectID(cfg.ProjectID),
 				}
 				if cfg.K8sSparkSA != "" {
-					dataprocOpts = append(dataprocOpts, dataprocprovider.WithServiceAccountName(cfg.K8sSparkSA))
+					dataprocOpts = append(dataprocOpts, dataproccore.WithServiceAccountName(cfg.K8sSparkSA))
 				}
 				if cfg.K8sSparkSubmitPath != "" {
-					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkSubmitPath(cfg.K8sSparkSubmitPath))
+					dataprocOpts = append(dataprocOpts, dataproccore.WithSparkSubmitPath(cfg.K8sSparkSubmitPath))
 				}
 				gcpEmulatorCfg := &sparkgcp.GCPEmulatorConfig{ProjectID: cfg.ProjectID, Region: "global"}
 				if v := os.Getenv("STORAGE_EMULATOR_HOST"); v != "" {
@@ -277,14 +282,14 @@ func startCmd() *cobra.Command {
 				} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
 					gcpEmulatorCfg.GCSEndpoint = v
 				}
-				dataprocOpts = append(dataprocOpts, dataprocprovider.WithGCPEmulator(gcpEmulatorCfg))
+				dataprocOpts = append(dataprocOpts, dataproccore.WithGCPEmulator(gcpEmulatorCfg))
 				if sparkMode == "k8s" {
 					sparkImage := cfg.K8sSparkImage
 					if sparkImage == "" {
 						slog.Error("dataproc: JAISCLOUD_K8S_SPARK_IMAGE is required when executor mode is k8s")
 						os.Exit(1)
 					}
-					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+					dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
 					k8sNS := cfg.K8sNamespace
 					if k8sNS == "" {
 						k8sNS = "jaiscloud"
@@ -296,15 +301,16 @@ func startCmd() *cobra.Command {
 					if k8sClient, err := buildK8sClient(); err != nil {
 						slog.Warn("dataproc: failed to build k8s client; falling back to mock", "err", err)
 					} else {
-						dataprocOpts = append(dataprocOpts, dataprocprovider.WithK8s(k8sClient, k8sNS, platformCfg))
+						dataprocOpts = append(dataprocOpts, dataproccore.WithK8s(k8sClient, k8sNS, platformCfg))
 					}
 				} else if sparkImage := cfg.K8sSparkImage; sparkImage != "" {
-					dataprocOpts = append(dataprocOpts, dataprocprovider.WithSparkImage(sparkImage))
+					dataprocOpts = append(dataprocOpts, dataproccore.WithSparkImage(sparkImage))
 				}
 				slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
-				dataprocP = dataprocprovider.New(stores.dataproc, stores.resources, dataprocOpts...)
-				defer dataprocP.Shutdown(context.Background())
+				dataprocCore = dataproccore.NewService(stores.dataproc, stores.resources, dataprocOpts...)
+				defer dataprocCore.Shutdown(context.Background())
 			}
+			dataprocP := restdataproc.NewProvider(dataprocCore, cfg.ProjectID)
 
 			// Managed Kafka's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
@@ -398,6 +404,7 @@ func startCmd() *cobra.Command {
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
+			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -415,6 +422,10 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("managedkafka") {
 					managedkafkapb.RegisterManagedKafkaServer(gserv.GRPC(), managedKafkaGRPC)
+				}
+				if transports.GRPCFor("dataproc") {
+					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
 				}
 				if transports.GRPCFor("pubsub") {
 					pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)

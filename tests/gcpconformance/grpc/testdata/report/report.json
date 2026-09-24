@@ -1,19 +1,26 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 183,
-  "passed": 183,
+  "total": 197,
+  "passed": 197,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 12,
-    "checks": 183,
-    "passed": 183,
+    "services": 13,
+    "checks": 197,
+    "passed": 197,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
   },
   "services": [
+    {
+      "service": "dataproc",
+      "total": 14,
+      "passed": 14,
+      "failed": 0,
+      "unimplemented": 0
+    },
     {
       "service": "datastore",
       "total": 11,
@@ -1359,6 +1366,104 @@
       "method": "ListConsumerGroups",
       "status": "pass",
       "key_field": "empty set (no broker)"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "LRO done + RUNNING cluster"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "GetCluster",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "clusterName round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "ListClusters",
+      "method": "ListClusters",
+      "status": "pass",
+      "key_field": "created cluster present"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "UpdateCluster",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "StopCluster",
+      "method": "StopCluster",
+      "status": "pass",
+      "key_field": "STOPPED cluster returned"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "StartCluster",
+      "method": "StartCluster",
+      "status": "pass",
+      "key_field": "RUNNING cluster returned"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "DeleteCluster",
+      "method": "DeleteCluster",
+      "status": "pass",
+      "key_field": "NotFound after delete"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "SubmitJob",
+      "method": "SubmitJob",
+      "status": "pass",
+      "key_field": "DONE job in mock mode"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "SubmitJobAsOperation",
+      "method": "SubmitJobAsOperation",
+      "status": "pass",
+      "key_field": "LRO done + typed Job response"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "GetJob",
+      "method": "GetJob",
+      "status": "pass",
+      "key_field": "job reference round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "ListJobs",
+      "method": "ListJobs",
+      "status": "pass",
+      "key_field": "submitted job present"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "UpdateJob",
+      "method": "UpdateJob",
+      "status": "pass",
+      "key_field": "labels updated"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CancelJob",
+      "method": "CancelJob",
+      "status": "pass",
+      "key_field": "terminal job returned"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "DeleteJob",
+      "method": "DeleteJob",
+      "status": "pass",
+      "key_field": "NotFound after delete"
     },
     {
       "service": "iam",

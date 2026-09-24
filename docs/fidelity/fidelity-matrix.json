@@ -1,17 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 575,
+    "total": 590,
     "by_state": {
-      "ga": 425,
+      "ga": 439,
       "limited": 104,
       "preview": 37,
-      "unsupported": 9
+      "unsupported": 10
     },
     "by_transport": {
       "grpc": {
-        "ga": 177,
-        "limited": 12
+        "ga": 191,
+        "limited": 12,
+        "unsupported": 1
       },
       "rest": {
         "ga": 248,
@@ -37,8 +38,8 @@
         "unsupported": 1
       },
       "dataproc": {
-        "ga": 14,
-        "unsupported": 1
+        "ga": 28,
+        "unsupported": 2
       },
       "datastore": {
         "ga": 16
@@ -1208,6 +1209,28 @@
     },
     {
       "service": "dataproc",
+      "operation": "CancelJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "CreateCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.CancelJob",
       "transport": "rest",
       "state": "ga",
@@ -1365,6 +1388,145 @@
         "discovery=dataproc.projects.regions.clusters.patch",
         "mutating",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "DeleteCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "DeleteJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "DiagnoseCluster",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "GetCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "GetJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "ListClusters",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "ListJobs",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "StartCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "StopCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "SubmitJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "SubmitJobAsOperation",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "UpdateCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "UpdateJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **575**
+Cells: **590**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 425 |
+| ga | 439 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 9 |
+| unsupported | 10 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 92 | 37 | 9 |
-| grpc | 177 | 12 | 0 | 0 |
+| grpc | 191 | 12 | 0 | 1 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -152,10 +152,12 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 ## dataproc
 
-_15 cell(s): ga=14 limited=0 preview=0 unsupported=1_
+_30 cell(s): ga=28 limited=0 preview=0 unsupported=2_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CancelJob | grpc | ga | — |
+| CreateCluster | grpc | ga | — |
 | Dataproc.CancelJob | rest | ga | — |
 | Dataproc.CreateCluster | rest | ga | — |
 | Dataproc.DeleteCluster | rest | ga | — |
@@ -171,6 +173,19 @@ _15 cell(s): ga=14 limited=0 preview=0 unsupported=1_
 | Dataproc.SubmitJob | rest | ga | covered by the k3d Lakehouse e2e (real Spark on Kubernetes) |
 | Dataproc.SubmitJobAsOperation | rest | ga | — |
 | Dataproc.UpdateCluster | rest | ga | — |
+| DeleteCluster | grpc | ga | — |
+| DeleteJob | grpc | ga | — |
+| DiagnoseCluster | grpc | unsupported | explicit Unimplemented stub |
+| GetCluster | grpc | ga | — |
+| GetJob | grpc | ga | — |
+| ListClusters | grpc | ga | — |
+| ListJobs | grpc | ga | — |
+| StartCluster | grpc | ga | — |
+| StopCluster | grpc | ga | — |
+| SubmitJob | grpc | ga | — |
+| SubmitJobAsOperation | grpc | ga | — |
+| UpdateCluster | grpc | ga | — |
+| UpdateJob | grpc | ga | — |
 
 ## datastore
 

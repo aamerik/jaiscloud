@@ -17,20 +17,25 @@ import (
 	"jaiscloud/internal/clock"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
-	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
-// newK8sProvider returns a provider wired with a fake clientset for real Spark
-// execution (k8s mode), plus a memory store for jobs and terminal snapshots.
-func newK8sProvider(t *testing.T, client *fake.Clientset) *Provider {
+// newProvider returns a mock-mode service over a memory store.
+func newProvider(t *testing.T) *Service {
 	t.Helper()
-	p := New(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+	return NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore())
+}
+
+// newK8sProvider returns a service wired with a fake clientset for real Spark
+// execution (k8s mode), plus a memory store for jobs and terminal snapshots.
+func newK8sProvider(t *testing.T, client *fake.Clientset) *Service {
+	t.Helper()
+	p := NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
 		WithK8s(client, "jaiscloud", nil),
 		WithSparkImage("spark:test"),
 	)
-	// New() starts a background ownership-patcher goroutine; drain it so the
-	// test does not leak goroutines/watchers.
+	// NewService() starts a background ownership-patcher goroutine; drain it so
+	// the test does not leak goroutines/watchers.
 	t.Cleanup(func() { p.Shutdown(context.Background()) })
 	return p
 }
@@ -107,7 +112,7 @@ func prependPodWatch(t *testing.T, client *fake.Clientset) *watch.RaceFreeFakeWa
 
 // runJobWithDriverPod runs the job to completion, emitting the given terminal
 // driver pod once the spark-submit k8s Job has been created.
-func runJobWithDriverPod(t *testing.T, p *Provider, client *fake.Clientset, j dataprocstore.Job, pod *corev1.Pod) {
+func runJobWithDriverPod(t *testing.T, p *Service, client *fake.Clientset, j dataprocstore.Job, pod *corev1.Pod) {
 	t.Helper()
 	fw := prependPodWatch(t, client)
 	ctx := context.Background()
@@ -143,12 +148,13 @@ func TestRunJob_DriverSucceeds_TransitionsToDone(t *testing.T) {
 	runJobWithDriverPod(t, p, client, j, succeededDriverPod("driver-ok", "jc-spark-cm-j-lc-1"))
 
 	// Assert through the wire rendering, not the store field, so a regression in
-	// jobToMap (camelCase keys) is caught.
-	resp, err := p.GetJob(context.Background(), testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	// JobJSON (camelCase keys) is caught.
+	j2, err := p.GetJob(context.Background(), j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	status, _ := resp.Data["status"].(map[string]any)
+	data := JobJSON(j2)
+	status, _ := data["status"].(map[string]any)
 	require.Equal(t, "DONE", status["state"])
-	require.NotEmpty(t, resp.Data["driverOutputResourceUri"])
+	require.NotEmpty(t, data["driverOutputResourceUri"])
 }
 
 func TestRunJob_DriverOOM_TransitionsToError(t *testing.T) {
@@ -160,9 +166,9 @@ func TestRunJob_DriverOOM_TransitionsToError(t *testing.T) {
 
 	runJobWithDriverPod(t, p, client, j, oomDriverPod("driver-oom", "jc-spark-cm-j-lc-oom"))
 
-	resp, err := p.GetJob(context.Background(), testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	j2, err := p.GetJob(context.Background(), j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	status, _ := resp.Data["status"].(map[string]any)
+	status, _ := JobJSON(j2)["status"].(map[string]any)
 	require.Equal(t, "ERROR", status["state"])
 	require.Contains(t, status["details"].(string), "OOMKilled")
 }
@@ -291,9 +297,9 @@ func TestCancelJob_TransitionsToCancelled(t *testing.T) {
 		return len(jobs.Items) > 0
 	}, 5*time.Second, 10*time.Millisecond)
 
-	resp, err := p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	cancelled, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	status, _ := resp.Data["status"].(map[string]any)
+	status, _ := JobJSON(cancelled)["status"].(map[string]any)
 	require.Equal(t, "CANCELLED", status["state"])
 
 	got, err := p.store.GetJob(context.Background(), j.ProjectID, j.Region, j.JobID)
@@ -316,9 +322,9 @@ func TestCancelJob_AlreadyTerminal_NoOp(t *testing.T) {
 	j.Status = dataprocstore.JobStatus{State: "DONE", StateStartTime: clock.Now().UTC()}
 	require.NoError(t, p.store.CreateJob(ctx, j.ProjectID, j.Region, j))
 
-	resp, err := p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	cancelled, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	status, _ := resp.Data["status"].(map[string]any)
+	status, _ := JobJSON(cancelled)["status"].(map[string]any)
 	require.Equal(t, "DONE", status["state"])
 
 	got, err := p.store.GetJob(ctx, j.ProjectID, j.Region, j.JobID)
@@ -329,7 +335,7 @@ func TestCancelJob_AlreadyTerminal_NoOp(t *testing.T) {
 // TestCancelJob_NotFound mirrors EMR: cancelling a missing job returns a 404.
 func TestCancelJob_NotFound(t *testing.T) {
 	p := newProvider(t)
-	_, err := p.CancelJob(context.Background(), testNR(map[string]any{"region": "us-central1", "jobId": "nope"}))
+	_, err := p.CancelJob(context.Background(), "proj", "us-central1", "nope")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "job not found")
 }
@@ -366,9 +372,9 @@ func TestCancelJob_CompletesSubmitOperation(t *testing.T) {
 		ID: j.JobID, Verb: "submit", Target: j.JobID, CreateTime: clock.Now().UTC(),
 	}))
 
-	resp, err := p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	cancelled, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	require.Equal(t, "CANCELLED", resp.Data["status"].(map[string]any)["state"])
+	require.Equal(t, "CANCELLED", JobJSON(cancelled)["status"].(map[string]any)["state"])
 
 	op, err := p.store.GetOperation(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
@@ -387,7 +393,7 @@ func TestCancelJob_CompletesSubmitOperation(t *testing.T) {
 // CancelJob performed the transition, nothing can un-cancel it afterward.
 func TestCancelJobVsFinishJobConcurrent_ResponseMatchesFinalState(t *testing.T) {
 	ctx := context.Background()
-	p := New(&delayedGetJobStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore())
+	p := NewService(&delayedGetJobStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore())
 	j := newTestJob()
 	j.JobID = "j-race-1"
 	require.NoError(t, p.store.CreateJob(ctx, j.ProjectID, j.Region, j))
@@ -395,21 +401,21 @@ func TestCancelJobVsFinishJobConcurrent_ResponseMatchesFinalState(t *testing.T) 
 		ID: j.JobID, Verb: "submit", Target: j.JobID, CreateTime: clock.Now().UTC(),
 	}))
 
-	var cancelResp *model.ProviderResponse
+	var cancelJob dataprocstore.Job
 	var cancelErr error
 	finishDone := make(chan struct{})
 	go func() {
 		defer close(finishDone)
 		p.finishJob(j.ProjectID, j.Region, j, "DONE", "")
 	}()
-	cancelResp, cancelErr = p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+	cancelJob, cancelErr = p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	<-finishDone
 	require.NoError(t, cancelErr)
 
 	got, err := p.store.GetJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
 
-	respState := cancelResp.Data["status"].(map[string]any)["state"]
+	respState := JobJSON(cancelJob)["status"].(map[string]any)["state"]
 	if respState == "CANCELLED" {
 		require.Equal(t, "CANCELLED", got.Status.State,
 			"CancelJob told the client CANCELLED, but the job later resurrected to %q", got.Status.State)
@@ -449,7 +455,7 @@ func TestCancelJob_ConcurrentCancels_SingleTerminal(t *testing.T) {
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			_, err := p.CancelJob(ctx, testNR(map[string]any{"region": j.Region, "jobId": j.JobID}))
+			_, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 			errs <- err
 		}()
 	}

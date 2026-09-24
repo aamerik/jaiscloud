@@ -95,6 +95,8 @@ compute,Compute.SubnetworksList,rest,limited,metadata-only over ResourceStore (n
 compute,Compute.Unimplemented,rest,unsupported,explicit Unimplemented stub
 compute,Compute.ZonesGet,rest,limited,metadata-only over ResourceStore (no control plane)
 compute,Compute.ZonesList,rest,limited,metadata-only over ResourceStore (no control plane)
+dataproc,CancelJob,grpc,ga,
+dataproc,CreateCluster,grpc,ga,
 dataproc,Dataproc.CancelJob,rest,ga,
 dataproc,Dataproc.CreateCluster,rest,ga,
 dataproc,Dataproc.DeleteCluster,rest,ga,
@@ -110,6 +112,19 @@ dataproc,Dataproc.StopCluster,rest,ga,
 dataproc,Dataproc.SubmitJob,rest,ga,covered by the k3d Lakehouse e2e (real Spark on Kubernetes)
 dataproc,Dataproc.SubmitJobAsOperation,rest,ga,
 dataproc,Dataproc.UpdateCluster,rest,ga,
+dataproc,DeleteCluster,grpc,ga,
+dataproc,DeleteJob,grpc,ga,
+dataproc,DiagnoseCluster,grpc,unsupported,explicit Unimplemented stub
+dataproc,GetCluster,grpc,ga,
+dataproc,GetJob,grpc,ga,
+dataproc,ListClusters,grpc,ga,
+dataproc,ListJobs,grpc,ga,
+dataproc,StartCluster,grpc,ga,
+dataproc,StopCluster,grpc,ga,
+dataproc,SubmitJob,grpc,ga,
+dataproc,SubmitJobAsOperation,grpc,ga,
+dataproc,UpdateCluster,grpc,ga,
+dataproc,UpdateJob,grpc,ga,
 datastore,AllocateIds,grpc,ga,
 datastore,BeginTransaction,grpc,ga,
 datastore,Commit,grpc,ga,

@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/dataproc"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -27,7 +28,7 @@ func testNR(params map[string]any) *model.NormalizedRequest {
 
 func newProvider(t *testing.T) *Provider {
 	t.Helper()
-	return New(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	return NewProvider(core.NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
 }
 
 func TestCreateCluster_LRO(t *testing.T) {
@@ -163,7 +164,7 @@ func (d *delayedGetClusterStore) GetCluster(ctx context.Context, projectID, regi
 // TOCTOU window reliably (the real in-memory round trip otherwise completes
 // in nanoseconds, too fast to overlap deterministically).
 func TestUpdateClusterVsStopClusterConcurrent_NoLostUpdate(t *testing.T) {
-	p := New(&delayedGetClusterStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore())
+	p := NewProvider(core.NewService(&delayedGetClusterStore{Store: dataprocstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore()), "proj")
 	ctx := context.Background()
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -486,7 +487,7 @@ func indexOf(s, sub string) int {
 func TestOperationTTLSweep(t *testing.T) {
 	ctx := context.Background()
 	st := dataprocstore.NewMemoryStore()
-	p := New(st, store.NewMemoryResourceStore(), WithOperationTTL(time.Hour))
+	p := NewProvider(core.NewService(st, store.NewMemoryResourceStore(), core.WithOperationTTL(time.Hour)), "proj")
 
 	if err := st.CreateOperation(ctx, "proj", "us-central1", dataprocstore.Operation{
 		ID: "stale", Done: true, CreateTime: clock.Now().UTC().Add(-2 * time.Hour),
@@ -512,40 +513,6 @@ func TestOperationTTLSweep(t *testing.T) {
 	}
 	if _, err := st.GetOperation(ctx, "proj", "us-central1", "fresh"); err != nil {
 		t.Fatalf("fresh op should remain, got %v", err)
-	}
-}
-
-// TestJobSubstateRunning verifies the dataproc.v1 JobStatus.substate field: a
-// submitted/non-terminal job carries the real QUEUED substate, both in the
-// stored JobStatus and in the rendered job response.
-func TestJobSubstateRunning(t *testing.T) {
-	p := newProvider(t)
-	ctx := context.Background()
-
-	j, err := jobToStore(testNR(map[string]any{}), map[string]any{
-		"placement":  map[string]any{"clusterName": "c1"},
-		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
-	}, "us-central1")
-	if err != nil {
-		t.Fatalf("jobToStore: %v", err)
-	}
-	if j.Status.State != "RUNNING" || j.Status.Substate != "QUEUED" {
-		t.Fatalf("submitted job status = %+v, want RUNNING/QUEUED", j.Status)
-	}
-	if got := jobStatusMap(j.Status)["substate"]; got != "QUEUED" {
-		t.Fatalf("rendered substate = %v, want QUEUED", got)
-	}
-
-	if err := p.store.CreateJob(ctx, "proj", "us-central1", j); err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-	resp, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": j.JobID}))
-	if err != nil {
-		t.Fatalf("GetJob: %v", err)
-	}
-	status, _ := resp.Data["status"].(map[string]any)
-	if status["substate"] != "QUEUED" {
-		t.Fatalf("GetJob status.substate = %v, want QUEUED", status["substate"])
 	}
 }
 

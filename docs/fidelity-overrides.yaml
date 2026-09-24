@@ -75,6 +75,12 @@ operations:
     operation: Dataproc.DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
+  # gRPC DiagnoseCluster is the same explicit Unimplemented stub over the
+  # ClusterController surface (the descriptor name carries no "Dataproc." prefix).
+  - service: dataproc
+    operation: DiagnoseCluster
+    state: unsupported
+    reason: "explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
     state: limited
