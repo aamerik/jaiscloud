@@ -195,9 +195,16 @@ func TestGRPCOnlyServices(t *testing.T) {
 	for _, s := range only {
 		got[s] = true
 	}
-	for _, want := range []string{"datastore", "logging", "monitoring"} {
+	// After the Phase 1/2 REST additions, only the long-running Operations
+	// service remains gRPC-only (Workflow Executions gained gRPC in Phase 3).
+	for _, want := range []string{"operations"} {
 		if !got[want] {
 			t.Errorf("GRPCOnlyServices missing %q (got %v)", want, only)
+		}
+	}
+	for _, notWant := range []string{"datastore", "logging", "monitoring", "workflowexecutions"} {
+		if got[notWant] {
+			t.Errorf("GRPCOnlyServices unexpectedly includes %q (got %v)", notWant, only)
 		}
 	}
 	for i := 1; i < len(only); i++ {
