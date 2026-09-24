@@ -9,6 +9,7 @@ require (
 	cloud.google.com/go/kms v1.33.0
 	cloud.google.com/go/logging v1.19.1
 	cloud.google.com/go/longrunning v1.2.0
+	cloud.google.com/go/managedkafka v1.1.0
 	cloud.google.com/go/monitoring v1.30.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/secretmanager v1.21.0

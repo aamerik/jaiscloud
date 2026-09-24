@@ -1,23 +1,23 @@
 {
   "version": 1,
   "summary": {
-    "total": 547,
+    "total": 575,
     "by_state": {
-      "ga": 403,
-      "limited": 95,
+      "ga": 425,
+      "limited": 104,
       "preview": 37,
-      "unsupported": 12
+      "unsupported": 9
     },
     "by_transport": {
       "grpc": {
-        "ga": 160,
-        "limited": 8
+        "ga": 177,
+        "limited": 12
       },
       "rest": {
-        "ga": 243,
-        "limited": 87,
+        "ga": 248,
+        "limited": 92,
         "preview": 37,
-        "unsupported": 12
+        "unsupported": 9
       }
     },
     "by_service": {
@@ -68,9 +68,8 @@
         "limited": 1
       },
       "managedkafka": {
-        "ga": 12,
-        "limited": 1,
-        "unsupported": 3
+        "ga": 34,
+        "limited": 10
       },
       "memorystore": {
         "limited": 8
@@ -3327,6 +3326,199 @@
     },
     {
       "service": "managedkafka",
+      "operation": "AddAclEntry",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "CreateAcl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "CreateCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "CreateTopic",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "DeleteAcl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "DeleteCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "DeleteConsumerGroup",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "DeleteTopic",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "GetAcl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "GetCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "GetConsumerGroup",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so get returns NOT_FOUND",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "GetTopic",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ListAcls",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ListClusters",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ListConsumerGroups",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "no broker data plane; consumer-group listing returns an empty set",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ListTopics",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ManagedKafka.AddAclEntry",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.addAclEntry",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ManagedKafka.CreateAcl",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
       "operation": "ManagedKafka.CreateCluster",
       "transport": "rest",
       "state": "ga",
@@ -3349,6 +3541,17 @@
     },
     {
       "service": "managedkafka",
+      "operation": "ManagedKafka.DeleteAcl",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
       "operation": "ManagedKafka.DeleteCluster",
       "transport": "rest",
       "state": "ga",
@@ -3362,8 +3565,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.DeleteConsumerGroup",
       "transport": "rest",
-      "state": "unsupported",
-      "reason": "explicit Unimplemented stub",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.delete",
         "mutating",
@@ -3383,6 +3586,16 @@
     },
     {
       "service": "managedkafka",
+      "operation": "ManagedKafka.GetAcl",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
       "operation": "ManagedKafka.GetCluster",
       "transport": "rest",
       "state": "ga",
@@ -3395,8 +3608,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.GetConsumerGroup",
       "transport": "rest",
-      "state": "unsupported",
-      "reason": "explicit Unimplemented stub",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so get returns NOT_FOUND",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.get",
         "postgres=yes"
@@ -3406,7 +3619,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.GetOperation",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
       "evidence": [
         "discovery=managedkafka.projects.locations.operations.get",
         "postgres=yes"
@@ -3419,6 +3633,16 @@
       "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.topics.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ManagedKafka.ListAcls",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.list",
         "postgres=yes"
       ]
     },
@@ -3447,7 +3671,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.ListOperations",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
       "evidence": [
         "discovery=managedkafka.projects.locations.operations.list",
         "postgres=yes"
@@ -3460,6 +3685,28 @@
       "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.topics.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ManagedKafka.RemoveAclEntry",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.removeAclEntry",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "ManagedKafka.UpdateAcl",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=managedkafka.projects.locations.clusters.acls.patch",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -3478,8 +3725,8 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.UpdateConsumerGroup",
       "transport": "rest",
-      "state": "unsupported",
-      "reason": "explicit Unimplemented stub",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so update returns NOT_FOUND",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.patch",
         "mutating",
@@ -3495,6 +3742,62 @@
         "discovery=managedkafka.projects.locations.clusters.topics.patch",
         "mutating",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "RemoveAclEntry",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "UpdateAcl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "UpdateCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "UpdateConsumerGroup",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "no broker data plane; consumer groups are never present, so update returns NOT_FOUND",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "managedkafka",
+      "operation": "UpdateTopic",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

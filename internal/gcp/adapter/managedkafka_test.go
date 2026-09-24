@@ -1,35 +1,6 @@
 package gcp
 
-import (
-	"net/http/httptest"
-	"testing"
-)
-
-func TestManagedKafkaCodecDecode(t *testing.T) {
-	cases := []struct {
-		method, path, action string
-	}{
-		{"POST", "/v1/projects/p/locations/us-central1/clusters?clusterId=c", "CreateCluster"},
-		{"GET", "/v1/projects/p/locations/us-central1/clusters", "ListClusters"},
-		{"GET", "/v1/projects/p/locations/us-central1/clusters/c", "GetCluster"},
-		{"PATCH", "/v1/projects/p/locations/us-central1/clusters/c", "UpdateCluster"},
-		{"DELETE", "/v1/projects/p/locations/us-central1/clusters/c", "DeleteCluster"},
-		{"GET", "/v1/projects/p/locations/us-central1/operations", "ListOperations"},
-		{"GET", "/v1/projects/p/locations/us-central1/operations/op", "GetOperation"},
-	}
-	for _, tc := range cases {
-		codec := &ManagedKafkaCodec{Service: "managedkafka"}
-		r := httptest.NewRequest(tc.method, tc.path, nil)
-		nr, err := codec.Decode(r, nil)
-		if err != nil {
-			t.Errorf("%s %s: %v", tc.method, tc.path, err)
-			continue
-		}
-		if nr.Action != tc.action {
-			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
-		}
-	}
-}
+import "testing"
 
 // TestDetectManagedKafkaServiceDoesNotClaimOperations locks the
 // operations-routing decision: the shared locations/{l}/operations/{id} LRO

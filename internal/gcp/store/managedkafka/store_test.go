@@ -78,12 +78,51 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("delete topic: %v", err)
 	}
 
+	// ACLs
+	if _, err := s.GetAcl(ctx, "proj", "us-central1", "my-cluster", "nope"); err != ErrNoSuchAcl {
+		t.Fatalf("expected ErrNoSuchAcl, got %v", err)
+	}
+	acl := Acl{
+		Name:         "topic/orders",
+		AclEntries:   []AclEntry{{Principal: "User:a@example.com", PermissionType: "ALLOW", Operation: "READ", Host: "*"}},
+		Etag:         "e1",
+		ResourceType: "TOPIC",
+		ResourceName: "orders",
+		PatternType:  "LITERAL",
+	}
+	if err := s.CreateAcl(ctx, "proj", "us-central1", "my-cluster", acl); err != nil {
+		t.Fatalf("create acl: %v", err)
+	}
+	if err := s.CreateAcl(ctx, "proj", "us-central1", "my-cluster", acl); err != ErrAlreadyExists {
+		t.Fatalf("expected acl ErrAlreadyExists, got %v", err)
+	}
+	gotAcl, err := s.GetAcl(ctx, "proj", "us-central1", "my-cluster", "topic/orders")
+	if err != nil || len(gotAcl.AclEntries) != 1 || gotAcl.Etag != "e1" {
+		t.Fatalf("get acl: %v %+v", err, gotAcl)
+	}
+	updated, err := s.UpdateAclAtomic(ctx, "proj", "us-central1", "my-cluster", "topic/orders", func(a Acl) (Acl, error) {
+		a.Etag = "e2"
+		a.AclEntries = append(a.AclEntries, AclEntry{Principal: "User:b@example.com", PermissionType: "DENY", Operation: "WRITE", Host: "*"})
+		return a, nil
+	})
+	if err != nil || updated.Etag != "e2" || len(updated.AclEntries) != 2 {
+		t.Fatalf("update acl: %v %+v", err, updated)
+	}
+	alist, err := s.ListAcls(ctx, "proj", "us-central1", "my-cluster")
+	if err != nil || len(alist) != 1 || alist[0].Name != "topic/orders" {
+		t.Fatalf("list acls: %v %+v", err, alist)
+	}
+
 	// Delete cluster
 	if err := s.DeleteCluster(ctx, "proj", "us-central1", "my-cluster"); err != nil {
 		t.Fatalf("delete cluster: %v", err)
 	}
 	if _, err := s.GetCluster(ctx, "proj", "us-central1", "my-cluster"); err != ErrNoSuchCluster {
 		t.Fatalf("expected ErrNoSuchCluster after delete, got %v", err)
+	}
+	// The cluster delete cascades its ACLs.
+	if _, err := s.GetAcl(ctx, "proj", "us-central1", "my-cluster", "topic/orders"); err != ErrNoSuchAcl {
+		t.Fatalf("expected ErrNoSuchAcl after cluster delete, got %v", err)
 	}
 
 	// Operations
@@ -114,6 +153,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	_ = s.CreateCluster(ctx, "p", "l", Cluster{Name: "c", Labels: map[string]string{"k": "v"}, Config: []byte(`{"capacityConfig":{"vcpuCount":3}}`)})
 	_ = s.CreateTopic(ctx, "p", "l", "c", Topic{Name: "t", PartitionCount: 3, ReplicationFactor: 1})
 	_ = s.CreateOperation(ctx, "p", "l", Operation{ID: "op1", Done: true, Metadata: `{"@type":"x"}`, Response: `{}`})
+	_ = s.CreateAcl(ctx, "p", "l", "c", Acl{Name: "cluster", AclEntries: []AclEntry{{Principal: "User:a", PermissionType: "ALLOW", Operation: "ALL", Host: "*"}}, Etag: "e1", ResourceType: "CLUSTER", ResourceName: "kafka-cluster", PatternType: "LITERAL"})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -135,5 +175,9 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	gotOp, err := s2.GetOperation(ctx, "p", "l", "op1")
 	if err != nil || !gotOp.Done || gotOp.Metadata != `{"@type":"x"}` {
 		t.Fatalf("operation lost after restore: %v %+v", err, gotOp)
+	}
+	gotAcl, err := s2.GetAcl(ctx, "p", "l", "c", "cluster")
+	if err != nil || gotAcl.Etag != "e1" || len(gotAcl.AclEntries) != 1 || gotAcl.AclEntries[0].Principal != "User:a" {
+		t.Fatalf("acl lost after restore: %v %+v", err, gotAcl)
 	}
 }

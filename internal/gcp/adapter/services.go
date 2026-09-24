@@ -6,6 +6,7 @@ import (
 	"jaiscloud/internal/adapter"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
+	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
@@ -92,7 +93,7 @@ var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "managedkafka",
 		ProviderPrefix: "ManagedKafka",
-		Codec:          func() adapter.Codec { return &ManagedKafkaCodec{Service: "managedkafka"} },
+		Codec:          func() adapter.Codec { return restmanagedkafka.NewCodec() },
 	},
 	{
 		ServiceName:    "bigquery",

@@ -107,6 +107,18 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Managed Kafka ACLs — callers pass "location/cluster/aclId". An acl id may
+	// itself contain a "/" (e.g. "topic/my-topic"), so the leaf is everything
+	// after the second segment.
+	"managedkafka-acl": func(p, n string) string {
+		loc, cluster, acl := mkTriple(n)
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/acls/%s", p, loc, cluster, acl)
+	},
+	// Managed Kafka consumer groups — callers pass "location/cluster/group".
+	"managedkafka-consumergroup": func(p, n string) string {
+		loc, cluster, group := mkTriple(n)
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/consumerGroups/%s", p, loc, cluster, group)
+	},
 	// Dataproc Metastore (control plane) — names embed the location; callers pass
 	// "location/service", "location/service/backup",
 	// "location/service/import", and "location/operation".
@@ -396,6 +408,21 @@ func wfExec(name string) (loc, wf, ex string) {
 		return parts[0], parts[1], ""
 	}
 	return "-", name, ""
+}
+
+// mkTriple splits "location/cluster/leaf" into its three parts, keeping any
+// remaining slashes in the leaf (an acl id or consumer-group id may contain a
+// "/").
+func mkTriple(name string) (loc, cluster, leaf string) {
+	parts := strings.SplitN(name, "/", 3)
+	switch len(parts) {
+	case 3:
+		return parts[0], parts[1], parts[2]
+	case 2:
+		return parts[0], parts[1], ""
+	default:
+		return "-", name, ""
+	}
 }
 
 // bqTableOf splits a "datasetId/tableId" name into its two segments. A name

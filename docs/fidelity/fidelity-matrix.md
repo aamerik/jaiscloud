@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **547**
+Cells: **575**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 403 |
-| limited | 95 |
+| ga | 425 |
+| limited | 104 |
 | preview | 37 |
-| unsupported | 12 |
+| unsupported | 9 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 243 | 87 | 37 | 12 |
-| grpc | 160 | 8 | 0 | 0 |
+| rest | 248 | 92 | 37 | 9 |
+| grpc | 177 | 12 | 0 | 0 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -419,26 +419,54 @@ _11 cell(s): ga=10 limited=1 preview=0 unsupported=0_
 
 ## managedkafka
 
-_16 cell(s): ga=12 limited=1 preview=0 unsupported=3_
+_44 cell(s): ga=34 limited=10 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| AddAclEntry | grpc | ga | — |
+| CreateAcl | grpc | ga | — |
+| CreateCluster | grpc | ga | — |
+| CreateTopic | grpc | ga | — |
+| DeleteAcl | grpc | ga | — |
+| DeleteCluster | grpc | ga | — |
+| DeleteConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so delete returns NOT_FOUND |
+| DeleteTopic | grpc | ga | — |
+| GetAcl | grpc | ga | — |
+| GetCluster | grpc | ga | — |
+| GetConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so get returns NOT_FOUND |
+| GetTopic | grpc | ga | — |
+| ListAcls | grpc | ga | — |
+| ListClusters | grpc | ga | — |
+| ListConsumerGroups | grpc | limited | no broker data plane; consumer-group listing returns an empty set |
+| ListTopics | grpc | ga | — |
+| ManagedKafka.AddAclEntry | rest | ga | — |
+| ManagedKafka.CreateAcl | rest | ga | — |
 | ManagedKafka.CreateCluster | rest | ga | — |
 | ManagedKafka.CreateTopic | rest | ga | — |
+| ManagedKafka.DeleteAcl | rest | ga | — |
 | ManagedKafka.DeleteCluster | rest | ga | — |
-| ManagedKafka.DeleteConsumerGroup | rest | unsupported | explicit Unimplemented stub |
+| ManagedKafka.DeleteConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so delete returns NOT_FOUND |
 | ManagedKafka.DeleteTopic | rest | ga | — |
+| ManagedKafka.GetAcl | rest | ga | — |
 | ManagedKafka.GetCluster | rest | ga | — |
-| ManagedKafka.GetConsumerGroup | rest | unsupported | explicit Unimplemented stub |
-| ManagedKafka.GetOperation | rest | ga | — |
+| ManagedKafka.GetConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so get returns NOT_FOUND |
+| ManagedKafka.GetOperation | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | ManagedKafka.GetTopic | rest | ga | — |
+| ManagedKafka.ListAcls | rest | ga | — |
 | ManagedKafka.ListClusters | rest | ga | — |
 | ManagedKafka.ListConsumerGroups | rest | limited | no broker data plane; consumer-group listing returns an empty set |
-| ManagedKafka.ListOperations | rest | ga | — |
+| ManagedKafka.ListOperations | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | ManagedKafka.ListTopics | rest | ga | — |
+| ManagedKafka.RemoveAclEntry | rest | ga | — |
+| ManagedKafka.UpdateAcl | rest | ga | — |
 | ManagedKafka.UpdateCluster | rest | ga | — |
-| ManagedKafka.UpdateConsumerGroup | rest | unsupported | explicit Unimplemented stub |
+| ManagedKafka.UpdateConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so update returns NOT_FOUND |
 | ManagedKafka.UpdateTopic | rest | ga | — |
+| RemoveAclEntry | grpc | ga | — |
+| UpdateAcl | grpc | ga | — |
+| UpdateCluster | grpc | ga | — |
+| UpdateConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so update returns NOT_FOUND |
+| UpdateTopic | grpc | ga | — |
 
 ## memorystore
 

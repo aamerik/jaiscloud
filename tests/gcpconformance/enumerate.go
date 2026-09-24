@@ -23,7 +23,6 @@ import (
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
-	managedkafkaprovider "jaiscloud/internal/gcp/provider/managedkafka"
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -34,6 +33,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
+	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
@@ -92,7 +92,7 @@ func providers() []provider.Provider {
 		&workflowsprovider.Provider{},
 		&restworkflowexecutions.Provider{},
 		&dataprocprovider.Provider{},
-		&managedkafkaprovider.Provider{},
+		&restmanagedkafka.Provider{},
 		&metastoreprovider.Provider{},
 		&icebergprovider.Provider{},
 		&bigqueryprovider.Provider{},

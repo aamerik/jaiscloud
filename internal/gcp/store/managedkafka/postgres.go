@@ -142,6 +142,9 @@ func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, location, 
 	if _, err := s.pool.Exec(ctx, `DELETE FROM jc_mk_topics WHERE project_id=$1 AND location=$2 AND cluster_name=$3`, projectID, location, name); err != nil {
 		return err
 	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM jc_mk_acls WHERE project_id=$1 AND location=$2 AND cluster_name=$3`, projectID, location, name); err != nil {
+		return err
+	}
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_mk_clusters WHERE project_id=$1 AND location=$2 AND cluster_name=$3`, projectID, location, name)
 	if err != nil {
 		return err
@@ -368,6 +371,141 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_mk_clusters`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_mk_topics`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_mk_operations`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_mk_acls`)
+}
+
+// --- ACLs ---
+
+func scanAcl(row pgx.Row) (Acl, error) {
+	var a Acl
+	var entries []byte
+	err := row.Scan(&a.ProjectID, &a.Location, &a.ClusterName, &a.Name, &entries, &a.Etag,
+		&a.ResourceType, &a.ResourceName, &a.PatternType)
+	if err != nil {
+		return Acl{}, err
+	}
+	_ = json.Unmarshal(entries, &a.AclEntries)
+	return a, nil
+}
+
+func (s *PostgresStore) CreateAcl(ctx context.Context, projectID, location, clusterName string, a Acl) error {
+	entries, _ := json.Marshal(a.AclEntries)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_mk_acls
+			(project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, projectID, location, clusterName, a.Name, nullableJSONRaw(entries, "[]"), a.Etag, a.ResourceType, a.ResourceName, a.PatternType)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetAcl(ctx context.Context, projectID, location, clusterName, name string) (Acl, error) {
+	a, err := scanAcl(s.pool.QueryRow(ctx, `
+		SELECT project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type
+		FROM jc_mk_acls WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND acl_name=$4
+	`, projectID, location, clusterName, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Acl{}, ErrNoSuchAcl
+	}
+	return a, err
+}
+
+func (s *PostgresStore) UpdateAcl(ctx context.Context, projectID, location, clusterName string, a Acl) error {
+	entries, _ := json.Marshal(a.AclEntries)
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_mk_acls SET entries=$5, etag=$6, resource_type=$7, resource_name=$8, pattern_type=$9
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND acl_name=$4
+	`, projectID, location, clusterName, a.Name, nullableJSONRaw(entries, "[]"), a.Etag, a.ResourceType, a.ResourceName, a.PatternType)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchAcl
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateAclAtomic(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Acl{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanAcl(tx.QueryRow(ctx, `
+		SELECT project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type
+		FROM jc_mk_acls WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND acl_name=$4 FOR UPDATE
+	`, projectID, location, clusterName, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Acl{}, ErrNoSuchAcl
+	}
+	if err != nil {
+		return Acl{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Acl{}, err
+	}
+
+	entries, _ := json.Marshal(next.AclEntries)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_mk_acls SET entries=$5, etag=$6, resource_type=$7, resource_name=$8, pattern_type=$9
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND acl_name=$4
+	`, projectID, location, clusterName, name, nullableJSONRaw(entries, "[]"), next.Etag, next.ResourceType, next.ResourceName, next.PatternType)
+	if err != nil {
+		return Acl{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Acl{}, ErrNoSuchAcl
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Acl{}, err
+	}
+	next.ProjectID = projectID
+	next.Location = location
+	next.ClusterName = clusterName
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteAcl(ctx context.Context, projectID, location, clusterName, name string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_mk_acls WHERE project_id=$1 AND location=$2 AND cluster_name=$3 AND acl_name=$4
+	`, projectID, location, clusterName, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchAcl
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListAcls(ctx context.Context, projectID, location, clusterName string) ([]Acl, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type
+		FROM jc_mk_acls WHERE project_id=$1 AND location=$2 AND cluster_name=$3 ORDER BY acl_name
+	`, projectID, location, clusterName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Acl
+	for rows.Next() {
+		a, err := scanAcl(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
 }
 
 // nullableJSONRaw returns a json.RawMessage for a JSONB column, substituting the

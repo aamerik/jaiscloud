@@ -14,6 +14,7 @@ import (
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -29,6 +30,7 @@ import (
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
+	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 )
@@ -65,6 +67,7 @@ var grpcWireService = map[string]string{
 	"google.monitoring.v3.NotificationChannelService":    "monitoring",
 	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
 	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
+	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
 	"google.iam.v1.IAMPolicy":                            "iam",
 	"google.longrunning.Operations":                      "operations",
 }
@@ -99,6 +102,7 @@ func EnumerateGRPC() []GRPCService {
 	grpcstoragepb.RegisterStorageServer(reg, &grpcstorage.Service{})
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
+	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	// Pub/Sub and KMS share one google.iam.v1.IAMPolicy registration.
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())

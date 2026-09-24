@@ -11,7 +11,7 @@ import (
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.clusters) == 0 && len(s.topics) == 0 && len(s.operations) == 0, nil
+	return len(s.clusters) == 0 && len(s.topics) == 0 && len(s.operations) == 0 && len(s.acls) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
@@ -21,6 +21,7 @@ func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 		"clusters":   s.clusters,
 		"topics":     s.topics,
 		"operations": s.operations,
+		"acls":       s.acls,
 	})
 }
 
@@ -29,6 +30,7 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 		Clusters   map[string]map[string]Cluster   `json:"clusters"`
 		Topics     map[string]map[string]Topic     `json:"topics"`
 		Operations map[string]map[string]Operation `json:"operations"`
+		Acls       map[string]map[string]Acl       `json:"acls"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -42,11 +44,15 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	if snap.Operations == nil {
 		snap.Operations = map[string]map[string]Operation{}
 	}
+	if snap.Acls == nil {
+		snap.Acls = map[string]map[string]Acl{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clusters = snap.Clusters
 	s.topics = snap.Topics
 	s.operations = snap.Operations
+	s.acls = snap.Acls
 	return nil
 }
 
@@ -54,7 +60,7 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 	var n int
-	for _, tbl := range []string{"jc_mk_clusters", "jc_mk_topics", "jc_mk_operations"} {
+	for _, tbl := range []string{"jc_mk_clusters", "jc_mk_topics", "jc_mk_operations", "jc_mk_acls"} {
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+tbl).Scan(&n); err != nil {
 			return false, err
 		}
@@ -78,10 +84,15 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		ProjectID string    `json:"projectId"`
 		Operation Operation `json:"operation"`
 	}
+	type aclRow struct {
+		ProjectID string `json:"projectId"`
+		Acl       Acl    `json:"acl"`
+	}
 
 	clusters := make([]clusterRow, 0)
 	topics := make([]topicRow, 0)
 	operations := make([]operationRow, 0)
+	acls := make([]aclRow, 0)
 
 	crows, err := s.pool.Query(ctx, `
 		SELECT project_id, location, cluster_name, config, labels, create_time, update_time
@@ -149,10 +160,34 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
+	arows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type
+		FROM jc_mk_acls ORDER BY project_id, location, cluster_name, acl_name
+	`)
+	if err != nil {
+		return err
+	}
+	for arows.Next() {
+		var r aclRow
+		var entries []byte
+		if err := arows.Scan(&r.ProjectID, &r.Acl.Location, &r.Acl.ClusterName, &r.Acl.Name, &entries,
+			&r.Acl.Etag, &r.Acl.ResourceType, &r.Acl.ResourceName, &r.Acl.PatternType); err != nil {
+			arows.Close()
+			return err
+		}
+		_ = json.Unmarshal(entries, &r.Acl.AclEntries)
+		acls = append(acls, r)
+	}
+	arows.Close()
+	if err := arows.Err(); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(w).Encode(map[string]any{
 		"clusters":   clusters,
 		"topics":     topics,
 		"operations": operations,
+		"acls":       acls,
 	})
 }
 
@@ -170,6 +205,10 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			ProjectID string    `json:"projectId"`
 			Operation Operation `json:"operation"`
 		} `json:"operations"`
+		Acls []struct {
+			ProjectID string `json:"projectId"`
+			Acl       Acl    `json:"acl"`
+		} `json:"acls"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -179,7 +218,7 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for _, tbl := range []string{"jc_mk_clusters", "jc_mk_topics", "jc_mk_operations"} {
+	for _, tbl := range []string{"jc_mk_clusters", "jc_mk_topics", "jc_mk_operations", "jc_mk_acls"} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl); err != nil {
 			return err
 		}
@@ -210,6 +249,17 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		`, r.ProjectID, r.Operation.Location, r.Operation.ID, r.Operation.Done, r.Operation.Metadata, r.Operation.Response,
 			r.Operation.Verb, r.Operation.Target, r.Operation.CreateTime, r.Operation.EndTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Acls {
+		entries, _ := json.Marshal(r.Acl.AclEntries)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_mk_acls
+				(project_id, location, cluster_name, acl_name, entries, etag, resource_type, resource_name, pattern_type)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		`, r.ProjectID, r.Acl.Location, r.Acl.ClusterName, r.Acl.Name, nullableJSONRaw(entries, "[]"),
+			r.Acl.Etag, r.Acl.ResourceType, r.Acl.ResourceName, r.Acl.PatternType); err != nil {
 			return err
 		}
 	}
