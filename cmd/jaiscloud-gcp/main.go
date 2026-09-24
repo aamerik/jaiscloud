@@ -46,7 +46,6 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
-	serviceusageprovider "jaiscloud/internal/gcp/provider/serviceusage"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
@@ -55,6 +54,7 @@ import (
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
+	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
@@ -81,6 +81,7 @@ import (
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
@@ -88,6 +89,7 @@ import (
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
@@ -112,6 +114,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	"github.com/go-chi/chi/v5"
@@ -345,8 +348,11 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
-			// Service Usage v1 is metadata-only over the shared ResourceStore.
-			serviceusageP := serviceusageprovider.New(stores.resources)
+			// Service Usage v1's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports run
+			// against one store and cannot drift.
+			serviceUsageCore := serviceusagecore.NewService(stores.resources)
+			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
 			// Cloud Resource Manager v1 project IAM is metadata-only over the
 			// shared ResourceStore (policies via internal/gcp/policy).
@@ -411,6 +417,7 @@ func startCmd() *cobra.Command {
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
+			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID)
 			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID)
@@ -431,6 +438,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("managedkafka") {
 					managedkafkapb.RegisterManagedKafkaServer(gserv.GRPC(), managedKafkaGRPC)
+				}
+				if transports.GRPCFor("serviceusage") {
+					serviceusagepb.RegisterServiceUsageServer(gserv.GRPC(), serviceUsageGRPC)
 				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)

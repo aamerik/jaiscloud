@@ -21,6 +21,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	grpcserver "jaiscloud/internal/gcp/grpc"
@@ -37,6 +38,7 @@ import (
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 )
 
@@ -77,6 +79,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
 	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
 	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
+	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.iam.v1.IAMPolicy":                            "iam",
 	"google.longrunning.Operations":                      "operations",
 }
@@ -112,6 +115,7 @@ func EnumerateGRPC() []GRPCService {
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
+	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})

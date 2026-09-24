@@ -92,6 +92,13 @@ operations:
     operation: ListRuntimes
     state: unsupported
     reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
+  # Service Usage gRPC is control-plane only: the service/get/list/enable/disable
+  # surface is implemented, while BatchGetServices is an explicit Unimplemented
+  # stub (the REST surface does not implement it either).
+  - service: serviceusage
+    operation: BatchGetServices
+    state: unsupported
+    reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
     state: limited
