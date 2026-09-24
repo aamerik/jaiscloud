@@ -51,11 +51,11 @@ import (
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	serviceusageprovider "jaiscloud/internal/gcp/provider/serviceusage"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
-	workflowexecutionsprovider "jaiscloud/internal/gcp/provider/workflowexecutions"
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
+	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -78,9 +78,11 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -100,6 +102,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
@@ -238,7 +241,11 @@ func startCmd() *cobra.Command {
 
 			workflowsEngine := workflowengine.New()
 			workflowsP := workflowsprovider.New(stores.workflows)
-			workflowExecutionsP := workflowexecutionsprovider.New(stores.workflows, workflowsEngine)
+			// Cloud Workflow Executions' transport-neutral core is shared by the
+			// REST provider and the gRPC adapter below, so both transports run
+			// against one store and one engine and cannot drift.
+			workflowExecutionsCore := workflowexecutionscore.NewService(stores.workflows, workflowsEngine)
+			workflowExecutionsP := restworkflowexecutions.NewProvider(workflowExecutionsCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
@@ -382,6 +389,7 @@ func startCmd() *cobra.Command {
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
+			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -393,6 +401,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("datastore") {
 					datastorepb.RegisterDatastoreServer(gserv.GRPC(), datastoreGRPC)
+				}
+				if transports.GRPCFor("workflowexecutions") {
+					executionspb.RegisterExecutionsServer(gserv.GRPC(), workflowExecutionsGRPC)
 				}
 				if transports.GRPCFor("pubsub") {
 					pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)

@@ -17,6 +17,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
@@ -29,6 +30,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 )
 
 // GRPCService is one gRPC service the emulator registers, read back from the
@@ -62,6 +64,7 @@ var grpcWireService = map[string]string{
 	"google.monitoring.v3.AlertPolicyService":            "monitoring",
 	"google.monitoring.v3.NotificationChannelService":    "monitoring",
 	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
+	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
 	"google.iam.v1.IAMPolicy":                            "iam",
 	"google.longrunning.Operations":                      "operations",
 }
@@ -95,6 +98,7 @@ func EnumerateGRPC() []GRPCService {
 	monitoringpb.RegisterNotificationChannelServiceServer(reg, &grpcmonitoring.Service{})
 	grpcstoragepb.RegisterStorageServer(reg, &grpcstorage.Service{})
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
+	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
 	// Pub/Sub and KMS share one google.iam.v1.IAMPolicy registration.
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())

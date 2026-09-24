@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **543**
+Cells: **547**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 399 |
+| ga | 403 |
 | limited | 95 |
 | preview | 37 |
 | unsupported | 12 |
@@ -22,7 +22,7 @@ Cells: **543**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 243 | 87 | 37 | 12 |
-| grpc | 156 | 8 | 0 | 0 |
+| grpc | 160 | 8 | 0 | 0 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -722,10 +722,14 @@ _52 cell(s): ga=51 limited=1 preview=0 unsupported=0_
 
 ## workflowexecutions
 
-_4 cell(s): ga=4 limited=0 preview=0 unsupported=0_
+_8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CancelExecution | grpc | ga | — |
+| CreateExecution | grpc | ga | — |
+| GetExecution | grpc | ga | — |
+| ListExecutions | grpc | ga | — |
 | WorkflowExecution.CancelExecution | rest | ga | — |
 | WorkflowExecution.CreateExecution | rest | ga | — |
 | WorkflowExecution.GetExecution | rest | ga | — |

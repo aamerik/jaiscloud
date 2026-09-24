@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 161,
-  "passed": 161,
+  "total": 165,
+  "passed": 165,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 10,
-    "checks": 161,
-    "passed": 161,
+    "services": 11,
+    "checks": 165,
+    "passed": 165,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -81,6 +81,13 @@
       "service": "storage",
       "total": 23,
       "passed": 23,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "workflowexecutions",
+      "total": 4,
+      "passed": 4,
       "failed": 0,
       "unimplemented": 0
     }
@@ -1191,6 +1198,34 @@
       "method": "DeleteNotificationChannel",
       "status": "pass",
       "key_field": "channel absent after delete"
+    },
+    {
+      "service": "workflowexecutions",
+      "rpc": "CreateExecution",
+      "method": "CreateExecution",
+      "status": "pass",
+      "key_field": "state=SUCCEEDED + result=42"
+    },
+    {
+      "service": "workflowexecutions",
+      "rpc": "GetExecution",
+      "method": "GetExecution",
+      "status": "pass",
+      "key_field": "name/state/result round-trip"
+    },
+    {
+      "service": "workflowexecutions",
+      "rpc": "ListExecutions",
+      "method": "ListExecutions",
+      "status": "pass",
+      "key_field": "created execution present in list"
+    },
+    {
+      "service": "workflowexecutions",
+      "rpc": "CancelExecution",
+      "method": "CancelExecution",
+      "status": "pass",
+      "key_field": "terminal execution returned unchanged"
     },
     {
       "service": "iam",

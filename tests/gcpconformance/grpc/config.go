@@ -18,17 +18,25 @@ import (
 const (
 	// DefaultEndpoint is the emulator's default gRPC listener.
 	DefaultEndpoint = "localhost:8081"
+	// DefaultRESTEndpoint is the emulator's default REST listener. The
+	// Workflow Executions probes use it to deploy their prerequisite workflow
+	// (the Workflows management API is REST-only).
+	DefaultRESTEndpoint = "http://localhost:8080"
 	// DefaultProject mirrors internal/config's default GCP project.
 	DefaultProject = "jaiscloud-project"
 
-	endpointEnv = "GCP_EMULATOR_ENDPOINT_GRPC"
-	projectEnv  = "GCP_EMULATOR_PROJECT"
+	endpointEnv     = "GCP_EMULATOR_ENDPOINT_GRPC"
+	restEndpointEnv = "GCP_EMULATOR_ENDPOINT_REST"
+	projectEnv      = "GCP_EMULATOR_PROJECT"
 )
 
 // Config is the resolved per-run emulator connection + naming context.
 type Config struct {
 	// Endpoint is the gRPC host:port the emulator listens on (no scheme).
 	Endpoint string
+	// RESTEndpoint is the REST base URL (with scheme) of the emulator, used by
+	// probes that must deploy a prerequisite over the management API.
+	RESTEndpoint string
 	// Project is the GCP project all resources are created under.
 	Project string
 	// Suffix is a per-run unique token appended to every resource name so
@@ -44,14 +52,19 @@ func ConfigFromEnv() Config {
 	if endpoint == "" {
 		endpoint = DefaultEndpoint
 	}
+	restEndpoint := strings.TrimSpace(os.Getenv(restEndpointEnv))
+	if restEndpoint == "" {
+		restEndpoint = DefaultRESTEndpoint
+	}
 	project := strings.TrimSpace(os.Getenv(projectEnv))
 	if project == "" {
 		project = DefaultProject
 	}
 	return Config{
-		Endpoint: stripScheme(endpoint),
-		Project:  project,
-		Suffix:   runSuffix(),
+		Endpoint:     stripScheme(endpoint),
+		RESTEndpoint: restEndpoint,
+		Project:      project,
+		Suffix:       runSuffix(),
 	}
 }
 

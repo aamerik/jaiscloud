@@ -7,6 +7,7 @@ import (
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
 
 // ServiceDescriptor captures the per-service metadata needed by the router and
@@ -75,9 +76,13 @@ var gcpServices = []ServiceDescriptor{
 		Codec:          func() adapter.Codec { return &JSONCodec{Service: "workflows"} },
 	},
 	{
+		// Cloud Workflow Executions v1 shares the /v1/ prefix; its execution
+		// paths are claimed by segment detection (detectV1Service) on the
+		// "executions" segment. The codec lives with the REST transport package
+		// that adapts it to the shared core.
 		ServiceName:    "workflowexecutions",
 		ProviderPrefix: "WorkflowExecution",
-		Codec:          func() adapter.Codec { return &JSONCodec{Service: "workflowexecutions"} },
+		Codec:          func() adapter.Codec { return restworkflowexecutions.NewCodec() },
 	},
 	{
 		ServiceName:    "dataproc",
