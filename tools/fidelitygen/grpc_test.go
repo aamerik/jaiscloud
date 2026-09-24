@@ -16,7 +16,7 @@ func TestGRPCFactsEveryMethod(t *testing.T) {
 		t.Fatal("EnumerateGRPC returned no services")
 	}
 
-	want := 0
+	want := map[string]bool{}
 	for _, s := range services {
 		if s.WireService == "" || s.Service == "" {
 			t.Errorf("service with empty wire/service name: %+v", s)
@@ -24,12 +24,14 @@ func TestGRPCFactsEveryMethod(t *testing.T) {
 		if len(s.Methods) == 0 {
 			t.Errorf("%s (%s): no methods", s.WireService, s.Service)
 		}
-		want += len(s.Methods)
+		for _, m := range s.Methods {
+			want[s.Service+"/"+m] = true
+		}
 	}
 
 	facts := GRPCFacts(services, &Overrides{}, nil)
-	if len(facts) != want {
-		t.Fatalf("got %d facts, want one per enumerated gRPC method (%d)", len(facts), want)
+	if len(facts) != len(want) {
+		t.Fatalf("got %d facts, want one per unique (service, method) (%d)", len(facts), len(want))
 	}
 
 	seen := map[string]bool{}

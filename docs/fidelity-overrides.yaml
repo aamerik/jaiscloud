@@ -81,6 +81,17 @@ operations:
     operation: DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
+  # Cloud Functions gRPC is control-plane only: v1 CallFunction is runtime
+  # invocation and v2 ListRuntimes has no emulator implementation, so both are
+  # explicit Unimplemented stubs (the REST surface does implement CallFunction).
+  - service: functions
+    operation: CallFunction
+    state: unsupported
+    reason: "runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub"
+  - service: functions
+    operation: ListRuntimes
+    state: unsupported
+    reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
     state: limited

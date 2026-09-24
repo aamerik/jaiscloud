@@ -11,6 +11,8 @@ import (
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
+	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
+	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
@@ -31,6 +33,7 @@ import (
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
@@ -59,6 +62,8 @@ type GRPCService struct {
 var grpcWireService = map[string]string{
 	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
 	"google.cloud.dataproc.v1.JobController":             "dataproc",
+	"google.cloud.functions.v1.CloudFunctionsService":    "functions",
+	"google.cloud.functions.v2.FunctionService":          "functions",
 	"google.storage.v2.Storage":                          "storage",
 	"google.firestore.v1.Firestore":                      "firestore",
 	"google.datastore.v1.Datastore":                      "datastore",
@@ -109,6 +114,8 @@ func EnumerateGRPC() []GRPCService {
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
+	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
+	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	// Pub/Sub and KMS share one google.iam.v1.IAMPolicy registration.
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())

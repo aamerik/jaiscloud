@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **590**
+Cells: **602**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 439 |
+| ga | 449 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 10 |
+| unsupported | 12 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 92 | 37 | 9 |
-| grpc | 191 | 12 | 0 | 1 |
+| grpc | 201 | 12 | 0 | 3 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -277,10 +277,13 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 
 ## functions
 
-_17 cell(s): ga=14 limited=3 preview=0 unsupported=0_
+_29 cell(s): ga=24 limited=3 preview=0 unsupported=2_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CallFunction | grpc | unsupported | runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub |
+| CreateFunction | grpc | ga | — |
+| DeleteFunction | grpc | ga | — |
 | Function.CallFunction | rest | ga | — |
 | Function.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
 | Function.CreateFunction | rest | ga | — |
@@ -298,6 +301,15 @@ _17 cell(s): ga=14 limited=3 preview=0 unsupported=0_
 | Function.ListLocations | rest | ga | — |
 | Function.ListOperations | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
+| GenerateDownloadUrl | grpc | ga | — |
+| GenerateUploadUrl | grpc | ga | — |
+| GetFunction | grpc | ga | — |
+| GetIamPolicy | grpc | ga | — |
+| ListFunctions | grpc | ga | — |
+| ListRuntimes | grpc | unsupported | not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub |
+| SetIamPolicy | grpc | ga | — |
+| TestIamPermissions | grpc | ga | — |
+| UpdateFunction | grpc | ga | — |
 
 ## iam
 
