@@ -11,10 +11,13 @@ import (
 
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
+
+const operationMetadataTypeV2 = "type.googleapis.com/google.cloud.functions.v2.OperationMetadata"
 
 // stubExecutor captures the InvokeRequest and optionally returns a fixed error.
 type stubExecutor struct {
@@ -43,6 +46,18 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: params, ResourceID: resource.ResourceID("proj")}
 }
 
+// newNRv2 builds a v2 request (apiVersion=v2) with the standard project wiring.
+func newNRv2(params map[string]any) *model.NormalizedRequest {
+	nr := newNR(params)
+	nr.Params["apiVersion"] = "v2"
+	return nr
+}
+
+func newProvider(t *testing.T, resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *Provider {
+	t.Helper()
+	return NewProvider(core.NewService(functionsstore.NewMemoryStore(), resources, core.WithExecutor(exec)), "proj")
+}
+
 // operationResponse asserts resp is a done google.longrunning.Operation and
 // returns its response object (the Function for create/update, {} for delete).
 func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]any {
@@ -51,8 +66,8 @@ func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]an
 		t.Fatalf("expected done operation, got %v", resp.Data)
 	}
 	meta, _ := resp.Data["metadata"].(map[string]any)
-	if meta == nil || meta["@type"] != "type.googleapis.com/google.cloud.functions.v1.OperationMetadata" {
-		t.Fatalf("expected functions OperationMetadata, got %v", resp.Data["metadata"])
+	if meta == nil || meta["@type"] != "type.googleapis.com/google.cloud.functions.v1.OperationMetadataV1" {
+		t.Fatalf("expected functions OperationMetadataV1, got %v", resp.Data["metadata"])
 	}
 	if _, ok := resp.Data["name"].(string); !ok {
 		t.Fatalf("expected operation name, got %v", resp.Data["name"])
@@ -66,7 +81,7 @@ func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]an
 
 func TestFunctionCRUD(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	// Create returns a done Operation wrapping the Function.
 	nr := newNR(map[string]any{
@@ -142,19 +157,12 @@ func TestFunctionCRUD(t *testing.T) {
 	}
 }
 
-// newNRv2 builds a v2 request (apiVersion=v2) with the standard project wiring.
-func newNRv2(params map[string]any) *model.NormalizedRequest {
-	nr := newNR(params)
-	nr.Params["apiVersion"] = "v2"
-	return nr
-}
-
 // TestFunctionCRUDv2 exercises the Cloud Functions v2 wire shape end to end:
 // create (v2 buildConfig body) → get/list emit state/buildConfig/serviceConfig,
 // and update merges nested buildConfig fields.
 func TestFunctionCRUDv2(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	create := newNRv2(map[string]any{
 		"location":   "us-central1",
@@ -256,7 +264,7 @@ func TestFunctionCRUDv2(t *testing.T) {
 // list is empty, and cancel/delete return empty objects.
 func TestOperationsV2(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	resp, err := p.GetOperation(ctx, newNRv2(map[string]any{
 		"location": "us-central1", "name": "locations/us-central1/operations/op1",
@@ -314,24 +322,13 @@ func (d *delayedGetStore) GetFunction(ctx context.Context, projectID, location, 
 
 // TestUpdateFunctionConcurrentDisjointFieldsNoLostUpdate proves that
 // UpdateFunction's get-merge-write cycle is atomic with respect to other
-// concurrent PATCH requests. Without atomicity, a PATCH that only intends to
-// change "description" reads a stale full copy of the function (taken before
-// a concurrent "runtime"-only PATCH committed), then writes that stale copy
-// back — silently reverting the runtime change even though the description
-// PATCH never touched runtime. Here, 25 goroutines each PATCH only "runtime"
-// to a unique value and 25 PATCH only "description" to a unique value; if the
-// bug is present, the final runtime (or description) will revert to its
-// original pre-race value because some racing writer's stale snapshot landed
-// last, instead of ending on one of the values a goroutine actually wrote.
+// concurrent PATCH requests.
 func TestUpdateFunctionConcurrentDisjointFieldsNoLostUpdate(t *testing.T) {
 	ctx := context.Background()
-	// delayedGetStore widens the TOCTOU window between a read and a
-	// subsequent write so the race manifests reliably instead of depending on
-	// scheduler luck (in-memory Get+merge+Update round trips otherwise
-	// complete in nanoseconds, too fast to overlap reliably). Irrelevant to
-	// the fixed code path, which no longer calls GetFunction from Update at
-	// all — UpdateFunctionAtomic does its own locked read internally.
-	p := New(&delayedGetStore{Store: functionsstore.NewMemoryStore(), delay: 5 * time.Millisecond}, store.NewMemoryResourceStore(), nil)
+	p := NewProvider(core.NewService(
+		&delayedGetStore{Store: functionsstore.NewMemoryStore(), delay: 5 * time.Millisecond},
+		store.NewMemoryResourceStore(),
+	), "proj")
 
 	createNR := newNR(map[string]any{
 		"location":   "us-central1",
@@ -393,13 +390,11 @@ func TestUpdateFunctionConcurrentDisjointFieldsNoLostUpdate(t *testing.T) {
 	}
 }
 
-// TestListFunctions_AllLocationsWildcard verifies that location="-"
-// aggregates functions across every region for the project, matching real
-// Cloud Functions' "locations/-/functions" wildcard, instead of doing an
-// exact-match lookup under the literal location "-" (which is always empty).
+// TestListFunctions_AllLocationsWildcard verifies that location="-" aggregates
+// functions across every region for the project.
 func TestListFunctions_AllLocationsWildcard(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	for _, loc := range []string{"us-central1", "europe-west1"} {
 		nr := newNR(map[string]any{
@@ -415,7 +410,6 @@ func TestListFunctions_AllLocationsWildcard(t *testing.T) {
 		}
 	}
 
-	// A single-location list only sees that region's function.
 	resp, err := p.ListFunctions(ctx, newNR(map[string]any{"location": "us-central1"}))
 	if err != nil {
 		t.Fatalf("list us-central1: %v", err)
@@ -424,7 +418,6 @@ func TestListFunctions_AllLocationsWildcard(t *testing.T) {
 		t.Fatalf("expected 1 function in us-central1, got %d", len(fns))
 	}
 
-	// The "-" wildcard sees both.
 	resp, err = p.ListFunctions(ctx, newNR(map[string]any{"location": "-"}))
 	if err != nil {
 		t.Fatalf("list -: %v", err)
@@ -437,7 +430,7 @@ func TestListFunctions_AllLocationsWildcard(t *testing.T) {
 
 func TestCallFunctionMockEcho(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	nr := newNR(map[string]any{
 		"location":   "us-central1",
@@ -448,7 +441,6 @@ func TestCallFunctionMockEcho(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Call with the mock executor: result echoes the request data.
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/echo",
 		"body": map[string]any{"data": "hello world"}})
 	resp, err := p.CallFunction(ctx, nr)
@@ -462,7 +454,6 @@ func TestCallFunctionMockEcho(t *testing.T) {
 		t.Errorf("expected non-empty executionId")
 	}
 
-	// Calling a missing function → 404.
 	nr = newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/missing",
 		"body": map[string]any{"data": "x"}})
 	if _, err := p.CallFunction(ctx, nr); err == nil {
@@ -472,7 +463,7 @@ func TestCallFunctionMockEcho(t *testing.T) {
 
 func TestGenerateUploadUrl(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 	nr := newNR(map[string]any{"location": "us-central1"})
 	resp, err := p.GenerateUploadUrl(ctx, nr)
 	if err != nil {
@@ -485,9 +476,8 @@ func TestGenerateUploadUrl(t *testing.T) {
 
 func TestIamPolicyLocationScoped(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
-	// Same function ID in two locations.
 	for _, loc := range []string{"us-central1", "europe-west1"} {
 		nr := newNR(map[string]any{
 			"location":   loc,
@@ -499,7 +489,6 @@ func TestIamPolicyLocationScoped(t *testing.T) {
 		}
 	}
 
-	// Set policy in us-central1.
 	set := newNR(map[string]any{
 		"location": "us-central1",
 		"name":     "locations/us-central1/functions/foo",
@@ -513,7 +502,6 @@ func TestIamPolicyLocationScoped(t *testing.T) {
 		t.Fatalf("set iam: %v", err)
 	}
 
-	// Same id in a DIFFERENT location must return an empty policy.
 	get := newNR(map[string]any{
 		"location": "europe-west1",
 		"name":     "locations/europe-west1/functions/foo",
@@ -526,7 +514,6 @@ func TestIamPolicyLocationScoped(t *testing.T) {
 		t.Errorf("expected empty bindings in other location, got %v", b)
 	}
 
-	// Same location must still return the policy.
 	get2 := newNR(map[string]any{
 		"location": "us-central1",
 		"name":     "locations/us-central1/functions/foo",
@@ -543,7 +530,7 @@ func TestIamPolicyLocationScoped(t *testing.T) {
 func TestCallFunctionExecutorErrorReturns200(t *testing.T) {
 	ctx := context.Background()
 	exec := &stubExecutor{err: errors.New("boom")}
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), exec)
+	p := NewProvider(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), core.WithExecutor(exec)), "proj")
 
 	nr := newNR(map[string]any{
 		"location":   "us-central1",
@@ -577,7 +564,7 @@ func TestCallFunctionExecutorErrorReturns200(t *testing.T) {
 func TestCallFunctionPropagatesMemoryAndTimeout(t *testing.T) {
 	ctx := context.Background()
 	exec := &stubExecutor{}
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), exec)
+	p := NewProvider(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), core.WithExecutor(exec)), "proj")
 
 	nr := newNR(map[string]any{
 		"location":   "us-central1",
@@ -623,7 +610,7 @@ func providerError(t *testing.T, err error) *model.ProviderError {
 
 func TestUpdateFunctionUpdateMask(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	create := newNR(map[string]any{
 		"location":   "us-central1",
@@ -638,8 +625,6 @@ func TestUpdateFunctionUpdateMask(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Masked update: only the masked field is applied even though the body
-	// carries another field.
 	masked := newNR(map[string]any{
 		"location":   "us-central1",
 		"name":       "locations/us-central1/functions/f",
@@ -658,7 +643,6 @@ func TestUpdateFunctionUpdateMask(t *testing.T) {
 		t.Errorf("unmasked description = %v, want d0 (retained)", got["description"])
 	}
 
-	// Empty mask = replace every mutable field present in the body.
 	full := newNR(map[string]any{
 		"location": "us-central1",
 		"name":     "locations/us-central1/functions/f",
@@ -676,7 +660,6 @@ func TestUpdateFunctionUpdateMask(t *testing.T) {
 		t.Errorf("runtime should be retained on full update, got %v", got["runtime"])
 	}
 
-	// Unsupported mask path -> 501 UNIMPLEMENTED, and the store is untouched.
 	bad := newNR(map[string]any{
 		"location":   "us-central1",
 		"name":       "locations/us-central1/functions/f",
@@ -699,7 +682,7 @@ func TestUpdateFunctionUpdateMask(t *testing.T) {
 
 func TestGenerateDownloadUrl(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	create := newNR(map[string]any{
 		"location":   "us-central1",
@@ -721,7 +704,6 @@ func TestGenerateDownloadUrl(t *testing.T) {
 		t.Errorf("unexpected downloadUrl: %q", u)
 	}
 
-	// Missing function -> NotFound.
 	_, err = p.GenerateDownloadUrl(ctx, newNR(map[string]any{
 		"location": "us-central1", "name": "locations/us-central1/functions/missing",
 	}))
@@ -732,7 +714,7 @@ func TestGenerateDownloadUrl(t *testing.T) {
 
 func TestListLocationsPagination(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
 	resp, err := p.ListLocations(ctx, newNR(map[string]any{"pageSize": "2"}))
 	if err != nil {
@@ -775,9 +757,8 @@ func TestListLocationsPagination(t *testing.T) {
 
 func TestFunctionValidation(t *testing.T) {
 	ctx := context.Background()
-	p := New(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), nil)
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
-	// Missing runtime.
 	_, err := p.CreateFunction(ctx, newNR(map[string]any{
 		"location": "us-central1", "functionId": "f", "body": map[string]any{"entryPoint": "h"},
 	}))
@@ -785,7 +766,6 @@ func TestFunctionValidation(t *testing.T) {
 		t.Errorf("missing runtime: code=%q status=%d, want InvalidArgument/400", perr.Code, perr.HTTPStatus)
 	}
 
-	// Missing functionId (no body name).
 	_, err = p.CreateFunction(ctx, newNR(map[string]any{
 		"location": "us-central1", "body": map[string]any{"runtime": "nodejs20"},
 	}))
@@ -793,7 +773,6 @@ func TestFunctionValidation(t *testing.T) {
 		t.Errorf("missing functionId: code=%q, want InvalidArgument", perr.Code)
 	}
 
-	// Malformed body name on create.
 	_, err = p.CreateFunction(ctx, newNR(map[string]any{
 		"location": "us-central1", "body": map[string]any{"name": "not-a-resource-name", "runtime": "nodejs20"},
 	}))
@@ -801,7 +780,6 @@ func TestFunctionValidation(t *testing.T) {
 		t.Errorf("malformed create name: code=%q, want InvalidArgument", perr.Code)
 	}
 
-	// Malformed name on update.
 	_, err = p.UpdateFunction(ctx, newNR(map[string]any{
 		"location": "us-central1", "name": "badname", "body": map[string]any{"runtime": "nodejs20"},
 	}))
@@ -809,7 +787,6 @@ func TestFunctionValidation(t *testing.T) {
 		t.Errorf("malformed update name: code=%q, want InvalidArgument", perr.Code)
 	}
 
-	// Malformed name on delete.
 	_, err = p.DeleteFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "badname"}))
 	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
 		t.Errorf("malformed delete name: code=%q, want InvalidArgument", perr.Code)

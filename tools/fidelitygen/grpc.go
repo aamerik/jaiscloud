@@ -52,8 +52,20 @@ func grpcDefaultOverride() *Override {
 // the default limited cells, which keeps the function testable without I/O.
 func GRPCFacts(services []conf.GRPCService, ov *Overrides, report *grpcReport) []Facts {
 	var facts []Facts
+	// Two wire services may belong to the same fidelity service and share RPC
+	// method names (Cloud Functions v1 CloudFunctionsService and v2
+	// FunctionService both declare GetFunction/CreateFunction/...). The matrix
+	// keys a cell by (service, operation, transport), so emit one fact per
+	// unique (fidelity service, method) and let the conformance report coverage
+	// aggregate across the wire services behind it.
+	seen := map[string]bool{}
 	for _, svc := range services {
 		for _, method := range svc.Methods {
+			key := svc.Service + "/" + method
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			cov := report.coverage(svc.Service, method)
 
 			var override *Override

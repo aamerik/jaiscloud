@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 590,
+    "total": 602,
     "by_state": {
-      "ga": 439,
+      "ga": 449,
       "limited": 104,
       "preview": 37,
-      "unsupported": 10
+      "unsupported": 12
     },
     "by_transport": {
       "grpc": {
-        "ga": 191,
+        "ga": 201,
         "limited": 12,
-        "unsupported": 1
+        "unsupported": 3
       },
       "rest": {
         "ga": 248,
@@ -51,8 +51,9 @@
         "ga": 33
       },
       "functions": {
-        "ga": 14,
-        "limited": 3
+        "ga": 24,
+        "limited": 3,
+        "unsupported": 2
       },
       "iam": {
         "ga": 16
@@ -2221,6 +2222,39 @@
     },
     {
       "service": "functions",
+      "operation": "CallFunction",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "CreateFunction",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "DeleteFunction",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "functions",
       "operation": "Function.CallFunction",
       "transport": "rest",
       "state": "ga",
@@ -2393,6 +2427,99 @@
         "discovery=cloudfunctions.projects.locations.functions.patch",
         "mutating",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "GenerateDownloadUrl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "GenerateUploadUrl",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "GetFunction",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=3/3 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "GetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "ListFunctions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "ListRuntimes",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "SetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "TestIamPermissions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "UpdateFunction",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {

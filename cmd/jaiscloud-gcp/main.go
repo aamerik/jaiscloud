@@ -38,7 +38,6 @@ import (
 	computeprovider "jaiscloud/internal/gcp/provider/compute"
 	eventarcprovider "jaiscloud/internal/gcp/provider/eventarc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
-	functionsprovider "jaiscloud/internal/gcp/provider/functions"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
@@ -52,6 +51,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
+	functionscore "jaiscloud/internal/gcp/service/functions"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
@@ -77,12 +77,14 @@ import (
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
+	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
@@ -100,6 +102,8 @@ import (
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
+	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
+	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
@@ -228,10 +232,12 @@ func startCmd() *cobra.Command {
 			monitoringRestP := restmonitoring.NewProvider(monitoringCore, cfg.ProjectID)
 
 			// Cloud Functions reuses the Lambda executor: mock echo by default,
-			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The executor (warm
-			// container pool / K8s client) is only built when functions is
-			// enabled.
-			var functionsP provider.Provider
+			// Docker/K8s under JAISCLOUD_EXECUTOR_MODE. The transport-neutral
+			// core is shared by the REST provider and the gRPC adapter below, so
+			// both transports own one function store and one executor. The
+			// executor (warm container pool / K8s client) is only built when
+			// functions is enabled.
+			var functionsCore *functionscore.Service
 			if serviceEnabled("functions") {
 				lambdaMode, lambdaModeSrc := config.ExecutorMode("lambda", "mock")
 				lambdaCfg := lambdaexec.DefaultLambdaConfig()
@@ -242,8 +248,9 @@ func startCmd() *cobra.Command {
 				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
 				defer lambdaExec.Close()
 				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
-				functionsP = functionsprovider.New(stores.functions, stores.resources, lambdaExec)
+				functionsCore = functionscore.NewService(stores.functions, stores.resources, functionscore.WithExecutor(lambdaExec))
 			}
+			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
 
 			workflowsEngine := workflowengine.New()
 			workflowsP := workflowsprovider.New(stores.workflows)
@@ -405,6 +412,8 @@ func startCmd() *cobra.Command {
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
+			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID)
+			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -426,6 +435,10 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
+				}
+				if transports.GRPCFor("functions") {
+					functionspb.RegisterCloudFunctionsServiceServer(gserv.GRPC(), functionsGRPC)
+					apiv2functionspb.RegisterFunctionServiceServer(gserv.GRPC(), functionsV2GRPC)
 				}
 				if transports.GRPCFor("pubsub") {
 					pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)
