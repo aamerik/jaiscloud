@@ -19,6 +19,7 @@ var (
 	ErrNoSuchCluster   = errors.New("NoSuchCluster")
 	ErrNoSuchTopic     = errors.New("NoSuchTopic")
 	ErrNoSuchOperation = errors.New("NoSuchOperation")
+	ErrNoSuchAcl       = errors.New("NoSuchAcl")
 	ErrAlreadyExists   = errors.New("AlreadyExists")
 )
 
@@ -67,6 +68,31 @@ type Operation struct {
 	EndTime    time.Time `json:"endTime"`
 }
 
+// AclEntry is one access grant within an Acl. The fields are the caller-supplied
+// Kafka ACL entry values; PermissionType/Operation are stored verbatim.
+type AclEntry struct {
+	Principal      string `json:"principal"`
+	PermissionType string `json:"permissionType"`
+	Operation      string `json:"operation"`
+	Host           string `json:"host"`
+}
+
+// Acl is a managed Kafka ACL: a set of entries for one resource pattern. The
+// acl ID (Name) encodes the pattern; ResourceType, ResourceName, and
+// PatternType are the derived output-only fields, and Etag provides optimistic
+// concurrency control across mutations.
+type Acl struct {
+	ProjectID    string     `json:"projectId"`
+	Location     string     `json:"location"`
+	ClusterName  string     `json:"clusterName"`
+	Name         string     `json:"aclId"`
+	AclEntries   []AclEntry `json:"aclEntries"`
+	Etag         string     `json:"etag"`
+	ResourceType string     `json:"resourceType"`
+	ResourceName string     `json:"resourceName"`
+	PatternType  string     `json:"patternType"`
+}
+
 // Store is the Managed Kafka store.
 type Store interface {
 	CreateCluster(ctx context.Context, projectID, location string, c Cluster) error
@@ -101,6 +127,17 @@ type Store interface {
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
+
+	// ACLs are cluster-scoped metadata keyed by the acl id (which encodes the
+	// resource pattern). UpdateAclAtomic performs the etag-checked
+	// get-mutate-set cycle so a concurrent UpdateAcl on the same acl cannot
+	// lose a write.
+	CreateAcl(ctx context.Context, projectID, location, clusterName string, a Acl) error
+	GetAcl(ctx context.Context, projectID, location, clusterName, name string) (Acl, error)
+	UpdateAcl(ctx context.Context, projectID, location, clusterName string, a Acl) error
+	UpdateAclAtomic(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error)
+	DeleteAcl(ctx context.Context, projectID, location, clusterName, name string) error
+	ListAcls(ctx context.Context, projectID, location, clusterName string) ([]Acl, error)
 
 	Reset(ctx context.Context)
 }

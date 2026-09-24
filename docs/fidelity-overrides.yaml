@@ -77,16 +77,16 @@ operations:
     reason: "explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
-    state: unsupported
-    reason: "explicit Unimplemented stub"
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
   - service: managedkafka
     operation: ManagedKafka.UpdateConsumerGroup
-    state: unsupported
-    reason: "explicit Unimplemented stub"
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
   - service: managedkafka
     operation: ManagedKafka.DeleteConsumerGroup
-    state: unsupported
-    reason: "explicit Unimplemented stub"
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
 
   # REST operations deliberately left limited: implemented to the extent the
   # emulator models the subsystem, with the missing plane named in the reason.
@@ -94,6 +94,34 @@ operations:
     operation: ManagedKafka.ListConsumerGroups
     state: limited
     reason: "no broker data plane; consumer-group listing returns an empty set"
+  - service: managedkafka
+    operation: ManagedKafka.GetOperation
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+  - service: managedkafka
+    operation: ManagedKafka.ListOperations
+    state: limited
+    reason: "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)"
+
+  # gRPC consumer-group methods are limited for the same reason as their REST
+  # counterparts: the emulator has no broker, so a list is always empty and the
+  # item methods report NOT_FOUND.
+  - service: managedkafka
+    operation: ListConsumerGroups
+    state: limited
+    reason: "no broker data plane; consumer-group listing returns an empty set"
+  - service: managedkafka
+    operation: GetConsumerGroup
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
+  - service: managedkafka
+    operation: UpdateConsumerGroup
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
+  - service: managedkafka
+    operation: DeleteConsumerGroup
+    state: limited
+    reason: "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
 
   # gRPC methods deliberately left limited: each is gated on a subsystem the
   # emulator does not model, so implementing it would fabricate a wire-divergent

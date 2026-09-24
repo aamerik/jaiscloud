@@ -299,22 +299,50 @@ logging,Logging.LogList,rest,ga,
 logging,Logging.MonitoredResourceDescriptorList,rest,ga,
 logging,TailLogEntries,grpc,limited,bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists
 logging,WriteLogEntries,grpc,ga,
+managedkafka,AddAclEntry,grpc,ga,
+managedkafka,CreateAcl,grpc,ga,
+managedkafka,CreateCluster,grpc,ga,
+managedkafka,CreateTopic,grpc,ga,
+managedkafka,DeleteAcl,grpc,ga,
+managedkafka,DeleteCluster,grpc,ga,
+managedkafka,DeleteConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
+managedkafka,DeleteTopic,grpc,ga,
+managedkafka,GetAcl,grpc,ga,
+managedkafka,GetCluster,grpc,ga,
+managedkafka,GetConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
+managedkafka,GetTopic,grpc,ga,
+managedkafka,ListAcls,grpc,ga,
+managedkafka,ListClusters,grpc,ga,
+managedkafka,ListConsumerGroups,grpc,limited,no broker data plane; consumer-group listing returns an empty set
+managedkafka,ListTopics,grpc,ga,
+managedkafka,ManagedKafka.AddAclEntry,rest,ga,
+managedkafka,ManagedKafka.CreateAcl,rest,ga,
 managedkafka,ManagedKafka.CreateCluster,rest,ga,
 managedkafka,ManagedKafka.CreateTopic,rest,ga,
+managedkafka,ManagedKafka.DeleteAcl,rest,ga,
 managedkafka,ManagedKafka.DeleteCluster,rest,ga,
-managedkafka,ManagedKafka.DeleteConsumerGroup,rest,unsupported,explicit Unimplemented stub
+managedkafka,ManagedKafka.DeleteConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
 managedkafka,ManagedKafka.DeleteTopic,rest,ga,
+managedkafka,ManagedKafka.GetAcl,rest,ga,
 managedkafka,ManagedKafka.GetCluster,rest,ga,
-managedkafka,ManagedKafka.GetConsumerGroup,rest,unsupported,explicit Unimplemented stub
-managedkafka,ManagedKafka.GetOperation,rest,ga,
+managedkafka,ManagedKafka.GetConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
+managedkafka,ManagedKafka.GetOperation,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
 managedkafka,ManagedKafka.GetTopic,rest,ga,
+managedkafka,ManagedKafka.ListAcls,rest,ga,
 managedkafka,ManagedKafka.ListClusters,rest,ga,
 managedkafka,ManagedKafka.ListConsumerGroups,rest,limited,no broker data plane; consumer-group listing returns an empty set
-managedkafka,ManagedKafka.ListOperations,rest,ga,
+managedkafka,ManagedKafka.ListOperations,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
 managedkafka,ManagedKafka.ListTopics,rest,ga,
+managedkafka,ManagedKafka.RemoveAclEntry,rest,ga,
+managedkafka,ManagedKafka.UpdateAcl,rest,ga,
 managedkafka,ManagedKafka.UpdateCluster,rest,ga,
-managedkafka,ManagedKafka.UpdateConsumerGroup,rest,unsupported,explicit Unimplemented stub
+managedkafka,ManagedKafka.UpdateConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
 managedkafka,ManagedKafka.UpdateTopic,rest,ga,
+managedkafka,RemoveAclEntry,grpc,ga,
+managedkafka,UpdateAcl,grpc,ga,
+managedkafka,UpdateCluster,grpc,ga,
+managedkafka,UpdateConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
+managedkafka,UpdateTopic,grpc,ga,
 memorystore,Memorystore.CreateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.DeleteInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.GetInstance,rest,limited,metadata-only over ResourceStore (no data plane)

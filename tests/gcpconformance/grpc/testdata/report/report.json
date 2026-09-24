@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 165,
-  "passed": 165,
+  "total": 183,
+  "passed": 183,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 11,
-    "checks": 165,
-    "passed": 165,
+    "services": 12,
+    "checks": 183,
+    "passed": 183,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -46,6 +46,13 @@
       "service": "logging",
       "total": 5,
       "passed": 5,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "managedkafka",
+      "total": 18,
+      "passed": 18,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1226,6 +1233,132 @@
       "method": "CancelExecution",
       "status": "pass",
       "key_field": "terminal execution returned unchanged"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "CreateCluster",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "LRO done + ACTIVE cluster"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "GetCluster",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "name/state round-trip"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "ListClusters",
+      "method": "ListClusters",
+      "status": "pass",
+      "key_field": "created cluster present"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "UpdateCluster",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "DeleteCluster",
+      "method": "DeleteCluster",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "CreateTopic",
+      "method": "CreateTopic",
+      "status": "pass",
+      "key_field": "partition/replication round-trip"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "GetTopic",
+      "method": "GetTopic",
+      "status": "pass",
+      "key_field": "name/fields round-trip"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "ListTopics",
+      "method": "ListTopics",
+      "status": "pass",
+      "key_field": "created topic present"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "UpdateTopic",
+      "method": "UpdateTopic",
+      "status": "pass",
+      "key_field": "partitionCount updated"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "DeleteTopic",
+      "method": "DeleteTopic",
+      "status": "pass",
+      "key_field": "NotFound after delete"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "CreateAcl",
+      "method": "CreateAcl",
+      "status": "pass",
+      "key_field": "resourceType/etag derived"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "GetAcl",
+      "method": "GetAcl",
+      "status": "pass",
+      "key_field": "entries/etag round-trip"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "ListAcls",
+      "method": "ListAcls",
+      "status": "pass",
+      "key_field": "created acl present"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "UpdateAcl",
+      "method": "UpdateAcl",
+      "status": "pass",
+      "key_field": "etag grows on update"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "DeleteAcl",
+      "method": "DeleteAcl",
+      "status": "pass",
+      "key_field": "NotFound after delete"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "AddAclEntry",
+      "method": "AddAclEntry",
+      "status": "pass",
+      "key_field": "entry appended"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "RemoveAclEntry",
+      "method": "RemoveAclEntry",
+      "status": "pass",
+      "key_field": "last entry deletes acl"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "ListConsumerGroups",
+      "method": "ListConsumerGroups",
+      "status": "pass",
+      "key_field": "empty set (no broker)"
     },
     {
       "service": "iam",

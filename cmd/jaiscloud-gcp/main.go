@@ -43,7 +43,6 @@ import (
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
 	kmsprovider "jaiscloud/internal/gcp/provider/kms"
-	managedkafkaprovider "jaiscloud/internal/gcp/provider/managedkafka"
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
@@ -54,6 +53,7 @@ import (
 	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
+	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	"jaiscloud/internal/gcp/sparkgcp"
@@ -77,10 +77,12 @@ import (
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
+	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
+	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	"jaiscloud/internal/gcp/transportcfg"
@@ -99,6 +101,7 @@ import (
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
+	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -303,7 +306,11 @@ func startCmd() *cobra.Command {
 				defer dataprocP.Shutdown(context.Background())
 			}
 
-			managedkafkaP := managedkafkaprovider.New(stores.managedkafka)
+			// Managed Kafka's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports run
+			// against one store and cannot drift.
+			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka)
+			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
 			metastoreP := metastoreprovider.New(stores.metastore)
 
@@ -390,6 +397,7 @@ func startCmd() *cobra.Command {
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
+			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -404,6 +412,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("workflowexecutions") {
 					executionspb.RegisterExecutionsServer(gserv.GRPC(), workflowExecutionsGRPC)
+				}
+				if transports.GRPCFor("managedkafka") {
+					managedkafkapb.RegisterManagedKafkaServer(gserv.GRPC(), managedKafkaGRPC)
 				}
 				if transports.GRPCFor("pubsub") {
 					pubsubpb.RegisterPublisherServer(gserv.GRPC(), pubsubGRPC)

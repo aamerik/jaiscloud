@@ -65,6 +65,11 @@ var actionOverrides = map[string]string{
 	"Monitoring.SendNotificationChannelVerificationCode": "monitoring.projects.notificationChannels.sendVerificationCode",
 	"Monitoring.GetNotificationChannelVerificationCode":  "monitoring.projects.notificationChannels.getVerificationCode",
 
+	// Managed Kafka ACL custom-verb methods do not derive from the CamelCase
+	// heuristic (the resource segment is nested under clusters.acls).
+	"ManagedKafka.AddAclEntry":    "managedkafka.projects.locations.clusters.acls.addAclEntry",
+	"ManagedKafka.RemoveAclEntry": "managedkafka.projects.locations.clusters.acls.removeAclEntry",
+
 	// Cloud Resource Manager v1 project surface (the discovery document's
 	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
 	// emulator's wire service name "resourcemanager").
