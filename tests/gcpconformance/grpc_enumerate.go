@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
@@ -28,6 +29,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
@@ -55,6 +57,8 @@ type GRPCService struct {
 // they are standard gRPC infrastructure, not GCP API surface, and would not
 // belong in the fidelity matrix.
 var grpcWireService = map[string]string{
+	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
+	"google.cloud.dataproc.v1.JobController":             "dataproc",
 	"google.storage.v2.Storage":                          "storage",
 	"google.firestore.v1.Firestore":                      "firestore",
 	"google.datastore.v1.Datastore":                      "datastore",
@@ -103,6 +107,8 @@ func EnumerateGRPC() []GRPCService {
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
+	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
+	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	// Pub/Sub and KMS share one google.iam.v1.IAMPolicy registration.
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())

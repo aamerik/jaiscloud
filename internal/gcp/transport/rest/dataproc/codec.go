@@ -1,4 +1,19 @@
-package gcp
+// Package dataproc is the REST transport for Cloud Dataproc v1
+// (dataproc.googleapis.com/v1).
+//
+// Real GCP serves the Dataproc protos over both gRPC and REST (grpc-gateway
+// transcoding), and the REST surface here follows the vendored Discovery
+// document. The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the
+// core's typed API); the Provider holds the routes. Neither owns business
+// logic — both delegate to the single core Service shared with the gRPC
+// transport (see internal/gcp/service/dataproc).
+//
+// Unlike the other /v1/projects/{project}/... services, Dataproc resources live
+// under /v1/projects/{project}/regions/{region} and expose clusters, jobs, and
+// long-running operations (also a first-class REST method — not gRPC-only).
+// Custom methods are suffix-call on a resource (:start, :stop, :diagnose,
+// :cancel) or on the collection (jobs:submit, jobs:submitAsOperation).
+package dataproc
 
 import (
 	"encoding/json"
@@ -10,20 +25,23 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// DataprocCodec decodes the Dataproc v1 REST surface
-// (dataproc.googleapis.com/v1). Unlike the other /v1/projects/{project}/...
-// services, Dataproc resources live under /v1/projects/{project}/regions/{region}
-// and expose clusters, jobs, and long-running operations (also a first-class
-// REST method — not gRPC-only). Custom methods are suffix-call on a resource
-// (:start, :stop, :diagnose, :cancel) or on the collection (jobs:submit,
-// jobs:submitAsOperation).
-type DataprocCodec struct {
-	Service string
-}
+// ServiceName is the wire service name.
+const ServiceName = "dataproc"
 
-func (c *DataprocCodec) ServiceName() string { return c.Service }
+// Codec decodes the Dataproc v1 REST surface into a NormalizedRequest and
+// encodes provider responses as the GCP JSON envelope. It satisfies
+// adapter.Codec structurally (the adapter package imports this package, so this
+// package must not import it).
+type Codec struct{}
 
-func (c *DataprocCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+// NewCodec returns the Dataproc REST codec.
+func NewCodec() *Codec { return &Codec{} }
+
+// ServiceName implements adapter.Codec.
+func (c *Codec) ServiceName() string { return ServiceName }
+
+// Decode parses a v1 Dataproc path into a NormalizedRequest.
+func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
 	for i, s := range seg {
@@ -36,7 +54,7 @@ func (c *DataprocCodec) Decode(r *http.Request, body []byte) (*model.NormalizedR
 		return nil, model.NewProviderError("InvalidRequest", "missing project in resource path", 404)
 	}
 
-	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
 	m, err := parseJSON(body)
@@ -152,8 +170,8 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 	return ""
 }
 
-// Encode serialises a provider response as JSON (shared with JSONCodec).
-func (c *DataprocCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+// Encode serialises a provider response as JSON.
+func (c *Codec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	status := resp.HTTPStatus
 	if status == 0 {
 		status = http.StatusOK
@@ -171,7 +189,7 @@ func (c *DataprocCodec) Encode(nr *model.NormalizedRequest, resp *model.Provider
 }
 
 // EncodeError serialises a ProviderError as a GCP error envelope.
-func (c *DataprocCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
 		status = http.StatusInternalServerError

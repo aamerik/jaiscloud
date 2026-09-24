@@ -5,10 +5,38 @@ import (
 	"fmt"
 
 	"jaiscloud/internal/clock"
-	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
-	"jaiscloud/internal/model"
+	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/sparkhelpers"
 )
+
+// JobInput carries the caller-supplied fields of a job submission.
+type JobInput struct {
+	JobID                string
+	PlacementClusterName string
+	Type                 string
+	TypeJob              json.RawMessage
+	Labels               map[string]string
+}
+
+// JobInputFromMap builds a JobInput from the Discovery/proto Job map (the
+// nested "job" object of a SubmitJob request).
+func JobInputFromMap(jobBody map[string]any) JobInput {
+	in := JobInput{Labels: bodyStringMap(jobBody, "labels")}
+	if ref, ok := jobBody["reference"].(map[string]any); ok {
+		in.JobID = bodyString(ref, "jobId")
+	}
+	if placement, ok := jobBody["placement"].(map[string]any); ok {
+		in.PlacementClusterName = bodyString(placement, "clusterName")
+	}
+	jobType, typeJob := extractJobType(jobBody)
+	in.Type = jobType
+	if jobType != "" && typeJob != nil {
+		if data, err := json.Marshal(typeJob); err == nil {
+			in.TypeJob = data
+		}
+	}
+	return in
+}
 
 // jobTypeKeys is the set of Dataproc oneof type-job field names in precedence
 // order. Only Spark-family types run; hadoopJob/hiveJob/pigJob/sparkSqlJob/
@@ -91,41 +119,23 @@ func propertiesToConfArgs(typeJob map[string]any) []string {
 	return out
 }
 
-// jobToStore builds the store Job from a SubmitJob body's nested "job" object.
-func jobToStore(nr *model.NormalizedRequest, jobBody map[string]any, region string) (dataprocstore.Job, error) {
-	jobID := bodyString(jobBodyRef(jobBody), "jobId")
+// jobToStore builds the store Job from a SubmitJob input.
+func jobToStore(project, region string, in JobInput) dpstore.Job {
+	jobID := in.JobID
 	if jobID == "" {
 		jobID = randomHex(16)
 	}
-	placement, _ := jobBody["placement"].(map[string]any)
-	clusterName := bodyString(placement, "clusterName")
-	jobType, typeJob := extractJobType(jobBody)
-
 	now := clock.Now().UTC()
-	j := dataprocstore.Job{
-		ProjectID:            nr.AccountID,
+	return dpstore.Job{
+		ProjectID:            project,
 		Region:               region,
 		JobID:                jobID,
-		PlacementClusterName: clusterName,
-		Type:                 jobType,
-		Labels:               bodyStringMap(jobBody, "labels"),
-		Status:               dataprocstore.JobStatus{State: "RUNNING", StateStartTime: now, Substate: substateRunning},
+		PlacementClusterName: in.PlacementClusterName,
+		Type:                 in.Type,
+		TypeJob:              in.TypeJob,
+		Labels:               in.Labels,
+		Status:               dpstore.JobStatus{State: "RUNNING", StateStartTime: now, Substate: substateRunning},
 		JobUUID:              randomHex(32),
 		CreateTime:           now,
 	}
-	if jobType != "" && typeJob != nil {
-		if data, err := json.Marshal(typeJob); err == nil {
-			j.TypeJob = data
-		}
-	}
-	return j, nil
-}
-
-// jobBodyRef returns the job reference object, or an empty map when absent.
-func jobBodyRef(jobBody map[string]any) map[string]any {
-	if jobBody == nil {
-		return nil
-	}
-	ref, _ := jobBody["reference"].(map[string]any)
-	return ref
 }

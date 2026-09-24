@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/adapter"
+	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
@@ -88,7 +89,7 @@ var gcpServices = []ServiceDescriptor{
 	{
 		ServiceName:    "dataproc",
 		ProviderPrefix: "Dataproc",
-		Codec:          func() adapter.Codec { return &DataprocCodec{Service: "dataproc"} },
+		Codec:          func() adapter.Codec { return restdataproc.NewCodec() },
 	},
 	{
 		ServiceName:    "managedkafka",

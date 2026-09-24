@@ -2,6 +2,7 @@ package dataproc
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,7 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/clock"
+	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/store"
 )
 
@@ -18,18 +20,19 @@ import (
 // owner-patch/cleanup wiring is exercised without a live cluster.
 func TestRunJob_SubmitClientModeWithFakeK8s(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
-	p := New(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+	p := NewService(dpstore.NewMemoryStore(), store.NewMemoryResourceStore(),
 		WithK8s(k8s, "jaiscloud", nil),
 		WithSparkImage("spark:test"),
 	)
+	t.Cleanup(func() { p.Shutdown(context.Background()) })
 
-	j := dataprocstore.Job{
+	j := dpstore.Job{
 		ProjectID: "proj",
 		Region:    "us-central1",
 		JobID:     "j1",
 		Type:      "pysparkJob",
 		TypeJob:   []byte(`{"mainPythonFileUri":"gs://b/main.py"}`),
-		Status:    dataprocstore.JobStatus{State: "RUNNING", StateStartTime: time.Now()},
+		Status:    dpstore.JobStatus{State: "RUNNING", StateStartTime: clock.Now().UTC()},
 	}
 	if err := p.store.CreateJob(context.Background(), "proj", "us-central1", j); err != nil {
 		t.Fatalf("create job: %v", err)
@@ -45,7 +48,7 @@ func TestRunJob_SubmitClientModeWithFakeK8s(t *testing.T) {
 		p.runJob(ctx, "proj", "us-central1", j)
 	}()
 
-	// Wait until the spark-submit Job appears, then cancel the provider context.
+	// Wait until the spark-submit Job appears, then cancel the core context.
 	require.Eventually(t, func() bool {
 		jobs, err := k8s.BatchV1().Jobs("jaiscloud").List(context.Background(), metav1.ListOptions{})
 		return err == nil && len(jobs.Items) > 0
@@ -64,57 +67,52 @@ func TestRunJob_SubmitClientModeWithFakeK8s(t *testing.T) {
 // RUNNING), and finishJob flips it to done=true with the terminal job response.
 func TestSubmitJobAsOperation_K8sDoneFalseThenCompletes(t *testing.T) {
 	k8s := fake.NewSimpleClientset()
-	p := New(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+	p := NewService(dpstore.NewMemoryStore(), store.NewMemoryResourceStore(),
 		WithK8s(k8s, "jaiscloud", nil),
 		WithSparkImage("spark:test"),
 	)
-	defer p.cancel() // unblock the runJob goroutine spawned by submitJob
+	// Unblock the runJob goroutine spawned by submitJob.
+	t.Cleanup(func() { p.Shutdown(context.Background()) })
 
-	_, _ = p.CreateCluster(context.Background(), testNR(map[string]any{
-		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
-	}))
+	ctx := context.Background()
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+		t.Fatalf("create cluster: %v", err)
+	}
 
-	resp, err := p.SubmitJobAsOperation(context.Background(), testNR(map[string]any{
-		"region": "us-central1",
-		"body": map[string]any{
-			"job": map[string]any{
-				"reference": map[string]any{"jobId": "j1"},
-				"placement": map[string]any{"clusterName": "c1"},
-				"pysparkJob": map[string]any{
-					"mainPythonFileUri": "gs://b/main.py",
-				},
-			},
+	op, err := p.SubmitJobAsOperation(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+		"reference": map[string]any{"jobId": "j1"},
+		"placement": map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{
+			"mainPythonFileUri": "gs://b/main.py",
 		},
 	}))
 	if err != nil {
 		t.Fatalf("SubmitJobAsOperation: %v", err)
 	}
-	op := resp.Data
-	if op["done"] != false {
-		t.Fatalf("expected done=false for a still-RUNNING k8s job, got %v", op["done"])
+	if op.Done {
+		t.Fatalf("expected done=false for a still-RUNNING k8s job, got %v", op.Done)
 	}
 
 	// Simulate terminal completion: finishJob writes DONE and flips the op.
-	j, err := p.store.GetJob(context.Background(), "proj", "us-central1", "j1")
+	j, err := p.store.GetJob(ctx, "proj", "us-central1", "j1")
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
 	p.finishJob("proj", "us-central1", j, "DONE", "")
 
 	// Operation id == job id, so GetOperation finds it via the job id.
-	got, err := p.GetOperation(context.Background(), testNR(map[string]any{"region": "us-central1", "operationId": "j1"}))
+	got, err := p.GetOperation(ctx, "proj", "us-central1", "j1")
 	if err != nil {
 		t.Fatalf("GetOperation: %v", err)
 	}
-	if got.Data["done"] != true {
-		t.Fatalf("expected done=true after finishJob, got %v", got.Data["done"])
+	if !got.Done {
+		t.Fatalf("expected done=true after finishJob, got %v", got.Done)
 	}
-	respObj, _ := got.Data["response"].(map[string]any)
-	if respObj == nil {
-		t.Fatalf("expected response on completed operation, got %v", got.Data)
+	var respMap map[string]any
+	if err := json.Unmarshal([]byte(got.Response), &respMap); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if st, _ := respObj["status"].(map[string]any); st["state"] != "DONE" {
-		t.Fatalf("expected response status DONE, got %v", respObj)
+	if state := respMap["status"].(map[string]any)["state"]; state != "DONE" {
+		t.Fatalf("expected response status DONE, got %v", state)
 	}
 }
