@@ -47,7 +47,6 @@ import (
 	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
-	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	functionscore "jaiscloud/internal/gcp/service/functions"
@@ -56,6 +55,7 @@ import (
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
+	workflowscore "jaiscloud/internal/gcp/service/workflows"
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
@@ -83,6 +83,7 @@ import (
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
+	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
@@ -91,6 +92,7 @@ import (
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
+	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -115,6 +117,7 @@ import (
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
+	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
 	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	"github.com/go-chi/chi/v5"
@@ -256,7 +259,15 @@ func startCmd() *cobra.Command {
 			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
 
 			workflowsEngine := workflowengine.New()
-			workflowsP := workflowsprovider.New(stores.workflows)
+			// Cloud Workflows' transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports run
+			// against one store and one piece of state and cannot drift. The
+			// core is only built when workflows is enabled on some transport.
+			var workflowsCore *workflowscore.Service
+			if serviceEnabled("workflows") {
+				workflowsCore = workflowscore.NewService(stores.workflows)
+			}
+			workflowsP := restworkflows.NewProvider(workflowsCore, cfg.ProjectID)
 			// Cloud Workflow Executions' transport-neutral core is shared by the
 			// REST provider and the gRPC adapter below, so both transports run
 			// against one store and one engine and cannot drift.
@@ -419,6 +430,7 @@ func startCmd() *cobra.Command {
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
+			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID)
 			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
@@ -435,6 +447,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("workflowexecutions") {
 					executionspb.RegisterExecutionsServer(gserv.GRPC(), workflowExecutionsGRPC)
+				}
+				if transports.GRPCFor("workflows") {
+					workflowspb.RegisterWorkflowsServer(gserv.GRPC(), workflowsGRPC)
 				}
 				if transports.GRPCFor("managedkafka") {
 					managedkafkapb.RegisterManagedKafkaServer(gserv.GRPC(), managedKafkaGRPC)

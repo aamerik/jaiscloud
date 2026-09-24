@@ -54,18 +54,18 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 454 |
+| ga | 459 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 13 |
-| **total** | **608** |
+| unsupported | 14 |
+| **total** | **614** |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 248 | 92 | 37 | 9 |
-| gRPC (proto descriptors + official-client conformance) | 206 | 12 | 0 | 4 |
+| gRPC (proto descriptors + official-client conformance) | 211 | 12 | 0 | 5 |
 
 gRPC-only services (no REST transport): **Operations (long-running)**.
 
@@ -99,6 +99,7 @@ verified against the proto descriptors only (see §7).
   `google.cloud.secretmanager.v1.SecretManagerService`,
   `google.logging.v2.LoggingServiceV2`, `google.monitoring.v3.*`,
   `google.cloud.workflows.executions.v1.Executions`,
+  `google.cloud.workflows.v1.Workflows`,
   `google.cloud.managedkafka.v1.ManagedKafka`,
   `google.api.serviceusage.v1.ServiceUsage`,
   `google.cloud.dataproc.v1.ClusterController`, `google.cloud.dataproc.v1.JobController`,
@@ -138,10 +139,10 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **220/220 checks pass** (Dataproc 14,
+- **gRPC** — official `cloud.google.com/go` clients: **225/225 checks pass** (Dataproc 14,
   Datastore 11, Firestore 18, Functions 18, IAM 3, KMS 31, Logging 5, Managed Kafka 18,
   Monitoring 24, Operations 5, Pub/Sub 25, Secret Manager 16, Service Usage 5, Storage 23,
-  Workflow Executions 4) against `:8081`.
+  Workflow Executions 4, Workflows 5) against `:8081`.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
   (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
@@ -200,16 +201,17 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
   (runtime invocation) and v2 `ListRuntimes` are explicit `unsupported` `Unimplemented` stubs —
   the gRPC surface is control-plane only.
-- **gRPC** — **12** of **222** cells remain `limited`: verified against proto descriptors only.
-  The other **206** are `ga` (plus **4** explicit `unsupported` stubs, Dataproc `DiagnoseCluster`,
-  Functions `CallFunction`/`ListRuntimes`, and Service Usage `BatchGetServices`),
+- **gRPC** — **12** of **228** cells remain `limited`: verified against proto descriptors only.
+  The other **211** are `ga` (plus **5** explicit `unsupported` stubs, Dataproc `DiagnoseCluster`,
+  Functions `CallFunction`/`ListRuntimes`, Service Usage `BatchGetServices`, and Workflows
+  `ListWorkflowRevisions`),
   verified with the official `cloud.google.com/go` clients against a
   live emulator (Dataproc 14, Datastore 8, Storage 23, IAM 3, KMS 31, Secret Manager 15, Logging 5,
   Managed Kafka 17, Operations 5, Pub/Sub 25, Firestore 17, Monitoring 24,
-  Workflow Executions 4, Functions 10, Service Usage 5). The conformance
-  harness exercises 220 checks over those 206 proto methods (Dataproc 14, Datastore 11, Firestore 18,
+  Workflow Executions 4, Workflows 5, Functions 10, Service Usage 5). The conformance
+  harness exercises 225 checks over those 211 proto methods (Dataproc 14, Datastore 11, Firestore 18,
   Functions 18, IAM 3, KMS 31, Managed Kafka 18, Monitoring 24, Operations 5, Storage 23,
-  Secret Manager 16, Workflow Executions 4, Service Usage 5, the rest one per method). KMS
+  Secret Manager 16, Workflow Executions 4, Workflows 5, Service Usage 5, the rest one per method). KMS
   `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
   `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`, as do Secret
   Manager `RotateSecret`/`EnableManagedRotation` (Cloud SQL managed rotation with no data plane
@@ -244,7 +246,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
   `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`;
   Dataproc `DiagnoseCluster`; Functions `CallFunction` (runtime invocation) and `ListRuntimes`;
-  Service Usage `BatchGetServices` (the gRPC surface is the get/list/enable/disable control plane).
+  Service Usage `BatchGetServices` (the gRPC surface is the get/list/enable/disable control plane);
+  Workflows `ListWorkflowRevisions` (workflow revision history is not modelled).
   These fail loud
   with an explicit `Unimplemented` error rather than a plausible empty response.
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores

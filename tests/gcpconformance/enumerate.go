@@ -27,7 +27,6 @@ import (
 	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
-	workflowsprovider "jaiscloud/internal/gcp/provider/workflows"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
@@ -36,6 +35,7 @@ import (
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
+	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 )
 
 // Operation is one entry in the emulator's dispatch registry, keyed by
@@ -89,7 +89,7 @@ func providers() []provider.Provider {
 		&pubsubprovider.Provider{},
 		&firestoreprovider.Provider{},
 		&restfunctions.Provider{},
-		&workflowsprovider.Provider{},
+		&restworkflows.Provider{},
 		&restworkflowexecutions.Provider{},
 		&restdataproc.Provider{},
 		&restmanagedkafka.Provider{},

@@ -125,6 +125,18 @@ func TestJSONCodecDecode(t *testing.T) {
 	}
 }
 
+func TestWorkflowsListRevisionsUnsupported(t *testing.T) {
+	// Workflow revision history is not modelled: the REST path must fail loud
+	// (404) rather than fall through to GetWorkflow and return the workflow.
+	codec := &JSONCodec{Service: "workflows"}
+	for _, method := range []string{"GET", "POST"} {
+		path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
+		if _, err := codec.Decode(httptest.NewRequest(method, path, nil), nil); err == nil {
+			t.Errorf("%s %s: expected unsupported (404)", method, path)
+		}
+	}
+}
+
 func TestFunctionsLocationsCodec(t *testing.T) {
 	// The Cloud Functions codec derives location-discovery actions from the
 	// shared locations resource type; the bare path itself is claimed by the
