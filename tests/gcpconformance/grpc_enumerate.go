@@ -10,6 +10,7 @@ import (
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
+	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -37,6 +38,7 @@ import (
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
+	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
@@ -87,6 +89,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.workflows.v1.Workflows":                "workflows",
 	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
 	"google.cloud.metastore.v1.DataprocMetastore":        "metastore",
+	"google.cloud.eventarc.v1.Eventarc":                  "eventarc",
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
 	"google.iam.v1.IAMPolicy":                            "iam",
@@ -126,14 +129,15 @@ func EnumerateGRPC() []GRPCService {
 	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	metastorepb.RegisterDataprocMetastoreServer(reg, &grpcmetastore.Service{})
+	eventarcpb.RegisterEventarcServer(reg, &grpceventarc.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
-	// Pub/Sub and KMS share one google.iam.v1.IAMPolicy registration.
-	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}))
+	// Pub/Sub, KMS and Eventarc share one google.iam.v1.IAMPolicy registration.
+	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())
 
 	info := reg.GetServiceInfo()

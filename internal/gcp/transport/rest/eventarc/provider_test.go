@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/gcp/resource"
+	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/model"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// rtTopic mirrors the core's Pub/Sub topic resource type for test seeding.
+const rtTopic = "gcp_topic"
 
 func newNR(params map[string]any) *model.NormalizedRequest {
 	if params == nil {
@@ -27,7 +31,8 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 func newProvider() (*Provider, *store.MemoryResourceStore, *workflowsstore.MemoryStore) {
 	resources := store.NewMemoryResourceStore()
 	workflows := workflowsstore.NewMemoryStore()
-	return New(eventarcstore.NewMemoryStore(), resources, workflows), resources, workflows
+	core := eventarccore.NewService(eventarcstore.NewMemoryStore(), resources, workflows)
+	return NewProvider(core, "proj"), resources, workflows
 }
 
 func createWorkflow(t *testing.T, workflows *workflowsstore.MemoryStore, location, id string) {
@@ -71,6 +76,9 @@ func TestTriggerCRUD(t *testing.T) {
 	if created["name"] != wantName {
 		t.Errorf("name = %v, want %v", created["name"], wantName)
 	}
+	if created["@type"] != eventarccore.TriggerTypeURL {
+		t.Errorf("response @type = %v, want %v", created["@type"], eventarccore.TriggerTypeURL)
+	}
 	if created["uid"] == "" || created["etag"] == "" {
 		t.Errorf("uid/etag not populated: %v", created)
 	}
@@ -113,6 +121,10 @@ func TestTriggerCRUD(t *testing.T) {
 	}
 	if delResp.Data["done"] != true {
 		t.Errorf("delete done = %v, want true", delResp.Data["done"])
+	}
+	deleted, _ := delResp.Data["response"].(map[string]any)
+	if deleted["name"] != wantName || deleted["@type"] != eventarccore.TriggerTypeURL {
+		t.Errorf("delete response = %v, want name=%v @type=%v", deleted, wantName, eventarccore.TriggerTypeURL)
 	}
 	if _, err := p.GetTrigger(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/triggers/t1"})); err == nil {
 		t.Fatal("expected NotFound after delete, got nil error")
@@ -219,6 +231,9 @@ func TestChannelCRUD(t *testing.T) {
 	if created["name"] != wantName {
 		t.Errorf("name = %v, want %v", created["name"], wantName)
 	}
+	if created["@type"] != eventarccore.ChannelTypeURL {
+		t.Errorf("response @type = %v, want %v", created["@type"], eventarccore.ChannelTypeURL)
+	}
 	if created["uid"] == "" || created["activationToken"] == "" || created["pubsubTopic"] == "" || created["state"] != "PENDING" {
 		t.Errorf("output-only channel fields missing/incorrect: %v", created)
 	}
@@ -242,8 +257,13 @@ func TestChannelCRUD(t *testing.T) {
 		t.Fatalf("expected 1 channel, got %d", len(items))
 	}
 
-	if _, err := p.DeleteChannel(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/channels/c1"})); err != nil {
+	delResp, err := p.DeleteChannel(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/channels/c1"}))
+	if err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
+	}
+	deleted, _ := delResp.Data["response"].(map[string]any)
+	if deleted["name"] != wantName || deleted["@type"] != eventarccore.ChannelTypeURL {
+		t.Errorf("delete response = %v, want name=%v @type=%v", deleted, wantName, eventarccore.ChannelTypeURL)
 	}
 	if _, err := p.GetChannel(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/channels/c1"})); err == nil {
 		t.Fatal("expected NotFound after delete, got nil error")
@@ -862,7 +882,7 @@ func TestConcurrentDisjointMaskedUpdatesNoLostUpdate(t *testing.T) {
 	ctx := context.Background()
 	resources := store.NewMemoryResourceStore()
 	workflows := workflowsstore.NewMemoryStore()
-	p := New(&delayedGetTriggerStore{Store: eventarcstore.NewMemoryStore(), delay: 2 * time.Millisecond}, resources, workflows)
+	p := NewProvider(eventarccore.NewService(&delayedGetTriggerStore{Store: eventarcstore.NewMemoryStore(), delay: 2 * time.Millisecond}, resources, workflows), "proj")
 	seedTrigger(t, p, workflows)
 
 	const perField = 25
@@ -903,38 +923,6 @@ func TestConcurrentDisjointMaskedUpdatesNoLostUpdate(t *testing.T) {
 	}
 	if sa, _ := got.Data["serviceAccount"].(string); !strings.HasPrefix(sa, "v") {
 		t.Fatalf("serviceAccount lost the concurrent update: %q", sa)
-	}
-}
-
-func TestMaskHelpers(t *testing.T) {
-	if maskPaths("") != nil {
-		t.Fatal("empty mask should be nil")
-	}
-	if got := maskPaths(" labels , serviceAccount "); len(got) != 2 || got[0] != "labels" {
-		t.Fatalf("maskPaths = %v", got)
-	}
-	if maskRoot("destination.cloudRun") != "destination" || maskRoot("labels") != "labels" {
-		t.Fatal("maskRoot failed")
-	}
-	if normalizeMaskField("event_filters") != "eventfilters" {
-		t.Fatal("normalizeMaskField failed")
-	}
-	// apply* with an empty mask merges every incoming field.
-	merged, err := applyTriggerMask(map[string]any{"a": 1}, map[string]any{"b": 2}, nil)
-	if err != nil || merged["a"] != 1 || merged["b"] != 2 {
-		t.Fatalf("empty-mask merge = %v, %v", merged, err)
-	}
-	if _, err := applyTriggerMask(nil, nil, []string{"bogus"}); err == nil {
-		t.Fatal("expected unsupported trigger mask error")
-	}
-	if _, err := applyChannelMask(nil, nil, []string{"bogus"}); err == nil {
-		t.Fatal("expected unsupported channel mask error")
-	}
-	if checkEtag("", "x") != nil || checkEtag("x", "x") != nil {
-		t.Fatal("checkEtag rejected an empty/matching etag")
-	}
-	if err := checkEtag("x", "y"); err == nil {
-		t.Fatal("checkEtag accepted a mismatched etag")
 	}
 }
 

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 242,
-  "passed": 242,
+  "total": 257,
+  "passed": 257,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 18,
-    "checks": 242,
-    "passed": 242,
+    "services": 19,
+    "checks": 257,
+    "passed": 257,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -29,6 +29,13 @@
       "unimplemented": 0
     },
     {
+      "service": "eventarc",
+      "total": 12,
+      "passed": 12,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
       "service": "firestore",
       "total": 18,
       "passed": 18,
@@ -44,8 +51,8 @@
     },
     {
       "service": "iam",
-      "total": 3,
-      "passed": 3,
+      "total": 6,
+      "passed": 6,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1590,6 +1597,111 @@
       "method": "DeleteBackup",
       "status": "pass",
       "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateTrigger",
+      "method": "CreateTrigger",
+      "status": "pass",
+      "key_field": "LRO done + trigger echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetTrigger",
+      "method": "GetTrigger",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListTriggers",
+      "method": "ListTriggers",
+      "status": "pass",
+      "key_field": "created trigger present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateTrigger",
+      "method": "UpdateTrigger",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteTrigger",
+      "method": "DeleteTrigger",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateChannel",
+      "method": "CreateChannel",
+      "status": "pass",
+      "key_field": "LRO done + PENDING channel"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetChannel",
+      "method": "GetChannel",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListChannels",
+      "method": "ListChannels",
+      "status": "pass",
+      "key_field": "created channel present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateChannel",
+      "method": "UpdateChannel",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteChannel",
+      "method": "DeleteChannel",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetProvider",
+      "method": "GetProvider",
+      "status": "pass",
+      "key_field": "catalogued provider present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListProviders",
+      "method": "ListProviders",
+      "status": "pass",
+      "key_field": "provider list non-empty"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (Eventarc trigger)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "empty policy on a fresh trigger"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (Eventarc trigger)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trips through the router"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (Eventarc trigger)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back"
     },
     {
       "service": "dataproc",

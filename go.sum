@@ -2,6 +2,8 @@ cloud.google.com/go/dataproc/v2 v2.25.0 h1:IF1wxkXvcgoTP92NVqX6QNDf2SdKNZFPa2IWe
 cloud.google.com/go/dataproc/v2 v2.25.0/go.mod h1:hkiM6kzc8CwLGoquMN1oghyhuI1fE0girmChH4h9W7w=
 cloud.google.com/go/datastore v1.22.0 h1:FOyx2Ag6ibD2wFkz9S8EiNrmBugia8pQOfpyJxi2yqA=
 cloud.google.com/go/datastore v1.22.0/go.mod h1:aopSX+Whx0lHspWWBj+AjWt68/zjYsPfDe3LjWtqZg8=
+cloud.google.com/go/eventarc v1.25.0 h1:+XAJNEmxJIPZLMtzLYdUZN61Kmqx62hWLry4AsWaTwo=
+cloud.google.com/go/eventarc v1.25.0/go.mod h1:ncY2NKHKiX+sUjIfxVozrivvmJQ4HWo2znxms7AxlP8=
 cloud.google.com/go/firestore v1.25.0 h1:yY3rQKyQXNhnhETdseNayF6W1p4x0bdg9ZYS4hKJfOw=
 cloud.google.com/go/firestore v1.25.0/go.mod h1:0PU6hj+r/QlhB6BLsRX+Kt/SYefTXrpYrBeHbYaSis8=
 cloud.google.com/go/functions v1.25.0 h1:ndUtLkam3XF9b0t2zVACH9D/EgFBISbVuQFqRz/X58k=
