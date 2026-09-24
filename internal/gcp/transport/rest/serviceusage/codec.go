@@ -1,4 +1,27 @@
-package gcp
+// Package serviceusage is the REST transport for Service Usage v1
+// (serviceusage.googleapis.com/v1), which manages a project's enabled APIs:
+//
+//	GET  /v1/projects/{project}/services
+//	GET  /v1/projects/{project}/services/{service}
+//	POST /v1/projects/{project}/services:batchEnable
+//	POST /v1/projects/{project}/services/{service}:enable
+//	POST /v1/projects/{project}/services/{service}:disable
+//
+// Real GCP serves the proto-defined v1 API over both gRPC and REST
+// (grpc-gateway transcoding), and this surface follows the vendored Discovery
+// document. The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the
+// core's typed API); the Provider holds the routes. Neither owns business logic
+// — both delegate to the single core Service shared with the gRPC transport
+// (see internal/gcp/service/serviceusage).
+//
+// A dedicated codec is used rather than the generic JSONCodec for two reasons:
+// the custom verb attaches to the "services" collection segment
+// (services:batchEnable) rather than to a resource id, and the "services"
+// resource type also appears beneath Dataproc Metastore's
+// locations/{location}/services — teaching detectResourceType about it would
+// make that generic scan ambiguous. The router (detectV1Service) claims these
+// paths before the GCS raw-media fallback.
+package serviceusage
 
 import (
 	"encoding/json"
@@ -10,29 +33,25 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// ServiceUsageCodec decodes the Service Usage v1 REST surface
-// (serviceusage.googleapis.com/v1), which manages a project's enabled APIs:
-//
-//	GET  /v1/projects/{project}/services
-//	GET  /v1/projects/{project}/services/{service}
-//	POST /v1/projects/{project}/services:batchEnable
-//	POST /v1/projects/{project}/services/{service}:enable
-//	POST /v1/projects/{project}/services/{service}:disable
-//
-// A dedicated codec is used rather than the generic JSONCodec for two reasons:
-// the custom verb attaches to the "services" collection segment
-// (services:batchEnable) rather than to a resource id, and the "services"
-// resource type also appears beneath Dataproc Metastore's
-// locations/{location}/services — teaching detectResourceType about it would
-// make that generic scan ambiguous. The router (detectV1Service) claims these
-// paths before the GCS raw-media fallback.
-type ServiceUsageCodec struct {
-	Service string
-}
+// ServiceName is the wire service name.
+const ServiceName = "serviceusage"
 
-func (c *ServiceUsageCodec) ServiceName() string { return c.Service }
+// Codec decodes Service Usage v1 REST requests into a NormalizedRequest and
+// encodes provider responses as the GCP JSON envelope. It satisfies
+// adapter.Codec structurally (the adapter package imports this package, so this
+// package must not import it).
+type Codec struct{}
 
-func (c *ServiceUsageCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+// NewCodec returns the Service Usage REST codec.
+func NewCodec() *Codec { return &Codec{} }
+
+// ServiceName implements adapter.Codec.
+func (c *Codec) ServiceName() string { return ServiceName }
+
+// Decode parses a v1 services path into a NormalizedRequest. Params carry
+// project, name, service (item paths), and body (POST), plus any query
+// parameters (filter, pageSize, pageToken).
+func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
 	for i, s := range seg {
@@ -45,7 +64,7 @@ func (c *ServiceUsageCodec) Decode(r *http.Request, body []byte) (*model.Normali
 		return nil, model.NewProviderError("InvalidRequest", "missing project or services resource in path", 404)
 	}
 
-	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
 	nr.Params["project"] = seg[pi+1]
 	queryToParams(r, nr.Params)
 	m, err := parseJSON(body)
@@ -102,7 +121,7 @@ func serviceUsageAction(rest []string, custom, method string) string {
 }
 
 // Encode serialises a provider response as JSON.
-func (c *ServiceUsageCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *Codec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	status := resp.HTTPStatus
 	if status == 0 {
 		status = http.StatusOK
@@ -120,7 +139,7 @@ func (c *ServiceUsageCodec) Encode(nr *model.NormalizedRequest, resp *model.Prov
 }
 
 // EncodeError serialises a ProviderError as a GCP error envelope.
-func (c *ServiceUsageCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
 		status = http.StatusInternalServerError

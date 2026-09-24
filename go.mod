@@ -15,6 +15,7 @@ require (
 	cloud.google.com/go/monitoring v1.30.0
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/secretmanager v1.21.0
+	cloud.google.com/go/serviceusage v1.15.0
 	cloud.google.com/go/workflows v1.20.0
 	github.com/apache/thrift v0.24.0
 	github.com/aws/aws-sdk-go-v2 v1.41.7

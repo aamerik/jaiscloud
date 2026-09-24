@@ -22,6 +22,8 @@ cloud.google.com/go/pubsub/v2 v2.7.0 h1:MFrBTZZa6PDWZzCi4NJRsHKMm2w0a4oAaYNqwjgb
 cloud.google.com/go/pubsub/v2 v2.7.0/go.mod h1:JaFvWNVRk3Knoil/4M1ECeLOaI9D8drbmJWypQlK5aM=
 cloud.google.com/go/secretmanager v1.21.0 h1:e56QQaKWRyzBdUz40AeZaio/ZHAl268cFx3QFAAw9CY=
 cloud.google.com/go/secretmanager v1.21.0/go.mod h1:+nlV+GYqTD8DM+x7Kk3UF7ZPYgdYMowrkZxAmMXORQ8=
+cloud.google.com/go/serviceusage v1.15.0 h1:/rQQl4i+HFuZljYdauY5w8AVUGYl9uTD2+juM1MiewA=
+cloud.google.com/go/serviceusage v1.15.0/go.mod h1:zTzxXSY22kIW2VTykOCi5p5HeHv2a/othkkOsV8jKY8=
 cloud.google.com/go/workflows v1.20.0 h1:qROpn1zRDdeIjUP9w9O3MHXJEg8v/pzVMicAcw9vLvQ=
 cloud.google.com/go/workflows v1.20.0/go.mod h1:TC9yx7VpjGdBBeKM8FG2EMtms5Q9nyTqI+2uV9bDNs4=
 github.com/apache/thrift v0.24.0 h1:zy31L1a49QTNB2bG1BBfMXol3yJrTH975G3pPubQVLQ=

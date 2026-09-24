@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 215,
-  "passed": 215,
+  "total": 220,
+  "passed": 220,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 14,
-    "checks": 215,
-    "passed": 215,
+    "services": 15,
+    "checks": 220,
+    "passed": 220,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -95,6 +95,13 @@
       "service": "secretmanager",
       "total": 16,
       "passed": 16,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "serviceusage",
+      "total": 5,
+      "passed": 5,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1247,6 +1254,41 @@
       "method": "CancelExecution",
       "status": "pass",
       "key_field": "terminal execution returned unchanged"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "EnableService",
+      "method": "EnableService",
+      "status": "pass",
+      "key_field": "LRO done + state ENABLED"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "GetService",
+      "method": "GetService",
+      "status": "pass",
+      "key_field": "name/state/config.name round-trip"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "ListServices",
+      "method": "ListServices",
+      "status": "pass",
+      "key_field": "enabled service present"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "BatchEnableServices",
+      "method": "BatchEnableServices",
+      "status": "pass",
+      "key_field": "LRO done + both services ENABLED"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "DisableService",
+      "method": "DisableService",
+      "status": "pass",
+      "key_field": "LRO done + state DISABLED"
     },
     {
       "service": "managedkafka",

@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **602**
+Cells: **608**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 449 |
+| ga | 454 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 12 |
+| unsupported | 13 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 92 | 37 | 9 |
-| grpc | 201 | 12 | 0 | 3 |
+| grpc | 206 | 12 | 0 | 4 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -706,10 +706,16 @@ _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 
 ## serviceusage
 
-_5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
+_11 cell(s): ga=10 limited=0 preview=0 unsupported=1_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| BatchEnableServices | grpc | ga | — |
+| BatchGetServices | grpc | unsupported | not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub |
+| DisableService | grpc | ga | — |
+| EnableService | grpc | ga | — |
+| GetService | grpc | ga | — |
+| ListServices | grpc | ga | — |
 | ServiceUsage.ServicesBatchEnable | rest | ga | — |
 | ServiceUsage.ServicesDisable | rest | ga | — |
 | ServiceUsage.ServicesEnable | rest | ga | — |
