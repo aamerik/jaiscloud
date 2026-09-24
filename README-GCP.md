@@ -3,7 +3,7 @@
 > **Early Development Notice**
 > `jaiscloud-gcp` is under active development on the `gcp` branch and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
-**JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols (both the REST/JSON APIs and the native gRPC APIs Firestore, Pub/Sub, Datastore, KMS, Secret Manager, Cloud Logging, and Cloud Monitoring actually use) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works.
+**JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
 **One binary per cloud.** `jaiscloud-gcp` is fully self-contained — no `--cloud` flag, no shared runtime with `jaiscloud-aws`. See the [main README](README.md) for the project-wide picture (AWS is the reference implementation; this document covers the GCP binary specifically).
 
@@ -17,21 +17,21 @@
 | Cloud Pub/Sub | REST + gRPC | Topics, subscriptions, snapshots, seek, push/pull delivery, ordering keys, DLQ |
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation |
-| Cloud IAM | REST | Service accounts, service account keys |
-| Service Usage | REST | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
-| Cloud Resource Manager | REST | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
+| Cloud IAM | REST + gRPC | Service accounts, service account keys; gRPC `IAMPolicy` for project/resource policies (authz not enforced) |
+| Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
+| Cloud Resource Manager | REST + gRPC | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, structured/aggregation/partition queries, composite indexes, `BatchWrite`/`Write`/`Listen` streaming, pipelines (read-only subset) |
-| Cloud Datastore mode | gRPC | Entities, queries, ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
-| Cloud Functions (v1) | REST | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |
-| Cloud Workflows | REST | Workflow definitions + executions, real YAML expression engine |
-| Cloud Dataproc | REST | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
-| Dataproc Metastore | REST | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); partitions/Hive-3.x stubbed, see [Known Limitations](#known-limitations) |
+| Cloud Datastore mode | REST + gRPC | Entities, queries, ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
+| Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |
+| Cloud Workflows | REST + gRPC | Workflow definitions + executions, real YAML expression engine |
+| Cloud Dataproc | REST + gRPC | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
+| Dataproc Metastore | REST + gRPC | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); partitions/Hive-3.x stubbed, see [Known Limitations](#known-limitations) |
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
-| Managed Kafka | REST | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
+| Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
-| Cloud Monitoring | gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
-| Cloud Logging | gRPC | Log entries, filtering, tailing, monitored-resource descriptors, log-based routing |
-| Eventarc | REST | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
+| Cloud Monitoring | REST + gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
+| Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, log-based routing |
+| Eventarc | REST + gRPC | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 | Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
 | Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
 | Cloud SQL Admin | REST | Metadata-only instances/databases/users — no SQL engine or data plane, see [Known Limitations](#known-limitations) |
@@ -83,7 +83,7 @@ go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
 
 ### 3. Connect
 
-Point any official Google client library at the emulator. Most services use plain endpoint overrides; the gRPC-native services (Firestore, Pub/Sub, Datastore, Monitoring) use the real Google client libraries' own emulator-host environment variables where those exist.
+Point any official Google client library at the emulator. Most services use plain endpoint overrides; gRPC-native clients connect to `:8081`, and the services with official emulator-host environment variables (Firestore, Datastore, Pub/Sub, Storage) can use them directly.
 
 ```bash
 export GCP_EMULATOR_ENDPOINT=http://localhost:8080/    # REST services (GCS, BigQuery, Dataproc, Workflows, ...)
@@ -146,8 +146,10 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--port` | `JAISCLOUD_PORT` | `8080` | REST listen port |
-| `--grpc-port` | — | `8081` | gRPC (h2c, plaintext) listen port |
+| `--port` | `JAISCLOUD_PORT` | `8080` | HTTP listen port — serves the GCP REST API when `rest` is selected, plus the always-on admin plane |
+| `--grpc-port` | — | `8081` | gRPC (h2c, plaintext) listen port — bound only when `grpc` is selected |
+| `--transports` | `JAISCLOUD_TRANSPORTS` | `rest,grpc` | Wire transports to expose globally: `rest`, `grpc`, `both`/`all`, or `none` |
+| `--transport-overrides` | `JAISCLOUD_TRANSPORT_OVERRIDES` | — | Per-service transport override, e.g. `storage=grpc,pubsub=rest,redis=none`; each value is `rest`, `grpc`, `both`, or `none` |
 | `--dsn` | `JAISCLOUD_DSN` | — | PostgreSQL DSN; when set all state is stored in PostgreSQL |
 | `--ephemeral` | `JAISCLOUD_EPHEMERAL` | `false` | Disable all persistence — state is lost on exit (CI / unit tests) |
 | `--data-dir` | `JAISCLOUD_DATA_DIR` | `~/.jaiscloud/jaiscloud-gcp` | Directory for state.json saves and named snapshots |
@@ -157,6 +159,15 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | `--kms-master-key` | `JAISCLOUD_KMS_MASTER_KEY` | — | 32-byte hex KEK wrapping the KMS DEK at rest |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--metrics` | — | `false` | Expose Prometheus metrics at `/metrics` |
+
+**Transport selection.** `--transports` sets the global default and `--transport-overrides` refines it per service (an override wins). A service is constructed and registered only when at least one transport is selected for it, and only the selected listeners bind — `--transports=rest` opens no `:8081`, while `--transports=grpc` serves the GCP REST API nowhere but keeps the always-on `/_jaiscloud/*` admin plane (and `/metrics`) on `--port`. Per-service selection gates construction and which gRPC services register; `none` removes a service from both transports (a later request for it fails with a registry `no handler` error). The REST API is mounted as one route set, so it is gated by the global `--transports` setting rather than per service. Per-service override names are the **wire** names: `storage`, `pubsub`, `secretmanager`, `kms`, `iam`, `firestore`, `firestoreadmin`, `datastore`, `logging`, `monitoring`, `functions`, `workflows`, `workflowexecutions`, `dataproc`, `managedkafka`, `metastore`, `eventarc`, `serviceusage`, `resourcemanager`, `bigquery`, `dns`, `sqladmin`, `compute`, `iceberg`, `redis` (Memorystore). An unknown service or transport token fails startup loudly.
+
+```bash
+./jaiscloud-gcp start --transports=rest                                  # REST + admin only (no :8081)
+./jaiscloud-gcp start --transports=grpc                                  # gRPC + admin only (no GCP REST surface)
+./jaiscloud-gcp start --transport-overrides=storage=grpc,pubsub=rest     # mixed per service
+./jaiscloud-gcp start --transport-overrides=redis=none                   # disable one service
+```
 
 Storage model (identical semantics to the AWS binary — see the [main README](README.md#configuration)): default is memory + periodic `state.json` saves; `--dsn` stores everything in PostgreSQL; `--ephemeral` is purely in-memory with no disk writes.
 
@@ -229,7 +240,7 @@ Documented approximations: the query read-set tracks the returned entities' vers
 
 ### Managed Kafka: metadata only, no real broker
 
-A cluster is a logical record only — the emulator never stands up a real Kafka broker. Consumer groups are not tracked: `ListConsumerGroups` always returns an empty list, and get/update/delete operations on a consumer group return `Unimplemented`.
+A cluster is a logical record only — the emulator never stands up a real Kafka broker. Consumer groups are not tracked: `ListConsumerGroups` always returns an empty list, and get/update/delete operations on a consumer group return `NOT_FOUND`.
 
 Cluster create/update/delete return a proper `google.longrunning.Operation` (`name`, `metadata` with `@type=type.googleapis.com/google.cloud.managedkafka.v1.OperationMetadata`, `done: true`, `response`) inline; the operation is also persisted under `projects/{project}/locations/{location}/operations/{id}` and served by the registered `GetOperation`/`ListOperations` handlers. That operations path is shared with Cloud Workflows' LRO surface and is routed to Workflows on the single emulator host, but every Managed Kafka operation is returned already done, so no client needs to poll it.
 
@@ -276,7 +287,7 @@ The Dataproc Serverless (Batch) API is not implemented. Dataproc is clusters + j
 
 ### Dataproc Metastore: control plane + Hive Thrift serving plane (partitions stubbed)
 
-The management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The table-metadata plane is served by a Hive Metastore **Thrift** listener on `:9083` (a single global catalog) that answers the database, table, and lock methods Spark's Hive/Iceberg clients use; the per-Service `endpointUri` is synthesized (`thrift://<id>.<location>.metastore.jaiscloud.local:9083`) because the listener is shared, not per-service. Partition methods, `get_table_meta`/Hive-3.x paths, and the Metastore gRPC transport are not implemented. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
+The management plane is implemented (`Service` / `Backup` / `MetadataImport` CRUD with long-running operations). The table-metadata plane is served by a Hive Metastore **Thrift** listener on `:9083` (a single global catalog) that answers the database, table, and lock methods Spark's Hive/Iceberg clients use; the per-Service `endpointUri` is synthesized (`thrift://<id>.<location>.metastore.jaiscloud.local:9083`) because the listener is shared, not per-service. Partition methods and `get_table_meta`/Hive-3.x paths are not implemented; the gRPC control plane (`Service`/`Backup`/`MetadataImport` CRUD) is implemented over the official `DataprocMetastore` proto. `ExportMetadata`, `RestoreService`, `QueryMetadata`, `MoveTableToDatabase`, and `AlterMetadataResourceLocation` return `Unimplemented`. On the single host, `locations/{l}/operations/{id}` is path-identical to Cloud Workflows' LRO surface and therefore routes to Workflows — Metastore's own operations are returned inline (`done: true`), so no client needs to poll them.
 
 ### BigLake Iceberg REST Catalog: DB-backed, standard REST spec
 

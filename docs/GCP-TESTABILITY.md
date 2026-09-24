@@ -96,11 +96,12 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
 | `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
+| `firestoreadmin` | grpc | 4/32 | 🟢 | Shape only | Shape only | Composite-index CRUD only; Databases/Backups/UserCreds/Schedules/Fields/Export/Import are `unsupported` stubs. |
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
 | `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; only `condition_threshold` is evaluated. |
 | `logging` | grpc, rest | 10/11 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
 | `iam` | grpc, rest | 16/16 | 🟢 | Shape only | Shape only | Service accounts + policy: authz is **not enforced**. |
-| `eventarc` | rest | 18/18 | 🟢 | Shape only | Shape only | Metadata only; no event-delivery engine. |
+| `eventarc` | grpc, rest | 30/57 | 🟢 | Shape only | Shape only | Metadata only; no event-delivery engine. gRPC trigger/channel/provider CRUD over one core; the other 27 Eventarc RPCs are `unsupported` stubs. |
 | `managedkafka` | grpc, rest | 34/44 | 🟢 | Shape only | Shape only | Metadata only; no real broker. Consumer-group `list` returns an empty set and `get`/`update`/`delete` report `NOT_FOUND`. |
 | `metastore` | grpc, rest | 26/38 | 🟢 | Shape only | Shape only | Control plane only; no per-service Hive Thrift plane. The 5 deferred RPCs (export/restore/query/move/alter) are `unsupported` stubs; the shared `operations` path routes to workflows, so `operations.get`/`list` are `limited`. |
 | `dataproc` | grpc, rest | 28/30 | 🟢 | Shape only | Shape only | Cluster/job metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
@@ -117,10 +118,10 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `bigquery` | rest | 0/23 | 🔴 | None | No | No SQL engine; `jobs.query` evaluates nothing. |
 | `iceberg` | rest | 0/14 | 🔴 | None | No | BigLake Iceberg REST catalog; `preview`. |
 
-Tier groups: **Green (18)** `dataproc`, `datastore`, `eventarc`, `firestore`, `iam`,
-`kms`, `logging`, `managedkafka`, `metastore`, `monitoring`, `operations`, `pubsub`,
-`resourcemanager`, `secretmanager`, `serviceusage`, `storage`, `workflowexecutions`,
-`workflows`. **Yellow (5)** `clouddns`,
+Tier groups: **Green (19)** `dataproc`, `datastore`, `eventarc`, `firestore`,
+`firestoreadmin`, `iam`, `kms`, `logging`, `managedkafka`, `metastore`, `monitoring`,
+`operations`, `pubsub`, `resourcemanager`, `secretmanager`, `serviceusage`, `storage`,
+`workflowexecutions`, `workflows`. **Yellow (5)** `clouddns`,
 `cloudsql`, `compute`, `functions`, `memorystore`. **Red (2)** `bigquery`, `iceberg`.
 
 ---
@@ -133,7 +134,7 @@ behind a wire-conformant API.
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |
-| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (no delivery engine), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no v2 deploy) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
+| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (no delivery engine), `firestoreadmin` (composite-index CRUD only), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no v2 deploy) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
 | **Metadata only** | `compute`, `cloudsql`, `clouddns`, `memorystore` | Resource records + `get`/`list`; nothing actually runs. |
 | **None (preview)** | `bigquery` (no SQL engine), `iceberg` | Nothing local counts as evidence. |
 
@@ -155,7 +156,7 @@ behind a wire-conformant API.
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
 | CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 10/11, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, only `condition_threshold` evaluated. |
-| EventBridge | **Eventarc** | 🟢 `ga` (18/18) | Metadata only — no delivery engine. |
+| EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Metadata only — no delivery engine. |
 | Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
 | Athena / Redshift | **BigQuery** | 🔴 `preview` (0/23) | **None** — real GCP required. |
 | RDS | **Cloud SQL** | 🟡 `limited` (0/24) | Metadata only. |

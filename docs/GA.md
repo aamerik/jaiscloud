@@ -151,7 +151,7 @@ surface and durability.
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
   `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
-  (gcloud 585.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
+  (gcloud 586.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
 - **Conformance harnesses** — REST wire-conformance (**clean: 0 divergences, 0 high-severity**),
   gRPC message-level, gcloud CLI, and the fidelity-matrix drift check.
@@ -177,7 +177,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   ELT Job that drives GCS + Dataproc). k3d e2e: `make test-e2e-lakehouse-k3d`.
 - **Ports** — REST `:8080`, gRPC `:8081` (h2c, plaintext).
 - **Config surface** — flags with `JAISCLOUD_*` env equivalents: `--port`/`JAISCLOUD_PORT`
-  (`8080`), `--grpc-port` (`8081`), `--dsn`/`JAISCLOUD_DSN` (Postgres backend),
+  (`8080`), `--grpc-port` (`8081`), `--transports`/`JAISCLOUD_TRANSPORTS` (`rest,grpc`; also
+  `rest`, `grpc`, `both`, `none`), `--transport-overrides`/`JAISCLOUD_TRANSPORT_OVERRIDES`
+  (per-service `service=rest|grpc|both|none`), `--dsn`/`JAISCLOUD_DSN` (Postgres backend),
   `--ephemeral`/`JAISCLOUD_EPHEMERAL`, `--data-dir`/`JAISCLOUD_DATA_DIR`,
   `JAISCLOUD_GCP_PROJECT_ID`, `JAISCLOUD_GCP_SERVICE_ACCOUNT`,
   `--gcp-metadata`/`JAISCLOUD_GCP_METADATA_ENABLED`, `--kms-master-key`/`JAISCLOUD_KMS_MASTER_KEY`,
@@ -197,7 +199,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
-- **Cloud Functions** — **v1 and v2 surfaces**. gcloud 585 (and current client SDKs) speak the
+- **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
   `functions` service and serialize the v2 shape (`state`, `buildConfig`, `serviceConfig`);
   `gcloud functions list` and `gcloud functions describe` pass. v2 `deploy` is not supported —
@@ -243,8 +245,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   while a k8s-executor job is still in flight (the generic `google.longrunning.Operations` stub
   does not read the Dataproc store; the REST `operations.get` path does); Metastore's Hive Thrift
   serving plane (:9083) implements databases/tables/locks (a single global catalog), but
-  partition methods and get_table_meta/Hive-3.x are stubbed and the gRPC transport is not
-  implemented.
+  partition methods and get_table_meta/Hive-3.x are stubbed. The gRPC control plane
+  (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
+  proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
 - **Not implemented at all (out of scope for v1.0)** — Artifact Registry, Cloud Run, Cloud
   Endpoints, Deployment Manager: no emulator surface (requests are unhandled). Artifact Registry
   and Cloud Run are engine-bearing (registry proxy / container executor) and are deliberately not
