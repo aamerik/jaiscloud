@@ -434,11 +434,6 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			case "testIamPermissions":
 				return "FunctionTestIamPermissions"
 			}
-		case "executions":
-			switch custom {
-			case "cancel":
-				return "CancelExecution"
-			}
 		case "triggers":
 			switch custom {
 			case "getIamPolicy":
@@ -615,15 +610,6 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "DeleteWorkflow"
 		case method == http.MethodGet:
 			return "GetWorkflow"
-		}
-	case "executions":
-		switch {
-		case isCollection && method == http.MethodPost:
-			return "CreateExecution"
-		case isCollection && method == http.MethodGet:
-			return "ListExecutions"
-		case method == http.MethodGet:
-			return "GetExecution"
 		}
 	case "operations":
 		switch {

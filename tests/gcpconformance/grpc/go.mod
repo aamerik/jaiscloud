@@ -13,6 +13,7 @@ require (
 	cloud.google.com/go/pubsub/v2 v2.7.0
 	cloud.google.com/go/secretmanager v1.21.0
 	cloud.google.com/go/storage v1.62.0
+	cloud.google.com/go/workflows v1.20.0
 	google.golang.org/api v0.287.1
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7
 	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7
