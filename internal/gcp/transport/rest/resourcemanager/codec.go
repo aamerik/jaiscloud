@@ -1,4 +1,23 @@
-package gcp
+// Package resourcemanager is the REST transport for the Cloud Resource Manager
+// v1 project surface (cloudresourcemanager.googleapis.com/v1) that the
+// hashicorp/google Terraform and Pulumi Google providers require:
+//
+//	GET  /v1/projects/{project}                      (projects.get)
+//	POST /v1/projects/{project}:getIamPolicy         (projects.getIamPolicy)
+//	POST /v1/projects/{project}:setIamPolicy         (projects.setIamPolicy)
+//	POST /v1/projects/{project}:testIamPermissions   (projects.testIamPermissions)
+//
+// Real GCP's proto-defined Resource Manager surface is v3 and is served over
+// both gRPC and REST, but this legacy v1 REST surface has no v3 transcode: the
+// Codec/Provider are a thin v1 <-> core adapter over the canonical v3 semantics
+// in internal/gcp/service/resourcemanager (projectId, projectNumber, name =
+// displayName, lifecycleState = state). Neither owns business logic.
+//
+// A dedicated codec is required because project-level IAM has no resource
+// segment after the project: the custom verb attaches directly to the project
+// segment, so the generic JSONCodec (which derives resourceType/name from the
+// segments after projects/{project}) has nothing to work with.
+package resourcemanager
 
 import (
 	"encoding/json"
@@ -10,26 +29,25 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// ResourceManagerCodec decodes the Cloud Resource Manager v1 project surface
-// (cloudresourcemanager.googleapis.com/v1) that the hashicorp/google Terraform
-// provider requires:
-//
-//	GET  /v1/projects/{project}                     (projects.get)
-//	POST /v1/projects/{project}:getIamPolicy        (projects.getIamPolicy)
-//	POST /v1/projects/{project}:setIamPolicy        (projects.setIamPolicy)
-//	POST /v1/projects/{project}:testIamPermissions   (projects.testIamPermissions)
-//
-// A dedicated codec is required because project-level IAM has no resource
-// segment after the project: the custom verb attaches directly to the project
-// segment, so the generic JSONCodec (which derives resourceType/name from the
-// segments after projects/{project}) has nothing to work with.
-type ResourceManagerCodec struct {
+// ServiceName is the wire service name.
+const ServiceName = "resourcemanager"
+
+// Codec decodes Cloud Resource Manager v1 REST requests into a
+// NormalizedRequest and encodes provider responses as the GCP JSON envelope. It
+// satisfies adapter.Codec structurally (the adapter package imports this
+// package, so this package must not import it).
+type Codec struct {
 	Service string
 }
 
-func (c *ResourceManagerCodec) ServiceName() string { return c.Service }
+// NewCodec returns the Cloud Resource Manager REST codec.
+func NewCodec() *Codec { return &Codec{Service: ServiceName} }
 
-func (c *ResourceManagerCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+// ServiceName implements adapter.Codec.
+func (c *Codec) ServiceName() string { return c.Service }
+
+// Decode parses a v1 Resource Manager path into a NormalizedRequest.
+func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
 	for i, s := range seg {
@@ -87,7 +105,7 @@ func (c *ResourceManagerCodec) Decode(r *http.Request, body []byte) (*model.Norm
 }
 
 // Encode serialises a provider response as JSON.
-func (c *ResourceManagerCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *Codec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	status := resp.HTTPStatus
 	if status == 0 {
 		status = http.StatusOK
@@ -105,7 +123,7 @@ func (c *ResourceManagerCodec) Encode(nr *model.NormalizedRequest, resp *model.P
 }
 
 // EncodeError serialises a ProviderError as a GCP error envelope.
-func (c *ResourceManagerCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *Codec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
 		status = http.StatusInternalServerError

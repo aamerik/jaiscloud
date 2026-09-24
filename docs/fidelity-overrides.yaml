@@ -106,6 +106,39 @@ operations:
     operation: ListWorkflowRevisions
     state: unsupported
     reason: "workflow revision history is not modelled; explicit Unimplemented stub"
+  # Cloud Resource Manager v3 gRPC is control-plane only: GetProject and the
+  # project IAM methods are implemented, while the project lifecycle/lookup RPCs
+  # are explicit Unimplemented stubs. The emulator never creates, moves, or
+  # deletes projects (every project id resolves to a synthesized ACTIVE
+  # project), and the v1 REST surface does not implement them either.
+  - service: resourcemanager
+    operation: ListProjects
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: SearchProjects
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: CreateProject
+    state: unsupported
+    reason: "projects are synthesized, never created; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: UpdateProject
+    state: unsupported
+    reason: "project metadata is not modelled; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: MoveProject
+    state: unsupported
+    reason: "project parent/ancestry is not modelled; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: DeleteProject
+    state: unsupported
+    reason: "projects are synthesized, never deleted; explicit Unimplemented stub"
+  - service: resourcemanager
+    operation: UndeleteProject
+    state: unsupported
+    reason: "projects are synthesized, never deleted; explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
     state: limited

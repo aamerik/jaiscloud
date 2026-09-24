@@ -494,10 +494,21 @@ pubsub,StreamingPull,grpc,ga,
 pubsub,UpdateSnapshot,grpc,ga,
 pubsub,UpdateSubscription,grpc,ga,
 pubsub,UpdateTopic,grpc,ga,
+resourcemanager,CreateProject,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,DeleteProject,grpc,unsupported,"projects are synthesized, never deleted; explicit Unimplemented stub"
+resourcemanager,GetIamPolicy,grpc,ga,
+resourcemanager,GetProject,grpc,ga,
+resourcemanager,ListProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,MoveProject,grpc,unsupported,project parent/ancestry is not modelled; explicit Unimplemented stub
 resourcemanager,ResourceManager.ProjectGet,rest,ga,
 resourcemanager,ResourceManager.ProjectGetIamPolicy,rest,ga,
 resourcemanager,ResourceManager.ProjectSetIamPolicy,rest,ga,
 resourcemanager,ResourceManager.ProjectTestIamPermissions,rest,ga,
+resourcemanager,SearchProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
+resourcemanager,SetIamPolicy,grpc,ga,
+resourcemanager,TestIamPermissions,grpc,ga,
+resourcemanager,UndeleteProject,grpc,unsupported,"projects are synthesized, never deleted; explicit Unimplemented stub"
+resourcemanager,UpdateProject,grpc,unsupported,project metadata is not modelled; explicit Unimplemented stub
 secretmanager,AccessSecretVersion,grpc,ga,
 secretmanager,AddSecretVersion,grpc,ga,
 secretmanager,CreateSecret,grpc,ga,

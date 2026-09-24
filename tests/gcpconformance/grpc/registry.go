@@ -76,6 +76,7 @@ func Registry() []Check {
 	checks = append(checks, workflowExecutionsChecks()...)
 	checks = append(checks, workflowsChecks()...)
 	checks = append(checks, serviceUsageChecks()...)
+	checks = append(checks, resourceManagerChecks()...)
 	checks = append(checks, managedKafkaChecks()...)
 	checks = append(checks, dataprocChecks()...)
 	checks = append(checks, functionsChecks()...)

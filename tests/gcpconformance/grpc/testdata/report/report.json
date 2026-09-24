@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 225,
-  "passed": 225,
+  "total": 229,
+  "passed": 229,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 16,
-    "checks": 225,
-    "passed": 225,
+    "services": 17,
+    "checks": 229,
+    "passed": 229,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -88,6 +88,13 @@
       "service": "pubsub",
       "total": 25,
       "passed": 25,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "resourcemanager",
+      "total": 4,
+      "passed": 4,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1331,6 +1338,34 @@
       "method": "DisableService",
       "status": "pass",
       "key_field": "LRO done + state DISABLED"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "GetProject",
+      "method": "GetProject",
+      "status": "pass",
+      "key_field": "name/projectId/state ACTIVE round-trip"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "policy etag present"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding stored + etag rotates"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed"
     },
     {
       "service": "managedkafka",

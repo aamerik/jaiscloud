@@ -9,6 +9,7 @@ import (
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
@@ -162,11 +163,12 @@ var gcpServices = []ServiceDescriptor{
 	{
 		// Cloud Resource Manager v1 project surface shares /v1/ and is claimed
 		// by segment detection (a project segment that is the last segment, with
-		// or without a ':' custom verb), so it has no PathPrefixes. See
-		// ResourceManagerCodec.
+		// or without a ':' custom verb), so it has no PathPrefixes. The codec
+		// lives with the REST transport package that adapts it to the shared
+		// core.
 		ServiceName:    "resourcemanager",
 		ProviderPrefix: "ResourceManager",
-		Codec:          func() adapter.Codec { return &ResourceManagerCodec{Service: "resourcemanager"} },
+		Codec:          func() adapter.Codec { return restresourcemanager.NewCodec() },
 	},
 	{
 		// Cloud Datastore v1 shares the /v1/ prefix; its data methods are

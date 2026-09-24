@@ -14,6 +14,7 @@ require (
 	cloud.google.com/go/managedkafka v1.1.0
 	cloud.google.com/go/monitoring v1.24.3
 	cloud.google.com/go/pubsub/v2 v2.7.0
+	cloud.google.com/go/resourcemanager v1.16.0
 	cloud.google.com/go/secretmanager v1.21.0
 	cloud.google.com/go/serviceusage v1.15.0
 	cloud.google.com/go/storage v1.62.0
