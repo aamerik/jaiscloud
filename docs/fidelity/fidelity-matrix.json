@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 608,
+    "total": 614,
     "by_state": {
-      "ga": 454,
+      "ga": 459,
       "limited": 104,
       "preview": 37,
-      "unsupported": 13
+      "unsupported": 14
     },
     "by_transport": {
       "grpc": {
-        "ga": 206,
+        "ga": 211,
         "limited": 12,
-        "unsupported": 4
+        "unsupported": 5
       },
       "rest": {
         "ga": 248,
@@ -108,7 +108,8 @@
         "ga": 8
       },
       "workflows": {
-        "ga": 6
+        "ga": 11,
+        "unsupported": 1
       }
     },
     "grpc_only_services": [
@@ -6523,6 +6524,70 @@
       "evidence": [
         "discovery=workflowexecutions.projects.locations.workflows.executions.list",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "CreateWorkflow",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "DeleteWorkflow",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "GetWorkflow",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "ListWorkflowRevisions",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "workflow revision history is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "ListWorkflows",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "UpdateWorkflow",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **608**
+Cells: **614**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 454 |
+| ga | 459 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 13 |
+| unsupported | 14 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 92 | 37 | 9 |
-| grpc | 206 | 12 | 0 | 4 |
+| grpc | 211 | 12 | 0 | 5 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -798,10 +798,16 @@ _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 
 ## workflows
 
-_6 cell(s): ga=6 limited=0 preview=0 unsupported=0_
+_12 cell(s): ga=11 limited=0 preview=0 unsupported=1_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CreateWorkflow | grpc | ga | — |
+| DeleteWorkflow | grpc | ga | — |
+| GetWorkflow | grpc | ga | — |
+| ListWorkflowRevisions | grpc | unsupported | workflow revision history is not modelled; explicit Unimplemented stub |
+| ListWorkflows | grpc | ga | — |
+| UpdateWorkflow | grpc | ga | — |
 | Workflow.CreateWorkflow | rest | ga | — |
 | Workflow.DeleteWorkflow | rest | ga | — |
 | Workflow.GetOperation | rest | ga | — |

@@ -22,6 +22,7 @@ import (
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
+	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
 	executionspb "cloud.google.com/go/workflows/executions/apiv1/executionspb"
 
 	grpcserver "jaiscloud/internal/gcp/grpc"
@@ -40,6 +41,7 @@ import (
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
+	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
 )
 
 // GRPCService is one gRPC service the emulator registers, read back from the
@@ -78,6 +80,7 @@ var grpcWireService = map[string]string{
 	"google.monitoring.v3.NotificationChannelService":    "monitoring",
 	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
 	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
+	"google.cloud.workflows.v1.Workflows":                "workflows",
 	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.iam.v1.IAMPolicy":                            "iam",
@@ -114,6 +117,7 @@ func EnumerateGRPC() []GRPCService {
 	grpcstoragepb.RegisterStorageServer(reg, &grpcstorage.Service{})
 	secretmanagerpb.RegisterSecretManagerServiceServer(reg, &grpcsecretmanager.Service{})
 	executionspb.RegisterExecutionsServer(reg, &grpcworkflowexecutions.Service{})
+	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})

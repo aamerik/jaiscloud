@@ -457,6 +457,14 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			case "upgrade":
 				return "UpgradeInstance"
 			}
+		case "workflows":
+			// Workflow revision history (listRevisions) is not modelled: fail
+			// loud (404) rather than falling through to the GetWorkflow case and
+			// returning a plausible but wrong resource body.
+			switch custom {
+			case "listRevisions":
+				return ""
+			}
 		}
 	}
 

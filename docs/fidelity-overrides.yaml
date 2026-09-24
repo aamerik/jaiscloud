@@ -99,6 +99,13 @@ operations:
     operation: BatchGetServices
     state: unsupported
     reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
+  # Cloud Workflows gRPC is control-plane only: ListWorkflowRevisions has no
+  # emulator implementation (workflow revision history is not modelled), so it
+  # is an explicit Unimplemented stub.
+  - service: workflows
+    operation: ListWorkflowRevisions
+    state: unsupported
+    reason: "workflow revision history is not modelled; explicit Unimplemented stub"
   - service: managedkafka
     operation: ManagedKafka.GetConsumerGroup
     state: limited
