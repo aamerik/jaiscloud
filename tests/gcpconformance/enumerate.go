@@ -24,7 +24,6 @@ import (
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
-	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
@@ -33,6 +32,7 @@ import (
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
@@ -102,7 +102,7 @@ func providers() []provider.Provider {
 		&cloudsqlprovider.Provider{},
 		&computeprovider.Provider{},
 		&restserviceusage.Provider{},
-		&resourcemanagerprovider.Provider{},
+		&restresourcemanager.Provider{},
 		&restdatastore.Provider{},
 		&restlogging.Provider{},
 		&restmonitoring.Provider{},

@@ -20,6 +20,7 @@ import (
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
@@ -39,6 +40,7 @@ import (
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
@@ -83,6 +85,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.workflows.v1.Workflows":                "workflows",
 	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
+	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
 	"google.iam.v1.IAMPolicy":                            "iam",
 	"google.longrunning.Operations":                      "operations",
 }
@@ -120,6 +123,7 @@ func EnumerateGRPC() []GRPCService {
 	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
+	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})

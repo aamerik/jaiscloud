@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 614,
+    "total": 625,
     "by_state": {
-      "ga": 459,
+      "ga": 463,
       "limited": 104,
       "preview": 37,
-      "unsupported": 14
+      "unsupported": 21
     },
     "by_transport": {
       "grpc": {
-        "ga": 211,
+        "ga": 215,
         "limited": 12,
-        "unsupported": 5
+        "unsupported": 12
       },
       "rest": {
         "ga": 248,
@@ -90,7 +90,8 @@
         "ga": 44
       },
       "resourcemanager": {
-        "ga": 4
+        "ga": 8,
+        "unsupported": 7
       },
       "secretmanager": {
         "ga": 30,
@@ -5401,6 +5402,73 @@
     },
     {
       "service": "resourcemanager",
+      "operation": "CreateProject",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "DeleteProject",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "projects are synthesized, never deleted; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "GetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "GetProject",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ListProjects",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "MoveProject",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "project parent/ancestry is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
       "operation": "ResourceManager.ProjectGet",
       "transport": "rest",
       "state": "ga",
@@ -5438,6 +5506,61 @@
       "evidence": [
         "discovery=cloudresourcemanager.projects.testIamPermissions",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "SearchProjects",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "SetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "TestIamPermissions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "UndeleteProject",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "projects are synthesized, never deleted; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "UpdateProject",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "project metadata is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
       ]
     },
     {

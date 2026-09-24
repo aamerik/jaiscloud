@@ -275,6 +275,13 @@ var formatters = map[string]func(project, name string) string{
 	"serviceusage-operation": func(_, n string) string {
 		return "operations/" + n
 	},
+	// Cloud Resource Manager — a project's canonical v3 resource name is
+	// "projects/{project}". The v1 REST API has no resource name (it identifies
+	// a project by projectId), so callers pass the project id as the closure
+	// project and the name is unused.
+	"project": func(p, _ string) string {
+		return "projects/" + p
+	},
 	// Cloud Logging v2 (gRPC and REST).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
 	// Cloud Monitoring v3 (gRPC and REST).

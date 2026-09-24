@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **614**
+Cells: **625**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 459 |
+| ga | 463 |
 | limited | 104 |
 | preview | 37 |
-| unsupported | 14 |
+| unsupported | 21 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 92 | 37 | 9 |
-| grpc | 211 | 12 | 0 | 5 |
+| grpc | 215 | 12 | 0 | 12 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -656,14 +656,25 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 ## resourcemanager
 
-_4 cell(s): ga=4 limited=0 preview=0 unsupported=0_
+_15 cell(s): ga=8 limited=0 preview=0 unsupported=7_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CreateProject | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
+| DeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
+| GetIamPolicy | grpc | ga | — |
+| GetProject | grpc | ga | — |
+| ListProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
+| MoveProject | grpc | unsupported | project parent/ancestry is not modelled; explicit Unimplemented stub |
 | ResourceManager.ProjectGet | rest | ga | — |
 | ResourceManager.ProjectGetIamPolicy | rest | ga | — |
 | ResourceManager.ProjectSetIamPolicy | rest | ga | — |
 | ResourceManager.ProjectTestIamPermissions | rest | ga | — |
+| SearchProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
+| SetIamPolicy | grpc | ga | — |
+| TestIamPermissions | grpc | ga | — |
+| UndeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
+| UpdateProject | grpc | unsupported | project metadata is not modelled; explicit Unimplemented stub |
 
 ## secretmanager
 

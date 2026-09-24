@@ -44,7 +44,6 @@ import (
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	metastoreprovider "jaiscloud/internal/gcp/provider/metastore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
-	resourcemanagerprovider "jaiscloud/internal/gcp/provider/resourcemanager"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
@@ -53,6 +52,7 @@ import (
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
+	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowscore "jaiscloud/internal/gcp/service/workflows"
@@ -81,6 +81,7 @@ import (
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
+	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
@@ -90,6 +91,7 @@ import (
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
+	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
@@ -115,6 +117,7 @@ import (
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
@@ -365,9 +368,15 @@ func startCmd() *cobra.Command {
 			serviceUsageCore := serviceusagecore.NewService(stores.resources)
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
-			// Cloud Resource Manager v1 project IAM is metadata-only over the
-			// shared ResourceStore (policies via internal/gcp/policy).
-			resourcemanagerP := resourcemanagerprovider.New(stores.resources)
+			// Cloud Resource Manager's transport-neutral core is shared by the
+			// v1 REST provider and the v3 gRPC adapter below, so project IAM
+			// policy lives in one store and the two transports cannot drift.
+			// The core is only built when resourcemanager is enabled.
+			var resourceManagerCore *resourcemanagercore.Service
+			if serviceEnabled("resourcemanager") {
+				resourceManagerCore = resourcemanagercore.NewService(stores.resources)
+			}
+			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
 
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
@@ -429,6 +438,7 @@ func startCmd() *cobra.Command {
 			workflowExecutionsGRPC := grpcworkflowexecutions.NewService(workflowExecutionsCore, cfg.ProjectID)
 			managedKafkaGRPC := grpcmanagedkafka.NewService(managedKafkaCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
+			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID)
@@ -456,6 +466,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("serviceusage") {
 					serviceusagepb.RegisterServiceUsageServer(gserv.GRPC(), serviceUsageGRPC)
+				}
+				if transports.GRPCFor("resourcemanager") {
+					resourcemanagerpb.RegisterProjectsServer(gserv.GRPC(), resourceManagerGRPC)
 				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
