@@ -68,13 +68,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 625 | 463 | 104 | 37 | 21 | 74% |
-| **gRPC** (official clients) | 239 | 215 | 12 | 0 | 12 | 90% |
-| **REST** (Discovery-backed) | 386 | 248 | 92 | 37 | 9 | 64% |
+| **Overall** | 644 | 475 | 106 | 37 | 26 | 74% |
+| **gRPC** (official clients) | 257 | 228 | 12 | 0 | 17 | 89% |
+| **REST** (Discovery-backed) | 387 | 247 | 94 | 37 | 9 | 64% |
 
 - gRPC-only services (no REST transport): **Operations (long-running)**.
-- gRPC split = 215 `ga` + 12 `limited` + 12 `unsupported` = 239. REST split = 248 + 92 + 37 + 9 = 386.
-  Overall = 239 + 386 = 625.
+- gRPC split = 228 `ga` + 12 `limited` + 17 `unsupported` = 257. REST split = 247 + 94 + 37 + 9 = 387.
+  Overall = 257 + 387 = 644.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -96,20 +96,20 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `kms` | grpc, rest | 55/64 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
 | `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
-| `datastore` | grpc | 8/8 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
-| `monitoring` | grpc | 24/24 | 🟢 | Full | Yes | Metrics/alerts/channels; only `condition_threshold` is evaluated. |
-| `logging` | grpc | 5/6 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
+| `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
+| `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; only `condition_threshold` is evaluated. |
+| `logging` | grpc, rest | 10/11 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
 | `iam` | grpc, rest | 16/16 | 🟢 | Shape only | Shape only | Service accounts + policy: authz is **not enforced**. |
 | `eventarc` | rest | 18/18 | 🟢 | Shape only | Shape only | Metadata only; no event-delivery engine. |
-| `managedkafka` | rest | 12/16 | 🟢 | Shape only | Shape only | Metadata only; no real broker. Consumer-group `get`/`update`/`delete` are unsupported stubs; `list` returns an empty set. |
-| `metastore` | rest | 14/19 | 🟢 | Shape only | Shape only | Control plane only; no Hive Thrift table plane. Metadata import/export, restore, query and relocation are unsupported stubs. |
-| `dataproc` | rest | 14/15 | 🟢 | Shape only | Shape only | REST metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
+| `managedkafka` | grpc, rest | 34/44 | 🟢 | Shape only | Shape only | Metadata only; no real broker. Consumer-group `list` returns an empty set and `get`/`update`/`delete` report `NOT_FOUND`. |
+| `metastore` | grpc, rest | 26/38 | 🟢 | Shape only | Shape only | Control plane only; no per-service Hive Thrift plane. The 5 deferred RPCs (export/restore/query/move/alter) are `unsupported` stubs; the shared `operations` path routes to workflows, so `operations.get`/`list` are `limited`. |
+| `dataproc` | grpc, rest | 28/30 | 🟢 | Shape only | Shape only | Cluster/job metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub. |
-| `serviceusage` | rest | 5/5 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. |
+| `serviceusage` | grpc, rest | 10/11 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. `BatchGetServices` is an unsupported stub. |
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
-| `workflows` | rest | 6/6 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. |
-| `workflowexecutions` | rest | 4/4 | 🟢 | Shape only | Shape only | Executions are synchronous. |
-| `functions` | rest | 14/17 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call; v2 deploy unsupported. |
+| `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. `ListWorkflowRevisions` is an unsupported stub. |
+| `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
+| `functions` | grpc, rest | 24/29 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call; v2 deploy unsupported; v1 `CallFunction`/v2 `ListRuntimes` are unsupported stubs. |
 | `compute` | rest | 0/33 | 🟡 | Metadata only | Metadata only | No VM/disk/network data plane. |
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |
@@ -149,14 +149,14 @@ behind a wire-conformant API.
 | --- | --- | --- | --- |
 | SQS | **Pub/Sub** | 🟢 `ga` (44/44) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (51/52) | High — `BidiReadObject` unimplemented. |
-| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Datastore 8/8) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
-| Lambda | **Cloud Functions** | 🟡 `limited` (14/17) | Control plane only; v2 deploy unsupported. |
+| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
+| Lambda | **Cloud Functions** | 🟡 `limited` (24/29) | Control plane only; v2 deploy unsupported. |
 | KMS | **Cloud KMS** | 🟢 `ga` (55/64) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
-| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 5/6, Monitoring 24/24) | High; `TailLogEntries` is a bounded poll, only `condition_threshold` evaluated. |
+| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 10/11, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, only `condition_threshold` evaluated. |
 | EventBridge | **Eventarc** | 🟢 `ga` (18/18) | Metadata only — no delivery engine. |
-| Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 6/6, Executions 4/4) | LROs complete synchronously. |
+| Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
 | Athena / Redshift | **BigQuery** | 🔴 `preview` (0/23) | **None** — real GCP required. |
 | RDS | **Cloud SQL** | 🟡 `limited` (0/24) | Metadata only. |
 | EC2 | **Compute Engine** | 🟡 `limited` (0/33) | Metadata only. |

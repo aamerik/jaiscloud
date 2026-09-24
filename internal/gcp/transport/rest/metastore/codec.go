@@ -1,4 +1,22 @@
-package gcp
+// Package metastore is the REST transport for the Dataproc Metastore v1
+// control plane (metastore.googleapis.com/v1).
+//
+// Real GCP serves the proto-defined v1 API over both gRPC and REST
+// (grpc-gateway transcoding), and the REST surface here follows the vendored
+// Discovery document. The Codec is a NormalizedRequest adapter (HTTP path/body
+// ↔ the core's typed API); the Provider holds the routes. Neither owns business
+// logic — both delegate to the single core Service shared with the gRPC
+// transport (see internal/gcp/service/metastore).
+//
+// Resources live under
+// /v1/projects/{project}/locations/{location}/services[/{id}[/backups[/{bid}]|
+// /metadataImports[/{mid}]]] plus the long-running operations surface at
+// .../locations/{location}/operations[/{id}]. Create/Update/Delete return a
+// done google.longrunning.Operation (Dataproc shape); Get/List return the
+// resource inline. Custom-method verbs
+// (:exportMetadata, :restore, :queryMetadata, :moveTableToDatabase,
+// :alterLocation) are deferred to Unimplemented handlers.
+package metastore
 
 import (
 	"encoding/json"
@@ -10,22 +28,23 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// MetastoreCodec decodes the Dataproc Metastore v1 REST surface
-// (metastore.googleapis.com/v1). Resources live under
-// /v1/projects/{project}/locations/{location}/services[/{id}[/backups[/{bid}]|
-// /metadataImports[/{mid}]]] plus the long-running operations surface at
-// .../locations/{location}/operations/{id}. Create/Update/Delete return a done
-// google.longrunning.Operation (Dataproc shape); Get/List return the resource
-// inline. Custom-method verbs
-// (:exportMetadata, :restore, :queryMetadata, :moveTableToDatabase,
-// :alterLocation) are deferred to Unimplemented handlers.
-type MetastoreCodec struct {
-	Service string
-}
+// ServiceName is the wire service name.
+const ServiceName = "metastore"
 
-func (c *MetastoreCodec) ServiceName() string { return c.Service }
+// Codec decodes Dataproc Metastore REST requests into a NormalizedRequest and
+// encodes provider responses as the GCP JSON envelope. It satisfies
+// adapter.Codec structurally (the adapter package imports this package, so this
+// package must not import it).
+type Codec struct{}
 
-func (c *MetastoreCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
+// NewCodec returns the Dataproc Metastore REST codec.
+func NewCodec() *Codec { return &Codec{} }
+
+// ServiceName implements adapter.Codec.
+func (c *Codec) ServiceName() string { return ServiceName }
+
+// Decode parses a v1 Dataproc Metastore path into a NormalizedRequest.
+func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
 	pi := -1
 	for i, s := range seg {
@@ -38,9 +57,12 @@ func (c *MetastoreCodec) Decode(r *http.Request, body []byte) (*model.Normalized
 		return nil, model.NewProviderError("InvalidRequest", "missing project in resource path", 404)
 	}
 
-	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
-	nr.Params["project"] = seg[pi+1]
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
+	// Query parameters are decoded FIRST; the authoritative path segments are
+	// assigned afterwards so a crafted ?project=/?location= cannot override the
+	// resource addressed by the URL.
 	queryToParams(r, nr.Params)
+	nr.Params["project"] = seg[pi+1]
 	m, err := parseJSON(body)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
@@ -174,6 +196,8 @@ func deriveMetastoreAction(resourceType string, isCollection bool, method, custo
 		}
 	case "operations":
 		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListOperations"
 		case method == http.MethodGet:
 			return "GetOperation"
 		}
@@ -182,7 +206,7 @@ func deriveMetastoreAction(resourceType string, isCollection bool, method, custo
 }
 
 // Encode serialises a provider response as JSON.
-func (c *MetastoreCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
+func (c *Codec) Encode(_ *model.NormalizedRequest, resp *model.ProviderResponse) (int, http.Header, []byte) {
 	status := resp.HTTPStatus
 	if status == 0 {
 		status = http.StatusOK
@@ -200,7 +224,7 @@ func (c *MetastoreCodec) Encode(nr *model.NormalizedRequest, resp *model.Provide
 }
 
 // EncodeError serialises a ProviderError as a GCP error envelope.
-func (c *MetastoreCodec) EncodeError(nr *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
+func (c *Codec) EncodeError(_ *model.NormalizedRequest, perr *model.ProviderError) (int, http.Header, []byte) {
 	status := perr.HTTPStatus
 	if status == 0 {
 		status = http.StatusInternalServerError

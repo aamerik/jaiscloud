@@ -1,22 +1,22 @@
 {
   "version": 1,
   "summary": {
-    "total": 625,
+    "total": 644,
     "by_state": {
-      "ga": 463,
-      "limited": 104,
+      "ga": 475,
+      "limited": 106,
       "preview": 37,
-      "unsupported": 21
+      "unsupported": 26
     },
     "by_transport": {
       "grpc": {
-        "ga": 215,
+        "ga": 228,
         "limited": 12,
-        "unsupported": 12
+        "unsupported": 17
       },
       "rest": {
-        "ga": 248,
-        "limited": 92,
+        "ga": 247,
+        "limited": 94,
         "preview": 37,
         "unsupported": 9
       }
@@ -77,8 +77,9 @@
         "limited": 8
       },
       "metastore": {
-        "ga": 14,
-        "unsupported": 5
+        "ga": 26,
+        "limited": 2,
+        "unsupported": 10
       },
       "monitoring": {
         "ga": 48
@@ -4185,6 +4186,145 @@
     },
     {
       "service": "metastore",
+      "operation": "AlterMetadataResourceLocation",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "CreateBackup",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "CreateMetadataImport",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "CreateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "DeleteBackup",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "DeleteService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "ExportMetadata",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Hive Thrift metadata export is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "GetBackup",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "GetMetadataImport",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "GetService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "ListBackups",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "ListMetadataImports",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "ListServices",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
       "operation": "Metastore.AlterMetadataResourceLocation",
       "transport": "rest",
       "state": "unsupported",
@@ -4286,7 +4426,8 @@
       "service": "metastore",
       "operation": "Metastore.GetOperation",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
       "evidence": [
         "discovery=metastore.projects.locations.operations.get",
         "postgres=yes"
@@ -4319,6 +4460,17 @@
       "state": "ga",
       "evidence": [
         "discovery=metastore.projects.locations.services.metadataImports.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "Metastore.ListOperations",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
+      "evidence": [
+        "discovery=metastore.projects.locations.operations.list",
         "postgres=yes"
       ]
     },
@@ -4387,6 +4539,63 @@
         "discovery=metastore.projects.locations.services.patch",
         "mutating",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "MoveTableToDatabase",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "QueryMetadata",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "the gRPC metadata query plane is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "RestoreService",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Hive Thrift metadata restore is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "UpdateMetadataImport",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "metastore",
+      "operation": "UpdateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

@@ -260,6 +260,18 @@ func (s *MemoryStore) GetOperation(_ context.Context, projectID, location, id st
 	return op, nil
 }
 
+func (s *MemoryStore) ListOperations(_ context.Context, projectID, location string) ([]Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.operations[serviceScope(projectID, location)]
+	result := make([]Operation, 0, len(m))
+	for _, op := range m {
+		result = append(result, op)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

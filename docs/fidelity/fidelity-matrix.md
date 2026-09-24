@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **625**
+Cells: **644**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 463 |
-| limited | 104 |
+| ga | 475 |
+| limited | 106 |
 | preview | 37 |
-| unsupported | 21 |
+| unsupported | 26 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 248 | 92 | 37 | 9 |
-| grpc | 215 | 12 | 0 | 12 |
+| rest | 247 | 94 | 37 | 9 |
+| grpc | 228 | 12 | 0 | 17 |
 
 gRPC-only services (no REST transport): operations.
 
@@ -512,10 +512,23 @@ _8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
 
 ## metastore
 
-_19 cell(s): ga=14 limited=0 preview=0 unsupported=5_
+_38 cell(s): ga=26 limited=2 preview=0 unsupported=10_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| AlterMetadataResourceLocation | grpc | unsupported | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
+| CreateBackup | grpc | ga | — |
+| CreateMetadataImport | grpc | ga | — |
+| CreateService | grpc | ga | — |
+| DeleteBackup | grpc | ga | — |
+| DeleteService | grpc | ga | — |
+| ExportMetadata | grpc | unsupported | Hive Thrift metadata export is not modelled; explicit Unimplemented stub |
+| GetBackup | grpc | ga | — |
+| GetMetadataImport | grpc | ga | — |
+| GetService | grpc | ga | — |
+| ListBackups | grpc | ga | — |
+| ListMetadataImports | grpc | ga | — |
+| ListServices | grpc | ga | — |
 | Metastore.AlterMetadataResourceLocation | rest | unsupported | explicit Unimplemented stub |
 | Metastore.CreateBackup | rest | ga | — |
 | Metastore.CreateMetadataImport | rest | ga | — |
@@ -525,16 +538,22 @@ _19 cell(s): ga=14 limited=0 preview=0 unsupported=5_
 | Metastore.ExportMetadata | rest | unsupported | explicit Unimplemented stub |
 | Metastore.GetBackup | rest | ga | — |
 | Metastore.GetMetadataImport | rest | ga | — |
-| Metastore.GetOperation | rest | ga | — |
+| Metastore.GetOperation | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | Metastore.GetService | rest | ga | — |
 | Metastore.ListBackups | rest | ga | — |
 | Metastore.ListMetadataImports | rest | ga | — |
+| Metastore.ListOperations | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | Metastore.ListServices | rest | ga | — |
 | Metastore.MoveTableToDatabase | rest | unsupported | explicit Unimplemented stub |
 | Metastore.QueryMetadata | rest | unsupported | explicit Unimplemented stub |
 | Metastore.RestoreService | rest | unsupported | explicit Unimplemented stub |
 | Metastore.UpdateMetadataImport | rest | ga | — |
 | Metastore.UpdateService | rest | ga | — |
+| MoveTableToDatabase | grpc | unsupported | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
+| QueryMetadata | grpc | unsupported | the gRPC metadata query plane is not modelled; explicit Unimplemented stub |
+| RestoreService | grpc | unsupported | Hive Thrift metadata restore is not modelled; explicit Unimplemented stub |
+| UpdateMetadataImport | grpc | ga | — |
+| UpdateService | grpc | ga | — |
 
 ## monitoring
 

@@ -124,6 +124,7 @@ type Store interface {
 
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
+	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
 	Reset(ctx context.Context)
 }

@@ -78,6 +78,7 @@ func Registry() []Check {
 	checks = append(checks, serviceUsageChecks()...)
 	checks = append(checks, resourceManagerChecks()...)
 	checks = append(checks, managedKafkaChecks()...)
+	checks = append(checks, metastoreChecks()...)
 	checks = append(checks, dataprocChecks()...)
 	checks = append(checks, functionsChecks()...)
 	checks = append(checks, iamChecks()...)

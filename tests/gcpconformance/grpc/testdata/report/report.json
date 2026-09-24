@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 229,
-  "passed": 229,
+  "total": 242,
+  "passed": 242,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 17,
-    "checks": 229,
-    "passed": 229,
+    "services": 18,
+    "checks": 242,
+    "passed": 242,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -67,6 +67,13 @@
       "service": "managedkafka",
       "total": 18,
       "passed": 18,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "metastore",
+      "total": 13,
+      "passed": 13,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1492,6 +1499,97 @@
       "method": "ListConsumerGroups",
       "status": "pass",
       "key_field": "empty set (no broker)"
+    },
+    {
+      "service": "metastore",
+      "rpc": "CreateService",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "LRO done + ACTIVE service"
+    },
+    {
+      "service": "metastore",
+      "rpc": "GetService",
+      "method": "GetService",
+      "status": "pass",
+      "key_field": "name/state round-trip"
+    },
+    {
+      "service": "metastore",
+      "rpc": "ListServices",
+      "method": "ListServices",
+      "status": "pass",
+      "key_field": "created service present"
+    },
+    {
+      "service": "metastore",
+      "rpc": "UpdateService",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "metastore",
+      "rpc": "DeleteService",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "metastore",
+      "rpc": "CreateMetadataImport",
+      "method": "CreateMetadataImport",
+      "status": "pass",
+      "key_field": "LRO done + SUCCEEDED import"
+    },
+    {
+      "service": "metastore",
+      "rpc": "GetMetadataImport",
+      "method": "GetMetadataImport",
+      "status": "pass",
+      "key_field": "name/state round-trip"
+    },
+    {
+      "service": "metastore",
+      "rpc": "ListMetadataImports",
+      "method": "ListMetadataImports",
+      "status": "pass",
+      "key_field": "created import present"
+    },
+    {
+      "service": "metastore",
+      "rpc": "UpdateMetadataImport",
+      "method": "UpdateMetadataImport",
+      "status": "pass",
+      "key_field": "description updated via LRO"
+    },
+    {
+      "service": "metastore",
+      "rpc": "CreateBackup",
+      "method": "CreateBackup",
+      "status": "pass",
+      "key_field": "LRO done + ACTIVE backup"
+    },
+    {
+      "service": "metastore",
+      "rpc": "GetBackup",
+      "method": "GetBackup",
+      "status": "pass",
+      "key_field": "name/state round-trip"
+    },
+    {
+      "service": "metastore",
+      "rpc": "ListBackups",
+      "method": "ListBackups",
+      "status": "pass",
+      "key_field": "created backup present"
+    },
+    {
+      "service": "metastore",
+      "rpc": "DeleteBackup",
+      "method": "DeleteBackup",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
     },
     {
       "service": "dataproc",
