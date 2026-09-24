@@ -6,25 +6,25 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **683**
+Cells: **711**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 487 |
-| limited | 106 |
+| ga | 492 |
+| limited | 101 |
 | preview | 37 |
-| unsupported | 53 |
+| unsupported | 81 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 247 | 94 | 37 | 9 |
-| grpc | 240 | 12 | 0 | 44 |
+| rest | 248 | 89 | 37 | 9 |
+| grpc | 244 | 12 | 0 | 72 |
 
-gRPC-only services (no REST transport): operations.
+gRPC-only services (no REST transport): firestoreadmin, operations.
 
 ## bigquery
 
@@ -314,6 +314,45 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 | UpdateDocument | grpc | ga | — |
 | Write | grpc | ga | — |
 
+## firestoreadmin
+
+_32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| BulkDeleteDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| CloneDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| CreateBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| CreateDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| CreateIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
+| CreateUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| DeleteBackup | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| DeleteBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| DeleteDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| DeleteIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
+| DeleteUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| DisableUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| EnableUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ExportDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| GetBackup | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| GetBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| GetDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| GetField | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| GetIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
+| GetUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ImportDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ListBackupSchedules | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ListBackups | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ListDatabases | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ListFields | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ListIndexes | grpc | ga | covered by the official admin-client gRPC conformance suite |
+| ListUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| ResetUserPassword | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| RestoreDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| UpdateBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| UpdateDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| UpdateField | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+
 ## functions
 
 _29 cell(s): ga=24 limited=3 preview=0 unsupported=2_
@@ -396,7 +435,7 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
+_60 cell(s): ga=56 limited=4 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -435,16 +474,12 @@ _64 cell(s): ga=55 limited=9 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionAsymmetricSign | rest | ga | — |
 | KMS.CryptoKeyVersionCreate | rest | ga | — |
 | KMS.CryptoKeyVersionDestroy | rest | ga | — |
-| KMS.CryptoKeyVersionDisable | rest | limited | no matching Discovery method (unverified against the official schema) |
-| KMS.CryptoKeyVersionEnable | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.CryptoKeyVersionGet | rest | ga | — |
-| KMS.CryptoKeyVersionGetIamPolicy | rest | limited | no matching Discovery method (unverified against the official schema) |
 | KMS.CryptoKeyVersionGetPublicKey | rest | ga | — |
 | KMS.CryptoKeyVersionList | rest | ga | — |
 | KMS.CryptoKeyVersionMacSign | rest | ga | — |
 | KMS.CryptoKeyVersionMacVerify | rest | ga | — |
-| KMS.CryptoKeyVersionSetIamPolicy | rest | limited | no matching Discovery method (unverified against the official schema) |
-| KMS.CryptoKeyVersionTestIamPermissions | rest | limited | no matching Discovery method (unverified against the official schema) |
+| KMS.CryptoKeyVersionUpdate | rest | ga | — |
 | KMS.KeyRingCreate | rest | ga | — |
 | KMS.KeyRingGet | rest | ga | — |
 | KMS.KeyRingGetIamPolicy | rest | ga | — |

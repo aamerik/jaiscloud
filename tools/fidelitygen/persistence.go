@@ -24,6 +24,7 @@ package main
 //	iam                -> internal/gcp/store/kms + internal/store (accounts)
 //	pubsub             -> internal/gcp/store/pubsub (+ kms)
 //	firestore          -> internal/gcp/store/firestore
+//	firestoreadmin     -> internal/store (ResourceStore; composite-index state)
 //	datastore          -> internal/gcp/store/datastore
 //	functions          -> internal/gcp/store/functions
 //	workflows          -> internal/gcp/store/workflows
@@ -44,8 +45,9 @@ package main
 //	monitoring         -> internal/gcp/store/monitoring
 //
 // Every enumerated REST service therefore qualifies today, and the gRPC-only
-// data services (datastore, logging) qualify via their own dedicated stores, so
-// no service is listed false. The map is explicit rather than "true for
+// data services (datastore, logging) qualify via their own dedicated stores
+// (firestoreadmin via the shared ResourceStore), so no service is listed
+// false. The map is explicit rather than "true for
 // everything" so a future service that lands without a store defaults to false
 // and its mutating operations are downgraded until persistence parity exists.
 // Truly stateless services are also listed true (persistence is N/A for them,
@@ -62,6 +64,7 @@ var persistentBackends = map[string]bool{
 	"iam":                true,
 	"pubsub":             true,
 	"firestore":          true,
+	"firestoreadmin":     true,
 	"datastore":          true,
 	"functions":          true,
 	"workflows":          true,

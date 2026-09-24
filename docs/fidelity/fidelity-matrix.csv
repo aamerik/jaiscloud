@@ -231,6 +231,38 @@ firestore,RunAggregationQuery,grpc,ga,
 firestore,RunQuery,grpc,ga,
 firestore,UpdateDocument,grpc,ga,
 firestore,Write,grpc,ga,
+firestoreadmin,BulkDeleteDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CloneDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,CreateIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,CreateUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteBackup,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DeleteIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,DeleteUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,DisableUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,EnableUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ExportDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetBackup,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetField,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,GetIndex,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,GetUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ImportDocuments,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListBackupSchedules,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListBackups,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListDatabases,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListFields,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ListIndexes,grpc,ga,covered by the official admin-client gRPC conformance suite
+firestoreadmin,ListUserCreds,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,ResetUserPassword,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,RestoreDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
+firestoreadmin,UpdateField,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
 functions,CallFunction,grpc,unsupported,runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub
 functions,CreateFunction,grpc,ga,
 functions,DeleteFunction,grpc,ga,
@@ -325,16 +357,12 @@ kms,KMS.CryptoKeyVersionAsymmetricDecrypt,rest,ga,
 kms,KMS.CryptoKeyVersionAsymmetricSign,rest,ga,
 kms,KMS.CryptoKeyVersionCreate,rest,ga,
 kms,KMS.CryptoKeyVersionDestroy,rest,ga,
-kms,KMS.CryptoKeyVersionDisable,rest,limited,no matching Discovery method (unverified against the official schema)
-kms,KMS.CryptoKeyVersionEnable,rest,limited,no matching Discovery method (unverified against the official schema)
 kms,KMS.CryptoKeyVersionGet,rest,ga,
-kms,KMS.CryptoKeyVersionGetIamPolicy,rest,limited,no matching Discovery method (unverified against the official schema)
 kms,KMS.CryptoKeyVersionGetPublicKey,rest,ga,
 kms,KMS.CryptoKeyVersionList,rest,ga,
 kms,KMS.CryptoKeyVersionMacSign,rest,ga,
 kms,KMS.CryptoKeyVersionMacVerify,rest,ga,
-kms,KMS.CryptoKeyVersionSetIamPolicy,rest,limited,no matching Discovery method (unverified against the official schema)
-kms,KMS.CryptoKeyVersionTestIamPermissions,rest,limited,no matching Discovery method (unverified against the official schema)
+kms,KMS.CryptoKeyVersionUpdate,rest,ga,
 kms,KMS.KeyRingCreate,rest,ga,
 kms,KMS.KeyRingGet,rest,ga,
 kms,KMS.KeyRingGetIamPolicy,rest,ga,

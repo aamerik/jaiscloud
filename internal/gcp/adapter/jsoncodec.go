@@ -354,13 +354,14 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyTestIamPermissions"
 			}
 		case "cryptoKeyVersions":
+			// Real KMS has no version-level :disable/:enable or IAM custom
+			// methods: a version's state is changed through
+			// cryptoKeyVersions.patch (handled by the method-based switch
+			// below) and IAM is scoped to key rings and crypto keys. Any other
+			// custom verb is therefore unrecognized and returns "" (fail loud).
 			switch custom {
 			case "destroy":
 				return "CryptoKeyVersionDestroy"
-			case "disable":
-				return "CryptoKeyVersionDisable"
-			case "enable":
-				return "CryptoKeyVersionEnable"
 			case "asymmetricSign":
 				return "CryptoKeyVersionAsymmetricSign"
 			case "asymmetricDecrypt":
@@ -369,12 +370,6 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyVersionMacSign"
 			case "macVerify":
 				return "CryptoKeyVersionMacVerify"
-			case "getIamPolicy":
-				return "CryptoKeyVersionGetIamPolicy"
-			case "setIamPolicy":
-				return "CryptoKeyVersionSetIamPolicy"
-			case "testIamPermissions":
-				return "CryptoKeyVersionTestIamPermissions"
 			}
 		case "keyRings":
 			switch custom {
@@ -527,14 +522,19 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "CryptoKeyGet"
 		}
 	case "cryptoKeyVersions":
+		// Only non-custom requests dispatch here; an unrecognized custom verb
+		// (e.g. a removed :disable/:enable or version :getIamPolicy) must not be
+		// treated as the plain resource verb, so every case requires custom=="".
 		switch {
-		case method == http.MethodGet && strings.HasSuffix(name, "/publicKey"):
+		case custom == "" && method == http.MethodGet && strings.HasSuffix(name, "/publicKey"):
 			return "CryptoKeyVersionGetPublicKey"
-		case isCollection && method == http.MethodPost:
+		case custom == "" && isCollection && method == http.MethodPost:
 			return "CryptoKeyVersionCreate"
-		case isCollection && method == http.MethodGet:
+		case custom == "" && isCollection && method == http.MethodGet:
 			return "CryptoKeyVersionList"
-		case method == http.MethodGet:
+		case custom == "" && method == http.MethodPatch:
+			return "CryptoKeyVersionUpdate"
+		case custom == "" && method == http.MethodGet:
 			return "CryptoKeyVersionGet"
 		}
 	case "serviceAccounts":

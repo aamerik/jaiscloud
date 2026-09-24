@@ -68,13 +68,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 644 | 475 | 106 | 37 | 26 | 74% |
-| **gRPC** (official clients) | 257 | 228 | 12 | 0 | 17 | 89% |
-| **REST** (Discovery-backed) | 387 | 247 | 94 | 37 | 9 | 64% |
+| **Overall** | 711 | 492 | 101 | 37 | 81 | 69% |
+| **gRPC** (official clients) | 328 | 244 | 12 | 0 | 72 | 74% |
+| **REST** (Discovery-backed) | 383 | 248 | 89 | 37 | 9 | 65% |
 
-- gRPC-only services (no REST transport): **Operations (long-running)**.
-- gRPC split = 228 `ga` + 12 `limited` + 17 `unsupported` = 257. REST split = 247 + 94 + 37 + 9 = 387.
-  Overall = 257 + 387 = 644.
+- gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
+- gRPC split = 244 `ga` + 12 `limited` + 72 `unsupported` = 328. REST split = 248 + 89 + 37 + 9 = 383.
+  Overall = 328 + 383 = 711.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -93,7 +93,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | --- | --- | ---: | --- | --- | --- | --- |
 | `pubsub` | grpc, rest | 44/44 | 🟢 | Full | Yes | Topics, subscriptions, snapshots, seek, ordering, DLQ. |
 | `storage` | grpc, rest | 51/52 | 🟢 | Full | Yes | Bucket/object/IAM/resumable; `BidiReadObject` unimplemented. |
-| `kms` | grpc, rest | 55/64 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. |
+| `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
 | `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
@@ -149,9 +149,9 @@ behind a wire-conformant API.
 | --- | --- | --- | --- |
 | SQS | **Pub/Sub** | 🟢 `ga` (44/44) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (51/52) | High — `BidiReadObject` unimplemented. |
-| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
+| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Firestore Admin 4/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
 | Lambda | **Cloud Functions** | 🟡 `limited` (24/29) | Control plane only; v2 deploy unsupported. |
-| KMS | **Cloud KMS** | 🟢 `ga` (55/64) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
+| KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
 | CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 10/11, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, only `condition_threshold` evaluated. |

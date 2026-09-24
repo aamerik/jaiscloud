@@ -57,17 +57,15 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions", "CryptoKeyVersionCreate"},
 		{"GET", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions", "CryptoKeyVersionList"},
 		{"GET", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3", "CryptoKeyVersionGet"},
+		{"PATCH", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3", "CryptoKeyVersionUpdate"},
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:destroy", "CryptoKeyVersionDestroy"},
-		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:disable", "CryptoKeyVersionDisable"},
-		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:enable", "CryptoKeyVersionEnable"},
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:asymmetricSign", "CryptoKeyVersionAsymmetricSign"},
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:asymmetricDecrypt", "CryptoKeyVersionAsymmetricDecrypt"},
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:macSign", "CryptoKeyVersionMacSign"},
 		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:macVerify", "CryptoKeyVersionMacVerify"},
 		{"GET", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3/publicKey", "CryptoKeyVersionGetPublicKey"},
-		{"GET", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:getIamPolicy", "CryptoKeyVersionGetIamPolicy"},
-		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:setIamPolicy", "CryptoKeyVersionSetIamPolicy"},
-		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:testIamPermissions", "CryptoKeyVersionTestIamPermissions"},
+		// Real KMS has no version-level :disable/:enable or IAM: these custom
+		// verbs are asserted to fail loud in TestKMSVersionNonGCPVerbs.
 		// IAM
 		{"POST", "/v1/projects/p/serviceAccounts", "ServiceAccountCreate"},
 		{"GET", "/v1/projects/p/serviceAccounts", "ServiceAccountList"},
@@ -133,6 +131,27 @@ func TestWorkflowsListRevisionsUnsupported(t *testing.T) {
 		path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
 		if _, err := codec.Decode(httptest.NewRequest(method, path, nil), nil); err == nil {
 			t.Errorf("%s %s: expected unsupported (404)", method, path)
+		}
+	}
+}
+
+// TestKMSVersionNonGCPVerbs pins that the emulator no longer invents KMS
+// cryptoKeyVersions :disable/:enable custom methods or version-level IAM: real
+// KMS changes a version's state through cryptoKeyVersions.patch and scopes IAM
+// to key rings/crypto keys, so these request shapes must 404, not silently
+// fall through to the plain version verbs.
+func TestKMSVersionNonGCPVerbs(t *testing.T) {
+	codec := &JSONCodec{Service: "kms"}
+	paths := []struct{ method, path string }{
+		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:disable"},
+		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:enable"},
+		{"GET", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:getIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:setIamPolicy"},
+		{"POST", "/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3:testIamPermissions"},
+	}
+	for _, tc := range paths {
+		if _, err := codec.Decode(httptest.NewRequest(tc.method, tc.path, nil), nil); err == nil {
+			t.Errorf("%s %s: decoded without error, want unsupported-operation", tc.method, tc.path)
 		}
 	}
 }
