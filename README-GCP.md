@@ -1,7 +1,7 @@
 # JaisCloud for GCP
 
 > **Early Development Notice**
-> `jaiscloud-gcp` is under active development on the `gcp` branch and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
+> `jaiscloud-gcp` is under active development on the `gcp` branch (current version **v1.1.0**) and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
 **JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
@@ -61,6 +61,10 @@ compatibility, deploy artifacts, and the surfaces that are explicitly non-GA —
 
 [`docs/GCP-TESTABILITY.md`](docs/GCP-TESTABILITY.md) is the per-service local-testability
 contract: what a local run proves, and what must be verified on real GCP.
+
+The release decisions and explicitly **accepted risks** for v1.1.0 — authz not enforced, LROs
+complete synchronously, the metadata-only tier, and the real-GCP smoke requirement for Yellow/Red
+surfaces — are recorded in [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110).
 
 ---
 

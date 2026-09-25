@@ -138,7 +138,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 const defaultHost = "http://localhost:8080"
 

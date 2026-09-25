@@ -1,6 +1,6 @@
 # GCP emulator — GA readiness
 
-Status: **GA contract for `jaiscloud-gcp` (v1.0.0)**.
+Status: **GA contract for `jaiscloud-gcp` (v1.1.0)**.
 
 This document states what GA means for this emulator. It is a **fidelity contract** — a
 declaration of which operation/transport cells are supported and wire-conformant — **not** a
@@ -86,7 +86,7 @@ verified against the proto descriptors only (see §7).
 
 ## 3. Stability & versioning
 
-- **Emulator version:** `1.0.0` (`cmd/jaiscloud-gcp/main.go`).
+- **Emulator version:** `1.1.0` (`cmd/jaiscloud-gcp/main.go`).
 - **Pinned to official artifacts.** REST is validated against the vendored Discovery documents —
   BigQuery `v2`; Cloud DNS `v1`; Cloud SQL Admin `v1`; Compute Engine `v1`; Dataproc `v1`;
   Datastore `v1`; Eventarc `v1`; Firestore `v1`; Cloud Functions `v1`; IAM `v1`; Cloud KMS `v1`;
@@ -248,7 +248,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   partition methods and get_table_meta/Hive-3.x are stubbed. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
   proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
-- **Not implemented at all (out of scope for v1.0)** — Artifact Registry, Cloud Run, Cloud
+- **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud Run, Cloud
   Endpoints, Deployment Manager: no emulator surface (requests are unhandled). Artifact Registry
   and Cloud Run are engine-bearing (registry proxy / container executor) and are deliberately not
   emulated.
@@ -316,3 +316,51 @@ contrast, records the transcript against a live emulator first — see §4.) The
 `tests/gcpconformance/grpc/testdata/report/report.json`, is committed as the evidence for the
 `ga` gRPC cells; the gRPC suite overwrites it with a fresh run on CI before the matrix is
 generated.
+
+---
+
+## 9. Release notes
+
+### v1.1.0 — dual-protocol parity (additive; no `ga` wire cell changed incompatibly)
+
+- **Dual-protocol parity.** Every GA service that real GCP serves over both REST and gRPC now
+  exposes both transports from one transport-neutral core (PRs #152–#166). Datastore, Logging and
+  Monitoring gained REST (REST clients for the data/observability plane); Dataproc, Eventarc,
+  Functions, Managed Kafka, Metastore, Resource Manager, Service Usage, Workflows and Workflow
+  Executions gained gRPC (official `cloud.google.com/go` clients). Matrix after the effort:
+  **26 services / 711 operation/transport cells** — `ga` 492, `limited` 101, `preview` 37,
+  `unsupported` 81; gRPC conformance **261/261**.
+- **Firestore Admin gRPC.** New `google.firestore.admin.v1.FirestoreAdmin` composite-index CRUD
+  (Create/Get/List/Delete index, 4 `ga` cells) over the shared core; Databases/Backups/UserCreds/
+  Schedules/Fields/Export/Import remain explicit `Unimplemented` stubs.
+- **KMS `cryptoKeyVersion` alignment.** The five non-standard REST cryptoKeyVersion cells (version
+  `:disable`/`:enable` and version-level IAM) were dropped and replaced by the standard
+  `cryptoKeyVersions.patch` (`CryptoKeyVersionUpdate`) cell; KMS version-level IAM is no longer
+  served through the shared `google.iam.v1.IAMPolicy` router (key-level IAM is unchanged).
+- **Transport selection.** `--transports`/`JAISCLOUD_TRANSPORTS` and
+  `--transport-overrides`/`JAISCLOUD_TRANSPORT_OVERRIDES` select the exposed transports
+  (`rest`/`grpc`/`both`/`none`) globally or per service (§6).
+
+The published GitHub Release body is the GoReleaser conventional-commit changelog
+(`.goreleaser.yaml`), so the `feat(gcp):` subjects for #152–#165 are the release notes of record;
+this section is the human-readable summary.
+
+---
+
+## 10. Release decisions and accepted risks (v1.1.0)
+
+The release-readiness plan (`plan_docs/gcp-emulator-release-readiness.md` §9) raised maintainer
+decisions that must be resolved — not left open — at a release. Resolved for v1.1.0:
+
+| Decision | Resolution |
+| --- | --- |
+| **Release posture** | Ship as a **tiered supported surface**. `ga` is a wire-contract claim; the fidelity matrix is the published contract. Yellow/Red services are not claimed as behaviourally complete. |
+| **Authz enforcement** | **Documented, not enforced — accepted risk.** No optional enforcement mode is shipped (it would be new service behaviour). Authorization is shape-only across all services; permission-sensitive paths **must** be smoke-tested against real GCP before being relied on. `iam`/`resourcemanager`/`serviceusage` remain "Shape only". |
+| **LRO realism** | **Documented synchronous completion — accepted risk.** The emulator completes LROs inline (`done: true`); it does not model async timing. Both shapes are covered: the gRPC conformance suite asserts the inline envelope, and the real-GCP differential goldens capture the real (eventually-consistent) envelopes, so a client that mishandles either is caught. Code that assumes async readiness must be tested on real GCP. |
+| **Metadata-only tier** | **Declared control-plane-only.** `compute`, `cloudsql`, `memorystore` and `clouddns` are `limited`/metadata-only — resource records + `get`/`list`, no data plane. Their data planes are explicitly out of scope for v1.x. |
+| **Yellow/Red real-GCP smoke** | **Defined and required for trust.** A local green run is not evidence for a Yellow/Red service or an authz-sensitive path; those must be validated against real GCP. The repo's mechanism is the differential recorder (`make record-gcp-differential`, ADC + a real project) plus service-specific smoke tests; the recorded goldens then gate every PR through `GCP_DIFFERENTIAL_STRICT=1 make test-gcp-differential`. This stage is credentialed and therefore not part of CI. |
+| **Emulator-only affordances** | **Policy, not a gate.** Production code must not depend on `/_jaiscloud/*`, reset/snapshot, lenient validation, absent authz, or the frozen clock (see [`GCP-TESTABILITY.md`](GCP-TESTABILITY.md) §8). |
+
+Accepted-risk summary: the release is **wire-conformant within the declared matrix**; it is **not**
+a substitute for real GCP on authz, LRO timing, quotas/throttling, or the data plane of any
+`limited`/`preview` service.
