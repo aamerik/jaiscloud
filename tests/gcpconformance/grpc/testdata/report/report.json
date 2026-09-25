@@ -679,7 +679,7 @@
       "rpc": "CreateSubscription",
       "method": "CreateSubscription",
       "status": "pass",
-      "key_field": "subscription.name/topic"
+      "key_field": "subscription.name/topic; exactly-once flag + 60s default"
     },
     {
       "service": "pubsub",

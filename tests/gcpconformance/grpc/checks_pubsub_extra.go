@@ -25,7 +25,7 @@ import (
 func pubSubExtraChecks() []Check {
 	return []Check{
 		// ── subscription CRUD ───────────────────────────────────────────────
-		{Service: "pubsub", RPC: "CreateSubscription", Method: "CreateSubscription", KeyField: "subscription.name/topic", Run: checkPubSubCreateSubscription},
+		{Service: "pubsub", RPC: "CreateSubscription", Method: "CreateSubscription", KeyField: "subscription.name/topic; exactly-once flag + 60s default", Run: checkPubSubCreateSubscription},
 		{Service: "pubsub", RPC: "GetSubscription", Method: "GetSubscription", KeyField: "subscription.name/topic", Run: checkPubSubGetSubscription},
 		{Service: "pubsub", RPC: "ListSubscriptions", Method: "ListSubscriptions", KeyField: "subscriptions[].name", Run: checkPubSubListSubscriptions},
 		{Service: "pubsub", RPC: "UpdateSubscription", Method: "UpdateSubscription", KeyField: "masked labels applied", Run: checkPubSubUpdateSubscription},
@@ -177,6 +177,54 @@ func checkPubSubCreateSubscription(ctx context.Context, cfg Config) error {
 		if sub.GetTopic() != topic {
 			return fmt.Errorf("CreateSubscription topic = %q, want %q", sub.GetTopic(), topic)
 		}
+	}
+	return checkPubSubExactlyOnceCreate(ctx, client, cfg, topic)
+}
+
+// checkPubSubExactlyOnceCreate exercises the exactly-once delivery surface of
+// CreateSubscription: the flag round-trips, an unspecified ack deadline defaults
+// to 60s, and the unsupported push + exactly-once combination fails loud with
+// InvalidArgument. It is folded into the CreateSubscription probe so it does not
+// add a new conformance cell.
+func checkPubSubExactlyOnceCreate(ctx context.Context, client *pubsub.Client, cfg Config, topic string) error {
+	sub := pubSubSubName(cfg, "gcpc-grpc-eod-sub")
+	created, err := client.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:                      sub,
+		Topic:                     topic,
+		EnableExactlyOnceDelivery: true,
+	})
+	if err != nil && status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("CreateSubscription(exactly-once): %w", err)
+	}
+	if err == nil {
+		if !created.GetEnableExactlyOnceDelivery() {
+			return fmt.Errorf("CreateSubscription dropped enable_exactly_once_delivery")
+		}
+		if created.GetAckDeadlineSeconds() != 60 {
+			return fmt.Errorf("exactly-once ack_deadline_seconds = %d, want 60", created.GetAckDeadlineSeconds())
+		}
+	}
+	got, err := client.SubscriptionAdminClient.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: sub})
+	if err != nil {
+		return fmt.Errorf("GetSubscription(exactly-once): %w", err)
+	}
+	if !got.GetEnableExactlyOnceDelivery() {
+		return fmt.Errorf("GetSubscription enable_exactly_once_delivery = false, want true")
+	}
+	if got.GetAckDeadlineSeconds() != 60 {
+		return fmt.Errorf("GetSubscription ack_deadline_seconds = %d, want 60", got.GetAckDeadlineSeconds())
+	}
+
+	// Exactly-once delivery is pull-only: a push subscription cannot request it.
+	pushSub := pubSubSubName(cfg, "gcpc-grpc-eod-push-sub")
+	_, err = client.SubscriptionAdminClient.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:                      pushSub,
+		Topic:                     topic,
+		EnableExactlyOnceDelivery: true,
+		PushConfig:                &pubsubpb.PushConfig{PushEndpoint: "https://example.invalid/gcpc-push"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("exactly-once + push CreateSubscription = %v, want InvalidArgument", err)
 	}
 	return nil
 }
