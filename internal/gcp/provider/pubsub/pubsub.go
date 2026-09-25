@@ -385,17 +385,33 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 	if !p.topicExists(ctx, nr.AccountID, lastSegment(topic)) {
 		return nil, model.NewProviderError("NotFound", "topic not found", 404)
 	}
+	// Exactly-once delivery is a pull-only feature; a push subscription cannot
+	// support it, so requesting both fails loud.
+	exactlyOnce, _ := body["enableExactlyOnceDelivery"].(bool)
+	pushEndpoint := ""
+	if pc, ok := body["pushConfig"].(map[string]any); ok {
+		pushEndpoint, _ = pc["pushEndpoint"].(string)
+	}
+	if exactlyOnce && pushEndpoint != "" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"exactly-once delivery is not supported for push subscriptions", 400)
+	}
 	ackDeadline := 10
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		v := int(ad)
 		// Proto: the value must be between 10 and 600 seconds; 0 selects the
-		// 10-second default. Anything else (including negatives) is invalid.
+		// default. Anything else (including negatives) is invalid.
 		if v != 0 && (v < 10 || v > 600) {
 			return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 10 and 600 (got %d)", v), 400)
 		}
 		if v != 0 {
 			ackDeadline = v
+		} else if exactlyOnce {
+			// Exactly-once subscriptions default to a 60-second ack deadline.
+			ackDeadline = 60
 		}
+	} else if exactlyOnce {
+		ackDeadline = 60
 	}
 	meta := map[string]any{
 		"name":               nr.ResourceID("pubsub-subscription", s),
@@ -403,6 +419,14 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		"ackDeadlineSeconds": ackDeadline,
 		// A freshly created subscription is immediately usable, i.e. ACTIVE.
 		"state": "ACTIVE",
+	}
+	// Only persist non-default flags: real Pub/Sub omits `false` booleans from
+	// the JSON response, and the differential goldens rely on that.
+	if exactlyOnce {
+		meta["enableExactlyOnceDelivery"] = true
+	}
+	if om, _ := body["enableMessageOrdering"].(bool); om {
+		meta["enableMessageOrdering"] = true
 	}
 	// Real Pub/Sub defaults: retain undelivered messages for 7 days and expire
 	// an inactive subscription after 31 days. Explicit request values win.

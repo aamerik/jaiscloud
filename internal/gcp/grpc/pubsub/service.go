@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
@@ -72,12 +73,41 @@ type Service struct {
 	messages    pubsubstore.Messages // published messages (data plane)
 	encryptor   crypto.EnvelopeEncryptor
 	defaultProj string
+
+	// regs holds one shared ack registry per subscription so ack state is
+	// authoritative across every StreamingPull stream on that subscription.
+	regMu sync.Mutex
+	regs  map[string]*ackRegistry
 }
 
 // NewService returns a Pub/Sub gRPC service backed by the shared stores.
 // defaultProj is the config-default project used when a request carries none.
 func NewService(resources store.ResourceStore, messages pubsubstore.Messages, encryptor crypto.EnvelopeEncryptor, defaultProj string) *Service {
-	return &Service{resources: resources, messages: messages, encryptor: encryptor, defaultProj: defaultProj}
+	return &Service{
+		resources:   resources,
+		messages:    messages,
+		encryptor:   encryptor,
+		defaultProj: defaultProj,
+		regs:        map[string]*ackRegistry{},
+	}
+}
+
+// registry returns the ack registry shared by every stream on a subscription,
+// creating it lazily. All StreamingPull streams and the unary Acknowledge RPC
+// for the same subscription resolve to the same instance, which is what makes
+// an ack on one stream visible to the others.
+func (s *Service) registry(sub string) *ackRegistry {
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
+	if s.regs == nil {
+		s.regs = map[string]*ackRegistry{}
+	}
+	r, ok := s.regs[sub]
+	if !ok {
+		r = newAckRegistry(sub, s.messages)
+		s.regs[sub] = r
+	}
+	return r
 }
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
@@ -398,19 +428,36 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		}
 		return nil, mapError(err)
 	}
+	// Exactly-once delivery is a pull-only feature. A push subscription cannot
+	// support it (the client never learns whether the push was processed), so
+	// requesting both fails loud rather than silently dropping the flag.
+	exactlyOnce := req.GetEnableExactlyOnceDelivery()
+	if exactlyOnce && req.GetPushConfig().GetPushEndpoint() != "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument",
+			"exactly-once delivery is not supported for push subscriptions", 400))
+	}
 	ackDeadline := 10
 	if v := req.GetAckDeadlineSeconds(); v != 0 {
 		// Proto: the value must be between 10 and 600 seconds; 0 selects the
-		// 10-second default.
+		// default.
 		if v < 10 || v > 600 {
 			return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 10 and 600 (got %d)", v), 400))
 		}
 		ackDeadline = int(v)
+	} else if exactlyOnce {
+		// Exactly-once subscriptions default to a 60-second ack deadline.
+		ackDeadline = 60
 	}
 	meta := map[string]any{
 		"name":               subscriptionName(project, sub),
 		"topic":              req.GetTopic(),
 		"ackDeadlineSeconds": ackDeadline,
+	}
+	if exactlyOnce {
+		meta["enableExactlyOnceDelivery"] = true
+	}
+	if req.GetEnableMessageOrdering() {
+		meta["enableMessageOrdering"] = true
 	}
 	if f := req.GetFilter(); f != "" {
 		if _, err := pubsubfilter.Compile(f); err != nil {
@@ -674,6 +721,25 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 			Message: "subscription " + sub + " is detached",
 		})
 	}
+	exactlyOnce, _ := meta["enableExactlyOnceDelivery"].(bool)
+	ordering, _ := meta["enableMessageOrdering"].(bool)
+	var props *pubsubpb.StreamingPullResponse_SubscriptionProperties
+	if exactlyOnce || ordering {
+		// Advertise the subscription's non-default properties (the official
+		// client reads these to keep its exactly-once / ordering mode in sync).
+		props = &pubsubpb.StreamingPullResponse_SubscriptionProperties{
+			ExactlyOnceDeliveryEnabled: exactlyOnce,
+			MessageOrderingEnabled:     ordering,
+		}
+	}
+
+	// The ack registry is subscription-scoped: every stream on this
+	// subscription shares it, and it is reconciled against the store on a short
+	// poll interval (acktrack.go). It keeps a message acked on one stream from
+	// being redelivered on another.
+	reg := s.registry(sub)
+	reg.acquire()
+	defer reg.release()
 	subFilter, _ := meta["filter"].(string)
 	topic, _ := meta["topic"].(string)
 	topicID := topic
@@ -775,6 +841,11 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 		}
 		if len(msgs) > 0 {
 			msgs = s.filterMessages(ctx, sub, subFilter, msgs)
+			// Cross-stream ack reconciliation: drop any message this stream
+			// claimed that was acknowledged on another stream (or by the unary
+			// Acknowledge RPC) between the Pull and the send. Without this the
+			// already-claimed copy would be delivered after its ack.
+			msgs = s.dropAcked(ctx, sub, reg, msgs)
 			received, err := s.buildReceivedMessages(ctx, project, sub, dlqTopic, maxDeliveryAttempts, hasDeadLetterPolicy, msgs)
 			if err != nil {
 				return err
@@ -798,7 +869,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				}
 			}
 			if len(sendable) > 0 {
-				if err := stream.Send(&pubsubpb.StreamingPullResponse{ReceivedMessages: sendable}); err != nil {
+				if err := stream.Send(&pubsubpb.StreamingPullResponse{
+					ReceivedMessages:       sendable,
+					SubscriptionProperties: props,
+				}); err != nil {
 					if errors.Is(err, io.EOF) {
 						return nil
 					}
@@ -829,8 +903,11 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 
 // applyStreamAcks acknowledges the ackIds in a StreamingPull request. It returns
 // the decoded message IDs so the caller can release them from the stream's
-// outstanding flow-control set.
-func (s *Service) applyStreamAcks(ctx context.Context, _ string, req *pubsubpb.StreamingPullRequest) []string {
+// outstanding flow-control set. Each successful ack also tombstones the message
+// in the subscription-scoped registry so another stream cannot redeliver an
+// already-claimed copy.
+func (s *Service) applyStreamAcks(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
+	reg := s.registry(queue)
 	var acked []string
 	for _, a := range req.GetAckIds() {
 		decoded, ok := decodeAckID(a)
@@ -838,12 +915,37 @@ func (s *Service) applyStreamAcks(ctx context.Context, _ string, req *pubsubpb.S
 			continue
 		}
 		parts := strings.SplitN(decoded, "/", 2)
-		if len(parts) == 2 {
-			_ = s.messages.Delete(ctx, parts[0], parts[1])
-			acked = append(acked, parts[1])
+		// An ackId is valid only for the subscription that issued it.
+		if len(parts) != 2 || parts[0] != queue {
+			continue
 		}
+		if err := s.messages.Delete(ctx, queue, parts[1]); err != nil {
+			// Leave it untombstoned so a later retry can still ack it.
+			continue
+		}
+		reg.markAcked(parts[1])
+		acked = append(acked, parts[1])
 	}
 	return acked
+}
+
+// dropAcked removes messages a stream claimed but that were acknowledged on
+// another stream (or by the unary Acknowledge RPC) before the send. A dropped
+// message that is somehow still present (a Seek restored it) is made visible
+// again so it is not stranded until its ack deadline.
+func (s *Service) dropAcked(ctx context.Context, queue string, reg *ackRegistry, msgs []pubsubstore.Message) []pubsubstore.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	kept := msgs[:0]
+	for _, m := range msgs {
+		if reg.isAcked(m.MessageID) {
+			_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + m.MessageID}, 0, clock.Now())
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
 }
 
 // applyStreamModifyDeadlines applies the parallel modifyDeadlineAckIds /
@@ -864,26 +966,42 @@ func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, 
 		if !ok {
 			continue
 		}
-		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{decoded}, int(seconds[i]), clock.Now())
+		parts := strings.SplitN(decoded, "/", 2)
+		// An ackId is valid only for the subscription that issued it.
+		if len(parts) != 2 || parts[0] != queue {
+			continue
+		}
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + parts[1]}, int(seconds[i]), clock.Now())
 		if seconds[i] <= 0 {
-			if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
-				nacked = append(nacked, parts[1])
-			}
+			nacked = append(nacked, parts[1])
 		}
 	}
 	return nacked
 }
 
 func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequest) (*emptypb.Empty, error) {
+	_, sub, named := splitSubscriptionName(req.GetSubscription())
 	for _, a := range req.GetAckIds() {
 		decoded, ok := decodeAckID(a)
 		if !ok {
 			continue
 		}
 		parts := strings.SplitN(decoded, "/", 2)
-		if len(parts) == 2 {
-			_ = s.messages.Delete(ctx, parts[0], parts[1])
+		if len(parts) != 2 {
+			continue
 		}
+		// An ackId is valid only for the subscription that issued it. When the
+		// request names a subscription, enforce that; otherwise trust the ackId.
+		if named && parts[0] != sub {
+			continue
+		}
+		queue := parts[0]
+		if err := s.messages.Delete(ctx, queue, parts[1]); err != nil {
+			return nil, mapError(err)
+		}
+		// Tombstone in the shared subscription registry so an active
+		// StreamingPull on the same subscription drops its claimed copy.
+		s.registry(queue).markAcked(parts[1])
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -908,9 +1026,16 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 	}
 	decoded := make([]string, 0, len(req.GetAckIds()))
 	for _, id := range req.GetAckIds() {
-		if d, ok := decodeAckID(id); ok {
-			decoded = append(decoded, d)
+		d, ok := decodeAckID(id)
+		if !ok {
+			continue
 		}
+		// An ackId is valid only for the subscription that issued it.
+		parts := strings.SplitN(d, "/", 2)
+		if len(parts) != 2 || parts[0] != sub {
+			continue
+		}
+		decoded = append(decoded, sub+"/"+parts[1])
 	}
 	if err := s.messages.ModifyAckDeadline(ctx, sub, decoded, int(req.GetAckDeadlineSeconds()), clock.Now()); err != nil {
 		return nil, mapError(err)
@@ -985,6 +1110,25 @@ func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSu
 				v = 10
 			}
 			meta["ackDeadlineSeconds"] = v
+		case "enable_exactly_once_delivery", "enableExactlyOnceDelivery":
+			if in.GetEnableExactlyOnceDelivery() {
+				// Enabling exactly-once is unsupported for push subscriptions.
+				if pc, ok := meta["pushConfig"].(map[string]any); ok {
+					if ep, _ := pc["pushEndpoint"].(string); ep != "" {
+						return nil, mapError(model.NewProviderError("InvalidArgument",
+							"exactly-once delivery is not supported for push subscriptions", 400))
+					}
+				}
+				meta["enableExactlyOnceDelivery"] = true
+			} else {
+				delete(meta, "enableExactlyOnceDelivery")
+			}
+		case "enable_message_ordering", "enableMessageOrdering":
+			if in.GetEnableMessageOrdering() {
+				meta["enableMessageOrdering"] = true
+			} else {
+				delete(meta, "enableMessageOrdering")
+			}
 		case "dead_letter_policy", "deadLetterPolicy":
 			if in.GetDeadLetterPolicy() == nil {
 				delete(meta, "deadLetterPolicy")
@@ -1142,6 +1286,11 @@ func (s *Service) ModifyPushConfig(ctx context.Context, req *pubsubpb.ModifyPush
 	if pc == nil || pc.GetPushEndpoint() == "" {
 		delete(meta, "pushConfig")
 	} else {
+		// Exactly-once delivery cannot be enabled on a push subscription.
+		if eod, _ := meta["enableExactlyOnceDelivery"].(bool); eod {
+			return nil, mapError(model.NewProviderError("InvalidArgument",
+				"exactly-once delivery is not supported for push subscriptions", 400))
+		}
 		pm := map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
 		if len(pc.GetAttributes()) > 0 {
 			pm["attributes"] = pc.GetAttributes()
@@ -1592,6 +1741,12 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 	}
 	if detached, _ := meta["detached"].(bool); detached {
 		sub.Detached = true
+	}
+	if eod, _ := meta["enableExactlyOnceDelivery"].(bool); eod {
+		sub.EnableExactlyOnceDelivery = true
+	}
+	if ord, _ := meta["enableMessageOrdering"].(bool); ord {
+		sub.EnableMessageOrdering = true
 	}
 	if labels, ok := meta["labels"].(map[string]any); ok {
 		m := make(map[string]string, len(labels))
