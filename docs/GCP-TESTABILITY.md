@@ -191,8 +191,9 @@ evidence for any of them.
 - [ ] **Quotas, throttling, and retry/backoff.** No rate limits or quota plane is
       modelled, so backoff and quota-exhaustion paths are never exercised locally.
 - [ ] **Frozen-clock OCC / TTL.** With the clock frozen (`POST /_jaiscloud/clock`),
-      Firestore/Datastore optimistic-concurrency conflict detection and DynamoDB-style TTL
-      edge cases can behave differently. Do not rely on frozen-clock results as production
+      Datastore optimistic-concurrency conflict detection and DynamoDB-style TTL edge cases can
+      behave differently. (Firestore's `UpdateTime` OCC token is kept strictly monotonic per
+      document even under a frozen clock.) Do not rely on frozen-clock results as production
       evidence.
 - [ ] **Per-language SDK wire paths.** Different official SDKs exercise different wire
       paths. Add each client SDK/language in use to the conformance matrix rather

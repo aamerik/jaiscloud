@@ -25,6 +25,11 @@ type collectionSelector struct {
 
 type fieldReference struct {
 	FieldPath string `json:"fieldPath,omitempty"`
+	// OutputPath is an optional pipeline-projection alias: when set, the field
+	// read from FieldPath is written under OutputPath. It is internal to the
+	// ExecutePipeline relational subset and never part of the wire
+	// StructuredQuery.
+	OutputPath string `json:"-"`
 }
 
 type fieldFilter struct {
@@ -852,18 +857,53 @@ type sortEntry struct {
 }
 
 // projectFields returns only the projected field paths (a "__name__"-only
-// projection yields an empty fields map; the name is always on the wire).
+// projection yields an empty fields map; the name is always on the wire). A
+// field reference's OutputPath, when set, renames the projected field. Values
+// are deep-copied so the projected document never shares (and can never mutate)
+// the store's nested map/array values.
 func projectFields(doc *firestorestore.Document, proj *projection) map[string]*firestorestore.Value {
 	out := map[string]*firestorestore.Value{}
 	for _, fr := range proj.Fields {
 		if fr.FieldPath == "__name__" {
 			continue
 		}
-		if v := fieldValue(doc, fr.FieldPath); v != nil {
-			setFieldPath(out, strings.Split(fr.FieldPath, "."), v)
+		v := fieldValue(doc, fr.FieldPath)
+		if v == nil {
+			continue
 		}
+		dst := fr.OutputPath
+		if dst == "" {
+			dst = fr.FieldPath
+		}
+		setFieldPath(out, strings.Split(dst, "."), cloneValue(v))
 	}
 	return out
+}
+
+// cloneValue returns a deep copy of a Value, so a projected (or otherwise
+// derived) document owns its nested maps and arrays instead of aliasing the
+// store's. Scalars share their underlying pointer fields, which are never
+// mutated in place.
+func cloneValue(v *firestorestore.Value) *firestorestore.Value {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	if v.ArrayValue != nil {
+		vals := make([]*firestorestore.Value, len(v.ArrayValue.Values))
+		for i, e := range v.ArrayValue.Values {
+			vals[i] = cloneValue(e)
+		}
+		out.ArrayValue = &firestorestore.ArrayValue{Values: vals}
+	}
+	if v.MapValue != nil {
+		fields := make(map[string]*firestorestore.Value, len(v.MapValue.Fields))
+		for k, e := range v.MapValue.Fields {
+			fields[k] = cloneValue(e)
+		}
+		out.MapValue = &firestorestore.MapValue{Fields: fields}
+	}
+	return &out
 }
 
 // numericValuesEqual reports whether two Values are numerically equal, used by
