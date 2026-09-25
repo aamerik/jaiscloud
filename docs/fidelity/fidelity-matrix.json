@@ -3,15 +3,15 @@
   "summary": {
     "total": 711,
     "by_state": {
-      "ga": 492,
-      "limited": 101,
+      "ga": 493,
+      "limited": 100,
       "preview": 37,
       "unsupported": 81
     },
     "by_transport": {
       "grpc": {
-        "ga": 244,
-        "limited": 12,
+        "ga": 245,
+        "limited": 11,
         "unsupported": 72
       },
       "rest": {
@@ -108,8 +108,7 @@
         "unsupported": 1
       },
       "storage": {
-        "ga": 51,
-        "limited": 1
+        "ga": 52
       },
       "workflowexecutions": {
         "ga": 8
@@ -7002,11 +7001,10 @@
       "service": "storage",
       "operation": "BidiReadObject",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

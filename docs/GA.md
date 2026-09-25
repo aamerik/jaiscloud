@@ -54,8 +54,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 492 |
-| limited | 101 |
+| ga | 493 |
+| limited | 100 |
 | preview | 37 |
 | unsupported | 81 |
 | **total** | **711** |
@@ -65,7 +65,7 @@ fails CI if the committed matrix drifts.
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 248 | 89 | 37 | 9 |
-| gRPC (proto descriptors + official-client conformance) | 244 | 12 | 0 | 72 |
+| gRPC (proto descriptors + official-client conformance) | 245 | 11 | 0 | 72 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
 
@@ -144,10 +144,10 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **261/261 checks pass** (Dataproc 14,
+- **gRPC** — official `cloud.google.com/go` clients: **262/262 checks pass** (Dataproc 14,
   Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 5,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
-  Secret Manager 16, Service Usage 5, Storage 23, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
+  Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
   `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
@@ -210,23 +210,23 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
   (runtime invocation) and v2 `ListRuntimes` are explicit `unsupported` `Unimplemented` stubs —
   the gRPC surface is control-plane only.
-- **gRPC** — **12** of **328** cells remain `limited`: verified against proto descriptors only.
-  The other **244** are `ga` and **72** are explicit `unsupported` stubs (see the `Unimplemented`
+- **gRPC** — **11** of **328** cells remain `limited`: verified against proto descriptors only.
+  The other **245** are `ga` and **72** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **261** checks over those `ga` proto methods (Dataproc 14,
+  The conformance harness exercises **262** checks over those `ga` proto methods (Dataproc 14,
   Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 5,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
-  Secret Manager 16, Service Usage 5, Storage 23, Workflow Executions 4, Workflows 5, the rest one
+  Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5, the rest one
   per method). KMS
   `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
   `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`, as do Secret
   Manager `RotateSecret`/`EnableManagedRotation` (Cloud SQL managed rotation with no data plane
-  to update), Storage `BidiReadObject`, and Managed Kafka
+  to update), Logging `TailLogEntries` (a bounded store-poll with no deterministic conformance
+  assertion), and Managed Kafka
   `List`/`Get`/`Update`/`DeleteConsumerGroup` (no broker, so the list is empty and the item
   methods report `NOT_FOUND`).
 - **Other documented caveats** (functional, not cell states — see
-  [README-GCP Known Limitations](../README-GCP.md#known-limitations)): GCS gRPC v2
-  `BidiReadObject` is unimplemented; Firestore `ExecutePipeline` implements the read-only
+  [README-GCP Known Limitations](../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources
   plus `limit`/`offset`) and rejects other pipeline stages with `Unimplemented`; Firestore
   optimistic-concurrency conflict detection can miss
@@ -328,8 +328,8 @@ generated.
   Monitoring gained REST (REST clients for the data/observability plane); Dataproc, Eventarc,
   Functions, Managed Kafka, Metastore, Resource Manager, Service Usage, Workflows and Workflow
   Executions gained gRPC (official `cloud.google.com/go` clients). Matrix after the effort:
-  **26 services / 711 operation/transport cells** — `ga` 492, `limited` 101, `preview` 37,
-  `unsupported` 81; gRPC conformance **261/261**.
+  **26 services / 711 operation/transport cells** — `ga` 493, `limited` 100, `preview` 37,
+  `unsupported` 81; gRPC conformance **262/262**.
 - **Firestore Admin gRPC.** New `google.firestore.admin.v1.FirestoreAdmin` composite-index CRUD
   (Create/Get/List/Delete index, 4 `ga` cells) over the shared core; Databases/Backups/UserCreds/
   Schedules/Fields/Export/Import remain explicit `Unimplemented` stubs.

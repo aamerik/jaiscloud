@@ -25,13 +25,15 @@ func storageChecks() []Check {
 
 func storageBucketName(cfg Config) string { return cfg.ResourceName("gcpc-grpc-bucket") }
 
-func newStorageClient(ctx context.Context, cfg Config) (*storage.Client, error) {
-	return storage.NewGRPCClient(ctx,
+func newStorageClient(ctx context.Context, cfg Config, extra ...option.ClientOption) (*storage.Client, error) {
+	opts := []option.ClientOption{
 		option.WithEndpoint(cfg.GRPCAddr()),
 		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 		option.WithoutAuthentication(),
 		storage.WithDisabledClientMetrics(),
-	)
+	}
+	opts = append(opts, extra...)
+	return storage.NewGRPCClient(ctx, opts...)
 }
 
 func checkStorageCreateBucket(ctx context.Context, cfg Config) error {

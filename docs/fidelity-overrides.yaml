@@ -399,7 +399,3 @@ operations:
     operation: TailLogEntries
     state: limited
     reason: "bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists"
-  - service: storage
-    operation: BidiReadObject
-    state: limited
-    reason: "bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served"
