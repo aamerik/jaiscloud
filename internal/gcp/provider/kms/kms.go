@@ -124,14 +124,17 @@ func cryptoKeyVersionName(nr *model.NormalizedRequest, loc, kr, key, version str
 	return nr.ResourceID("kms-cryptokey-version", loc+"/"+kr+"/"+key+"/"+version)
 }
 
-// cryptoKeyMap renders a CryptoKey as its GCP response object.
-// primaryCreateTime is the primary version's create time; it is used for the
-// primary's createTime/generateTime (GCP reports both as the version's
-// generation time). Zero falls back to the crypto key's own create time.
-func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryState string, primaryCreateTime time.Time) map[string]any {
+// cryptoKeyMap renders a CryptoKey as its GCP response object. primary is the
+// crypto key's primary version (see primaryVersion); its create time feeds the
+// embedded primary's createTime/generateTime (GCP reports both as the version's
+// generation time) and its destruction timestamps are carried through when the
+// primary is DESTROY_SCHEDULED/DESTROYED.
+func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryVersion kmsstore.Version) map[string]any {
+	primaryState := primaryVersion.State
 	if primaryState == "" {
 		primaryState = "ENABLED"
 	}
+	primaryCreateTime := primaryVersion.CreateTime
 	if primaryCreateTime.IsZero() {
 		primaryCreateTime = k.CreateTime
 	}
@@ -144,6 +147,12 @@ func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryStat
 		ts := primaryCreateTime.UTC().Format(time.RFC3339Nano)
 		primary["createTime"] = ts
 		primary["generateTime"] = ts
+	}
+	if primaryVersion.State == "DESTROY_SCHEDULED" && !primaryVersion.DestroyTime.IsZero() {
+		primary["destroyTime"] = primaryVersion.DestroyTime.UTC().Format(time.RFC3339Nano)
+	}
+	if primaryVersion.State == "DESTROYED" && !primaryVersion.DestroyEventTime.IsZero() {
+		primary["destroyEventTime"] = primaryVersion.DestroyEventTime.UTC().Format(time.RFC3339Nano)
 	}
 	out := map[string]any{
 		"name":       cryptoKeyName(nr, k.Location, k.KeyRingID, k.ID),
@@ -205,14 +214,23 @@ func parseLabels(v any) map[string]string {
 	return labels
 }
 
-// versionMap renders a CryptoKeyVersion as its GCP response object.
-func versionMap(nr *model.NormalizedRequest, loc, kr, key, version, state, algorithm string, ct time.Time) map[string]any {
-	return map[string]any{
-		"name":       cryptoKeyVersionName(nr, loc, kr, key, version),
-		"state":      state,
-		"algorithm":  algorithm,
-		"createTime": ct.UTC().Format(time.RFC3339Nano),
+// versionMap renders a CryptoKeyVersion as its GCP response object. destroyTime
+// is emitted only while DESTROY_SCHEDULED and destroyEventTime only once
+// DESTROYED (both output-only in Cloud KMS).
+func versionMap(nr *model.NormalizedRequest, loc, kr, key string, v kmsstore.Version) map[string]any {
+	out := map[string]any{
+		"name":       cryptoKeyVersionName(nr, loc, kr, key, v.Version),
+		"state":      v.State,
+		"algorithm":  v.Algorithm,
+		"createTime": v.CreateTime.UTC().Format(time.RFC3339Nano),
 	}
+	if v.State == "DESTROY_SCHEDULED" && !v.DestroyTime.IsZero() {
+		out["destroyTime"] = v.DestroyTime.UTC().Format(time.RFC3339Nano)
+	}
+	if v.State == "DESTROYED" && !v.DestroyEventTime.IsZero() {
+		out["destroyEventTime"] = v.DestroyEventTime.UTC().Format(time.RFC3339Nano)
+	}
+	return out
 }
 
 // versionPageKey renders a version number zero-padded to a fixed width so
@@ -349,7 +367,7 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 		}
 		return nil, err
 	}
-	return provider.OK(cryptoKeyMap(nr, ck, "ENABLED", ck.CreateTime)), nil
+	return provider.OK(cryptoKeyMap(nr, ck, kmsstore.Version{State: "ENABLED", Algorithm: ck.Algorithm, CreateTime: ck.CreateTime})), nil
 }
 
 func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -372,6 +390,7 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	// the page reflects the rotated primaries.
 	for _, k := range keys {
 		kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, k.ID, clock.Now())
+		p.promoteDestroyed(ctx, nr.AccountID, loc, kr, k.ID)
 	}
 	if keys, err = p.keys.ListCryptoKeys(ctx, nr.AccountID, loc, kr); err != nil {
 		return nil, err
@@ -379,8 +398,7 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, k := range page {
-		state, ct := p.primaryMeta(ctx, nr.AccountID, k)
-		items = append(items, cryptoKeyMap(nr, k, state, ct))
+		items = append(items, cryptoKeyMap(nr, k, p.primaryVersion(ctx, nr.AccountID, k)))
 	}
 	resp := map[string]any{"cryptoKeys": items, "totalSize": len(keys)}
 	if next != "" {
@@ -396,12 +414,12 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 	}
 	loc, kr, key := parseCryptoKey(name)
 	kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, key, clock.Now())
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	k, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)
 	}
-	state, ct := p.primaryMeta(ctx, nr.AccountID, k)
-	return provider.OK(cryptoKeyMap(nr, k, state, ct)), nil
+	return provider.OK(cryptoKeyMap(nr, k, p.primaryVersion(ctx, nr.AccountID, k))), nil
 }
 
 func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -503,7 +521,7 @@ func (p *Provider) CryptoKeyVersionCreate(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, p.versionErr(err)
 	}
-	return provider.OK(versionMap(nr, loc, kr, key, version, "ENABLED", ck.Algorithm, now)), nil
+	return provider.OK(versionMap(nr, loc, kr, key, kmsstore.Version{Version: version, State: "ENABLED", Algorithm: ck.Algorithm, CreateTime: now})), nil
 }
 
 func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -512,6 +530,7 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKeyFromParent(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	versions, err := p.keys.ListVersions(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -519,7 +538,7 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 	page, next := paging.Page(versions, versionPageKey, nr.Params)
 	items := make([]any, 0, len(page))
 	for _, v := range page {
-		items = append(items, versionMap(nr, loc, kr, key, v.Version, v.State, v.Algorithm, v.CreateTime))
+		items = append(items, versionMap(nr, loc, kr, key, v))
 	}
 	resp := map[string]any{"cryptoKeyVersions": items, "totalSize": len(versions)}
 	if next != "" {
@@ -534,15 +553,33 @@ func (p *Provider) CryptoKeyVersionGet(ctx context.Context, nr *model.Normalized
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
 	}
-	return provider.OK(versionMap(nr, loc, kr, key, v.Version, v.State, v.Algorithm, v.CreateTime)), nil
+	return provider.OK(versionMap(nr, loc, kr, key, v)), nil
 }
 
+// CryptoKeyVersionDestroy schedules a version for destruction: it moves to
+// DESTROY_SCHEDULED with a destroy_time one destroy_scheduled_duration (30 days
+// by default) in the future. A version already DESTROY_SCHEDULED or DESTROYED is
+// returned unchanged (idempotent, as in Cloud KMS).
 func (p *Provider) CryptoKeyVersionDestroy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return p.setVersionState(ctx, nr, "DESTROYED")
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr, key, version := parseVersion(name)
+	// Apply any elapsed destroy window first, so a version already past its
+	// destroy_time is reported (and kept) DESTROYED rather than stale
+	// DESTROY_SCHEDULED.
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
+	v, err := p.keys.DestroyVersion(ctx, nr.AccountID, loc, kr, key, version, clock.Now().Add(kmsstore.DefaultDestroyScheduledDuration))
+	if err != nil {
+		return nil, p.versionErr(err)
+	}
+	return provider.OK(versionMap(nr, loc, kr, key, v)), nil
 }
 
 // CryptoKeyVersionUpdate implements cryptoKeyVersions.patch. Real KMS exposes
@@ -554,7 +591,28 @@ func (p *Provider) CryptoKeyVersionUpdate(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, err
 	}
-	return p.setVersionState(ctx, nr, state)
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr, key, version := parseVersion(name)
+	// Apply any elapsed destroy window first, then reject a scheduled or
+	// destroyed version: patch only moves between ENABLED and DISABLED (a
+	// DESTROY_SCHEDULED version is restored, not patched).
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
+	cur, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
+	if err != nil {
+		return nil, p.versionErr(err)
+	}
+	if cur.State == "DESTROY_SCHEDULED" || cur.State == "DESTROYED" {
+		return nil, model.NewProviderError("FailedPrecondition",
+			"CryptoKeyVersion is "+cur.State+"; use restore", 400)
+	}
+	if err := p.keys.UpdateVersionState(ctx, nr.AccountID, loc, kr, key, version, state); err != nil {
+		return nil, p.versionErr(err)
+	}
+	v, _ := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
+	return provider.OK(versionMap(nr, loc, kr, key, v)), nil
 }
 
 // versionStateFromPatch extracts and validates the `state` field of a
@@ -579,19 +637,6 @@ func versionStateFromPatch(nr *model.NormalizedRequest) (string, error) {
 	}
 }
 
-func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequest, state string) (*model.ProviderResponse, error) {
-	name, err := resourceName(nr)
-	if err != nil {
-		return nil, err
-	}
-	loc, kr, key, version := parseVersion(name)
-	if err := p.keys.UpdateVersionState(ctx, nr.AccountID, loc, kr, key, version, state); err != nil {
-		return nil, p.versionErr(err)
-	}
-	v, _ := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
-	return provider.OK(versionMap(nr, loc, kr, key, v.Version, v.State, v.Algorithm, v.CreateTime)), nil
-}
-
 func (p *Provider) CryptoKeyUpdatePrimaryVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -606,9 +651,9 @@ func (p *Provider) CryptoKeyUpdatePrimaryVersion(ctx context.Context, nr *model.
 	if err := p.keys.UpdatePrimaryVersion(ctx, nr.AccountID, loc, kr, key, versionID); err != nil {
 		return nil, p.versionErr(err)
 	}
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	ck, _ := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
-	state, ct := p.primaryMeta(ctx, nr.AccountID, ck)
-	return provider.OK(cryptoKeyMap(nr, ck, state, ct)), nil
+	return provider.OK(cryptoKeyMap(nr, ck, p.primaryVersion(ctx, nr.AccountID, ck))), nil
 }
 
 // defaultAlgorithmForPurpose maps a GCP KMS purpose to its default algorithm.
@@ -631,6 +676,7 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -688,6 +734,7 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -725,6 +772,7 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -763,6 +811,7 @@ func (p *Provider) CryptoKeyVersionMacVerify(ctx context.Context, nr *model.Norm
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -802,6 +851,7 @@ func (p *Provider) CryptoKeyVersionGetPublicKey(ctx context.Context, nr *model.N
 	// name may be ".../cryptoKeyVersions/{v}/publicKey" — strip the suffix.
 	name = strings.TrimSuffix(name, "/publicKey")
 	loc, kr, key, version := parseVersion(name)
+	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
 		return nil, p.versionErr(err)
@@ -950,9 +1000,18 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 	return provider.OK(map[string]any{"permissions": policy.TestPermissions(policy.Permissions(body))}), nil
 }
 
+// promoteDestroyed lazily applies any elapsed destruction windows for a crypto
+// key before its versions are observed. Cloud KMS transitions DESTROY_SCHEDULED
+// to DESTROYED automatically; without a scheduler the emulator does it on
+// access (mirrors RotateIfDue).
+func (p *Provider) promoteDestroyed(ctx context.Context, accountID, loc, kr, key string) {
+	kmsstore.PromoteDestroyedIfDue(ctx, p.keys, accountID, loc, kr, key, clock.Now())
+}
+
 // requireVersionEnabled rejects use of a crypto-key version that is not
-// ENABLED (DISABLED/DESTROYED/PENDING) with FailedPrecondition.
+// ENABLED (DISABLED/DESTROY_SCHEDULED/DESTROYED) with FailedPrecondition.
 func (p *Provider) requireVersionEnabled(ctx context.Context, accountID, loc, kr, key, version string) error {
+	p.promoteDestroyed(ctx, accountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, accountID, loc, kr, key, version)
 	if err != nil {
 		return p.versionErr(err)
@@ -963,22 +1022,22 @@ func (p *Provider) requireVersionEnabled(ctx context.Context, accountID, loc, kr
 	return nil
 }
 
-// primaryMeta reports the current state and create time of a crypto key's
-// primary version. A missing/unknown primary falls back to ENABLED and the
-// key's own create time.
-func (p *Provider) primaryMeta(ctx context.Context, accountID string, k kmsstore.CryptoKey) (state string, createTime time.Time) {
+// primaryVersion returns a crypto key's primary version, used to render the
+// embedded CryptoKey.primary. A missing/unknown primary falls back to a
+// synthetic ENABLED version stamped with the key's own create time.
+func (p *Provider) primaryVersion(ctx context.Context, accountID string, k kmsstore.CryptoKey) kmsstore.Version {
+	fallback := kmsstore.Version{Version: k.PrimaryVersion, State: "ENABLED", Algorithm: k.Algorithm, CreateTime: k.CreateTime}
 	if k.PrimaryVersion == "" {
-		return "ENABLED", k.CreateTime
+		return fallback
 	}
 	v, err := p.keys.GetVersion(ctx, accountID, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion)
 	if err != nil || v.State == "" {
-		return "ENABLED", k.CreateTime
+		return fallback
 	}
-	ct := v.CreateTime
-	if ct.IsZero() {
-		ct = k.CreateTime
+	if v.CreateTime.IsZero() {
+		v.CreateTime = k.CreateTime
 	}
-	return v.State, ct
+	return v
 }
 
 func versionNotEnabledErr(version, state string) error {
@@ -1003,6 +1062,10 @@ func (p *Provider) versionErr(err error) error {
 		return model.NewProviderError("NotFound", "crypto key not found", 404)
 	case errors.Is(err, kmsstore.ErrNoSuchVersion):
 		return model.NewProviderError("NotFound", "crypto key version not found", 404)
+	case errors.Is(err, kmsstore.ErrNotDestroyable):
+		return model.NewProviderError("FailedPrecondition", "CryptoKeyVersion must be ENABLED or DISABLED to destroy", 400)
+	case errors.Is(err, kmsstore.ErrNotRestorable):
+		return model.NewProviderError("FailedPrecondition", "CryptoKeyVersion must be DESTROY_SCHEDULED to restore", 400)
 	}
 	return err
 }

@@ -3,8 +3,12 @@ package kms
 import (
 	"context"
 	"testing"
+	"time"
 
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+
+	"jaiscloud/internal/clock"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -67,6 +71,10 @@ func TestKMSRawEncryptDecrypt(t *testing.T) {
 }
 
 func TestKMSDeleteAndRetiredResources(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	client, _, cleanup := kmsTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -81,9 +89,19 @@ func TestKMSDeleteAndRetiredResources(t *testing.T) {
 	if _, err := client.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: version}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("DeleteCryptoKeyVersion(live) err = %v, want FailedPrecondition", err)
 	}
-	if _, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: version}); err != nil {
+	scheduled, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: version})
+	if err != nil {
 		t.Fatalf("DestroyCryptoKeyVersion: %v", err)
 	}
+	if scheduled.GetState() != kmspb.CryptoKeyVersion_DESTROY_SCHEDULED {
+		t.Fatalf("DestroyCryptoKeyVersion state = %v, want DESTROY_SCHEDULED", scheduled.GetState())
+	}
+	// A scheduled version cannot be deleted either; it must first reach
+	// DESTROYED, which the emulator promotes lazily once destroy_time passes.
+	if _, err := client.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: version}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteCryptoKeyVersion(scheduled) err = %v, want FailedPrecondition", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(kmsstore.DefaultDestroyScheduledDuration + time.Second)})
 	delVer, err := client.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: version})
 	if err != nil {
 		t.Fatalf("DeleteCryptoKeyVersion: %v", err)

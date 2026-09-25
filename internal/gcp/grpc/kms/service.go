@@ -104,8 +104,17 @@ func keyRingErr(err error) error {
 	return mapError(err)
 }
 
+// promoteDestroyed lazily applies any elapsed destruction windows for a crypto
+// key before its versions are observed. Cloud KMS transitions DESTROY_SCHEDULED
+// to DESTROYED automatically; without a scheduler the emulator does it on
+// access (mirrors RotateIfDue).
+func (s *Service) promoteDestroyed(ctx context.Context, project, loc, kr, key string) {
+	kmsstore.PromoteDestroyedIfDue(ctx, s.keys, project, loc, kr, key, clock.Now())
+}
+
 // requireVersionEnabled rejects use of a crypto-key version that is not ENABLED.
 func (s *Service) requireVersionEnabled(ctx context.Context, project, loc, kr, key, version string) error {
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return versionErr(err)
@@ -116,16 +125,22 @@ func (s *Service) requireVersionEnabled(ctx context.Context, project, loc, kr, k
 	return nil
 }
 
-// primaryState reports the state of a crypto key's primary version.
-func (s *Service) primaryState(ctx context.Context, project string, k kmsstore.CryptoKey) string {
+// primaryVersion returns a crypto key's primary version, used to render the
+// embedded CryptoKey.primary. A missing/unknown primary falls back to a
+// synthetic ENABLED version stamped with the key's own create time.
+func (s *Service) primaryVersion(ctx context.Context, project string, k kmsstore.CryptoKey) kmsstore.Version {
+	fallback := kmsstore.Version{Version: k.PrimaryVersion, State: "ENABLED", Algorithm: k.Algorithm, CreateTime: k.CreateTime}
 	if k.PrimaryVersion == "" {
-		return "ENABLED"
+		return fallback
 	}
 	v, err := s.keys.GetVersion(ctx, project, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion)
 	if err != nil || v.State == "" {
-		return "ENABLED"
+		return fallback
 	}
-	return v.State
+	if v.CreateTime.IsZero() {
+		v.CreateTime = k.CreateTime
+	}
+	return v
 }
 
 func versionNotEnabledErr(version, state string) *model.ProviderError {
@@ -148,6 +163,10 @@ func versionErr(err error) error {
 		return mapError(model.NewProviderError("NotFound", "crypto key not found", 404))
 	case errors.Is(err, kmsstore.ErrNoSuchVersion):
 		return mapError(model.NewProviderError("NotFound", "crypto key version not found", 404))
+	case errors.Is(err, kmsstore.ErrNotDestroyable):
+		return mapError(model.NewProviderError("FailedPrecondition", "CryptoKeyVersion must be ENABLED or DISABLED to destroy", 400))
+	case errors.Is(err, kmsstore.ErrNotRestorable):
+		return mapError(model.NewProviderError("FailedPrecondition", "CryptoKeyVersion must be DESTROY_SCHEDULED to restore", 400))
 	}
 	return mapError(err)
 }
@@ -301,6 +320,7 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 	// the page reflects the rotated primaries.
 	for _, k := range keys {
 		kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, k.ID, clock.Now())
+		s.promoteDestroyed(ctx, project, loc, kr, k.ID)
 	}
 	if keys, err = s.keys.ListCryptoKeys(ctx, project, loc, kr); err != nil {
 		return nil, mapError(err)
@@ -309,7 +329,7 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
 	out := make([]*kmspb.CryptoKey, 0, len(page))
 	for _, k := range page {
-		out = append(out, cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)))
+		out = append(out, cryptoKeyToProto(project, k, s.primaryVersion(ctx, project, k)))
 	}
 	return &kmspb.ListCryptoKeysResponse{CryptoKeys: out, NextPageToken: next, TotalSize: int32(len(keys))}, nil
 }
@@ -367,7 +387,7 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 		}
 		return nil, mapError(err)
 	}
-	return cryptoKeyToProto(project, ck, "ENABLED"), nil
+	return cryptoKeyToProto(project, ck, kmsstore.Version{Version: ck.PrimaryVersion, State: "ENABLED", Algorithm: ck.Algorithm, CreateTime: ck.CreateTime}), nil
 }
 
 func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyRequest) (*kmspb.CryptoKey, error) {
@@ -376,11 +396,12 @@ func (s *Service) GetCryptoKey(ctx context.Context, req *kmspb.GetCryptoKeyReque
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
 	kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, key, clock.Now())
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	k, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
 		return nil, keyErr(err)
 	}
-	return cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)), nil
+	return cryptoKeyToProto(project, k, s.primaryVersion(ctx, project, k)), nil
 }
 
 // UpdateCryptoKey applies the update_mask to the mutable fields. `labels` and
@@ -409,7 +430,7 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKe
 	if err != nil {
 		return nil, keyErr(err)
 	}
-	return cryptoKeyToProto(project, k, s.primaryState(ctx, project, k)), nil
+	return cryptoKeyToProto(project, k, s.primaryVersion(ctx, project, k)), nil
 }
 
 // applyCryptoKeyMask merges an incoming crypto key into the stored key
@@ -454,7 +475,7 @@ func (s *Service) UpdateCryptoKeyPrimaryVersion(ctx context.Context, req *kmspb.
 		return nil, versionErr(err)
 	}
 	ck, _ := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
-	return cryptoKeyToProto(project, ck, s.primaryState(ctx, project, ck)), nil
+	return cryptoKeyToProto(project, ck, s.primaryVersion(ctx, project, ck)), nil
 }
 
 // ─── CryptoKeyVersions ────────────────────────────────────────────────────────
@@ -481,6 +502,7 @@ func (s *Service) ListCryptoKeyVersions(ctx context.Context, req *kmspb.ListCryp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	versions, err := s.keys.ListVersions(ctx, project, loc, kr, key)
 	if err != nil {
 		return nil, versionErr(err)
@@ -499,6 +521,7 @@ func (s *Service) GetCryptoKeyVersion(ctx context.Context, req *kmspb.GetCryptoK
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -506,12 +529,43 @@ func (s *Service) GetCryptoKeyVersion(ctx context.Context, req *kmspb.GetCryptoK
 	return versionToProto(project, loc, kr, key, v), nil
 }
 
+// DestroyCryptoKeyVersion schedules a version for destruction: it moves to
+// DESTROY_SCHEDULED with a destroy_time one destroy_scheduled_duration (30 days
+// by default) in the future. A version already DESTROY_SCHEDULED or DESTROYED is
+// returned unchanged (idempotent, as in Cloud KMS). A subsequent read whose
+// destroy_time has elapsed promotes it to DESTROYED (see promoteDestroyed).
 func (s *Service) DestroyCryptoKeyVersion(ctx context.Context, req *kmspb.DestroyCryptoKeyVersionRequest) (*kmspb.CryptoKeyVersion, error) {
-	return s.setVersionState(ctx, req.GetName(), "DESTROYED")
+	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	// Apply any elapsed destroy window first, so a version already past its
+	// destroy_time is reported (and kept) DESTROYED rather than stale
+	// DESTROY_SCHEDULED.
+	s.promoteDestroyed(ctx, project, loc, kr, key)
+	v, err := s.keys.DestroyVersion(ctx, project, loc, kr, key, version, clock.Now().Add(kmsstore.DefaultDestroyScheduledDuration))
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	return versionToProto(project, loc, kr, key, v), nil
 }
 
+// RestoreCryptoKeyVersion reverses a scheduled destruction: a DESTROY_SCHEDULED
+// version becomes DISABLED and its destroy_time is cleared. Restoring any other
+// state fails with FAILED_PRECONDITION.
 func (s *Service) RestoreCryptoKeyVersion(ctx context.Context, req *kmspb.RestoreCryptoKeyVersionRequest) (*kmspb.CryptoKeyVersion, error) {
-	return s.setVersionState(ctx, req.GetName(), "DISABLED")
+	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	// Apply any elapsed destroy window first: once destroy_time has passed the
+	// version is DESTROYED and restoration is irreversible.
+	s.promoteDestroyed(ctx, project, loc, kr, key)
+	v, err := s.keys.RestoreVersion(ctx, project, loc, kr, key, version)
+	if err != nil {
+		return nil, versionErr(err)
+	}
+	return versionToProto(project, loc, kr, key, v), nil
 }
 
 func (s *Service) UpdateCryptoKeyVersion(ctx context.Context, req *kmspb.UpdateCryptoKeyVersionRequest) (*kmspb.CryptoKeyVersion, error) {
@@ -523,7 +577,23 @@ func (s *Service) UpdateCryptoKeyVersion(ctx context.Context, req *kmspb.UpdateC
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	if state := stateFromProto(p.GetState()); state != "" {
+	// Apply any elapsed destroy window first, then reject a scheduled or
+	// destroyed version: UpdateCryptoKeyVersion only moves between ENABLED and
+	// DISABLED (a DESTROY_SCHEDULED version is restored, not updated).
+	s.promoteDestroyed(ctx, project, loc, kr, key)
+	if p.GetState() != kmspb.CryptoKeyVersion_CRYPTO_KEY_VERSION_STATE_UNSPECIFIED {
+		state := stateFromProto(p.GetState())
+		if state != "ENABLED" && state != "DISABLED" {
+			return nil, mapError(model.NewProviderError("InvalidArgument", "cryptoKeyVersion.state must be ENABLED or DISABLED", 400))
+		}
+		cur, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
+		if err != nil {
+			return nil, versionErr(err)
+		}
+		if cur.State == "DESTROY_SCHEDULED" || cur.State == "DESTROYED" {
+			return nil, mapError(model.NewProviderError("FailedPrecondition",
+				"CryptoKeyVersion is "+cur.State+"; use RestoreCryptoKeyVersion", 400))
+		}
 		if err := s.keys.UpdateVersionState(ctx, project, loc, kr, key, version, state); err != nil {
 			return nil, versionErr(err)
 		}
@@ -532,18 +602,6 @@ func (s *Service) UpdateCryptoKeyVersion(ctx context.Context, req *kmspb.UpdateC
 	if err != nil {
 		return nil, versionErr(err)
 	}
-	return versionToProto(project, loc, kr, key, v), nil
-}
-
-func (s *Service) setVersionState(ctx context.Context, name, state string) (*kmspb.CryptoKeyVersion, error) {
-	project, loc, kr, key, version, ok := splitVersionName(name)
-	if !ok {
-		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
-	}
-	if err := s.keys.UpdateVersionState(ctx, project, loc, kr, key, version, state); err != nil {
-		return nil, versionErr(err)
-	}
-	v, _ := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	return versionToProto(project, loc, kr, key, v), nil
 }
 
@@ -632,6 +690,7 @@ func (s *Service) RawEncrypt(ctx context.Context, req *kmspb.RawEncryptRequest) 
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -687,6 +746,7 @@ func (s *Service) RawDecrypt(ctx context.Context, req *kmspb.RawDecryptRequest) 
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -732,6 +792,7 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -780,6 +841,7 @@ func (s *Service) AsymmetricDecrypt(ctx context.Context, req *kmspb.AsymmetricDe
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -833,6 +895,7 @@ func (s *Service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -862,6 +925,7 @@ func (s *Service) MacSign(ctx context.Context, req *kmspb.MacSignRequest) (*kmsp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -897,6 +961,7 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -949,6 +1014,7 @@ func (s *Service) DeleteCryptoKeyVersion(ctx context.Context, req *kmspb.DeleteC
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
 		return nil, versionErr(err)
@@ -1302,19 +1368,30 @@ func keyRingToProto(project, location string, kr kmsstore.KeyRing) *kmspb.KeyRin
 	return out
 }
 
-func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryState string) *kmspb.CryptoKey {
+// cryptoKeyToProto renders a CryptoKey. primaryVersion is the key's primary
+// version (see primaryVersion); its destruction timestamps are carried through
+// when the primary is DESTROY_SCHEDULED/DESTROYED.
+func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsstore.Version) *kmspb.CryptoKey {
+	primaryState := primaryVersion.State
 	if primaryState == "" {
 		primaryState = "ENABLED"
+	}
+	primary := &kmspb.CryptoKeyVersion{
+		Name:            versionName(project, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
+		State:           stateToProto(primaryState),
+		Algorithm:       algorithmToProto(k.Algorithm),
+		ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
+	}
+	if primaryVersion.State == "DESTROY_SCHEDULED" && !primaryVersion.DestroyTime.IsZero() {
+		primary.DestroyTime = timestamppb.New(primaryVersion.DestroyTime)
+	}
+	if primaryVersion.State == "DESTROYED" && !primaryVersion.DestroyEventTime.IsZero() {
+		primary.DestroyEventTime = timestamppb.New(primaryVersion.DestroyEventTime)
 	}
 	out := &kmspb.CryptoKey{
 		Name:    cryptoKeyName(project, k.Location, k.KeyRingID, k.ID),
 		Purpose: purposeToProto(k.Purpose),
-		Primary: &kmspb.CryptoKeyVersion{
-			Name:            versionName(project, k.Location, k.KeyRingID, k.ID, k.PrimaryVersion),
-			State:           stateToProto(primaryState),
-			Algorithm:       algorithmToProto(k.Algorithm),
-			ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
-		},
+		Primary: primary,
 		VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
 			Algorithm:       algorithmToProto(k.Algorithm),
 			ProtectionLevel: kmspb.ProtectionLevel_SOFTWARE,
@@ -1344,6 +1421,14 @@ func versionToProto(project, location, kr, key string, v kmsstore.Version) *kmsp
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamppb.New(v.CreateTime)
+	}
+	// destroy_time is present only while DESTROY_SCHEDULED; destroy_event_time
+	// only once DESTROYED (both output-only in Cloud KMS).
+	if v.State == "DESTROY_SCHEDULED" && !v.DestroyTime.IsZero() {
+		out.DestroyTime = timestamppb.New(v.DestroyTime)
+	}
+	if v.State == "DESTROYED" && !v.DestroyEventTime.IsZero() {
+		out.DestroyEventTime = timestamppb.New(v.DestroyEventTime)
 	}
 	return out
 }

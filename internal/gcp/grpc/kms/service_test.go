@@ -520,7 +520,16 @@ func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
 	}
 }
 
-func TestKMSDestroyVersion(t *testing.T) {
+// TestKMSDestroyVersionLifecycle covers the faithful destruction timing:
+// DestroyCryptoKeyVersion moves a version to DESTROY_SCHEDULED with a
+// destroy_time 30 days out (idempotently), the scheduled version is unusable,
+// RestoreCryptoKeyVersion reverses it before the window closes, and a read after
+// destroy_time lazily promotes it to the terminal DESTROYED state.
+func TestKMSDestroyVersionLifecycle(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	client, _, cleanup := kmsTestService(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -530,34 +539,57 @@ func TestKMSDestroyVersion(t *testing.T) {
 	}
 
 	verName := symKey + "/cryptoKeyVersions/1"
+	wantDestroy := t0.Add(kmsstore.DefaultDestroyScheduledDuration)
 
-	destroyed, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: verName})
+	// Destroy schedules destruction rather than destroying eagerly.
+	scheduled, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: verName})
 	if err != nil {
 		t.Fatalf("DestroyCryptoKeyVersion: %v", err)
 	}
-	if destroyed.GetState() != kmspb.CryptoKeyVersion_DESTROYED {
-		t.Fatalf("DestroyCryptoKeyVersion state = %v, want DESTROYED", destroyed.GetState())
+	if scheduled.GetState() != kmspb.CryptoKeyVersion_DESTROY_SCHEDULED {
+		t.Fatalf("DestroyCryptoKeyVersion state = %v, want DESTROY_SCHEDULED", scheduled.GetState())
+	}
+	if scheduled.GetDestroyTime() == nil || !scheduled.GetDestroyTime().AsTime().Equal(wantDestroy) {
+		t.Fatalf("destroy_time = %v, want %v", scheduled.GetDestroyTime().AsTime(), wantDestroy)
+	}
+	if scheduled.GetDestroyEventTime() != nil {
+		t.Fatal("DESTROY_SCHEDULED version should not carry destroy_event_time")
 	}
 
-	// A destroyed version cannot be used, and the primary reports its state.
+	// Destroying an already-scheduled version is idempotent.
+	again, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: verName})
+	if err != nil {
+		t.Fatalf("DestroyCryptoKeyVersion (again): %v", err)
+	}
+	if again.GetState() != kmspb.CryptoKeyVersion_DESTROY_SCHEDULED ||
+		again.GetDestroyTime() == nil || !again.GetDestroyTime().AsTime().Equal(wantDestroy) {
+		t.Fatalf("second destroy = %v @ %v, want unchanged DESTROY_SCHEDULED @ %v",
+			again.GetState(), again.GetDestroyTime().AsTime(), wantDestroy)
+	}
+
+	// A scheduled version cannot be used and the primary reports its state.
 	if _, err := client.Encrypt(ctx, &kmspb.EncryptRequest{Name: symKey, Plaintext: []byte("hi")}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("Encrypt destroyed err = %v, want FailedPrecondition", err)
+		t.Fatalf("Encrypt scheduled err = %v, want FailedPrecondition", err)
 	}
 	got, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
 	if err != nil {
 		t.Fatalf("GetCryptoKey: %v", err)
 	}
-	if got.GetPrimary().GetState() != kmspb.CryptoKeyVersion_DESTROYED {
-		t.Fatalf("primary.state = %v, want DESTROYED", got.GetPrimary().GetState())
+	if got.GetPrimary().GetState() != kmspb.CryptoKeyVersion_DESTROY_SCHEDULED {
+		t.Fatalf("primary.state = %v, want DESTROY_SCHEDULED", got.GetPrimary().GetState())
 	}
 
-	// Restore brings it back to DISABLED (GCP semantics).
+	// Restore before destroy_time returns the version to DISABLED and clears
+	// destroy_time (GCP semantics).
 	restored, err := client.RestoreCryptoKeyVersion(ctx, &kmspb.RestoreCryptoKeyVersionRequest{Name: verName})
 	if err != nil {
 		t.Fatalf("RestoreCryptoKeyVersion: %v", err)
 	}
 	if restored.GetState() != kmspb.CryptoKeyVersion_DISABLED {
 		t.Fatalf("RestoreCryptoKeyVersion state = %v, want DISABLED", restored.GetState())
+	}
+	if restored.GetDestroyTime() != nil {
+		t.Fatalf("restored version destroy_time = %v, want nil", restored.GetDestroyTime())
 	}
 
 	// UpdateCryptoKeyVersion moves it back to ENABLED.
@@ -569,6 +601,49 @@ func TestKMSDestroyVersion(t *testing.T) {
 	}
 	if enabled.GetState() != kmspb.CryptoKeyVersion_ENABLED {
 		t.Fatalf("UpdateCryptoKeyVersion state = %v, want ENABLED", enabled.GetState())
+	}
+
+	// Destroy again, then advance the clock past destroy_time. A read promotes
+	// the version to DESTROYED, records destroy_event_time, and clears
+	// destroy_time.
+	if _, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: verName}); err != nil {
+		t.Fatalf("DestroyCryptoKeyVersion (second schedule): %v", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: wantDestroy.Add(time.Second)})
+	// Restoring after the window must fail even with no prior read: the service
+	// promotes before restoring, so the version is already DESTROYED.
+	if _, err := client.RestoreCryptoKeyVersion(ctx, &kmspb.RestoreCryptoKeyVersionRequest{Name: verName}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreCryptoKeyVersion after window err = %v, want FailedPrecondition", err)
+	}
+	promoted, err := client.GetCryptoKeyVersion(ctx, &kmspb.GetCryptoKeyVersionRequest{Name: verName})
+	if err != nil {
+		t.Fatalf("GetCryptoKeyVersion after window: %v", err)
+	}
+	if promoted.GetState() != kmspb.CryptoKeyVersion_DESTROYED {
+		t.Fatalf("promoted state = %v, want DESTROYED", promoted.GetState())
+	}
+	if promoted.GetDestroyTime() != nil {
+		t.Fatalf("DESTROYED version destroy_time = %v, want nil", promoted.GetDestroyTime())
+	}
+	if promoted.GetDestroyEventTime() == nil || !promoted.GetDestroyEventTime().AsTime().Equal(wantDestroy) {
+		t.Fatalf("destroy_event_time = %v, want %v", promoted.GetDestroyEventTime().AsTime(), wantDestroy)
+	}
+
+	// DESTROYED is terminal: destroy stays idempotent, restore and update fail.
+	still, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: verName})
+	if err != nil {
+		t.Fatalf("DestroyCryptoKeyVersion (destroyed): %v", err)
+	}
+	if still.GetState() != kmspb.CryptoKeyVersion_DESTROYED {
+		t.Fatalf("destroy on DESTROYED state = %v, want DESTROYED", still.GetState())
+	}
+	if _, err := client.RestoreCryptoKeyVersion(ctx, &kmspb.RestoreCryptoKeyVersionRequest{Name: verName}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreCryptoKeyVersion on DESTROYED err = %v, want FailedPrecondition", err)
+	}
+	if _, err := client.UpdateCryptoKeyVersion(ctx, &kmspb.UpdateCryptoKeyVersionRequest{
+		CryptoKeyVersion: &kmspb.CryptoKeyVersion{Name: verName, State: kmspb.CryptoKeyVersion_ENABLED},
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("UpdateCryptoKeyVersion on DESTROYED err = %v, want FailedPrecondition", err)
 	}
 }
 

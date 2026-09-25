@@ -10,7 +10,10 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/kms/apiv1"
 	"cloud.google.com/go/kms/apiv1/kmspb"
@@ -689,6 +692,64 @@ func kmsRetiredResourceName(cfg Config, kind string) string {
 	return "projects/" + cfg.Project + "/locations/global/retiredResources/" + kmsExtraKeyID(cfg, kind)
 }
 
+// kmsDestroyNow destroys a version and drives the emulator clock past its
+// destroy window so the lazy promotion moves it to DESTROYED (a version can
+// only be deleted once DESTROYED). Cloud KMS does this transition
+// automatically; the emulator has no scheduler, so the probe advances the
+// emulator clock over its management endpoint and restores real time before
+// returning. Real time is restored with defer even on error so later probes are
+// unaffected.
+func kmsDestroyNow(ctx context.Context, cfg Config, client *kms.KeyManagementClient, name string) error {
+	defer kmsSetRealClock(cfg)
+	scheduled, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("DestroyCryptoKeyVersion: %w", err)
+	}
+	if scheduled.GetState() == kmspb.CryptoKeyVersion_DESTROYED {
+		return nil // already promoted by an earlier probe
+	}
+	dt := scheduled.GetDestroyTime()
+	if dt == nil {
+		return fmt.Errorf("DestroyCryptoKeyVersion returned %v with no destroy_time", scheduled.GetState())
+	}
+	if err := kmsSetFixedClock(cfg, dt.AsTime().Add(time.Second)); err != nil {
+		return err
+	}
+	if _, err := client.GetCryptoKeyVersion(ctx, &kmspb.GetCryptoKeyVersionRequest{Name: name}); err != nil {
+		return fmt.Errorf("GetCryptoKeyVersion after destroy window: %w", err)
+	}
+	return nil
+}
+
+// kmsSetFixedClock freezes the emulator clock at t via /_jaiscloud/clock.
+func kmsSetFixedClock(cfg Config, t time.Time) error {
+	return kmsPostClock(cfg, fmt.Sprintf(`{"mode":"fixed","time":%q}`, t.UTC().Format(time.RFC3339Nano)))
+}
+
+// kmsSetRealClock restores the emulator clock to wall time (best-effort).
+func kmsSetRealClock(cfg Config) {
+	_ = kmsPostClock(cfg, `{"mode":"real"}`)
+}
+
+func kmsPostClock(cfg Config, body string) error {
+	url := strings.TrimRight(cfg.RESTEndpoint, "/") + "/_jaiscloud/clock"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("set clock: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("set clock: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func checkKMSDeleteCryptoKeyVersion(ctx context.Context, cfg Config) error {
 	client, err := newKMSClient(ctx, cfg)
 	if err != nil {
@@ -700,8 +761,8 @@ func checkKMSDeleteCryptoKeyVersion(ctx context.Context, cfg Config) error {
 		return err
 	}
 	name := kmsExtraVersionName(cfg, "delver", "1")
-	if _, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: name}); err != nil {
-		return fmt.Errorf("DestroyCryptoKeyVersion: %w", err)
+	if err := kmsDestroyNow(ctx, cfg, client, name); err != nil {
+		return err
 	}
 	op, err := client.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: name})
 	if err != nil {
@@ -728,8 +789,8 @@ func checkKMSDeleteCryptoKey(ctx context.Context, cfg Config) error {
 		return err
 	}
 	name := kmsExtraVersionName(cfg, "delkey", "1")
-	if _, err := client.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: name}); err != nil {
-		return fmt.Errorf("DestroyCryptoKeyVersion: %w", err)
+	if err := kmsDestroyNow(ctx, cfg, client, name); err != nil {
+		return err
 	}
 	delVer, err := client.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: name})
 	if err != nil {

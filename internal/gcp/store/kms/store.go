@@ -13,6 +13,13 @@ var (
 	ErrNoSuchCryptoKey = errors.New("NoSuchCryptoKey")
 	ErrNoSuchVersion   = errors.New("NoSuchVersion")
 	ErrAlreadyExists   = errors.New("AlreadyExists")
+	// ErrNotDestroyable is returned when a version cannot be scheduled for
+	// destruction because it is not ENABLED or DISABLED (the only destroyable
+	// states in Cloud KMS).
+	ErrNotDestroyable = errors.New("NotDestroyable")
+	// ErrNotRestorable is returned when a version cannot be restored because it
+	// is not DESTROY_SCHEDULED (the only restorable state in Cloud KMS).
+	ErrNotRestorable = errors.New("NotRestorable")
 )
 
 // KeyRing is a KMS key ring.
@@ -54,6 +61,15 @@ type Version struct {
 	KeyMaterial []byte // DEK-wrapped symmetric/HMAC key (at rest)
 	PrivateKey  []byte // DEK-wrapped PKCS8 private DER (asymmetric)
 	PublicKey   []byte // DEK-wrapped PKIX public DER (asymmetric)
+
+	// DestroyTime is when a DESTROY_SCHEDULED version's key material will be
+	// destroyed and the state will move to DESTROYED. It is zero unless State
+	// is "DESTROY_SCHEDULED" (mirrors the output-only destroy_time field).
+	DestroyTime time.Time
+	// DestroyEventTime is when a version actually reached DESTROYED. It is zero
+	// unless State is "DESTROYED" (mirrors the output-only destroy_event_time
+	// field).
+	DestroyEventTime time.Time
 }
 
 // Store is the KMS store.
@@ -79,7 +95,27 @@ type Store interface {
 	CreateVersion(ctx context.Context, projectID, location, keyringID, keyID string, v Version) (string, error)
 	GetVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error)
 	ListVersions(ctx context.Context, projectID, location, keyringID, keyID string) ([]Version, error)
+	// UpdateVersionState applies an ENABLED/DISABLED lifecycle transition and
+	// clears any destruction timestamps. Callers should use DestroyVersion or
+	// RestoreVersion for the destruction lifecycle.
 	UpdateVersionState(ctx context.Context, projectID, location, keyringID, keyID, version, state string) error
+	// DestroyVersion schedules a version for destruction: State becomes
+	// DESTROY_SCHEDULED and DestroyTime is set to the supplied instant. It is
+	// idempotent — a version already DESTROY_SCHEDULED or DESTROYED is returned
+	// unchanged (Cloud KMS semantics). Returns ErrNoSuchVersion if the version
+	// does not exist and ErrNotDestroyable if it is in a state that cannot be
+	// destroyed (only ENABLED and DISABLED can).
+	DestroyVersion(ctx context.Context, projectID, location, keyringID, keyID, version string, destroyTime time.Time) (Version, error)
+	// RestoreVersion reverses a scheduled destruction: a DESTROY_SCHEDULED
+	// version becomes DISABLED and its DestroyTime is cleared. Returns
+	// ErrNoSuchVersion if the version does not exist and ErrNotRestorable if it
+	// is not DESTROY_SCHEDULED.
+	RestoreVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error)
+	// PromoteDestroyed advances every DESTROY_SCHEDULED version of the crypto
+	// key whose DestroyTime is at or before now to DESTROYED, recording the
+	// promotion in DestroyEventTime. It returns the number of versions promoted.
+	// The emulator has no background scheduler, so read paths call this lazily.
+	PromoteDestroyed(ctx context.Context, projectID, location, keyringID, keyID string, now time.Time) (int, error)
 	UpdatePrimaryVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) error
 	// DeleteVersion permanently removes a crypto-key version. Returns
 	// ErrNoSuchVersion if it does not exist.

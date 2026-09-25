@@ -5,6 +5,7 @@ package paritygrpc_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"cloud.google.com/go/kms/apiv1"
@@ -54,6 +55,9 @@ func seedKMS(d *driver, suffix string) (func() error, func() error, func() error
 			return err
 		}
 		defer closeFn()
+		// The destroy-window handling below freezes the emulator clock; always
+		// restore wall time so later seeds/probes are unaffected, even on error.
+		defer func() { _, _, _ = d.do("POST", "/_jaiscloud/clock", `{"mode":"real"}`) }()
 
 		if _, err := c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent, KeyRingId: ringID}); err != nil {
 			return fmt.Errorf("CreateKeyRing: %w", err)
@@ -80,10 +84,20 @@ func seedKMS(d *driver, suffix string) (func() error, func() error, func() error
 			return fmt.Errorf("CreateImportJob: %w", err)
 		}
 		// The key can only be deleted once every version is gone, and each
-		// version must be DESTROYED before it can be deleted.
+		// version must reach DESTROYED before it can be deleted. Destroy only
+		// schedules destruction (DESTROY_SCHEDULED + destroy_time), so advance
+		// the emulator clock past the window to let the lazy promotion run.
 		for _, version := range []string{keyName + "/cryptoKeyVersions/1", extra.GetName()} {
-			if _, err := c.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: version}); err != nil {
+			scheduled, err := c.DestroyCryptoKeyVersion(ctx, &kmspb.DestroyCryptoKeyVersionRequest{Name: version})
+			if err != nil {
 				return fmt.Errorf("DestroyCryptoKeyVersion(%s): %w", version, err)
+			}
+			if dt := scheduled.GetDestroyTime(); dt != nil {
+				body := fmt.Sprintf(`{"mode":"fixed","time":%q}`,
+					dt.AsTime().Add(time.Second).UTC().Format(time.RFC3339Nano))
+				if code, resp, err := d.do("POST", "/_jaiscloud/clock", body); err != nil || (code != http.StatusNoContent && code != http.StatusOK) {
+					return fmt.Errorf("advance clock past destroy window: code=%d resp=%s err=%v", code, truncate(resp), err)
+				}
 			}
 			op, err := c.DeleteCryptoKeyVersion(ctx, &kmspb.DeleteCryptoKeyVersionRequest{Name: version})
 			if err != nil {

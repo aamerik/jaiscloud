@@ -340,13 +340,33 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID, location, 
 	return version, nil
 }
 
-func (s *PostgresStore) GetVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error) {
+// versionColumns is the shared column list for scanning a
+// jc_kms_cryptokey_versions row.
+const versionColumns = `key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time`
+
+// scanVersion decodes a jc_kms_cryptokey_versions row (the shared column list)
+// into a Version, mapping the nullable destruction timestamps.
+func scanVersion(sc interface{ Scan(dest ...any) error }) (Version, error) {
 	var v Version
-	err := s.pool.QueryRow(ctx, `
-		SELECT key_id, version, state, algorithm, create_time, key_material, private_key, public_key
+	var destroyTime, destroyEventTime *time.Time
+	if err := sc.Scan(&v.KeyID, &v.Version, &v.State, &v.Algorithm, &v.CreateTime, &v.KeyMaterial, &v.PrivateKey, &v.PublicKey, &destroyTime, &destroyEventTime); err != nil {
+		return Version{}, err
+	}
+	if destroyTime != nil {
+		v.DestroyTime = *destroyTime
+	}
+	if destroyEventTime != nil {
+		v.DestroyEventTime = *destroyEventTime
+	}
+	return v, nil
+}
+
+func (s *PostgresStore) GetVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error) {
+	v, err := scanVersion(s.pool.QueryRow(ctx, `
+		SELECT `+versionColumns+`
 		FROM jc_kms_cryptokey_versions
 		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
-	`, projectID, location, keyringID, keyID, version).Scan(&v.KeyID, &v.Version, &v.State, &v.Algorithm, &v.CreateTime, &v.KeyMaterial, &v.PrivateKey, &v.PublicKey)
+	`, projectID, location, keyringID, keyID, version))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -358,7 +378,7 @@ func (s *PostgresStore) GetVersion(ctx context.Context, projectID, location, key
 
 func (s *PostgresStore) ListVersions(ctx context.Context, projectID, location, keyringID, keyID string) ([]Version, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT key_id, version, state, algorithm, create_time, key_material, private_key, public_key
+		SELECT `+versionColumns+`
 		FROM jc_kms_cryptokey_versions
 		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
 	`, projectID, location, keyringID, keyID)
@@ -368,8 +388,8 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, location, k
 	defer rows.Close()
 	var result []Version
 	for rows.Next() {
-		var v Version
-		if err := rows.Scan(&v.KeyID, &v.Version, &v.State, &v.Algorithm, &v.CreateTime, &v.KeyMaterial, &v.PrivateKey, &v.PublicKey); err != nil {
+		v, err := scanVersion(rows)
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, v)
@@ -378,9 +398,11 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, location, k
 	return result, rows.Err()
 }
 
+// UpdateVersionState applies an ENABLED/DISABLED transition and clears any
+// destruction timestamps so the version carries no stale destroy_time.
 func (s *PostgresStore) UpdateVersionState(ctx context.Context, projectID, location, keyringID, keyID, version, state string) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_kms_cryptokey_versions SET state=$6
+		UPDATE jc_kms_cryptokey_versions SET state=$6, destroy_time=NULL, destroy_event_time=NULL
 		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
 	`, projectID, location, keyringID, keyID, version, state)
 	if err != nil {
@@ -390,6 +412,105 @@ func (s *PostgresStore) UpdateVersionState(ctx context.Context, projectID, locat
 		return ErrNoSuchVersion
 	}
 	return nil
+}
+
+// DestroyVersion schedules a version for destruction. The row is locked FOR
+// UPDATE so concurrent destroy/restore/promote calls cannot interleave.
+// DESTROY_SCHEDULED and DESTROYED are idempotent; only ENABLED and DISABLED may
+// be destroyed.
+func (s *PostgresStore) DestroyVersion(ctx context.Context, projectID, location, keyringID, keyID, version string, destroyTime time.Time) (Version, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Version{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	v, err := scanVersion(tx.QueryRow(ctx, `
+		SELECT `+versionColumns+`
+		FROM jc_kms_cryptokey_versions
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
+		FOR UPDATE
+	`, projectID, location, keyringID, keyID, version))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Version{}, ErrNoSuchVersion
+	}
+	if err != nil {
+		return Version{}, err
+	}
+	switch v.State {
+	case "DESTROY_SCHEDULED", "DESTROYED":
+		return v, nil
+	case "ENABLED", "DISABLED":
+	default:
+		return Version{}, ErrNotDestroyable
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_kms_cryptokey_versions SET state='DESTROY_SCHEDULED', destroy_time=$6, destroy_event_time=NULL
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
+	`, projectID, location, keyringID, keyID, version, destroyTime); err != nil {
+		return Version{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Version{}, err
+	}
+	v.State = "DESTROY_SCHEDULED"
+	v.DestroyTime = destroyTime
+	v.DestroyEventTime = time.Time{}
+	return v, nil
+}
+
+// RestoreVersion reverses a scheduled destruction, moving DESTROY_SCHEDULED to
+// DISABLED and clearing destroy_time.
+func (s *PostgresStore) RestoreVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) (Version, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Version{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	v, err := scanVersion(tx.QueryRow(ctx, `
+		SELECT `+versionColumns+`
+		FROM jc_kms_cryptokey_versions
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
+		FOR UPDATE
+	`, projectID, location, keyringID, keyID, version))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Version{}, ErrNoSuchVersion
+	}
+	if err != nil {
+		return Version{}, err
+	}
+	if v.State != "DESTROY_SCHEDULED" {
+		return Version{}, ErrNotRestorable
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_kms_cryptokey_versions SET state='DISABLED', destroy_time=NULL, destroy_event_time=NULL
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4 AND version=$5
+	`, projectID, location, keyringID, keyID, version); err != nil {
+		return Version{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Version{}, err
+	}
+	v.State = "DISABLED"
+	v.DestroyTime = time.Time{}
+	v.DestroyEventTime = time.Time{}
+	return v, nil
+}
+
+// PromoteDestroyed moves every DESTROY_SCHEDULED version of the key whose
+// destroy window has elapsed to DESTROYED.
+func (s *PostgresStore) PromoteDestroyed(ctx context.Context, projectID, location, keyringID, keyID string, now time.Time) (int, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_kms_cryptokey_versions
+		SET state='DESTROYED', destroy_event_time=destroy_time, destroy_time=NULL
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
+		  AND state='DESTROY_SCHEDULED' AND destroy_time IS NOT NULL AND destroy_time <= $5
+	`, projectID, location, keyringID, keyID, now)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (s *PostgresStore) UpdatePrimaryVersion(ctx context.Context, projectID, location, keyringID, keyID, version string) error {

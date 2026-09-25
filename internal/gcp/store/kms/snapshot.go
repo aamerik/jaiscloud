@@ -81,17 +81,19 @@ type kmsCryptokeyRow struct {
 }
 
 type kmsVersionRow struct {
-	ProjectID   string    `json:"projectId"`
-	Location    string    `json:"location"`
-	KeyRingID   string    `json:"keyRingId"`
-	KeyID       string    `json:"keyId"`
-	Version     string    `json:"version"`
-	State       string    `json:"state"`
-	Algorithm   string    `json:"algorithm"`
-	CreateTime  time.Time `json:"createTime"`
-	KeyMaterial []byte    `json:"keyMaterial,omitempty"`
-	PrivateKey  []byte    `json:"privateKey,omitempty"`
-	PublicKey   []byte    `json:"publicKey,omitempty"`
+	ProjectID        string    `json:"projectId"`
+	Location         string    `json:"location"`
+	KeyRingID        string    `json:"keyRingId"`
+	KeyID            string    `json:"keyId"`
+	Version          string    `json:"version"`
+	State            string    `json:"state"`
+	Algorithm        string    `json:"algorithm"`
+	CreateTime       time.Time `json:"createTime"`
+	KeyMaterial      []byte    `json:"keyMaterial,omitempty"`
+	PrivateKey       []byte    `json:"privateKey,omitempty"`
+	PublicKey        []byte    `json:"publicKey,omitempty"`
+	DestroyTime      time.Time `json:"destroyTime,omitempty"`
+	DestroyEventTime time.Time `json:"destroyEventTime,omitempty"`
 }
 
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
@@ -152,15 +154,22 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]kmsVersionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key FROM jc_kms_cryptokey_versions ORDER BY project_id, location, keyring_id, key_id, version`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time FROM jc_kms_cryptokey_versions ORDER BY project_id, location, keyring_id, key_id, version`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r kmsVersionRow
-		if err := vrows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.KeyID, &r.Version, &r.State, &r.Algorithm, &r.CreateTime, &r.KeyMaterial, &r.PrivateKey, &r.PublicKey); err != nil {
+		var destroyTime, destroyEventTime *time.Time
+		if err := vrows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.KeyID, &r.Version, &r.State, &r.Algorithm, &r.CreateTime, &r.KeyMaterial, &r.PrivateKey, &r.PublicKey, &destroyTime, &destroyEventTime); err != nil {
 			vrows.Close()
 			return err
+		}
+		if destroyTime != nil {
+			r.DestroyTime = *destroyTime
+		}
+		if destroyEventTime != nil {
+			r.DestroyEventTime = *destroyEventTime
 		}
 		versions = append(versions, r)
 	}
@@ -243,8 +252,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.Versions {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			r.ProjectID, r.Location, r.KeyRingID, r.KeyID, r.Version, r.State, r.Algorithm, r.CreateTime, r.KeyMaterial, r.PrivateKey, r.PublicKey); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			r.ProjectID, r.Location, r.KeyRingID, r.KeyID, r.Version, r.State, r.Algorithm, r.CreateTime, r.KeyMaterial, r.PrivateKey, r.PublicKey, nullableTime(r.DestroyTime), nullableTime(r.DestroyEventTime)); err != nil {
 			return err
 		}
 	}
