@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 261,
-  "passed": 261,
+  "total": 262,
+  "passed": 262,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 261,
-    "passed": 261,
+    "checks": 262,
+    "passed": 262,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -135,8 +135,8 @@
     },
     {
       "service": "storage",
-      "total": 23,
-      "passed": 23,
+      "total": 24,
+      "passed": 24,
       "failed": 0,
       "unimplemented": 0
     },
@@ -246,6 +246,13 @@
       "method": "ReadObject",
       "status": "pass",
       "key_field": "range bytes + contentRange"
+    },
+    {
+      "service": "storage",
+      "rpc": "BidiReadObject",
+      "method": "BidiReadObject",
+      "status": "pass",
+      "key_field": "multi-range bytes + read_handle round-trip"
     },
     {
       "service": "storage",

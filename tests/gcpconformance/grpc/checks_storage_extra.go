@@ -47,6 +47,7 @@ func storageExtraChecks() []Check {
 		{Service: "storage", RPC: "MoveObject", Method: "MoveObject", KeyField: "source gone, destination present", Run: checkStorageMoveObject},
 		{Service: "storage", RPC: "RestoreObject", Method: "RestoreObject", KeyField: "restored generation live", Run: checkStorageRestoreObject},
 		{Service: "storage", RPC: "ReadObject", Method: "ReadObject", KeyField: "range bytes + contentRange", Run: checkStorageReadObject},
+		{Service: "storage", RPC: "BidiReadObject", Method: "BidiReadObject", KeyField: "multi-range bytes + read_handle round-trip", Run: checkStorageBidiReadObject},
 
 		// ── writes ──────────────────────────────────────────────────────────
 		{Service: "storage", RPC: "WriteObject", Method: "WriteObject", KeyField: "client-stream resource name/size", Run: checkStorageWriteObject},

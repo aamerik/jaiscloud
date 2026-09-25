@@ -638,7 +638,7 @@ serviceusage,ServiceUsage.ServicesDisable,rest,ga,
 serviceusage,ServiceUsage.ServicesEnable,rest,ga,
 serviceusage,ServiceUsage.ServicesGet,rest,ga,
 serviceusage,ServiceUsage.ServicesList,rest,ga,
-storage,BidiReadObject,grpc,limited,bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served
+storage,BidiReadObject,grpc,ga,
 storage,BidiWriteObject,grpc,ga,
 storage,CancelResumableWrite,grpc,ga,
 storage,ComposeObject,grpc,ga,

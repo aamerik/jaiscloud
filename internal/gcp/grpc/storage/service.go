@@ -6,10 +6,8 @@
 // Implemented RPCs: bucket CRUD + UpdateBucket/LockBucketRetentionPolicy, object
 // CRUD + RestoreObject, compose/rewrite/move, Get/Update/DeleteObject, the
 // resumable-write surface (StartResumableWrite/WriteObject/BidiWriteObject/
-// QueryWriteStatus/CancelResumableWrite), ReadObject, and bucket/object IAM.
-// BidiReadObject — the newer bidirectional streaming read surface — remains
-// intentionally unimplemented (the embedded UnimplementedStorageServer fails it
-// loud with codes.Unimplemented); ReadObject covers the read surface.
+// QueryWriteStatus/CancelResumableWrite), the read surface (ReadObject and the
+// bidirectional streaming BidiReadObject), and bucket/object IAM.
 package storage
 
 import (

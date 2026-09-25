@@ -12,8 +12,8 @@ Cells: **711**
 
 | state | count |
 | --- | --- |
-| ga | 492 |
-| limited | 101 |
+| ga | 493 |
+| limited | 100 |
 | preview | 37 |
 | unsupported | 81 |
 
@@ -22,7 +22,7 @@ Cells: **711**
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 248 | 89 | 37 | 9 |
-| grpc | 244 | 12 | 0 | 72 |
+| grpc | 245 | 11 | 0 | 72 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -828,11 +828,11 @@ _11 cell(s): ga=10 limited=0 preview=0 unsupported=1_
 
 ## storage
 
-_52 cell(s): ga=51 limited=1 preview=0 unsupported=0_
+_52 cell(s): ga=52 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| BidiReadObject | grpc | limited | bidirectional streaming read with range handles is unimplemented; only the server-streaming ReadObject is served |
+| BidiReadObject | grpc | ga | — |
 | BidiWriteObject | grpc | ga | — |
 | CancelResumableWrite | grpc | ga | — |
 | ComposeObject | grpc | ga | — |
