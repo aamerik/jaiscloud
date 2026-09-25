@@ -17,10 +17,11 @@ import (
 //
 // Cloud KMS has no DeleteKeyRing/DeleteCryptoKey RPC (keys are scheduled for
 // destruction, not deleted), so the delete-side probe uses
-// DestroyCryptoKeyVersion, which is the real API's delete analogue. The probe
-// accepts either DESTROY_SCHEDULED (real KMS) or DESTROYED (this emulator
-// destroys eagerly) so it asserts RPC availability + a well-formed result
-// rather than re-litigating the emulator's documented destruction semantics.
+// DestroyCryptoKeyVersion, which is the real API's delete analogue. Destroying
+// a live version must report DESTROY_SCHEDULED with a destroy_time (the
+// emulator promotes to DESTROYED lazily once the window elapses); DESTROYED is
+// tolerated only for a version that was already promoted, so the probe remains
+// safe if it re-runs against the same version.
 func kmsChecks() []Check {
 	checks := []Check{
 		{Service: "kms", RPC: "CreateKeyRing", KeyField: "success", Run: checkKMSCreateKeyRing},
@@ -167,7 +168,13 @@ func checkKMSDestroyCryptoKeyVersion(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("DestroyCryptoKeyVersion returned name %q, want %q", destroyed.GetName(), version)
 	}
 	switch destroyed.GetState() {
-	case kmspb.CryptoKeyVersion_DESTROY_SCHEDULED, kmspb.CryptoKeyVersion_DESTROYED:
+	case kmspb.CryptoKeyVersion_DESTROY_SCHEDULED:
+		if destroyed.GetDestroyTime() == nil {
+			return fmt.Errorf("DESTROY_SCHEDULED version returned no destroy_time")
+		}
+		return nil
+	case kmspb.CryptoKeyVersion_DESTROYED:
+		// The version was already promoted before this probe ran.
 		return nil
 	default:
 		return fmt.Errorf("DestroyCryptoKeyVersion state = %v, want DESTROY_SCHEDULED or DESTROYED", destroyed.GetState())

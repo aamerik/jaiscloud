@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 )
 
@@ -209,14 +212,22 @@ func TestKMSRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("destroy version: %v", err)
 	}
-	if dr.Data["state"] != "DESTROYED" {
-		t.Errorf("expected DESTROYED, got %v", dr.Data["state"])
+	if dr.Data["state"] != "DESTROY_SCHEDULED" {
+		t.Errorf("expected DESTROY_SCHEDULED, got %v", dr.Data["state"])
+	}
+	if _, ok := dr.Data["destroyTime"].(string); !ok {
+		t.Errorf("expected destroyTime on scheduled version, got %v", dr.Data)
 	}
 }
 
-// TestKMSDestroyedPrimaryUnusable verifies a DESTROYED primary version cannot
-// be used for encryption and that GetCryptoKey reports its real state.
+// TestKMSDestroyedPrimaryUnusable verifies a destroyed (scheduled then
+// promoted) primary version cannot be used for encryption and that GetCryptoKey
+// reports its real state.
 func TestKMSDestroyedPrimaryUnusable(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	ctx := context.Background()
 	p := newTestProvider()
 
@@ -233,28 +244,47 @@ func TestKMSDestroyedPrimaryUnusable(t *testing.T) {
 		t.Fatalf("encrypt before destroy: %v", err)
 	}
 
-	// Destroy the primary version.
-	if _, err := p.CryptoKeyVersionDestroy(ctx, newNR(map[string]any{"name": keyName + "/cryptoKeyVersions/1"})); err != nil {
+	// Destroy the primary version: it moves to DESTROY_SCHEDULED.
+	dr, err := p.CryptoKeyVersionDestroy(ctx, newNR(map[string]any{"name": keyName + "/cryptoKeyVersions/1"}))
+	if err != nil {
 		t.Fatalf("destroy: %v", err)
+	}
+	if dr.Data["state"] != "DESTROY_SCHEDULED" {
+		t.Fatalf("destroy state = %v, want DESTROY_SCHEDULED", dr.Data["state"])
 	}
 
 	// Encrypt must now fail with FailedPrecondition.
-	_, err := p.CryptoKeyEncrypt(ctx, newNR(map[string]any{"name": keyName, "body": map[string]any{"plaintext": "aGVsbG8="}}))
+	_, err = p.CryptoKeyEncrypt(ctx, newNR(map[string]any{"name": keyName, "body": map[string]any{"plaintext": "aGVsbG8="}}))
 	if err == nil {
-		t.Fatal("expected encrypt against destroyed primary to fail")
+		t.Fatal("expected encrypt against scheduled primary to fail")
 	}
 	if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "FailedPrecondition" {
 		t.Fatalf("expected FailedPrecondition, got %v", err)
 	}
 
-	// GetCryptoKey reports the real primary state.
+	// GetCryptoKey reports the scheduled state.
 	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": keyName}))
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	primary, _ := resp.Data["primary"].(map[string]any)
+	if primary["state"] != "DESTROY_SCHEDULED" {
+		t.Fatalf("primary.state = %v, want DESTROY_SCHEDULED", primary["state"])
+	}
+
+	// Once destroy_time passes, a read promotes the primary to DESTROYED and
+	// encryption still fails.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(kmsstore.DefaultDestroyScheduledDuration + time.Second)})
+	resp, err = p.CryptoKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("get after window: %v", err)
+	}
+	primary, _ = resp.Data["primary"].(map[string]any)
 	if primary["state"] != "DESTROYED" {
-		t.Fatalf("primary.state = %v, want DESTROYED", primary["state"])
+		t.Fatalf("primary.state after window = %v, want DESTROYED", primary["state"])
+	}
+	if _, err := p.CryptoKeyEncrypt(ctx, newNR(map[string]any{"name": keyName, "body": map[string]any{"plaintext": "aGVsbG8="}})); err == nil {
+		t.Fatal("expected encrypt against promoted DESTROYED primary to fail")
 	}
 }
 

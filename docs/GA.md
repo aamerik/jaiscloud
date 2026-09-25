@@ -231,9 +231,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   plus `limit`/`offset`) and rejects other pipeline stages with `Unimplemented`; Firestore
   optimistic-concurrency conflict detection can miss
   a race under a frozen clock; Datastore transactions are single entity-group with read-set
-  approximations; **KMS destruction timing** — the emulator destroys eagerly and reports
-  `DESTROYED`, whereas real KMS first reports `DESTROY_SCHEDULED` and only reaches `DESTROYED`
-  after the window, so the gRPC conformance probe accepts either state; KMS rotation schedules
+  approximations; **KMS destruction timing** — `DestroyCryptoKeyVersion` moves the version to
+  `DESTROY_SCHEDULED` with a `destroyTime` (the documented 30-day default), and a lazy on-read
+  promotion flips it to the terminal `DESTROYED` (recording `destroyEventTime`) once the window
+  elapses; `Encrypt`/asymmetric/MAC on a scheduled version fail with `FAILED_PRECONDITION` and
+  `DestroyCryptoKeyVersion` is idempotent on an already-scheduled/destroyed version. The
+  per-key `destroy_scheduled_duration` override (and the org-policy minimum) is not modelled —
+  the documented 30-day default applies. As with
+  rotation, promotion runs on access (no background scheduler); KMS rotation schedules
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
   creating a new primary and advancing the schedule — there is no background scheduler); Logging
   `TailLogEntries` is a bounded, at-most-once poll;

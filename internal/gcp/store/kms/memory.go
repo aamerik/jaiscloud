@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"jaiscloud/internal/gcp/storeutil"
 )
@@ -228,6 +229,8 @@ func (s *MemoryStore) ListVersions(_ context.Context, projectID, location, keyri
 	return result, nil
 }
 
+// UpdateVersionState applies an ENABLED/DISABLED transition and clears any
+// destruction timestamps so the version carries no stale destroy_time.
 func (s *MemoryStore) UpdateVersionState(_ context.Context, projectID, location, keyringID, keyID, version, state string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,8 +240,73 @@ func (s *MemoryStore) UpdateVersionState(_ context.Context, projectID, location,
 		return ErrNoSuchVersion
 	}
 	v.State = state
+	v.DestroyTime = time.Time{}
+	v.DestroyEventTime = time.Time{}
 	s.versions[vk][version] = v
 	return nil
+}
+
+// DestroyVersion schedules a version for destruction. DESTROY_SCHEDULED and
+// DESTROYED are idempotent; only ENABLED and DISABLED may be destroyed.
+func (s *MemoryStore) DestroyVersion(_ context.Context, projectID, location, keyringID, keyID, version string, destroyTime time.Time) (Version, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vk := vKey(projectID, location, keyringID, keyID)
+	v, ok := s.versions[vk][version]
+	if !ok {
+		return Version{}, ErrNoSuchVersion
+	}
+	switch v.State {
+	case "DESTROY_SCHEDULED", "DESTROYED":
+		return v, nil
+	case "ENABLED", "DISABLED":
+		v.State = "DESTROY_SCHEDULED"
+		v.DestroyTime = destroyTime
+		v.DestroyEventTime = time.Time{}
+		s.versions[vk][version] = v
+		return v, nil
+	default:
+		return Version{}, ErrNotDestroyable
+	}
+}
+
+// RestoreVersion reverses a scheduled destruction, moving DESTROY_SCHEDULED to
+// DISABLED and clearing destroy_time.
+func (s *MemoryStore) RestoreVersion(_ context.Context, projectID, location, keyringID, keyID, version string) (Version, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vk := vKey(projectID, location, keyringID, keyID)
+	v, ok := s.versions[vk][version]
+	if !ok {
+		return Version{}, ErrNoSuchVersion
+	}
+	if v.State != "DESTROY_SCHEDULED" {
+		return Version{}, ErrNotRestorable
+	}
+	v.State = "DISABLED"
+	v.DestroyTime = time.Time{}
+	v.DestroyEventTime = time.Time{}
+	s.versions[vk][version] = v
+	return v, nil
+}
+
+// PromoteDestroyed moves every DESTROY_SCHEDULED version of the key whose
+// destroy window has elapsed to DESTROYED.
+func (s *MemoryStore) PromoteDestroyed(_ context.Context, projectID, location, keyringID, keyID string, now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.versions[vKey(projectID, location, keyringID, keyID)]
+	promoted := 0
+	for version, v := range m {
+		if v.State == "DESTROY_SCHEDULED" && !v.DestroyTime.IsZero() && !now.Before(v.DestroyTime) {
+			v.State = "DESTROYED"
+			v.DestroyEventTime = v.DestroyTime
+			v.DestroyTime = time.Time{}
+			m[version] = v
+			promoted++
+		}
+	}
+	return promoted, nil
 }
 
 func (s *MemoryStore) UpdatePrimaryVersion(_ context.Context, projectID, location, keyringID, keyID, version string) error {

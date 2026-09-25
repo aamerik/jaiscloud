@@ -428,7 +428,9 @@ func TestSDKKMSMacSignVerify(t *testing.T) {
 
 // TestSDKKMSVersionDestroyAndNotFound covers version destroy (the GCP-native
 // way to retire a version — the KMS SDK has no per-version disable) and 404 for
-// a missing version and missing key.
+// a missing version and missing key. Destroy schedules the destruction
+// (DESTROY_SCHEDULED with a destroy_time); the version only becomes DESTROYED
+// once the destroy window elapses.
 func TestSDKKMSVersionDestroyAndNotFound(t *testing.T) {
 	ctx := context.Background()
 	svc, err := cloudkms.NewService(ctx, opts()...)
@@ -439,13 +441,16 @@ func TestSDKKMSVersionDestroyAndNotFound(t *testing.T) {
 		keyName+"/cryptoKeyVersions", &cloudkms.CryptoKeyVersion{}).Do()
 	require.NoError(t, err)
 
-	// Destroy version 2 → state DESTROYED.
-	_, err = svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.Destroy(ver2.Name,
+	// Destroy version 2 → DESTROY_SCHEDULED with a destroy_time.
+	dv, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.Destroy(ver2.Name,
 		&cloudkms.DestroyCryptoKeyVersionRequest{}).Do()
 	require.NoError(t, err)
+	require.Equal(t, "DESTROY_SCHEDULED", dv.State)
+	require.NotEmpty(t, dv.DestroyTime)
 	got, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.Get(ver2.Name).Do()
 	require.NoError(t, err)
-	require.Equal(t, "DESTROYED", got.State)
+	require.Equal(t, "DESTROY_SCHEDULED", got.State)
+	require.NotEmpty(t, got.DestroyTime)
 
 	// A missing version returns 404.
 	_, err = svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.Get(keyName + "/cryptoKeyVersions/99").Do()
