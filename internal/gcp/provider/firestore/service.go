@@ -93,6 +93,42 @@ func parentDocOfCollection(collPath string) string {
 	return collPath[:i]
 }
 
+// nextUpdateTime returns the update timestamp to stamp on a write, guaranteed
+// to be strictly greater than the document's current update time.
+//
+// Firestore uses updateTime as its optimistic-concurrency token: a write only
+// succeeds if the stored updateTime still equals the one the writer observed
+// (a currentDocument.updateTime precondition, or a transaction read-set entry).
+// The emulator derives updateTime from clock.Now(), which a frozen clock (time
+// control, deterministic tests) can return unchanged for every write. Without a
+// guard, two concurrent writers would both observe T, both compute T, and both
+// pass the check — a silent lost update.
+//
+// Both stamps are truncated to microseconds (the granularity of the Postgres
+// TIMESTAMPTZ column, so the token survives a round-trip through the persistent
+// backend) and a microsecond is added whenever the clock does not advance. That
+// keeps updateTime strictly monotonic per document, so the second writer's
+// observed value no longer matches and its commit aborts instead of
+// overwriting. Under a live clock now is almost always after prev, making the
+// conditional advance a no-op.
+func nextUpdateTime(prev, now time.Time) time.Time {
+	prev = prev.Truncate(time.Microsecond)
+	now = now.Truncate(time.Microsecond)
+	if prev.IsZero() || now.After(prev) {
+		return now
+	}
+	return prev.Add(time.Microsecond)
+}
+
+// documentTime returns the current business time truncated to microseconds, the
+// precision both backends persist (the Postgres column is TIMESTAMPTZ). Stamping
+// documents at that precision keeps a createTime/updateTime returned to a client
+// equal to the value a subsequent read of the store yields, so it can be used as
+// a currentDocument.updateTime precondition.
+func documentTime() time.Time {
+	return clock.Now().Truncate(time.Microsecond)
+}
+
 // ─── transaction state ───────────────────────────────────────────────────────
 
 // readSet records the documents read within a transaction for optimistic
@@ -226,7 +262,7 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 	if err := checkSize(fields); err != nil {
 		return firestorestore.Document{}, err
 	}
-	now := clock.Now()
+	now := documentTime()
 	doc := firestorestore.Document{
 		Name:       name,
 		Fields:     fields,
@@ -253,7 +289,7 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		return firestorestore.Document{}, err
 	}
 
-	now := clock.Now()
+	now := documentTime()
 
 	existing, err := s.store.GetDocument(ctx, name)
 	exists := err == nil
@@ -272,9 +308,11 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 
 	var base map[string]*firestorestore.Value
 	createTime := now
+	updateTime := now
 	if exists {
 		base = existing.Fields
 		createTime = existing.CreateTime
+		updateTime = nextUpdateTime(existing.UpdateTime, now)
 	}
 	merged := applyMask(fields, mask, base)
 	if err := checkSize(merged); err != nil {
@@ -284,7 +322,7 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		Name:       name,
 		Fields:     merged,
 		CreateTime: createTime,
-		UpdateTime: now,
+		UpdateTime: updateTime,
 	}
 	// Route through store.Commit (the same atomic check-and-apply primitive
 	// transactions use) instead of a separate Get-then-Update/Create, so a
@@ -510,7 +548,7 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 		return nil, nil, model.NewProviderError("InvalidArgument",
 			"a batchWrite may contain at most "+strconv.Itoa(maxWriteBatchSize)+" writes", 400)
 	}
-	now := clock.Now()
+	now := documentTime()
 	statuses := make([]any, 0, len(writes))
 	writeResults := make([]any, 0, len(writes))
 	for _, w := range writes {
@@ -620,6 +658,7 @@ func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.T
 // Commit call is detected (ErrAborted) instead of silently overwritten by the
 // merge this function computed from a now-stale base.
 func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
+	now = now.Truncate(time.Microsecond)
 	if dw.Name == "" {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "update document name is required", 400)
 	}
@@ -674,11 +713,13 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	}
 
 	createTime := now
+	updateTime := now
 	if exists {
 		createTime = existing.CreateTime
+		updateTime = nextUpdateTime(existing.UpdateTime, now)
 	}
-	doc := firestorestore.Document{Name: dw.Name, Fields: merged, CreateTime: createTime, UpdateTime: now}
-	res := map[string]any{"updateTime": now.Format(time.RFC3339Nano)}
+	doc := firestorestore.Document{Name: dw.Name, Fields: merged, CreateTime: createTime, UpdateTime: updateTime}
+	res := map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano)}
 	if len(transformResults) > 0 {
 		tr := make([]any, 0, len(transformResults))
 		for _, r := range transformResults {
@@ -694,6 +735,7 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 // — see buildUpdate's doc comment for why the caller must fold it into the
 // read-set passed to store.Commit.
 func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
+	now = now.Truncate(time.Microsecond)
 	if tw.Document == "" {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
 	}
@@ -706,9 +748,11 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 
 	base := map[string]*firestorestore.Value{}
 	createTime := now
+	updateTime := now
 	if exists {
 		base = existing.Fields
 		createTime = existing.CreateTime
+		updateTime = nextUpdateTime(existing.UpdateTime, now)
 	}
 	fields, transformResults, err := applyFieldTransforms(base, tw.FieldTransforms, now)
 	if err != nil {
@@ -718,12 +762,12 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 
-	doc := firestorestore.Document{Name: tw.Document, Fields: fields, CreateTime: createTime, UpdateTime: now}
+	doc := firestorestore.Document{Name: tw.Document, Fields: fields, CreateTime: createTime, UpdateTime: updateTime}
 	tr := make([]any, 0, len(transformResults))
 	for _, r := range transformResults {
 		tr = append(tr, valueWire(r))
 	}
-	return doc, map[string]any{"updateTime": now.Format(time.RFC3339Nano), "transformResults": tr}, readRef, nil
+	return doc, map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano), "transformResults": tr}, readRef, nil
 }
 
 // ─── index management ────────────────────────────────────────────────────────

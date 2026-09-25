@@ -228,9 +228,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources
-  plus `limit`/`offset`) and rejects other pipeline stages with `Unimplemented`; Firestore
-  optimistic-concurrency conflict detection can miss
-  a race under a frozen clock; Datastore transactions are single entity-group with read-set
+  plus `where`, `sort`, `select`, `distinct`, `limit`/`offset`) and rejects other pipeline
+  stages and unsupported expressions with `Unimplemented`; Firestore's `UpdateTime`
+  optimistic-concurrency token is kept strictly monotonic per document even under a frozen
+  clock; Datastore transactions are single entity-group with read-set
   approximations; **KMS destruction timing** — `DestroyCryptoKeyVersion` moves the version to
   `DESTROY_SCHEDULED` with a `destroyTime` (the documented 30-day default), and a lazy on-read
   promotion flips it to the terminal `DESTROYED` (recording `destroyEventTime`) once the window
