@@ -168,6 +168,47 @@ func TestSDKFirestoreReadsQueriesTxn(t *testing.T) {
 	require.True(t, snap.Exists())
 }
 
+// TestSDKFirestoreCursorsAndUpdateMissing covers the Java-compat gaps J17/R12
+// (startAfter/endBefore exclusivity) and J18/R13 (update on a missing document
+// → NOT_FOUND) through the official Go client.
+func TestSDKFirestoreCursorsAndUpdateMissing(t *testing.T) {
+	ctx := context.Background()
+	client := newClient(t)
+	col := client.Collection(unique("cursors"))
+
+	for _, age := range []int64{10, 20, 30, 40} {
+		_, err := col.Doc(fmt.Sprintf("doc-%d", age)).Set(ctx, map[string]any{"age": age})
+		require.NoError(t, err)
+	}
+
+	ages := func(q firestore.Query) []int64 {
+		docs, err := q.Documents(ctx).GetAll()
+		require.NoError(t, err)
+		out := make([]int64, len(docs))
+		for i, d := range docs {
+			out[i] = d.Data()["age"].(int64)
+		}
+		return out
+	}
+
+	// startAfter is exclusive.
+	require.Equal(t, []int64{30, 40}, ages(col.OrderBy("age", firestore.Asc).StartAfter(int64(20))))
+	// startAt/endAt are inclusive.
+	require.Equal(t, []int64{20, 30}, ages(col.OrderBy("age", firestore.Asc).StartAt(int64(20)).EndAt(int64(30))))
+	// endBefore is exclusive.
+	require.Equal(t, []int64{10, 20}, ages(col.OrderBy("age", firestore.Asc).EndBefore(int64(30))))
+	// Descending startAfter.
+	require.Equal(t, []int64{20, 10}, ages(col.OrderBy("age", firestore.Desc).StartAfter(int64(30))))
+
+	// Update on a missing document must fail with NOT_FOUND, not an upsert.
+	_, err := col.Doc("does-not-exist").Update(ctx, []firestore.Update{{Path: "age", Value: int64(1)}})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "No document to update")
+
+	// The failed update must not have created the document.
+	require.False(t, docRefIDs(t, ctx, col)["does-not-exist"])
+}
+
 // TestSDKFirestoreSnapshots exercises the high-level Snapshots listener. It
 // verifies the emulator emits a TargetChange NO_CHANGE frame after CURRENT so
 // the SDK concludes a snapshot instead of hanging, and that subsequent writes

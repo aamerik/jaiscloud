@@ -792,16 +792,25 @@ func executeQuery(docs []*firestorestore.Document, q *structuredQuery, parent st
 	})
 
 	// cursor filtering (startAt / endAt)
+	//
+	// Cursor.before is a position relative to the sort order, not an
+	// inclusivity flag: before=true is the position just *before* the given
+	// values, before=false just *after* them. So for start_at, before=true
+	// keeps the cursor document itself (inclusive — startAt) while before=false
+	// skips it (exclusive — startAfter); for end_at it is the other way around
+	// (before=false keeps it — endAt; before=true skips it — endBefore). See
+	// google/firestore/v1/query.proto Cursor and the Java SDK's
+	// startAt/startAfter/endAt/endBefore mappings.
 	startIdx := 0
 	endIdx := len(keyed)
 	if q.StartAt != nil {
 		for _, e := range keyed {
 			c := compareCursor(e.key, q.StartAt.Values, desc)
-			before := c < 0
-			if q.StartAt.Before {
-				before = c <= 0
+			skip := c < 0
+			if !q.StartAt.Before {
+				skip = c <= 0
 			}
-			if before {
+			if skip {
 				startIdx++
 			} else {
 				break

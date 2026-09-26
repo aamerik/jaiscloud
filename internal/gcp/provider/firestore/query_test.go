@@ -173,37 +173,99 @@ func TestExecuteQueryCursorInclusive(t *testing.T) {
 		From:    []collectionSelector{{CollectionID: "cities"}},
 		OrderBy: []order{{Field: fieldReference{FieldPath: "pop"}, Direction: "ASCENDING"}},
 	}
+	names := func(res []*firestorestore.Document) []string {
+		out := make([]string, len(res))
+		for i, d := range res {
+			out[i] = d.Name
+		}
+		return out
+	}
 
-	// startAt inclusive (before=false) at 20 → b, c.
+	// Cursor.before is a *position*, not an inclusivity flag: before=true sits
+	// just before the given values (so the cursor document itself is kept for
+	// start_at, giving startAt), before=false just after it (exclusive, giving
+	// startAfter). The Java SDK maps startAfter → before=false.
+
+	// startAt (inclusive) at 20 → b, c.
 	q := *base
-	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: false}
-	res, _ := executeQuery(docs, &q, "projects/p/databases/(default)/documents")
-	if len(res) != 2 || res[0].Name != "projects/p/databases/(default)/documents/cities/b" {
-		t.Errorf("inclusive startAt: got %d results", len(res))
-	}
-
-	// startAt exclusive (before=true) at 20 → c only.
-	q = *base
 	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: true}
-	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
-	if len(res) != 1 || res[0].Name != "projects/p/databases/(default)/documents/cities/c" {
-		t.Errorf("exclusive startAt: got %d results", len(res))
+	res, _ := executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 2 || got[0] != "projects/p/databases/(default)/documents/cities/b" {
+		t.Errorf("startAt before=true (inclusive): got %v", got)
 	}
 
-	// endAt inclusive (before=false) at 20 → a, b.
+	// startAfter (exclusive) at 20 → c only.
+	q = *base
+	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: false}
+	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 1 || got[0] != "projects/p/databases/(default)/documents/cities/c" {
+		t.Errorf("startAfter before=false (exclusive): got %v", got)
+	}
+
+	// endAt (inclusive) at 20 → a, b.
 	q = *base
 	q.EndAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: false}
 	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
-	if len(res) != 2 || res[1].Name != "projects/p/databases/(default)/documents/cities/b" {
-		t.Errorf("inclusive endAt: got %d results", len(res))
+	if got := names(res); len(got) != 2 || got[1] != "projects/p/databases/(default)/documents/cities/b" {
+		t.Errorf("endAt before=false (inclusive): got %v", got)
 	}
 
-	// endAt exclusive (before=true) at 20 → a only.
+	// endBefore (exclusive) at 20 → a only.
 	q = *base
 	q.EndAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: true}
 	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
-	if len(res) != 1 || res[0].Name != "projects/p/databases/(default)/documents/cities/a" {
-		t.Errorf("exclusive endAt: got %d results", len(res))
+	if got := names(res); len(got) != 1 || got[0] != "projects/p/databases/(default)/documents/cities/a" {
+		t.Errorf("endBefore before=true (exclusive): got %v", got)
+	}
+
+	// startAt + endAt window [20, 30] → b, c.
+	q = *base
+	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: true}
+	q.EndAt = &cursor{Values: []*firestorestore.Value{intField(30)}, Before: false}
+	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 2 || got[0] != "projects/p/databases/(default)/documents/cities/b" || got[1] != "projects/p/databases/(default)/documents/cities/c" {
+		t.Errorf("startAt/endAt window: got %v", got)
+	}
+
+	// Descending order: startAfter 20 → a only (the next value below 20).
+	// Sort is c(30), b(20), a(10); startAfter excludes 20.
+	descBase := &structuredQuery{
+		From:    []collectionSelector{{CollectionID: "cities"}},
+		OrderBy: []order{{Field: fieldReference{FieldPath: "pop"}, Direction: "DESCENDING"}},
+	}
+	q = *descBase
+	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: false}
+	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 1 || got[0] != "projects/p/databases/(default)/documents/cities/a" {
+		t.Errorf("descending startAfter: got %v", got)
+	}
+
+	// Descending endBefore 20 → c only (values strictly above 20, since the
+	// sort is descending).
+	q = *descBase
+	q.EndAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: true}
+	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 1 || got[0] != "projects/p/databases/(default)/documents/cities/c" {
+		t.Errorf("descending endBefore: got %v", got)
+	}
+
+	// Composite (prefix) cursor on the first order-by field: startAfter pop=20
+	// with a second order-by field still excludes the 20 document.
+	composite := &structuredQuery{
+		From: []collectionSelector{{CollectionID: "cities"}},
+		OrderBy: []order{
+			{Field: fieldReference{FieldPath: "pop"}, Direction: "ASCENDING"},
+			{Field: fieldReference{FieldPath: "name"}, Direction: "ASCENDING"},
+		},
+	}
+	for _, d := range docs {
+		d.Fields["name"] = strField(d.Name)
+	}
+	q = *composite
+	q.StartAt = &cursor{Values: []*firestorestore.Value{intField(20)}, Before: false}
+	res, _ = executeQuery(docs, &q, "projects/p/databases/(default)/documents")
+	if got := names(res); len(got) != 1 || got[0] != "projects/p/databases/(default)/documents/cities/c" {
+		t.Errorf("composite startAfter prefix: got %v", got)
 	}
 }
 

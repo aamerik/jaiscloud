@@ -411,6 +411,14 @@ func checkPrecondition(exists bool, updateTime time.Time, pre *firestorestore.Pr
 	return nil
 }
 
+// existsPreconditionRequiresMissing reports whether pre is
+// currentDocument.exists=true while the target document is absent. Real
+// Firestore reports this as NOT_FOUND ("No document to update"), not
+// FAILED_PRECONDITION.
+func existsPreconditionRequiresMissing(exists bool, pre *firestorestore.Precondition) bool {
+	return !exists && pre != nil && pre.Exists != nil && *pre.Exists
+}
+
 // maskFields projects a document's fields down to the given field paths. A path
 // not present in the document is omitted; "__name__" is always implicit and
 // skipped (the name is carried on the wire independently).

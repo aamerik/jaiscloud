@@ -302,6 +302,10 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		if err := checkPrecondition(true, existing.UpdateTime, pre); err != nil {
 			return firestorestore.Document{}, err
 		}
+	} else if existsPreconditionRequiresMissing(exists, pre) {
+		// exists=true on a missing document: real Firestore rejects the
+		// update with NOT_FOUND, not FAILED_PRECONDITION.
+		return firestorestore.Document{}, newUpdateMissingErr(name)
 	} else if err := checkPrecondition(false, time.Time{}, pre); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -554,12 +558,12 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 	for _, w := range writes {
 		ws, results, implicitReads, err := s.buildWrites(ctx, []*writeWire{w}, now)
 		if err != nil {
-			statuses = append(statuses, statusWire(3, errMsg(err)))
+			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
 			continue
 		}
 		if err := s.store.Commit(ctx, implicitReads, ws); err != nil {
-			statuses = append(statuses, statusWireForError(err))
+			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
 			continue
 		}
@@ -674,6 +678,11 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
+	if existsPreconditionRequiresMissing(exists, pre) {
+		// exists=true on a missing document: NOT_FOUND, matching the
+		// PatchDocument path and real Firestore (the Java SDK's update()).
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, newUpdateMissingErr(dw.Name)
+	}
 	readRef := firestorestore.ReadRef{Name: dw.Name, Exists: exists, UpdateTime: existing.UpdateTime}
 
 	base := map[string]*firestorestore.Value{}
@@ -743,6 +752,9 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+	}
+	if existsPreconditionRequiresMissing(exists, pre) {
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, newUpdateMissingErr(tw.Document)
 	}
 	readRef := firestorestore.ReadRef{Name: tw.Document, Exists: exists, UpdateTime: existing.UpdateTime}
 
