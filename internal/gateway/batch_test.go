@@ -36,8 +36,9 @@ func (stubBatchCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provi
 	return perr.HTTPStatus, nil, []byte(`{"error":true}`)
 }
 
-// stubBatchAdapter implements adapter.CloudAdapter plus adapter.BatchHandler so
-// the gateway's batch hook can be exercised without any cloud-specific code.
+// stubBatchAdapter implements adapter.CloudAdapter plus the gateway's
+// BatchHandler extension point so the gateway's batch hook can be exercised
+// without any cloud-specific code.
 type stubBatchAdapter struct {
 	batchCalled bool
 }
@@ -56,7 +57,7 @@ func (a *stubBatchAdapter) ResourceIDFor(_, _ string) func(string, string) strin
 func (a *stubBatchAdapter) IsBatchRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/batch/")
 }
-func (a *stubBatchAdapter) ServeBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, process adapter.BatchProcessFunc) {
+func (a *stubBatchAdapter) ServeBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, process BatchProcessFunc) {
 	a.batchCalled = true
 	sub := httptest.NewRequest(http.MethodGet, "/storage/v1/b/bkt/o/x", nil)
 	status, headers, respBody := process(ctx, sub, nil)

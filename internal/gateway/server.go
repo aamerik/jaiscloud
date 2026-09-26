@@ -318,8 +318,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	// envelope and formats the multiplexed response, while the gateway runs each
 	// embedded sub-request through the normal detect → dispatch → encode
 	// pipeline. Clouds without a batch surface (AWS) do not implement
-	// adapter.BatchHandler, so their behaviour is unchanged.
-	if bh, ok := s.cloudAdapter.(adapter.BatchHandler); ok && bh.IsBatchRequest(r) {
+	// BatchHandler, so their behaviour is unchanged.
+	if bh, ok := s.cloudAdapter.(BatchHandler); ok && bh.IsBatchRequest(r) {
 		bh.ServeBatch(r.Context(), w, r, body, func(ctx context.Context, sr *http.Request, sb []byte) (int, http.Header, []byte) {
 			status, headers, respBody, stream := s.processCloudRequest(ctx, sr, sb)
 			if stream != nil {
@@ -439,12 +439,6 @@ func (s *Server) processCloudRequest(ctx context.Context, r *http.Request, body 
 	}
 	return status, headers, respBody, stream
 }
-
-// maxBatchSubResponseBytes caps the buffered body of one batch sub-response.
-// Batch endpoints are metadata-only in the protocols the emulator serves, so a
-// streaming sub-response is unexpected; the cap prevents an unbounded read if
-// one ever occurs.
-const maxBatchSubResponseBytes = 64 << 20
 
 // plainErrorResponse mirrors http.Error's headers/body shape so responses
 // produced by the extracted pipeline match the previous inline handler.
