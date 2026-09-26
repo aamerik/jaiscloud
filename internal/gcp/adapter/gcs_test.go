@@ -653,3 +653,44 @@ func TestGCSCodecStorageLayoutRouting(t *testing.T) {
 		t.Fatalf("bucket = %q, want bkt", got)
 	}
 }
+
+func TestGCSCodecNotificationConfigsRouting(t *testing.T) {
+	c := &GCSCodec{}
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantAction string
+		wantNotif  string
+	}{
+		{"insert", "POST", "/storage/v1/b/bkt/notificationConfigs",
+			`{"topic":"projects/p/topics/t"}`, "NotificationsInsert", ""},
+		{"list", "GET", "/storage/v1/b/bkt/notificationConfigs", "", "NotificationsList", ""},
+		{"get", "GET", "/storage/v1/b/bkt/notificationConfigs/42", "", "NotificationsGet", "42"},
+		{"delete", "DELETE", "/storage/v1/b/bkt/notificationConfigs/42", "", "NotificationsDelete", "42"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var body []byte
+			if tc.body != "" {
+				body = []byte(tc.body)
+			}
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			nr, err := c.Decode(r, body)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if nr.Action != tc.wantAction {
+				t.Fatalf("action = %q, want %q", nr.Action, tc.wantAction)
+			}
+			if got, _ := nr.Params["bucket"].(string); got != "bkt" {
+				t.Errorf("bucket = %q, want bkt", got)
+			}
+			if got, _ := nr.Params["notification"].(string); got != tc.wantNotif {
+				t.Errorf("notification = %q, want %q", got, tc.wantNotif)
+			}
+		})
+	}
+}

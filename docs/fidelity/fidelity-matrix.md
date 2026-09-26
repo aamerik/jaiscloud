@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **712**
+Cells: **716**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 494 |
+| ga | 498 |
 | limited | 100 |
 | preview | 37 |
 | unsupported | 81 |
@@ -21,7 +21,7 @@ Cells: **712**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 249 | 89 | 37 | 9 |
+| rest | 253 | 89 | 37 | 9 |
 | grpc | 245 | 11 | 0 | 72 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -828,7 +828,7 @@ _11 cell(s): ga=10 limited=0 preview=0 unsupported=1_
 
 ## storage
 
-_53 cell(s): ga=53 limited=0 preview=0 unsupported=0_
+_57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -863,6 +863,10 @@ _53 cell(s): ga=53 limited=0 preview=0 unsupported=0_
 | Storage.BucketsLockRetentionPolicy | rest | ga | — |
 | Storage.BucketsSetIamPolicy | rest | ga | — |
 | Storage.BucketsUpdate | rest | ga | — |
+| Storage.NotificationsDelete | rest | ga | — |
+| Storage.NotificationsGet | rest | ga | — |
+| Storage.NotificationsInsert | rest | ga | — |
+| Storage.NotificationsList | rest | ga | — |
 | Storage.ObjectACLInsert | rest | ga | — |
 | Storage.ObjectACLList | rest | ga | — |
 | Storage.ObjectsCompose | rest | ga | — |
