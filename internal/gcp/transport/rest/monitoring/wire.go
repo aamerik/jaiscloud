@@ -182,8 +182,8 @@ var (
 		"METRIC_KIND_UNSPECIFIED": 0, "GAUGE": 1, "DELTA": 2, "CUMULATIVE": 3,
 	}
 	valueTypeValue = map[string]int32{
-		"VALUE_TYPE_UNSPECIFIED": 0, "INT64": 1, "DOUBLE": 2, "STRING": 3,
-		"DISTRIBUTION": 4, "BOOL": 5, "MONEY": 6,
+		"VALUE_TYPE_UNSPECIFIED": 0, "BOOL": 1, "INT64": 2, "DOUBLE": 3,
+		"STRING": 4, "DISTRIBUTION": 5, "MONEY": 6,
 	}
 	labelValueTypeValue = map[string]int32{
 		"STRING": 0, "BOOL": 1, "INT64": 2,
@@ -719,6 +719,34 @@ func parseTime(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// aggregationFromParams parses the REST query parameters that mirror the proto
+// google.monitoring.v3.Aggregation: aggregation.alignmentPeriod,
+// aggregation.perSeriesAligner, aggregation.crossSeriesReducer, and the
+// repeated aggregation.groupByFields. It returns nil when no aggregation
+// parameter is present.
+func aggregationFromParams(nr *model.NormalizedRequest) (*core.Aggregation, error) {
+	period := strParam(nr, "aggregation.alignmentPeriod")
+	aligner := strParam(nr, "aggregation.perSeriesAligner")
+	reducer := strParam(nr, "aggregation.crossSeriesReducer")
+	groupBy := strListFrom(nr.Params["aggregation.groupByFields"])
+	if period == "" && aligner == "" && reducer == "" && len(groupBy) == 0 {
+		return nil, nil
+	}
+	agg := &core.Aggregation{
+		PerSeriesAligner:   core.Aligner(aligner),
+		CrossSeriesReducer: core.Reducer(reducer),
+		GroupByFields:      groupBy,
+	}
+	if period != "" {
+		d, err := time.ParseDuration(period)
+		if err != nil {
+			return nil, invalidArgument("invalid aggregation.alignmentPeriod: " + period)
+		}
+		agg.AlignmentPeriod = d
+	}
+	return agg, nil
 }
 
 // updateMaskFromQuery parses the repeated/comma-separated updateMask query

@@ -19,14 +19,16 @@
 // any other key, operator, or malformed clause is rejected rather than silently
 // matching everything.
 //
-// Documented limitations (unchanged from the gRPC-only implementation): only
-// condition_threshold alert conditions are evaluated by the background worker;
-// ListTimeSeries supports only the metric.type / resource.type equality filter
-// subset; SendNotificationChannelVerificationCode performs no delivery.
+// Documented limitations: only condition_threshold alert conditions are
+// evaluated by the background worker; ListTimeSeries supports the
+// metric.type/resource.type and metric.labels.<k>/resource.labels.<k> filter
+// subset (equality and starts_with) plus per-series alignment and cross-series
+// reduction; SendNotificationChannelVerificationCode performs no delivery.
 package monitoring
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -99,7 +101,7 @@ func (s *Service) DeleteMetricDescriptor(ctx context.Context, project, typ strin
 
 // ─── MetricService: time series ───────────────────────────────────────────────
 
-func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, interval *TimeInterval, headersOnly bool, pageSize int, pageToken string) ([]monitoringstore.TimeSeries, string, error) {
+func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, interval *TimeInterval, aggregation *Aggregation, headersOnly bool, pageSize int, pageToken string) ([]monitoringstore.TimeSeries, string, error) {
 	f, err := compileTSFilter(filter)
 	if err != nil {
 		return nil, "", invalidArgument("invalid filter: " + err.Error())
@@ -114,39 +116,118 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 			continue
 		}
 		ts.Points = filterPoints(ts.Points, interval)
-		if headersOnly {
-			ts.Points = nil
-		} else if len(ts.Points) == 0 {
+		if !headersOnly && len(ts.Points) == 0 {
 			continue
 		}
 		matching = append(matching, ts)
+	}
+	if aggregation != nil {
+		matching, err = applyAggregation(matching, aggregation, interval)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if headersOnly {
+		for i := range matching {
+			matching[i].Points = nil
+		}
 	}
 	page, next := pageSlice(matching, pageSize, pageToken)
 	return page, next, nil
 }
 
 func (s *Service) CreateTimeSeries(ctx context.Context, project string, series []monitoringstore.TimeSeries) error {
-	return s.writeTimeSeries(ctx, project, series)
+	return s.writeTimeSeries(ctx, project, series, true)
 }
 
 // CreateServiceTimeSeries is the service-scoped counterpart to CreateTimeSeries.
 // In real Cloud Monitoring the two differ only in the identity/permission used
 // to authorize the write; the emulator has no authz plane, so this mirrors the
-// CreateTimeSeries write path.
+// CreateTimeSeries write path. Service time series target a metric descriptor
+// the service already published, so this path does not auto-create one.
 func (s *Service) CreateServiceTimeSeries(ctx context.Context, project string, series []monitoringstore.TimeSeries) error {
-	return s.writeTimeSeries(ctx, project, series)
+	return s.writeTimeSeries(ctx, project, series, false)
 }
 
-func (s *Service) writeTimeSeries(ctx context.Context, project string, series []monitoringstore.TimeSeries) error {
+// writeTimeSeries stores each series, optionally auto-creating a metric
+// descriptor for a previously unseen metric type. Real Cloud Monitoring creates
+// a custom metric descriptor on first write, so a later get/list/delete of that
+// type behaves as if it had been created explicitly.
+func (s *Service) writeTimeSeries(ctx context.Context, project string, series []monitoringstore.TimeSeries, autoCreateDescriptors bool) error {
 	for _, ts := range series {
 		if ts.MetricType == "" {
 			return invalidArgument("time series metric type is required")
+		}
+		if autoCreateDescriptors {
+			if err := s.ensureMetricDescriptor(ctx, project, ts); err != nil {
+				return err
+			}
 		}
 		if err := s.store.CreateTimeSeries(ctx, project, ts); err != nil {
 			return mapStoreError(err)
 		}
 	}
 	return nil
+}
+
+// ensureMetricDescriptor creates a descriptor for ts.MetricType when one does
+// not already exist. Real Cloud Monitoring derives the schema from the series:
+// the metric kind defaults to GAUGE for a custom metric, and the value type is
+// taken from the metric kind/value type when set, else from the point value.
+// An existing descriptor is left untouched so writes cannot clobber an
+// explicitly created schema.
+func (s *Service) ensureMetricDescriptor(ctx context.Context, project string, ts monitoringstore.TimeSeries) error {
+	_, err := s.store.GetMetricDescriptor(ctx, project, ts.MetricType)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, monitoringstore.ErrMetricDescriptorNotFound):
+		d := monitoringstore.MetricDescriptor{
+			Type:       ts.MetricType,
+			MetricKind: inferMetricKind(ts),
+			ValueType:  inferValueType(ts),
+			Unit:       ts.Unit,
+		}
+		if ts.ResourceType != "" {
+			d.MonitoredResourceTypes = []string{ts.ResourceType}
+		}
+		_, cerr := s.store.CreateMetricDescriptor(ctx, project, d)
+		return mapStoreError(cerr)
+	default:
+		return mapStoreError(err)
+	}
+}
+
+// inferMetricKind returns the series' metric kind, defaulting to GAUGE for a
+// custom metric that does not specify one.
+func inferMetricKind(ts monitoringstore.TimeSeries) int32 {
+	if ts.MetricKind != 0 {
+		return ts.MetricKind
+	}
+	return metricKindGauge
+}
+
+// inferValueType returns the series' value type, inferring it from the first
+// typed point when unset (DOUBLE when the series carries no typed value).
+func inferValueType(ts monitoringstore.TimeSeries) int32 {
+	if ts.ValueType != 0 {
+		return ts.ValueType
+	}
+	for _, p := range ts.Points {
+		switch {
+		case p.Value.BoolValue != nil:
+			return valueTypeBool
+		case p.Value.Int64Value != nil:
+			return valueTypeInt64
+		case p.Value.DoubleValue != nil:
+			return valueTypeDouble
+		case p.Value.StringValue != nil:
+			return valueTypeString
+		case p.Value.DistributionValue != nil:
+			return valueTypeDistribution
+		}
+	}
+	return valueTypeDouble
 }
 
 // ─── MetricService: monitored resource descriptors ────────────────────────────

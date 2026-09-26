@@ -36,3 +36,15 @@ type TimeInterval struct {
 	Start time.Time
 	End   time.Time
 }
+
+// google.api.MetricDescriptor.MetricKind and ValueType numeric enum values.
+// The transports cast the generated proto enums to these same numbers, so all
+// persisted descriptors and aggregated points share one canonical encoding.
+const (
+	metricKindGauge       int32 = 1
+	valueTypeBool         int32 = 1
+	valueTypeInt64        int32 = 2
+	valueTypeDouble       int32 = 3
+	valueTypeString       int32 = 4
+	valueTypeDistribution int32 = 5
+)

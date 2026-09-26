@@ -81,7 +81,7 @@ func TestListMonitoredResourceDescriptorsPagination(t *testing.T) {
 			t.Fatalf("pagination did not terminate")
 		}
 	}
-	if len(seen) != 10 {
-		t.Fatalf("paginated catalog = %d types, want 10: %v", len(seen), seen)
+	if len(seen) != 11 {
+		t.Fatalf("paginated catalog = %d types, want 11: %v", len(seen), seen)
 	}
 }
