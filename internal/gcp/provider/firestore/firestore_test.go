@@ -50,6 +50,23 @@ func assertPreconditionErr(t *testing.T, err error) {
 	}
 }
 
+func assertNotFoundErr(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected NOT_FOUND error, got nil")
+	}
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	if pe.HTTPStatus != 404 || pe.Code != "NotFound" {
+		t.Fatalf("expected NotFound@404, got HTTP=%d code=%q", pe.HTTPStatus, pe.Code)
+	}
+	if !strings.Contains(pe.Message, "No document to update") {
+		t.Fatalf("expected 'No document to update' message, got %q", pe.Message)
+	}
+}
+
 func assertInvalidArgumentErr(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -89,12 +106,13 @@ func TestDocumentsPatchPrecondition(t *testing.T) {
 	_, err = p.DocumentsPatch(ctx, nr)
 	assertPreconditionErr(t, err)
 
-	// exists=true on a missing doc → FAILED_PRECONDITION.
+	// exists=true on a missing doc → NOT_FOUND "No document to update" (real
+	// Firestore rejects the update; it does not report FAILED_PRECONDITION).
 	nr = patchNR()
 	nr.Params["name"] = "databases/(default)/documents/cities/MISSING"
 	nr.Params["currentDocument.exists"] = "true"
 	_, err = p.DocumentsPatch(ctx, nr)
-	assertPreconditionErr(t, err)
+	assertNotFoundErr(t, err)
 
 	// matching updateTime → succeeds.
 	nr = patchNR()
@@ -105,6 +123,89 @@ func TestDocumentsPatchPrecondition(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected a response")
+	}
+}
+
+// TestCommitUpdateMissingWithExistsPrecondition reproduces the Java SDK's
+// DocumentReference.update(): it commits a Write.Update with
+// currentDocument.exists=true. On a missing document real Firestore returns
+// NOT_FOUND "No document to update: <name>" (FirestoreTest
+// #updateFailsWhenDocumentMissing), not FAILED_PRECONDITION.
+func TestCommitUpdateMissingWithExistsPrecondition(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	name := "projects/proj/databases/(default)/documents/cities/MISSING"
+
+	nr := testNR()
+	nr.Params["body"] = map[string]any{
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"name": map[string]any{"stringValue": "Alice"}},
+				},
+				"currentDocument": map[string]any{"exists": true},
+			},
+		},
+	}
+	_, err := p.Commit(ctx, nr)
+	assertNotFoundErr(t, err)
+
+	// The failed precondition must not have created the document.
+	if _, err := p.store.GetDocument(ctx, name); !errors.Is(err, firestorestore.ErrDocumentNotFound) {
+		t.Fatalf("update-on-missing must not create the document, got err=%v", err)
+	}
+
+	// updateTime precondition on a missing doc stays FAILED_PRECONDITION.
+	nr = testNR()
+	nr.Params["body"] = map[string]any{
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"name": map[string]any{"stringValue": "Alice"}},
+				},
+				"currentDocument": map[string]any{"updateTime": "2026-01-01T00:00:00Z"},
+			},
+		},
+	}
+	_, err = p.Commit(ctx, nr)
+	assertPreconditionErr(t, err)
+}
+
+// TestBatchWriteUpdateMissingStatus checks the BatchWrite per-write status for
+// the same precondition: google.rpc code 5 (NOT_FOUND), not 3.
+func TestBatchWriteUpdateMissingStatus(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	name := "projects/proj/databases/(default)/documents/cities/MISSING"
+
+	nr := testNR()
+	nr.Params["body"] = map[string]any{
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"name": map[string]any{"stringValue": "Alice"}},
+				},
+				"currentDocument": map[string]any{"exists": true},
+			},
+		},
+	}
+	resp, err := p.BatchWrite(ctx, nr)
+	if err != nil {
+		t.Fatalf("batchWrite: %v", err)
+	}
+	statuses, _ := resp.Data["status"].([]any)
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	st, _ := statuses[0].(map[string]any)
+	if code, _ := st["code"].(int64); code != 5 {
+		t.Fatalf("expected NOT_FOUND (5) per-write status, got %+v", st)
+	}
+	if msg, _ := st["message"].(string); !strings.Contains(msg, "No document to update") {
+		t.Fatalf("expected 'No document to update' message, got %q", msg)
 	}
 }
 

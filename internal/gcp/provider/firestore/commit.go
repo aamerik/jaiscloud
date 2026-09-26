@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/gcperr"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 )
@@ -83,6 +84,13 @@ func newPreconditionErr(msg string) error {
 	return &model.ProviderError{Code: "FailedPrecondition", Message: msg, HTTPStatus: 400, Status: "FAILED_PRECONDITION"}
 }
 
+// newUpdateMissingErr returns the NOT_FOUND error real Firestore raises when an
+// update or transform carries a currentDocument.exists=true precondition but
+// the target document does not exist.
+func newUpdateMissingErr(name string) error {
+	return model.NewProviderError("NotFound", "No document to update: "+name, 404)
+}
+
 // newAbortedErr returns an ABORTED error at HTTP 409 (transaction contention).
 func newAbortedErr(msg string) error {
 	return &model.ProviderError{Code: "Aborted", Message: msg, HTTPStatus: 409, Status: "ABORTED"}
@@ -142,6 +150,22 @@ func statusWireForError(err error) map[string]any {
 	default:
 		return statusWire(13, errMsg(err))
 	}
+}
+
+// statusWireForWriteError maps a write-build or commit error to a per-write
+// batchWrite status, preferring a provider error's canonical google.rpc code
+// (e.g. NOT_FOUND for an update on a missing document) over the store sentinel
+// table.
+func statusWireForWriteError(err error) map[string]any {
+	var perr *model.ProviderError
+	if errors.As(err, &perr) {
+		if name, _ := gcperr.Resolve(perr); name != "" {
+			if code, ok := gcperr.GRPCCodeForStatus(name); ok {
+				return statusWire(int64(code), perr.Message)
+			}
+		}
+	}
+	return statusWireForError(err)
 }
 
 func errMsg(err error) string {
