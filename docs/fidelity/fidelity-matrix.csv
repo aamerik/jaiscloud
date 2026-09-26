@@ -384,16 +384,59 @@ kms,RestoreCryptoKeyVersion,grpc,ga,
 kms,UpdateCryptoKey,grpc,ga,
 kms,UpdateCryptoKeyPrimaryVersion,grpc,ga,
 kms,UpdateCryptoKeyVersion,grpc,ga,
+logging,CopyLogEntries,grpc,unsupported,cross-project log copy is not modelled; explicit Unimplemented stub
+logging,CreateBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,CreateBucketAsync,grpc,unsupported,asynchronous log-bucket creation is not modelled; explicit Unimplemented stub
+logging,CreateExclusion,grpc,ga,
+logging,CreateLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,CreateSink,grpc,ga,
+logging,CreateView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,DeleteBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,DeleteExclusion,grpc,ga,
+logging,DeleteLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
 logging,DeleteLog,grpc,ga,
+logging,DeleteSink,grpc,ga,
+logging,DeleteView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,GetBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,GetCmekSettings,grpc,unsupported,Logging CMEK settings are not modelled; explicit Unimplemented stub
+logging,GetExclusion,grpc,ga,
+logging,GetLink,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
+logging,GetSettings,grpc,unsupported,Logging service settings are not modelled; explicit Unimplemented stub
+logging,GetSink,grpc,ga,
+logging,GetView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,ListBuckets,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,ListExclusions,grpc,ga,
+logging,ListLinks,grpc,unsupported,BigQuery linked datasets are not modelled; explicit Unimplemented stub
 logging,ListLogEntries,grpc,ga,
 logging,ListLogs,grpc,ga,
 logging,ListMonitoredResourceDescriptors,grpc,ga,
+logging,ListSinks,grpc,ga,
+logging,ListViews,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
 logging,Logging.EntryList,rest,ga,
 logging,Logging.EntryWrite,rest,ga,
+logging,Logging.ExclusionCreate,rest,ga,
+logging,Logging.ExclusionDelete,rest,ga,
+logging,Logging.ExclusionGet,rest,ga,
+logging,Logging.ExclusionList,rest,ga,
+logging,Logging.ExclusionPatch,rest,ga,
 logging,Logging.LogDelete,rest,ga,
 logging,Logging.LogList,rest,ga,
 logging,Logging.MonitoredResourceDescriptorList,rest,ga,
+logging,Logging.SinkCreate,rest,ga,
+logging,Logging.SinkDelete,rest,ga,
+logging,Logging.SinkGet,rest,ga,
+logging,Logging.SinkList,rest,ga,
+logging,Logging.SinkPatch,rest,ga,
+logging,Logging.SinkUpdate,rest,ga,
 logging,TailLogEntries,grpc,limited,bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists
+logging,UndeleteBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,UpdateBucket,grpc,unsupported,log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub
+logging,UpdateBucketAsync,grpc,unsupported,asynchronous log-bucket updates are not modelled; explicit Unimplemented stub
+logging,UpdateCmekSettings,grpc,unsupported,Logging CMEK settings are not modelled; explicit Unimplemented stub
+logging,UpdateExclusion,grpc,ga,
+logging,UpdateSettings,grpc,unsupported,Logging service settings are not modelled; explicit Unimplemented stub
+logging,UpdateSink,grpc,ga,
+logging,UpdateView,grpc,unsupported,log views are not modelled (entries live in a flat store); explicit Unimplemented stub
 logging,WriteLogEntries,grpc,ga,
 managedkafka,AddAclEntry,grpc,ga,
 managedkafka,CreateAcl,grpc,ga,

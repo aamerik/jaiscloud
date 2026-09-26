@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 262,
-  "passed": 262,
+  "total": 272,
+  "passed": 272,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 262,
-    "passed": 262,
+    "checks": 272,
+    "passed": 272,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -72,8 +72,8 @@
     },
     {
       "service": "logging",
-      "total": 5,
-      "passed": 5,
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1093,6 +1093,76 @@
       "method": "DeleteLog",
       "status": "pass",
       "key_field": "log absent from ListLogs after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateSink",
+      "method": "CreateSink",
+      "status": "pass",
+      "key_field": "sink name/destination/writerIdentity round-trip"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetSink",
+      "method": "GetSink",
+      "status": "pass",
+      "key_field": "sink by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListSinks",
+      "method": "ListSinks",
+      "status": "pass",
+      "key_field": "sinks[] contains the created sink"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateSink",
+      "method": "UpdateSink",
+      "status": "pass",
+      "key_field": "masked filter update preserves destination"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteSink",
+      "method": "DeleteSink",
+      "status": "pass",
+      "key_field": "sink absent from ListSinks after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateExclusion",
+      "method": "CreateExclusion",
+      "status": "pass",
+      "key_field": "exclusion filter round-trip"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetExclusion",
+      "method": "GetExclusion",
+      "status": "pass",
+      "key_field": "exclusion by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListExclusions",
+      "method": "ListExclusions",
+      "status": "pass",
+      "key_field": "exclusions[] contains the created exclusion"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateExclusion",
+      "method": "UpdateExclusion",
+      "status": "pass",
+      "key_field": "masked disabled update"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteExclusion",
+      "method": "DeleteExclusion",
+      "status": "pass",
+      "key_field": "exclusion absent from ListExclusions after delete"
     },
     {
       "service": "operations",

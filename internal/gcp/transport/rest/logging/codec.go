@@ -9,10 +9,14 @@
 //	GET    /v2/{parent}/logs                          logs.list
 //	DELETE /v2/{logName}                              logs.delete
 //	GET    /v2/monitoredResourceDescriptors           monitoredResourceDescriptors.list
+//	GET/POST        /v2/{parent}/sinks                sinks.list / sinks.create
+//	GET/PUT/PATCH/DELETE /v2/{sinkName}               sinks.get/update/patch/delete
+//	GET/POST        /v2/{parent}/exclusions           exclusions.list / exclusions.create
+//	GET/PATCH/DELETE /v2/{name}                       exclusions.get/patch/delete
 //
 // entries.tail is bidirectional-streaming and stays gRPC-only; the
-// settings/sinks/exclusions/metrics and entries.copy families are not
-// implemented (they are out of scope for this phase).
+// settings/metrics/buckets/views and entries.copy families are not implemented
+// (they are out of scope for this phase).
 //
 // The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the core's typed
 // API); the Provider holds the routes. Neither owns business logic — both
@@ -26,6 +30,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/gcp/gcperr"
+	core "jaiscloud/internal/gcp/service/logging"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
@@ -77,6 +82,8 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	case r.Method == http.MethodDelete && strings.Contains(rest, "/logs/"):
 		nr.Action = "LogDelete"
 		nr.Params["logName"] = rest
+	case decodeConfigPath(r, rest, nr):
+		// Action/params are set by the helper.
 	case r.Method == http.MethodPost && knownUnimplemented[rest]:
 		return nil, model.NewProviderError("Unimplemented", "method not implemented over REST", 501)
 	default:
@@ -93,6 +100,75 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	}
 	queryToParams(r, nr.Params)
 	return nr, nil
+}
+
+// decodeConfigPath recognises the Logging config-plane paths and sets the
+// action + resource params on nr. It returns false when rest is not a
+// sink/exclusion path (or uses an unsupported method on one), so Decode can
+// fall through to the not-found/unimplemented cases.
+//
+//	GET    /v2/{parent}/sinks               sinks.list
+//	POST   /v2/{parent}/sinks               sinks.create
+//	GET    /v2/{sinkName}                   sinks.get
+//	PUT    /v2/{sinkName}                   sinks.update
+//	PATCH  /v2/{sinkName}                   sinks.patch
+//	DELETE /v2/{sinkName}                   sinks.delete
+//	GET    /v2/{parent}/exclusions          exclusions.list
+//	POST   /v2/{parent}/exclusions          exclusions.create
+//	GET    /v2/{name}                       exclusions.get
+//	PATCH  /v2/{name}                       exclusions.patch
+//	DELETE /v2/{name}                       exclusions.delete
+func decodeConfigPath(r *http.Request, rest string, nr *model.NormalizedRequest) bool {
+	parts := strings.Split(rest, "/")
+	if len(parts) < 3 || len(parts) > 4 {
+		return false
+	}
+	if !core.IsLogScope(parts[0]) || parts[1] == "" {
+		return false
+	}
+	collection := parts[2]
+	if collection != "sinks" && collection != "exclusions" {
+		return false
+	}
+	parent := parts[0] + "/" + parts[1]
+	if len(parts) == 3 {
+		switch {
+		case r.Method == http.MethodGet && collection == "sinks":
+			nr.Action, nr.Params["parent"] = "SinkList", parent
+		case r.Method == http.MethodPost && collection == "sinks":
+			nr.Action, nr.Params["parent"] = "SinkCreate", parent
+		case r.Method == http.MethodGet && collection == "exclusions":
+			nr.Action, nr.Params["parent"] = "ExclusionList", parent
+		case r.Method == http.MethodPost && collection == "exclusions":
+			nr.Action, nr.Params["parent"] = "ExclusionCreate", parent
+		default:
+			return false
+		}
+		return true
+	}
+	if parts[3] == "" {
+		return false
+	}
+	full := parent + "/" + collection + "/" + parts[3]
+	switch {
+	case collection == "sinks" && r.Method == http.MethodGet:
+		nr.Action, nr.Params["sinkName"] = "SinkGet", full
+	case collection == "sinks" && r.Method == http.MethodPut:
+		nr.Action, nr.Params["sinkName"] = "SinkUpdate", full
+	case collection == "sinks" && r.Method == http.MethodPatch:
+		nr.Action, nr.Params["sinkName"] = "SinkPatch", full
+	case collection == "sinks" && r.Method == http.MethodDelete:
+		nr.Action, nr.Params["sinkName"] = "SinkDelete", full
+	case collection == "exclusions" && r.Method == http.MethodGet:
+		nr.Action, nr.Params["name"] = "ExclusionGet", full
+	case collection == "exclusions" && r.Method == http.MethodPatch:
+		nr.Action, nr.Params["name"] = "ExclusionPatch", full
+	case collection == "exclusions" && r.Method == http.MethodDelete:
+		nr.Action, nr.Params["name"] = "ExclusionDelete", full
+	default:
+		return false
+	}
+	return true
 }
 
 // Encode serialises a provider response as JSON.

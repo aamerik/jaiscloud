@@ -84,6 +84,7 @@ var grpcWireService = map[string]string{
 	"google.pubsub.v1.Subscriber":                        "pubsub",
 	"google.cloud.kms.v1.KeyManagementService":           "kms",
 	"google.logging.v2.LoggingServiceV2":                 "logging",
+	"google.logging.v2.ConfigServiceV2":                  "logging",
 	"google.monitoring.v3.MetricService":                 "monitoring",
 	"google.monitoring.v3.AlertPolicyService":            "monitoring",
 	"google.monitoring.v3.NotificationChannelService":    "monitoring",
@@ -124,6 +125,7 @@ func EnumerateGRPC() []GRPCService {
 	pubsubpb.RegisterSubscriberServer(reg, &grpcpubsub.Service{})
 	kmspb.RegisterKeyManagementServiceServer(reg, &grpckms.Service{})
 	loggingpb.RegisterLoggingServiceV2Server(reg, &grpclogging.Service{})
+	loggingpb.RegisterConfigServiceV2Server(reg, &grpclogging.ConfigService{})
 	monitoringpb.RegisterMetricServiceServer(reg, &grpcmonitoring.Service{})
 	monitoringpb.RegisterAlertPolicyServiceServer(reg, &grpcmonitoring.Service{})
 	monitoringpb.RegisterNotificationChannelServiceServer(reg, &grpcmonitoring.Service{})

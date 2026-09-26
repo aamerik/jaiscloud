@@ -231,6 +231,33 @@ func Scenarios(suffix string) []Scenario {
 			Body: fmt.Sprintf(`{"resourceNames":["projects/%s"],"filter":"%s"}`, p, logFilter)},
 	)
 
+	// Cloud Logging config plane (sinks + exclusions).
+	sinkID := "conf-sink-" + suffix
+	sinkName := "projects/" + p + "/sinks/" + sinkID
+	sinkDest := "storage.googleapis.com/conf-bucket-" + suffix
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/projects/" + p + "/sinks",
+			Body: fmt.Sprintf(`{"name":%q,"destination":%q,"filter":"severity>=WARNING"}`, sinkID, sinkDest)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + sinkName},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/sinks"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/" + sinkName + "?updateMask=filter",
+			Body: `{"filter":"severity>=ERROR"}`},
+		Scenario{Service: "logging", Method: "PUT", Path: "/v2/" + sinkName,
+			Body: fmt.Sprintf(`{"name":%q,"destination":%q,"filter":"severity>=ERROR","description":"updated"}`, sinkID, sinkDest)},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + sinkName},
+	)
+	exclID := "conf-exclusion-" + suffix
+	exclName := "projects/" + p + "/exclusions/" + exclID
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/projects/" + p + "/exclusions",
+			Body: fmt.Sprintf(`{"name":%q,"filter":"severity<DEBUG"}`, exclID)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + exclName},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/exclusions"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/" + exclName + "?updateMask=disabled",
+			Body: `{"disabled":true}`},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + exclName},
+	)
+
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
 	mType := "conf.metric_" + suffix
 	tsType := "conf.ts_" + suffix

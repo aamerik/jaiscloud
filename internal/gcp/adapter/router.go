@@ -265,6 +265,11 @@ func detectV2Service(path string) string {
 	if isLoggingLogsPath(seg) {
 		return "logging"
 	}
+	// Cloud Logging config plane: /v2/{scope}/{scopeID}/sinks[/{id}] and
+	// /v2/{scope}/{scopeID}/exclusions[/{id}].
+	if isLoggingConfigPath(seg) {
+		return "logging"
+	}
 
 	if !strings.HasPrefix(path, "/v2/projects/") {
 		return ""
@@ -311,6 +316,15 @@ func isLoggingLogsPath(seg []string) bool {
 		return false
 	}
 	return seg[3] == "logs"
+}
+
+// isLoggingConfigPath reports whether seg is
+// /v2/{scope}/{scopeID}/sinks[/{id}] or /v2/{scope}/{scopeID}/exclusions[/{id}].
+func isLoggingConfigPath(seg []string) bool {
+	if len(seg) < 4 || len(seg) > 5 || !servicelogging.IsLogScope(seg[1]) || seg[2] == "" {
+		return false
+	}
+	return seg[3] == "sinks" || seg[3] == "exclusions"
 }
 
 // detectDataprocResourceType returns "clusters", "jobs", or "operations" when

@@ -30,7 +30,7 @@
 | Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
 | BigQuery | REST | Metadata + stored rows — no SQL engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | REST + gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
-| Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, log-based routing |
+| Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, sinks + exclusions (routing evaluated, not delivered) |
 | Eventarc | REST + gRPC | Metadata-only triggers/channels + provider discovery — no event-delivery engine, see [Known Limitations](#known-limitations) |
 | Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
 | Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
@@ -272,6 +272,12 @@ Alert policies are evaluated by a background worker (30s tick, matching the AWS 
 - **`buffer_window` is realized as the poll interval**, not as a reordering buffer. The emulator's store already returns entries in `(timestamp, id)` order, so there are no late-arriving out-of-order entries to absorb; the window only controls latency. Absent/`nil` uses the real 2 s default, explicit `0` is clamped to 50 ms to avoid a spin, and values are capped at 60 s (the spec's maximum).
 - **Filter (and project) changes on further client requests are applied** to subsequent polls; a project change re-seeds the id cursor so the new project's pre-existing backlog is not replayed.
 - The session terminates cleanly on client half-close (`Recv` → `EOF`) or context cancel.
+
+### Cloud Logging: sinks and exclusions are configured, routing is evaluated (not delivered)
+
+The config plane is implemented over both transports for **sinks** (`sinks.create`/`get`/`list`/`update`/`patch`/`delete`, gRPC `CreateSink`/`GetSink`/`ListSinks`/`UpdateSink`/`DeleteSink`) and **resource-level exclusions** (`exclusions.create`/`get`/`list`/`patch`/`delete`, gRPC `ConfigServiceV2` exclusions). Sinks and exclusions are project-scoped and persisted (memory + Postgres + snapshots); the sink's inline `exclusions` and the `writer_identity` output field round-trip, and masked updates honor the REST `updateMask`/gRPC `FieldMask` paths (`destination`, `filter`, `description`, `disabled`, `exclusions`, `include_children`). A filter that the emulator's advanced-log subset cannot parse is rejected at write time (`InvalidArgument`) rather than silently routing nothing.
+
+`WriteLogEntries` **evaluates** routing: resource-level exclusions are applied first, then each enabled sink's inline exclusions, then the sink filter, and the matched sink resource names are recorded (debug log). The emulator has **no export destination delivery** — no bytes are written to the sink's bucket/dataset/topic — so a sink is configuration + routing evaluation only. Sink/exclusion filters use the same filter engine as `ListLogEntries` (the documented subset), so filters the engine does not understand are rejected loud. The gRPC `ConfigServiceV2` bucket/view/link, CMEK/settings, and `CopyLogEntries` RPCs are explicit `Unimplemented` stubs (the emulator has no log-bucket storage plane).
 
 ### Cloud KMS: rotation schedule is executed lazily on read
 

@@ -6,7 +6,18 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+// Sentinel errors returned by the store for the sink/exclusion registries. The
+// service maps them to gRPC status codes (errors.Is-compatible, matching the
+// datastore/monitoring conventions).
+var (
+	ErrSinkNotFound      = errors.New("SinkNotFound")
+	ErrSinkExists        = errors.New("SinkExists")
+	ErrExclusionNotFound = errors.New("ExclusionNotFound")
+	ErrExclusionExists   = errors.New("ExclusionExists")
 )
 
 // LogEntry is a stored Cloud Logging entry. LogName is the full resource name
@@ -27,10 +38,41 @@ type LogEntry struct {
 	Labels         map[string]string `json:"labels,omitempty"`
 }
 
+// LogSink is a stored Cloud Logging sink (an export route). Name is the
+// client-assigned short sink id (the trailing segment of the resource name);
+// the full resource name is built by the service. Exclusions are the sink's
+// inline exclusion filters. CreateTime/UpdateTime are server-assigned.
+type LogSink struct {
+	Name            string         `json:"name"`
+	Destination     string         `json:"destination"`
+	Filter          string         `json:"filter,omitempty"`
+	Description     string         `json:"description,omitempty"`
+	Disabled        bool           `json:"disabled,omitempty"`
+	Exclusions      []LogExclusion `json:"exclusions,omitempty"`
+	WriterIdentity  string         `json:"writerIdentity,omitempty"`
+	IncludeChildren bool           `json:"includeChildren,omitempty"`
+	CreateTime      time.Time      `json:"createTime,omitempty"`
+	UpdateTime      time.Time      `json:"updateTime,omitempty"`
+}
+
+// LogExclusion is a stored Cloud Logging exclusion. For a resource-level
+// exclusion (projects.exclusions.*) Name is the short exclusion id; for a
+// sink's inline exclusion it is also the short id. The service builds the full
+// resource name where the wire form carries one.
+type LogExclusion struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Filter      string    `json:"filter"`
+	Disabled    bool      `json:"disabled,omitempty"`
+	CreateTime  time.Time `json:"createTime,omitempty"`
+	UpdateTime  time.Time `json:"updateTime,omitempty"`
+}
+
 // Store is the Cloud Logging store. Entries are isolated by scope parent, the
 // two-segment Cloud Logging resource container ("projects/p",
 // "organizations/123", "folders/f", "billingAccounts/b"); queries return
-// entries ordered by (timestamp, id) ascending.
+// entries ordered by (timestamp, id) ascending. Sinks and resource-level
+// exclusions are also scope-scoped.
 type Store interface {
 	Write(ctx context.Context, scope string, e LogEntry) error
 	// List returns every entry in the scope, ordered by (timestamp, id).
@@ -39,5 +81,26 @@ type Store interface {
 	ListLogs(ctx context.Context, scope string) ([]string, error)
 	// DeleteLog deletes every entry whose log name equals logName.
 	DeleteLog(ctx context.Context, scope, logName string) error
+
+	// Sink registry. CreateSink returns ErrSinkExists when the scope already
+	// holds a sink with the same name; GetSink returns ErrSinkNotFound.
+	CreateSink(ctx context.Context, scope string, s LogSink) error
+	GetSink(ctx context.Context, scope, name string) (LogSink, error)
+	// ListSinks returns the scope's sinks ordered by name.
+	ListSinks(ctx context.Context, scope string) ([]LogSink, error)
+	// UpdateSink replaces the stored sink (matched by Name) or returns
+	// ErrSinkNotFound.
+	UpdateSink(ctx context.Context, scope string, s LogSink) error
+	DeleteSink(ctx context.Context, scope, name string) error
+
+	// Resource-level exclusion registry (projects.exclusions.*), keyed by the
+	// short exclusion id.
+	CreateExclusion(ctx context.Context, scope string, e LogExclusion) error
+	GetExclusion(ctx context.Context, scope, name string) (LogExclusion, error)
+	// ListExclusions returns the scope's exclusions ordered by name.
+	ListExclusions(ctx context.Context, scope string) ([]LogExclusion, error)
+	UpdateExclusion(ctx context.Context, scope string, e LogExclusion) error
+	DeleteExclusion(ctx context.Context, scope, name string) error
+
 	Reset(ctx context.Context)
 }

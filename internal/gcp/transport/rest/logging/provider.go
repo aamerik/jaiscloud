@@ -35,6 +35,19 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Logging.LogList":                         p.LogList,
 		"Logging.LogDelete":                       p.LogDelete,
 		"Logging.MonitoredResourceDescriptorList": p.MonitoredResourceDescriptorList,
+
+		"Logging.SinkCreate": p.SinkCreate,
+		"Logging.SinkGet":    p.SinkGet,
+		"Logging.SinkList":   p.SinkList,
+		"Logging.SinkUpdate": p.SinkUpdate,
+		"Logging.SinkPatch":  p.SinkPatch,
+		"Logging.SinkDelete": p.SinkDelete,
+
+		"Logging.ExclusionCreate": p.ExclusionCreate,
+		"Logging.ExclusionGet":    p.ExclusionGet,
+		"Logging.ExclusionList":   p.ExclusionList,
+		"Logging.ExclusionPatch":  p.ExclusionPatch,
+		"Logging.ExclusionDelete": p.ExclusionDelete,
 	}
 }
 
@@ -167,4 +180,136 @@ func (p *Provider) MonitoredResourceDescriptorList(_ context.Context, nr *model.
 		out["nextPageToken"] = next
 	}
 	return provider.OK(out), nil
+}
+
+// ─── sinks ────────────────────────────────────────────────────────────────────
+
+func (p *Provider) SinkCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	parent := strParam(nr, "parent")
+	sink, err := p.core.CreateSink(ctx, parent, sinkFromWire(bodyOf(nr)),
+		boolParam(nr, "uniqueWriterIdentity"), strParam(nr, "customWriterIdentity"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(sinkToWire(sink, sinkResourceName(parent, sink.Name))), nil
+}
+
+func (p *Provider) SinkGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr, "sinkName")
+	sink, err := p.core.GetSink(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(sinkToWire(sink, name)), nil
+}
+
+func (p *Provider) SinkList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	parent := strParam(nr, "parent")
+	sinks, next, err := p.core.ListSinks(ctx, parent,
+		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(sinks) > 0 {
+		list := make([]any, 0, len(sinks))
+		for _, s := range sinks {
+			list = append(list, sinkToWire(s, sinkResourceName(parent, s.Name)))
+		}
+		out["sinks"] = list
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) SinkUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.updateSink(ctx, nr)
+}
+
+func (p *Provider) SinkPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.updateSink(ctx, nr)
+}
+
+func (p *Provider) updateSink(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name := strParam(nr, "sinkName")
+	sink, err := p.core.UpdateSink(ctx, name, sinkFromWire(bodyOf(nr)),
+		updateMaskFromQuery(nr.Params["updateMask"]), boolParam(nr, "uniqueWriterIdentity"),
+		strParam(nr, "customWriterIdentity"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(sinkToWire(sink, name)), nil
+}
+
+// sinkResourceName builds a sink's full resource name from a parent if the
+// parent parses; "" otherwise (the sink's own name field still renders).
+func sinkResourceName(parent, id string) string {
+	scope, err := core.ParseScopeParent(parent)
+	if err != nil {
+		return ""
+	}
+	return core.SinkResourceName(scope, id)
+}
+
+func (p *Provider) SinkDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := p.core.DeleteSink(ctx, strParam(nr, "sinkName")); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── exclusions ───────────────────────────────────────────────────────────────
+
+func (p *Provider) ExclusionCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.core.CreateExclusion(ctx, strParam(nr, "parent"), exclusionFromWire(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(exclusionToWire(e)), nil
+}
+
+func (p *Provider) ExclusionGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.core.GetExclusion(ctx, strParam(nr, "name"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(exclusionToWire(e)), nil
+}
+
+func (p *Provider) ExclusionList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	list, next, err := p.core.ListExclusions(ctx, strParam(nr, "parent"),
+		intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(list) > 0 {
+		items := make([]any, 0, len(list))
+		for _, e := range list {
+			items = append(items, exclusionToWire(e))
+		}
+		out["exclusions"] = items
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) ExclusionPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	e, err := p.core.UpdateExclusion(ctx, strParam(nr, "name"), exclusionFromWire(bodyOf(nr)),
+		updateMaskFromQuery(nr.Params["updateMask"]))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(exclusionToWire(e)), nil
+}
+
+func (p *Provider) ExclusionDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := p.core.DeleteExclusion(ctx, strParam(nr, "name")); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }

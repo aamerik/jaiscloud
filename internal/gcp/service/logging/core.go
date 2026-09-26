@@ -94,12 +94,15 @@ func (s *Service) WriteEntries(ctx context.Context, req *WriteRequest) error {
 		return nil
 	}
 
-	// Pass 2: write every validated entry.
+	// Pass 2: write every validated entry, then record its routing decision
+	// against the scope's exclusions and sinks. Routing is observability only —
+	// the emulator performs no export delivery.
 	for _, e := range entries {
 		scope, _, _ := ParseLogName(e.LogName)
 		if err := s.store.Write(ctx, scope, e); err != nil {
 			return err
 		}
+		s.recordRouting(ctx, e)
 	}
 	return nil
 }
@@ -247,23 +250,5 @@ func ValidateOrderBy(orderBy string) error {
 }
 
 func paginateEntries(entries []loggingstore.LogEntry, pageSize int, token string) ([]loggingstore.LogEntry, string, error) {
-	if pageSize < 0 || pageSize > 1000 {
-		return nil, "", invalidArgument("page_size must be between 0 and 1000")
-	}
-	if pageSize == 0 {
-		pageSize = 50
-	}
-	start := decodeOffset(token)
-	if start > len(entries) {
-		start = len(entries)
-	}
-	end := start + pageSize
-	if end > len(entries) {
-		end = len(entries)
-	}
-	next := ""
-	if end < len(entries) {
-		next = encodeOffset(end)
-	}
-	return entries[start:end], next, nil
+	return paginateConfig(entries, pageSize, token)
 }

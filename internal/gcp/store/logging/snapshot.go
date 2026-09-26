@@ -8,31 +8,67 @@ import (
 
 // --- Memory store ---
 
+// memorySnapshot is the current on-disk shape of the memory-store snapshot. A
+// legacy snapshot (a bare scope→entries map, before sinks/exclusions existed)
+// is still accepted by Restore.
+type memorySnapshot struct {
+	Entries    map[string][]LogEntry              `json:"entries"`
+	Sinks      map[string]map[string]LogSink      `json:"sinks,omitempty"`
+	Exclusions map[string]map[string]LogExclusion `json:"exclusions,omitempty"`
+}
+
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries) == 0, nil
+	return len(s.entries) == 0 && len(s.sinks) == 0 && len(s.exclusions) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.NewEncoder(w).Encode(s.entries)
+	return json.NewEncoder(w).Encode(memorySnapshot{
+		Entries:    s.entries,
+		Sinks:      s.sinks,
+		Exclusions: s.exclusions,
+	})
 }
 
 func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
-	var snap map[string][]LogEntry
-	if err := json.NewDecoder(r).Decode(&snap); err != nil {
+	data, err := io.ReadAll(r)
+	if err != nil {
 		return err
 	}
-	if snap == nil {
-		snap = make(map[string][]LogEntry)
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	var snap memorySnapshot
+	if _, ok := probe["entries"]; ok {
+		if err := json.Unmarshal(data, &snap); err != nil {
+			return err
+		}
+	} else {
+		// Legacy shape: a bare scope→entries map.
+		if err := json.Unmarshal(data, &snap.Entries); err != nil {
+			return err
+		}
+	}
+	if snap.Entries == nil {
+		snap.Entries = make(map[string][]LogEntry)
+	}
+	if snap.Sinks == nil {
+		snap.Sinks = make(map[string]map[string]LogSink)
+	}
+	if snap.Exclusions == nil {
+		snap.Exclusions = make(map[string]map[string]LogExclusion)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = snap
+	s.entries = snap.Entries
+	s.sinks = snap.Sinks
+	s.exclusions = snap.Exclusions
 	var maxID int64
-	for _, entries := range snap {
+	for _, entries := range snap.Entries {
 		for _, e := range entries {
 			if e.ID > maxID {
 				maxID = e.ID
@@ -53,17 +89,36 @@ const reseatSequenceSQL = `SELECT setval(pg_get_serial_sequence('jc_log_entries'
 
 func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_log_entries`).Scan(&n); err != nil {
+	if err := s.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM jc_log_entries)
+		     + (SELECT count(*) FROM jc_log_sinks)
+		     + (SELECT count(*) FROM jc_log_exclusions)
+	`).Scan(&n); err != nil {
 		return false, err
 	}
 	return n == 0, nil
 }
 
-func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
-	type row struct {
+// pgSnapshot is the Postgres snapshot shape: entries plus the sink/exclusion
+// registries. Sinks/Exclusions are omitted when empty, so a snapshot written by
+// the pre-sink emulator still restores.
+type pgSnapshot struct {
+	Entries []struct {
 		ProjectID string   `json:"projectId"`
 		Entry     LogEntry `json:"entry"`
-	}
+	} `json:"entries"`
+	Sinks []struct {
+		ProjectID string  `json:"projectId"`
+		Sink      LogSink `json:"sink"`
+	} `json:"sinks,omitempty"`
+	Exclusions []struct {
+		ProjectID string       `json:"projectId"`
+		Exclusion LogExclusion `json:"exclusion"`
+	} `json:"exclusions,omitempty"`
+}
+
+func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
+	var snap pgSnapshot
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
 		FROM jc_log_entries ORDER BY project_id, id
@@ -71,12 +126,14 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	entries := make([]row, 0)
 	for rows.Next() {
-		var r row
+		var r struct {
+			ProjectID string   `json:"projectId"`
+			Entry     LogEntry `json:"entry"`
+		}
 		var jsonPayload, resourceLabels, labels []byte
 		if err := rows.Scan(&r.ProjectID, &r.Entry.ID, &r.Entry.LogName, &r.Entry.ResourceType, &resourceLabels, &r.Entry.Severity, &r.Entry.PayloadType, &r.Entry.TextPayload, &jsonPayload, &r.Entry.Timestamp, &r.Entry.InsertID, &labels); err != nil {
+			rows.Close()
 			return err
 		}
 		if len(jsonPayload) > 0 {
@@ -88,21 +145,70 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		if len(labels) > 0 {
 			json.Unmarshal(labels, &r.Entry.Labels)
 		}
-		entries = append(entries, r)
+		snap.Entries = append(snap.Entries, r)
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return json.NewEncoder(w).Encode(map[string]any{"entries": entries})
+
+	sinkRows, err := s.pool.Query(ctx, `
+		SELECT project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		FROM jc_log_sinks ORDER BY project_id, name
+	`)
+	if err != nil {
+		return err
+	}
+	for sinkRows.Next() {
+		var r struct {
+			ProjectID string  `json:"projectId"`
+			Sink      LogSink `json:"sink"`
+		}
+		var exclusions []byte
+		if err := sinkRows.Scan(&r.ProjectID, &r.Sink.Name, &r.Sink.Destination, &r.Sink.Filter, &r.Sink.Description,
+			&r.Sink.Disabled, &exclusions, &r.Sink.WriterIdentity, &r.Sink.IncludeChildren, &r.Sink.CreateTime, &r.Sink.UpdateTime); err != nil {
+			sinkRows.Close()
+			return err
+		}
+		if len(exclusions) > 0 {
+			_ = json.Unmarshal(exclusions, &r.Sink.Exclusions)
+		}
+		snap.Sinks = append(snap.Sinks, r)
+	}
+	sinkRows.Close()
+	if err := sinkRows.Err(); err != nil {
+		return err
+	}
+
+	exclRows, err := s.pool.Query(ctx, `
+		SELECT project_id, name, description, filter, disabled, create_time, update_time
+		FROM jc_log_exclusions ORDER BY project_id, name
+	`)
+	if err != nil {
+		return err
+	}
+	for exclRows.Next() {
+		var r struct {
+			ProjectID string       `json:"projectId"`
+			Exclusion LogExclusion `json:"exclusion"`
+		}
+		if err := exclRows.Scan(&r.ProjectID, &r.Exclusion.Name, &r.Exclusion.Description, &r.Exclusion.Filter,
+			&r.Exclusion.Disabled, &r.Exclusion.CreateTime, &r.Exclusion.UpdateTime); err != nil {
+			exclRows.Close()
+			return err
+		}
+		snap.Exclusions = append(snap.Exclusions, r)
+	}
+	exclRows.Close()
+	if err := exclRows.Err(); err != nil {
+		return err
+	}
+
+	return json.NewEncoder(w).Encode(snap)
 }
 
 func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
-	var snap struct {
-		Entries []struct {
-			ProjectID string   `json:"projectId"`
-			Entry     LogEntry `json:"entry"`
-		} `json:"entries"`
-	}
+	var snap pgSnapshot
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
 	}
@@ -114,6 +220,12 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_entries`); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_sinks`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_log_exclusions`); err != nil {
+		return err
+	}
 	for _, r := range snap.Entries {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_log_entries
@@ -121,6 +233,25 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		`, r.ProjectID, r.Entry.ID, r.Entry.LogName, r.Entry.ResourceType, nullableJSON(r.Entry.ResourceLabels), r.Entry.Severity, r.Entry.PayloadType,
 			r.Entry.TextPayload, nullableJSON(r.Entry.JsonPayload), r.Entry.Timestamp, r.Entry.InsertID, nullableJSON(r.Entry.Labels)); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Sinks {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_log_sinks
+				(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		`, r.ProjectID, r.Sink.Name, r.Sink.Destination, r.Sink.Filter, r.Sink.Description, r.Sink.Disabled,
+			nullableJSON(nonNilExclusions(r.Sink.Exclusions)), r.Sink.WriterIdentity, r.Sink.IncludeChildren, r.Sink.CreateTime, r.Sink.UpdateTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.Exclusions {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_log_exclusions (project_id, name, description, filter, disabled, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+		`, r.ProjectID, r.Exclusion.Name, r.Exclusion.Description, r.Exclusion.Filter, r.Exclusion.Disabled,
+			r.Exclusion.CreateTime, r.Exclusion.UpdateTime); err != nil {
 			return err
 		}
 	}
