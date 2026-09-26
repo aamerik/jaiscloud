@@ -111,12 +111,11 @@ func objectPreconditionMatches(current ObjectMeta, exists bool, p *Precondition)
 		}
 	}
 	if p.GenerationNotMatch != nil {
-		if !exists {
-			// NotMatch against 0 means "must already exist".
-			if *p.GenerationNotMatch == 0 {
-				return false
-			}
-		} else if gen == *p.GenerationNotMatch {
+		// GCS documents this rule for ifGenerationNotMatch only: "If no live
+		// object exists, the precondition fails" — whatever the compared value.
+		// (ifMetagenerationNotMatch carries no such sentence, so its behavior
+		// on a missing object is left unchanged.)
+		if !exists || gen == *p.GenerationNotMatch {
 			return false
 		}
 	}

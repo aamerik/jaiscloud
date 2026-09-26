@@ -1312,6 +1312,10 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 
 	pfx, _ := nr.Params["prefix"].(string)
 	delim, _ := nr.Params["delimiter"].(string)
+	// startOffset filters the listing to names lexicographically equal to or
+	// after it (GCS objects.list). It composes with prefix/delimiter and is
+	// applied before the pageToken cursor.
+	startOffset, _ := nr.Params["startOffset"].(string)
 	if versions == "true" {
 		delim = "" // versions listing does not group prefixes
 	}
@@ -1329,6 +1333,11 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		seen := map[string]bool{}
 		for _, m := range objs {
 			if !strings.HasPrefix(m.Name, pfx) {
+				continue
+			}
+			// startOffset filters object names before common prefixes are
+			// derived, so a prefix survives if any of its objects is in range.
+			if startOffset != "" && m.Name < startOffset {
 				continue
 			}
 			rest := m.Name[len(pfx):]
@@ -1383,12 +1392,22 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		return provider.OK(resp), nil
 	}
 
-	// No delimiter: prefix filter + pagination.
+	// No delimiter: prefix filter + startOffset + pagination.
 	var filtered []gcs.ObjectMeta
 	for _, m := range objs {
 		if pfx == "" || strings.HasPrefix(m.Name, pfx) {
 			filtered = append(filtered, m)
 		}
+	}
+	if startOffset != "" {
+		kept := 0
+		for _, m := range filtered {
+			if m.Name >= startOffset {
+				filtered[kept] = m
+				kept++
+			}
+		}
+		filtered = filtered[:kept]
 	}
 
 	// Cursor pagination over object names. The versions listing is ordered by
@@ -1757,11 +1776,29 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	// GoogleCloudStorageReadChannel NPEs on a 200-with-full-body response.
 	if nr.Raw != nil {
 		if rng := nr.Raw.Header.Get("Range"); rng != "" {
-			if start, end, ok := parseByteRange(rng, int64(len(plain))); ok {
+			total := int64(len(plain))
+			start, end, res := parseByteRange(rng, total)
+			switch res {
+			case rangeOK:
 				body = plain[start : end+1]
 				status = http.StatusPartialContent
-				headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, len(plain))
+				headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, total)
 				headers["Content-Length"] = strconv.Itoa(len(body))
+			case rangeUnsatisfiable:
+				// A syntactically valid but unsatisfiable range (start at or past
+				// the end, or a zero-length suffix) is 416 Range Not Satisfiable
+				// with the unsatisfied-range form of Content-Range. A malformed
+				// Range falls through to the full 200 body (RFC 7233).
+				headers["Content-Range"] = fmt.Sprintf("bytes */%d", total)
+				headers["Content-Length"] = "0"
+				return &model.ProviderResponse{
+					HTTPStatus: http.StatusRequestedRangeNotSatisfiable,
+					Data: map[string]any{
+						"_stream":           io.NopCloser(bytes.NewReader(nil)),
+						wire.ContentTypeKey: meta.ContentType,
+						wire.HeadersKey:     headers,
+					},
+				}, nil
 			}
 		}
 	}
@@ -1775,60 +1812,74 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}, nil
 }
 
+// rangeParse is the outcome of parsing an HTTP Range header.
+type rangeParse int
+
+const (
+	// rangeOK: a satisfiable range; start/end are the clamped inclusive bounds.
+	rangeOK rangeParse = iota
+	// rangeMalformed: the header is not a usable bytes range. Per RFC 7233 it is
+	// ignored, yielding a full 200 response.
+	rangeMalformed
+	// rangeUnsatisfiable: a syntactically valid bytes range that cannot be
+	// satisfied against the representation, e.g. a start offset at or past the
+	// end, a zero-length suffix, or any range against an empty representation.
+	// The response is 416.
+	rangeUnsatisfiable
+)
+
 // parseByteRange parses an HTTP Range header ("bytes=start-end", "bytes=start-",
 // or "bytes=-suffix") against a total length and returns the inclusive byte
-// bounds, clamping to the object bounds. Returns ok=false for malformed or
-// unsatisfiable ranges.
-func parseByteRange(rng string, total int64) (start, end int64, ok bool) {
+// bounds plus the outcome. Satisfiable ranges are clamped to the object bounds.
+func parseByteRange(rng string, total int64) (start, end int64, res rangeParse) {
 	const prefix = "bytes="
 	if !strings.HasPrefix(rng, prefix) {
-		return 0, 0, false
+		return 0, 0, rangeMalformed
 	}
 	spec := strings.TrimPrefix(rng, prefix)
-	if total <= 0 {
-		return 0, 0, false
+	i := strings.IndexByte(spec, '-')
+	if i < 0 {
+		return 0, 0, rangeMalformed
 	}
-	if i := strings.IndexByte(spec, '-'); i >= 0 {
-		startStr := spec[:i]
-		endStr := spec[i+1:]
-		switch {
-		case startStr == "" && endStr == "":
-			return 0, 0, false
-		case startStr == "": // bytes=-suffix
-			n, err := strconv.ParseInt(endStr, 10, 64)
-			if err != nil || n <= 0 {
-				return 0, 0, false
-			}
-			start = total - n
-			if start < 0 {
-				start = 0
-			}
-			end = total - 1
-		default: // bytes=start-end or bytes=start-
-			s, err := strconv.ParseInt(startStr, 10, 64)
-			if err != nil || s < 0 {
-				return 0, 0, false
-			}
-			if s >= total {
-				return 0, 0, false
-			}
-			start = s
-			if endStr == "" {
-				end = total - 1
-			} else {
-				e, err := strconv.ParseInt(endStr, 10, 64)
-				if err != nil || e < start {
-					return 0, 0, false
-				}
-				end = e
-				if end >= total {
-					end = total - 1
-				}
-			}
+	startStr := spec[:i]
+	endStr := spec[i+1:]
+	switch {
+	case startStr == "" && endStr == "": // bytes= — malformed
+		return 0, 0, rangeMalformed
+	case startStr == "": // bytes=-suffix
+		n, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || n < 0 {
+			return 0, 0, rangeMalformed
 		}
-		return start, end, true
+		if n == 0 || total <= 0 {
+			return 0, 0, rangeUnsatisfiable
+		}
+		start = total - n
+		if start < 0 {
+			start = 0
+		}
+		return start, total - 1, rangeOK
+	default: // bytes=start-end or bytes=start-
+		s, err := strconv.ParseInt(startStr, 10, 64)
+		if err != nil || s < 0 {
+			return 0, 0, rangeMalformed
+		}
+		if s >= total {
+			return 0, 0, rangeUnsatisfiable
+		}
+		start = s
+		if endStr == "" {
+			return start, total - 1, rangeOK
+		}
+		e, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || e < start {
+			return 0, 0, rangeMalformed
+		}
+		if e >= total {
+			e = total - 1
+		}
+		return start, e, rangeOK
 	}
-	return 0, 0, false
 }
 
 // mediaHeaders builds the GCS media-download response headers for an object so
@@ -2129,7 +2180,9 @@ func sourcePrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 // objectMetaPreconditionMatches reports whether p is satisfied by the given
 // (live) object metadata. A nil p always matches. Mirrors the store's
 // unexported objectPreconditionMatches for callers holding an already-read
-// ObjectMeta.
+// ObjectMeta, so it must only be called with a resolved (existing) object —
+// the missing-object rules (e.g. ifGenerationNotMatch failing on absence) are
+// enforced by the store's *Checked write methods, not here.
 func objectMetaPreconditionMatches(m gcs.ObjectMeta, p *gcs.Precondition) bool {
 	if p == nil {
 		return true

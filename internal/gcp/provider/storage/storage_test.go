@@ -1859,23 +1859,23 @@ func TestParseByteRange(t *testing.T) {
 	cases := []struct {
 		rng        string
 		start, end int64
-		ok         bool
+		res        rangeParse
 	}{
-		{"bytes=0-15", 0, 15, true},
-		{"bytes=50-", 50, 99, true},
-		{"bytes=-10", 90, 99, true},
-		{"bytes=0-200", 0, 99, true}, // clamped to total
-		{"bytes=100-", 0, 0, false},  // start >= total
-		{"bytes=", 0, 0, false},      // empty
-		{"items=0-5", 0, 0, false},   // wrong unit
-		{"bytes=5-2", 0, 0, false},   // end < start
-		{"bytes=-0", 0, 0, false},    // suffix 0
+		{"bytes=0-15", 0, 15, rangeOK},
+		{"bytes=50-", 50, 99, rangeOK},
+		{"bytes=-10", 90, 99, rangeOK},
+		{"bytes=0-200", 0, 99, rangeOK},          // clamped to total
+		{"bytes=100-", 0, 0, rangeUnsatisfiable}, // start at the end
+		{"bytes=-0", 0, 0, rangeUnsatisfiable},   // zero-length suffix
+		{"bytes=", 0, 0, rangeMalformed},         // empty
+		{"items=0-5", 0, 0, rangeMalformed},      // wrong unit
+		{"bytes=5-2", 0, 0, rangeMalformed},      // end < start
 	}
 	for _, c := range cases {
-		s, e, ok := parseByteRange(c.rng, total)
-		if ok != c.ok || (ok && (s != c.start || e != c.end)) {
+		s, e, res := parseByteRange(c.rng, total)
+		if res != c.res || (res == rangeOK && (s != c.start || e != c.end)) {
 			t.Errorf("parseByteRange(%q, %d) = (%d,%d,%v), want (%d,%d,%v)",
-				c.rng, total, s, e, ok, c.start, c.end, c.ok)
+				c.rng, total, s, e, res, c.start, c.end, c.res)
 		}
 	}
 }

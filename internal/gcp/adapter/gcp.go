@@ -74,6 +74,7 @@ func (a *GCPAdapter) ServiceToProvider(service string) string {
 // DetectAndDecode implements adapter.CloudAdapter.
 // Identifies the service from the URL path, selects the codec, and decodes.
 func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.NormalizedRequest, adapter.Codec, error) {
+	applyMethodOverride(r)
 	body, err := decodeGzippedBody(r, body)
 	if err != nil {
 		return nil, nil, err
@@ -93,6 +94,20 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 		return nil, codec, err
 	}
 	return nr, codec, nil
+}
+
+// applyMethodOverride honors the X-HTTP-Method-Override header, which Google's
+// HTTP clients send when they tunnel a PATCH through POST (the Java
+// google-http-client does this for GCS object/bucket PATCH requests). Real GCP
+// documents PATCH as the sole valid value and evaluates the overridden method,
+// so rewrite r.Method before service detection and codec dispatch. Without this
+// an objects.patch arrives as POST and is treated as an objects.update (strict
+// replacement) — silently clearing fields the PATCH body omitted, e.g.
+// contentType on a Java Storage.update call.
+func applyMethodOverride(r *http.Request) {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-HTTP-Method-Override")), http.MethodPatch) {
+		r.Method = http.MethodPatch
+	}
 }
 
 // decodeGzippedBody transparently decompresses a request whose

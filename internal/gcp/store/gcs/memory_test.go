@@ -137,6 +137,45 @@ func TestMemoryObjectStorePutObjectMetaChecked(t *testing.T) {
 	}
 }
 
+// TestObjectPreconditionMatchesMissingObject verifies GCS's documented rule
+// for ifGenerationNotMatch: it fails when no live object exists, whatever the
+// compared value, while ifGenerationMatch=0 (the create-only-if-absent idiom)
+// succeeds. ifMetagenerationNotMatch is deliberately not covered — the
+// Discovery doc attaches the missing-object rule to ifGenerationNotMatch only.
+func TestObjectPreconditionMatchesMissingObject(t *testing.T) {
+	zero := int64(0)
+	one := int64(1)
+	cases := []struct {
+		name string
+		pre  *Precondition
+		want bool
+	}{
+		{"nil precondition", nil, true},
+		{"generationMatch 0", &Precondition{GenerationMatch: &zero}, true},
+		{"generationMatch 1", &Precondition{GenerationMatch: &one}, false},
+		{"generationNotMatch 0", &Precondition{GenerationNotMatch: &zero}, false},
+		{"generationNotMatch 1", &Precondition{GenerationNotMatch: &one}, false},
+		{"metagenerationMatch", &Precondition{MetagenerationMatch: &one}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := objectPreconditionMatches(ObjectMeta{}, false, c.pre); got != c.want {
+				t.Fatalf("objectPreconditionMatches(missing) = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// An existing object still honors the normal not-match comparisons.
+	live := ObjectMeta{Generation: "5", Metageneration: "2"}
+	five := int64(5)
+	if !objectPreconditionMatches(live, true, &Precondition{GenerationNotMatch: &one}) {
+		t.Error("GenerationNotMatch 1 should pass on a generation-5 object")
+	}
+	if objectPreconditionMatches(live, true, &Precondition{GenerationNotMatch: &five}) {
+		t.Error("GenerationNotMatch 5 should fail on a generation-5 object")
+	}
+}
+
 func TestMemoryObjectStoreDeleteObjectMetaChecked(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryObjectStore()
