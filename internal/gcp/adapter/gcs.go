@@ -156,6 +156,12 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		// ifMetagenerationMatch query param is captured by queryToParams.
 		nr.Params["bucket"] = seg[1]
 		nr.Action = "BucketsLockRetentionPolicy"
+	case len(seg) == 3 && seg[0] == "b" && seg[2] == "storageLayout":
+		// /b/{bucket}/storageLayout — buckets.getStorageLayout. No request
+		// body; the optional `prefix` permission-check query param is captured
+		// by queryToParams.
+		nr.Params["bucket"] = seg[1]
+		nr.Action = "BucketsGetStorageLayout"
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "iam":
 		// /b/{bucket}/iam
 		nr.Params["bucket"] = seg[1]

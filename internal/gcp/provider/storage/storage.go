@@ -232,6 +232,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.BucketsGet":                  p.BucketsGet,
 		"Storage.BucketsUpdate":               p.BucketsUpdate,
 		"Storage.BucketsLockRetentionPolicy":  p.BucketsLockRetentionPolicy,
+		"Storage.BucketsGetStorageLayout":     p.BucketsGetStorageLayout,
 		"Storage.BucketsDelete":               p.BucketsDelete,
 		"Storage.BucketsGetIamPolicy":         p.BucketsGetIamPolicy,
 		"Storage.BucketsSetIamPolicy":         p.BucketsSetIamPolicy,
@@ -638,6 +639,30 @@ func (p *Provider) BucketsGet(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, err
 	}
 	return provider.OK(toBucketMap(nr, mapToBucket(meta))), nil
+}
+
+// BucketsGetStorageLayout implements buckets.getStorageLayout. The emulator
+// models no hierarchical namespace, so every bucket reports it disabled. This
+// is the resource `gcloud storage cp` (and the GCS SDKs) reads before uploading,
+// and its absence previously aborted those clients.
+func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, _ := nr.Params["bucket"].(string)
+	meta, err := p.objects.GetBucket(ctx, name)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
+	layout := map[string]any{
+		"kind":                  "storage#storageLayout",
+		"bucket":                name,
+		"hierarchicalNamespace": map[string]any{"enabled": false},
+	}
+	if loc, _ := meta["location"].(string); loc != "" {
+		layout["location"] = loc
+	}
+	return provider.OK(layout), nil
 }
 
 func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

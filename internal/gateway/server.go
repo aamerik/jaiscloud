@@ -313,6 +313,54 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Optional cloud batch endpoint (e.g. GCP's POST /batch/{service}/{version}).
+	// Intercept before service detection: the adapter parses the multipart
+	// envelope and formats the multiplexed response, while the gateway runs each
+	// embedded sub-request through the normal detect → dispatch → encode
+	// pipeline. Clouds without a batch surface (AWS) do not implement
+	// adapter.BatchHandler, so their behaviour is unchanged.
+	if bh, ok := s.cloudAdapter.(adapter.BatchHandler); ok && bh.IsBatchRequest(r) {
+		bh.ServeBatch(r.Context(), w, r, body, func(ctx context.Context, sr *http.Request, sb []byte) (int, http.Header, []byte) {
+			status, headers, respBody, stream := s.processCloudRequest(ctx, sr, sb)
+			if stream != nil {
+				defer stream.Close()
+				respBody, _ = io.ReadAll(io.LimitReader(stream, maxBatchSubResponseBytes))
+			}
+			return status, headers, respBody
+		})
+		return
+	}
+
+	status, headers, respBody, stream := s.processCloudRequest(r.Context(), r, body)
+	// P2-6: Attach CORS headers to regular responses when Origin is present.
+	if s.corsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			bucket := corsExtractBucket(r)
+			rules := s.corsLookup(bucket)
+			CORSAddResponseHeaders(headers, rules, origin)
+		}
+	}
+	if s.gcsCorsLookup != nil {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			gcsCORSAddResponseHeaders(headers, s.gcsCorsLookup(gcsCORSExtractBucket(r)), origin)
+		}
+	}
+	if stream != nil {
+		defer stream.Close()
+		writeStreamResponse(w, status, headers, stream)
+		return
+	}
+	writeResponse(w, status, headers, respBody)
+}
+
+// processCloudRequest runs one request through the cloud adapter's
+// detect → enrich → dispatch → encode pipeline and returns the encoded
+// response. It backs both the normal request path and each embedded sub-request
+// of a cloud batch request. When the provider returned a streaming body, stream
+// is non-nil and respBody is empty; the caller owns closing it. ctx carries the
+// metric labels for the originating request (the labelsHolder is a pointer, so
+// mutating it is visible to the metrics middleware).
+func (s *Server) processCloudRequest(ctx context.Context, r *http.Request, body []byte) (status int, headers http.Header, respBody []byte, stream io.ReadCloser) {
 	nr, codec, detectErr := s.cloudAdapter.DetectAndDecode(r, body)
 	if detectErr != nil {
 		if pe, ok := detectErr.(*model.ProviderError); ok {
@@ -323,9 +371,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 				"path", r.URL.Path,
 				"request_id", middleware.GetRequestID(r.Context()),
 			)
-			status, headers, respBody := encodeErrorFallback(codec, nil, pe)
-			writeResponse(w, status, headers, respBody)
-			return
+			status, headers, respBody = encodeErrorFallback(codec, nil, pe)
+			return status, headers, respBody, nil
 		}
 		slog.Error("service detection failed",
 			"err", detectErr,
@@ -333,8 +380,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			"path", r.URL.Path,
 			"request_id", middleware.GetRequestID(r.Context()),
 		)
-		http.Error(w, detectErr.Error(), http.StatusBadRequest)
-		return
+		status, headers, respBody = plainErrorResponse(detectErr.Error(), http.StatusBadRequest)
+		return status, headers, respBody, nil
 	}
 
 	// Inject gateway context — each cloud adapter extracts identity from the request
@@ -348,12 +395,12 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 	nr.Cloud = s.cloudAdapter.Cloud()
 	nr.ResourceID = s.cloudAdapter.ResourceIDFor(region, accountID)
 
-	// Attach labels for Prometheus metrics middleware
-	r = r.WithContext(middleware.WithRequestLabels(r.Context(), string(nr.Cloud), nr.Service, nr.Action))
+	// Attach labels for Prometheus metrics middleware.
+	ctx = middleware.WithRequestLabels(ctx, string(nr.Cloud), nr.Service, nr.Action)
 
 	providerKey := s.cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action
 
-	resp, dispatchErr := s.registry.Dispatch(r.Context(), providerKey, nr)
+	resp, dispatchErr := s.registry.Dispatch(ctx, providerKey, nr)
 	if dispatchErr != nil {
 		if pe, ok := dispatchErr.(*model.ProviderError); ok {
 			logFn := slog.Error
@@ -370,9 +417,8 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 				"region", nr.Region,
 				"request_id", middleware.GetRequestID(r.Context()),
 			)
-			status, headers, respBody := codec.EncodeError(nr, pe)
-			writeResponse(w, status, headers, respBody)
-			return
+			status, headers, respBody = codec.EncodeError(nr, pe)
+			return status, headers, respBody, nil
 		}
 		slog.Error("dispatch error",
 			"key", providerKey,
@@ -383,30 +429,30 @@ func (s *Server) handleCloudRequest(w http.ResponseWriter, r *http.Request) {
 			"err", dispatchErr,
 			"request_id", middleware.GetRequestID(r.Context()),
 		)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		status, headers, respBody = plainErrorResponse("internal error", http.StatusInternalServerError)
+		return status, headers, respBody, nil
 	}
 
-	status, headers, respBody := codec.Encode(nr, resp)
-	// P2-6: Attach CORS headers to regular responses when Origin is present.
-	if s.corsLookup != nil {
-		if origin := r.Header.Get("Origin"); origin != "" {
-			bucket := corsExtractBucket(r)
-			rules := s.corsLookup(bucket)
-			CORSAddResponseHeaders(headers, rules, origin)
-		}
+	status, headers, respBody = codec.Encode(nr, resp)
+	if resp != nil {
+		stream, _ = resp.Data["_stream"].(io.ReadCloser)
 	}
-	if s.gcsCorsLookup != nil {
-		if origin := r.Header.Get("Origin"); origin != "" {
-			gcsCORSAddResponseHeaders(headers, s.gcsCorsLookup(gcsCORSExtractBucket(r)), origin)
-		}
-	}
-	if stream, ok := resp.Data["_stream"].(io.ReadCloser); ok {
-		defer stream.Close()
-		writeStreamResponse(w, status, headers, stream)
-		return
-	}
-	writeResponse(w, status, headers, respBody)
+	return status, headers, respBody, stream
+}
+
+// maxBatchSubResponseBytes caps the buffered body of one batch sub-response.
+// Batch endpoints are metadata-only in the protocols the emulator serves, so a
+// streaming sub-response is unexpected; the cap prevents an unbounded read if
+// one ever occurs.
+const maxBatchSubResponseBytes = 64 << 20
+
+// plainErrorResponse mirrors http.Error's headers/body shape so responses
+// produced by the extracted pipeline match the previous inline handler.
+func plainErrorResponse(msg string, status int) (int, http.Header, []byte) {
+	h := http.Header{}
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	return status, h, []byte(msg + "\n")
 }
 
 func encodeErrorFallback(codec adapter.Codec, nr *model.NormalizedRequest, pe *model.ProviderError) (int, http.Header, []byte) {

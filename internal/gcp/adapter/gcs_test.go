@@ -638,3 +638,18 @@ func TestGCSCodecParseMultipartSingleQuotedBoundary(t *testing.T) {
 		t.Fatalf("expected media hello, got %q / %v", b, err)
 	}
 }
+
+func TestGCSCodecStorageLayoutRouting(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("GET", "/storage/v1/b/bkt/storageLayout?alt=json", nil)
+	nr, err := c.Decode(r, nil)
+	if err != nil {
+		t.Fatalf("decode storageLayout: %v", err)
+	}
+	if nr.Action != "BucketsGetStorageLayout" {
+		t.Fatalf("action = %q, want BucketsGetStorageLayout", nr.Action)
+	}
+	if got, _ := nr.Params["bucket"].(string); got != "bkt" {
+		t.Fatalf("bucket = %q, want bkt", got)
+	}
+}
