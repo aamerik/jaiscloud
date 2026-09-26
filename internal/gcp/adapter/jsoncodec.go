@@ -543,6 +543,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "ServiceAccountCreate"
 		case isCollection && method == http.MethodGet:
 			return "ServiceAccountList"
+		case method == http.MethodPatch:
+			// serviceAccounts.patch (updateMask) — what the gax/Java client sends.
+			return "ServiceAccountPatch"
+		case method == http.MethodPut:
+			// serviceAccounts.update (full replace) — real GCP serves update as PUT.
+			return "ServiceAccountUpdate"
 		case method == http.MethodGet:
 			return "ServiceAccountGet"
 		case method == http.MethodDelete:

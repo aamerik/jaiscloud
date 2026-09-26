@@ -33,6 +33,19 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if !strings.Contains(keyName, "/keys/") {
 		t.Fatalf("expected key name with /keys/, got %q", keyName)
 	}
+	keyIDField, _ := kr.Data["keyId"].(string)
+	if keyIDField == "" {
+		t.Error("expected a non-blank keyId on key create")
+	}
+	if !strings.HasSuffix(keyName, "/keys/"+keyIDField) {
+		t.Errorf("keyId %q does not match trailing segment of name %q", keyIDField, keyName)
+	}
+	if kr.Data["keyOrigin"] != "USER_PROVIDED" {
+		t.Errorf("keyOrigin = %v, want USER_PROVIDED", kr.Data["keyOrigin"])
+	}
+	if kr.Data["keyType"] != "USER_MANAGED" {
+		t.Errorf("keyType = %v, want USER_MANAGED", kr.Data["keyType"])
+	}
 	if _, ok := kr.Data["privateKeyData"]; !ok {
 		t.Error("expected privateKeyData on key create")
 	}
@@ -89,8 +102,13 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key list: %v", err)
 	}
-	if keys, _ := lr.Data["keys"].([]any); len(keys) != 1 {
+	keys, _ := lr.Data["keys"].([]any)
+	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %v", lr.Data["keys"])
+	}
+	listed, _ := keys[0].(map[string]any)
+	if listed["keyId"] != keyIDField {
+		t.Errorf("listed key keyId = %v, want %q (stable across list)", listed["keyId"], keyIDField)
 	}
 
 	// Delete the key.

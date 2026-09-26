@@ -33,6 +33,10 @@ var actionOverrides = map[string]string{
 	"IAM.ServiceAccountKeyGet":    "iam.projects.serviceAccounts.keys.get",
 	"IAM.ServiceAccountKeyList":   "iam.projects.serviceAccounts.keys.list",
 	"IAM.ServiceAccountKeyDelete": "iam.projects.serviceAccounts.keys.delete",
+	// serviceAccounts.patch (PATCH, updateMask) and serviceAccounts.update
+	// (PUT, full replace) share one handler.
+	"IAM.ServiceAccountPatch":  "iam.projects.serviceAccounts.patch",
+	"IAM.ServiceAccountUpdate": "iam.projects.serviceAccounts.update",
 
 	// KMS crypto-key-version public key is Discovery's cryptoKeyVersions.getPublicKey.
 	"KMS.CryptoKeyVersionGetPublicKey": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",

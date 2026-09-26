@@ -26,6 +26,13 @@ import (
 // keys (RSA key pairs backing signBlob/signJwt).
 const rtServiceAccountKey = "gcp_service_account_key"
 
+// keyOrigin / keyType classify a key created through the API: a user-provided,
+// user-managed key (as opposed to Google-managed/system-managed).
+const (
+	keyOrigin = "USER_PROVIDED"
+	keyType   = "USER_MANAGED"
+)
+
 // serviceAccountKeyMeta is the stored representation of a service-account key.
 type serviceAccountKeyMeta struct {
 	Email      string `json:"email"`
@@ -90,11 +97,20 @@ func parseKeyName(name string) (email, keyID string) {
 
 // keyToMap renders a service-account key as its GCP response object (no
 // privateKeyData — that is returned only on create).
+//
+// keyId is not a field of the Discovery ServiceAccountKey schema (the id is
+// implicit in `name`), but the Java gax client and the floci-gcp reference
+// surface the key id as a top-level string, so callers can address a key
+// without parsing `name`. Emitting it keeps the SDK compatibility suite green;
+// the value is stable for the key's lifetime.
 func keyToMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
 	out := map[string]any{
 		"name":           nr.ResourceID("service-account", m.Email) + "/keys/" + m.KeyID,
+		"keyId":          m.KeyID,
 		"privateKeyType": "TYPE_GOOGLE_CREDENTIALS_FILE",
 		"keyAlgorithm":   m.Algorithm,
+		"keyOrigin":      keyOrigin,
+		"keyType":        keyType,
 		"validAfterTime": m.ValidAfter,
 	}
 	if pub, ok := m.publicKeyData(); ok {
