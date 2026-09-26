@@ -245,6 +245,16 @@ type ObjectStore interface {
 	PutObjectGenerationChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
 	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
 	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
+	// DeleteObjectGeneration removes exactly one generation (live or non-live)
+	// of an object, returning its metadata for blob cleanup/events. Deleting
+	// the live generation does not promote a noncurrent survivor: remaining
+	// revisions stay noncurrent (GCS has no delete markers/promotion), so a
+	// bare lookup by name stops resolving. When no generations remain the
+	// object is forgotten. precondition (if non-nil) is validated against the
+	// current live-generation state atomically. Returns ErrNoSuchObject when
+	// the generation does not exist and ErrPreconditionFailed — without
+	// applying the delete — on a mismatch.
+	DeleteObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error)
 	// ListObjects returns the live generation of every object in the bucket,
 	// sorted by name. Prefix, delimiter, and pageToken pagination are applied
 	// by the provider.

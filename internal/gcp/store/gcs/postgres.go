@@ -568,6 +568,51 @@ func (s *PostgresObjectStore) TombstoneObjectMeta(ctx context.Context, bucket, n
 	return m, nil
 }
 
+// DeleteObjectGeneration removes exactly one generation (live or non-live) of
+// an object inside one Serializable transaction. The current live generation is
+// locked and the precondition validated against it; then the targeted row is
+// removed. Removing the live generation does not promote a noncurrent survivor
+// (GCS has no delete markers/promotion), so remaining revisions stay noncurrent
+// and a bare lookup by name stops resolving. Returns the removed generation's
+// metadata for blob cleanup/events.
+func (s *PostgresObjectStore) DeleteObjectGeneration(ctx context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
+	return retrySerializable(ctx, func() (ObjectMeta, error) {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return ObjectMeta{}, err
+		}
+		defer tx.Rollback(ctx)
+		current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+		if err != nil {
+			return ObjectMeta{}, err
+		}
+		if !objectPreconditionMatches(current, exists, precondition) {
+			return ObjectMeta{}, ErrPreconditionFailed
+		}
+		row := tx.QueryRow(ctx, `
+			SELECT `+objectCols+`
+			FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND generation=$3
+			FOR UPDATE
+		`, bucket, name, generation)
+		target, err := scanObject(row.Scan)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ObjectMeta{}, ErrNoSuchObject
+		}
+		if err != nil {
+			return ObjectMeta{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND generation=$3
+		`, bucket, name, generation); err != nil {
+			return ObjectMeta{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return ObjectMeta{}, err
+		}
+		return target, nil
+	})
+}
+
 func (s *PostgresObjectStore) ListObjects(ctx context.Context, bucket string) ([]ObjectMeta, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+objectCols+`

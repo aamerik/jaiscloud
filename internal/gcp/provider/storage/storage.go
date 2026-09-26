@@ -328,6 +328,9 @@ type bucketMeta struct {
 	SoftDeletePolicy map[string]any `json:"softDeletePolicy,omitempty"`
 	// Labels is the bucket's user-defined label set (GCS Bucket.labels).
 	Labels map[string]string `json:"labels,omitempty"`
+	// DefaultEventBasedHold is inherited by newly created objects that do not
+	// explicitly set eventBasedHold (GCS Bucket.defaultEventBasedHold).
+	DefaultEventBasedHold bool `json:"defaultEventBasedHold,omitempty"`
 }
 
 type objectMeta struct {
@@ -379,6 +382,26 @@ type customerEncryption struct {
 type objectRetention struct {
 	RetainUntilTime string `json:"retainUntilTime,omitempty"`
 	Mode            string `json:"mode,omitempty"`
+}
+
+// applyObjectHolds resolves a created/overwritten object's hold flags to match
+// GCS: explicit temporaryHold/eventBasedHold fields in the request body win; an
+// absent eventBasedHold inherits the bucket's defaultEventBasedHold. Shared by
+// the REST insert/compose/copy paths (the gRPC write path applies the same rule
+// via Service.applyDefaultEventBasedHold).
+func applyObjectHolds(body map[string]any, bmeta map[string]any, o *objectMeta) {
+	if body != nil {
+		if h, ok := body["temporaryHold"].(bool); ok {
+			o.TemporaryHold = h
+		}
+		if h, ok := body["eventBasedHold"].(bool); ok {
+			o.EventBasedHold = h
+			return
+		}
+	}
+	if def, _ := bmeta["defaultEventBasedHold"].(bool); def {
+		o.EventBasedHold = true
+	}
 }
 
 // toStoreObject converts the wire objectMeta into the store's ObjectMeta.
@@ -662,6 +685,9 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	b.Cors = bodySlice(body, "cors")
 	b.SoftDeletePolicy = bodyMap(body, "softDeletePolicy")
 	b.Labels = bodyStringMap(body, "labels")
+	if h, ok := body["defaultEventBasedHold"].(bool); ok {
+		b.DefaultEventBasedHold = h
+	}
 	b.TimeCreated = clock.Now().Format(time.RFC3339Nano)
 	b.Updated = b.TimeCreated
 	b.Metageneration = "1"
@@ -769,6 +795,9 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		if _, ok := body["labels"]; ok {
 			b.Labels = bodyStringMap(body, "labels")
+		}
+		if h, ok := body["defaultEventBasedHold"].(bool); ok {
+			b.DefaultEventBasedHold = h
 		}
 		b.Metageneration = bumpMeta(gcs.BucketMetageneration(meta))
 		b.Updated = clock.Now().Format(time.RFC3339Nano)
@@ -1498,14 +1527,9 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 		o.RetentionExpirationTime = retention.RetainUntilTime
 	}
 	o.Metadata = uploadMetadata(nr.Params)
-	if body != nil {
-		if h, ok := body["temporaryHold"].(bool); ok {
-			o.TemporaryHold = h
-		}
-		if h, ok := body["eventBasedHold"].(bool); ok {
-			o.EventBasedHold = h
-		}
-	}
+	// GCS applies the bucket's defaultEventBasedHold to a new object unless the
+	// insert explicitly sets eventBasedHold (explicit false overrides).
+	applyObjectHolds(body, bmeta, &o)
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
 	base := baseURL(nr)
@@ -1575,6 +1599,17 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 // metadata write (see gcs.ObjectStore's *Checked methods) — nil for a caller
 // (currently: the gRPC Storage service) that doesn't yet parse one.
 func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.ObjectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool, kmsKeyName string, cseKey []byte, cseKeySHA256 string, precondition *gcs.Precondition) (gcs.ObjectMeta, error) {
+	// Capture the prior live generation before writing any bytes: it is needed
+	// both to reject an overwrite of a held/retention-protected object without
+	// leaving an orphaned blob, and to emit the replacement events below.
+	var prevMeta *gcs.ObjectMeta
+	if existing, gerr := p.objects.GetObjectMeta(ctx, meta.Bucket, meta.Name); gerr == nil && existing.Generation != meta.Generation {
+		if perr := objectWriteBlockedError(existing); perr != nil {
+			return meta, perr
+		}
+		prev := existing
+		prevMeta = &prev
+	}
 	// Plaintext checksums/size (GCS reports the logical object, not the
 	// ciphertext).
 	if md5Enabled {
@@ -1616,15 +1651,6 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	}
 
 	meta.WrappedDEK = wrappedDEK
-	// Capture the prior live generation (if any) before the write, so
-	// replacement events can carry overwroteGeneration/overwrittenByGeneration
-	// and emit OBJECT_ARCHIVE (versioned) / OBJECT_DELETE (non-versioned) for
-	// the replaced object.
-	var prevMeta *gcs.ObjectMeta
-	if existing, gerr := p.objects.GetObjectMeta(ctx, meta.Bucket, meta.Name); gerr == nil && existing.Generation != meta.Generation {
-		prev := existing
-		prevMeta = &prev
-	}
 	var err error
 	if versioned {
 		err = p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
@@ -2054,6 +2080,11 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 			o.StorageClass = sc
 		}
 	}
+	// The destination inherits the destination bucket's defaultEventBasedHold
+	// unless the copy body overrides it; an explicitly requested hold wins over
+	// the source object's hold state.
+	bmeta, _ := p.objects.GetBucket(ctx, dstBucket)
+	applyObjectHolds(body, bmeta, &o)
 	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
 	o.Etag = "CAE="
 	base := baseURL(nr)
@@ -2199,7 +2230,7 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.DeleteObjectData(ctx, srcBucket, srcObject, objectPrecondition(nr)); err != nil {
+	if err := p.DeleteObjectData(ctx, srcBucket, srcObject, "", objectPrecondition(nr)); err != nil {
 		return nil, err
 	}
 	return provider.OK(toMap(final)), nil
@@ -2310,6 +2341,10 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 			o.StorageClass = sc
 		}
 	}
+	// Holds: explicit destination values win, otherwise inherit the bucket's
+	// defaultEventBasedHold — matching the gRPC ComposeObject path.
+	bmeta, _ := p.objects.GetBucket(ctx, bucket)
+	applyObjectHolds(dest, bmeta, &o)
 	o.ID = bucket + "/" + object + "/" + o.Generation
 	o.Etag = "CAE="
 	base := baseURL(nr)
@@ -2414,6 +2449,10 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 	if o.StorageClass == "" {
 		o.StorageClass = "STANDARD"
 	}
+	// Holds are writable via objects.update too; omitted booleans reset to false
+	// under PUT's full-replacement semantics.
+	o.TemporaryHold, _ = bodyBool(nr.Params, "temporaryHold")
+	o.EventBasedHold, _ = bodyBool(nr.Params, "eventBasedHold")
 
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
@@ -2455,6 +2494,12 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 		if _, ok := body["metadata"]; ok {
 			o.Metadata = bodyMetadata(nr.Params)
 		}
+		if h, ok := bodyBool(nr.Params, "temporaryHold"); ok {
+			o.TemporaryHold = h
+		}
+		if h, ok := bodyBool(nr.Params, "eventBasedHold"); ok {
+			o.EventBasedHold = h
+		}
 	}
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
@@ -2478,6 +2523,18 @@ func bodyString(params map[string]any, key string) (string, bool) {
 	}
 	s, ok := body[key].(string)
 	return s, ok
+}
+
+// bodyBool returns the named boolean field from the request body. The second
+// return distinguishes "present (true/false)" from "absent" so callers can
+// implement strict-replace vs merge semantics.
+func bodyBool(params map[string]any, key string) (bool, bool) {
+	body, ok := params["body"].(map[string]any)
+	if !ok {
+		return false, false
+	}
+	b, ok := body[key].(bool)
+	return b, ok
 }
 
 // bodyMetadata returns the metadata map from the request body, or nil when the
@@ -2512,22 +2569,32 @@ func bumpMeta(m string) string {
 func (p *Provider) ObjectsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
-	if err := p.DeleteObjectData(ctx, bucket, object, objectPrecondition(nr)); err != nil {
+	// objects.delete honours an explicit ?generation= to delete only that
+	// revision; with no generation it deletes the live object (tombstoning it
+	// in a versioned bucket).
+	generation, _ := nr.Params["generation"].(string)
+	if err := p.DeleteObjectData(ctx, bucket, object, generation, objectPrecondition(nr)); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 // DeleteObjectData deletes an object, honoring retention holds and bucket
-// versioning (non-versioned: hard-delete every generation and its bytes;
-// versioned: tombstone the live generation and drop its bytes). Shared by the
-// REST ObjectsDelete and the gRPC DeleteObject. precondition is GCS's
-// ifGenerationMatch/ifGenerationNotMatch (the common "safe delete" idiom —
-// only delete if the object is still at the generation I last observed),
-// checked atomically with the delete; nil for a caller (currently: the gRPC
-// Storage service) that doesn't yet parse one.
-func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, precondition *gcs.Precondition) error {
-	// Retention check first: a held or retention-active object cannot be
+// versioning. With an empty generation it deletes the live object: in a
+// non-versioned bucket every generation is hard-deleted, in a versioned bucket
+// the live generation is tombstoned and its bytes dropped. When generation is
+// supplied (objects.delete?generation=) only that revision is removed — live or
+// non-live — and its bytes dropped; removing the live revision does not promote
+// a noncurrent survivor, so the name then resolves only by generation. Shared
+// by the REST ObjectsDelete and the gRPC DeleteObject. precondition is GCS's
+// ifGenerationMatch/ifGenerationNotMatch (the common "safe delete" idiom — the
+// store validates it against the live generation), checked atomically with the
+// delete.
+func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generation string, precondition *gcs.Precondition) error {
+	if generation != "" {
+		return p.deleteObjectGeneration(ctx, bucket, object, generation, precondition)
+	}
+	// Holds/retention check first: a held or retention-active object cannot be
 	// deleted (GCS returns PERMISSION_DENIED). Note this GetObjectMeta read is
 	// separate from the precondition check inside the *Checked delete call
 	// below — a hold added/removed in between is a pre-existing, narrower race
@@ -2539,8 +2606,8 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, 
 		}
 		return err
 	}
-	if objectProtected(meta) {
-		return model.NewProviderError("PermissionDenied", "Object is under hold or retention and cannot be deleted", 403)
+	if perr := objectDeleteBlockedError(meta); perr != nil {
+		return perr
 	}
 
 	if p.bucketVersioned(ctx, bucket) {
@@ -2588,6 +2655,42 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, 
 	return nil
 }
 
+// deleteObjectGeneration removes one specific object revision (the target of
+// objects.delete?generation=), enforcing holds/retention on that revision and
+// dropping its bytes. Removing the live revision does not promote a noncurrent
+// survivor (the store leaves remaining revisions noncurrent).
+func (p *Provider) deleteObjectGeneration(ctx context.Context, bucket, object, generation string, precondition *gcs.Precondition) error {
+	if _, perr := strconv.ParseInt(generation, 10, 64); perr != nil {
+		return model.NewProviderError("InvalidRequest", "invalid generation: "+generation, 400)
+	}
+	// The hold/retention read below is separate from the store's atomic
+	// DeleteObjectGeneration; a hold added in between is a pre-existing narrow
+	// race, same as the live-delete path.
+	target, err := p.objects.GetObjectGeneration(ctx, bucket, object, generation)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return model.NewProviderError("NotFound", "object generation not found", 404)
+		}
+		return err
+	}
+	if perr := objectDeleteBlockedError(target); perr != nil {
+		return perr
+	}
+	removed, err := p.objects.DeleteObjectGeneration(ctx, bucket, object, generation, precondition)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return model.NewProviderError("NotFound", "object generation not found", 404)
+		}
+		if errors.Is(err, gcs.ErrPreconditionFailed) {
+			return model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+		}
+		return err
+	}
+	_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, removed.Generation))
+	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", removed, clock.Now(), nil)
+	return nil
+}
+
 // bucketProject returns the project that owns a bucket (the account scope used
 // for notification storage and envelope encryption), falling back to "" when
 // the bucket metadata cannot be read.
@@ -2600,17 +2703,40 @@ func (p *Provider) bucketProject(ctx context.Context, bucket string) string {
 	return ""
 }
 
-// objectProtected reports whether an object's holds or active retention block
-// deletion. While temporaryHold/eventBasedHold is set, or the object's
-// retention expiration is still in the future, the object cannot be deleted.
-func objectProtected(m gcs.ObjectMeta) bool {
-	if m.TemporaryHold || m.EventBasedHold {
-		return true
+// objectDeleteBlockedError returns the GCS error that blocks deleting an object
+// because of a temporary/event-based hold or an active retention policy, or nil
+// when the object may be deleted. The message names the specific protection so
+// clients (and the Java compat suite) can distinguish holds from retention.
+func objectDeleteBlockedError(m gcs.ObjectMeta) *model.ProviderError {
+	return objectBlockedError(m, "deleted")
+}
+
+// objectWriteBlockedError returns the GCS error that blocks overwriting an
+// object because of a hold or an active retention policy, or nil when the write
+// may proceed.
+func objectWriteBlockedError(m gcs.ObjectMeta) *model.ProviderError {
+	return objectBlockedError(m, "overwritten")
+}
+
+// objectBlockedError builds the 403 that blocks mutating a protected object,
+// naming the specific hold or the retention policy and the attempted verb.
+func objectBlockedError(m gcs.ObjectMeta, verb string) *model.ProviderError {
+	if m.TemporaryHold {
+		return model.NewProviderError("PermissionDenied", "Object is under a temporary hold and cannot be "+verb, 403)
 	}
-	if m.Retention != nil && !m.Retention.RetainUntilTime.IsZero() {
-		return clock.Now().Before(m.Retention.RetainUntilTime)
+	if m.EventBasedHold {
+		return model.NewProviderError("PermissionDenied", "Object is under an event-based hold and cannot be "+verb, 403)
 	}
-	return false
+	if retentionActive(m) {
+		return model.NewProviderError("PermissionDenied", "Object is under an active retention policy and cannot be "+verb, 403)
+	}
+	return nil
+}
+
+// retentionActive reports whether the object's retention policy still forbids
+// deletion/overwrite at the current (possibly frozen) clock time.
+func retentionActive(m gcs.ObjectMeta) bool {
+	return m.Retention != nil && !m.Retention.RetainUntilTime.IsZero() && clock.Now().Before(m.Retention.RetainUntilTime)
 }
 
 // filterLifecycle lazily applies bucket lifecycle Delete rules: an object whose
@@ -2734,6 +2860,7 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	if b.Labels != nil {
 		out["labels"] = b.Labels
 	}
+	out["defaultEventBasedHold"] = b.DefaultEventBasedHold
 	return out
 }
 
