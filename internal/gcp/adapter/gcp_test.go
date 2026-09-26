@@ -121,6 +121,38 @@ func TestGCPAdapter_DetectAndDecode_Storage(t *testing.T) {
 	}
 }
 
+// TestGCPAdapter_MethodOverride verifies the Java google-http-client shape:
+// a PATCH tunnelled as POST with X-HTTP-Method-Override must route to the
+// merge (ObjectsPatch) handler, not the strict-replace ObjectsUpdate.
+func TestGCPAdapter_MethodOverride(t *testing.T) {
+	a := gcp.New()
+	body := []byte(`{"metadata":{"tag":"keep-me"}}`)
+
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/o/obj.txt", bytes.NewReader(body))
+	r.Header.Set("X-HTTP-Method-Override", "PATCH")
+	nr, _, err := a.DetectAndDecode(r, body)
+	if err != nil {
+		t.Fatalf("DetectAndDecode: %v", err)
+	}
+	if nr.Action != "ObjectsPatch" {
+		t.Fatalf("expected ObjectsPatch for overridden PATCH, got %q", nr.Action)
+	}
+	if r.Method != "PATCH" {
+		t.Errorf("expected effective method PATCH, got %q", r.Method)
+	}
+
+	// Without the override header a POST on an object resource stays the
+	// defensive objects.update route.
+	r = httptest.NewRequest("POST", "/storage/v1/b/bkt/o/obj.txt", bytes.NewReader(body))
+	nr, _, err = a.DetectAndDecode(r, body)
+	if err != nil {
+		t.Fatalf("DetectAndDecode (no override): %v", err)
+	}
+	if nr.Action != "ObjectsUpdate" {
+		t.Fatalf("expected ObjectsUpdate for plain POST, got %q", nr.Action)
+	}
+}
+
 func TestGCPAdapter_DetectAndDecode_Unknown(t *testing.T) {
 	a := gcp.New()
 	r := httptest.NewRequest("POST", "/", nil)
