@@ -39,9 +39,10 @@ func (c *GCSCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReques
 	}
 }
 
-// decodeRawMedia handles the raw media URL /{bucket}/{object...} used by the
-// GCS storage client for downloads. The object name's slashes are literal path
-// separators here (unlike the JSON API, where they are percent-encoded).
+// decodeRawMedia handles the raw XML API URL /{bucket}/{object...}: object
+// downloads (GET/HEAD, used by the GCS storage client) and object uploads
+// (PUT, signed-URL or plain XML API). The object name's slashes are literal
+// path separators here (unlike the JSON API, where they are percent-encoded).
 func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(strings.TrimPrefix(r.URL.EscapedPath(), "/"))
 	if len(seg) < 2 || seg[0] == "" {
@@ -57,10 +58,23 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	if signed {
 		nr.Params[wire.SignedURLKey] = true
 	}
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+	switch {
+	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		nr.Action = "ObjectsGetMedia"
-	} else if signed && r.Method == http.MethodPut {
-		// V4 signed-URL upload: PUT stores the object through the media path.
+	case r.Method == http.MethodPut:
+		// XML API object upload: PUT /{bucket}/{object}. This covers V4
+		// signed-URL uploads and plain (unsigned) XML PUTs — the emulator does
+		// not enforce authentication, so an unsigned PUT stores the object like
+		// any other write. CSEK/CMEK material and x-goog-meta-* metadata are
+		// picked up by the header extractors above.
+		//
+		// Other XML API PUT variants (copy with x-goog-copy-source, compose,
+		// set ACL, set retention/encryption, multipart parts) share the PUT
+		// method but are not implemented. Rejecting them here keeps them a loud
+		// 404 rather than silently storing the request body as the object.
+		if r.Header.Get("x-goog-copy-source") != "" || hasUnsupportedXMLPutSubResource(r.URL.Query()) {
+			return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
+		}
 		nr.Action = "ObjectsInsert"
 		if body == nil {
 			nr.Params[wire.StreamKey] = r.Body
@@ -70,7 +84,7 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			nr.Params[wire.ContentTypeKey] = ct
 		}
-	} else {
+	default:
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
 	}
 	return nr, nil
@@ -83,6 +97,26 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 func hasSignedSignature(r *http.Request) bool {
 	_, ok := r.URL.Query()["X-Goog-Signature"]
 	return ok
+}
+
+// unsupportedXMLPutSubResources lists the XML API object sub-resource query
+// parameters that address an operation other than a plain object upload. The
+// emulator does not implement them, so a PUT carrying one must not be decoded
+// as an ObjectsInsert (which would store the request body as the object).
+var unsupportedXMLPutSubResources = []string{
+	"acl", "compose", "retention", "encryption", "tagging",
+	"uploads", "uploadId", "partNumber",
+}
+
+// hasUnsupportedXMLPutSubResource reports whether q carries an XML API object
+// sub-resource parameter that is not a plain object upload.
+func hasUnsupportedXMLPutSubResource(q url.Values) bool {
+	for _, k := range unsupportedXMLPutSubResources {
+		if q.Has(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeDownload handles /download/storage/v1/... — always a media download, so
@@ -672,14 +706,31 @@ func queryToParams(r *http.Request, params map[string]any) {
 
 // csekFromHeaders copies the customer-supplied encryption key headers into the
 // request params so the storage provider can validate and use them. The GCS
-// CSEK contract carries the key (base64 AES-256) and its base64 SHA-256 digest
-// in these headers, distinct from CMEK's kmsKeyName query param.
+// CSEK contract carries the algorithm (AES256), the key (base64 AES-256), and
+// its base64 SHA-256 digest in headers, distinct from CMEK's kmsKeyName query
+// param. Copy/rewrite requests carry a second set of copy-source-encryption-*
+// headers describing the source object's key.
 func csekFromHeaders(r *http.Request, params map[string]any) {
+	if v := r.Header.Get("x-goog-encryption-algorithm"); v != "" {
+		params[wire.CSEKAlgorithm] = v
+	}
 	if v := r.Header.Get("x-goog-encryption-key"); v != "" {
 		params[wire.CSEKKey] = v
 	}
 	if v := r.Header.Get("x-goog-encryption-key-sha256"); v != "" {
 		params[wire.CSEKKeySHA256] = v
+	}
+	// Copy/rewrite source-object CSEK, carried in distinct headers that apply
+	// to the source while x-goog-encryption-* (above) applies to the
+	// destination.
+	if v := r.Header.Get("x-goog-copy-source-encryption-algorithm"); v != "" {
+		params[wire.CopySourceCSEKAlgorithm] = v
+	}
+	if v := r.Header.Get("x-goog-copy-source-encryption-key"); v != "" {
+		params[wire.CopySourceCSEKKey] = v
+	}
+	if v := r.Header.Get("x-goog-copy-source-encryption-key-sha256"); v != "" {
+		params[wire.CopySourceCSEKKeySHA256] = v
 	}
 }
 

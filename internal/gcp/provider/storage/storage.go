@@ -1618,6 +1618,14 @@ func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedReque
 // metadata write (see gcs.ObjectStore's *Checked methods) — nil for a caller
 // (currently: the gRPC Storage service) that doesn't yet parse one.
 func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.ObjectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool, kmsKeyName string, cseKey []byte, cseKeySHA256 string, precondition *gcs.Precondition) (gcs.ObjectMeta, error) {
+	// A write always re-encrypts, so encryption metadata inherited from a
+	// source object (copy/rewrite/move) or a prior generation must not leak onto
+	// the new object. The key branches below re-populate exactly the metadata
+	// for the chosen encryption (CSEK/CMEK/server-DEK).
+	meta.CSEKeySHA256 = ""
+	meta.KmsKeyName = ""
+	meta.WrappedDEK = nil
+
 	// Capture the prior live generation before writing any bytes: it is needed
 	// both to reject an overwrite of a held/retention-protected object without
 	// leaving an orphaned blob, and to emit the replacement events below.
@@ -1908,6 +1916,13 @@ func mediaHeaders(m gcs.ObjectMeta) map[string]string {
 	if len(hashes) > 0 {
 		h["x-goog-hash"] = strings.Join(hashes, ",")
 	}
+	// The XML API surfaces a CSEK object's algorithm and key hash on reads so
+	// clients can identify which key is required (the JSON API returns the same
+	// data as customerEncryption on the object metadata).
+	if m.CSEKeySHA256 != "" {
+		h["x-goog-encryption-algorithm"] = "AES256"
+		h["x-goog-encryption-key-sha256"] = m.CSEKeySHA256
+	}
 	for k, v := range m.Metadata {
 		h["x-goog-meta-"+canonicalMetaKey(k)] = v
 	}
@@ -2096,7 +2111,7 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 		return objectMeta{}, err
 	}
 
-	srcParams := map[string]any{}
+	srcParams := copySourceCSEKParams(nr)
 	if g, _ := nr.Params["sourceGeneration"].(string); g != "" {
 		srcParams["generation"] = g
 	}
@@ -2255,7 +2270,7 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, err
 	}
 
-	srcMeta, raw, err := p.readSourceRaw(ctx, nr, srcBucket, srcObject, map[string]any{})
+	srcMeta, raw, err := p.readSourceRaw(ctx, nr, srcBucket, srcObject, copySourceCSEKParams(nr))
 	if err != nil {
 		return nil, err
 	}
@@ -2415,18 +2430,12 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 // then CMEK (per-object kmsKeyName query param, else the bucket's
 // encryption.defaultKmsKeyName), else empty (server DEK via Wrap).
 func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, bmeta map[string]any) (kmsKeyName string, cseKey []byte, cseKeySHA256 string, err error) {
-	if keyB64, _ := nr.Params[wire.CSEKKey].(string); keyB64 != "" {
-		key, err := base64.StdEncoding.DecodeString(keyB64)
-		if err != nil || len(key) != 32 {
-			return "", nil, "", model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
-		}
-		sum := sha256.Sum256(key)
-		expected := base64.StdEncoding.EncodeToString(sum[:])
-		gotSHA, _ := nr.Params[wire.CSEKKeySHA256].(string)
-		if gotSHA != expected {
-			return "", nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption key hash mismatch", 400)
-		}
-		return "", key, expected, nil
+	cseKey, cseKeySHA256, err = resolveCSEK(nr.Params, wire.CSEKAlgorithm, wire.CSEKKey, wire.CSEKKeySHA256)
+	if err != nil {
+		return "", nil, "", err
+	}
+	if cseKey != nil {
+		return "", cseKey, cseKeySHA256, nil
 	}
 	if k, _ := nr.Params["kmsKeyName"].(string); k != "" {
 		return k, nil, "", nil
@@ -2439,11 +2448,70 @@ func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, b
 	return "", nil, "", nil
 }
 
+// resolveCSEK validates a customer-supplied encryption key header set and
+// returns the decoded 32-byte AES-256 key plus its computed base64 SHA-256.
+// The param names are explicit so the same helper validates the destination key
+// (x-goog-encryption-*) and a copy/rewrite source key
+// (x-goog-copy-source-encryption-*). It returns (nil, "", nil) when no key
+// material is present at all (the object is server-DEK/CMEK encrypted).
+//
+// Per the GCS contract, the algorithm must be AES256 when supplied, the key
+// must be base64 of exactly 32 bytes, and the caller-supplied SHA-256 must
+// match the key.
+func resolveCSEK(params map[string]any, algKey, keyKey, shaKey string) ([]byte, string, error) {
+	alg, _ := params[algKey].(string)
+	keyB64, _ := params[keyKey].(string)
+	gotSHA, _ := params[shaKey].(string)
+	if alg == "" && keyB64 == "" && gotSHA == "" {
+		return nil, "", nil
+	}
+	if alg != "" && !strings.EqualFold(alg, "AES256") {
+		return nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption algorithm must be AES256", 400)
+	}
+	if keyB64 == "" {
+		return nil, "", model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key", 400)
+	}
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil || len(key) != 32 {
+		return nil, "", model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+	}
+	if gotSHA == "" {
+		return nil, "", model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key sha256", 400)
+	}
+	sum := sha256.Sum256(key)
+	expected := base64.StdEncoding.EncodeToString(sum[:])
+	if gotSHA != expected {
+		return nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption key hash mismatch", 400)
+	}
+	return key, expected, nil
+}
+
+// copySourceCSEKParams builds the source-object read params from the
+// x-goog-copy-source-encryption-* headers, keyed the way decryptObject expects
+// (wire.CSEKKey/wire.CSEKKeySHA256). Empty when the request carried no
+// copy-source key (the source is server-DEK/CMEK encrypted).
+func copySourceCSEKParams(nr *model.NormalizedRequest) map[string]any {
+	params := map[string]any{}
+	if v, _ := nr.Params[wire.CopySourceCSEKAlgorithm].(string); v != "" {
+		params[wire.CSEKAlgorithm] = v
+	}
+	if v, _ := nr.Params[wire.CopySourceCSEKKey].(string); v != "" {
+		params[wire.CSEKKey] = v
+	}
+	if v, _ := nr.Params[wire.CopySourceCSEKKeySHA256].(string); v != "" {
+		params[wire.CSEKKeySHA256] = v
+	}
+	return params
+}
+
 // decryptObject returns the plaintext for a stored ciphertext, using the CSEK
 // key (when the object is CSEK-encrypted) or the envelope DEK otherwise.
 func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedRequest, meta gcs.ObjectMeta, ciphertext []byte) ([]byte, error) {
 	var cseKey []byte
 	if meta.CSEKeySHA256 != "" {
+		if alg, _ := nr.Params[wire.CSEKAlgorithm].(string); alg != "" && !strings.EqualFold(alg, "AES256") {
+			return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption algorithm must be AES256", 400)
+		}
 		keyB64, _ := nr.Params[wire.CSEKKey].(string)
 		if keyB64 == "" {
 			return nil, model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key", 400)
@@ -2451,6 +2519,14 @@ func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedReques
 		key, err := base64.StdEncoding.DecodeString(keyB64)
 		if err != nil || len(key) != 32 {
 			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+		}
+		// A caller-supplied sha256, when present, must match the provided key.
+		// The stored hash is separately checked by decryptObjectWithKey.
+		if gotSHA, _ := nr.Params[wire.CSEKKeySHA256].(string); gotSHA != "" {
+			sum := sha256.Sum256(key)
+			if base64.StdEncoding.EncodeToString(sum[:]) != gotSHA {
+				return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption key sha256 mismatch", 400)
+			}
 		}
 		cseKey = key
 	}
