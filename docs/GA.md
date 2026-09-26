@@ -99,7 +99,7 @@ verified against the proto descriptors only (see §7).
   `google.datastore.v1.Datastore`,
   `google.cloud.kms.v1.KeyManagementService`,
   `google.cloud.secretmanager.v1.SecretManagerService`,
-  `google.logging.v2.LoggingServiceV2`, `google.monitoring.v3.*`,
+  `google.logging.v2.LoggingServiceV2`/`ConfigServiceV2`, `google.monitoring.v3.*`,
   `google.cloud.workflows.executions.v1.Executions`,
   `google.cloud.workflows.v1.Workflows`,
   `google.cloud.managedkafka.v1.ManagedKafka`,
@@ -144,8 +144,8 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **262/262 checks pass** (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 5,
+- **gRPC** — official `cloud.google.com/go` clients: **272/272 checks pass** (Dataproc 14,
+  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 15,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
@@ -210,11 +210,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
   (runtime invocation) and v2 `ListRuntimes` are explicit `unsupported` `Unimplemented` stubs —
   the gRPC surface is control-plane only.
-- **gRPC** — **11** of **328** cells remain `limited`: verified against proto descriptors only.
-  The other **245** are `ga` and **72** are explicit `unsupported` stubs (see the `Unimplemented`
+- **gRPC** — **11** of **360** cells remain `limited`: verified against proto descriptors only.
+  The other **255** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **262** checks over those `ga` proto methods (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 5,
+  The conformance harness exercises **272** checks over those `ga` proto methods (Dataproc 14,
+  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 15,
   Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5, the rest one
   per method). KMS
@@ -224,7 +224,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   to update), Logging `TailLogEntries` (a bounded store-poll with no deterministic conformance
   assertion), and Managed Kafka
   `List`/`Get`/`Update`/`DeleteConsumerGroup` (no broker, so the list is empty and the item
-  methods report `NOT_FOUND`).
+  methods report `NOT_FOUND`). Logging's gRPC `ConfigServiceV2` serves sinks + exclusions; its
+  log-bucket/view/link, CMEK/settings, and `CopyLogEntries` RPCs are explicit `unsupported`
+  `Unimplemented` stubs (the emulator has no bucket/view storage plane).
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources

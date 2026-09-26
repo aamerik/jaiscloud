@@ -3,9 +3,11 @@ package logging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"jaiscloud/internal/clock"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -94,6 +96,201 @@ func (s *PostgresStore) DeleteLog(ctx context.Context, scope, logName string) er
 	return err
 }
 
+// ─── sinks ────────────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateSink(ctx context.Context, scope string, sink LogSink) error {
+	exclusions, err := json.Marshal(nonNilExclusions(sink.Exclusions))
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_log_sinks
+			(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (project_id, name) DO NOTHING
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.CreateTime, sink.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSinkExists
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetSink(ctx context.Context, scope, name string) (LogSink, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		FROM jc_log_sinks WHERE project_id=$1 AND name=$2
+	`, scope, name)
+	return scanSink(row)
+}
+
+func (s *PostgresStore) ListSinks(ctx context.Context, scope string) ([]LogSink, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		FROM jc_log_sinks WHERE project_id=$1 ORDER BY name
+	`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []LogSink
+	for rows.Next() {
+		sink, err := scanSink(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, sink)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateSink(ctx context.Context, scope string, sink LogSink) error {
+	exclusions, err := json.Marshal(nonNilExclusions(sink.Exclusions))
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_log_sinks
+		SET destination=$3, filter=$4, description=$5, disabled=$6, exclusions=$7, writer_identity=$8, include_children=$9, update_time=$10
+		WHERE project_id=$1 AND name=$2
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSinkNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) DeleteSink(ctx context.Context, scope, name string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_log_sinks WHERE project_id=$1 AND name=$2`, scope, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSinkNotFound
+	}
+	return nil
+}
+
+// sinkScanner is the shared row scan target for GetSink/ListSinks (pgx.Row and
+// pgx.Rows both satisfy it).
+type sinkScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSink(row sinkScanner) (LogSink, error) {
+	var sink LogSink
+	var exclusions []byte
+	err := row.Scan(&sink.Name, &sink.Destination, &sink.Filter, &sink.Description, &sink.Disabled,
+		&exclusions, &sink.WriterIdentity, &sink.IncludeChildren, &sink.CreateTime, &sink.UpdateTime)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LogSink{}, ErrSinkNotFound
+		}
+		return LogSink{}, err
+	}
+	if len(exclusions) > 0 {
+		_ = json.Unmarshal(exclusions, &sink.Exclusions)
+	}
+	return sink, nil
+}
+
+func nonNilExclusions(in []LogExclusion) []LogExclusion {
+	if in == nil {
+		return []LogExclusion{}
+	}
+	return in
+}
+
+// ─── exclusions ───────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateExclusion(ctx context.Context, scope string, e LogExclusion) error {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_log_exclusions (project_id, name, description, filter, disabled, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (project_id, name) DO NOTHING
+	`, scope, e.Name, e.Description, e.Filter, e.Disabled, e.CreateTime, e.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrExclusionExists
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetExclusion(ctx context.Context, scope, name string) (LogExclusion, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT name, description, filter, disabled, create_time, update_time
+		FROM jc_log_exclusions WHERE project_id=$1 AND name=$2
+	`, scope, name)
+	return scanExclusion(row)
+}
+
+func (s *PostgresStore) ListExclusions(ctx context.Context, scope string) ([]LogExclusion, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, description, filter, disabled, create_time, update_time
+		FROM jc_log_exclusions WHERE project_id=$1 ORDER BY name
+	`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []LogExclusion
+	for rows.Next() {
+		e, err := scanExclusion(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateExclusion(ctx context.Context, scope string, e LogExclusion) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jc_log_exclusions
+		SET description=$3, filter=$4, disabled=$5, update_time=$6
+		WHERE project_id=$1 AND name=$2
+	`, scope, e.Name, e.Description, e.Filter, e.Disabled, e.UpdateTime)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrExclusionNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) DeleteExclusion(ctx context.Context, scope, name string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_log_exclusions WHERE project_id=$1 AND name=$2`, scope, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrExclusionNotFound
+	}
+	return nil
+}
+
+func scanExclusion(row sinkScanner) (LogExclusion, error) {
+	var e LogExclusion
+	err := row.Scan(&e.Name, &e.Description, &e.Filter, &e.Disabled, &e.CreateTime, &e.UpdateTime)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LogExclusion{}, ErrExclusionNotFound
+		}
+		return LogExclusion{}, err
+	}
+	return e, nil
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_entries`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_sinks`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_exclusions`)
 }

@@ -2,6 +2,8 @@ package logging
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	core "jaiscloud/internal/gcp/service/logging"
@@ -200,6 +202,182 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 	}
 	if len(e.Labels) > 0 {
 		out["labels"] = e.Labels
+	}
+	return out
+}
+
+// ─── sink / exclusion transcoding ─────────────────────────────────────────────
+
+// intParam reads a signed integer request parameter that may arrive as a JSON
+// number (body) or a query string. Unlike intFrom it preserves a leading minus,
+// so an out-of-range pageSize (e.g. -1) reaches the core's validation and is
+// rejected consistently with the gRPC transport.
+func intParam(nr *model.NormalizedRequest, key string) int {
+	switch v := nr.Params[key].(type) {
+	case float64:
+		return int(v)
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
+}
+
+// boolParam reads a boolean request parameter that may arrive as a JSON bool
+// (body) or a query string ("true"/"1").
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	default:
+		return false
+	}
+}
+
+// updateMaskFromQuery parses the repeated/comma-separated updateMask query
+// parameter into field paths.
+func updateMaskFromQuery(v any) []string {
+	var raw []string
+	switch x := v.(type) {
+	case string:
+		raw = []string{x}
+	case []any:
+		for _, e := range x {
+			if s, ok := e.(string); ok {
+				raw = append(raw, s)
+			}
+		}
+	}
+	var out []string
+	for _, entry := range raw {
+		for _, p := range splitComma(entry) {
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+func splitComma(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+// sinkFromWire decodes a Discovery LogSink body into the neutral stored form.
+// The client-assigned name is the short sink id. Output-only fields
+// (resourceName, writerIdentity, createTime, updateTime) are ignored.
+func sinkFromWire(v map[string]any) loggingstore.LogSink {
+	s := loggingstore.LogSink{
+		Name:            strFrom(v["name"]),
+		Destination:     strFrom(v["destination"]),
+		Filter:          strFrom(v["filter"]),
+		Description:     strFrom(v["description"]),
+		Disabled:        boolFrom(v["disabled"]),
+		IncludeChildren: boolFrom(v["includeChildren"]),
+	}
+	if arr, ok := v["exclusions"].([]any); ok {
+		for _, e := range arr {
+			if m, ok := e.(map[string]any); ok {
+				s.Exclusions = append(s.Exclusions, exclusionFromWire(m))
+			}
+		}
+	}
+	return s
+}
+
+// sinkToWire encodes a stored sink as the Discovery LogSink JSON. fullName is
+// the sink's full resource name, emitted as the output-only resourceName (the
+// name field stays the short client-assigned id, per the Discovery document).
+func sinkToWire(s loggingstore.LogSink, fullName string) map[string]any {
+	out := map[string]any{}
+	if s.Name != "" {
+		out["name"] = s.Name
+	}
+	if fullName != "" {
+		out["resourceName"] = fullName
+	}
+	if s.Destination != "" {
+		out["destination"] = s.Destination
+	}
+	if s.Filter != "" {
+		out["filter"] = s.Filter
+	}
+	if s.Description != "" {
+		out["description"] = s.Description
+	}
+	if s.Disabled {
+		out["disabled"] = true
+	}
+	if len(s.Exclusions) > 0 {
+		exclusions := make([]any, 0, len(s.Exclusions))
+		for _, e := range s.Exclusions {
+			exclusions = append(exclusions, exclusionToWire(e))
+		}
+		out["exclusions"] = exclusions
+	}
+	if s.WriterIdentity != "" {
+		out["writerIdentity"] = s.WriterIdentity
+	}
+	if s.IncludeChildren {
+		out["includeChildren"] = true
+	}
+	if !s.CreateTime.IsZero() {
+		out["createTime"] = s.CreateTime.UTC().Format(time.RFC3339Nano)
+	}
+	if !s.UpdateTime.IsZero() {
+		out["updateTime"] = s.UpdateTime.UTC().Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+// exclusionFromWire decodes a Discovery LogExclusion body into the neutral
+// stored form. Output-only timestamps are ignored.
+func exclusionFromWire(v map[string]any) loggingstore.LogExclusion {
+	return loggingstore.LogExclusion{
+		Name:        strFrom(v["name"]),
+		Description: strFrom(v["description"]),
+		Filter:      strFrom(v["filter"]),
+		Disabled:    boolFrom(v["disabled"]),
+	}
+}
+
+// exclusionToWire encodes a stored exclusion as the Discovery LogExclusion
+// JSON. The name is the short client-assigned id (the Discovery document
+// defines name that way for exclusions; there is no resourceName field).
+func exclusionToWire(e loggingstore.LogExclusion) map[string]any {
+	out := map[string]any{}
+	if e.Name != "" {
+		out["name"] = e.Name
+	}
+	if e.Description != "" {
+		out["description"] = e.Description
+	}
+	if e.Filter != "" {
+		out["filter"] = e.Filter
+	}
+	if e.Disabled {
+		out["disabled"] = true
+	}
+	if !e.CreateTime.IsZero() {
+		out["createTime"] = e.CreateTime.UTC().Format(time.RFC3339Nano)
+	}
+	if !e.UpdateTime.IsZero() {
+		out["updateTime"] = e.UpdateTime.UTC().Format(time.RFC3339Nano)
 	}
 	return out
 }

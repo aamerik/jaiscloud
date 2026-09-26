@@ -155,7 +155,7 @@ behind a wire-conformant API.
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
-| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 10/11, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, only `condition_threshold` evaluated. |
+| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 31/54, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, sink routing is evaluated but not delivered, and the logging bucket/view/link/CMEK gRPC RPCs are `unsupported` stubs; only `condition_threshold` evaluated. |
 | EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Metadata only — no delivery engine. |
 | Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
 | Athena / Redshift | **BigQuery** | 🔴 `preview` (0/23) | **None** — real GCP required. |
