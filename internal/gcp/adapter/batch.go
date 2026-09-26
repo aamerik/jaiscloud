@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"jaiscloud/internal/adapter"
+	"jaiscloud/internal/gateway"
 	"jaiscloud/internal/model"
 )
 
@@ -22,7 +22,7 @@ import (
 // google-api-client batch protocol used by e.g. google-cloud-storage's
 // StorageBatch. The adapter owns the multipart/mixed wire parsing and response
 // formatting; the gateway supplies process to run each embedded sub-request
-// through the normal pipeline (see adapter.BatchHandler).
+// through the normal pipeline (see gateway.BatchHandler).
 
 // IsBatchRequest reports whether r targets a GCP JSON batch endpoint. The
 // canonical path is /batch/storage/v1; the service/version segments are
@@ -41,7 +41,7 @@ func (a *GCPAdapter) IsBatchRequest(r *http.Request) bool {
 // response. Sub-requests are replayed in order — the google-api-client
 // response parser matches responses to requests positionally, so ordering and
 // one part per request are required.
-func (a *GCPAdapter) ServeBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, process adapter.BatchProcessFunc) {
+func (a *GCPAdapter) ServeBatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, process gateway.BatchProcessFunc) {
 	decoded, err := decodeGzippedBody(r, body)
 	if err != nil {
 		if pe, ok := err.(*model.ProviderError); ok {
