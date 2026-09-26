@@ -49,7 +49,41 @@ const (
 	rtBucketIAM = ResourceTypeBucketIAM
 	rtObjectIAM = ResourceTypeObjectIAM
 	rtACL       = "gcs_acl"
+	// rtNotification is the generic-store resource type for per-bucket Cloud
+	// Pub/Sub notification configurations (GCS notificationConfigs).
+	rtNotification = "gcs_notification"
 )
+
+// EventPublisher publishes one Cloud Pub/Sub message on behalf of another
+// provider. It is satisfied by the Pub/Sub provider, letting the storage
+// provider reuse Pub/Sub's envelope encryption, per-subscription fan-out and
+// push delivery without importing the provider/pubsub package (no
+// provider→provider dependency).
+type EventPublisher interface {
+	// PublishEvent delivers data (plaintext bytes) with attributes to the given
+	// topic (a bare ID, "projects/{p}/topics/{t}", or the fully-qualified
+	// "//pubsub.googleapis.com/..." form) and returns the message ID.
+	PublishEvent(ctx context.Context, accountID, topic string, data []byte, attributes map[string]string) (string, error)
+	// TopicExists reports whether the topic exists in the project (real GCS
+	// rejects a notificationConfigs.insert for a missing topic with 404).
+	TopicExists(ctx context.Context, accountID, topic string) (bool, error)
+}
+
+// notificationConfig is a stored GCS notificationConfigs entry. The JSON field
+// names match the GCS JSON API schema (storage#notification), which uses
+// snake_case for payload_format/event_types/custom_attributes/object_name_prefix
+// (per the Discovery document) and camelCase for selfLink.
+type notificationConfig struct {
+	Kind             string            `json:"kind,omitempty"`
+	ID               string            `json:"id,omitempty"`
+	SelfLink         string            `json:"selfLink,omitempty"`
+	Topic            string            `json:"topic,omitempty"`
+	PayloadFormat    string            `json:"payload_format,omitempty"`
+	EventTypes       []string          `json:"event_types,omitempty"`
+	ObjectNamePrefix string            `json:"object_name_prefix,omitempty"`
+	CustomAttributes map[string]string `json:"custom_attributes,omitempty"`
+	Etag             string            `json:"etag,omitempty"`
+}
 
 // blobsNamespace is the BlobStore namespace ("bucket") used for GCS object bytes.
 const blobsNamespace = "gcs"
@@ -83,7 +117,15 @@ type Provider struct {
 
 	genMu sync.Mutex
 	gen   int64 // monotonically-increasing object generation counter
+
+	notifMu   sync.Mutex // serialises notification ID allocation
+	publisher EventPublisher
 }
+
+// SetEventPublisher wires the Pub/Sub publisher used to fan object events out
+// to a bucket's notificationConfigs. Called once at startup; nil disables
+// notification delivery (unit tests that don't exercise fan-out).
+func (p *Provider) SetEventPublisher(ev EventPublisher) { p.publisher = ev }
 
 // completedSession is a lightweight tombstone for a finished resumable upload,
 // holding the finalized object resource so a post-completion status query can
@@ -233,6 +275,10 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Storage.BucketsUpdate":               p.BucketsUpdate,
 		"Storage.BucketsLockRetentionPolicy":  p.BucketsLockRetentionPolicy,
 		"Storage.BucketsGetStorageLayout":     p.BucketsGetStorageLayout,
+		"Storage.NotificationsInsert":         p.NotificationsInsert,
+		"Storage.NotificationsList":           p.NotificationsList,
+		"Storage.NotificationsGet":            p.NotificationsGet,
+		"Storage.NotificationsDelete":         p.NotificationsDelete,
 		"Storage.BucketsDelete":               p.BucketsDelete,
 		"Storage.BucketsGetIamPolicy":         p.BucketsGetIamPolicy,
 		"Storage.BucketsSetIamPolicy":         p.BucketsSetIamPolicy,
@@ -801,6 +847,7 @@ func (p *Provider) BucketsLockRetentionPolicy(ctx context.Context, nr *model.Nor
 
 func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, _ := nr.Params["bucket"].(string)
+	project := p.bucketProject(ctx, name)
 	if err := p.objects.DeleteBucket(ctx, name); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
@@ -810,7 +857,384 @@ func (p *Provider) BucketsDelete(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
+	// Real GCS drops a bucket's notification configs with the bucket.
+	if entries, err := p.listBucketNotifications(ctx, project, name); err == nil {
+		for _, e := range entries {
+			_ = p.resources.Delete(ctx, project, store.GlobalRegion, rtNotification, e.ID)
+		}
+	}
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// ─── notification configs ──────────────────────────────────────────────────────
+
+// NotificationsInsert implements storage.notifications.insert: POST
+// /storage/v1/b/{bucket}/notificationConfigs.
+func (p *Provider) NotificationsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	if bucket == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
+	}
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	if body == nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	}
+	topic, _ := body["topic"].(string)
+	if topic == "" {
+		return nil, model.NewProviderError("InvalidArgument", "topic is required", 400)
+	}
+	if p.publisher != nil {
+		exists, err := p.publisher.TopicExists(ctx, nr.AccountID, topic)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, model.NewProviderError("NotFound", "The topic does not exist.", 404)
+		}
+	}
+	payloadFormat := firstString(body, "payload_format", "payloadFormat")
+	if payloadFormat == "" {
+		payloadFormat = "JSON_API_V1"
+	}
+	if payloadFormat != "JSON_API_V1" && payloadFormat != "NONE" {
+		return nil, model.NewProviderError("InvalidArgument",
+			"payload_format must be one of JSON_API_V1, NONE", 400)
+	}
+	eventTypes := firstStringSlice(body, "event_types", "eventTypes")
+	for _, et := range eventTypes {
+		if !validNotificationEventType(et) {
+			return nil, model.NewProviderError("InvalidArgument",
+				"invalid event type: "+et, 400)
+		}
+	}
+	cfg := notificationConfig{
+		Kind:             "storage#notification",
+		Topic:            topic,
+		PayloadFormat:    payloadFormat,
+		EventTypes:       eventTypes,
+		ObjectNamePrefix: firstString(body, "object_name_prefix", "objectNamePrefix"),
+		CustomAttributes: firstStringMap(body, "custom_attributes", "customAttributes"),
+		Etag:             "CAE=",
+	}
+	p.notifMu.Lock()
+	defer p.notifMu.Unlock()
+	id, err := p.nextNotificationID(ctx, nr.AccountID, bucket)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ID = id
+	cfg.SelfLink = baseURL(nr) + "/storage/v1/b/" + bucket + "/notificationConfigs/" + id
+	data, _ := json.Marshal(cfg)
+	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion,
+		store.ResourceEntry{Type: rtNotification, ID: notificationKey(bucket, id), Data: data}); err != nil {
+		return nil, err
+	}
+	// Real GCS increments the bucket metageneration when a notification config
+	// is created or deleted.
+	p.bumpBucketMetageneration(ctx, bucket)
+	return provider.OK(notificationToMap(cfg)), nil
+}
+
+// validNotificationEventType reports whether et is a GCS notification event
+// type (the documented set; OBJECT_INITIALIZE is zonal-bucket-only).
+func validNotificationEventType(et string) bool {
+	switch et {
+	case "OBJECT_FINALIZE", "OBJECT_INITIALIZE", "OBJECT_METADATA_UPDATE",
+		"OBJECT_DELETE", "OBJECT_ARCHIVE":
+		return true
+	default:
+		return false
+	}
+}
+
+// NotificationsList implements storage.notifications.list: GET
+// /storage/v1/b/{bucket}/notificationConfigs.
+func (p *Provider) NotificationsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, _ := nr.Params["bucket"].(string)
+	if bucket == "" {
+		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
+	}
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return nil, err
+	}
+	items := make([]any, 0)
+	entries, err := p.listBucketNotifications(ctx, nr.AccountID, bucket)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		var cfg notificationConfig
+		if json.Unmarshal(e.Data, &cfg) == nil {
+			items = append(items, notificationToMap(cfg))
+		}
+	}
+	return provider.OK(map[string]any{"kind": "storage#notifications", "items": items}), nil
+}
+
+// NotificationsGet implements storage.notifications.get: GET
+// /storage/v1/b/{bucket}/notificationConfigs/{notification}.
+func (p *Provider) NotificationsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, id, err := p.notificationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtNotification, notificationKey(bucket, id))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "notification not found", 404)
+		}
+		return nil, err
+	}
+	var cfg notificationConfig
+	if err := json.Unmarshal(e.Data, &cfg); err != nil {
+		return nil, err
+	}
+	return provider.OK(notificationToMap(cfg)), nil
+}
+
+// NotificationsDelete implements storage.notifications.delete: DELETE
+// /storage/v1/b/{bucket}/notificationConfigs/{notification}.
+func (p *Provider) NotificationsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	bucket, id, err := p.notificationTarget(ctx, nr)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtNotification, notificationKey(bucket, id)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "notification not found", 404)
+		}
+		return nil, err
+	}
+	p.bumpBucketMetageneration(ctx, bucket)
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
+}
+
+// notificationTarget resolves and validates the bucket + notification ID for a
+// notificationConfigs get/delete, scoping the request to the bucket's project.
+func (p *Provider) notificationTarget(ctx context.Context, nr *model.NormalizedRequest) (bucket, id string, err error) {
+	bucket, _ = nr.Params["bucket"].(string)
+	id, _ = nr.Params["notification"].(string)
+	if bucket == "" || id == "" {
+		return "", "", model.NewProviderError("InvalidRequest", "missing bucket or notification id", 400)
+	}
+	if err := p.scopeToBucket(ctx, nr, bucket); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", "", model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		return "", "", err
+	}
+	return bucket, id, nil
+}
+
+// nextNotificationID allocates the next notification ID for a bucket (the
+// emulator's analogue of GCS's per-bucket increasing numeric IDs).
+func (p *Provider) nextNotificationID(ctx context.Context, account, bucket string) (string, error) {
+	entries, err := p.listBucketNotifications(ctx, account, bucket)
+	if err != nil {
+		return "", err
+	}
+	max := 0
+	for _, e := range entries {
+		if n, err := strconv.Atoi(strings.TrimPrefix(e.ID, bucket+"/")); err == nil && n > max {
+			max = n
+		}
+	}
+	return strconv.Itoa(max + 1), nil
+}
+
+// listBucketNotifications returns the notification entries for one bucket,
+// scoped to the owning project.
+func (p *Provider) listBucketNotifications(ctx context.Context, account, bucket string) ([]store.ResourceEntry, error) {
+	entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtNotification, "")
+	if err != nil {
+		return nil, err
+	}
+	prefix := bucket + "/"
+	out := make([]store.ResourceEntry, 0, len(entries))
+	for _, e := range entries {
+		if strings.HasPrefix(e.ID, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// bumpBucketMetageneration increments a bucket's metageneration, as real GCS
+// does when a notification config is created or deleted. Best-effort.
+func (p *Provider) bumpBucketMetageneration(ctx context.Context, bucket string) {
+	_, _ = p.objects.UpdateBucketMetaAtomic(ctx, bucket, func(meta map[string]any) (map[string]any, error) {
+		meta["metageneration"] = bumpMeta(gcs.BucketMetageneration(meta))
+		meta["updated"] = clock.Now().Format(time.RFC3339Nano)
+		return meta, nil
+	})
+}
+
+// notificationResourceName is the `notificationConfig` event-attribute value:
+// projects/_/buckets/{bucket}/notificationConfigs/{id}.
+func notificationResourceName(bucket, id string) string {
+	return resource.ResourceID("")("gcs-notification", bucket+"/notificationConfigs/"+id)
+}
+
+// notificationKey is the generic-store entry ID for a bucket notification.
+func notificationKey(bucket, id string) string { return bucket + "/" + id }
+
+// publishObjectEvent fans an object event out to every notification config on
+// the bucket whose eventTypes and objectNamePrefix match. eventTime is the time
+// the event took place (defaults to now when zero); extra carries event-specific
+// attributes such as overwroteGeneration/overwrittenByGeneration. Best-effort:
+// publish errors are swallowed.
+func (p *Provider) publishObjectEvent(ctx context.Context, account, bucket, object, eventType string, meta gcs.ObjectMeta, eventTime time.Time, extra map[string]string) {
+	if p.publisher == nil {
+		return
+	}
+	entries, err := p.listBucketNotifications(ctx, account, bucket)
+	if err != nil {
+		return
+	}
+	if eventTime.IsZero() {
+		eventTime = clock.Now()
+	}
+	for _, e := range entries {
+		var cfg notificationConfig
+		if json.Unmarshal(e.Data, &cfg) != nil || cfg.Topic == "" {
+			continue
+		}
+		if !notificationEventMatches(cfg.EventTypes, eventType) {
+			continue
+		}
+		if cfg.ObjectNamePrefix != "" && !strings.HasPrefix(object, cfg.ObjectNamePrefix) {
+			continue
+		}
+		format := cfg.PayloadFormat
+		if format == "" {
+			format = "JSON_API_V1"
+		}
+		// Custom attributes first so the reserved attributes always win.
+		attrs := map[string]string{}
+		for k, v := range cfg.CustomAttributes {
+			attrs[k] = v
+		}
+		attrs["eventType"] = eventType
+		attrs["payloadFormat"] = format
+		attrs["bucketId"] = bucket
+		attrs["objectId"] = object
+		attrs["objectGeneration"] = meta.Generation
+		attrs["notificationConfig"] = notificationResourceName(bucket, cfg.ID)
+		attrs["eventTime"] = eventTime.UTC().Format(time.RFC3339Nano)
+		for k, v := range extra {
+			attrs[k] = v
+		}
+		var data []byte
+		if format == "JSON_API_V1" {
+			data = objectEventData(meta)
+		}
+		_, _ = p.publisher.PublishEvent(ctx, account, cfg.Topic, data, attrs)
+	}
+}
+
+// notificationEventMatches reports whether an event type passes a config's
+// eventTypes filter. Per the Discovery schema, an empty filter matches every
+// event type.
+func notificationEventMatches(types []string, eventType string) bool {
+	if len(types) == 0 {
+		return true
+	}
+	for _, t := range types {
+		if t == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// objectEventData renders the JSON_API_V1 notification payload: the
+// storage#object resource for the object that changed.
+func objectEventData(m gcs.ObjectMeta) []byte {
+	o := objectMeta{
+		Kind:           "storage#object",
+		ID:             m.Bucket + "/" + m.Name + "/" + m.Generation,
+		Name:           m.Name,
+		Bucket:         m.Bucket,
+		Size:           strconv.FormatInt(m.Size, 10),
+		ContentType:    m.ContentType,
+		Md5Hash:        m.MD5Hash,
+		Crc32c:         m.CRC32C,
+		Etag:           "CAE=",
+		Metadata:       m.Metadata,
+		Generation:     m.Generation,
+		Metageneration: m.Metageneration,
+		StorageClass:   m.StorageClass,
+	}
+	if !m.TimeCreated.IsZero() {
+		o.TimeCreated = m.TimeCreated.Format(time.RFC3339Nano)
+		o.TimeFinalized = o.TimeCreated
+	}
+	if !m.Updated.IsZero() {
+		o.Updated = m.Updated.Format(time.RFC3339Nano)
+	}
+	b, _ := json.Marshal(o)
+	return b
+}
+
+// firstString returns the first non-empty string value among the given keys
+// (accepting both the Discovery snake_case and the lowerCamelCase spelling).
+func firstString(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// firstStringSlice returns the first string-array value among the given keys.
+func firstStringSlice(m map[string]any, keys ...string) []string {
+	for _, k := range keys {
+		items, ok := m[k].([]any)
+		if !ok {
+			continue
+		}
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
+// firstStringMap returns the first string→string map value among the given
+// keys.
+func firstStringMap(m map[string]any, keys ...string) map[string]string {
+	for _, k := range keys {
+		raw, ok := m[k].(map[string]any)
+		if !ok {
+			continue
+		}
+		out := make(map[string]string, len(raw))
+		for kk, vv := range raw {
+			if s, ok := vv.(string); ok {
+				out[kk] = s
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }
 
 // ─── objects ──────────────────────────────────────────────────────────────────
@@ -1192,6 +1616,15 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	}
 
 	meta.WrappedDEK = wrappedDEK
+	// Capture the prior live generation (if any) before the write, so
+	// replacement events can carry overwroteGeneration/overwrittenByGeneration
+	// and emit OBJECT_ARCHIVE (versioned) / OBJECT_DELETE (non-versioned) for
+	// the replaced object.
+	var prevMeta *gcs.ObjectMeta
+	if existing, gerr := p.objects.GetObjectMeta(ctx, meta.Bucket, meta.Name); gerr == nil && existing.Generation != meta.Generation {
+		prev := existing
+		prevMeta = &prev
+	}
 	var err error
 	if versioned {
 		err = p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
@@ -1207,6 +1640,19 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	if priorBlobKey != "" {
 		_ = p.blobs.Delete(ctx, blobsNamespace, priorBlobKey)
 	}
+	// Publish the replacement events and the OBJECT_FINALIZE for the new
+	// generation. Best-effort: a delivery failure must not fail the upload.
+	finalizeAttrs := map[string]string{}
+	if prevMeta != nil {
+		finalizeAttrs["overwroteGeneration"] = prevMeta.Generation
+		replacedEvent := "OBJECT_DELETE"
+		if versioned {
+			replacedEvent = "OBJECT_ARCHIVE"
+		}
+		p.publishObjectEvent(ctx, project, meta.Bucket, meta.Name, replacedEvent, *prevMeta, prevMeta.Updated,
+			map[string]string{"overwrittenByGeneration": meta.Generation})
+	}
+	p.publishObjectEvent(ctx, project, meta.Bucket, meta.Name, "OBJECT_FINALIZE", meta, meta.TimeCreated, finalizeAttrs)
 	return meta, nil
 }
 
@@ -2110,6 +2556,9 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, 
 			return err
 		}
 		_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, meta.Generation))
+		// A versioned delete makes the live version noncurrent, which real GCS
+		// reports as OBJECT_ARCHIVE (not OBJECT_DELETE).
+		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_ARCHIVE", meta, clock.Now(), nil)
 		return nil
 	}
 
@@ -2135,7 +2584,20 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object string, 
 	for _, id := range blobKeys {
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 	}
+	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", meta, clock.Now(), nil)
 	return nil
+}
+
+// bucketProject returns the project that owns a bucket (the account scope used
+// for notification storage and envelope encryption), falling back to "" when
+// the bucket metadata cannot be read.
+func (p *Provider) bucketProject(ctx context.Context, bucket string) string {
+	if m, err := p.objects.GetBucket(ctx, bucket); err == nil {
+		if pid, _ := m["projectId"].(string); pid != "" {
+			return pid
+		}
+	}
+	return ""
 }
 
 // objectProtected reports whether an object's holds or active retention block
@@ -2201,6 +2663,15 @@ func objectLifecycleExpired(lc map[string]any, created time.Time) bool {
 // toMap converts an objectMeta struct into a map for JSON-encoding by the codec.
 func toMap(o objectMeta) map[string]any {
 	b, _ := json.Marshal(o)
+	var m map[string]any
+	json.Unmarshal(b, &m)
+	return m
+}
+
+// notificationToMap converts a notificationConfig into a wire map (honouring the
+// GCS JSON API's snake_case field names).
+func notificationToMap(cfg notificationConfig) map[string]any {
+	b, _ := json.Marshal(cfg)
 	var m map[string]any
 	json.Unmarshal(b, &m)
 	return m

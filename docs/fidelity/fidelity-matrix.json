@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 712,
+    "total": 716,
     "by_state": {
-      "ga": 494,
+      "ga": 498,
       "limited": 100,
       "preview": 37,
       "unsupported": 81
@@ -15,7 +15,7 @@
         "unsupported": 72
       },
       "rest": {
-        "ga": 249,
+        "ga": 253,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -108,7 +108,7 @@
         "unsupported": 1
       },
       "storage": {
-        "ga": 53
+        "ga": 57
       },
       "workflowexecutions": {
         "ga": 8
@@ -7318,6 +7318,48 @@
       "evidence": [
         "discovery=storage.buckets.update",
         "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.NotificationsDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=storage.notifications.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.NotificationsGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=storage.notifications.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.NotificationsInsert",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=storage.notifications.insert",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.NotificationsList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=storage.notifications.list",
         "postgres=yes"
       ]
     },

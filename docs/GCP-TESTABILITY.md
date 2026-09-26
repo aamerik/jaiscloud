@@ -68,13 +68,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 711 | 493 | 100 | 37 | 81 | 69% |
+| **Overall** | 716 | 498 | 100 | 37 | 81 | 70% |
 | **gRPC** (official clients) | 328 | 245 | 11 | 0 | 72 | 75% |
-| **REST** (Discovery-backed) | 383 | 248 | 89 | 37 | 9 | 65% |
+| **REST** (Discovery-backed) | 388 | 253 | 89 | 37 | 9 | 65% |
 
 - gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
-- gRPC split = 245 `ga` + 11 `limited` + 72 `unsupported` = 328. REST split = 248 + 89 + 37 + 9 = 383.
-  Overall = 328 + 383 = 711.
+- gRPC split = 245 `ga` + 11 `limited` + 72 `unsupported` = 328. REST split = 253 + 89 + 37 + 9 = 388.
+  Overall = 328 + 388 = 716.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read

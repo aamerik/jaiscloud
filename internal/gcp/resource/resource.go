@@ -21,6 +21,10 @@ var formatters = map[string]func(project, name string) string{
 	"gcs-object": func(_, n string) string { return n },
 	// GCS bucket IAM policy resourceId uses a fixed "_" project placeholder.
 	"gcs-bucket-policy": func(_, n string) string { return "projects/_/buckets/" + n },
+	// GCS notification-config resource name used by the `notificationConfig`
+	// event attribute: projects/_/buckets/{bucket}/notificationConfigs/{id}
+	// (callers pass "bucket/notificationConfigs/id").
+	"gcs-notification": func(_, n string) string { return "projects/_/buckets/" + n },
 	// GCS object IAM policy resourceId: projects/_/buckets/{bucket}/objects/{object}.
 	"gcs-object-policy": func(_, n string) string { return "projects/_/buckets/" + n },
 	// Cloud Pub/Sub

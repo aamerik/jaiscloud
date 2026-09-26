@@ -17,6 +17,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
+	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -321,6 +322,105 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 		p.deliverPush(ctx, nr.AccountID, topicFull, msg, plainData[i])
 	}
 	return provider.OK(map[string]any{"messageIds": ids}), nil
+}
+
+// PublishEvent publishes one message (plaintext bytes + string attributes) to a
+// topic on behalf of another provider (currently GCS object notifications). It
+// runs the same envelope-encryption, per-pull-subscription fan-out and push
+// delivery as TopicPublish, but takes already-decoded input rather than a
+// request body. topicName may be a bare topic ID, "projects/{p}/topics/{t}", or
+// the fully-qualified "//pubsub.googleapis.com/projects/{p}/topics/{t}" form.
+// A missing topic is NotFound (real Pub/Sub rejects a publish to it).
+func (p *Provider) PublishEvent(ctx context.Context, accountID, topicName string, data []byte, attributes map[string]string) (string, error) {
+	project, t := topicProjectAndID(topicName)
+	if t == "" {
+		return "", model.NewProviderError("InvalidArgument", "missing topic", 400)
+	}
+	if project == "" {
+		project = accountID
+	}
+	topicEntry, err := p.resources.Get(ctx, project, store.GlobalRegion, rtTopic, t)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", model.NewProviderError("NotFound", "topic not found", 404)
+		}
+		return "", err
+	}
+	kmsKeyName := ""
+	var topicMeta map[string]any
+	if json.Unmarshal(topicEntry.Data, &topicMeta) == nil {
+		kmsKeyName, _ = topicMeta["kmsKeyName"].(string)
+	}
+
+	id, err := p.messages.NextID(ctx)
+	if err != nil {
+		return "", err
+	}
+	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, project, kmsKeyName)
+	if err != nil {
+		return "", err
+	}
+	ciphertext, err := kmsstore.EncryptData(rawDEK, data, nil)
+	if err != nil {
+		return "", err
+	}
+	msg := pubsubstore.Message{
+		Topic:       t,
+		MessageID:   id,
+		Data:        base64.StdEncoding.EncodeToString(ciphertext),
+		Attributes:  attributes,
+		PublishTime: clock.Now(),
+		KmsKeyName:  kmsKeyName,
+		WrappedDEK:  wrappedDEK,
+	}
+	// Fan out: one copy per pull subscription, each with independent delivery.
+	for _, sid := range p.pullSubscriptionIDs(ctx, project, t) {
+		copy := msg
+		copy.Subscription = sid
+		if err := p.messages.Put(ctx, copy); err != nil {
+			return "", err
+		}
+	}
+	p.deliverPush(ctx, project, resource.ResourceID(project)("pubsub-topic", t), msg,
+		base64.StdEncoding.EncodeToString(data))
+	return id, nil
+}
+
+// topicShortID extracts the short topic ID from any accepted topic-name form.
+func topicShortID(name string) string {
+	_, id := topicProjectAndID(name)
+	return id
+}
+
+// topicProjectAndID splits any accepted topic-name form into the project that
+// owns it ("" when the name carries no project) and the short topic ID. Real
+// GCS allows a notification topic in any project, so the owning project must be
+// resolved from the name rather than assumed to be the bucket's.
+func topicProjectAndID(name string) (project, id string) {
+	name = strings.TrimPrefix(name, "//pubsub.googleapis.com/")
+	if i := strings.LastIndex(name, "/topics/"); i >= 0 {
+		return strings.TrimPrefix(name[:i], "projects/"), name[i+len("/topics/"):]
+	}
+	return "", strings.TrimPrefix(name, "topics/")
+}
+
+// TopicExists reports whether a topic (any accepted name form) exists in the
+// project. It backs GCS notificationConfigs.insert's topic validation.
+func (p *Provider) TopicExists(ctx context.Context, accountID, topicName string) (bool, error) {
+	project, t := topicProjectAndID(topicName)
+	if t == "" {
+		return false, nil
+	}
+	if project == "" {
+		project = accountID
+	}
+	if _, err := p.resources.Get(ctx, project, store.GlobalRegion, rtTopic, t); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // deliverPush POSTs a message to every push subscription of the topic (SNS

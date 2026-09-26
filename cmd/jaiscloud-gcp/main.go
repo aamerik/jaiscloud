@@ -228,6 +228,10 @@ func startCmd() *cobra.Command {
 			kmsP := kmsprovider.New(stores.keys, stores.resources)
 			iamP := iamprovider.New(stores.resources)
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
+			// GCS object notifications fan out through Pub/Sub; the storage
+			// provider only sees the interface, so it never imports the Pub/Sub
+			// provider (no provider→provider dependency).
+			storageP.SetEventPublisher(pubsubP)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST

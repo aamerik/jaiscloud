@@ -162,6 +162,29 @@ func (c *GCSCodec) decodeStorage(r *http.Request, body []byte, rest string) (*mo
 		// by queryToParams.
 		nr.Params["bucket"] = seg[1]
 		nr.Action = "BucketsGetStorageLayout"
+	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "notificationConfigs":
+		// /b/{bucket}/notificationConfigs[/{notification}] —
+		// storage.notifications.{insert,list,get,delete}.
+		nr.Params["bucket"] = seg[1]
+		if len(seg) == 3 {
+			if r.Method == http.MethodPost {
+				nr.Action = "NotificationsInsert"
+				m, err := parseJSON(body)
+				if err != nil {
+					return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+				}
+				nr.Params["body"] = m
+			} else {
+				nr.Action = "NotificationsList"
+			}
+		} else {
+			nr.Params["notification"] = seg[3]
+			if r.Method == http.MethodDelete {
+				nr.Action = "NotificationsDelete"
+			} else {
+				nr.Action = "NotificationsGet"
+			}
+		}
 	case len(seg) >= 3 && seg[0] == "b" && seg[2] == "iam":
 		// /b/{bucket}/iam
 		nr.Params["bucket"] = seg[1]
