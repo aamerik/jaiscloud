@@ -71,6 +71,8 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"GET", "/v1/projects/p/serviceAccounts", "ServiceAccountList"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com", "ServiceAccountGet"},
 		{"DELETE", "/v1/projects/p/serviceAccounts/sa@example.com", "ServiceAccountDelete"},
+		{"PATCH", "/v1/projects/p/serviceAccounts/sa@example.com", "ServiceAccountPatch"},
+		{"PUT", "/v1/projects/p/serviceAccounts/sa@example.com", "ServiceAccountUpdate"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com:getIamPolicy", "ServiceAccountGetIamPolicy"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:setIamPolicy", "ServiceAccountSetIamPolicy"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:testIamPermissions", "ServiceAccountTestIamPermissions"},

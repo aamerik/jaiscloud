@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 716,
+    "total": 718,
     "by_state": {
-      "ga": 498,
+      "ga": 500,
       "limited": 100,
       "preview": 37,
       "unsupported": 81
@@ -15,7 +15,7 @@
         "unsupported": 72
       },
       "rest": {
-        "ga": 253,
+        "ga": 255,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -61,7 +61,7 @@
         "unsupported": 2
       },
       "iam": {
-        "ga": 16
+        "ga": 18
       },
       "iceberg": {
         "preview": 14
@@ -3445,6 +3445,17 @@
     },
     {
       "service": "iam",
+      "operation": "IAM.ServiceAccountPatch",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
       "operation": "IAM.ServiceAccountSetIamPolicy",
       "transport": "rest",
       "state": "ga",
@@ -3481,6 +3492,17 @@
       "state": "ga",
       "evidence": [
         "discovery=iam.projects.serviceAccounts.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "IAM.ServiceAccountUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.update",
+        "mutating",
         "postgres=yes"
       ]
     },

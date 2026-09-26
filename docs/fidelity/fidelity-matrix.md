@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **716**
+Cells: **718**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 498 |
+| ga | 500 |
 | limited | 100 |
 | preview | 37 |
 | unsupported | 81 |
@@ -21,7 +21,7 @@ Cells: **716**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 253 | 89 | 37 | 9 |
+| rest | 255 | 89 | 37 | 9 |
 | grpc | 245 | 11 | 0 | 72 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -391,7 +391,7 @@ _29 cell(s): ga=24 limited=3 preview=0 unsupported=2_
 
 ## iam
 
-_16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
+_18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -405,10 +405,12 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountKeyGet | rest | ga | — |
 | IAM.ServiceAccountKeyList | rest | ga | — |
 | IAM.ServiceAccountList | rest | ga | — |
+| IAM.ServiceAccountPatch | rest | ga | — |
 | IAM.ServiceAccountSetIamPolicy | rest | ga | — |
 | IAM.ServiceAccountSignBlob | rest | ga | — |
 | IAM.ServiceAccountSignJwt | rest | ga | — |
 | IAM.ServiceAccountTestIamPermissions | rest | ga | — |
+| IAM.ServiceAccountUpdate | rest | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
 
