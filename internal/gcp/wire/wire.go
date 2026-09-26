@@ -41,6 +41,20 @@ const (
 	// CSEKKeySHA256 carries the base64 "x-goog-encryption-key-sha256" header
 	// value as a string in NormalizedRequest.Params (codec → provider).
 	CSEKKeySHA256 = "x-goog-encryption-key-sha256"
+	// CSEKAlgorithm carries the "x-goog-encryption-algorithm" header value
+	// ("AES256") as a string in NormalizedRequest.Params (codec → provider).
+	CSEKAlgorithm = "x-goog-encryption-algorithm"
+	// CopySourceCSEKKey carries the base64 "x-goog-copy-source-encryption-key"
+	// header value as a string in NormalizedRequest.Params (codec → provider).
+	// It is the CSEK of the source object in a JSON-API copy/rewrite, distinct
+	// from CSEKKey which applies to the destination object.
+	CopySourceCSEKKey = "x-goog-copy-source-encryption-key"
+	// CopySourceCSEKKeySHA256 carries the base64
+	// "x-goog-copy-source-encryption-key-sha256" header value.
+	CopySourceCSEKKeySHA256 = "x-goog-copy-source-encryption-key-sha256"
+	// CopySourceCSEKAlgorithm carries the
+	// "x-goog-copy-source-encryption-algorithm" header value ("AES256").
+	CopySourceCSEKAlgorithm = "x-goog-copy-source-encryption-algorithm"
 	// RawJSONKey carries a json.RawMessage in ProviderResponse.Data that the codec
 	// emits verbatim (used by server-streaming REST methods — Firestore runQuery
 	// and batchGet — whose response body is newline-delimited JSON, one JSON

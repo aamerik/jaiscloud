@@ -52,25 +52,25 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 			return svc, SourcePath
 		}
 	}
-	// GCS media downloads use the "raw" URL form /{bucket}/{object} (no JSON-API
-	// prefix). The storage client derives this base from the emulator endpoint.
-	// Recognise it as a storage media request when no other service prefix
-	// matched and the path has at least a bucket and an object segment.
+	// GCS raw XML API object requests use the "raw" URL form /{bucket}/{object}
+	// (no JSON-API prefix): GET/HEAD downloads (the storage client derives this
+	// base from the emulator endpoint) and PUT uploads. Recognise them as
+	// storage when no other service prefix matched and the path has at least a
+	// bucket and an object segment.
 	if isRawStorageMediaPath(r) {
 		return "storage", SourcePath
 	}
 	return "", SourceUnknown
 }
 
-// isRawStorageMediaPath reports whether r is a GCS raw media download of the
-// form /{bucket}/{object} (GET/HEAD), or a V4 signed-URL upload of the same
-// shape (PUT with an X-Goog-Signature query param). Admin routes and JSON-API
+// isRawStorageMediaPath reports whether r is a GCS raw XML API object request
+// of the form /{bucket}/{object}: a download (GET/HEAD) or an upload (PUT,
+// whether a V4 signed URL or a plain XML API PUT). Admin routes and JSON-API
 // prefixes are handled elsewhere; only genuine object requests reach this
 // fallback.
 func isRawStorageMediaPath(r *http.Request) bool {
-	switch {
-	case r.Method == http.MethodGet, r.Method == http.MethodHead:
-	case r.Method == http.MethodPut && hasSignedSignature(r):
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPut:
 	default:
 		return false
 	}
