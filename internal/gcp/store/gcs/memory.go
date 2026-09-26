@@ -378,6 +378,47 @@ func (s *MemoryObjectStore) DeleteObjectMeta(_ context.Context, bucket, name str
 	return nil
 }
 
+// DeleteObjectGeneration removes one specific generation of an object. Remaining
+// revisions stay noncurrent (GCS does not promote a noncurrent version to live),
+// so removing the live generation leaves the name unresolvable by bare lookup;
+// when no generations remain the name is forgotten so the bucket can become
+// empty. The precondition is validated against the current live state under the
+// same lock.
+func (s *MemoryObjectStore) DeleteObjectGeneration(_ context.Context, bucket, name, generation string, precondition *Precondition) (ObjectMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	objs, ok := s.objects[bucket]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	gens, ok := objs[name]
+	if !ok {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	current, exists := liveGeneration(gens)
+	if !objectPreconditionMatches(current, exists, precondition) {
+		return ObjectMeta{}, ErrPreconditionFailed
+	}
+	idx := -1
+	for i := range gens {
+		if gens[i].Generation == generation {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ObjectMeta{}, ErrNoSuchObject
+	}
+	removed := gens[idx]
+	gens = append(gens[:idx], gens[idx+1:]...)
+	if len(gens) == 0 {
+		delete(objs, name)
+	} else {
+		objs[name] = gens
+	}
+	return removed, nil
+}
+
 func (s *MemoryObjectStore) TombstoneObjectMeta(_ context.Context, bucket, name string) (ObjectMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

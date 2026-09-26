@@ -74,12 +74,17 @@ type uploadSession struct {
 	kmsKeyName   string
 	cseKey       []byte
 	cseKeySHA256 string
-	precondition *gcs.Precondition // from WriteObjectSpec's if_* fields; checked atomically at finalize
-	buf          []byte
-	tmpPath      string   // spill file path once the threshold is exceeded
-	tmpFile      *os.File // open handle for appending spilled bytes
-	length       int64
-	lastAccess   time.Time
+	// temporaryHold/eventBasedHold mirror the write spec's Object hold fields.
+	// eventBasedHold is a *bool so an omitted field (nil) can inherit the
+	// bucket's defaultEventBasedHold while an explicit false overrides it.
+	temporaryHold  bool
+	eventBasedHold *bool
+	precondition   *gcs.Precondition // from WriteObjectSpec's if_* fields; checked atomically at finalize
+	buf            []byte
+	tmpPath        string   // spill file path once the threshold is exceeded
+	tmpFile        *os.File // open handle for appending spilled bytes
+	length         int64
+	lastAccess     time.Time
 }
 
 // closeSpill closes and removes the session's spill file, if any. It is
@@ -200,9 +205,9 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 		CreateTime:     ts(m.TimeCreated),
 		UpdateTime:     ts(m.Updated),
 	}
-	if m.EventBasedHold {
-		o.EventBasedHold = &m.EventBasedHold
-	}
+	// The proto field is optional but, per the API contract, always set in a
+	// response (true or false), so clients can distinguish it from "unknown".
+	o.EventBasedHold = &m.EventBasedHold
 	if m.TimeDeleted != nil {
 		o.DeleteTime = ts(*m.TimeDeleted)
 	}
@@ -236,6 +241,7 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 	if v, _ := m["storageClass"].(string); v != "" {
 		b.StorageClass = v
 	}
+	b.DefaultEventBasedHold, _ = m["defaultEventBasedHold"].(bool)
 	switch l := m["labels"].(type) {
 	case map[string]string:
 		b.Labels = l
@@ -523,6 +529,7 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if rp := bucketRetentionToMap(req.GetBucket().GetRetentionPolicy()); rp != nil {
 		meta["retentionPolicy"] = rp
 	}
+	meta["defaultEventBasedHold"] = req.GetBucket().GetDefaultEventBasedHold()
 
 	if err := s.objects.CreateBucket(ctx, project, name, meta); err != nil {
 		if errors.Is(err, gcs.ErrAlreadyExists) {
@@ -684,6 +691,13 @@ func applyBucketMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskp
 			meta["retentionPolicy"] = rp
 		} else {
 			delete(meta, "retentionPolicy")
+		}
+	}
+	if maskIncludes(mask, "default_event_based_hold") {
+		if pb.GetDefaultEventBasedHold() {
+			meta["defaultEventBasedHold"] = true
+		} else {
+			delete(meta, "defaultEventBasedHold")
 		}
 	}
 }
@@ -920,20 +934,16 @@ func (s *Service) DeleteObject(ctx context.Context, req *storagepb.DeleteObjectR
 
 	// Preconditions are threaded into the store's *Checked delete so the check
 	// and the delete happen under one lock/transaction — the same atomic path
-	// the REST ObjectsDelete uses (see storage.objectPrecondition). A
-	// separately-fetched read would leave a check-then-write race.
+	// the REST ObjectsDelete uses (see storage.objectPrecondition).
 	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
-	// The optional `generation` field selects the revision to delete; the store
-	// deletes the live revision, so fold it into the atomic precondition (a
-	// non-live target is a precondition failure, not a partial delete).
+	// An explicit `generation` selects the revision to delete; the provider
+	// removes exactly that generation (a noncurrent survivor is not promoted),
+	// matching REST's ?generation= contract.
+	gen := ""
 	if req.GetGeneration() > 0 {
-		if pre == nil {
-			pre = &gcs.Precondition{}
-		}
-		gen := req.GetGeneration()
-		pre.GenerationMatch = &gen
+		gen = int64ToGen(req.GetGeneration())
 	}
-	if err := s.provider.DeleteObjectData(ctx, bucket, object, pre); err != nil {
+	if err := s.provider.DeleteObjectData(ctx, bucket, object, gen, pre); err != nil {
 		return nil, mapError(preconditionResult(err))
 	}
 	return &emptypb.Empty{}, nil
@@ -1120,6 +1130,11 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	now := clock.Now()
 	meta := protoResourceToMeta(dest, bucket, object, s.provider.NextGen(), now)
 	meta.ComponentCount = int64(len(sources))
+	// Inherit the bucket default only when the destination resource did not
+	// explicitly set event_based_hold.
+	if dest == nil || dest.EventBasedHold == nil {
+		s.applyDefaultEventBasedHold(ctx, bucket, &meta)
+	}
 
 	// The compose destination's if_generation_match/if_metageneration_match
 	// (ComposeObjectRequest has no not-match variants) guard the write
@@ -1275,7 +1290,7 @@ func (s *Service) MoveObject(ctx context.Context, req *storagepb.MoveObjectReque
 		return nil, mapError(preconditionResult(err))
 	}
 
-	if err := s.provider.DeleteObjectData(ctx, bucket, srcObject, srcPre); err != nil {
+	if err := s.provider.DeleteObjectData(ctx, bucket, srcObject, "", srcPre); err != nil {
 		return nil, mapError(err)
 	}
 	return objectToProto(finalMeta), nil
@@ -1303,13 +1318,15 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 	}
 
 	sess := &uploadSession{
-		bucket:       bucket,
-		object:       object,
-		contentType:  resource.GetContentType(),
-		metadata:     resource.GetMetadata(),
-		kmsKeyName:   resource.GetKmsKey(),
-		precondition: pre,
-		lastAccess:   now,
+		bucket:         bucket,
+		object:         object,
+		contentType:    resource.GetContentType(),
+		metadata:       resource.GetMetadata(),
+		kmsKeyName:     resource.GetKmsKey(),
+		temporaryHold:  resource.GetTemporaryHold(),
+		eventBasedHold: resource.EventBasedHold,
+		precondition:   pre,
+		lastAccess:     now,
 	}
 	if sess.contentType == "" {
 		sess.contentType = "application/octet-stream"
@@ -1441,6 +1458,19 @@ func (s *Service) sessionBytes(sess *uploadSession) ([]byte, error) {
 	return data, nil
 }
 
+// applyDefaultEventBasedHold sets meta.EventBasedHold from the bucket's
+// defaultEventBasedHold when the caller did not explicitly set it. It is the
+// gRPC analogue of the REST ObjectsInsert default inheritance.
+func (s *Service) applyDefaultEventBasedHold(ctx context.Context, bucket string, meta *gcs.ObjectMeta) {
+	bmeta, err := s.objects.GetBucket(ctx, bucket)
+	if err != nil {
+		return
+	}
+	if def, _ := bmeta["defaultEventBasedHold"].(bool); def {
+		meta.EventBasedHold = true
+	}
+}
+
 // finalize persists the accumulated bytes as a new object generation and
 // returns its proto form.
 func (s *Service) finalize(ctx context.Context, project string, sess *uploadSession) (*storagepb.Object, error) {
@@ -1460,8 +1490,14 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 		StorageClass:   "STANDARD",
 		Metadata:       sess.metadata,
 		KmsKeyName:     sess.kmsKeyName,
+		TemporaryHold:  sess.temporaryHold,
 		TimeCreated:    clock.Now(),
 		Updated:        clock.Now(),
+	}
+	if sess.eventBasedHold != nil {
+		meta.EventBasedHold = *sess.eventBasedHold
+	} else {
+		s.applyDefaultEventBasedHold(ctx, sess.bucket, &meta)
 	}
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
@@ -1509,12 +1545,14 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 			case *storagepb.WriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:       parseBucketName(res.GetBucket()),
-					object:       res.GetName(),
-					contentType:  res.GetContentType(),
-					metadata:     res.GetMetadata(),
-					kmsKeyName:   res.GetKmsKey(),
-					precondition: grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:         parseBucketName(res.GetBucket()),
+					object:         res.GetName(),
+					contentType:    res.GetContentType(),
+					metadata:       res.GetMetadata(),
+					kmsKeyName:     res.GetKmsKey(),
+					temporaryHold:  res.GetTemporaryHold(),
+					eventBasedHold: res.EventBasedHold,
+					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				project = s.projectForBucket(ctx, sess.bucket)
 			case *storagepb.WriteObjectRequest_UploadId:
@@ -1593,12 +1631,14 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 			case *storagepb.BidiWriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:       parseBucketName(res.GetBucket()),
-					object:       res.GetName(),
-					contentType:  res.GetContentType(),
-					metadata:     res.GetMetadata(),
-					kmsKeyName:   res.GetKmsKey(),
-					precondition: grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:         parseBucketName(res.GetBucket()),
+					object:         res.GetName(),
+					contentType:    res.GetContentType(),
+					metadata:       res.GetMetadata(),
+					kmsKeyName:     res.GetKmsKey(),
+					temporaryHold:  res.GetTemporaryHold(),
+					eventBasedHold: res.EventBasedHold,
+					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				if sess.contentType == "" {
 					sess.contentType = "application/octet-stream"

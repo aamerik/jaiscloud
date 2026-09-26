@@ -295,3 +295,68 @@ func TestGCSConcurrentUploads(t *testing.T) {
 		gens[gen] = true
 	}
 }
+
+// TestGCSObjectHoldsAndGenerationDelete verifies the wire contract for object
+// holds (bucket default inheritance, delete blocked with a message naming the
+// hold) and objects.delete?generation= (only the requested revision is removed;
+// removing the live revision does not promote a survivor).
+func TestGCSObjectHoldsAndGenerationDelete(t *testing.T) {
+	resetState(t)
+
+	// A bucket with defaultEventBasedHold: a new object inherits the hold.
+	resp, body := do(t, "POST", "/storage/v1/b?project=proj",
+		[]byte(`{"name":"hold-bucket","defaultEventBasedHold":true}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, true, jsonMap(t, body)["defaultEventBasedHold"])
+
+	resp, body = do(t, "POST", "/upload/storage/v1/b/hold-bucket/o?uploadType=media&name=h.txt",
+		[]byte("held"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, true, jsonMap(t, body)["eventBasedHold"])
+
+	// Deleting the held object is forbidden with a message naming the hold.
+	resp, body = do(t, "DELETE", "/storage/v1/b/hold-bucket/o/h.txt", nil, nil)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Contains(t, string(body), "event-based hold")
+
+	// Releasing the hold (PATCH) allows the delete.
+	resp, _ = do(t, "PATCH", "/storage/v1/b/hold-bucket/o/h.txt",
+		[]byte(`{"eventBasedHold":false}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, _ = do(t, "DELETE", "/storage/v1/b/hold-bucket/o/h.txt", nil, nil)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	// Versioned bucket: delete-by-generation removes only that revision.
+	createBucket(t, "ver-bucket")
+	resp, _ = do(t, "PATCH", "/storage/v1/b/ver-bucket",
+		[]byte(`{"versioning":{"enabled":true}}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body = do(t, "POST", "/upload/storage/v1/b/ver-bucket/o?uploadType=media&name=v.txt",
+		[]byte("one"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	gen1, _ := jsonMap(t, body)["generation"].(string)
+	resp, body = do(t, "POST", "/upload/storage/v1/b/ver-bucket/o?uploadType=media&name=v.txt",
+		[]byte("two"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	gen2, _ := jsonMap(t, body)["generation"].(string)
+	require.NotEqual(t, gen1, gen2)
+
+	// Deleting the noncurrent v1 leaves the live v2 in place.
+	resp, _ = do(t, "DELETE", "/storage/v1/b/ver-bucket/o/v.txt?generation="+gen1, nil, nil)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	resp, body = do(t, "GET", "/storage/v1/b/ver-bucket/o/v.txt", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, gen2, jsonMap(t, body)["generation"])
+
+	// Deleting the live v2 by generation removes the object (no promotion).
+	resp, _ = do(t, "DELETE", "/storage/v1/b/ver-bucket/o/v.txt?generation="+gen2, nil, nil)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	resp, _ = do(t, "GET", "/storage/v1/b/ver-bucket/o/v.txt", nil, nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	// A generation that does not exist is NotFound.
+	resp, _ = do(t, "DELETE", "/storage/v1/b/ver-bucket/o/v.txt?generation=999999", nil, nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}

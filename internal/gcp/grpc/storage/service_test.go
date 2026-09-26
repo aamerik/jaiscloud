@@ -448,11 +448,13 @@ func TestDeleteAndUpdatePreconditions(t *testing.T) {
 		t.Fatalf("DeleteObject precondition err = %v, want FailedPrecondition", err)
 	}
 
-	// DeleteObject targeting a non-live generation.
+	// DeleteObject targeting a generation that does not exist is NotFound —
+	// delete-by-generation removes exactly the requested revision, so a
+	// missing revision is not a live-generation precondition mismatch.
 	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
 		Bucket: testBucket, Object: "pre-obj", Generation: stale,
-	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("DeleteObject generation err = %v, want FailedPrecondition", err)
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteObject missing-generation err = %v, want NotFound", err)
 	}
 
 	// UpdateObject if_metageneration_match mismatch.
@@ -474,6 +476,59 @@ func TestDeleteAndUpdatePreconditions(t *testing.T) {
 // store's atomic *Checked methods — the follow-up #48 deliberately deferred
 // (its DeleteObject/ComposeObject/finalize calls passed precondition=nil). A
 // stale precondition must be rejected atomically, without mutating the object.
+
+// TestDeleteObjectGenerationRemovesOnlyThatVersion verifies the gRPC
+// delete-by-generation contract matches REST's ?generation=: only the requested
+// revision is removed, deleting the live revision does not promote a noncurrent
+// survivor, and removing the last revision removes the object.
+func TestDeleteObjectGenerationRemovesOnlyThatVersion(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "bucket-a",
+		Bucket: &storagepb.Bucket{
+			Project:    "projects/test-project",
+			Location:   "US",
+			Versioning: &storagepb.Bucket_Versioning{Enabled: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	v1 := writeSingleShot(t, client, testBucket, "gen-del", "text/plain", []byte("version-one"))
+	v2 := writeSingleShot(t, client, testBucket, "gen-del", "text/plain", []byte("version-two"))
+
+	// Deleting the live v2 must not promote the noncurrent v1: a bare lookup
+	// fails, while v1 stays reachable by generation.
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "gen-del", Generation: v2.GetGeneration(),
+	}); err != nil {
+		t.Fatalf("DeleteObject(v2): %v", err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "gen-del",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("bare GetObject after deleting the live generation err = %v, want NotFound", err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "gen-del", Generation: v1.GetGeneration(),
+	}); err != nil {
+		t.Fatalf("noncurrent v1 must still be reachable by generation: %v", err)
+	}
+
+	// Removing the last (noncurrent) revision deletes the object entirely.
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "gen-del", Generation: v1.GetGeneration(),
+	}); err != nil {
+		t.Fatalf("DeleteObject(v1): %v", err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "gen-del", Generation: v1.GetGeneration(),
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetObject(v1) after delete err = %v, want NotFound", err)
+	}
+}
 
 func TestComposeObjectDestinationPrecondition(t *testing.T) {
 	client, cleanup := storageTestService(t)
