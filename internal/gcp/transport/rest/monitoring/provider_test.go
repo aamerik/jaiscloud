@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	core "jaiscloud/internal/gcp/service/monitoring"
@@ -165,9 +166,74 @@ func TestRESTTimeSeriesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRESTTimeSeriesLabelFilterAndAggregation(t *testing.T) {
+	c, p := newTestProvider(t)
+	const tstype = "custom.googleapis.com/conf/agg"
+
+	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries", map[string]any{
+		"timeSeries": []any{
+			map[string]any{
+				"metric":   map[string]any{"type": tstype, "labels": map[string]any{"env": "a"}},
+				"resource": map[string]any{"type": "global"},
+				"points":   []any{map[string]any{"interval": map[string]any{"endTime": "2026-01-01T00:00:00Z"}, "value": map[string]any{"doubleValue": 5}}},
+			},
+			map[string]any{
+				"metric":   map[string]any{"type": tstype, "labels": map[string]any{"env": "b"}},
+				"resource": map[string]any{"type": "global"},
+				"points":   []any{map[string]any{"interval": map[string]any{"endTime": "2026-01-01T00:00:00Z"}, "value": map[string]any{"doubleValue": 7}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create timeSeries: %v", err)
+	}
+
+	// Label equality filters by metric label.
+	q := url.Values{}
+	q.Set("filter", `metric.type = "`+tstype+`" AND metric.labels.env = "a"`)
+	one, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+q.Encode(), nil)
+	if err != nil {
+		t.Fatalf("label-filtered list: %v", err)
+	}
+	if series, _ := wireData(t, one)["timeSeries"].([]any); len(series) != 1 {
+		t.Fatalf("label filter = %+v, want 1 series", wireData(t, one))
+	}
+
+	// Aggregation reduces both series into a single summed point.
+	agg := url.Values{}
+	agg.Set("filter", `metric.type = "`+tstype+`"`)
+	agg.Set("aggregation.alignmentPeriod", "3600s")
+	agg.Set("aggregation.perSeriesAligner", "ALIGN_SUM")
+	agg.Set("aggregation.crossSeriesReducer", "REDUCE_SUM")
+	reduced, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+agg.Encode(), nil)
+	if err != nil {
+		t.Fatalf("aggregated list: %v", err)
+	}
+	data := wireData(t, reduced)
+	series, _ := data["timeSeries"].([]any)
+	if len(series) != 1 {
+		t.Fatalf("aggregated = %+v, want 1 series", data)
+	}
+	points := series[0].(map[string]any)["points"].([]any)
+	if len(points) != 1 {
+		t.Fatalf("aggregated points = %+v, want 1", points)
+	}
+	if got := points[0].(map[string]any)["value"].(map[string]any)["doubleValue"]; got != 12.0 {
+		t.Fatalf("aggregated value = %v, want 12", got)
+	}
+
+	// A short alignment period is rejected.
+	bad := url.Values{}
+	bad.Set("filter", `metric.type = "`+tstype+`"`)
+	bad.Set("aggregation.alignmentPeriod", "30s")
+	bad.Set("aggregation.perSeriesAligner", "ALIGN_SUM")
+	bad.Set("aggregation.crossSeriesReducer", "REDUCE_SUM")
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+bad.Encode(), nil); err == nil {
+		t.Fatal("short alignment period should be rejected over REST")
+	}
+}
+
 func TestRESTAlertPolicyRoundTrip(t *testing.T) {
 	c, p := newTestProvider(t)
-
 	created, err := call(t, c, p, http.MethodPost, "/v3/projects/test/alertPolicies", map[string]any{
 		"displayName": "Conf Policy",
 		"combiner":    "OR",
@@ -361,6 +427,15 @@ func TestRESTErrorsAndCodecRouting(t *testing.T) {
 		perr, ok := err.(*model.ProviderError)
 		if !ok || perr.HTTPStatus != tc.wantStatus {
 			t.Errorf("%s %s err = %v, want status %d", tc.method, tc.path, err, tc.wantStatus)
+		}
+	}
+}
+
+func TestRESTValueTypeEnumIsCanonical(t *testing.T) {
+	// google.api.MetricDescriptor.ValueType: BOOL=1, INT64=2, DOUBLE=3.
+	for name, want := range map[string]int32{"BOOL": 1, "INT64": 2, "DOUBLE": 3, "STRING": 4, "DISTRIBUTION": 5} {
+		if got := enumValue(valueTypeValue, name); got != want {
+			t.Errorf("enumValue(valueTypeValue, %q) = %d, want %d", name, got, want)
 		}
 	}
 }

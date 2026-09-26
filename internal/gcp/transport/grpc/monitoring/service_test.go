@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -353,6 +354,68 @@ func TestListTimeSeriesInvalidFilter(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unsupported filter err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestListTimeSeriesAggregation(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	metricType := "custom.googleapis.com/agg_test_metric"
+	end := time.Now().UTC().Truncate(time.Second)
+	write := func(env string, v float64, at time.Time) *monitoringpb.TimeSeries {
+		return &monitoringpb.TimeSeries{
+			Metric:   &metricpb.Metric{Type: metricType, Labels: map[string]string{"env": env}},
+			Resource: &monitoredrespb.MonitoredResource{Type: "global", Labels: map[string]string{"project_id": "test"}},
+			Points: []*monitoringpb.Point{{
+				Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(at)},
+				Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_DoubleValue{DoubleValue: v}},
+			}},
+		}
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/test",
+		TimeSeries: []*monitoringpb.TimeSeries{
+			write("a", 5, end.Add(-30*time.Second)),
+			write("b", 7, end.Add(-20*time.Second)),
+		},
+	}); err != nil {
+		t.Fatalf("create time series: %v", err)
+	}
+
+	req := func(period time.Duration) *monitoringpb.ListTimeSeriesRequest {
+		return &monitoringpb.ListTimeSeriesRequest{
+			Name:     "projects/test",
+			Filter:   `metric.type = "` + metricType + `"`,
+			Interval: &monitoringpb.TimeInterval{StartTime: timestamppb.New(end.Add(-10 * time.Minute)), EndTime: timestamppb.New(end)},
+			Aggregation: &monitoringpb.Aggregation{
+				AlignmentPeriod:    durationpb.New(period),
+				PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_SUM,
+				CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_SUM,
+			},
+			View: monitoringpb.ListTimeSeriesRequest_FULL,
+		}
+	}
+
+	resp, err := mc.ListTimeSeries(ctx, req(time.Hour))
+	if err != nil {
+		t.Fatalf("aggregated list: %v", err)
+	}
+	if len(resp.GetTimeSeries()) != 1 {
+		t.Fatalf("aggregated series = %d, want 1", len(resp.GetTimeSeries()))
+	}
+	pts := resp.GetTimeSeries()[0].GetPoints()
+	if len(pts) != 1 || pts[0].GetValue().GetDoubleValue() != 12 {
+		t.Fatalf("aggregated points = %+v, want one point 12", pts)
+	}
+	if got := resp.GetTimeSeries()[0].GetValueType(); got != metricpb.MetricDescriptor_DOUBLE {
+		t.Fatalf("aggregated value type = %v, want DOUBLE", got)
+	}
+
+	// An alignment period below 60s is rejected.
+	if _, err := mc.ListTimeSeries(ctx, req(30*time.Second)); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("short alignment period err = %v, want InvalidArgument", err)
 	}
 }
 

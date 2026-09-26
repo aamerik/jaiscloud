@@ -141,6 +141,14 @@ var catalog = []Descriptor{
 		},
 	},
 	{
+		typ:         "global",
+		displayName: "Global",
+		description: "A resource type that is not associated with any specific resource.",
+		labels: []*labelpb.LabelDescriptor{
+			strLabel("project_id", "The identifier of the GCP project associated with this resource, such as \"my-project\"."),
+		},
+	},
+	{
 		typ:         "k8s_container",
 		displayName: "Kubernetes Container",
 		description: "A container running in a Kubernetes cluster.",

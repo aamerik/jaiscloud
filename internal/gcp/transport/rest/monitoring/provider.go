@@ -134,7 +134,11 @@ func (p *Provider) ListTimeSeries(ctx context.Context, nr *model.NormalizedReque
 		interval = &core.TimeInterval{Start: start, End: end}
 	}
 	headersOnly := strings.EqualFold(strParam(nr, "view"), "HEADERS")
-	page, next, err := p.core.ListTimeSeries(ctx, project, strParam(nr, "filter"), interval, headersOnly,
+	aggregation, err := aggregationFromParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListTimeSeries(ctx, project, strParam(nr, "filter"), interval, aggregation, headersOnly,
 		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
@@ -154,24 +158,27 @@ func (p *Provider) ListTimeSeries(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *Provider) CreateTimeSeries(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if err := p.writeTimeSeries(ctx, nr); err != nil {
+	if err := p.writeTimeSeries(ctx, nr, false); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) CreateServiceTimeSeries(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if err := p.writeTimeSeries(ctx, nr); err != nil {
+	if err := p.writeTimeSeries(ctx, nr, true); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
-func (p *Provider) writeTimeSeries(ctx context.Context, nr *model.NormalizedRequest) error {
+func (p *Provider) writeTimeSeries(ctx context.Context, nr *model.NormalizedRequest, isService bool) error {
 	project := p.project(nr)
 	var series []monitoringstore.TimeSeries
 	for _, s := range listFrom(bodyOf(nr)["timeSeries"]) {
 		series = append(series, timeSeriesFromJSON(s))
+	}
+	if isService {
+		return p.core.CreateServiceTimeSeries(ctx, project, series)
 	}
 	return p.core.CreateTimeSeries(ctx, project, series)
 }

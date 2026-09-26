@@ -69,6 +69,20 @@ func timeIntervalFromProto(iv *monitoringpb.TimeInterval) *core.TimeInterval {
 	return out
 }
 
+// aggregationFromProto maps the proto Aggregation to the core's transport-neutral
+// form. A nil aggregation stays nil (no aggregation requested).
+func aggregationFromProto(a *monitoringpb.Aggregation) *core.Aggregation {
+	if a == nil {
+		return nil
+	}
+	return &core.Aggregation{
+		AlignmentPeriod:    a.GetAlignmentPeriod().AsDuration(),
+		PerSeriesAligner:   core.Aligner(a.GetPerSeriesAligner().String()),
+		CrossSeriesReducer: core.Reducer(a.GetCrossSeriesReducer().String()),
+		GroupByFields:      a.GetGroupByFields(),
+	}
+}
+
 // ─── MetricService: metric descriptors ────────────────────────────────────────
 
 func (s *Service) ListMetricDescriptors(ctx context.Context, req *monitoringpb.ListMetricDescriptorsRequest) (*monitoringpb.ListMetricDescriptorsResponse, error) {
@@ -122,7 +136,7 @@ func (s *Service) DeleteMetricDescriptor(ctx context.Context, req *monitoringpb.
 func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTimeSeriesRequest) (*monitoringpb.ListTimeSeriesResponse, error) {
 	project := s.project(ctx, req.GetName())
 	headersOnly := req.GetView() == monitoringpb.ListTimeSeriesRequest_HEADERS
-	page, next, err := s.core.ListTimeSeries(ctx, project, req.GetFilter(), timeIntervalFromProto(req.GetInterval()), headersOnly, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListTimeSeries(ctx, project, req.GetFilter(), timeIntervalFromProto(req.GetInterval()), aggregationFromProto(req.GetAggregation()), headersOnly, int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -134,20 +148,20 @@ func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTime
 }
 
 func (s *Service) CreateTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest) (*emptypb.Empty, error) {
-	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries()); err != nil {
+	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries(), false); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
 }
 
 func (s *Service) CreateServiceTimeSeries(ctx context.Context, req *monitoringpb.CreateTimeSeriesRequest) (*emptypb.Empty, error) {
-	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries()); err != nil {
+	if err := s.writeTimeSeries(ctx, req.GetName(), req.GetTimeSeries(), true); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
 }
 
-func (s *Service) writeTimeSeries(ctx context.Context, name string, series []*monitoringpb.TimeSeries) error {
+func (s *Service) writeTimeSeries(ctx context.Context, name string, series []*monitoringpb.TimeSeries, isService bool) error {
 	project := s.project(ctx, name)
 	out := make([]monitoringstore.TimeSeries, 0, len(series))
 	for _, p := range series {
@@ -157,7 +171,13 @@ func (s *Service) writeTimeSeries(ctx context.Context, name string, series []*mo
 		}
 		out = append(out, ts)
 	}
-	if err := s.core.CreateTimeSeries(ctx, project, out); err != nil {
+	var err error
+	if isService {
+		err = s.core.CreateServiceTimeSeries(ctx, project, out)
+	} else {
+		err = s.core.CreateTimeSeries(ctx, project, out)
+	}
+	if err != nil {
 		return mapError(err)
 	}
 	return nil
