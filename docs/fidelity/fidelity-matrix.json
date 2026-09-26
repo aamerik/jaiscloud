@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 711,
+    "total": 712,
     "by_state": {
-      "ga": 493,
+      "ga": 494,
       "limited": 100,
       "preview": 37,
       "unsupported": 81
@@ -15,7 +15,7 @@
         "unsupported": 72
       },
       "rest": {
-        "ga": 248,
+        "ga": 249,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -108,7 +108,7 @@
         "unsupported": 1
       },
       "storage": {
-        "ga": 52
+        "ga": 53
       },
       "workflowexecutions": {
         "ga": 8
@@ -7255,6 +7255,16 @@
       "state": "ga",
       "evidence": [
         "discovery=storage.buckets.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "storage",
+      "operation": "Storage.BucketsGetStorageLayout",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=storage.buckets.getStorageLayout",
         "postgres=yes"
       ]
     },
