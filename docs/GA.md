@@ -259,6 +259,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   partition methods and get_table_meta/Hive-3.x are stubbed. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
   proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
+- **Cloud Monitoring alert evaluation** — the background worker evaluates
+  `condition_threshold` and `condition_absent`. `condition_matched_log`, MQL, PromQL, and SQL
+  conditions are stored but never evaluated (they never fire). For `condition_absent`, a metric
+  that has never produced a measurement does not fire (matching real Cloud Monitoring), the absent
+  window is the condition's `duration`, `trigger` count/percent selects how many absent series are
+  required, and the condition's per-series aligner / cross-series reducer / `group_by_fields` are
+  not applied to the absence evaluation.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud Run, Cloud
   Endpoints, Deployment Manager: no emulator surface (requests are unhandled). Artifact Registry
   and Cloud Run are engine-bearing (registry proxy / container executor) and are deliberately not

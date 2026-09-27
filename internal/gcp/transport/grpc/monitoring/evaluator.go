@@ -29,10 +29,10 @@ type Publisher interface {
 
 // Evaluator is the background alert-policy evaluator. Every tick it lists the
 // alert policies of every known project, evaluates each enabled policy's
-// condition_threshold conditions, combines them with the policy's Combiner,
-// and reconciles incidents: a transition to firing opens an incident and
-// delivers notifications; a transition to not-firing closes the open incident
-// and delivers a resolution notification.
+// condition_threshold and condition_absent conditions, combines them with the
+// policy's Combiner, and reconciles incidents: a transition to firing opens an
+// incident and delivers notifications; a transition to not-firing closes the
+// open incident and delivers a resolution notification.
 type Evaluator struct {
 	store     monitoringstore.Store
 	publisher Publisher
@@ -149,6 +149,7 @@ func (e *Evaluator) evaluateConditions(ctx context.Context, project string, p mo
 
 	firingName := ""
 	firingReason := ""
+	fired := false
 	allFire := true
 	for _, raw := range p.Conditions {
 		cond := &monitoringpb.AlertPolicy_Condition{}
@@ -159,9 +160,10 @@ func (e *Evaluator) evaluateConditions(ctx context.Context, project string, p mo
 		}
 		firing, reason := e.evaluateCondition(ctx, project, p, cond)
 		if firing {
-			if firingName == "" {
+			if !fired {
 				firingName = cond.GetDisplayName()
 				firingReason = reason
+				fired = true
 			}
 			continue
 		}
@@ -171,7 +173,7 @@ func (e *Evaluator) evaluateConditions(ctx context.Context, project string, p mo
 		}
 	}
 	if useOr {
-		if firingName != "" {
+		if fired {
 			return true, firingName, firingReason
 		}
 		return false, "", "no condition firing"
@@ -182,16 +184,42 @@ func (e *Evaluator) evaluateConditions(ctx context.Context, project string, p mo
 	return false, "", "not all conditions firing"
 }
 
-// evaluateCondition evaluates a single condition. Only condition_threshold is
-// evaluated; every other condition type is logged and treated as not firing.
+// evaluateCondition evaluates a single condition. condition_threshold and
+// condition_absent are evaluated; every other condition type is logged and
+// treated as not firing.
 func (e *Evaluator) evaluateCondition(ctx context.Context, project string, p monitoringstore.AlertPolicy, cond *monitoringpb.AlertPolicy_Condition) (bool, string) {
-	mt := cond.GetConditionThreshold()
-	if mt == nil {
-		e.log.Warn("monitoring evaluator: condition type not evaluated",
-			"project", project, "policy", p.ID, "condition", cond.GetDisplayName())
-		return false, "unsupported condition type"
+	if mt := cond.GetConditionThreshold(); mt != nil {
+		return e.evaluateThreshold(ctx, project, p, mt)
 	}
-	return e.evaluateThreshold(ctx, project, p, mt)
+	if ma := cond.GetConditionAbsent(); ma != nil {
+		return e.evaluateAbsent(ctx, project, p, ma)
+	}
+	e.log.Warn("monitoring evaluator: condition type not evaluated",
+		"project", project, "policy", p.ID, "condition", cond.GetDisplayName())
+	return false, "unsupported condition type"
+}
+
+// matchingSeries lists the project's time series that satisfy the shared
+// equality filter subset. Series with no points are treated as not yet seen
+// (real Cloud Monitoring rejects a point-less write, so they carry no
+// measurement for either condition type). A store read error is returned so
+// callers can distinguish it from "no matching series".
+func (e *Evaluator) matchingSeries(ctx context.Context, project, filter string) ([]monitoringstore.TimeSeries, error) {
+	f := compileMetricFilter(filter)
+	all, err := e.store.ListTimeSeries(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	matching := make([]monitoringstore.TimeSeries, 0, len(all))
+	for _, ts := range all {
+		if len(ts.Points) == 0 {
+			continue
+		}
+		if f.match(ts) {
+			matching = append(matching, ts)
+		}
+	}
+	return matching, nil
 }
 
 // evaluateThreshold implements the emulator's condition_threshold semantics.
@@ -207,17 +235,10 @@ func (e *Evaluator) evaluateCondition(ctx context.Context, project string, p mon
 // single reduced value is compared directly. duration widens the evaluation to
 // consecutive alignment windows that must all satisfy the comparison.
 func (e *Evaluator) evaluateThreshold(ctx context.Context, project string, p monitoringstore.AlertPolicy, mt *monitoringpb.AlertPolicy_Condition_MetricThreshold) (bool, string) {
-	filter := compileMetricFilter(mt.GetFilter())
-	all, err := e.store.ListTimeSeries(ctx, project)
+	matching, err := e.matchingSeries(ctx, project, mt.GetFilter())
 	if err != nil {
 		e.log.Warn("monitoring evaluator: list time series failed", "project", project, "policy", p.ID, "err", err)
 		return false, "time series read failed"
-	}
-	matching := make([]monitoringstore.TimeSeries, 0, len(all))
-	for _, ts := range all {
-		if filter.match(ts) {
-			matching = append(matching, ts)
-		}
 	}
 	if len(matching) == 0 {
 		return false, "no matching time series"
@@ -261,6 +282,81 @@ func (e *Evaluator) evaluateThreshold(ctx context.Context, project string, p mon
 		}
 	}
 	return true, fmt.Sprintf("threshold held for %s", duration)
+}
+
+// evaluateAbsent implements the emulator's condition_absent semantics.
+//
+// Filter subset: the same equality clauses as condition_threshold (metric.type,
+// resource.type, metric.label.{key}, resource.label.{key}); unknown clauses are
+// ignored.
+//
+// A matching time series is "absent" when it has no data point in the
+// (now-duration, now] window. Real Cloud Monitoring requires at least one
+// successful measurement before a metric-absence condition can be met, so a
+// filter that matches no series never fires. `trigger` selects how many absent
+// series are required (count or percent); when unset, any absent series fires
+// (the real "Any time series violates" default).
+//
+// The aggregations' perSeriesAligner / crossSeriesReducer / groupByFields are
+// not applied to absence — the duration window and per-series trigger govern
+// (documented limitation).
+func (e *Evaluator) evaluateAbsent(ctx context.Context, project string, p monitoringstore.AlertPolicy, ma *monitoringpb.AlertPolicy_Condition_MetricAbsence) (bool, string) {
+	matching, err := e.matchingSeries(ctx, project, ma.GetFilter())
+	if err != nil {
+		e.log.Warn("monitoring evaluator: list time series failed", "project", project, "policy", p.ID, "err", err)
+		return false, "time series read failed"
+	}
+	if len(matching) == 0 {
+		// Never seen: real Cloud Monitoring does not meet a metric-absence
+		// condition until the metric has produced at least one measurement.
+		return false, "no matching time series"
+	}
+
+	var duration time.Duration
+	if d := ma.GetDuration(); d != nil {
+		duration = d.AsDuration()
+	}
+	if duration <= 0 {
+		e.log.Warn("monitoring evaluator: condition_absent without a positive duration",
+			"project", project, "policy", p.ID, "filter", ma.GetFilter())
+		return false, "condition_absent without a duration"
+	}
+
+	now := clock.Now()
+	start := now.Add(-duration)
+	absent := 0
+	for _, ts := range matching {
+		if !seriesHasPointInWindow(ts, start, now) {
+			absent++
+		}
+	}
+
+	if t := ma.GetTrigger(); t != nil {
+		if t.GetCount() > 0 {
+			return absent >= int(t.GetCount()), fmt.Sprintf("%d/%d series absent (trigger count %d)", absent, len(matching), t.GetCount())
+		}
+		if t.GetPercent() > 0 {
+			pct := float64(absent) / float64(len(matching)) * 100
+			return pct >= t.GetPercent(), fmt.Sprintf("%.1f%% series absent (trigger percent %.1f%%)", pct, t.GetPercent())
+		}
+	}
+	return absent > 0, fmt.Sprintf("%d/%d series absent for %s", absent, len(matching), duration)
+}
+
+// seriesHasPointInWindow reports whether a series has any data point whose
+// end time falls within (start, end]. Unlike seriesLatestInWindow it does not
+// interpret the point value, so a string- or distribution-valued point still
+// counts as data for metric-absence conditions.
+func seriesHasPointInWindow(ts monitoringstore.TimeSeries, start, end time.Time) bool {
+	for _, p := range ts.Points {
+		if p.EndTime.IsZero() {
+			continue
+		}
+		if p.EndTime.After(start) && !p.EndTime.After(end) {
+			return true
+		}
+	}
+	return false
 }
 
 // evalWindow evaluates one alignment window. start is exclusive, end
