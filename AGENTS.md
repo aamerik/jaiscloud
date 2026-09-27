@@ -52,7 +52,8 @@ parseable index/detail.
    first), with an explicit `Pri` (P1–P20) as the fallback when an item is not in
    a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
    the top item unless told otherwise. Slash aliases: `/gcp:next` (show next),
-   `/gcp:new` (next item + start), `/gcp:status`, `/gcp:list`, `/gcp:audit`,
+   `/gcp:new` (next item + start), `/gcp:plan <service>` (scaffold a GA wave plan),
+   `/gcp:status`, `/gcp:list`, `/gcp:audit`,
    `/gcp:find` (nested `/gcp/next` etc. resolve too).
 4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
