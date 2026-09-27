@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -314,6 +315,60 @@ func TestComposeAndUpdateAndList(t *testing.T) {
 		if !names[want] {
 			t.Fatalf("ListObjects missing %q (got %v)", want, names)
 		}
+	}
+}
+
+func TestListObjectsLexicographicBounds(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	for _, name := range []string{"lex-a", "lex-b", "lex-c"} {
+		writeSingleShot(t, client, testBucket, name, "text/plain", []byte(name))
+	}
+
+	listNames := func(req *storagepb.ListObjectsRequest) []string {
+		t.Helper()
+		resp, err := client.ListObjects(ctx, req)
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		names := make([]string, 0, len(resp.GetObjects()))
+		for _, o := range resp.GetObjects() {
+			names = append(names, o.GetName())
+		}
+		return names
+	}
+
+	// LexicographicStart is inclusive.
+	got := listNames(&storagepb.ListObjectsRequest{Parent: testBucket, LexicographicStart: "lex-b"})
+	if want := []string{"lex-b", "lex-c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("LexicographicStart listing = %v, want %v", got, want)
+	}
+
+	// LexicographicEnd is exclusive.
+	got = listNames(&storagepb.ListObjectsRequest{Parent: testBucket, LexicographicEnd: "lex-c"})
+	if want := []string{"lex-a", "lex-b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("LexicographicEnd listing = %v, want %v", got, want)
+	}
+
+	// Both bounds form a half-open range.
+	got = listNames(&storagepb.ListObjectsRequest{Parent: testBucket, LexicographicStart: "lex-a", LexicographicEnd: "lex-c"})
+	if want := []string{"lex-a", "lex-b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounds listing = %v, want %v", got, want)
+	}
+
+	// Bounds compose with a prefix.
+	got = listNames(&storagepb.ListObjectsRequest{Parent: testBucket, Prefix: "lex-", LexicographicStart: "lex-b", LexicographicEnd: "lex-c"})
+	if want := []string{"lex-b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefix+bounds listing = %v, want %v", got, want)
+	}
+
+	// An empty range (start == end) lists nothing.
+	got = listNames(&storagepb.ListObjectsRequest{Parent: testBucket, LexicographicStart: "lex-b", LexicographicEnd: "lex-b"})
+	if len(got) != 0 {
+		t.Fatalf("empty range listing = %v, want none", got)
 	}
 }
 

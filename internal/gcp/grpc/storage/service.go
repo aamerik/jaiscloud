@@ -930,13 +930,23 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 		return nil, mapError(err)
 	}
 
-	// Prefix filter.
-	if pfx := req.GetPrefix(); pfx != "" {
+	// Prefix filter plus the lexicographic bounds (the gRPC equivalents of the
+	// REST startOffset/endOffset): inclusive start, exclusive end.
+	pfx := req.GetPrefix()
+	lexStart, lexEnd := req.GetLexicographicStart(), req.GetLexicographicEnd()
+	if pfx != "" || lexStart != "" || lexEnd != "" {
 		filtered := objs[:0]
 		for _, m := range objs {
-			if strings.HasPrefix(m.Name, pfx) {
-				filtered = append(filtered, m)
+			if pfx != "" && !strings.HasPrefix(m.Name, pfx) {
+				continue
 			}
+			if lexStart != "" && m.Name < lexStart {
+				continue
+			}
+			if lexEnd != "" && m.Name >= lexEnd {
+				continue
+			}
+			filtered = append(filtered, m)
 		}
 		objs = filtered
 	}
