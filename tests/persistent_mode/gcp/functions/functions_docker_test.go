@@ -95,29 +95,61 @@ func buildZip(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
+// putAbsolute PUTs body to an absolute URL (the source-upload URL returned by
+// generateUploadUrl points at the emulator origin, not the fixed host()).
+func putAbsolute(t *testing.T, url string, body []byte, contentType string) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build PUT %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
 // TestFunctionSourceExecutionDocker deploys a Python function whose zip is
-// uploaded to GCS and referenced as a v2 storageSource, then invokes it and
-// asserts the handler actually ran (not mock echo).
+// uploaded through the v2 generateUploadUrl flow (a GCS-backed upload target),
+// then invokes it and asserts the handler actually ran (not mock echo).
 func TestFunctionSourceExecutionDocker(t *testing.T) {
 	requireDockerEnv(t)
 	reset(t)
 
-	// 1. A GCS bucket holding the source archive.
-	if code, body := do(t, "POST", "/storage/v1/b?project=proj",
-		[]byte(`{"name":"fn-source-bucket"}`), "application/json"); code != http.StatusOK {
-		t.Fatalf("create bucket: HTTP %d: %s", code, body)
-	}
 	zipBytes := buildZip(t, map[string]string{
 		"lambda_function.py": "def handler(event, context):\n    return {\"hello\": \"world\", \"input\": event}\n",
 	})
-	if code, body := do(t, "POST", "/upload/storage/v1/b/fn-source-bucket/o?uploadType=media&name=src.zip",
-		zipBytes, "application/zip"); code != http.StatusOK {
+
+	// 1. generateUploadUrl returns a GCS-backed upload target; PUT the archive to it.
+	code, body := do(t, "POST", "/v2/projects/proj/locations/us-central1/functions:generateUploadUrl",
+		[]byte(`{}`), "application/json")
+	if code != http.StatusOK {
+		t.Fatalf("generateUploadUrl: HTTP %d: %s", code, body)
+	}
+	var up struct {
+		UploadURL     string `json:"uploadUrl"`
+		StorageSource struct {
+			Bucket string `json:"bucket"`
+			Object string `json:"object"`
+		} `json:"storageSource"`
+	}
+	if err := json.Unmarshal(body, &up); err != nil {
+		t.Fatalf("generateUploadUrl response: %v (%s)", err, body)
+	}
+	if up.UploadURL == "" || up.StorageSource.Bucket == "" || up.StorageSource.Object == "" {
+		t.Fatalf("generateUploadUrl incomplete: %s", body)
+	}
+	if code, body := putAbsolute(t, up.UploadURL, zipBytes, "application/zip"); code != http.StatusOK {
 		t.Fatalf("upload source: HTTP %d: %s", code, body)
 	}
 
 	// 2. Create a v2 function referencing the uploaded storageSource.
 	create := []byte(`{"buildConfig":{"runtime":"python312","entryPoint":"lambda_function.handler",` +
-		`"source":{"storageSource":{"bucket":"fn-source-bucket","object":"src.zip"}}}}`)
+		`"source":{"storageSource":{"bucket":"` + up.StorageSource.Bucket + `","object":"` + up.StorageSource.Object + `"}}}}`)
 	if code, body := do(t, "POST", "/v2/projects/proj/locations/us-central1/functions?functionId=hello",
 		create, "application/json"); code != http.StatusOK {
 		t.Fatalf("create function: HTTP %d: %s", code, body)

@@ -41,6 +41,7 @@ type Service struct {
 
 	core        *core.Service
 	defaultProj string
+	uploadBase  string
 }
 
 // ServiceV2 implements apiv2functionspb.FunctionServiceServer (v2) over the
@@ -50,17 +51,20 @@ type ServiceV2 struct {
 
 	core        *core.Service
 	defaultProj string
+	uploadBase  string
 }
 
 // NewService returns the Cloud Functions v1 gRPC server wrapping the core.
 // defaultProj is the config-default project used when a request carries none.
-func NewService(c *core.Service, defaultProj string) *Service {
-	return &Service{core: c, defaultProj: defaultProj}
+// uploadBase is the emulator-http origin used to build a source-upload URL
+// (empty falls back to the real-GCP-shaped storage.googleapis.com).
+func NewService(c *core.Service, defaultProj, uploadBase string) *Service {
+	return &Service{core: c, defaultProj: defaultProj, uploadBase: uploadBase}
 }
 
 // NewServiceV2 returns the Cloud Functions v2 gRPC server wrapping the core.
-func NewServiceV2(c *core.Service, defaultProj string) *ServiceV2 {
-	return &ServiceV2{core: c, defaultProj: defaultProj}
+func NewServiceV2(c *core.Service, defaultProj, uploadBase string) *ServiceV2 {
+	return &ServiceV2{core: c, defaultProj: defaultProj, uploadBase: uploadBase}
 }
 
 // mapError translates a core ProviderError into a gRPC status error.
@@ -154,7 +158,13 @@ func (s *Service) GenerateUploadUrl(ctx context.Context, req *functionspb.Genera
 		return nil, mapError(err)
 	}
 	project = resolveProject(ctx, project, s.defaultProj)
-	return &functionspb.GenerateUploadUrlResponse{UploadUrl: s.core.GenerateUploadURL(project, location)}, nil
+	up, err := s.core.GenerateUploadURL(ctx, project, location, s.uploadBase)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	// v1 GenerateUploadUrlResponse carries only the upload URL (there is no
+	// storageSource field in the v1 proto).
+	return &functionspb.GenerateUploadUrlResponse{UploadUrl: up.URL}, nil
 }
 
 func (s *Service) GenerateDownloadUrl(ctx context.Context, req *functionspb.GenerateDownloadUrlRequest) (*functionspb.GenerateDownloadUrlResponse, error) {
@@ -329,7 +339,17 @@ func (s *ServiceV2) GenerateUploadUrl(ctx context.Context, req *apiv2functionspb
 		return nil, mapError(err)
 	}
 	project = resolveProject(ctx, project, s.defaultProj)
-	return &apiv2functionspb.GenerateUploadUrlResponse{UploadUrl: s.core.GenerateUploadURL(project, location)}, nil
+	up, err := s.core.GenerateUploadURL(ctx, project, location, s.uploadBase)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &apiv2functionspb.GenerateUploadUrlResponse{
+		UploadUrl: up.URL,
+		StorageSource: &apiv2functionspb.StorageSource{
+			Bucket: up.Bucket,
+			Object: up.Object,
+		},
+	}, nil
 }
 
 func (s *ServiceV2) GenerateDownloadUrl(ctx context.Context, req *apiv2functionspb.GenerateDownloadUrlRequest) (*apiv2functionspb.GenerateDownloadUrlResponse, error) {

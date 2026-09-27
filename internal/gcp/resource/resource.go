@@ -63,6 +63,12 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Cloud Functions v2 service revisions — output-only
+	// serviceConfig.revision; callers pass "location/function/revision".
+	"cloud-function-revision": func(p, n string) string {
+		loc, fn, rev := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/functions/%s/revisions/%s", p, loc, fn, rev)
+	},
 	// The backing Cloud Run service of a Cloud Functions v2 function is
 	// "projects/{p}/locations/{l}/services/{id}"; callers pass "location/id".
 	// It is reported as Cloud Functions' serviceConfig.service (output-only),

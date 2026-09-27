@@ -27,6 +27,84 @@ type SourceFetcher interface {
 	FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error)
 }
 
+// SourceBucketEnsurer creates the GCS bucket that holds a v2 function's
+// uploaded source archive (gcf-v2-sources-*) if it does not already exist. It
+// is implemented by the GCS provider (which owns bucket metadata) and injected
+// by main.go; a nil ensurer skips bucket creation.
+type SourceBucketEnsurer interface {
+	EnsureBucket(ctx context.Context, project, bucket, location string) error
+}
+
+// UploadTarget is the GCS location returned by GenerateUploadURL: the bucket and
+// object the caller PUTs the source archive to, and the absolute URL to use for
+// that upload. V2 clients echo Bucket/Object back through
+// buildConfig.source.storageSource after a successful upload.
+type UploadTarget struct {
+	Bucket string
+	Object string
+	URL    string
+}
+
+// sourceBucketPrefix is the base name of the GCS bucket that holds deployed v2
+// source archives, matching real Cloud Functions' "gcf-v2-sources-{project}-{location}".
+const sourceBucketPrefix = "gcf-v2-sources"
+
+// SourceBucket returns the sanitized name of the GCS bucket holding a project's
+// uploaded source archives for a location. GCS bucket names are lowercase and
+// limited to 63 characters, so invalid characters are replaced and an over-long
+// name is truncated with a stable hash suffix.
+func SourceBucket(project, location string) string {
+	raw := sourceBucketPrefix + "-" + project + "-" + location
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-_.")
+	if name == "" {
+		name = sourceBucketPrefix
+	}
+	if len(name) > maxGCSCBucketName {
+		sum := sha256.Sum256([]byte(raw))
+		suffix := "-" + hex.EncodeToString(sum[:])[:8]
+		name = name[:maxGCSCBucketName-len(suffix)] + suffix
+	}
+	return name
+}
+
+// maxGCSCBucketName is the GCS bucket-name length limit.
+const maxGCSCBucketName = 63
+
+// GenerateUploadURL provisions a GCS location for a v2 source upload and returns
+// its bucket/object plus the absolute URL the caller PUTs the archive to. The
+// URL is built from baseURL (the emulator-reachable "scheme://host" of the
+// calling request), so a `gcloud functions deploy --gen2` upload lands in the
+// emulated GCS instead of real storage.googleapis.com. Source storage must be
+// configured (blobs non-nil); the bucket is created when an ensurer is wired.
+func (s *Service) GenerateUploadURL(ctx context.Context, project, location, baseURL string) (UploadTarget, error) {
+	if s.blobs == nil {
+		return UploadTarget{}, model.NewProviderError("FailedPrecondition", "source storage is not configured", 400)
+	}
+	bucket := SourceBucket(project, location)
+	object := "source-" + newUUID() + ".zip"
+	if s.sourceBuckets != nil {
+		if err := s.sourceBuckets.EnsureBucket(ctx, project, bucket, location); err != nil {
+			return UploadTarget{}, err
+		}
+	}
+	base := strings.TrimRight(baseURL, "/")
+	if base == "" {
+		// No request host (e.g. a gRPC client without a configured base): fall
+		// back to the real-GCP-shaped host. REST always supplies the request host.
+		base = "https://storage.googleapis.com"
+	}
+	return UploadTarget{Bucket: bucket, Object: object, URL: base + "/" + bucket + "/" + object}, nil
+}
+
 // sourceBlobKey is the blobfs key of a function's source archive at revision
 // rev (the sha256 hex). It is scoped by project/location/id exactly like the
 // store row, so it cannot collide across locations.
@@ -66,6 +144,12 @@ func splitGSURL(ref string) (bucket, object string) {
 func (s *Service) StoreSource(ctx context.Context, project, location, id string, zip []byte) (sha256hex string, size int64, blobKey string, err error) {
 	if s.blobs == nil {
 		return "", 0, "", invalidArgument("source storage is not configured")
+	}
+	// Build/stage validation: an empty archive is not a deployable source. The
+	// archive contents/entry point are deliberately not validated (mirroring the
+	// pre-existing shallow input validation).
+	if len(zip) == 0 {
+		return "", 0, "", invalidArgument("source archive is empty")
 	}
 	sum := sha256.Sum256(zip)
 	sha256hex = hex.EncodeToString(sum[:])

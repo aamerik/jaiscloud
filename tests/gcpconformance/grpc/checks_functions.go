@@ -49,7 +49,7 @@ func functionsChecks() []Check {
 		{Service: "functions", RPC: "ListFunctions (v2)", Method: "ListFunctions", KeyField: "created function present", Run: checkFnListV2},
 		{Service: "functions", RPC: "UpdateFunction (v2)", Method: "UpdateFunction", KeyField: "buildConfig.runtime updated via LRO", Run: checkFnUpdateV2},
 		{Service: "functions", RPC: "DeleteFunction (v2)", Method: "DeleteFunction", KeyField: "NotFound after delete", Run: checkFnDeleteV2},
-		{Service: "functions", RPC: "GenerateUploadUrl (v2)", Method: "GenerateUploadUrl", KeyField: "non-empty uploadUrl", Run: checkFnGenerateUploadURLV2},
+		{Service: "functions", RPC: "GenerateUploadUrl (v2)", Method: "GenerateUploadUrl", KeyField: "non-empty uploadUrl + storageSource", Run: checkFnGenerateUploadURLV2},
 		{Service: "functions", RPC: "GenerateDownloadUrl (v2)", Method: "GenerateDownloadUrl", KeyField: "non-empty downloadUrl", Run: checkFnGenerateDownloadURLV2},
 		{Service: "functions", RPC: "ListRuntimes (v2)", Method: "ListRuntimes", KeyField: "runtime catalog includes nodejs20 (GEN_2)", Run: checkFnListRuntimesV2},
 		// Dual-protocol invariant: one store behind both API versions.
@@ -548,6 +548,11 @@ func checkFnGenerateUploadURLV2(ctx context.Context, cfg Config) error {
 	}
 	if resp.GetUploadUrl() == "" {
 		return fmt.Errorf("empty uploadUrl")
+	}
+	// v2 also returns the GCS storageSource the client echoes back through
+	// buildConfig.source.storageSource after uploading.
+	if resp.GetStorageSource().GetBucket() == "" || resp.GetStorageSource().GetObject() == "" {
+		return fmt.Errorf("empty storageSource: %v", resp.GetStorageSource())
 	}
 	return nil
 }

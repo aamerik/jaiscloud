@@ -199,9 +199,21 @@ func (p *Provider) ListRuntimes(_ context.Context, nr *model.NormalizedRequest) 
 	return provider.OK(map[string]any{"runtimes": items}), nil
 }
 
-// GenerateUploadUrl returns a fake signed upload URL for source deployment.
-func (p *Provider) GenerateUploadUrl(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"uploadUrl": p.core.GenerateUploadURL(p.project(nr), strParam(nr, "location"))}), nil
+// GenerateUploadUrl provisions a GCS-backed upload target for v2 source
+// deployment. The v2 response carries storageSource (bucket/object) which the
+// client echoes back through buildConfig.source.storageSource after uploading;
+// v1 carries only uploadUrl. The URL points at the emulator's GCS so the
+// subsequent PUT lands locally.
+func (p *Provider) GenerateUploadUrl(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	up, err := p.core.GenerateUploadURL(ctx, p.project(nr), strParam(nr, "location"), baseURL(nr))
+	if err != nil {
+		return nil, err
+	}
+	resp := map[string]any{"uploadUrl": up.URL}
+	if p.version(nr) == core.V2 {
+		resp["storageSource"] = map[string]any{"bucket": up.Bucket, "object": up.Object}
+	}
+	return provider.OK(resp), nil
 }
 
 // GenerateDownloadUrl returns a fake signed download URL for a function's
