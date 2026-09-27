@@ -553,23 +553,53 @@ func TestAllocateIdsCompleteKey(t *testing.T) {
 	}
 }
 
-func TestMultiElementKeyRejected(t *testing.T) {
+func TestMultiElementKeyRoundTrip(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	multi := &datastorepb.Key{
-		PartitionId: &datastorepb.PartitionId{ProjectId: "test"},
-		Path: []*datastorepb.Key_PathElement{
-			{Kind: "Parent", IdType: &datastorepb.Key_PathElement_Id{Id: 1}},
-			{Kind: "Child", IdType: &datastorepb.Key_PathElement_Id{Id: 2}},
-		},
+	parent := func(id int64) *datastorepb.Key_PathElement {
+		return &datastorepb.Key_PathElement{Kind: "Parent", IdType: &datastorepb.Key_PathElement_Id{Id: id}}
 	}
-	if _, err := client.Lookup(ctx, &datastorepb.LookupRequest{
+	child := func(parentID int64) *datastorepb.Key {
+		return &datastorepb.Key{
+			PartitionId: &datastorepb.PartitionId{ProjectId: "test"},
+			Path: []*datastorepb.Key_PathElement{
+				parent(parentID),
+				{Kind: "Child", IdType: &datastorepb.Key_PathElement_Name{Name: "c"}},
+			},
+		}
+	}
+
+	if _, err := client.Commit(ctx, &datastorepb.CommitRequest{
 		ProjectId: "test",
-		Keys:      []*datastorepb.Key{multi},
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("multi-element lookup err = %v, want InvalidArgument", err)
+		Mutations: []*datastorepb.Mutation{{
+			Operation: &datastorepb.Mutation_Upsert{Upsert: entity(child(1), map[string]*datastorepb.Value{"n": intVal(1)})},
+		}},
+	}); err != nil {
+		t.Fatalf("upsert child: %v", err)
+	}
+
+	resp, err := client.Lookup(ctx, &datastorepb.LookupRequest{ProjectId: "test", Keys: []*datastorepb.Key{child(1)}})
+	if err != nil {
+		t.Fatalf("lookup child: %v", err)
+	}
+	if len(resp.Found) != 1 {
+		t.Fatalf("lookup found = %d, want 1", len(resp.Found))
+	}
+	gotPath := resp.Found[0].Entity.GetKey().GetPath()
+	if len(gotPath) != 2 || gotPath[0].GetKind() != "Parent" || gotPath[0].GetId() != 1 ||
+		gotPath[1].GetKind() != "Child" || gotPath[1].GetName() != "c" {
+		t.Fatalf("round-tripped path = %+v", gotPath)
+	}
+
+	// The same kind+name under a different parent is a distinct entity.
+	resp, err = client.Lookup(ctx, &datastorepb.LookupRequest{ProjectId: "test", Keys: []*datastorepb.Key{child(2)}})
+	if err != nil {
+		t.Fatalf("lookup other parent: %v", err)
+	}
+	if len(resp.Found) != 0 || len(resp.Missing) != 1 {
+		t.Fatalf("other-parent lookup found=%d missing=%d, want 0/1", len(resp.Found), len(resp.Missing))
 	}
 }
 

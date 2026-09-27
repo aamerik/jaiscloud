@@ -6,21 +6,63 @@ import (
 	dsstore "jaiscloud/internal/gcp/store/datastore"
 )
 
-// Key is a transport-neutral Datastore key path element. The emulator supports
-// single-element keys only (no ancestors); completeness is expressed by HasID /
-// HasName. A key with neither is incomplete (used by AllocateIds and by
-// insert/upsert mutations that want a server-allocated numeric ID).
+// Key is a transport-neutral Datastore key. The final path element is held in
+// the flat Kind/ID/Name fields, with completeness expressed by HasID/HasName; a
+// key with neither is incomplete (used by AllocateIds and by insert/upsert
+// mutations that want a server-allocated numeric ID). Ancestors holds the
+// parent elements from root to immediate parent (empty for a root entity), and
+// Namespace/Database are the key's partition dimensions ("" for the default
+// namespace / default database).
 type Key struct {
 	Kind    string
 	ID      int64
 	Name    string
 	HasID   bool
 	HasName bool
+
+	Ancestors []dsstore.PathElement
+	Namespace string
+	Database  string
 }
 
-// Complete reports whether the key names a concrete entity (numeric ID or
-// name). Ancestor paths are rejected before a Key reaches the core.
+// Complete reports whether the key's final element names a concrete entity
+// (numeric ID or name).
 func (k Key) Complete() bool { return k.HasID || k.HasName }
+
+// PathElements returns the key's full path: its ancestors followed by the
+// final element. It is exported so transports can rebuild their wire key.
+func (k Key) PathElements() []dsstore.PathElement { return k.path() }
+
+// ValidateKeyPath checks that a decoded key path is structurally well-formed:
+// every element must have a non-empty kind and every ancestor element (all but
+// the final one) must be complete. The final element may be incomplete (an
+// insert/upsert key awaiting a server-allocated ID). An empty path means "no
+// key" and is allowed. Transports call this after decoding, so a malformed key
+// is rejected consistently rather than diverging between store backends.
+func ValidateKeyPath(path []dsstore.PathElement) error {
+	for i, e := range path {
+		if e.Kind == "" {
+			return invalidArgument("key path element has an empty kind")
+		}
+		if i < len(path)-1 && !e.HasID && !e.HasName {
+			return invalidArgument("ancestor key is incomplete")
+		}
+	}
+	return nil
+}
+
+// path returns the key's full path: its ancestors followed by the final
+// element.
+func (k Key) path() []dsstore.PathElement {
+	final := dsstore.PathElement{Kind: k.Kind, ID: k.ID, Name: k.Name, HasID: k.HasID, HasName: k.HasName}
+	if len(k.Ancestors) == 0 {
+		return []dsstore.PathElement{final}
+	}
+	out := make([]dsstore.PathElement, 0, len(k.Ancestors)+1)
+	out = append(out, k.Ancestors...)
+	out = append(out, final)
+	return out
+}
 
 // MutationOp identifies a single Datastore mutation.
 type MutationOp int
@@ -32,12 +74,15 @@ const (
 	MutationDelete
 )
 
-// Mutation is one transport-neutral mutation. Entity carries the properties for
-// Insert/Update/Upsert (its Key is the canonical store key, or "" to request a
-// server-allocated ID). DeleteKey is the entity to delete. Precondition is the
-// optional conflict-detection condition (base_version/update_time).
+// Mutation is one transport-neutral mutation. Key is the target entity's key
+// for Insert/Update/Upsert; it may be incomplete (no final id/name) for
+// Insert/Upsert, in which case the core allocates one. Entity carries the
+// properties for those operations (its Key is filled by the core from Key).
+// DeleteKey is the entity to delete. Precondition is the optional
+// conflict-detection condition (base_version/update_time).
 type Mutation struct {
 	Op           MutationOp
+	Key          Key
 	Entity       dsstore.Entity
 	DeleteKey    Key
 	Precondition *dsstore.Precondition
@@ -104,6 +149,9 @@ type Query struct {
 	Filter *Filter
 	Offset int
 	Limit  *int // nil = unbounded
+	// Namespace and Database scope the query's partition ("" = default).
+	Namespace string
+	Database  string
 }
 
 // QueryResult is the transport-neutral result of RunQuery.
@@ -126,6 +174,10 @@ const (
 	PropertyLessThanOrEqual
 	PropertyGreaterThan
 	PropertyGreaterThanOrEqual
+	// PropertyHasAncestor is the special "__key__ HAS ANCESTOR" operator. Its
+	// property name must be "__key__" and its value a key; it matches entities
+	// whose key path has that key as a proper prefix.
+	PropertyHasAncestor
 )
 
 // CompositeOp is a transport-neutral CompositeFilter operator.

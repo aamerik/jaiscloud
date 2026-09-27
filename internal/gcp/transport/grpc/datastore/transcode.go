@@ -21,74 +21,71 @@ func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
 }
 
-// rejectDatabaseID rejects a non-empty request DatabaseId. The emulator serves
-// a single default database per project, so a named database cannot be honored;
-// failing loud mirrors keyFromProto's rejection of database-scoped keys rather
-// than silently reading/writing the default database.
-func rejectDatabaseID(databaseID string) error {
-	if databaseID != "" {
-		return invalidArgument("database-scoped requests are not supported")
-	}
-	return nil
-}
-
 // ─── key transcoding ──────────────────────────────────────────────────────────
 
-// keyFromProto converts a proto Key to the transport-neutral Key. Ancestor
-// (multi-element) paths and non-default namespace/database scopes are not
-// supported and return InvalidArgument rather than silently collapsing to the
-// last path element. An incomplete key (no id/name) is returned with Kind set
-// and Complete()==false.
+// keyFromProto converts a proto Key to the transport-neutral Key. The full path
+// (ancestors followed by the final element) and the partition (namespace +
+// database) are preserved. An incomplete final element (no id/name) is returned
+// with Kind set and Complete()==false.
 func keyFromProto(k *datastorepb.Key) (core.Key, error) {
 	if k == nil {
 		return core.Key{}, nil
 	}
+	out := core.Key{}
 	if pid := k.GetPartitionId(); pid != nil {
-		if pid.GetNamespaceId() != "" {
-			return core.Key{}, invalidArgument("namespaced keys are not supported")
-		}
-		if pid.GetDatabaseId() != "" {
-			return core.Key{}, invalidArgument("database-scoped keys are not supported")
-		}
+		out.Namespace = pid.GetNamespaceId()
+		out.Database = pid.GetDatabaseId()
 	}
 	path := k.GetPath()
 	if len(path) == 0 {
-		return core.Key{}, nil
-	}
-	if len(path) > 1 {
-		return core.Key{}, invalidArgument("ancestor keys are not supported")
-	}
-	el := path[0]
-	out := core.Key{Kind: el.GetKind()}
-	if id, ok := el.GetIdType().(*datastorepb.Key_PathElement_Id); ok {
-		out.ID = id.Id
-		out.HasID = true
 		return out, nil
 	}
-	if name, ok := el.GetIdType().(*datastorepb.Key_PathElement_Name); ok {
-		out.Name = name.Name
-		out.HasName = true
-		return out, nil
+	els := make([]dsstore.PathElement, 0, len(path))
+	for _, el := range path {
+		pe := dsstore.PathElement{Kind: el.GetKind()}
+		if id, ok := el.GetIdType().(*datastorepb.Key_PathElement_Id); ok {
+			pe.ID, pe.HasID = id.Id, true
+		} else if name, ok := el.GetIdType().(*datastorepb.Key_PathElement_Name); ok {
+			pe.Name, pe.HasName = name.Name, true
+		}
+		els = append(els, pe)
+	}
+	if err := core.ValidateKeyPath(els); err != nil {
+		return core.Key{}, err
+	}
+	final := els[len(els)-1]
+	out.Kind, out.ID, out.Name, out.HasID, out.HasName =
+		final.Kind, final.ID, final.Name, final.HasID, final.HasName
+	if len(els) > 1 {
+		out.Ancestors = els[:len(els)-1]
 	}
 	return out, nil
 }
 
-// keyToProto reconstructs a single-element proto Key from a neutral key,
-// tagging the partition with the owning project.
+// keyToProto reconstructs a proto Key (full path + partition) from a neutral
+// key, tagging the partition with the owning project.
 func keyToProto(k core.Key, project string) *datastorepb.Key {
-	el := &datastorepb.Key_PathElement{Kind: k.Kind}
-	switch {
-	case k.HasID:
-		el.IdType = &datastorepb.Key_PathElement_Id{Id: k.ID}
-	case k.HasName:
-		el.IdType = &datastorepb.Key_PathElement_Name{Name: k.Name}
-	default:
-		// Incomplete key: emit the kind only (partition still tagged).
+	pid := &datastorepb.PartitionId{ProjectId: project}
+	if k.Database != "" {
+		pid.DatabaseId = k.Database
 	}
-	return &datastorepb.Key{
-		PartitionId: &datastorepb.PartitionId{ProjectId: project},
-		Path:        []*datastorepb.Key_PathElement{el},
+	if k.Namespace != "" {
+		pid.NamespaceId = k.Namespace
 	}
+	out := &datastorepb.Key{PartitionId: pid}
+	for _, e := range k.PathElements() {
+		el := &datastorepb.Key_PathElement{Kind: e.Kind}
+		switch {
+		case e.HasID:
+			el.IdType = &datastorepb.Key_PathElement_Id{Id: e.ID}
+		case e.HasName:
+			el.IdType = &datastorepb.Key_PathElement_Name{Name: e.Name}
+		default:
+			// Incomplete key: emit the kind only (partition still tagged).
+		}
+		out.Path = append(out.Path, el)
+	}
+	return out
 }
 
 // ─── entity transcoding ───────────────────────────────────────────────────────
@@ -244,37 +241,65 @@ func mutationFromProto(m *datastorepb.Mutation) (core.Mutation, error) {
 	out := core.Mutation{Precondition: mutationPrecondition(m)}
 	switch op := m.GetOperation().(type) {
 	case *datastorepb.Mutation_Insert:
-		e, err := entityFromProto(op.Insert)
+		k, e, err := mutationTarget(op.Insert)
 		if err != nil {
 			return out, err
 		}
-		out.Op = core.MutationInsert
-		out.Entity = e
+		out.Op, out.Key, out.Entity = core.MutationInsert, k, e
 	case *datastorepb.Mutation_Upsert:
-		e, err := entityFromProto(op.Upsert)
+		k, e, err := mutationTarget(op.Upsert)
 		if err != nil {
 			return out, err
 		}
-		out.Op = core.MutationUpsert
-		out.Entity = e
+		out.Op, out.Key, out.Entity = core.MutationUpsert, k, e
 	case *datastorepb.Mutation_Update:
-		e, err := entityFromProto(op.Update)
+		k, e, err := mutationTarget(op.Update)
 		if err != nil {
 			return out, err
 		}
-		out.Op = core.MutationUpdate
-		out.Entity = e
+		out.Op, out.Key, out.Entity = core.MutationUpdate, k, e
 	case *datastorepb.Mutation_Delete:
 		k, err := keyFromProto(op.Delete)
 		if err != nil {
 			return out, err
 		}
-		out.Op = core.MutationDelete
-		out.DeleteKey = k
+		out.Op, out.DeleteKey = core.MutationDelete, k
 	default:
 		return out, invalidArgument("mutation has no operation")
 	}
 	return out, nil
+}
+
+// withDatabase applies a request's database id to a mutation's keys that do not
+// already carry one. The official SDK sets both the request field and each key's
+// partition; a raw stub may set only the request field.
+func withDatabase(m core.Mutation, database string) core.Mutation {
+	if database == "" {
+		return m
+	}
+	if m.Key.Database == "" {
+		m.Key.Database = database
+	}
+	if m.DeleteKey.Database == "" {
+		m.DeleteKey.Database = database
+	}
+	return m
+}
+
+// mutationTarget parses an insert/upsert/update entity's neutral key and
+// properties. The neutral key carries any ancestors and partition — needed to
+// allocate an ID for an incomplete key — while the entity carries the
+// properties.
+func mutationTarget(p *datastorepb.Entity) (core.Key, dsstore.Entity, error) {
+	e, err := entityFromProto(p)
+	if err != nil {
+		return core.Key{}, dsstore.Entity{}, err
+	}
+	k, err := keyFromProto(p.GetKey())
+	if err != nil {
+		return core.Key{}, dsstore.Entity{}, err
+	}
+	return k, e, nil
 }
 
 // mutationPrecondition translates a Mutation's conflict_detection_strategy
@@ -369,6 +394,8 @@ func propertyOpFromProto(op datastorepb.PropertyFilter_Operator) core.PropertyOp
 		return core.PropertyGreaterThan
 	case datastorepb.PropertyFilter_GREATER_THAN_OR_EQUAL:
 		return core.PropertyGreaterThanOrEqual
+	case datastorepb.PropertyFilter_HAS_ANCESTOR:
+		return core.PropertyHasAncestor
 	default:
 		return core.PropertyUnspecified
 	}

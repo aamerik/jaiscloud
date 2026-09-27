@@ -9,11 +9,11 @@ import (
 )
 
 // matchesFilter evaluates a query filter against an entity. It supports
-// PropertyFilter EQUAL, NOT_EQUAL, IN, and the four comparison operators
-// (LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL), and
-// CompositeFilter AND over those property filters. Unsupported operators
-// (HAS_ANCESTOR, NOT_IN, OR, unspecified/unknown) return an InvalidArgument
-// error rather than matching everything.
+// PropertyFilter EQUAL, NOT_EQUAL, IN, the four comparison operators
+// (LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL), and the
+// special "__key__ HAS ANCESTOR", plus CompositeFilter AND over those property
+// filters. Unsupported operators (NOT_IN, OR, unspecified/unknown) return an
+// InvalidArgument error rather than matching everything.
 func matchesFilter(e dsstore.Entity, f *Filter) (bool, error) {
 	if f == nil {
 		return true, nil
@@ -57,6 +57,18 @@ func matchesPropertyFilter(e dsstore.Entity, pf *PropertyFilter) (bool, error) {
 	filterVal := pf.Value
 
 	switch pf.Op {
+	case PropertyHasAncestor:
+		// HAS_ANCESTOR is not a property comparison: it only applies to the
+		// implicit "__key__" property and its value is a key. It matches an
+		// entity whose key path has that key as a proper prefix (the query's
+		// partition already scopes the result set).
+		if prop != keyPropertyName {
+			return false, invalidArgument("HAS_ANCESTOR requires the " + keyPropertyName + " property")
+		}
+		if filterVal.KeyValue == nil {
+			return false, invalidArgument("HAS_ANCESTOR requires a key value")
+		}
+		return keyHasAncestor(e.Key, *filterVal.KeyValue), nil
 	case PropertyEqual:
 		return ok && valueEqual(val, filterVal), nil
 	case PropertyNotEqual:
@@ -92,6 +104,33 @@ func matchesPropertyFilter(e dsstore.Entity, pf *PropertyFilter) (bool, error) {
 	default:
 		return false, unsupportedQueryOperator(propertyOpName(pf.Op))
 	}
+}
+
+// keyPropertyName is the reserved Datastore property that exposes an entity's
+// own key; the only legal operand of HAS_ANCESTOR.
+const keyPropertyName = "__key__"
+
+// keyHasAncestor reports whether ancestorKey is a proper path prefix of
+// entityKey. Both arguments are canonical store keys, so the comparison is
+// structural — a raw string prefix would be wrong (kind "A" is lexically a
+// prefix of kind "AB").
+//
+// Only the paths are compared: the partition is the query's concern (the query
+// already restricts results to its namespace/database), and a GQL KEY(...)
+// literal — or an SDK ancestor key without an explicit namespace — carries no
+// partition of its own. Requiring partition equality would wrongly reject those.
+func keyHasAncestor(entityKey, ancestorKey string) bool {
+	_, _, epath, eok := dsstore.ParseKey(entityKey)
+	_, _, apath, aok := dsstore.ParseKey(ancestorKey)
+	if !eok || !aok || len(apath) == 0 || len(apath) >= len(epath) {
+		return false
+	}
+	for i := range apath {
+		if apath[i] != epath[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // numericValue reports the numeric value of v (integer or double) as a float64.
@@ -353,6 +392,8 @@ func propertyOpName(op PropertyOp) string {
 		return "GREATER_THAN"
 	case PropertyGreaterThanOrEqual:
 		return "GREATER_THAN_OR_EQUAL"
+	case PropertyHasAncestor:
+		return "HAS_ANCESTOR"
 	default:
 		return "PROPERTY_FILTER_OP_UNSPECIFIED"
 	}

@@ -52,11 +52,38 @@ func (p *Provider) project(nr *model.NormalizedRequest) string {
 	return p.defaultProj
 }
 
+// requestPartition extracts the request-level namespace/database from a body.
+// The database may appear either as the top-level databaseId (as on the proto
+// request) or inside partitionId; namespace only ever appears in partitionId.
+func requestPartition(body map[string]any) (namespace, database string) {
+	database = strFrom(body["databaseId"])
+	if pid, ok := body["partitionId"].(map[string]any); ok && pid != nil {
+		namespace = strFrom(pid["namespaceId"])
+		if database == "" {
+			database = strFrom(pid["databaseId"])
+		}
+	}
+	return namespace, database
+}
+
+// applyDatabase stamps the request-level database onto any key that lacks one.
+func applyDatabase(keys []core.Key, database string) {
+	if database == "" {
+		return
+	}
+	for i := range keys {
+		if keys[i].Database == "" {
+			keys[i].Database = database
+		}
+	}
+}
+
 // ─── handlers ─────────────────────────────────────────────────────────────────
 
 func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	_, database := requestPartition(body)
 
 	txn, err := transactionFromReadOptions(body["readOptions"])
 	if err != nil {
@@ -66,6 +93,7 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
+	applyDatabase(keys, database)
 	resp, err := p.core.Lookup(ctx, project, keys, txn)
 	if err != nil {
 		return nil, err
@@ -98,6 +126,7 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	namespace, database := requestPartition(body)
 
 	txn, err := transactionFromReadOptions(body["readOptions"])
 	if err != nil {
@@ -110,7 +139,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		if err != nil {
 			return nil, err
 		}
-		resp, err = p.core.RunQueryGQL(ctx, project, gql, txn)
+		resp, err = p.core.RunQueryGQL(ctx, project, gql, txn, namespace, database)
 		if err != nil {
 			return nil, err
 		}
@@ -119,6 +148,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		if err != nil {
 			return nil, err
 		}
+		q.Namespace, q.Database = namespace, database
 		resp, err = p.core.RunQuery(ctx, project, q, txn)
 		if err != nil {
 			return nil, err
@@ -153,10 +183,8 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	namespace, database := requestPartition(body)
 
-	if db := strFrom(body["databaseId"]); db != "" {
-		return nil, invalidArgument("database-scoped requests are not supported")
-	}
 	txn, err := transactionFromReadOptions(body["readOptions"])
 	if err != nil {
 		return nil, err
@@ -168,7 +196,7 @@ func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.Normalized
 		if err != nil {
 			return nil, err
 		}
-		resp, err = p.core.RunAggregationQueryGQL(ctx, project, gql, txn)
+		resp, err = p.core.RunAggregationQueryGQL(ctx, project, gql, txn, namespace, database)
 		if err != nil {
 			return nil, err
 		}
@@ -177,6 +205,7 @@ func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.Normalized
 		if err != nil {
 			return nil, err
 		}
+		aq.Nested.Namespace, aq.Nested.Database = namespace, database
 		resp, err = p.core.RunAggregationQuery(ctx, project, aq, txn)
 		if err != nil {
 			return nil, err
@@ -208,6 +237,7 @@ func (p *Provider) BeginTransaction(ctx context.Context, _ *model.NormalizedRequ
 func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	_, database := requestPartition(body)
 
 	txn, err := bytesFromWire(body["transaction"])
 	if err != nil {
@@ -223,6 +253,9 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	mutations, err := mutationsFromWire(body["mutations"])
 	if err != nil {
 		return nil, err
+	}
+	for i := range mutations {
+		mutations[i] = withDatabase(mutations[i], database)
 	}
 	resp, err := p.core.Commit(ctx, project, &core.CommitRequest{Mode: mode, Transaction: txn, Mutations: mutations})
 	if err != nil {
@@ -260,11 +293,13 @@ func (p *Provider) Rollback(ctx context.Context, nr *model.NormalizedRequest) (*
 func (p *Provider) AllocateIds(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	_, database := requestPartition(body)
 
 	keys, err := keysFromWire(body["keys"])
 	if err != nil {
 		return nil, err
 	}
+	applyDatabase(keys, database)
 	out, err := p.core.AllocateIDs(ctx, project, keys)
 	if err != nil {
 		return nil, err
@@ -279,14 +314,13 @@ func (p *Provider) AllocateIds(ctx context.Context, nr *model.NormalizedRequest)
 func (p *Provider) ReserveIds(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
 	project := p.project(nr)
+	_, database := requestPartition(body)
 
-	if db := strFrom(body["databaseId"]); db != "" {
-		return nil, invalidArgument("database-scoped requests are not supported")
-	}
 	keys, err := keysFromWire(body["keys"])
 	if err != nil {
 		return nil, err
 	}
+	applyDatabase(keys, database)
 	if err := p.core.ReserveIDs(ctx, project, keys); err != nil {
 		return nil, err
 	}

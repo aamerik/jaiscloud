@@ -101,4 +101,78 @@ func TestDatastore(t *testing.T) {
 		require.Len(t, keys, 1)
 		assert.Greater(t, keys[0].ID, int64(0))
 	})
+
+	t.Run("AncestorKeys", func(t *testing.T) {
+		parent := datastore.NameKey("TaskList", "list-"+suffix, nil)
+		child := datastore.NameKey("Task", "child-"+suffix, parent)
+
+		_, err := client.Put(ctx, child, &Task{Description: "child", Priority: 1})
+		require.NoError(t, err)
+		t.Cleanup(func() { client.Delete(ctx, child) })
+
+		var got Task
+		require.NoError(t, client.Get(ctx, child, &got))
+		assert.Equal(t, "child", got.Description)
+
+		// An ancestor query returns the descendant.
+		var results []Task
+		q := datastore.NewQuery("Task").Ancestor(parent).FilterField("Priority", "=", 1)
+		_, err = client.GetAll(ctx, q, &results)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "child", results[0].Description)
+
+		// A different ancestor does not match.
+		other := datastore.NameKey("TaskList", "other-"+suffix, nil)
+		results = nil
+		_, err = client.GetAll(ctx, datastore.NewQuery("Task").Ancestor(other), &results)
+		require.NoError(t, err)
+		assert.Empty(t, results)
+
+		// The same kind+name under a different parent is a distinct entity.
+		sibling := datastore.NameKey("Task", "child-"+suffix, other)
+		var missing Task
+		assert.ErrorIs(t, client.Get(ctx, sibling, &missing), datastore.ErrNoSuchEntity)
+	})
+
+	t.Run("Namespace", func(t *testing.T) {
+		ns := "ns-" + suffix
+		key := datastore.NameKey("Task", "ns-"+suffix, nil)
+		key.Namespace = ns
+
+		_, err := client.Put(ctx, key, &Task{Description: "namespaced"})
+		require.NoError(t, err)
+		t.Cleanup(func() { client.Delete(ctx, key) })
+
+		// The same kind+name in the default namespace is a different entity.
+		def := datastore.NameKey("Task", "ns-"+suffix, nil)
+		var got Task
+		assert.ErrorIs(t, client.Get(ctx, def, &got), datastore.ErrNoSuchEntity)
+
+		var results []Task
+		_, err = client.GetAll(ctx, datastore.NewQuery("Task").Namespace(ns), &results)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "namespaced", results[0].Description)
+	})
+
+	t.Run("NamedDatabase", func(t *testing.T) {
+		dbID := "db-" + suffix
+		dbClient, err := datastore.NewClientWithDatabase(ctx, ProjectID(), dbID)
+		require.NoError(t, err)
+		defer dbClient.Close()
+
+		key := datastore.NameKey("Task", "db-"+suffix, nil)
+		_, err = dbClient.Put(ctx, key, &Task{Description: "in-db"})
+		require.NoError(t, err)
+		t.Cleanup(func() { dbClient.Delete(ctx, key) })
+
+		var got Task
+		require.NoError(t, dbClient.Get(ctx, key, &got))
+		assert.Equal(t, "in-db", got.Description)
+
+		// The same key in the default database is a different entity.
+		var def Task
+		assert.ErrorIs(t, client.Get(ctx, key, &def), datastore.ErrNoSuchEntity)
+	})
 }

@@ -111,50 +111,68 @@ func keyFromWire(v any) (core.Key, error) {
 	if !ok {
 		return core.Key{}, invalidArgument("malformed key")
 	}
+	out := core.Key{}
 	if pid, ok := m["partitionId"].(map[string]any); ok && pid != nil {
-		if strFrom(pid["namespaceId"]) != "" {
-			return core.Key{}, invalidArgument("namespaced keys are not supported")
-		}
-		if strFrom(pid["databaseId"]) != "" {
-			return core.Key{}, invalidArgument("database-scoped keys are not supported")
-		}
+		out.Namespace = strFrom(pid["namespaceId"])
+		out.Database = strFrom(pid["databaseId"])
 	}
 	raws, _ := m["path"].([]any)
 	if len(raws) == 0 {
-		return core.Key{}, nil
+		return out, nil
 	}
-	if len(raws) > 1 {
-		return core.Key{}, invalidArgument("ancestor keys are not supported")
-	}
-	out := core.Key{}
-	if el, ok := raws[0].(map[string]any); ok {
-		out.Kind = strFrom(el["kind"])
+	els := make([]dsstore.PathElement, 0, len(raws))
+	for _, raw := range raws {
+		el, ok := raw.(map[string]any)
+		if !ok {
+			return core.Key{}, invalidArgument("malformed key path element")
+		}
+		pe := dsstore.PathElement{Kind: strFrom(el["kind"])}
 		if idv, ok := el["id"]; ok {
 			id, err := int64FromWire(idv)
 			if err != nil {
 				return core.Key{}, invalidArgument("invalid key id")
 			}
-			out.ID, out.HasID = id, true
+			pe.ID, pe.HasID = id, true
 		} else if namev, ok := el["name"]; ok {
-			out.Name, out.HasName = strFrom(namev), true
+			pe.Name, pe.HasName = strFrom(namev), true
 		}
+		els = append(els, pe)
+	}
+	if err := core.ValidateKeyPath(els); err != nil {
+		return core.Key{}, err
+	}
+	final := els[len(els)-1]
+	out.Kind, out.ID, out.Name, out.HasID, out.HasName =
+		final.Kind, final.ID, final.Name, final.HasID, final.HasName
+	if len(els) > 1 {
+		out.Ancestors = els[:len(els)-1]
 	}
 	return out, nil
 }
 
 func keyToWire(k core.Key, project string) map[string]any {
-	el := map[string]any{"kind": k.Kind}
-	switch {
-	case k.HasID:
-		el["id"] = strconv.FormatInt(k.ID, 10)
-	case k.HasName:
-		el["name"] = k.Name
-	}
 	pid := map[string]any{}
 	if project != "" {
 		pid["projectId"] = project
 	}
-	return map[string]any{"partitionId": pid, "path": []any{el}}
+	if k.Database != "" {
+		pid["databaseId"] = k.Database
+	}
+	if k.Namespace != "" {
+		pid["namespaceId"] = k.Namespace
+	}
+	path := make([]any, 0, len(k.PathElements()))
+	for _, e := range k.PathElements() {
+		el := map[string]any{"kind": e.Kind}
+		switch {
+		case e.HasID:
+			el["id"] = strconv.FormatInt(e.ID, 10)
+		case e.HasName:
+			el["name"] = e.Name
+		}
+		path = append(path, el)
+	}
+	return map[string]any{"partitionId": pid, "path": path}
 }
 
 // ─── value ────────────────────────────────────────────────────────────────────
@@ -345,23 +363,23 @@ func mutationFromWire(m map[string]any) (core.Mutation, error) {
 	out := core.Mutation{Precondition: preconditionFromWire(m)}
 	switch {
 	case hasKey(m, "insert"):
-		e, err := entityFromWire(m["insert"])
+		k, e, err := mutationTargetWire(m["insert"])
 		if err != nil {
 			return out, err
 		}
-		out.Op, out.Entity = core.MutationInsert, e
+		out.Op, out.Key, out.Entity = core.MutationInsert, k, e
 	case hasKey(m, "upsert"):
-		e, err := entityFromWire(m["upsert"])
+		k, e, err := mutationTargetWire(m["upsert"])
 		if err != nil {
 			return out, err
 		}
-		out.Op, out.Entity = core.MutationUpsert, e
+		out.Op, out.Key, out.Entity = core.MutationUpsert, k, e
 	case hasKey(m, "update"):
-		e, err := entityFromWire(m["update"])
+		k, e, err := mutationTargetWire(m["update"])
 		if err != nil {
 			return out, err
 		}
-		out.Op, out.Entity = core.MutationUpdate, e
+		out.Op, out.Key, out.Entity = core.MutationUpdate, k, e
 	case hasKey(m, "delete"):
 		k, err := keyFromWire(m["delete"])
 		if err != nil {
@@ -372,6 +390,41 @@ func mutationFromWire(m map[string]any) (core.Mutation, error) {
 		return out, invalidArgument("mutation has no operation")
 	}
 	return out, nil
+}
+
+// mutationTargetWire parses an insert/upsert/update entity's neutral key and
+// properties. The neutral key carries any ancestors and partition (needed to
+// allocate an ID for an incomplete key); the entity carries the properties.
+func mutationTargetWire(v any) (core.Key, dsstore.Entity, error) {
+	e, err := entityFromWire(v)
+	if err != nil {
+		return core.Key{}, dsstore.Entity{}, err
+	}
+	var kv any
+	if em, ok := v.(map[string]any); ok {
+		kv = em["key"]
+	}
+	k, err := keyFromWire(kv)
+	if err != nil {
+		return core.Key{}, dsstore.Entity{}, err
+	}
+	return k, e, nil
+}
+
+// withDatabase applies a request's database id to a mutation's keys that do not
+// already carry one (the SDK sets both; a raw caller may set only the request
+// field).
+func withDatabase(m core.Mutation, database string) core.Mutation {
+	if database == "" {
+		return m
+	}
+	if m.Key.Database == "" {
+		m.Key.Database = database
+	}
+	if m.DeleteKey.Database == "" {
+		m.DeleteKey.Database = database
+	}
+	return m
 }
 
 func preconditionFromWire(m map[string]any) *dsstore.Precondition {
@@ -617,6 +670,8 @@ func propertyOpFromWire(s string) core.PropertyOp {
 		return core.PropertyGreaterThan
 	case "GREATER_THAN_OR_EQUAL":
 		return core.PropertyGreaterThanOrEqual
+	case "HAS_ANCESTOR":
+		return core.PropertyHasAncestor
 	default:
 		return core.PropertyUnspecified
 	}

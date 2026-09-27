@@ -49,7 +49,7 @@ type ArrayValue struct {
 // Datastore wire Value one-of (null, boolean, integer, double, timestamp, key,
 // string, blob, geo point, entity, array). Integers and doubles are split
 // (unlike DynamoDB's arbitrary-precision number), and key_value stores a key as
-// its canonical string form (see KeyOfID/KeyOfName).
+// its canonical string form (see KeyOfPath/ParseKey).
 type Value struct {
 	NullValue      *string     `json:"nullValue,omitempty"`
 	BooleanValue   *bool       `json:"booleanValue,omitempty"`
@@ -66,8 +66,9 @@ type Value struct {
 
 // Entity is a stored Datastore entity. Kind is the entity kind (denormalized
 // for kind-scoped queries). Key is the stable canonical key string
-// "kind/id-or-name" (see KeyOfID/KeyOfName); the store's primary key is
-// (project, Key). Properties is the property map keyed by property name.
+// (see KeyOfPath/ParseKey), encoding the key's partition (database +
+// namespace) and full ancestor path; the store's primary key is (project,
+// Key). Properties is the property map keyed by property name.
 // Version and UpdateTime are server-managed bookkeeping used only by
 // ApplyMutation/DeleteConflictChecked's optimistic-concurrency check — a
 // caller constructing an Entity for Insert/Update/Upsert/ApplyMutation does
@@ -269,72 +270,153 @@ func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
 	}
 }
 
-// KeyOfID returns the canonical key string for a numeric-ID key:
-// "<len(kind)>:<kind>/id:<id>". The kind is length-prefixed — rather than
-// relying on "/" as an unambiguous separator — so a kind containing "/" (or
-// any other character) still round-trips correctly through SplitKey. This
-// mirrors the structural principle real Datastore/Firestore key encoding
-// uses: a Key is a protobuf message with explicit length-delimited fields,
-// never a delimiter-joined string, so a kind or name can never corrupt the
-// parse regardless of its contents. See
-// https://cloud.google.com/php/docs/reference/cloud-datastore/latest/V1.Key
-// (Key.PathElement: kind + (id xor name), not a joined string).
-func KeyOfID(kind string, id int64) string {
-	return encodeKind(kind) + "id:" + strconv.FormatInt(id, 10)
+// keyVersionPrefix marks the canonical key encoding. Every canonical key is
+// "<prefix>" + the length-prefixed partition (database, namespace) + one
+// length-prefixed segment per path element. The prefix exists so a malformed
+// or pre-ancestor key is rejected outright rather than misparsed.
+const keyVersionPrefix = "v1|"
+
+// PathElement is one element of a Datastore key path: a kind plus either a
+// numeric ID or a string name (exactly one, unless the element is the
+// incomplete final element of an auto-ID key). It mirrors the protobuf
+// Key.PathElement one-of.
+type PathElement struct {
+	Kind    string
+	ID      int64
+	Name    string
+	HasID   bool
+	HasName bool
 }
 
-// KeyOfName returns the canonical key string for a name key:
-// "<len(kind)>:<kind>/name:<name>". See KeyOfID for why kind is
-// length-prefixed. name is not: ParseIDOrName splits it off by the fixed
-// "id:"/"name:" tag prefix (a single Cut on the first ":"), so name may
-// itself contain "/" or ":" without ambiguity.
-func KeyOfName(kind, name string) string {
-	return encodeKind(kind) + "name:" + name
-}
-
-func encodeKind(kind string) string {
-	return strconv.Itoa(len(kind)) + ":" + kind + "/"
-}
-
-// SplitKey parses "<len(kind)>:<kind>/id-or-name" into its kind and tagged
-// id-or-name. ok is false when the key is malformed.
-func SplitKey(key string) (kind, idOrName string, ok bool) {
-	lenStr, rest, found := strings.Cut(key, ":")
-	if !found {
-		return "", "", false
-	}
-	n, err := strconv.Atoi(lenStr)
-	if err != nil || n < 0 || n > len(rest) {
-		return "", "", false
-	}
-	kind = rest[:n]
-	if kind == "" || len(rest) == n || rest[n] != '/' {
-		return "", "", false
-	}
-	idOrName = rest[n+1:]
-	if idOrName == "" {
-		return "", "", false
-	}
-	return kind, idOrName, true
-}
-
-// ParseIDOrName parses a tagged id-or-name ("id:<n>" or "name:<s>") into its
-// numeric id (isID=true) or name (isID=false).
-func ParseIDOrName(s string) (id int64, name string, isID bool) {
-	tag, val, ok := strings.Cut(s, ":")
-	if !ok {
-		return 0, "", false
-	}
-	switch tag {
-	case "id":
-		n, err := strconv.ParseInt(val, 10, 64)
-		if err != nil {
-			return 0, "", false
+// KeyOfPath returns the canonical store key for a fully-qualified Datastore
+// key: a partition (database + namespace) and a path of one or more elements.
+// The encoding is self-delimiting — every field is length-prefixed — so a kind
+// or name containing "/", ":", or any other character round-trips exactly.
+// This mirrors real Datastore/Firestore, where a Key is a protobuf message
+// with explicit length-delimited fields, never a delimiter-joined string (see
+// https://cloud.google.com/php/docs/reference/cloud-datastore/latest/V1.Key).
+//
+// The final path element may be incomplete (neither HasID nor HasName): it is
+// encoded with a "?" tag and round-trips through ParseKey. Callers that only
+// store complete entities never build such a key; it exists so a core can
+// canonicalize an incomplete key while allocating an ID.
+func KeyOfPath(database, namespace string, path []PathElement) string {
+	var b strings.Builder
+	b.WriteString(keyVersionPrefix)
+	writeLenPrefixed(&b, database)
+	writeLenPrefixed(&b, namespace)
+	for _, e := range path {
+		writeLenPrefixed(&b, e.Kind)
+		switch {
+		case e.HasID:
+			b.WriteByte('i')
+			writeLenPrefixed(&b, strconv.FormatInt(e.ID, 10))
+		case e.HasName:
+			b.WriteByte('n')
+			writeLenPrefixed(&b, e.Name)
+		default:
+			b.WriteByte('?')
 		}
-		return n, "", true
-	case "name":
-		return 0, val, false
-	default:
-		return 0, "", false
 	}
+	return b.String()
+}
+
+// KeyOfID returns the canonical store key for a root, default-partition
+// numeric-ID key (a convenience wrapper over KeyOfPath).
+func KeyOfID(kind string, id int64) string {
+	return KeyOfPath("", "", []PathElement{{Kind: kind, ID: id, HasID: true}})
+}
+
+// KeyOfName returns the canonical store key for a root, default-partition name
+// key (a convenience wrapper over KeyOfPath).
+func KeyOfName(kind, name string) string {
+	return KeyOfPath("", "", []PathElement{{Kind: kind, Name: name, HasName: true}})
+}
+
+// ParseKey parses a canonical store key into its partition (database,
+// namespace) and path. ok is false when the key is malformed or was produced
+// by an incompatible older encoding.
+func ParseKey(key string) (database, namespace string, path []PathElement, ok bool) {
+	rest, found := strings.CutPrefix(key, keyVersionPrefix)
+	if !found {
+		return "", "", nil, false
+	}
+	database, rest, ok = readLenPrefixed(rest)
+	if !ok {
+		return "", "", nil, false
+	}
+	namespace, rest, ok = readLenPrefixed(rest)
+	if !ok {
+		return "", "", nil, false
+	}
+	for rest != "" {
+		kind, r, kok := readLenPrefixed(rest)
+		if !kok || kind == "" || r == "" {
+			return "", "", nil, false
+		}
+		tag := r[0]
+		r = r[1:]
+		switch tag {
+		case 'i':
+			val, r2, vok := readLenPrefixed(r)
+			if !vok {
+				return "", "", nil, false
+			}
+			id, err := strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return "", "", nil, false
+			}
+			path = append(path, PathElement{Kind: kind, ID: id, HasID: true})
+			rest = r2
+		case 'n':
+			val, r2, vok := readLenPrefixed(r)
+			if !vok {
+				return "", "", nil, false
+			}
+			path = append(path, PathElement{Kind: kind, Name: val, HasName: true})
+			rest = r2
+		case '?':
+			path = append(path, PathElement{Kind: kind})
+			rest = r
+		default:
+			return "", "", nil, false
+		}
+	}
+	if len(path) == 0 {
+		return "", "", nil, false
+	}
+	return database, namespace, path, true
+}
+
+// KeyKind returns the kind of a canonical key's final path element, or "" when
+// the key is malformed. It is the denormalized value the store keeps in its
+// kind column for kind-scoped listing.
+func KeyKind(key string) string {
+	_, _, path, ok := ParseKey(key)
+	if !ok || len(path) == 0 {
+		return ""
+	}
+	return path[len(path)-1].Kind
+}
+
+// writeLenPrefixed writes "<len>:<s>" — a decimal byte length, a colon, then
+// the raw bytes — to b.
+func writeLenPrefixed(b *strings.Builder, s string) {
+	b.WriteString(strconv.Itoa(len(s)))
+	b.WriteByte(':')
+	b.WriteString(s)
+}
+
+// readLenPrefixed consumes one "<len>:<value>" field from s and returns the
+// value and the unconsumed remainder.
+func readLenPrefixed(s string) (value, rest string, ok bool) {
+	i := strings.IndexByte(s, ':')
+	if i < 0 {
+		return "", "", false
+	}
+	n, err := strconv.Atoi(s[:i])
+	if err != nil || n < 0 || len(s) < i+1+n {
+		return "", "", false
+	}
+	return s[i+1 : i+1+n], s[i+1+n:], true
 }

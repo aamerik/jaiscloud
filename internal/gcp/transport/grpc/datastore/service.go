@@ -48,13 +48,14 @@ func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*datastorepb.CommitResponse, error) {
 	project := s.project(ctx, req.GetProjectId())
 
+	database := req.GetDatabaseId()
 	mutations := make([]core.Mutation, 0, len(req.GetMutations()))
 	for _, m := range req.GetMutations() {
 		cm, err := mutationFromProto(m)
 		if err != nil {
 			return nil, mapError(err)
 		}
-		mutations = append(mutations, cm)
+		mutations = append(mutations, withDatabase(cm, database))
 	}
 
 	mode := core.CommitModeUnspecified
@@ -93,11 +94,15 @@ func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*
 	txn := req.GetReadOptions().GetTransaction()
 	project := s.project(ctx, req.GetProjectId())
 
+	database := req.GetDatabaseId()
 	keys := make([]core.Key, 0, len(req.GetKeys()))
 	for _, k := range req.GetKeys() {
 		ck, err := keyFromProto(k)
 		if err != nil {
 			return nil, mapError(err)
+		}
+		if database != "" && ck.Database == "" {
+			ck.Database = database
 		}
 		keys = append(keys, ck)
 	}
@@ -126,6 +131,8 @@ func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*
 func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest) (*datastorepb.RunQueryResponse, error) {
 	txn := req.GetReadOptions().GetTransaction()
 	project := s.project(ctx, req.GetProjectId())
+	namespace := req.GetPartitionId().GetNamespaceId()
+	database := req.GetDatabaseId()
 
 	var (
 		resp *core.QueryResult
@@ -137,13 +144,14 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 		if qerr != nil {
 			return nil, mapError(qerr)
 		}
+		nq.Namespace, nq.Database = namespace, database
 		resp, err = s.core.RunQuery(ctx, project, nq, txn)
 	case *datastorepb.RunQueryRequest_GqlQuery:
 		gql, gerr := gqlQueryFromProto(qt.GqlQuery)
 		if gerr != nil {
 			return nil, mapError(gerr)
 		}
-		resp, err = s.core.RunQueryGQL(ctx, project, gql, txn)
+		resp, err = s.core.RunQueryGQL(ctx, project, gql, txn, namespace, database)
 	default:
 		return nil, mapError(invalidArgument("run query request has no query"))
 	}
@@ -169,11 +177,10 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 }
 
 func (s *Service) RunAggregationQuery(ctx context.Context, req *datastorepb.RunAggregationQueryRequest) (*datastorepb.RunAggregationQueryResponse, error) {
-	if err := rejectDatabaseID(req.GetDatabaseId()); err != nil {
-		return nil, mapError(err)
-	}
 	txn := req.GetReadOptions().GetTransaction()
 	project := s.project(ctx, req.GetProjectId())
+	namespace := req.GetPartitionId().GetNamespaceId()
+	database := req.GetDatabaseId()
 
 	var (
 		resp *core.AggregationResult
@@ -185,13 +192,14 @@ func (s *Service) RunAggregationQuery(ctx context.Context, req *datastorepb.RunA
 		if aerr != nil {
 			return nil, mapError(aerr)
 		}
+		naq.Nested.Namespace, naq.Nested.Database = namespace, database
 		resp, err = s.core.RunAggregationQuery(ctx, project, naq, txn)
 	case *datastorepb.RunAggregationQueryRequest_GqlQuery:
 		gql, gerr := gqlQueryFromProto(qt.GqlQuery)
 		if gerr != nil {
 			return nil, mapError(gerr)
 		}
-		resp, err = s.core.RunAggregationQueryGQL(ctx, project, gql, txn)
+		resp, err = s.core.RunAggregationQueryGQL(ctx, project, gql, txn, namespace, database)
 	default:
 		return nil, mapError(invalidArgument("run aggregation query request has no query"))
 	}
@@ -229,11 +237,15 @@ func (s *Service) Rollback(ctx context.Context, req *datastorepb.RollbackRequest
 func (s *Service) AllocateIds(ctx context.Context, req *datastorepb.AllocateIdsRequest) (*datastorepb.AllocateIdsResponse, error) {
 	project := s.project(ctx, req.GetProjectId())
 
+	database := req.GetDatabaseId()
 	keys := make([]core.Key, 0, len(req.GetKeys()))
 	for _, k := range req.GetKeys() {
 		ck, err := keyFromProto(k)
 		if err != nil {
 			return nil, mapError(err)
+		}
+		if database != "" && ck.Database == "" {
+			ck.Database = database
 		}
 		keys = append(keys, ck)
 	}
@@ -250,16 +262,17 @@ func (s *Service) AllocateIds(ctx context.Context, req *datastorepb.AllocateIdsR
 }
 
 func (s *Service) ReserveIds(ctx context.Context, req *datastorepb.ReserveIdsRequest) (*datastorepb.ReserveIdsResponse, error) {
-	if err := rejectDatabaseID(req.GetDatabaseId()); err != nil {
-		return nil, mapError(err)
-	}
 	project := s.project(ctx, req.GetProjectId())
+	database := req.GetDatabaseId()
 
 	keys := make([]core.Key, 0, len(req.GetKeys()))
 	for _, k := range req.GetKeys() {
 		ck, err := keyFromProto(k)
 		if err != nil {
 			return nil, mapError(err)
+		}
+		if database != "" && ck.Database == "" {
+			ck.Database = database
 		}
 		keys = append(keys, ck)
 	}

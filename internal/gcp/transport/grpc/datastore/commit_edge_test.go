@@ -90,26 +90,18 @@ func TestNonTransactionalNoOperationMutation(t *testing.T) {
 	}
 }
 
-// TestNonTransactionalInvalidKeys covers the resolveEntity / entityFromProto /
-// deleteKey error branches. A namespaced key is rejected by canonicalKey, which
-// each mutation kind surfaces as INVALID_ARGUMENT; an incomplete Update key is
-// rejected by the service's explicit empty-key check.
+// TestNonTransactionalInvalidKeys covers the resolveEntity / mutation error
+// branches. An incomplete Update key is rejected by the service's explicit
+// Complete() check (an incomplete Insert/Upsert key is valid — the server
+// allocates an ID).
 func TestNonTransactionalInvalidKeys(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()
 
-	namespaced := &datastorepb.Key{
-		PartitionId: &datastorepb.PartitionId{ProjectId: "test", NamespaceId: "ns"},
-		Path:        []*datastorepb.Key_PathElement{{Kind: "Task", IdType: &datastorepb.Key_PathElement_Name{Name: "a"}}},
-	}
 	cases := []struct {
 		name string
 		m    *datastorepb.Mutation
 	}{
-		{"insert namespaced key", &datastorepb.Mutation{Operation: &datastorepb.Mutation_Insert{Insert: entity(namespaced, map[string]*datastorepb.Value{"n": intVal(1)})}}},
-		{"upsert namespaced key", &datastorepb.Mutation{Operation: &datastorepb.Mutation_Upsert{Upsert: entity(namespaced, map[string]*datastorepb.Value{"n": intVal(1)})}}},
-		{"update namespaced key", &datastorepb.Mutation{Operation: &datastorepb.Mutation_Update{Update: entity(namespaced, map[string]*datastorepb.Value{"n": intVal(1)})}}},
-		{"delete namespaced key", &datastorepb.Mutation{Operation: &datastorepb.Mutation_Delete{Delete: namespaced}}},
 		{"update incomplete key", &datastorepb.Mutation{Operation: &datastorepb.Mutation_Update{Update: entity(incompleteKey("Task"), map[string]*datastorepb.Value{"n": intVal(1)})}}},
 	}
 	for _, tc := range cases {

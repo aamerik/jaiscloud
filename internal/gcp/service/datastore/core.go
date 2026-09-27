@@ -234,7 +234,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			if m.Op == MutationUpsert {
 				storeKind = dsstore.MutationUpsert
 			}
-			e, allocated, err := s.resolveEntity(ctx, project, m.Entity)
+			e, allocated, err := s.resolveEntity(ctx, project, m.Key, m.Entity)
 			if err != nil {
 				return nil, err
 			}
@@ -254,10 +254,12 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				}
 			}
 		case MutationUpdate:
-			e := m.Entity
-			if e.Key == "" {
+			if !m.Key.Complete() {
 				return nil, invalidArgument("update key is incomplete")
 			}
+			e := m.Entity
+			e.Kind = m.Key.Kind
+			e.Key = canonicalKey(m.Key)
 			applied, err := s.store.ApplyMutation(ctx, project, dsstore.MutationUpdate, e, m.Precondition)
 			switch {
 			case errors.Is(err, dsstore.ErrConflict):
@@ -317,7 +319,7 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 			if m.Op == MutationUpsert {
 				writeOp = dsstore.WriteUpsert
 			}
-			e, allocated, err := s.resolveEntity(ctx, project, m.Entity)
+			e, allocated, err := s.resolveEntity(ctx, project, m.Key, m.Entity)
 			if err != nil {
 				return nil, err
 			}
@@ -326,10 +328,12 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 				allocatedKeys[i] = keyFromCanonical(e.Key)
 			}
 		case MutationUpdate:
-			e := m.Entity
-			if e.Key == "" {
+			if !m.Key.Complete() {
 				return nil, invalidArgument("update key is incomplete")
 			}
+			e := m.Entity
+			e.Kind = m.Key.Kind
+			e.Key = canonicalKey(m.Key)
 			writes = append(writes, dsstore.Write{Op: dsstore.WriteUpdate, Key: e.Key, Entity: e, Precondition: m.Precondition})
 		case MutationDelete:
 			key, err := deleteKey(m.DeleteKey)
@@ -412,6 +416,9 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	out := &QueryResult{MoreResults: MoreResultsNoMoreResults}
 	skipped := 0
 	for _, e := range entities {
+		if !entityInScope(e, q.Namespace, q.Database) {
+			continue
+		}
 		match, err := matchesFilter(e, q.Filter)
 		if err != nil {
 			return nil, err
@@ -499,6 +506,9 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 	// transaction read-set (the same approximation RunQuery makes).
 	matching := make([]dsstore.Entity, 0, len(entities))
 	for _, e := range entities {
+		if !entityInScope(e, aq.Nested.Namespace, aq.Nested.Database) {
+			continue
+		}
 		match, err := matchesFilter(e, aq.Nested.Filter)
 		if err != nil {
 			return nil, err
@@ -556,7 +566,13 @@ func (s *Service) AllocateIDs(ctx context.Context, project string, keys []Key) (
 	}
 	out := make([]Key, len(keys))
 	for i, k := range keys {
-		out[i] = Key{Kind: k.Kind, ID: ids[i], HasID: true}
+		// Preserve the key's ancestors and partition; only the final element is
+		// completed with the allocated numeric ID.
+		k.ID = ids[i]
+		k.HasID = true
+		k.HasName = false
+		k.Name = ""
+		out[i] = k
 	}
 	return out, nil
 }
@@ -577,38 +593,49 @@ func (s *Service) ReserveIDs(ctx context.Context, project string, keys []Key) er
 	return nil
 }
 
-// resolveEntity allocates a numeric ID when the entity's key path is
-// incomplete. The bool reports whether an ID was allocated (so Commit can echo
-// the resolved key back in MutationResult.Key). For an explicitly-keyed entity,
-// the per-project ID allocator is advanced past the explicit numeric ID so
-// AllocateIds never reissues an ID already in use.
-func (s *Service) resolveEntity(ctx context.Context, project string, e dsstore.Entity) (dsstore.Entity, bool, error) {
-	if e.Key == "" {
+// resolveEntity completes an entity's target key, allocating a numeric ID when
+// the key's final element is incomplete, and returns the entity stamped with
+// its canonical store key. The bool reports whether an ID was allocated (so
+// Commit can echo the resolved key back in MutationResult.Key). For an
+// explicitly-keyed entity, the project's ID allocator is advanced past the
+// explicit numeric ID so AllocateIds never reissues an ID already in use.
+func (s *Service) resolveEntity(ctx context.Context, project string, mk Key, e dsstore.Entity) (dsstore.Entity, bool, error) {
+	if mk.Kind == "" {
+		return e, false, invalidArgument("entity key is missing its kind")
+	}
+	final := dsstore.PathElement{Kind: mk.Kind, ID: mk.ID, Name: mk.Name, HasID: mk.HasID, HasName: mk.HasName}
+	allocated := false
+	if !mk.Complete() {
 		ids, err := s.store.AllocateIDs(ctx, project, 1)
 		if err != nil {
 			return e, false, mapStoreError(err)
 		}
-		e.Key = dsstore.KeyOfID(e.Kind, ids[0])
-		return e, true, nil
+		final.ID, final.HasID = ids[0], true
+		allocated = true
 	}
-	if err := s.advanceAllocator(ctx, project, e.Key); err != nil {
-		return e, false, err
+	path := append(append([]dsstore.PathElement(nil), mk.Ancestors...), final)
+	e.Kind = final.Kind
+	e.Key = dsstore.KeyOfPath(mk.Database, mk.Namespace, path)
+	if !allocated {
+		if err := s.advanceAllocator(ctx, project, e.Key); err != nil {
+			return e, false, err
+		}
 	}
-	return e, false, nil
+	return e, allocated, nil
 }
 
 // advanceAllocator advances the project's ID allocator past an explicitly-used
-// numeric ID (name keys are ignored).
+// numeric final-element ID (name keys are ignored).
 func (s *Service) advanceAllocator(ctx context.Context, project, key string) error {
-	_, idOrName, ok := dsstore.SplitKey(key)
-	if !ok {
+	_, _, path, ok := dsstore.ParseKey(key)
+	if !ok || len(path) == 0 {
 		return nil
 	}
-	id, _, isID := dsstore.ParseIDOrName(idOrName)
-	if !isID {
+	final := path[len(path)-1]
+	if !final.HasID {
 		return nil
 	}
-	return mapStoreError(s.store.AdvanceIDs(ctx, project, id))
+	return mapStoreError(s.store.AdvanceIDs(ctx, project, final.ID))
 }
 
 // deleteKey requires a complete key and returns its canonical store key.
@@ -619,16 +646,21 @@ func deleteKey(k Key) (string, error) {
 	return canonicalKey(k), nil
 }
 
-// canonicalKey converts a complete neutral key to the store's canonical key
-// string.
+// canonicalKey converts a complete neutral key (path + partition) to the
+// store's canonical key string.
 func canonicalKey(k Key) string {
-	if k.HasID {
-		return dsstore.KeyOfID(k.Kind, k.ID)
+	if !k.Complete() {
+		return ""
 	}
-	if k.HasName {
-		return dsstore.KeyOfName(k.Kind, k.Name)
-	}
-	return ""
+	return dsstore.KeyOfPath(k.Database, k.Namespace, k.path())
+}
+
+// entityInScope reports whether an entity's canonical key belongs to the given
+// partition (namespace/database). It is how a query's partition scopes the
+// store's project-wide ListKind scan.
+func entityInScope(e dsstore.Entity, namespace, database string) bool {
+	db, ns, _, ok := dsstore.ParseKey(e.Key)
+	return ok && db == database && ns == namespace
 }
 
 // CanonicalKey returns the store's canonical key string for a neutral key. It
@@ -636,18 +668,27 @@ func canonicalKey(k Key) string {
 // keyed entity.
 func CanonicalKey(k Key) string { return canonicalKey(k) }
 
-// keyFromCanonical reconstructs a neutral Key from the store's canonical key
-// string, or nil when the key is malformed.
+// keyFromCanonical reconstructs a neutral Key (partition + full path) from the
+// store's canonical key string, or nil when the key is malformed.
 func keyFromCanonical(key string) *Key {
-	kind, idOrName, ok := dsstore.SplitKey(key)
-	if !ok {
+	database, namespace, path, ok := dsstore.ParseKey(key)
+	if !ok || len(path) == 0 {
 		return nil
 	}
-	id, name, isID := dsstore.ParseIDOrName(idOrName)
-	if isID {
-		return &Key{Kind: kind, ID: id, HasID: true}
+	final := path[len(path)-1]
+	k := &Key{
+		Kind:      final.Kind,
+		ID:        final.ID,
+		Name:      final.Name,
+		HasID:     final.HasID,
+		HasName:   final.HasName,
+		Namespace: namespace,
+		Database:  database,
 	}
-	return &Key{Kind: kind, Name: name, HasName: true}
+	if len(path) > 1 {
+		k.Ancestors = append([]dsstore.PathElement(nil), path[:len(path)-1]...)
+	}
+	return k
 }
 
 // KeyFromCanonical reconstructs a neutral Key from a canonical store key

@@ -25,8 +25,10 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
-// entityCols is the SELECT column list for jc_datastore_entities (the project
-// and name_or_id columns are re-derivable from Key and scanned but discarded).
+// entityCols is the SELECT column list for jc_datastore_entities. The
+// name_or_id column holds the full canonical key (KeyOfPath) and the kind
+// column is its final element kind (denormalized for kind-scoped listing); the
+// project column is scanned but discarded.
 const entityCols = "project, kind, name_or_id, properties, version, update_time"
 
 func scanEntity(scan func(...any) error) (Entity, error) {
@@ -42,16 +44,25 @@ func scanEntity(scan func(...any) error) (Entity, error) {
 	if e.Properties == nil {
 		e.Properties = map[string]Value{}
 	}
-	// Rebuild the canonical (length-prefixed) key form the rest of the store
-	// uses (KeyOfID/KeyOfName). The name_or_id column is the tagged identifier
-	// ("id:<n>"/"name:<s>"), not the canonical key, so — unlike the
-	// pre-#42 "kind/name_or_id" join — it round-trips through SplitKey.
-	if id, name, isID := ParseIDOrName(nameOrID); isID {
-		e.Key = KeyOfID(e.Kind, id)
-	} else {
-		e.Key = KeyOfName(e.Kind, name)
+	// name_or_id is the full canonical key, so it is used verbatim. A value
+	// that does not parse (e.g. a row written by a pre-ancestors build) is
+	// surfaced as ErrInvalidKey rather than silently misread.
+	if _, _, _, ok := ParseKey(nameOrID); !ok {
+		return Entity{}, ErrInvalidKey
 	}
+	e.Key = nameOrID
 	return e, nil
+}
+
+// keyCols decomposes a canonical key into the (kind, name_or_id) column pair
+// the entity table is keyed by: name_or_id holds the whole canonical key and
+// kind is its final element kind.
+func keyCols(key string) (kind, nameOrID string, ok bool) {
+	kind = KeyKind(key)
+	if kind == "" {
+		return "", "", false
+	}
+	return kind, key, true
 }
 
 func propertiesJSON(props map[string]Value) []byte {
@@ -65,10 +76,10 @@ func propertiesJSON(props map[string]Value) []byte {
 	return b
 }
 
-// splitKeyCols decomposes an entity's canonical key into the kind and tagged
-// id-or-name columns.
+// splitKeyCols decomposes an entity's canonical key into the kind and
+// name_or_id columns.
 func splitKeyCols(e Entity) (kind, nameOrID string, err error) {
-	kind, nameOrID, ok := SplitKey(e.Key)
+	kind, nameOrID, ok := keyCols(e.Key)
 	if !ok {
 		return "", "", ErrInvalidKey
 	}
@@ -76,7 +87,7 @@ func splitKeyCols(e Entity) (kind, nameOrID string, err error) {
 }
 
 func (s *PostgresStore) Get(ctx context.Context, project, key string) (Entity, error) {
-	kind, nameOrID, ok := SplitKey(key)
+	kind, nameOrID, ok := keyCols(key)
 	if !ok {
 		return Entity{}, ErrInvalidKey
 	}
@@ -142,7 +153,7 @@ func (s *PostgresStore) Update(ctx context.Context, project string, e Entity) er
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, project, key string) error {
-	kind, nameOrID, ok := SplitKey(key)
+	kind, nameOrID, ok := keyCols(key)
 	if !ok {
 		return ErrInvalidKey
 	}
@@ -217,7 +228,7 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 
 // DeleteConflictChecked mirrors ApplyMutation's locking convention.
 func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key string, precondition *Precondition) error {
-	kind, nameOrID, ok := SplitKey(key)
+	kind, nameOrID, ok := keyCols(key)
 	if !ok {
 		return ErrInvalidKey
 	}
@@ -263,7 +274,7 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 
 	// 1. Re-validate the transaction read-set under row locks.
 	for _, r := range reads {
-		kind, nameOrID, ok := SplitKey(r.Key)
+		kind, nameOrID, ok := keyCols(r.Key)
 		if !ok {
 			return nil, ErrInvalidKey
 		}
@@ -291,7 +302,7 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 	//    persist, without mutating anything yet (all-or-nothing).
 	applied := make([]Entity, len(writes))
 	for i, w := range writes {
-		kind, nameOrID, ok := SplitKey(w.Key)
+		kind, nameOrID, ok := keyCols(w.Key)
 		if !ok {
 			return nil, ErrInvalidKey
 		}
@@ -316,7 +327,7 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 
 	// 3. Apply all writes now that every validation has passed.
 	for i, w := range writes {
-		kind, nameOrID, ok := SplitKey(w.Key)
+		kind, nameOrID, ok := keyCols(w.Key)
 		if !ok {
 			return nil, ErrInvalidKey
 		}

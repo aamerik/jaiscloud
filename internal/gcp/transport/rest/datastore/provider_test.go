@@ -339,6 +339,95 @@ func TestRESTAllocateIdsRejectsEmptyKeyPath(t *testing.T) {
 	}
 }
 
+// TestRESTAncestorNamespaceDatabaseRoundTrip drives Commit/Lookup/RunQuery with
+// an ancestor path plus namespace and request-level database, asserting the
+// full partition+path round-trips and scopes results.
+func TestRESTAncestorNamespaceDatabaseRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	childKey := func(ns string) map[string]any {
+		pid := map[string]any{"projectId": "test"}
+		if ns != "" {
+			pid["namespaceId"] = ns
+		}
+		// databaseId is deliberately omitted: the request-level field fills it.
+		return map[string]any{
+			"partitionId": pid,
+			"path": []any{
+				map[string]any{"kind": "Parent", "id": "1"},
+				map[string]any{"kind": "Child", "name": "c"},
+			},
+		}
+	}
+
+	if _, err := call(t, c, p, "test", "commit", map[string]any{
+		"databaseId": "db1",
+		"mode":       "NON_TRANSACTIONAL",
+		"mutations": []any{map[string]any{"upsert": map[string]any{
+			"key":        childKey("ns1"),
+			"properties": map[string]any{"n": map[string]any{"integerValue": "1"}},
+		}}},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	lookup, err := call(t, c, p, "test", "lookup", map[string]any{
+		"databaseId": "db1",
+		"keys":       []any{childKey("ns1")},
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	found, _ := lookup.Data["found"].([]any)
+	if len(found) != 1 {
+		t.Fatalf("found = %v, want 1", lookup.Data["found"])
+	}
+	gotKey := found[0].(map[string]any)["entity"].(map[string]any)["key"].(map[string]any)
+	pid, _ := gotKey["partitionId"].(map[string]any)
+	if pid["namespaceId"] != "ns1" || pid["databaseId"] != "db1" {
+		t.Fatalf("round-tripped partition = %+v", pid)
+	}
+	if path, _ := gotKey["path"].([]any); len(path) != 2 {
+		t.Fatalf("round-tripped path = %+v", gotKey["path"])
+	}
+
+	// A different namespace is a different entity.
+	miss, err := call(t, c, p, "test", "lookup", map[string]any{
+		"databaseId": "db1",
+		"keys":       []any{childKey("ns2")},
+	})
+	if err != nil {
+		t.Fatalf("lookup ns2: %v", err)
+	}
+	if f, _ := miss.Data["found"].([]any); len(f) != 0 {
+		t.Fatalf("ns2 found = %v, want none", miss.Data["found"])
+	}
+
+	// An ancestor query scoped to ns1/db1 returns the child.
+	rq, err := call(t, c, p, "test", "runQuery", map[string]any{
+		"databaseId":  "db1",
+		"partitionId": map[string]any{"namespaceId": "ns1"},
+		"query": map[string]any{
+			"kind": []any{map[string]any{"name": "Child"}},
+			"filter": map[string]any{"propertyFilter": map[string]any{
+				"property": map[string]any{"name": "__key__"},
+				"op":       "HAS_ANCESTOR",
+				"value": map[string]any{"keyValue": map[string]any{
+					"partitionId": map[string]any{"projectId": "test"},
+					"path":        []any{map[string]any{"kind": "Parent", "id": "1"}},
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("runQuery: %v", err)
+	}
+	batch, _ := rq.Data["batch"].(map[string]any)
+	if ers, _ := batch["entityResults"].([]any); len(ers) != 1 {
+		t.Fatalf("ancestor query results = %v, want 1", batch["entityResults"])
+	}
+}
+
 func TestCodecRejectsNonPostAndUnknownVerb(t *testing.T) {
 	c := NewCodec()
 	raw := []byte(`{}`)
