@@ -385,6 +385,55 @@ func compositeOpFromProto(op datastorepb.CompositeFilter_Operator) core.Composit
 	}
 }
 
+// gqlQueryFromProto converts a proto GqlQuery into the transport-neutral
+// GQLQuery. A binding carries either an inline value or an opaque cursor; the
+// core rejects a cursor binding when it is referenced.
+func gqlQueryFromProto(q *datastorepb.GqlQuery) (core.GQLQuery, error) {
+	out := core.GQLQuery{
+		QueryString:   q.GetQueryString(),
+		AllowLiterals: q.GetAllowLiterals(),
+	}
+	if named := q.GetNamedBindings(); len(named) > 0 {
+		out.NamedBindings = make(map[string]core.GQLBinding, len(named))
+		for name, b := range named {
+			gb, err := gqlBindingFromProto(b)
+			if err != nil {
+				return core.GQLQuery{}, err
+			}
+			out.NamedBindings[name] = gb
+		}
+	}
+	if positional := q.GetPositionalBindings(); len(positional) > 0 {
+		out.PositionalBindings = make([]core.GQLBinding, 0, len(positional))
+		for _, b := range positional {
+			gb, err := gqlBindingFromProto(b)
+			if err != nil {
+				return core.GQLQuery{}, err
+			}
+			out.PositionalBindings = append(out.PositionalBindings, gb)
+		}
+	}
+	return out, nil
+}
+
+func gqlBindingFromProto(b *datastorepb.GqlQueryParameter) (core.GQLBinding, error) {
+	if b == nil {
+		return core.GQLBinding{}, nil
+	}
+	switch pt := b.GetParameterType().(type) {
+	case *datastorepb.GqlQueryParameter_Value:
+		v, err := valueFromProto(pt.Value)
+		if err != nil {
+			return core.GQLBinding{}, err
+		}
+		return core.GQLBinding{Value: &v}, nil
+	case *datastorepb.GqlQueryParameter_Cursor:
+		return core.GQLBinding{Cursor: pt.Cursor}, nil
+	default:
+		return core.GQLBinding{}, invalidArgument("GQL binding has no value")
+	}
+}
+
 // aggregationQueryFromProto translates a proto AggregationQuery into a neutral
 // one. A non-nil query without a nested query is rejected (the wire requires
 // the nested query).

@@ -127,21 +127,26 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 	txn := req.GetReadOptions().GetTransaction()
 	project := s.project(ctx, req.GetProjectId())
 
-	var q *core.Query
+	var (
+		resp *core.QueryResult
+		err  error
+	)
 	switch qt := req.GetQueryType().(type) {
 	case *datastorepb.RunQueryRequest_Query:
-		nq, err := queryFromProto(qt.Query)
-		if err != nil {
-			return nil, mapError(err)
+		nq, qerr := queryFromProto(qt.Query)
+		if qerr != nil {
+			return nil, mapError(qerr)
 		}
-		q = nq
+		resp, err = s.core.RunQuery(ctx, project, nq, txn)
 	case *datastorepb.RunQueryRequest_GqlQuery:
-		return nil, mapError(invalidArgument("GQL queries are not supported"))
+		gql, gerr := gqlQueryFromProto(qt.GqlQuery)
+		if gerr != nil {
+			return nil, mapError(gerr)
+		}
+		resp, err = s.core.RunQueryGQL(ctx, project, gql, txn)
 	default:
 		return nil, mapError(invalidArgument("run query request has no query"))
 	}
-
-	resp, err := s.core.RunQuery(ctx, project, q, txn)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -170,21 +175,26 @@ func (s *Service) RunAggregationQuery(ctx context.Context, req *datastorepb.RunA
 	txn := req.GetReadOptions().GetTransaction()
 	project := s.project(ctx, req.GetProjectId())
 
-	var aq *core.AggregationQuery
+	var (
+		resp *core.AggregationResult
+		err  error
+	)
 	switch qt := req.GetQueryType().(type) {
 	case *datastorepb.RunAggregationQueryRequest_AggregationQuery:
-		naq, err := aggregationQueryFromProto(qt.AggregationQuery)
-		if err != nil {
-			return nil, mapError(err)
+		naq, aerr := aggregationQueryFromProto(qt.AggregationQuery)
+		if aerr != nil {
+			return nil, mapError(aerr)
 		}
-		aq = naq
+		resp, err = s.core.RunAggregationQuery(ctx, project, naq, txn)
 	case *datastorepb.RunAggregationQueryRequest_GqlQuery:
-		return nil, mapError(invalidArgument("GQL aggregation queries are not supported"))
+		gql, gerr := gqlQueryFromProto(qt.GqlQuery)
+		if gerr != nil {
+			return nil, mapError(gerr)
+		}
+		resp, err = s.core.RunAggregationQueryGQL(ctx, project, gql, txn)
 	default:
 		return nil, mapError(invalidArgument("run aggregation query request has no query"))
 	}
-
-	resp, err := s.core.RunAggregationQuery(ctx, project, aq, txn)
 	if err != nil {
 		return nil, mapError(err)
 	}

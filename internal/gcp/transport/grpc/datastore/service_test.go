@@ -443,17 +443,83 @@ func TestRunQueryUnsupportedOperatorsFailClosed(t *testing.T) {
 	}
 }
 
-func TestRunQueryGqlNotSupported(t *testing.T) {
+func gqlValue(v *datastorepb.Value) *datastorepb.GqlQueryParameter {
+	return &datastorepb.GqlQueryParameter{ParameterType: &datastorepb.GqlQueryParameter_Value{Value: v}}
+}
+
+func TestRunQueryGQL(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	_, err := client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+	// Seed two entities: Task a with n=1 and Task b with n=5.
+	upsertTask(t, client, "a", 1)
+	upsertTask(t, client, "b", 5)
+
+	run := func(query string, allowLiterals bool, named map[string]*datastorepb.GqlQueryParameter, positional []*datastorepb.GqlQueryParameter) (int, error) {
+		resp, err := client.RunQuery(ctx, &datastorepb.RunQueryRequest{
+			ProjectId: "test",
+			QueryType: &datastorepb.RunQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{
+				QueryString:        query,
+				AllowLiterals:      allowLiterals,
+				NamedBindings:      named,
+				PositionalBindings: positional,
+			}},
+		})
+		if err != nil {
+			return 0, err
+		}
+		return len(resp.GetBatch().GetEntityResults()), nil
+	}
+
+	// Literal comparison.
+	if n, err := run("SELECT * FROM Task WHERE n >= 4", true, nil, nil); err != nil || n != 1 {
+		t.Fatalf("literal GQL = (%d, %v), want (1, nil)", n, err)
+	}
+	// Named binding.
+	if n, err := run("SELECT * FROM Task WHERE n = @p", false,
+		map[string]*datastorepb.GqlQueryParameter{"p": gqlValue(intVal(5))}, nil); err != nil || n != 1 {
+		t.Fatalf("named-binding GQL = (%d, %v), want (1, nil)", n, err)
+	}
+	// Positional binding.
+	if n, err := run("SELECT * FROM Task WHERE n = @1", false, nil,
+		[]*datastorepb.GqlQueryParameter{gqlValue(intVal(1))}); err != nil || n != 1 {
+		t.Fatalf("positional-binding GQL = (%d, %v), want (1, nil)", n, err)
+	}
+	// IN with a positional array binding.
+	arr := &datastorepb.Value{ValueType: &datastorepb.Value_ArrayValue{ArrayValue: &datastorepb.ArrayValue{
+		Values: []*datastorepb.Value{intVal(1), intVal(5)},
+	}}}
+	if n, err := run("SELECT * FROM Task WHERE n IN @1", false, nil,
+		[]*datastorepb.GqlQueryParameter{gqlValue(arr)}); err != nil || n != 2 {
+		t.Fatalf("IN-binding GQL = (%d, %v), want (2, nil)", n, err)
+	}
+	// LIMIT.
+	if n, err := run("SELECT * FROM Task WHERE n >= 1 LIMIT 1", true, nil, nil); err != nil || n != 1 {
+		t.Fatalf("LIMIT GQL = (%d, %v), want (1, nil)", n, err)
+	}
+	// Literals are rejected when allow_literals is false.
+	if _, err := run("SELECT * FROM Task WHERE n = 5", false, nil, nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("disallowed-literal GQL err = %v, want InvalidArgument", err)
+	}
+
+	// Aggregation GQL.
+	agg, err := client.RunAggregationQuery(ctx, &datastorepb.RunAggregationQueryRequest{
 		ProjectId: "test",
-		QueryType: &datastorepb.RunQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{QueryString: "SELECT * FROM Task"}},
+		QueryType: &datastorepb.RunAggregationQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{
+			QueryString:   "AGGREGATE COUNT(*) OVER (SELECT * FROM Task WHERE n >= 1)",
+			AllowLiterals: true,
+		}},
 	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("GQL err = %v, want InvalidArgument", err)
+	if err != nil {
+		t.Fatalf("GQL aggregation: %v", err)
+	}
+	counts := agg.GetBatch().GetAggregationResults()
+	if len(counts) != 1 {
+		t.Fatalf("GQL aggregation returned %d results, want 1", len(counts))
+	}
+	if got := counts[0].GetAggregateProperties()["property_1"].GetIntegerValue(); got != 2 {
+		t.Fatalf("GQL AGGREGATE COUNT(*) = %d, want 2", got)
 	}
 }
 

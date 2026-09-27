@@ -21,7 +21,7 @@
 | Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, structured/aggregation/partition queries, composite indexes, `BatchWrite`/`Write`/`Listen` streaming, pipelines (read-only subset) |
-| Cloud Datastore mode | REST + gRPC | Entities, queries, ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
+| Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke (mock echo by default, Docker/K8s execution modes), locations, source URLs |
 | Cloud Workflows | REST + gRPC | Workflow definitions + executions, real YAML expression engine |
 | Cloud Dataproc | REST + gRPC | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
@@ -243,6 +243,8 @@ The Firestore pipeline RPC (`google.firestore.v1.Firestore/ExecutePipeline`) is 
 ### Datastore: transactions are optimistic with a read-set
 
 The Datastore gRPC service supports real transactions using GCP's optimistic read-set model. `BeginTransaction` returns an opaque transaction handle; `Lookup`, `RunQuery`, and `RunAggregationQuery` issued with that handle record a read-set; a `Commit` with the `TRANSACTIONAL` mode re-validates every read key against current state and applies all mutations atomically. A concurrent modification to a read key aborts the whole commit with `ABORTED` (no mutations applied), and a per-mutation `base_version`/`update_time` precondition mismatch fails with `FAILED_PRECONDITION`. `Rollback` discards the transaction, and a `TRANSACTIONAL` commit without a handle (or with an unknown/expired one) is `INVALID_ARGUMENT`. Non-transactional `Commit`, `Lookup`, and `RunQuery` are fully supported. `ReserveIds` advances the ID allocator so reserved IDs are never reissued by `AllocateIds`. `RunAggregationQuery` evaluates `count`/`sum`/`avg` over the nested query (kind + filter), honors aliases, and participates in transactions.
+
+GQL is supported on both transports: `runQuery`/`RunQuery` accept a `gqlQuery` (`SELECT` with `WHERE`, `IN`, `IS [NOT] NULL`, `DATETIME`/`KEY`/`BLOB` literals, and named `@name`/positional `@N` bindings), and `runAggregationQuery`/`RunAggregationQuery` accept `AGGREGATE COUNT(*) | COUNT_UP_TO(n) | SUM(p) | AVG(p) OVER (SELECT ...)`. A GQL filter is translated to the same structured filter the engine already executes. Documented approximations: the emulator's query engine models only kind/filter/offset/limit, so GQL projection, `ORDER BY`, and cursor bindings are parsed/ignored, not applied; `HAS ANCESTOR`/`HAS DESCENDANT`, `CONTAINS`, and `NOT` are rejected (the same limitations the structured query surface has). Literals are accepted only when `allow_literals` is set, matching real Datastore.
 
 Documented approximations: the query read-set tracks the returned entities' versions (real Datastore validates the query's read *range*), transactions are single entity-group, and an unused transaction handle expires after ~270 seconds (real Datastore also expires transactions).
 

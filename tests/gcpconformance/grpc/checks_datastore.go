@@ -30,6 +30,8 @@ func datastoreChecks() []Check {
 		{Service: "datastore", RPC: "RunQuery (filter)", Method: "RunQuery", KeyField: "batch.entity_results[]", Run: checkDatastoreRunQuery},
 		{Service: "datastore", RPC: "RunQuery (limit+offset)", Method: "RunQuery", KeyField: "batch.entity_results[] bounded", Run: checkDatastoreRunQueryWindow},
 		{Service: "datastore", RPC: "RunAggregationQuery (count)", Method: "RunAggregationQuery", KeyField: "batch.aggregation_results[].count", Run: checkDatastoreRunAggregationQuery},
+		{Service: "datastore", RPC: "RunQuery (GQL)", Method: "RunQuery", KeyField: "batch.entity_results[] via GQL", Run: checkDatastoreRunQueryGQL},
+		{Service: "datastore", RPC: "RunAggregationQuery (GQL)", Method: "RunAggregationQuery", KeyField: "GQL AGGREGATE COUNT(*)", Run: checkDatastoreRunAggregationQueryGQL},
 		{Service: "datastore", RPC: "Commit (Delete)", Method: "Commit", KeyField: "entity absent after delete", Run: checkDatastoreDelete},
 		{Service: "datastore", RPC: "BeginTransaction + Commit", Method: "BeginTransaction", KeyField: "txn commit persists entity", Run: checkDatastoreTxnCommit},
 		{Service: "datastore", RPC: "Rollback", Method: "Rollback", KeyField: "entity absent after rollback", Run: checkDatastoreRollback},
@@ -250,6 +252,74 @@ func checkDatastoreRunAggregationQuery(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("count = %d, want 1", got)
 	}
 	return nil
+}
+
+// Check 6b: a GQL SELECT with a named binding must return the same entity the
+// structured RunQuery checks returned. Exercised through the generated stub
+// because the high-level client does not expose GQL queries.
+func checkDatastoreRunQueryGQL(ctx context.Context, cfg Config) error {
+	stub, conn, err := newDatastoreStub(cfg)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	resp, err := stub.RunQuery(ctx, &datastorepb.RunQueryRequest{
+		ProjectId: cfg.Project,
+		QueryType: &datastorepb.RunQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{
+			QueryString: "SELECT * FROM " + datastoreKind + " WHERE Description = @d",
+			NamedBindings: map[string]*datastorepb.GqlQueryParameter{
+				"d": gqlStringBinding(datastoreValue(cfg)),
+			},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("GQL RunQuery: %w", err)
+	}
+	if n := len(resp.GetBatch().GetEntityResults()); n != 1 {
+		return fmt.Errorf("GQL RunQuery returned %d entities, want 1", n)
+	}
+	return nil
+}
+
+// Check 6c: a GQL aggregation query must report the same count as the
+// structured aggregation check.
+func checkDatastoreRunAggregationQueryGQL(ctx context.Context, cfg Config) error {
+	stub, conn, err := newDatastoreStub(cfg)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	resp, err := stub.RunAggregationQuery(ctx, &datastorepb.RunAggregationQueryRequest{
+		ProjectId: cfg.Project,
+		QueryType: &datastorepb.RunAggregationQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{
+			QueryString: "AGGREGATE COUNT(*) OVER (SELECT * FROM " + datastoreKind + " WHERE Description = @d)",
+			NamedBindings: map[string]*datastorepb.GqlQueryParameter{
+				"d": gqlStringBinding(datastoreValue(cfg)),
+			},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("GQL RunAggregationQuery: %w", err)
+	}
+	results := resp.GetBatch().GetAggregationResults()
+	if len(results) != 1 {
+		return fmt.Errorf("GQL RunAggregationQuery returned %d results, want 1", len(results))
+	}
+	if got := results[0].GetAggregateProperties()["property_1"].GetIntegerValue(); got != 1 {
+		return fmt.Errorf("GQL COUNT(*) = %d, want 1", got)
+	}
+	return nil
+}
+
+// gqlStringBinding builds a named GQL string-value binding.
+func gqlStringBinding(s string) *datastorepb.GqlQueryParameter {
+	return &datastorepb.GqlQueryParameter{
+		ParameterType: &datastorepb.GqlQueryParameter_Value{Value: &datastorepb.Value{
+			ValueType: &datastorepb.Value_StringValue{StringValue: s},
+		}},
+	}
 }
 
 // Check 7: Commit via the high-level Delete must remove the entity inserted by

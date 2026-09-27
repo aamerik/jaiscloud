@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 288,
-  "passed": 288,
+  "total": 290,
+  "passed": 290,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 288,
-    "passed": 288,
+    "checks": 290,
+    "passed": 290,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "datastore",
-      "total": 11,
-      "passed": 11,
+      "total": 13,
+      "passed": 13,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1023,6 +1023,20 @@
       "method": "RunAggregationQuery",
       "status": "pass",
       "key_field": "batch.aggregation_results[].count"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunQuery (GQL)",
+      "method": "RunQuery",
+      "status": "pass",
+      "key_field": "batch.entity_results[] via GQL"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunAggregationQuery (GQL)",
+      "method": "RunAggregationQuery",
+      "status": "pass",
+      "key_field": "GQL AGGREGATE COUNT(*)"
     },
     {
       "service": "datastore",

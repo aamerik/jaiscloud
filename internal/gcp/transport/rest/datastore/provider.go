@@ -103,20 +103,28 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := body["gqlQuery"]; ok {
-		return nil, invalidArgument("GQL queries are not supported")
-	}
-	qv, ok := body["query"]
-	if !ok {
+	var resp *core.QueryResult
+	switch {
+	case body["gqlQuery"] != nil:
+		gql, err := gqlQueryFromWire(body["gqlQuery"])
+		if err != nil {
+			return nil, err
+		}
+		resp, err = p.core.RunQueryGQL(ctx, project, gql, txn)
+		if err != nil {
+			return nil, err
+		}
+	case body["query"] != nil:
+		q, err := queryFromWire(body["query"])
+		if err != nil {
+			return nil, err
+		}
+		resp, err = p.core.RunQuery(ctx, project, q, txn)
+		if err != nil {
+			return nil, err
+		}
+	default:
 		return nil, invalidArgument("run query request has no query")
-	}
-	q, err := queryFromWire(qv)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := p.core.RunQuery(ctx, project, q, txn)
-	if err != nil {
-		return nil, err
 	}
 
 	batch := map[string]any{
@@ -153,20 +161,28 @@ func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.Normalized
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := body["gqlQuery"]; ok {
-		return nil, invalidArgument("GQL aggregation queries are not supported")
-	}
-	aqv, ok := body["aggregationQuery"]
-	if !ok {
+	var resp *core.AggregationResult
+	switch {
+	case body["gqlQuery"] != nil:
+		gql, err := gqlQueryFromWire(body["gqlQuery"])
+		if err != nil {
+			return nil, err
+		}
+		resp, err = p.core.RunAggregationQueryGQL(ctx, project, gql, txn)
+		if err != nil {
+			return nil, err
+		}
+	case body["aggregationQuery"] != nil:
+		aq, err := aggregationQueryFromWire(body["aggregationQuery"])
+		if err != nil {
+			return nil, err
+		}
+		resp, err = p.core.RunAggregationQuery(ctx, project, aq, txn)
+		if err != nil {
+			return nil, err
+		}
+	default:
 		return nil, invalidArgument("run aggregation query request has no query")
-	}
-	aq, err := aggregationQueryFromWire(aqv)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := p.core.RunAggregationQuery(ctx, project, aq, txn)
-	if err != nil {
-		return nil, err
 	}
 
 	props := make(map[string]any, len(resp.Aggregates))

@@ -419,6 +419,64 @@ func queryFromWire(v any) (*core.Query, error) {
 	return out, nil
 }
 
+// gqlQueryFromWire converts a Discovery-shaped gqlQuery body into the
+// transport-neutral GQLQuery. A binding carries either an inline value or a
+// base64 cursor; the core rejects a cursor binding when it is referenced.
+func gqlQueryFromWire(v any) (core.GQLQuery, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return core.GQLQuery{}, invalidArgument("malformed gqlQuery")
+	}
+	allowLiterals, _ := m["allowLiterals"].(bool)
+	out := core.GQLQuery{
+		QueryString:   strFrom(m["queryString"]),
+		AllowLiterals: allowLiterals,
+	}
+	if named, ok := m["namedBindings"].(map[string]any); ok && len(named) > 0 {
+		out.NamedBindings = make(map[string]core.GQLBinding, len(named))
+		for name, raw := range named {
+			gb, err := gqlBindingFromWire(raw)
+			if err != nil {
+				return core.GQLQuery{}, err
+			}
+			out.NamedBindings[name] = gb
+		}
+	}
+	if positional, ok := m["positionalBindings"].([]any); ok && len(positional) > 0 {
+		out.PositionalBindings = make([]core.GQLBinding, 0, len(positional))
+		for _, raw := range positional {
+			gb, err := gqlBindingFromWire(raw)
+			if err != nil {
+				return core.GQLQuery{}, err
+			}
+			out.PositionalBindings = append(out.PositionalBindings, gb)
+		}
+	}
+	return out, nil
+}
+
+func gqlBindingFromWire(v any) (core.GQLBinding, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return core.GQLBinding{}, invalidArgument("malformed GQL binding")
+	}
+	if raw, ok := m["value"]; ok && raw != nil {
+		val, err := valueFromWire(raw)
+		if err != nil {
+			return core.GQLBinding{}, err
+		}
+		return core.GQLBinding{Value: &val}, nil
+	}
+	if raw, ok := m["cursor"]; ok {
+		cur, err := base64.StdEncoding.DecodeString(strFrom(raw))
+		if err != nil {
+			return core.GQLBinding{}, invalidArgument("invalid GQL cursor binding")
+		}
+		return core.GQLBinding{Cursor: cur}, nil
+	}
+	return core.GQLBinding{}, invalidArgument("GQL binding has no value")
+}
+
 func filterFromWire(v any) (*core.Filter, error) {
 	if v == nil {
 		return nil, nil

@@ -156,6 +156,75 @@ func TestRESTRunAggregationQuery(t *testing.T) {
 	}
 }
 
+func TestRESTRunQueryGQL(t *testing.T) {
+	c, p := newTestProvider(t)
+	upsert(t, c, p, "Task", "a", 1)
+	upsert(t, c, p, "Task", "b", 2)
+
+	// Literal filter.
+	resp, err := call(t, c, p, "test", "runQuery", map[string]any{
+		"gqlQuery": map[string]any{"queryString": "SELECT * FROM Task WHERE n = 2", "allowLiterals": true},
+	})
+	if err != nil {
+		t.Fatalf("GQL runQuery: %v", err)
+	}
+	batch := resp.Data["batch"].(map[string]any)
+	if ers, _ := batch["entityResults"].([]any); len(ers) != 1 {
+		t.Fatalf("GQL literal results = %v", batch["entityResults"])
+	}
+
+	// Named binding (literals disallowed).
+	resp, err = call(t, c, p, "test", "runQuery", map[string]any{
+		"gqlQuery": map[string]any{
+			"queryString":   "SELECT * FROM Task WHERE n = @n",
+			"allowLiterals": false,
+			"namedBindings": map[string]any{
+				"n": map[string]any{"value": map[string]any{"integerValue": "1"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GQL named binding: %v", err)
+	}
+	batch = resp.Data["batch"].(map[string]any)
+	ers, _ := batch["entityResults"].([]any)
+	if len(ers) != 1 {
+		t.Fatalf("GQL binding results = %v", batch["entityResults"])
+	}
+	if got := ers[0].(map[string]any)["entity"].(map[string]any)["key"].(map[string]any)["path"].([]any)[0].(map[string]any)["name"]; got != "a" {
+		t.Fatalf("GQL binding matched key %v, want a", got)
+	}
+
+	// A literal with allow_literals=false is an InvalidArgument.
+	if _, err := call(t, c, p, "test", "runQuery", map[string]any{
+		"gqlQuery": map[string]any{"queryString": "SELECT * FROM Task WHERE n = 2"},
+	}); err == nil {
+		t.Fatal("GQL literal with allow_literals=false should error")
+	}
+}
+
+func TestRESTRunAggregationQueryGQL(t *testing.T) {
+	c, p := newTestProvider(t)
+	upsert(t, c, p, "Task", "a", 1)
+	upsert(t, c, p, "Task", "b", 2)
+
+	resp, err := call(t, c, p, "test", "runAggregationQuery", map[string]any{
+		"gqlQuery": map[string]any{"queryString": "AGGREGATE COUNT(*) AS total OVER (SELECT * FROM Task)"},
+	})
+	if err != nil {
+		t.Fatalf("GQL runAggregationQuery: %v", err)
+	}
+	batch := resp.Data["batch"].(map[string]any)
+	results, _ := batch["aggregationResults"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("GQL aggregationResults = %v", batch["aggregationResults"])
+	}
+	props := results[0].(map[string]any)["aggregateProperties"].(map[string]any)
+	if got := props["total"].(map[string]any)["integerValue"]; got != "2" {
+		t.Fatalf("GQL count = %v, want \"2\"", got)
+	}
+}
+
 func TestRESTAllocateAndReserveIds(t *testing.T) {
 	c, p := newTestProvider(t)
 
