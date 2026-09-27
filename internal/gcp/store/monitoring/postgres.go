@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -12,8 +13,8 @@ import (
 )
 
 // PostgresStore implements Store against the jc_monitoring_* tables. The
-// monitoring migration (gcpstore.MigrationFS, migration 023) must have run
-// before use.
+// monitoring migrations (gcpstore.MigrationFS, 023 onward, including 045 for
+// services + service-level objectives) must have run before use.
 type PostgresStore struct {
 	pool *pgxpool.Pool
 }
@@ -338,6 +339,8 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_alert_policies`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_notification_channels`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_incidents`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_service_level_objectives`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_monitoring_services`)
 }
 
 // ─── notification channels ────────────────────────────────────────────────────
@@ -584,6 +587,269 @@ func (s *PostgresStore) UpdateIncidentAtomic(ctx context.Context, project, id st
 	return next, nil
 }
 
+// ─── services ─────────────────────────────────────────────────────────────────
+
+func scanService(scan func(...any) error) (Service, error) {
+	var svc Service
+	var identifier, basicService, telemetry, userLabels []byte
+	if err := scan(&svc.ID, &svc.DisplayName, &identifier, &basicService, &telemetry, &userLabels); err != nil {
+		return Service{}, err
+	}
+	if len(identifier) > 0 && string(identifier) != "null" {
+		svc.Identifier = json.RawMessage(identifier)
+	}
+	if len(basicService) > 0 && string(basicService) != "null" {
+		svc.BasicService = json.RawMessage(basicService)
+	}
+	if len(telemetry) > 0 && string(telemetry) != "null" {
+		svc.Telemetry = json.RawMessage(telemetry)
+	}
+	if len(userLabels) > 0 {
+		_ = json.Unmarshal(userLabels, &svc.UserLabels)
+	}
+	return svc, nil
+}
+
+const serviceCols = "id, display_name, identifier, basic_service, telemetry, user_labels"
+
+func (s *PostgresStore) CreateService(ctx context.Context, project string, svc Service) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_monitoring_services
+			(project_id, id, display_name, identifier, basic_service, telemetry, user_labels)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, project, svc.ID, svc.DisplayName, jsonb(svc.Identifier), jsonb(svc.BasicService), jsonb(svc.Telemetry), jsonb(svc.UserLabels))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrServiceExists
+		}
+		return fmt.Errorf("monitoring CreateService: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetService(ctx context.Context, project, id string) (Service, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+serviceCols+` FROM jc_monitoring_services WHERE project_id=$1 AND id=$2
+	`, project, id)
+	svc, err := scanService(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Service{}, ErrServiceNotFound
+	}
+	return svc, err
+}
+
+func (s *PostgresStore) ListServices(ctx context.Context, project string) ([]Service, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+serviceCols+` FROM jc_monitoring_services WHERE project_id=$1 ORDER BY id
+	`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Service, 0)
+	for rows.Next() {
+		svc, err := scanService(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, svc)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, project, id string, mutate func(Service) (Service, error)) (Service, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Service{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		SELECT `+serviceCols+` FROM jc_monitoring_services WHERE project_id=$1 AND id=$2 FOR UPDATE
+	`, project, id)
+	current, err := scanService(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Service{}, ErrServiceNotFound
+	}
+	if err != nil {
+		return Service{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Service{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_monitoring_services
+		SET display_name=$3, identifier=$4, basic_service=$5, telemetry=$6, user_labels=$7
+		WHERE project_id=$1 AND id=$2
+	`, project, id, next.DisplayName, jsonb(next.Identifier), jsonb(next.BasicService), jsonb(next.Telemetry), jsonb(next.UserLabels))
+	if err != nil {
+		return Service{}, fmt.Errorf("monitoring UpdateServiceAtomic: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Service{}, ErrServiceNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Service{}, err
+	}
+	next.ID = id
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteService(ctx context.Context, project, id string) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM jc_monitoring_service_level_objectives WHERE project_id=$1 AND service_id=$2
+	`, project, id); err != nil {
+		return fmt.Errorf("monitoring DeleteService: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM jc_monitoring_services WHERE project_id=$1 AND id=$2
+	`, project, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrServiceNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+// ─── service level objectives ─────────────────────────────────────────────────
+
+func scanServiceLevelObjective(scan func(...any) error) (ServiceLevelObjective, error) {
+	var slo ServiceLevelObjective
+	var indicator, userLabels []byte
+	var rollingNanos int64
+	if err := scan(&slo.ID, &slo.ServiceID, &slo.DisplayName, &indicator, &slo.Goal, &rollingNanos, &slo.CalendarPeriod, &userLabels); err != nil {
+		return ServiceLevelObjective{}, err
+	}
+	if len(indicator) > 0 && string(indicator) != "null" {
+		slo.ServiceLevelIndicator = json.RawMessage(indicator)
+	}
+	slo.RollingPeriod = time.Duration(rollingNanos)
+	if len(userLabels) > 0 {
+		_ = json.Unmarshal(userLabels, &slo.UserLabels)
+	}
+	return slo, nil
+}
+
+const sloCols = "id, service_id, display_name, service_level_indicator, goal, rolling_period_nanos, calendar_period, user_labels"
+
+func (s *PostgresStore) CreateServiceLevelObjective(ctx context.Context, project string, slo ServiceLevelObjective) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_monitoring_service_level_objectives
+			(project_id, service_id, id, display_name, service_level_indicator, goal, rolling_period_nanos, calendar_period, user_labels)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, project, slo.ServiceID, slo.ID, slo.DisplayName, jsonb(slo.ServiceLevelIndicator), slo.Goal,
+		int64(slo.RollingPeriod), slo.CalendarPeriod, jsonb(slo.UserLabels))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrServiceLevelObjectiveExists
+		}
+		return fmt.Errorf("monitoring CreateServiceLevelObjective: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) GetServiceLevelObjective(ctx context.Context, project, serviceID, id string) (ServiceLevelObjective, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+sloCols+` FROM jc_monitoring_service_level_objectives
+		WHERE project_id=$1 AND service_id=$2 AND id=$3
+	`, project, serviceID, id)
+	slo, err := scanServiceLevelObjective(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ServiceLevelObjective{}, ErrServiceLevelObjectiveNotFound
+	}
+	return slo, err
+}
+
+func (s *PostgresStore) ListServiceLevelObjectives(ctx context.Context, project, serviceID string) ([]ServiceLevelObjective, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+sloCols+` FROM jc_monitoring_service_level_objectives
+		WHERE project_id=$1 AND service_id=$2 ORDER BY id
+	`, project, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]ServiceLevelObjective, 0)
+	for rows.Next() {
+		slo, err := scanServiceLevelObjective(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, slo)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) UpdateServiceLevelObjectiveAtomic(ctx context.Context, project, serviceID, id string, mutate func(ServiceLevelObjective) (ServiceLevelObjective, error)) (ServiceLevelObjective, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return ServiceLevelObjective{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		SELECT `+sloCols+` FROM jc_monitoring_service_level_objectives
+		WHERE project_id=$1 AND service_id=$2 AND id=$3 FOR UPDATE
+	`, project, serviceID, id)
+	current, err := scanServiceLevelObjective(row.Scan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ServiceLevelObjective{}, ErrServiceLevelObjectiveNotFound
+	}
+	if err != nil {
+		return ServiceLevelObjective{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return ServiceLevelObjective{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_monitoring_service_level_objectives
+		SET display_name=$4, service_level_indicator=$5, goal=$6, rolling_period_nanos=$7, calendar_period=$8, user_labels=$9
+		WHERE project_id=$1 AND service_id=$2 AND id=$3
+	`, project, serviceID, id, next.DisplayName, jsonb(next.ServiceLevelIndicator), next.Goal,
+		int64(next.RollingPeriod), next.CalendarPeriod, jsonb(next.UserLabels))
+	if err != nil {
+		return ServiceLevelObjective{}, fmt.Errorf("monitoring UpdateServiceLevelObjectiveAtomic: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ServiceLevelObjective{}, ErrServiceLevelObjectiveNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ServiceLevelObjective{}, err
+	}
+	next.ID = id
+	next.ServiceID = serviceID
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteServiceLevelObjective(ctx context.Context, project, serviceID, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_monitoring_service_level_objectives
+		WHERE project_id=$1 AND service_id=$2 AND id=$3
+	`, project, serviceID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrServiceLevelObjectiveNotFound
+	}
+	return nil
+}
+
 // ListProjects returns the distinct projects that hold any monitoring state.
 func (s *PostgresStore) ListProjects(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -592,6 +858,8 @@ func (s *PostgresStore) ListProjects(ctx context.Context) ([]string, error) {
 		UNION SELECT project_id FROM jc_monitoring_alert_policies
 		UNION SELECT project_id FROM jc_monitoring_notification_channels
 		UNION SELECT project_id FROM jc_monitoring_incidents
+		UNION SELECT project_id FROM jc_monitoring_services
+		UNION SELECT project_id FROM jc_monitoring_service_level_objectives
 		ORDER BY project_id
 	`)
 	if err != nil {

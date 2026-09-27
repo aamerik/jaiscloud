@@ -654,6 +654,116 @@ func alertPolicyToJSON(p monitoringstore.AlertPolicy, project string) map[string
 	return out
 }
 
+// ─── service monitoring: services + service level objectives ──────────────────
+
+// serviceIdentifierJSONKeys are the JSON (lowerCamelCase) names of the Service
+// identifier oneof. Exactly one may be present in a request body. basicService
+// is a separate Service field (a basic service is identified by service type +
+// labels instead of the oneof), handled alongside telemetry.
+var serviceIdentifierJSONKeys = []string{
+	"custom", "appEngine", "cloudEndpoints", "clusterIstio", "meshIstio",
+	"istioCanonicalService", "cloudRun", "gkeNamespace", "gkeWorkload",
+	"gkeService",
+}
+
+var calendarPeriodValue = map[string]int32{
+	"CALENDAR_PERIOD_UNSPECIFIED": 0, "DAY": 1, "WEEK": 2, "FORTNIGHT": 3,
+	"MONTH": 4, "QUARTER": 5, "HALF": 6, "YEAR": 7,
+}
+
+func serviceFromJSON(body map[string]any) monitoringstore.Service {
+	svc := monitoringstore.Service{
+		DisplayName: strFrom(body["displayName"]),
+		UserLabels:  stringMapFrom(body["userLabels"]),
+	}
+	for _, key := range serviceIdentifierJSONKeys {
+		if v, ok := body[key]; ok && v != nil {
+			svc.Identifier = rawMessage(map[string]any{key: v})
+			break
+		}
+	}
+	if bs, ok := body["basicService"]; ok && bs != nil {
+		svc.BasicService = rawMessage(map[string]any{"basicService": bs})
+	}
+	if tel, ok := body["telemetry"]; ok && tel != nil {
+		svc.Telemetry = rawMessage(map[string]any{"telemetry": tel})
+	}
+	return svc
+}
+
+func serviceToJSON(svc monitoringstore.Service, project string) map[string]any {
+	out := map[string]any{"name": core.ServiceName(project, svc.ID)}
+	if svc.DisplayName != "" {
+		out["displayName"] = svc.DisplayName
+	}
+	if len(svc.UserLabels) > 0 {
+		out["userLabels"] = svc.UserLabels
+	}
+	if m, ok := rawToAny(svc.Identifier).(map[string]any); ok {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	if m, ok := rawToAny(svc.BasicService).(map[string]any); ok {
+		if v, ok := m["basicService"]; ok {
+			out["basicService"] = v
+		}
+	}
+	if m, ok := rawToAny(svc.Telemetry).(map[string]any); ok {
+		if v, ok := m["telemetry"]; ok {
+			out["telemetry"] = v
+		}
+	}
+	return out
+}
+
+func serviceLevelObjectiveFromJSON(body map[string]any) monitoringstore.ServiceLevelObjective {
+	slo := monitoringstore.ServiceLevelObjective{
+		DisplayName:    strFrom(body["displayName"]),
+		Goal:           floatFrom(body["goal"]),
+		UserLabels:     stringMapFrom(body["userLabels"]),
+		CalendarPeriod: enumValue(calendarPeriodValue, body["calendarPeriod"]),
+	}
+	if sli, ok := body["serviceLevelIndicator"]; ok && sli != nil {
+		slo.ServiceLevelIndicator = rawMessage(sli)
+	}
+	if rp := strFrom(body["rollingPeriod"]); rp != "" {
+		if d, err := time.ParseDuration(rp); err == nil {
+			slo.RollingPeriod = d
+		}
+	}
+	return slo
+}
+
+func serviceLevelObjectiveToJSON(slo monitoringstore.ServiceLevelObjective, project string) map[string]any {
+	out := map[string]any{"name": core.ServiceLevelObjectiveName(project, slo.ServiceID, slo.ID)}
+	if slo.DisplayName != "" {
+		out["displayName"] = slo.DisplayName
+	}
+	if slo.Goal != 0 {
+		out["goal"] = slo.Goal
+	}
+	if len(slo.ServiceLevelIndicator) > 0 {
+		out["serviceLevelIndicator"] = rawToAny(slo.ServiceLevelIndicator)
+	}
+	if slo.RollingPeriod != 0 {
+		out["rollingPeriod"] = durationToJSON(slo.RollingPeriod)
+	}
+	if name, ok := enumName(calendarPeriodValue, slo.CalendarPeriod); ok {
+		out["calendarPeriod"] = name
+	}
+	if len(slo.UserLabels) > 0 {
+		out["userLabels"] = slo.UserLabels
+	}
+	return out
+}
+
+// durationToJSON renders a duration the way protojson/discovery do: decimal
+// seconds with an "s" suffix (e.g. "300s" or "1.500s").
+func durationToJSON(d time.Duration) string {
+	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
+}
+
 // ─── notification channels ────────────────────────────────────────────────────
 
 func notificationChannelFromJSON(body map[string]any) monitoringstore.NotificationChannel {

@@ -28,6 +28,8 @@ import (
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -61,6 +63,15 @@ func newMetricClient(t *testing.T) *monitoring.MetricClient {
 func newAlertPolicyClient(t *testing.T) *monitoring.AlertPolicyClient {
 	t.Helper()
 	c, err := monitoring.NewAlertPolicyClient(context.Background(),
+		option.WithGRPCConn(dialConn(t)), option.WithoutAuthentication())
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+func newServiceMonitoringClient(t *testing.T) *monitoring.ServiceMonitoringClient {
+	t.Helper()
+	c, err := monitoring.NewServiceMonitoringClient(context.Background(),
 		option.WithGRPCConn(dialConn(t)), option.WithoutAuthentication())
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close() })
@@ -202,4 +213,78 @@ func TestSDKAlertPolicy(t *testing.T) {
 	require.Contains(t, listed, created.GetName())
 
 	require.NoError(t, ac.DeleteAlertPolicy(ctx, &monitoringpb.DeleteAlertPolicyRequest{Name: created.GetName()}))
+}
+
+// TestSDKServiceMonitoring exercises create + get + list + patch + delete of a
+// Service and its ServiceLevelObjective through the high-level client.
+func TestSDKServiceMonitoring(t *testing.T) {
+	ctx := context.Background()
+	sc := newServiceMonitoringClient(t)
+
+	serviceID := unique("svc")
+	createdSvc, err := sc.CreateService(ctx, &monitoringpb.CreateServiceRequest{
+		Parent:    "projects/" + projectID,
+		ServiceId: serviceID,
+		Service: &monitoringpb.Service{
+			DisplayName: "SDK Checkout",
+			Identifier: &monitoringpb.Service_CloudRun_{
+				CloudRun: &monitoringpb.Service_CloudRun{ServiceName: "checkout"},
+			},
+			UserLabels: map[string]string{"team": "payments"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "projects/"+projectID+"/services/"+serviceID, createdSvc.GetName())
+	require.Equal(t, "checkout", createdSvc.GetCloudRun().GetServiceName())
+
+	gotSvc, err := sc.GetService(ctx, &monitoringpb.GetServiceRequest{Name: createdSvc.GetName()})
+	require.NoError(t, err)
+	require.Equal(t, "SDK Checkout", gotSvc.GetDisplayName())
+
+	// A masked patch updates the display name and preserves the identifier.
+	updatedSvc, err := sc.UpdateService(ctx, &monitoringpb.UpdateServiceRequest{
+		Service:    &monitoringpb.Service{Name: createdSvc.GetName(), DisplayName: "SDK Checkout v2"},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "SDK Checkout v2", updatedSvc.GetDisplayName())
+	require.Equal(t, "checkout", updatedSvc.GetCloudRun().GetServiceName())
+
+	sloID := unique("slo")
+	createdSLO, err := sc.CreateServiceLevelObjective(ctx, &monitoringpb.CreateServiceLevelObjectiveRequest{
+		Parent:                  createdSvc.GetName(),
+		ServiceLevelObjectiveId: sloID,
+		ServiceLevelObjective: &monitoringpb.ServiceLevelObjective{
+			DisplayName: "Availability",
+			Goal:        0.99,
+			Period:      &monitoringpb.ServiceLevelObjective_RollingPeriod{RollingPeriod: durationpb.New(30 * 24 * time.Hour)},
+			ServiceLevelIndicator: &monitoringpb.ServiceLevelIndicator{
+				Type: &monitoringpb.ServiceLevelIndicator_BasicSli{
+					BasicSli: &monitoringpb.BasicSli{
+						SliCriteria: &monitoringpb.BasicSli_Availability{Availability: &monitoringpb.BasicSli_AvailabilityCriteria{}},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, createdSvc.GetName()+"/serviceLevelObjectives/"+sloID, createdSLO.GetName())
+	require.Equal(t, 0.99, createdSLO.GetGoal())
+	require.Equal(t, 30*24*time.Hour, createdSLO.GetRollingPeriod().AsDuration())
+	require.NotNil(t, createdSLO.GetServiceLevelIndicator().GetBasicSli().GetAvailability())
+
+	var listed []string
+	it := sc.ListServiceLevelObjectives(ctx, &monitoringpb.ListServiceLevelObjectivesRequest{Parent: createdSvc.GetName()})
+	for {
+		slo, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		require.NoError(t, err)
+		listed = append(listed, slo.GetName())
+	}
+	require.Contains(t, listed, createdSLO.GetName())
+
+	require.NoError(t, sc.DeleteServiceLevelObjective(ctx, &monitoringpb.DeleteServiceLevelObjectiveRequest{Name: createdSLO.GetName()}))
+	require.NoError(t, sc.DeleteService(ctx, &monitoringpb.DeleteServiceRequest{Name: createdSvc.GetName()}))
 }

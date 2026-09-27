@@ -1,5 +1,6 @@
 // Package monitoring is the gRPC transport for Cloud Monitoring v3
-// (MetricService, AlertPolicyService, NotificationChannelService). It is a thin
+// (MetricService, AlertPolicyService, NotificationChannelService, and
+// ServiceMonitoringService). It is a thin
 // proto adapter over the transport-neutral core in
 // internal/gcp/service/monitoring: it transcodes between the generated protobuf
 // messages and the core's typed API and maps core errors to gRPC status codes.
@@ -23,12 +24,14 @@ import (
 )
 
 // Service implements monitoringpb.MetricServiceServer,
-// monitoringpb.AlertPolicyServiceServer, and
-// monitoringpb.NotificationChannelServiceServer over the shared core.
+// monitoringpb.AlertPolicyServiceServer,
+// monitoringpb.NotificationChannelServiceServer, and
+// monitoringpb.ServiceMonitoringServiceServer over the shared core.
 type Service struct {
 	monitoringpb.UnimplementedMetricServiceServer
 	monitoringpb.UnimplementedAlertPolicyServiceServer
 	monitoringpb.UnimplementedNotificationChannelServiceServer
+	monitoringpb.UnimplementedServiceMonitoringServiceServer
 
 	core        *core.Service
 	defaultProj string
@@ -417,4 +420,5 @@ var (
 	_ monitoringpb.MetricServiceServer              = (*Service)(nil)
 	_ monitoringpb.AlertPolicyServiceServer         = (*Service)(nil)
 	_ monitoringpb.NotificationChannelServiceServer = (*Service)(nil)
+	_ monitoringpb.ServiceMonitoringServiceServer   = (*Service)(nil)
 )

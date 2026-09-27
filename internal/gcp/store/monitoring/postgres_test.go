@@ -5,6 +5,7 @@ package monitoring
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"reflect"
 	"testing"
@@ -80,4 +81,84 @@ func TestPostgresDistributionRoundTrip(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	assertDist(t, s)
+}
+
+// TestPostgresServicesRoundTrip verifies Service + ServiceLevelObjective CRUD,
+// the DeleteService cascade, and a Snapshot/Restore round trip through the
+// Postgres-backed store (migration 045).
+func TestPostgresServicesRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres monitoring test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	defer s.Reset(ctx)
+	s.Reset(ctx)
+
+	svc := Service{
+		ID: "svc-1", DisplayName: "Checkout",
+		Identifier:   json.RawMessage(`{"cloudRun":{"serviceName":"checkout"}}`),
+		BasicService: json.RawMessage(`{"basicService":{"serviceType":"CLOUD_RUN"}}`),
+		UserLabels:   map[string]string{"team": "payments"},
+	}
+	if err := s.CreateService(ctx, "p1", svc); err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	if err := s.CreateService(ctx, "p1", svc); err != ErrServiceExists {
+		t.Fatalf("duplicate service err = %v, want ErrServiceExists", err)
+	}
+
+	slo := ServiceLevelObjective{
+		ID: "slo-1", ServiceID: "svc-1", DisplayName: "availability",
+		ServiceLevelIndicator: json.RawMessage(`{"basicSli":{"availability":{}}}`),
+		Goal:                  0.99, RollingPeriod: 30 * 24 * time.Hour,
+	}
+	if err := s.CreateServiceLevelObjective(ctx, "p1", slo); err != nil {
+		t.Fatalf("create SLO: %v", err)
+	}
+
+	assertServices := func(t *testing.T, store *PostgresStore) {
+		t.Helper()
+		got, err := store.GetService(ctx, "p1", "svc-1")
+		if err != nil {
+			t.Fatalf("get service: %v", err)
+		}
+		if got.DisplayName != "Checkout" || got.UserLabels["team"] != "payments" ||
+			string(got.Identifier) == "" || string(got.BasicService) == "" {
+			t.Fatalf("service = %+v", got)
+		}
+		slos, err := store.ListServiceLevelObjectives(ctx, "p1", "svc-1")
+		if err != nil || len(slos) != 1 || slos[0].RollingPeriod != 30*24*time.Hour {
+			t.Fatalf("SLOs = %+v, %v", slos, err)
+		}
+	}
+	assertServices(t, s)
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	assertServices(t, s)
+
+	// DeleteService cascades the SLO.
+	if err := s.DeleteService(ctx, "p1", "svc-1"); err != nil {
+		t.Fatalf("delete service: %v", err)
+	}
+	if got, _ := s.ListServiceLevelObjectives(ctx, "p1", "svc-1"); len(got) != 0 {
+		t.Fatalf("SLOs after cascade = %+v, want empty", got)
+	}
 }

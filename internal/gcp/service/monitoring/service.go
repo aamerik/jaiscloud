@@ -1,8 +1,10 @@
 // Package monitoring is the transport-neutral core of the Cloud Monitoring v3
-// service (MetricService, AlertPolicyService, NotificationChannelService) over
-// the shared monitoring store — the Amazon CloudWatch metrics+alarms analogue.
-// It manages the metric descriptor catalog, the time-series data plane, the
-// alert-policy (alarm) registry, and the notification-channel registry.
+// service (MetricService, AlertPolicyService, NotificationChannelService, and
+// ServiceMonitoringService) over the shared monitoring store — the Amazon
+// CloudWatch metrics+alarms analogue. It manages the metric descriptor catalog,
+// the time-series data plane, the alert-policy (alarm) registry, the
+// notification-channel registry, and the Service Monitoring services +
+// service-level objectives registry.
 //
 // It deliberately has no dependency on protobuf or on NormalizedRequest: the
 // gRPC transport (internal/gcp/transport/grpc/monitoring) and the REST
@@ -23,7 +25,10 @@
 // conditions are evaluated by the background worker; ListTimeSeries supports the
 // metric.type/resource.type and metric.labels.<k>/resource.labels.<k> filter
 // subset (equality and starts_with) plus per-series alignment and cross-series
-// reduction; SendNotificationChannelVerificationCode performs no delivery.
+// reduction; SendNotificationChannelVerificationCode performs no delivery;
+// ServiceLevelObjectives are stored and returned as declared (no burn-rate
+// evaluation) and the ListServices/ListServiceLevelObjectives filters support an
+// equality subset; the SLO "view=EXPLICIT" fold is not applied.
 package monitoring
 
 import (

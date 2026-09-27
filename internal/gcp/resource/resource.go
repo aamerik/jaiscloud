@@ -312,6 +312,15 @@ var formatters = map[string]func(project, name string) string{
 	"monitored-resource-descriptor": func(p, n string) string {
 		return fmt.Sprintf("projects/%s/monitoredResourceDescriptors/%s", p, n)
 	},
+	// Service Monitoring — callers pass the service id for a service, and
+	// "serviceId/sloId" for a service-level objective.
+	"monitoring-service": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/services/%s", p, n)
+	},
+	"monitoring-slo": func(p, n string) string {
+		svc, id := svcSLO(n)
+		return fmt.Sprintf("projects/%s/services/%s/serviceLevelObjectives/%s", p, svc, id)
+	},
 }
 
 // ProjectNumber returns a synthesized, stable 12-digit decimal project number
@@ -335,6 +344,14 @@ func ResourceID(project string) func(resourceType, name string) string {
 			"resourceType", resourceType, "name", name)
 		return name
 	}
+}
+
+// svcSLO splits a "serviceId/sloId" name for the monitoring-slo formatter.
+func svcSLO(name string) (service, id string) {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i], name[i+1:]
+	}
+	return name, ""
 }
 
 // locOf splits a "location/keyRing[/cryptoKey]" name into its location part.

@@ -10,11 +10,13 @@ import (
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
 	mu          sync.RWMutex
-	descriptors map[string]map[string]MetricDescriptor    // project → type → descriptor
-	series      map[string]map[string]*TimeSeries         // project → seriesKey → series
-	policies    map[string]map[string]AlertPolicy         // project → id → policy
-	channels    map[string]map[string]NotificationChannel // project → id → channel
-	incidents   map[string]map[string]Incident            // project → id → incident
+	descriptors map[string]map[string]MetricDescriptor      // project → type → descriptor
+	series      map[string]map[string]*TimeSeries           // project → seriesKey → series
+	policies    map[string]map[string]AlertPolicy           // project → id → policy
+	channels    map[string]map[string]NotificationChannel   // project → id → channel
+	incidents   map[string]map[string]Incident              // project → id → incident
+	services    map[string]map[string]Service               // project → id → service
+	slos        map[string]map[string]ServiceLevelObjective // project → "serviceID/id" → SLO
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -25,6 +27,8 @@ func NewMemoryStore() *MemoryStore {
 		policies:    make(map[string]map[string]AlertPolicy),
 		channels:    make(map[string]map[string]NotificationChannel),
 		incidents:   make(map[string]map[string]Incident),
+		services:    make(map[string]map[string]Service),
+		slos:        make(map[string]map[string]ServiceLevelObjective),
 	}
 }
 
@@ -309,6 +313,145 @@ func (s *MemoryStore) UpdateIncidentAtomic(_ context.Context, project, id string
 	return next, nil
 }
 
+// ─── services ─────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateService(_ context.Context, project string, svc Service) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.services[project][svc.ID]; ok {
+		return ErrServiceExists
+	}
+	if s.services[project] == nil {
+		s.services[project] = make(map[string]Service)
+	}
+	s.services[project][svc.ID] = svc
+	return nil
+}
+
+func (s *MemoryStore) GetService(_ context.Context, project, id string) (Service, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	svc, ok := s.services[project][id]
+	if !ok {
+		return Service{}, ErrServiceNotFound
+	}
+	return svc, nil
+}
+
+func (s *MemoryStore) ListServices(_ context.Context, project string) ([]Service, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Service, 0, len(s.services[project]))
+	for _, svc := range s.services[project] {
+		result = append(result, svc)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) UpdateServiceAtomic(_ context.Context, project, id string, mutate func(Service) (Service, error)) (Service, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.services[project][id]
+	if !ok {
+		return Service{}, ErrServiceNotFound
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Service{}, err
+	}
+	next.ID = id
+	s.services[project][id] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteService(_ context.Context, project, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.services[project][id]; !ok {
+		return ErrServiceNotFound
+	}
+	delete(s.services[project], id)
+	for key, slo := range s.slos[project] {
+		if slo.ServiceID == id {
+			delete(s.slos[project], key)
+		}
+	}
+	return nil
+}
+
+// ─── service level objectives ─────────────────────────────────────────────────
+
+// sloKey is the in-memory map key for SLOs, namespacing the SLO id under its
+// parent service id.
+func sloKey(serviceID, id string) string { return serviceID + "/" + id }
+
+func (s *MemoryStore) CreateServiceLevelObjective(_ context.Context, project string, slo ServiceLevelObjective) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sloKey(slo.ServiceID, slo.ID)
+	if _, ok := s.slos[project][key]; ok {
+		return ErrServiceLevelObjectiveExists
+	}
+	if s.slos[project] == nil {
+		s.slos[project] = make(map[string]ServiceLevelObjective)
+	}
+	s.slos[project][key] = slo
+	return nil
+}
+
+func (s *MemoryStore) GetServiceLevelObjective(_ context.Context, project, serviceID, id string) (ServiceLevelObjective, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	slo, ok := s.slos[project][sloKey(serviceID, id)]
+	if !ok {
+		return ServiceLevelObjective{}, ErrServiceLevelObjectiveNotFound
+	}
+	return slo, nil
+}
+
+func (s *MemoryStore) ListServiceLevelObjectives(_ context.Context, project, serviceID string) ([]ServiceLevelObjective, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]ServiceLevelObjective, 0, len(s.slos[project]))
+	for _, slo := range s.slos[project] {
+		if slo.ServiceID == serviceID {
+			result = append(result, slo)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) UpdateServiceLevelObjectiveAtomic(_ context.Context, project, serviceID, id string, mutate func(ServiceLevelObjective) (ServiceLevelObjective, error)) (ServiceLevelObjective, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sloKey(serviceID, id)
+	current, ok := s.slos[project][key]
+	if !ok {
+		return ServiceLevelObjective{}, ErrServiceLevelObjectiveNotFound
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return ServiceLevelObjective{}, err
+	}
+	next.ID = id
+	next.ServiceID = serviceID
+	s.slos[project][key] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteServiceLevelObjective(_ context.Context, project, serviceID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sloKey(serviceID, id)
+	if _, ok := s.slos[project][key]; !ok {
+		return ErrServiceLevelObjectiveNotFound
+	}
+	delete(s.slos[project], key)
+	return nil
+}
+
 // ListProjects returns the distinct projects that hold any monitoring state.
 func (s *MemoryStore) ListProjects(_ context.Context) ([]string, error) {
 	s.mu.RLock()
@@ -329,6 +472,12 @@ func (s *MemoryStore) ListProjects(_ context.Context) ([]string, error) {
 	for p := range s.incidents {
 		seen[p] = struct{}{}
 	}
+	for p := range s.services {
+		seen[p] = struct{}{}
+	}
+	for p := range s.slos {
+		seen[p] = struct{}{}
+	}
 	result := make([]string, 0, len(seen))
 	for p := range seen {
 		result = append(result, p)
@@ -345,6 +494,8 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.policies = make(map[string]map[string]AlertPolicy)
 	s.channels = make(map[string]map[string]NotificationChannel)
 	s.incidents = make(map[string]map[string]Incident)
+	s.services = make(map[string]map[string]Service)
+	s.slos = make(map[string]map[string]ServiceLevelObjective)
 }
 
 // seriesKey returns a stable identity key for a time series, derived from its
