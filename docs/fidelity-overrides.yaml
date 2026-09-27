@@ -110,13 +110,9 @@ operations:
     operation: DiagnoseCluster
     state: unsupported
     reason: "explicit Unimplemented stub"
-  # Cloud Functions gRPC is control-plane only: v1 CallFunction is runtime
-  # invocation and v2 ListRuntimes has no emulator implementation, so both are
-  # explicit Unimplemented stubs (the REST surface does implement CallFunction).
-  - service: functions
-    operation: CallFunction
-    state: unsupported
-    reason: "runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub"
+  # Cloud Functions v2 ListRuntimes has no emulator implementation, so it is an
+  # explicit Unimplemented stub. v1 CallFunction (runtime invocation) is served
+  # over the shared core executor on both transports, so it needs no override.
   - service: functions
     operation: ListRuntimes
     state: unsupported

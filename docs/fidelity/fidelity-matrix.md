@@ -12,17 +12,17 @@ Cells: **791**
 
 | state | count |
 | --- | --- |
-| ga | 551 |
+| ga | 552 |
 | limited | 100 |
 | preview | 37 |
-| unsupported | 103 |
+| unsupported | 102 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 281 | 89 | 37 | 9 |
-| grpc | 270 | 11 | 0 | 94 |
+| grpc | 271 | 11 | 0 | 93 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -355,11 +355,11 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_29 cell(s): ga=24 limited=3 preview=0 unsupported=2_
+_29 cell(s): ga=25 limited=3 preview=0 unsupported=1_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| CallFunction | grpc | unsupported | runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub |
+| CallFunction | grpc | ga | — |
 | CreateFunction | grpc | ga | — |
 | DeleteFunction | grpc | ga | — |
 | Function.CallFunction | rest | ga | — |

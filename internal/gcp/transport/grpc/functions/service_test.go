@@ -2,6 +2,7 @@ package functions
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	lambdaexec "jaiscloud/internal/executor/lambda"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/store"
@@ -189,13 +191,83 @@ func TestIAMV1(t *testing.T) {
 	}
 }
 
-// TestRuntimeInvocationUnimplemented pins the control-plane-only decision:
-// v1 CallFunction and v2 ListRuntimes fail loud.
-func TestRuntimeInvocationUnimplemented(t *testing.T) {
-	v1 := newTestV1()
-	if _, err := v1.CallFunction(context.Background(), &functionspb.CallFunctionRequest{Name: "projects/proj/locations/us-central1/functions/f1"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("CallFunction = %v, want Unimplemented", err)
+// errExecutor fails every invocation, to exercise the in-band error path.
+type errExecutor struct{}
+
+func (errExecutor) Invoke(context.Context, lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+	return lambdaexec.InvokeResult{}, errors.New("boom")
+}
+func (errExecutor) DeleteFunction(context.Context, string) {}
+func (errExecutor) Reset(context.Context)                  {}
+func (errExecutor) Close() error                           { return nil }
+
+// newTestV1WithExecutor returns a v1 server whose core uses the given executor.
+func newTestV1WithExecutor(e lambdaexec.LambdaExecutor) *Service {
+	return NewService(core.NewService(
+		functionsstore.NewMemoryStore(),
+		store.NewMemoryResourceStore(),
+		core.WithExecutor(e),
+	), "proj")
+}
+
+// TestCallFunctionV1 covers runtime invocation over the shared Lambda executor:
+// the mock-echo success path, an in-band executor error (returned on the
+// response, not as a gRPC status), NotFound for a missing function, and
+// InvalidArgument for a malformed resource name.
+func TestCallFunctionV1(t *testing.T) {
+	ctx := context.Background()
+	s := newTestV1()
+	if _, err := s.CreateFunction(ctx, createV1Req("f1")); err != nil {
+		t.Fatalf("CreateFunction: %v", err)
 	}
+	resp, err := s.CallFunction(ctx, &functionspb.CallFunctionRequest{
+		Name: "projects/proj/locations/us-central1/functions/f1",
+		Data: `{"hello":"world"}`,
+	})
+	if err != nil {
+		t.Fatalf("CallFunction: %v", err)
+	}
+	if resp.GetExecutionId() == "" {
+		t.Fatal("empty executionId")
+	}
+	if resp.GetError() != "" {
+		t.Fatalf("unexpected in-band error: %q", resp.GetError())
+	}
+	if resp.GetResult() != `{"hello":"world"}` {
+		t.Fatalf("result = %q, want echoed payload", resp.GetResult())
+	}
+
+	failing := newTestV1WithExecutor(errExecutor{})
+	if _, err := failing.CreateFunction(ctx, createV1Req("f2")); err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	resp, err = failing.CallFunction(ctx, &functionspb.CallFunctionRequest{
+		Name: "projects/proj/locations/us-central1/functions/f2",
+		Data: "ignored",
+	})
+	if err != nil {
+		t.Fatalf("CallFunction (failing executor): %v", err)
+	}
+	if resp.GetExecutionId() == "" {
+		t.Fatal("empty executionId on error path")
+	}
+	if resp.GetError() != "boom" || resp.GetResult() != "" {
+		t.Fatalf("in-band error = %q, result = %q; want boom/empty", resp.GetError(), resp.GetResult())
+	}
+
+	if _, err := s.CallFunction(ctx, &functionspb.CallFunctionRequest{
+		Name: "projects/proj/locations/us-central1/functions/missing",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("CallFunction missing = %v, want NotFound", err)
+	}
+	if _, err := s.CallFunction(ctx, &functionspb.CallFunctionRequest{Name: "not-a-function"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CallFunction malformed name = %v, want InvalidArgument", err)
+	}
+}
+
+// TestListRuntimesUnimplemented pins the remaining control-plane-only decision:
+// v2 ListRuntimes has no emulator implementation and fails loud.
+func TestListRuntimesUnimplemented(t *testing.T) {
 	v2 := newTestV2()
 	if _, err := v2.ListRuntimes(context.Background(), &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj/locations/us-central1"}); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("ListRuntimes = %v, want Unimplemented", err)

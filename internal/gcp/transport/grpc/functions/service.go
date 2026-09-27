@@ -15,8 +15,9 @@
 // response are packed as typed Any protos (OperationMetadataV1 / OperationMetadata
 // for v1 and v2 respectively, and the Function or google.protobuf.Empty as the
 // response), so the generated client's Wait observes the result without
-// polling. Runtime invocation (v1 CallFunction) and v2 ListRuntimes are out of
-// scope for the control plane and fail loud with codes.Unimplemented.
+// polling. v1 CallFunction (runtime invocation) is served over the SAME core
+// executor as the REST transport. v2 ListRuntimes has no emulator
+// implementation yet and fails loud with codes.Unimplemented.
 package functions
 
 import (
@@ -167,6 +168,28 @@ func (s *Service) GenerateDownloadUrl(ctx context.Context, req *functionspb.Gene
 		return nil, mapError(err)
 	}
 	return &functionspb.GenerateDownloadUrlResponse{DownloadUrl: url}, nil
+}
+
+// CallFunction invokes a function synchronously via the shared core's Lambda
+// executor — the same executor the REST Function.CallFunction uses (one store,
+// one executor). A function-execution failure is reported in-band on the
+// response's error field, matching real Cloud Functions; only control-plane
+// failures (e.g. NotFound) become gRPC status errors.
+func (s *Service) CallFunction(ctx context.Context, req *functionspb.CallFunctionRequest) (*functionspb.CallFunctionResponse, error) {
+	project, location, id, err := core.ParseFunctionName(req.GetName())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	project = resolveProject(ctx, project, s.defaultProj)
+	executionID, result, invokeErr, err := s.core.CallFunction(ctx, project, location, id, req.GetData())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &functionspb.CallFunctionResponse{
+		ExecutionId: executionID,
+		Result:      result,
+		Error:       invokeErr,
+	}, nil
 }
 
 func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyRequest) (*iampb.Policy, error) {

@@ -3,16 +3,16 @@
   "summary": {
     "total": 791,
     "by_state": {
-      "ga": 551,
+      "ga": 552,
       "limited": 100,
       "preview": 37,
-      "unsupported": 103
+      "unsupported": 102
     },
     "by_transport": {
       "grpc": {
-        "ga": 270,
+        "ga": 271,
         "limited": 11,
-        "unsupported": 94
+        "unsupported": 93
       },
       "rest": {
         "ga": 281,
@@ -56,9 +56,9 @@
         "unsupported": 28
       },
       "functions": {
-        "ga": 24,
+        "ga": 25,
         "limited": 3,
-        "unsupported": 2
+        "unsupported": 1
       },
       "iam": {
         "ga": 18
@@ -3042,11 +3042,10 @@
       "service": "functions",
       "operation": "CallFunction",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

@@ -110,7 +110,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
 | `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. `ListWorkflowRevisions` is an unsupported stub. |
 | `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
-| `functions` | grpc, rest | 24/29 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call; v2 deploy unsupported; v1 `CallFunction`/v2 `ListRuntimes` are unsupported stubs. |
+| `functions` | grpc, rest | 25/29 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 deploy unsupported; v2 `ListRuntimes` is an unsupported stub. |
 | `compute` | rest | 0/33 | 🟡 | Metadata only | Metadata only | No VM/disk/network data plane. |
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |

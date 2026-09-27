@@ -208,8 +208,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
-  (runtime invocation) and v2 `ListRuntimes` are explicit `unsupported` `Unimplemented` stubs —
-  the gRPC surface is control-plane only.
+  (runtime invocation) is served over the shared core's Lambda executor on both transports;
+  v2 `ListRuntimes` is an explicit `unsupported` `Unimplemented` stub.
 - **gRPC** — **11** of **365** cells remain `limited`: verified against proto descriptors only.
   The other **260** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
@@ -274,7 +274,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   emulated.
 - **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
   `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`;
-  Dataproc `DiagnoseCluster`; Functions `CallFunction` (runtime invocation) and `ListRuntimes`;
+  Dataproc `DiagnoseCluster`; Functions `ListRuntimes`;
   Service Usage `BatchGetServices` (the gRPC surface is the get/list/enable/disable control plane);
   Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
   Cloud Resource Manager v3 `ListProjects`/`SearchProjects`/`CreateProject`/`UpdateProject`/

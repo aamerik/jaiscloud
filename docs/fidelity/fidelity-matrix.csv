@@ -263,7 +263,7 @@ firestoreadmin,RestoreDatabase,grpc,unsupported,explicit Unimplemented stub (no 
 firestoreadmin,UpdateBackupSchedule,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
 firestoreadmin,UpdateDatabase,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
 firestoreadmin,UpdateField,grpc,unsupported,explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)
-functions,CallFunction,grpc,unsupported,runtime invocation is out of scope for the gRPC control plane; explicit Unimplemented stub
+functions,CallFunction,grpc,ga,
 functions,CreateFunction,grpc,ga,
 functions,DeleteFunction,grpc,ga,
 functions,Function.CallFunction,rest,ga,
