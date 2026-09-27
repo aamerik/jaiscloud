@@ -165,6 +165,21 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	if secs := timeoutSeconds(f.Timeout); secs > 0 {
 		svc["timeoutSeconds"] = secs
 	}
+	// v2 ServiceConfig instance/concurrency settings (FD6). Only explicitly
+	// configured values are surfaced (no synthesized defaults), so a client sees
+	// exactly the configuration it set.
+	if f.MinInstanceCount > 0 {
+		svc["minInstanceCount"] = f.MinInstanceCount
+	}
+	if f.MaxInstanceCount > 0 {
+		svc["maxInstanceCount"] = f.MaxInstanceCount
+	}
+	if f.MaxInstanceRequestConcurrency > 0 {
+		svc["maxInstanceRequestConcurrency"] = f.MaxInstanceRequestConcurrency
+	}
+	if f.AvailableCPU != "" {
+		svc["availableCpu"] = f.AvailableCPU
+	}
 	if len(svc) > 0 {
 		out["serviceConfig"] = svc
 	}

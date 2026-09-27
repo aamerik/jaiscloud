@@ -341,6 +341,58 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// TestFunctionsInstanceConfig covers FD6 over the wire: the v2 ServiceConfig
+// instance/concurrency settings round-trip through create/get/patch, and
+// out-of-range values are 400 INVALID_ARGUMENT.
+func TestFunctionsInstanceConfig(t *testing.T) {
+	resetState(t)
+
+	const project = "proj"
+	const location = "us-central1"
+	v2base := "/v2/projects/" + project + "/locations/" + location + "/functions"
+
+	resp, body := do(t, "POST", v2base+"?functionId=cfg",
+		[]byte(`{"buildConfig":{"runtime":"nodejs22","entryPoint":"h"},`+
+			`"serviceConfig":{"minInstanceCount":2,"maxInstanceCount":10,`+
+			`"maxInstanceRequestConcurrency":80,"availableCpu":"1"}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "%s", body)
+	op := jsonMap(t, body)
+	fn, _ := op["response"].(map[string]any)
+	sc, _ := fn["serviceConfig"].(map[string]any)
+	require.Equal(t, float64(2), sc["minInstanceCount"])
+	require.Equal(t, float64(10), sc["maxInstanceCount"])
+	require.Equal(t, float64(80), sc["maxInstanceRequestConcurrency"])
+	require.Equal(t, "1", sc["availableCpu"])
+
+	// Get renders the persisted config.
+	resp, body = do(t, "GET", v2base+"/cfg", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	sc, _ = jsonMap(t, body)["serviceConfig"].(map[string]any)
+	require.Equal(t, "1", sc["availableCpu"])
+
+	// A masked PATCH applies the new value.
+	resp, body = do(t, "PATCH", v2base+"/cfg?updateMask=serviceConfig.maxInstanceCount",
+		[]byte(`{"serviceConfig":{"maxInstanceCount":20}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "%s", body)
+	upd, _ := jsonMap(t, body)["response"].(map[string]any)
+	require.Equal(t, float64(20), upd["serviceConfig"].(map[string]any)["maxInstanceCount"])
+
+	// Out-of-range values are rejected.
+	resp, body = do(t, "POST", v2base+"?functionId=bad",
+		[]byte(`{"buildConfig":{"runtime":"nodejs22"},"serviceConfig":{"maxInstanceRequestConcurrency":1001}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "%s", body)
+	require.Contains(t, string(body), "INVALID_ARGUMENT")
+
+	resp, body = do(t, "POST", "/v1/projects/"+project+"/locations/"+location+"/functions?functionId=badmem",
+		[]byte(`{"runtime":"nodejs20","availableMemoryMb":300}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "%s", body)
+	require.Contains(t, string(body), "INVALID_ARGUMENT")
+}
+
 // doHost performs an HTTP request with an explicit Host header. It is used to
 // invoke a deployed function at its synthesized HTTPS-trigger URL
 // ({location}-{project}.cloudfunctions.net), which is host-scoped rather than

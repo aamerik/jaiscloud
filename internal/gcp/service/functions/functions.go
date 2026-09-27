@@ -28,7 +28,13 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 	if in.Runtime == "" {
 		return functionsstore.Function{}, Operation{}, invalidArgument("missing runtime")
 	}
+	if err := validateConfigInput(in, v); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
 	f := newFunction(project, location, id, in)
+	if err := validateConfigRelations(f); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
 	sha, size, blobKey, serr := s.resolveSource(ctx, project, location, id, in)
 	if serr != nil {
 		return functionsstore.Function{}, Operation{}, serr
@@ -106,6 +112,9 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 	if gerr != nil {
 		return functionsstore.Function{}, Operation{}, gerr
 	}
+	if verr := validateConfigInput(in, v); verr != nil {
+		return functionsstore.Function{}, Operation{}, verr
+	}
 	var sha string
 	var size int64
 	var blobKey string
@@ -119,6 +128,9 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 	f, err := s.functions.UpdateFunctionAtomic(ctx, project, location, id, func(f functionsstore.Function) (functionsstore.Function, error) {
 		if uerr := ApplyFunctionUpdate(&f, in, mask); uerr != nil {
 			return functionsstore.Function{}, uerr
+		}
+		if verr := validateConfigRelations(f); verr != nil {
+			return functionsstore.Function{}, verr
 		}
 		if blobKey != "" {
 			f.SourceSHA256, f.SourceSize, f.SourceBlobKey = sha, size, blobKey

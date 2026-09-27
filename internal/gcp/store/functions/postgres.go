@@ -54,13 +54,15 @@ func (s *PostgresStore) CreateFunction(ctx context.Context, projectID, location,
 			(project_id, location, function_id, runtime, entry_point, source_upload_url, source_archive_url,
 			 https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 			 available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-			 revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+			 revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+			 min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.CreateTime, f.UpdateTime,
 		json.RawMessage(labels), f.AvailableMemoryMB, f.Timeout, f.Description,
 		f.SourceSHA256, f.SourceSize, f.SourceBlobKey,
-		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2)
+		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2,
+		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -78,7 +80,8 @@ func scanFunction(row pgx.Row) (Function, error) {
 		&f.HttpsTriggerURL, &eventTrigger, &env, &f.Status, &f.CreateTime, &f.UpdateTime, &labels,
 		&f.AvailableMemoryMB, &f.Timeout, &f.Description,
 		&f.SourceSHA256, &f.SourceSize, &f.SourceBlobKey,
-		&f.Revision, &f.UpgradeState, &f.UpgradeRuntime, &f.UpgradeMaxInstances, &f.UpgradeTrafficGen2)
+		&f.Revision, &f.UpgradeState, &f.UpgradeRuntime, &f.UpgradeMaxInstances, &f.UpgradeTrafficGen2,
+		&f.MinInstanceCount, &f.MaxInstanceCount, &f.MaxInstanceRequestConcurrency, &f.AvailableCPU)
 	if err != nil {
 		return Function{}, err
 	}
@@ -95,7 +98,8 @@ func (s *PostgresStore) GetFunction(ctx context.Context, projectID, location, id
 		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
 		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2
+		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
 		FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -112,13 +116,15 @@ func (s *PostgresStore) UpdateFunction(ctx context.Context, projectID, location,
 		       https_trigger_url=$8, event_trigger=$9, environment_variables=$10, status=$11, update_time=$12, labels=$13,
 		       available_memory_mb=$14, timeout=$15, description=$16,
 		       source_sha256=$17, source_size=$18, source_blob_key=$19,
-		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24
+		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24,
+		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, f.Runtime, f.EntryPoint, f.SourceUploadURL, f.SourceArchiveURL,
 		f.HttpsTriggerURL, nullableJSON(f.EventTrigger), json.RawMessage(env), f.Status, f.UpdateTime,
 		json.RawMessage(labels), f.AvailableMemoryMB, f.Timeout, f.Description,
 		f.SourceSHA256, f.SourceSize, f.SourceBlobKey,
-		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2)
+		f.Revision, f.UpgradeState, f.UpgradeRuntime, f.UpgradeMaxInstances, f.UpgradeTrafficGen2,
+		f.MinInstanceCount, f.MaxInstanceCount, f.MaxInstanceRequestConcurrency, f.AvailableCPU)
 	if err != nil {
 		return err
 	}
@@ -145,7 +151,8 @@ func (s *PostgresStore) UpdateFunctionAtomic(ctx context.Context, projectID, loc
 		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
 		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2
+		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
 		FROM jc_functions WHERE project_id=$1 AND location=$2 AND function_id=$3 FOR UPDATE
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -167,13 +174,15 @@ func (s *PostgresStore) UpdateFunctionAtomic(ctx context.Context, projectID, loc
 		       https_trigger_url=$8, event_trigger=$9, environment_variables=$10, status=$11, update_time=$12, labels=$13,
 		       available_memory_mb=$14, timeout=$15, description=$16,
 		       source_sha256=$17, source_size=$18, source_blob_key=$19,
-		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24
+		       revision=$20, upgrade_state=$21, upgrade_runtime=$22, upgrade_max_instances=$23, upgrade_traffic_gen2=$24,
+		       min_instance_count=$25, max_instance_count=$26, max_instance_request_concurrency=$27, available_cpu=$28
 		WHERE project_id=$1 AND location=$2 AND function_id=$3
 	`, projectID, location, id, next.Runtime, next.EntryPoint, next.SourceUploadURL, next.SourceArchiveURL,
 		next.HttpsTriggerURL, nullableJSON(next.EventTrigger), json.RawMessage(env), next.Status, next.UpdateTime,
 		json.RawMessage(labels), next.AvailableMemoryMB, next.Timeout, next.Description,
 		next.SourceSHA256, next.SourceSize, next.SourceBlobKey,
-		next.Revision, next.UpgradeState, next.UpgradeRuntime, next.UpgradeMaxInstances, next.UpgradeTrafficGen2)
+		next.Revision, next.UpgradeState, next.UpgradeRuntime, next.UpgradeMaxInstances, next.UpgradeTrafficGen2,
+		next.MinInstanceCount, next.MaxInstanceCount, next.MaxInstanceRequestConcurrency, next.AvailableCPU)
 	if err != nil {
 		return Function{}, err
 	}
@@ -204,7 +213,8 @@ func (s *PostgresStore) ListFunctions(ctx context.Context, projectID, location s
 		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
 		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2
+		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
 		FROM jc_functions WHERE project_id=$1 AND location=$2 ORDER BY function_id
 	`, projectID, location)
 	if err != nil {
@@ -228,7 +238,8 @@ func (s *PostgresStore) ListFunctionsAllLocations(ctx context.Context, projectID
 		SELECT function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
 		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
 		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
-		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2
+		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2,
+		       min_instance_count, max_instance_count, max_instance_request_concurrency, available_cpu
 		FROM jc_functions WHERE project_id=$1 ORDER BY location, function_id
 	`, projectID)
 	if err != nil {

@@ -96,3 +96,61 @@ func TestPostgresOperationCRUD(t *testing.T) {
 
 	s.Reset(ctx)
 }
+
+// TestPostgresFunctionInstanceConfig round-trips the FD6 v2 instance/concurrency
+// columns through Postgres (insert, get, update, snapshot/restore) so --dsn mode
+// persists them like the memory backend.
+func TestPostgresFunctionInstanceConfig(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres store test")
+	}
+	ctx := context.Background()
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	f := Function{ID: "cfg", Runtime: "nodejs22", Status: "ACTIVE",
+		MinInstanceCount: 2, MaxInstanceCount: 10, MaxInstanceRequestConcurrency: 80, AvailableCPU: "0.5"}
+	if err := s.CreateFunction(ctx, "proj", "us-central1", "cfg", f); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetFunction(ctx, "proj", "us-central1", "cfg")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.MinInstanceCount != 2 || got.MaxInstanceCount != 10 || got.MaxInstanceRequestConcurrency != 80 || got.AvailableCPU != "0.5" {
+		t.Fatalf("get config = %+v", got)
+	}
+
+	got.AvailableCPU = "1"
+	got.MaxInstanceCount = 20
+	if err := s.UpdateFunction(ctx, "proj", "us-central1", "cfg", got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// Snapshot/restore (the --dsn restart path) preserves the columns.
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err = s.GetFunction(ctx, "proj", "us-central1", "cfg")
+	if err != nil {
+		t.Fatalf("get after restore: %v", err)
+	}
+	if got.MinInstanceCount != 2 || got.MaxInstanceCount != 20 || got.MaxInstanceRequestConcurrency != 80 || got.AvailableCPU != "1" {
+		t.Fatalf("restored config = %+v", got)
+	}
+	s.Reset(ctx)
+}
