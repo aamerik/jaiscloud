@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 793,
+    "total": 794,
     "by_state": {
-      "ga": 558,
+      "ga": 559,
       "limited": 97,
       "preview": 37,
       "unsupported": 101
@@ -15,7 +15,7 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 286,
+        "ga": 287,
         "limited": 86,
         "preview": 37,
         "unsupported": 9
@@ -56,7 +56,7 @@
         "unsupported": 28
       },
       "functions": {
-        "ga": 31
+        "ga": 32
       },
       "iam": {
         "ga": 18
@@ -3200,6 +3200,16 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudfunctions.operations.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.InvokeTrigger",
+      "transport": "rest",
+      "state": "ga",
+      "reason": "deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested",
+      "evidence": [
         "postgres=yes"
       ]
     },

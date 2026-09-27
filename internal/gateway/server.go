@@ -618,6 +618,7 @@ func cloudDNSNames(cloud, region string) []string {
 			"storage.googleapis.com",
 			"compute.googleapis.com",
 			"cloudfunctions.googleapis.com",
+			"*.cloudfunctions.net",
 			"run.googleapis.com",
 			"firestore.googleapis.com",
 			"secretmanager.googleapis.com",
