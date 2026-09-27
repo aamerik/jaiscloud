@@ -96,8 +96,9 @@ const (
 	MoreResultsAfterLimit
 )
 
-// Query is a transport-neutral Datastore query (structured form only; GQL is
-// rejected by the transports before reaching the core).
+// Query is a transport-neutral Datastore query. Both the structured form and
+// the GQL form (parsed by ParseGQL) resolve to this type, so the two share one
+// execution engine.
 type Query struct {
 	Kind   string
 	Filter *Filter

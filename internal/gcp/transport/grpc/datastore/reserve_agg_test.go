@@ -402,10 +402,12 @@ func TestRunAggregationQueryUnknownTransactionInvalid(t *testing.T) {
 	}
 }
 
-func TestRunAggregationQueryGQLInvalid(t *testing.T) {
+func TestRunAggregationQueryGQLMalformed(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()
 
+	// An empty query string is not a valid AGGREGATE ... OVER (...) statement,
+	// so the GQL parser fails closed with InvalidArgument.
 	_, err := client.RunAggregationQuery(context.Background(), &datastorepb.RunAggregationQueryRequest{
 		ProjectId: "test",
 		QueryType: &datastorepb.RunAggregationQueryRequest_GqlQuery{GqlQuery: &datastorepb.GqlQuery{}},

@@ -144,9 +144,9 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **278/278 checks pass** (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
-  Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
+- **gRPC** — official `cloud.google.com/go` clients: **290/290 checks pass** (Dataproc 14,
+  Datastore 13, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
+  Managed Kafka 18, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
   `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
@@ -213,9 +213,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **gRPC** — **11** of **365** cells remain `limited`: verified against proto descriptors only.
   The other **260** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **278** checks over those `ga` proto methods (Dataproc 14,
-  Datastore 11, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
-  Managed Kafka 18, Metastore 13, Monitoring 24, Operations 5, Pub/Sub 25, Resource Manager 4,
+  The conformance harness exercises **290** checks over those `ga` proto methods (Dataproc 14,
+  Datastore 13, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 18, IAM 6, KMS 31, Logging 21,
+  Managed Kafka 18, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5, the rest one
   per method). KMS
   `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
@@ -237,7 +237,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   stages and unsupported expressions with `Unimplemented`; Firestore's `UpdateTime`
   optimistic-concurrency token is kept strictly monotonic per document even under a frozen
   clock; Datastore transactions are single entity-group with read-set
-  approximations; **KMS destruction timing** — `DestroyCryptoKeyVersion` moves the version to
+  approximations, and its query engine models only kind/filter/offset/limit, so GQL projection,
+  `ORDER BY`, and cursor bindings are parsed/ignored and `HAS ANCESTOR`/`CONTAINS`/`NOT` are
+  rejected (the same limits the structured query surface has); **KMS destruction timing** — `DestroyCryptoKeyVersion` moves the version to
   `DESTROY_SCHEDULED` with a `destroyTime` (the documented 30-day default), and a lazy on-read
   promotion flips it to the terminal `DESTROYED` (recording `destroyEventTime`) once the window
   elapses; `Encrypt`/asymmetric/MAC on a scheduled version fail with `FAILED_PRECONDITION` and
