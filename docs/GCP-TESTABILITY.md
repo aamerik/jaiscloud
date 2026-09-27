@@ -110,7 +110,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
 | `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. `ListWorkflowRevisions` is an unsupported stub. |
 | `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
-| `functions` | grpc, rest | 25/29 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 deploy unsupported; v2 `ListRuntimes` is an unsupported stub. |
+| `functions` | grpc, rest | 27/30 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 runtime catalog (`/v2/.../runtimes`, gRPC `ListRuntimes`) served; v2 deploy (source upload + build/stage) unsupported. |
 | `compute` | rest | 0/33 | 🟡 | Metadata only | Metadata only | No VM/disk/network data plane. |
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |
@@ -186,8 +186,9 @@ evidence for any of them.
 - [ ] **BigQuery.** No SQL engine ships locally; `jobs.query` evaluates nothing. All
       query behaviour must be tested against real BigQuery.
 - [ ] **Cloud Functions v2 deploy.** v2 request/response *shapes* are served (gcloud
-      `list`/`describe` pass), but v2 `deploy` additionally needs `/v2/.../runtimes` and a
-      resumable source upload, which are not modelled. Test deploy end-to-end on GCP.
+      `list`/`describe` pass) and runtime resolution works (`/v2/.../runtimes`), but v2 `deploy`
+      still needs a resumable source upload and a build/stage step, which are not modelled.
+      Test deploy end-to-end on GCP.
 - [ ] **Quotas, throttling, and retry/backoff.** No rate limits or quota plane is
       modelled, so backoff and quota-exhaustion paths are never exercised locally.
 - [ ] **Frozen-clock OCC / TTL.** With the clock frozen (`POST /_jaiscloud/clock`),

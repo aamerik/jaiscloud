@@ -202,14 +202,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
   `functions` service and serialize the v2 shape (`state`, `buildConfig`, `serviceConfig`);
-  `gcloud functions list` and `gcloud functions describe` pass. v2 `deploy` is not supported —
-  it additionally requires `/v2/.../runtimes` and a resumable source upload. `Function.GetLocation`
-  is `limited` (no matching Discovery method). The gRPC surface registers both
-  `google.cloud.functions.v1.CloudFunctionsService` and
+  `gcloud functions list` and `gcloud functions describe` pass. v2 runtime resolution works
+  (`GET /v2/.../runtimes` + gRPC `ListRuntimes`), so `gcloud functions deploy --gen2` gets past the
+  runtime lookup, but deploy still needs a resumable source upload + build/stage step, which is not
+  modelled. `Function.GetLocation` is `limited` (no matching Discovery method). The gRPC surface
+  registers both `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
-  (runtime invocation) is served over the shared core's Lambda executor on both transports;
-  v2 `ListRuntimes` is an explicit `unsupported` `Unimplemented` stub.
+  (runtime invocation) is served over the shared core's Lambda executor on both transports.
 - **gRPC** — **11** of **365** cells remain `limited`: verified against proto descriptors only.
   The other **260** are `ga` and **94** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
@@ -274,7 +274,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   emulated.
 - **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
   `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`;
-  Dataproc `DiagnoseCluster`; Functions `ListRuntimes`;
+  Dataproc `DiagnoseCluster`;
   Service Usage `BatchGetServices` (the gRPC surface is the get/list/enable/disable control plane);
   Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
   Cloud Resource Manager v3 `ListProjects`/`SearchProjects`/`CreateProject`/`UpdateProject`/

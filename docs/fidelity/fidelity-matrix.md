@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **791**
+Cells: **792**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 552 |
+| ga | 554 |
 | limited | 100 |
 | preview | 37 |
-| unsupported | 102 |
+| unsupported | 101 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 281 | 89 | 37 | 9 |
-| grpc | 271 | 11 | 0 | 93 |
+| rest | 282 | 89 | 37 | 9 |
+| grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -355,7 +355,7 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_29 cell(s): ga=25 limited=3 preview=0 unsupported=1_
+_30 cell(s): ga=27 limited=3 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -378,13 +378,14 @@ _29 cell(s): ga=25 limited=3 preview=0 unsupported=1_
 | Function.ListFunctions | rest | ga | — |
 | Function.ListLocations | rest | ga | — |
 | Function.ListOperations | rest | ga | — |
+| Function.ListRuntimes | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
 | GenerateDownloadUrl | grpc | ga | — |
 | GenerateUploadUrl | grpc | ga | — |
 | GetFunction | grpc | ga | — |
 | GetIamPolicy | grpc | ga | — |
 | ListFunctions | grpc | ga | — |
-| ListRuntimes | grpc | unsupported | not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub |
+| ListRuntimes | grpc | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
 | UpdateFunction | grpc | ga | — |

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 791,
+    "total": 792,
     "by_state": {
-      "ga": 552,
+      "ga": 554,
       "limited": 100,
       "preview": 37,
-      "unsupported": 102
+      "unsupported": 101
     },
     "by_transport": {
       "grpc": {
-        "ga": 271,
+        "ga": 272,
         "limited": 11,
-        "unsupported": 93
+        "unsupported": 92
       },
       "rest": {
-        "ga": 281,
+        "ga": 282,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -56,9 +56,8 @@
         "unsupported": 28
       },
       "functions": {
-        "ga": 25,
-        "limited": 3,
-        "unsupported": 1
+        "ga": 27,
+        "limited": 3
       },
       "iam": {
         "ga": 18
@@ -3237,6 +3236,16 @@
     },
     {
       "service": "functions",
+      "operation": "Function.ListRuntimes",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.runtimes.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
       "operation": "Function.UpdateFunction",
       "transport": "rest",
       "state": "ga",
@@ -3300,11 +3309,10 @@
       "service": "functions",
       "operation": "ListRuntimes",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

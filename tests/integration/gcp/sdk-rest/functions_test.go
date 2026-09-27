@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"google.golang.org/api/cloudfunctions/v1"
+	cloudfunctionsv2 "google.golang.org/api/cloudfunctions/v2"
 	"google.golang.org/api/option"
 
 	"github.com/stretchr/testify/require"
@@ -70,4 +71,34 @@ func TestSDKCloudFunctions(t *testing.T) {
 
 	_, err = svc.Projects.Locations.Functions.Get(name).Do()
 	require.Error(t, err)
+}
+
+// TestSDKCloudFunctionsRuntimes exercises the v2 runtime catalog through the
+// official apiary client: the list is non-empty, nodejs20 is GEN_2/GA, and an
+// AIP-160 name filter narrows it.
+func TestSDKCloudFunctionsRuntimes(t *testing.T) {
+	ctx := context.Background()
+	svc, err := cloudfunctionsv2.NewService(ctx, option.WithEndpoint(endpoint()), option.WithoutAuthentication())
+	require.NoError(t, err)
+
+	const parent = "projects/proj/locations/us-central1"
+	resp, err := svc.Projects.Locations.Runtimes.List(parent).Do()
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Runtimes)
+
+	var node *cloudfunctionsv2.Runtime
+	for _, rt := range resp.Runtimes {
+		if rt.Name == "nodejs20" {
+			node = rt
+		}
+	}
+	require.NotNil(t, node, "nodejs20 missing from runtime catalog")
+	require.Equal(t, "GEN_2", node.Environment)
+	require.Equal(t, "GA", node.Stage)
+	require.Equal(t, "Node.js 20", node.DisplayName)
+
+	filtered, err := svc.Projects.Locations.Runtimes.List(parent).Filter(`name="python312"`).Do()
+	require.NoError(t, err)
+	require.Len(t, filtered.Runtimes, 1)
+	require.Equal(t, "python312", filtered.Runtimes[0].Name)
 }

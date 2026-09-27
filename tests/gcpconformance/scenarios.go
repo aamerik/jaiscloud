@@ -272,6 +272,17 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + metricName},
 	)
 
+	// ─── Cloud Functions v2 runtime catalog ───────────────────────────────────
+	// The runtime catalog is the v2-deploy enabler: gcloud resolves a function's
+	// runtime from this list (filtered to environment GEN_2) before uploading
+	// source. Both the unfiltered list and an AIP-160 name filter are exercised.
+	sc = append(sc,
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + p + "/locations/us-central1/runtimes"},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + p + "/locations/us-central1/runtimes?filter=" + url.QueryEscape(`name="nodejs20"`)},
+	)
+
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
 	mType := "conf.metric_" + suffix
 	tsType := "conf.ts_" + suffix

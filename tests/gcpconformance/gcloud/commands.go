@@ -273,8 +273,9 @@ func commands(f fixtures) []Command {
 		// list fans out to both the v2 (GEN_2 filter) and v1 list endpoints and
 		// merges them, so this exercises the v2 routing. The function is seeded
 		// directly against the emulator's v2 REST API before the table runs
-		// because `gcloud functions deploy` also requires /v2/.../runtimes and a
-		// resumable source upload, neither of which the emulator serves yet.
+		// because `gcloud functions deploy` also requires a resumable source
+		// upload and build/stage step, which the emulator does not model (the
+		// /v2/.../runtimes runtime lookup is served).
 		{
 			Name: "functions list", Service: "functions",
 			Args:   []string{"functions", "list", "--format=json"},

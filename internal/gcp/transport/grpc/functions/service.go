@@ -16,8 +16,8 @@
 // for v1 and v2 respectively, and the Function or google.protobuf.Empty as the
 // response), so the generated client's Wait observes the result without
 // polling. v1 CallFunction (runtime invocation) is served over the SAME core
-// executor as the REST transport. v2 ListRuntimes has no emulator
-// implementation yet and fails loud with codes.Unimplemented.
+// executor as the REST transport, and v2 ListRuntimes (the runtime catalog) is
+// served from the SAME core catalog as the REST /v2/.../runtimes route.
 package functions
 
 import (
@@ -300,6 +300,25 @@ func (s *ServiceV2) ListFunctions(ctx context.Context, req *apiv2functionspb.Lis
 	out := &apiv2functionspb.ListFunctionsResponse{NextPageToken: next}
 	for _, f := range page {
 		out.Functions = append(out.Functions, functionToProtoV2(project, f))
+	}
+	return out, nil
+}
+
+// ListRuntimes returns the v2 runtime catalog over the shared core. It is the
+// v2-deploy enabler: a client resolves a function's runtime from this list.
+func (s *ServiceV2) ListRuntimes(ctx context.Context, req *apiv2functionspb.ListRuntimesRequest) (*apiv2functionspb.ListRuntimesResponse, error) {
+	project, location, err := core.ParseLocationParent(req.GetParent())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	project = resolveProject(ctx, project, s.defaultProj)
+	runtimes, err := s.core.ListRuntimes(project, location, req.GetFilter())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := &apiv2functionspb.ListRuntimesResponse{}
+	for _, rt := range runtimes {
+		out.Runtimes = append(out.Runtimes, runtimeToProto(rt))
 	}
 	return out, nil
 }
