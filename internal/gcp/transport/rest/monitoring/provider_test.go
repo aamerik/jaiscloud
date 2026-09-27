@@ -404,6 +404,141 @@ func TestRESTMonitoredResourceDescriptors(t *testing.T) {
 	}
 }
 
+func TestRESTServiceMonitoringRoundTrip(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	createdSvc, err := call(t, c, p, http.MethodPost, "/v3/projects/test/services?serviceId=checkout", map[string]any{
+		"displayName": "Checkout",
+		"cloudRun":    map[string]any{"serviceName": "checkout"},
+		"userLabels":  map[string]any{"team": "payments"},
+	})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	svcData := wireData(t, createdSvc)
+	svcName, _ := svcData["name"].(string)
+	if svcName != "projects/test/services/checkout" || svcData["displayName"] != "Checkout" {
+		t.Fatalf("created service = %+v", svcData)
+	}
+	if _, ok := svcData["cloudRun"].(map[string]any); !ok {
+		t.Fatalf("created service identifier = %+v", svcData["cloudRun"])
+	}
+
+	list, err := call(t, c, p, http.MethodGet, "/v3/projects/test/services", nil)
+	if err != nil {
+		t.Fatalf("list services: %v", err)
+	}
+	if svcs, _ := wireData(t, list)["services"].([]any); len(svcs) != 1 {
+		t.Fatalf("list services = %+v", wireData(t, list))
+	}
+
+	// A masked patch changes only displayName, preserving the identifier.
+	patched, err := call(t, c, p, http.MethodPatch, "/v3/"+svcName+"?updateMask=displayName", map[string]any{
+		"displayName": "Checkout v2",
+	})
+	if err != nil {
+		t.Fatalf("patch service: %v", err)
+	}
+	pd := wireData(t, patched)
+	if pd["displayName"] != "Checkout v2" {
+		t.Fatalf("patched = %+v", pd)
+	}
+	if _, ok := pd["cloudRun"].(map[string]any); !ok {
+		t.Fatalf("patched identifier lost = %+v", pd)
+	}
+
+	// A documented identifier_case filter narrows the list.
+	filtered, err := call(t, c, p, http.MethodGet, `/v3/projects/test/services?filter=identifier_case+%3D+%22CLOUD_RUN%22`, nil)
+	if err != nil {
+		t.Fatalf("filtered list: %v", err)
+	}
+	if svcs, _ := wireData(t, filtered)["services"].([]any); len(svcs) != 1 {
+		t.Fatalf("filtered list = %+v", wireData(t, filtered))
+	}
+	other, err := call(t, c, p, http.MethodGet, `/v3/projects/test/services?filter=identifier_case+%3D+%22CUSTOM%22`, nil)
+	if err != nil {
+		t.Fatalf("filtered list (no match): %v", err)
+	}
+	if svcs, _ := wireData(t, other)["services"].([]any); len(svcs) != 0 {
+		t.Fatalf("filtered list (no match) = %+v, want empty", wireData(t, other))
+	}
+
+	// A basic service is identified by the separate basicService field.
+	basic, err := call(t, c, p, http.MethodPost, "/v3/projects/test/services?serviceId=basic", map[string]any{
+		"basicService": map[string]any{"serviceType": "CLOUD_RUN"},
+	})
+	if err != nil {
+		t.Fatalf("create basic service: %v", err)
+	}
+	bs, ok := wireData(t, basic)["basicService"].(map[string]any)
+	if !ok || bs["serviceType"] != "CLOUD_RUN" {
+		t.Fatalf("basic service = %+v", wireData(t, basic))
+	}
+	basicList, err := call(t, c, p, http.MethodGet, `/v3/projects/test/services?filter=identifier_case+%3D+%22BASIC_SERVICE%22`, nil)
+	if err != nil {
+		t.Fatalf("basic filter: %v", err)
+	}
+	if svcs, _ := wireData(t, basicList)["services"].([]any); len(svcs) != 1 {
+		t.Fatalf("basic filter = %+v, want 1", wireData(t, basicList))
+	}
+
+	sloName := svcName + "/serviceLevelObjectives/avail"
+	createdSLO, err := call(t, c, p, http.MethodPost, "/v3/"+svcName+"/serviceLevelObjectives?serviceLevelObjectiveId=avail", map[string]any{
+		"displayName":           "Availability",
+		"goal":                  0.99,
+		"rollingPeriod":         "2592000s",
+		"serviceLevelIndicator": map[string]any{"basicSli": map[string]any{"availability": map[string]any{}}},
+	})
+	if err != nil {
+		t.Fatalf("create SLO: %v", err)
+	}
+	sloData := wireData(t, createdSLO)
+	if sloData["name"] != sloName || sloData["goal"] != 0.99 || sloData["rollingPeriod"] != "2592000s" {
+		t.Fatalf("created SLO = %+v", sloData)
+	}
+
+	sloList, err := call(t, c, p, http.MethodGet, "/v3/"+svcName+"/serviceLevelObjectives", nil)
+	if err != nil {
+		t.Fatalf("list SLOs: %v", err)
+	}
+	if slos, _ := wireData(t, sloList)["serviceLevelObjectives"].([]any); len(slos) != 1 {
+		t.Fatalf("list SLOs = %+v", wireData(t, sloList))
+	}
+
+	gotSLO, err := call(t, c, p, http.MethodGet, "/v3/"+sloName, nil)
+	if err != nil {
+		t.Fatalf("get SLO: %v", err)
+	}
+	if wireData(t, gotSLO)["displayName"] != "Availability" {
+		t.Fatalf("get SLO = %+v", wireData(t, gotSLO))
+	}
+
+	updatedSLO, err := call(t, c, p, http.MethodPatch, "/v3/"+sloName+"?updateMask=goal", map[string]any{"goal": 0.95})
+	if err != nil {
+		t.Fatalf("patch SLO: %v", err)
+	}
+	if wireData(t, updatedSLO)["goal"] != 0.95 {
+		t.Fatalf("patched SLO = %+v", wireData(t, updatedSLO))
+	}
+
+	// An invalid goal is rejected at the core, not silently stored.
+	if _, err := call(t, c, p, http.MethodPatch, "/v3/"+sloName+"?updateMask=goal", map[string]any{"goal": 1.5}); err == nil {
+		t.Fatal("goal > 1 should be rejected")
+	}
+
+	if _, err := call(t, c, p, http.MethodDelete, "/v3/"+sloName, nil); err != nil {
+		t.Fatalf("delete SLO: %v", err)
+	}
+
+	// Deleting the service removes the service itself.
+	if _, err := call(t, c, p, http.MethodDelete, "/v3/"+svcName, nil); err != nil {
+		t.Fatalf("delete service: %v", err)
+	}
+	if _, err := call(t, c, p, http.MethodGet, "/v3/"+svcName, nil); err == nil {
+		t.Fatal("get after delete should be NotFound")
+	}
+}
+
 func TestRESTErrorsAndCodecRouting(t *testing.T) {
 	c, p := newTestProvider(t)
 

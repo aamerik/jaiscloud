@@ -17,15 +17,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// monitoringChecks covers the Cloud Monitoring v3 gRPC surface — all 24 RPCs of
-// google.monitoring.v3.MetricService (9), AlertPolicyService (5) and
-// NotificationChannelService (10) — via the official
-// cloud.google.com/go/monitoring/apiv3/v2 clients.
+// monitoringChecks covers the Cloud Monitoring v3 gRPC surface — all 34 RPCs of
+// google.monitoring.v3.MetricService (9), AlertPolicyService (5),
+// NotificationChannelService (10) and ServiceMonitoringService (10) — via the
+// official cloud.google.com/go/monitoring/apiv3/v2 clients.
 //
 // Checks run in registry order and share state through the emulator: the metric
 // descriptor created first is read/listed by the following probes and deleted
@@ -67,6 +68,18 @@ func monitoringChecks() []Check {
 		{Service: "monitoring", RPC: "SendNotificationChannelVerificationCode", Method: "SendNotificationChannelVerificationCode", KeyField: "success (empty)", Run: checkMonitoringSendVerificationCode},
 		{Service: "monitoring", RPC: "GetNotificationChannelVerificationCode", Method: "GetNotificationChannelVerificationCode", KeyField: "code non-empty", Run: checkMonitoringGetVerificationCode},
 		{Service: "monitoring", RPC: "DeleteNotificationChannel", Method: "DeleteNotificationChannel", KeyField: "channel absent after delete", Run: checkMonitoringDeleteNotificationChannel},
+
+		// ── ServiceMonitoringService ─────────────────────────────────────────
+		{Service: "monitoring", RPC: "CreateService", Method: "CreateService", KeyField: "service.name/display_name/identifier", Run: checkMonitoringCreateService},
+		{Service: "monitoring", RPC: "GetService", Method: "GetService", KeyField: "service.display_name/identifier", Run: checkMonitoringGetService},
+		{Service: "monitoring", RPC: "ListServices", Method: "ListServices", KeyField: "services[] contains service", Run: checkMonitoringListServices},
+		{Service: "monitoring", RPC: "UpdateService", Method: "UpdateService", KeyField: "masked display_name applied", Run: checkMonitoringUpdateService},
+		{Service: "monitoring", RPC: "CreateServiceLevelObjective", Method: "CreateServiceLevelObjective", KeyField: "slo.name/goal/rolling_period", Run: checkMonitoringCreateServiceLevelObjective},
+		{Service: "monitoring", RPC: "GetServiceLevelObjective", Method: "GetServiceLevelObjective", KeyField: "slo.display_name/indicator", Run: checkMonitoringGetServiceLevelObjective},
+		{Service: "monitoring", RPC: "ListServiceLevelObjectives", Method: "ListServiceLevelObjectives", KeyField: "serviceLevelObjectives[] contains slo", Run: checkMonitoringListServiceLevelObjectives},
+		{Service: "monitoring", RPC: "UpdateServiceLevelObjective", Method: "UpdateServiceLevelObjective", KeyField: "masked goal applied", Run: checkMonitoringUpdateServiceLevelObjective},
+		{Service: "monitoring", RPC: "DeleteServiceLevelObjective", Method: "DeleteServiceLevelObjective", KeyField: "slo absent after delete", Run: checkMonitoringDeleteServiceLevelObjective},
+		{Service: "monitoring", RPC: "DeleteService", Method: "DeleteService", KeyField: "service absent after delete", Run: checkMonitoringDeleteService},
 	}
 }
 
@@ -90,6 +103,10 @@ func newMonitoringAlertPolicyClient(ctx context.Context, cfg Config) (*monitorin
 
 func newMonitoringChannelClient(ctx context.Context, cfg Config) (*monitoring.NotificationChannelClient, error) {
 	return monitoring.NewNotificationChannelClient(ctx, monitoringOptions(cfg)...)
+}
+
+func newMonitoringServiceClient(ctx context.Context, cfg Config) (*monitoring.ServiceMonitoringClient, error) {
+	return monitoring.NewServiceMonitoringClient(ctx, monitoringOptions(cfg)...)
 }
 
 // ─── naming helpers ───────────────────────────────────────────────────────────
@@ -853,6 +870,283 @@ func checkMonitoringDeleteNotificationChannel(ctx context.Context, cfg Config) e
 	}
 	if _, err := nc.GetNotificationChannel(ctx, &monitoringpb.GetNotificationChannelRequest{Name: c.GetName()}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetNotificationChannel after delete = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// ─── ServiceMonitoringService checks ──────────────────────────────────────────
+
+func monitoringServiceID(cfg Config) string { return cfg.ResourceName("gcpc-svc") }
+
+func monitoringServiceName(cfg Config) string {
+	return monitoringParent(cfg) + "/services/" + monitoringServiceID(cfg)
+}
+
+func monitoringSLOID(cfg Config) string { return cfg.ResourceName("gcpc-slo") }
+
+func monitoringSLODisplay(cfg Config) string { return cfg.ResourceName("gcpc-slo-display") }
+
+func monitoringSLOName(cfg Config) string {
+	return monitoringServiceName(cfg) + "/serviceLevelObjectives/" + monitoringSLOID(cfg)
+}
+
+func monitoringAvailabilitySLI() *monitoringpb.ServiceLevelIndicator {
+	return &monitoringpb.ServiceLevelIndicator{
+		Type: &monitoringpb.ServiceLevelIndicator_BasicSli{
+			BasicSli: &monitoringpb.BasicSli{
+				SliCriteria: &monitoringpb.BasicSli_Availability{
+					Availability: &monitoringpb.BasicSli_AvailabilityCriteria{},
+				},
+			},
+		},
+	}
+}
+
+// Check 25: CreateService must return a service with a project-scoped name, the
+// requested display name, and its Cloud Run identifier.
+func checkMonitoringCreateService(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	created, err := sc.CreateService(ctx, &monitoringpb.CreateServiceRequest{
+		Parent:    monitoringParent(cfg),
+		ServiceId: monitoringServiceID(cfg),
+		Service: &monitoringpb.Service{
+			DisplayName: cfg.ResourceName("gcpc-svc-display"),
+			Identifier: &monitoringpb.Service_CloudRun_{
+				CloudRun: &monitoringpb.Service_CloudRun{ServiceName: "checkout"},
+			},
+			UserLabels: map[string]string{"conformance": "true"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateService: %w", err)
+	}
+	if got, want := created.GetName(), monitoringServiceName(cfg); got != want {
+		return fmt.Errorf("created name = %q, want %q", got, want)
+	}
+	if created.GetDisplayName() == "" {
+		return errors.New("created service has an empty display_name")
+	}
+	if created.GetCloudRun().GetServiceName() != "checkout" {
+		return fmt.Errorf("created identifier = %+v, want cloudRun", created.GetIdentifier())
+	}
+	return nil
+}
+
+// Check 26: GetService must round-trip the created service and its identifier.
+func checkMonitoringGetService(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	got, err := sc.GetService(ctx, &monitoringpb.GetServiceRequest{Name: monitoringServiceName(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetService: %w", err)
+	}
+	if got.GetName() != monitoringServiceName(cfg) {
+		return fmt.Errorf("name = %q, want %q", got.GetName(), monitoringServiceName(cfg))
+	}
+	if got.GetCloudRun().GetServiceName() != "checkout" {
+		return fmt.Errorf("identifier = %+v, want cloudRun", got.GetIdentifier())
+	}
+	return nil
+}
+
+// Check 27: ListServices must include the created service.
+func checkMonitoringListServices(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	it := sc.ListServices(ctx, &monitoringpb.ListServicesRequest{Parent: monitoringParent(cfg)})
+	for {
+		svc, err := it.Next()
+		if err == iterator.Done {
+			return fmt.Errorf("ListServices did not include %q", monitoringServiceName(cfg))
+		}
+		if err != nil {
+			return fmt.Errorf("ListServices: %w", err)
+		}
+		if svc.GetName() == monitoringServiceName(cfg) {
+			return nil
+		}
+	}
+}
+
+// Check 28: UpdateService with a display_name mask must apply the change while
+// preserving the identifier.
+func checkMonitoringUpdateService(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	updated, err := sc.UpdateService(ctx, &monitoringpb.UpdateServiceRequest{
+		Service: &monitoringpb.Service{
+			Name:        monitoringServiceName(cfg),
+			DisplayName: "updated by conformance",
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateService: %w", err)
+	}
+	if updated.GetDisplayName() != "updated by conformance" {
+		return fmt.Errorf("display_name = %q, want updated by conformance", updated.GetDisplayName())
+	}
+	if updated.GetCloudRun().GetServiceName() != "checkout" {
+		return fmt.Errorf("identifier lost on update: %+v", updated.GetIdentifier())
+	}
+	return nil
+}
+
+// Check 29: CreateServiceLevelObjective must return an SLO with the run-unique
+// name, goal, rolling period and basic SLI.
+func checkMonitoringCreateServiceLevelObjective(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	created, err := sc.CreateServiceLevelObjective(ctx, &monitoringpb.CreateServiceLevelObjectiveRequest{
+		Parent:                  monitoringServiceName(cfg),
+		ServiceLevelObjectiveId: monitoringSLOID(cfg),
+		ServiceLevelObjective: &monitoringpb.ServiceLevelObjective{
+			DisplayName:           monitoringSLODisplay(cfg),
+			Goal:                  0.99,
+			Period:                &monitoringpb.ServiceLevelObjective_RollingPeriod{RollingPeriod: durationpb.New(30 * 24 * time.Hour)},
+			ServiceLevelIndicator: monitoringAvailabilitySLI(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateServiceLevelObjective: %w", err)
+	}
+	if got, want := created.GetName(), monitoringSLOName(cfg); got != want {
+		return fmt.Errorf("created name = %q, want %q", got, want)
+	}
+	if created.GetGoal() != 0.99 {
+		return fmt.Errorf("goal = %v, want 0.99", created.GetGoal())
+	}
+	if created.GetRollingPeriod().AsDuration() != 30*24*time.Hour {
+		return fmt.Errorf("rolling_period = %v, want 720h", created.GetRollingPeriod().AsDuration())
+	}
+	if created.GetServiceLevelIndicator().GetBasicSli().GetAvailability() == nil {
+		return fmt.Errorf("indicator = %+v, want basicSli.availability", created.GetServiceLevelIndicator())
+	}
+	return nil
+}
+
+// Check 30: GetServiceLevelObjective must round-trip the created SLO.
+func checkMonitoringGetServiceLevelObjective(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	got, err := sc.GetServiceLevelObjective(ctx, &monitoringpb.GetServiceLevelObjectiveRequest{
+		Name: monitoringSLOName(cfg),
+		View: monitoringpb.ServiceLevelObjective_FULL,
+	})
+	if err != nil {
+		return fmt.Errorf("GetServiceLevelObjective: %w", err)
+	}
+	if got.GetDisplayName() != monitoringSLODisplay(cfg) {
+		return fmt.Errorf("display_name = %q, want %q", got.GetDisplayName(), monitoringSLODisplay(cfg))
+	}
+	if got.GetServiceLevelIndicator().GetBasicSli().GetAvailability() == nil {
+		return fmt.Errorf("indicator = %+v, want basicSli.availability", got.GetServiceLevelIndicator())
+	}
+	return nil
+}
+
+// Check 31: ListServiceLevelObjectives must include the created SLO.
+func checkMonitoringListServiceLevelObjectives(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	it := sc.ListServiceLevelObjectives(ctx, &monitoringpb.ListServiceLevelObjectivesRequest{Parent: monitoringServiceName(cfg)})
+	for {
+		slo, err := it.Next()
+		if err == iterator.Done {
+			return fmt.Errorf("ListServiceLevelObjectives did not include %q", monitoringSLOName(cfg))
+		}
+		if err != nil {
+			return fmt.Errorf("ListServiceLevelObjectives: %w", err)
+		}
+		if slo.GetName() == monitoringSLOName(cfg) {
+			return nil
+		}
+	}
+}
+
+// Check 32: UpdateServiceLevelObjective with a goal mask must apply the change.
+func checkMonitoringUpdateServiceLevelObjective(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	updated, err := sc.UpdateServiceLevelObjective(ctx, &monitoringpb.UpdateServiceLevelObjectiveRequest{
+		ServiceLevelObjective: &monitoringpb.ServiceLevelObjective{
+			Name: monitoringSLOName(cfg),
+			Goal: 0.95,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"goal"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateServiceLevelObjective: %w", err)
+	}
+	if updated.GetGoal() != 0.95 {
+		return fmt.Errorf("goal = %v, want 0.95", updated.GetGoal())
+	}
+	return nil
+}
+
+// Check 33: DeleteServiceLevelObjective must remove the SLO created by check 29.
+func checkMonitoringDeleteServiceLevelObjective(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	if err := sc.DeleteServiceLevelObjective(ctx, &monitoringpb.DeleteServiceLevelObjectiveRequest{Name: monitoringSLOName(cfg)}); err != nil {
+		return fmt.Errorf("DeleteServiceLevelObjective: %w", err)
+	}
+	if _, err := sc.GetServiceLevelObjective(ctx, &monitoringpb.GetServiceLevelObjectiveRequest{Name: monitoringSLOName(cfg)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetServiceLevelObjective after delete = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// Check 34: DeleteService must remove the service created by check 25.
+func checkMonitoringDeleteService(ctx context.Context, cfg Config) error {
+	sc, err := newMonitoringServiceClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer sc.Close()
+
+	if err := sc.DeleteService(ctx, &monitoringpb.DeleteServiceRequest{Name: monitoringServiceName(cfg)}); err != nil {
+		return fmt.Errorf("DeleteService: %w", err)
+	}
+	if _, err := sc.GetService(ctx, &monitoringpb.GetServiceRequest{Name: monitoringServiceName(cfg)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetService after delete = %v, want NotFound", err)
 	}
 	return nil
 }

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 771,
+    "total": 791,
     "by_state": {
-      "ga": 531,
+      "ga": 551,
       "limited": 100,
       "preview": 37,
       "unsupported": 103
     },
     "by_transport": {
       "grpc": {
-        "ga": 260,
+        "ga": 270,
         "limited": 11,
         "unsupported": 94
       },
       "rest": {
-        "ga": 271,
+        "ga": 281,
         "limited": 89,
         "preview": 37,
         "unsupported": 9
@@ -88,7 +88,7 @@
         "unsupported": 10
       },
       "monitoring": {
-        "ga": 48
+        "ga": 68
       },
       "operations": {
         "ga": 5
@@ -6010,6 +6010,28 @@
     },
     {
       "service": "monitoring",
+      "operation": "CreateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "CreateServiceLevelObjective",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "CreateServiceTimeSeries",
       "transport": "grpc",
       "state": "ga",
@@ -6055,6 +6077,28 @@
     {
       "service": "monitoring",
       "operation": "DeleteNotificationChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "DeleteService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "DeleteServiceLevelObjective",
       "transport": "grpc",
       "state": "ga",
       "evidence": [
@@ -6125,6 +6169,26 @@
     },
     {
       "service": "monitoring",
+      "operation": "GetService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "GetServiceLevelObjective",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "ListAlertPolicies",
       "transport": "grpc",
       "state": "ga",
@@ -6175,6 +6239,26 @@
     },
     {
       "service": "monitoring",
+      "operation": "ListServiceLevelObjectives",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "ListServices",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "ListTimeSeries",
       "transport": "grpc",
       "state": "ga",
@@ -6212,6 +6296,28 @@
       "state": "ga",
       "evidence": [
         "discovery=monitoring.projects.notificationChannels.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateService",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.CreateServiceLevelObjective",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.serviceLevelObjectives.create",
         "mutating",
         "postgres=yes"
       ]
@@ -6267,6 +6373,28 @@
       "state": "ga",
       "evidence": [
         "discovery=monitoring.projects.notificationChannels.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteService",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.DeleteServiceLevelObjective",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.serviceLevelObjectives.delete",
         "mutating",
         "postgres=yes"
       ]
@@ -6333,6 +6461,26 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.GetService",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.GetServiceLevelObjective",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.serviceLevelObjectives.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.ListAlertPolicies",
       "transport": "rest",
       "state": "ga",
@@ -6383,6 +6531,26 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.ListServiceLevelObjectives",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.serviceLevelObjectives.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.ListServices",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.ListTimeSeries",
       "transport": "rest",
       "state": "ga",
@@ -6425,6 +6593,28 @@
     },
     {
       "service": "monitoring",
+      "operation": "Monitoring.UpdateService",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "Monitoring.UpdateServiceLevelObjective",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=monitoring.services.serviceLevelObjectives.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "monitoring",
       "operation": "Monitoring.VerifyNotificationChannel",
       "transport": "rest",
       "state": "ga",
@@ -6457,6 +6647,28 @@
     {
       "service": "monitoring",
       "operation": "UpdateNotificationChannel",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "UpdateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "monitoring",
+      "operation": "UpdateServiceLevelObjective",
       "transport": "grpc",
       "state": "ga",
       "evidence": [

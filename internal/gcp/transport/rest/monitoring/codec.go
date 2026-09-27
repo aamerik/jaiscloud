@@ -3,8 +3,8 @@
 // Real GCP serves Monitoring's proto-defined v3 API over both gRPC and REST
 // (grpc-gateway transcoding), and the REST surface here follows the vendored
 // Discovery document. The implemented data methods are the REST mirrors of the
-// 24 gRPC RPCs across MetricService, AlertPolicyService, and
-// NotificationChannelService:
+// 34 gRPC RPCs across MetricService, AlertPolicyService,
+// NotificationChannelService, and ServiceMonitoringService:
 //
 //	projects.metricDescriptors.{list,get,create,delete}
 //	projects.monitoredResourceDescriptors.{list,get}
@@ -13,10 +13,12 @@
 //	projects.notificationChannels.{list,get,create,patch,delete}
 //	projects.notificationChannels.{sendVerificationCode,getVerificationCode,verify}
 //	projects.notificationChannelDescriptors.{list,get}
+//	projects.services.{list,get,create,patch,delete}
+//	projects.services.serviceLevelObjectives.{list,get,create,patch,delete}
 //
-// The rest of the v3 surface (services, SLIs/SLOs, snoozes, uptime checks,
-// groups, dashboards) is not implemented and returns 501 UNIMPLEMENTED when it
-// is a recognized v3 collection, or 404 NOT_FOUND for an unknown path.
+// The rest of the v3 surface (snoozes, uptime checks, groups, dashboards) is
+// not implemented and returns 501 UNIMPLEMENTED when it is a recognized v3
+// collection, or 404 NOT_FOUND for an unknown path.
 //
 // The Codec is a NormalizedRequest adapter (HTTP path/body ↔ the core's typed
 // API); the Provider holds the routes. Neither owns business logic — both
@@ -56,7 +58,7 @@ func (c *Codec) ServiceName() string { return ServiceName }
 // (404 NOT_FOUND). Dashboards are a v1 API (not part of the vendored v3
 // Discovery document) and correctly fall through to 404.
 var knownUnimplemented = []string{
-	"/services", "/serviceLevelObjectives", "/snoozes", "/uptimeCheckConfigs",
+	"/snoozes", "/uptimeCheckConfigs",
 	"/groups", "/alerts", "/collectdTimeSeries", "uptimeCheckIps",
 }
 
@@ -97,6 +99,65 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 // provider action, populating nr.Params with the resolved project or resource
 // name. It returns ok=false for paths the emulator does not serve.
 func route(rest, method string, nr *model.NormalizedRequest) (string, bool) {
+	// Service Monitoring is checked before the MetricService paths because an
+	// SLO name ("projects/{p}/services/{s}/serviceLevelObjectives/{id}") also
+	// contains "/services/".
+	switch {
+	// Service level objectives. The collection is nested under a service, so
+	// the parent is "projects/{p}/services/{s}".
+	case strings.HasSuffix(rest, "/serviceLevelObjectives"):
+		parent := strings.TrimSuffix(rest, "/serviceLevelObjectives")
+		project, service, ok := core.SplitServiceName(parent)
+		if !ok {
+			return "", false
+		}
+		nr.Params["parent"] = parent
+		nr.Params["project"] = project
+		nr.Params["service"] = service
+		switch method {
+		case http.MethodGet:
+			return "ListServiceLevelObjectives", true
+		case http.MethodPost:
+			return "CreateServiceLevelObjective", true
+		}
+		return "", false
+	case strings.Contains(rest, "/serviceLevelObjectives/"):
+		nr.Params["name"] = rest
+		switch method {
+		case http.MethodGet:
+			return "GetServiceLevelObjective", true
+		case http.MethodPatch:
+			return "UpdateServiceLevelObjective", true
+		case http.MethodDelete:
+			return "DeleteServiceLevelObjective", true
+		}
+		return "", false
+
+	// Services (Service Monitoring).
+	case strings.HasSuffix(rest, "/services"):
+		if !setParent(nr, rest, "/services") {
+			return "", false
+		}
+		switch method {
+		case http.MethodGet:
+			return "ListServices", true
+		case http.MethodPost:
+			return "CreateService", true
+		}
+		return "", false
+	case strings.Contains(rest, "/services/"):
+		nr.Params["name"] = rest
+		switch method {
+		case http.MethodGet:
+			return "GetService", true
+		case http.MethodPatch:
+			return "UpdateService", true
+		case http.MethodDelete:
+			return "DeleteService", true
+		}
+		return "", false
+	}
+
 	// Metric descriptors. A metric type may contain slashes, so get/delete are
 	// distinguished from list/create by whether anything follows the collection.
 	switch {

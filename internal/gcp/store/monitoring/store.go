@@ -1,10 +1,12 @@
 // Package monitoring provides the Cloud Monitoring (v3) store — the Amazon
 // CloudWatch metrics+alarms analogue. It holds the metric descriptor catalog,
-// the time-series data plane, and the alert-policy (alarm) registry. Metric
-// descriptors are keyed by metric type, time series by their fully-specified
-// (metric, resource, labels) identity, and alert policies by a server-assigned
-// id. All state is project-scoped; timestamps default to clock.Now; a snapshot
-// pair backs the admin export/import surface.
+// the time-series data plane, the alert-policy (alarm) registry, the
+// notification-channel registry, and the Service Monitoring services + SLOs.
+// Metric descriptors are keyed by metric type, time series by their
+// fully-specified (metric, resource, labels) identity, alert policies and
+// notification channels by a server-assigned id, and SLOs by (service id, id).
+// All state is project-scoped; timestamps default to clock.Now; a snapshot pair
+// backs the admin export/import surface.
 package monitoring
 
 import (
@@ -18,13 +20,17 @@ import (
 // Sentinel errors returned by the store, mapped to gRPC status codes by the
 // service (errors.Is-compatible, matching the datastore/logging conventions).
 var (
-	ErrMetricDescriptorNotFound    = errors.New("MetricDescriptorNotFound")
-	ErrAlertPolicyNotFound         = errors.New("AlertPolicyNotFound")
-	ErrAlertPolicyExists           = errors.New("AlertPolicyExists")
-	ErrNotificationChannelNotFound = errors.New("NotificationChannelNotFound")
-	ErrNotificationChannelExists   = errors.New("NotificationChannelExists")
-	ErrIncidentNotFound            = errors.New("IncidentNotFound")
-	ErrIncidentExists              = errors.New("IncidentExists")
+	ErrMetricDescriptorNotFound      = errors.New("MetricDescriptorNotFound")
+	ErrAlertPolicyNotFound           = errors.New("AlertPolicyNotFound")
+	ErrAlertPolicyExists             = errors.New("AlertPolicyExists")
+	ErrNotificationChannelNotFound   = errors.New("NotificationChannelNotFound")
+	ErrNotificationChannelExists     = errors.New("NotificationChannelExists")
+	ErrIncidentNotFound              = errors.New("IncidentNotFound")
+	ErrIncidentExists                = errors.New("IncidentExists")
+	ErrServiceNotFound               = errors.New("ServiceNotFound")
+	ErrServiceExists                 = errors.New("ServiceExists")
+	ErrServiceLevelObjectiveNotFound = errors.New("ServiceLevelObjectiveNotFound")
+	ErrServiceLevelObjectiveExists   = errors.New("ServiceLevelObjectiveExists")
 )
 
 // LabelDescriptor mirrors google.api.LabelDescriptor (the label key, its value
@@ -171,6 +177,43 @@ type NotificationChannel struct {
 	UpdateTime         time.Time         `json:"updateTime,omitempty"`
 }
 
+// Service is a stored Service Monitoring service. ID is the service id (the
+// trailing segment of the resource name); it is either client-supplied or
+// server-generated. Identifier carries the proto Service identifier oneof as
+// opaque JSON (e.g. {"custom":{...}} or {"cloudEndpoints":{...}}),
+// BasicService carries the separate Service.BasicService field (a basic
+// service is defined by service type + labels instead of the identifier
+// oneof), and Telemetry carries Service.Telemetry. Each opaque field round-trips
+// faithfully without the store depending on the proto package. A valid service
+// sets exactly one identity: an identifier-oneof member or BasicService.
+type Service struct {
+	ID           string            `json:"id,omitempty"`
+	DisplayName  string            `json:"displayName,omitempty"`
+	Identifier   json.RawMessage   `json:"identifier,omitempty"`
+	BasicService json.RawMessage   `json:"basicService,omitempty"`
+	Telemetry    json.RawMessage   `json:"telemetry,omitempty"`
+	UserLabels   map[string]string `json:"userLabels,omitempty"`
+}
+
+// ServiceLevelObjective is a stored SLO for a Service. ID is the trailing
+// segment of the resource name; ServiceID is the owning service's id.
+// ServiceLevelIndicator carries the proto ServiceLevelIndicator oneof as opaque
+// JSON (basicSli/requestBased/windowsBased). Exactly one period field is set:
+// RollingPeriod (a duration) or CalendarPeriod (the numeric CalendarPeriod enum).
+// Neither RollingPeriod nor CalendarPeriod is a pointer, so a zero value means
+// "unset"; a rolling period is always positive and the CalendarPeriod enum's
+// zero value is CALENDAR_PERIOD_UNSPECIFIED.
+type ServiceLevelObjective struct {
+	ID                    string            `json:"id,omitempty"`
+	ServiceID             string            `json:"serviceId,omitempty"`
+	DisplayName           string            `json:"displayName,omitempty"`
+	ServiceLevelIndicator json.RawMessage   `json:"serviceLevelIndicator,omitempty"`
+	Goal                  float64           `json:"goal,omitempty"`
+	RollingPeriod         time.Duration     `json:"rollingPeriod,omitempty"`
+	CalendarPeriod        int32             `json:"calendarPeriod,omitempty"`
+	UserLabels            map[string]string `json:"userLabels,omitempty"`
+}
+
 // IncidentState is the lifecycle state of a monitoring incident. GCP exposes
 // incidents only on an internal API (not the v3 client library), so the
 // emulator records them for observability via snapshots and slog.
@@ -244,6 +287,25 @@ type Store interface {
 	// UpdateAlertPolicyAtomic).
 	UpdateNotificationChannelAtomic(ctx context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error)
 	DeleteNotificationChannel(ctx context.Context, project, id string) error
+
+	// Service Monitoring: service registry. DeleteService also removes every
+	// ServiceLevelObjective owned by the service (the store owns the cascade).
+	CreateService(ctx context.Context, project string, svc Service) error
+	GetService(ctx context.Context, project, id string) (Service, error)
+	ListServices(ctx context.Context, project string) ([]Service, error)
+	// UpdateServiceAtomic performs a locked get-mutate-set cycle so a masked
+	// PATCH cannot lose a concurrent PATCH's changes (mirrors
+	// UpdateAlertPolicyAtomic).
+	UpdateServiceAtomic(ctx context.Context, project, id string, mutate func(Service) (Service, error)) (Service, error)
+	DeleteService(ctx context.Context, project, id string) error
+
+	// Service Monitoring: service-level-objective registry, scoped to a parent
+	// service id.
+	CreateServiceLevelObjective(ctx context.Context, project string, slo ServiceLevelObjective) error
+	GetServiceLevelObjective(ctx context.Context, project, serviceID, id string) (ServiceLevelObjective, error)
+	ListServiceLevelObjectives(ctx context.Context, project, serviceID string) ([]ServiceLevelObjective, error)
+	UpdateServiceLevelObjectiveAtomic(ctx context.Context, project, serviceID, id string, mutate func(ServiceLevelObjective) (ServiceLevelObjective, error)) (ServiceLevelObjective, error)
+	DeleteServiceLevelObjective(ctx context.Context, project, serviceID, id string) error
 
 	// Incident registry (recorded state for fired alert policies).
 	// CreateIncident returns ErrIncidentExists when an OPEN incident already

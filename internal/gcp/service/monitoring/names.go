@@ -80,6 +80,44 @@ func SplitMonitoredResourceDescriptorName(name string) (project, typ string, ok 
 	return parts[1], parts[3], true
 }
 
+// ServiceName is the Cloud Monitoring resource name for a Service Monitoring
+// service id: "projects/{p}/services/{id}".
+func ServiceName(project, id string) string {
+	return resource.ResourceID(project)("monitoring-service", id)
+}
+
+// SplitServiceName parses "projects/{p}/services/{id}". Service ids contain no
+// slashes, so the name has exactly four segments.
+func SplitServiceName(name string) (project, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "services" {
+		return "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
+// ServiceLevelObjectiveName is the Cloud Monitoring resource name for an SLO:
+// "projects/{p}/services/{service}/serviceLevelObjectives/{id}".
+func ServiceLevelObjectiveName(project, serviceID, id string) string {
+	return resource.ResourceID(project)("monitoring-slo", serviceID+"/"+id)
+}
+
+// SplitServiceLevelObjectiveName parses
+// "projects/{p}/services/{service}/serviceLevelObjectives/{id}".
+func SplitServiceLevelObjectiveName(name string) (project, serviceID, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "services" || parts[4] != "serviceLevelObjectives" {
+		return "", "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
+}
+
 // NotificationChannelName is the Cloud Monitoring resource name for a
 // notification channel id.
 func NotificationChannelName(project, id string) string {

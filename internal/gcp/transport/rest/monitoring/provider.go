@@ -53,6 +53,16 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Monitoring.SendNotificationChannelVerificationCode": p.SendNotificationChannelVerificationCode,
 		"Monitoring.GetNotificationChannelVerificationCode":  p.GetNotificationChannelVerificationCode,
 		"Monitoring.VerifyNotificationChannel":               p.VerifyNotificationChannel,
+		"Monitoring.ListServices":                            p.ListServices,
+		"Monitoring.GetService":                              p.GetService,
+		"Monitoring.CreateService":                           p.CreateService,
+		"Monitoring.UpdateService":                           p.UpdateService,
+		"Monitoring.DeleteService":                           p.DeleteService,
+		"Monitoring.ListServiceLevelObjectives":              p.ListServiceLevelObjectives,
+		"Monitoring.GetServiceLevelObjective":                p.GetServiceLevelObjective,
+		"Monitoring.CreateServiceLevelObjective":             p.CreateServiceLevelObjective,
+		"Monitoring.UpdateServiceLevelObjective":             p.UpdateServiceLevelObjective,
+		"Monitoring.DeleteServiceLevelObjective":             p.DeleteServiceLevelObjective,
 	}
 }
 
@@ -430,4 +440,140 @@ func (p *Provider) VerifyNotificationChannel(ctx context.Context, nr *model.Norm
 		return nil, err
 	}
 	return provider.OK(notificationChannelToJSON(c, project)), nil
+}
+
+// ─── service monitoring: services ─────────────────────────────────────────────
+
+func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	page, _, next, err := p.core.ListServices(ctx, project, strParam(nr, "filter"),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(page) > 0 {
+		arr := make([]any, 0, len(page))
+		for _, svc := range page {
+			arr = append(arr, serviceToJSON(svc, project))
+		}
+		out["services"] = arr
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) GetService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitServiceName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service name: " + strParam(nr, "name"))
+	}
+	svc, err := p.core.GetService(ctx, project, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceToJSON(svc, project)), nil
+}
+
+func (p *Provider) CreateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	svc, err := p.core.CreateService(ctx, project, strParam(nr, "serviceId"), serviceFromJSON(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceToJSON(svc, project)), nil
+}
+
+func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitServiceName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service name: " + strParam(nr, "name"))
+	}
+	svc, err := p.core.UpdateService(ctx, project, id, serviceFromJSON(bodyOf(nr)), updateMaskFromQuery(nr.Params["updateMask"]))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceToJSON(svc, project)), nil
+}
+
+func (p *Provider) DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, id, ok := core.SplitServiceName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service name: " + strParam(nr, "name"))
+	}
+	if err := p.core.DeleteService(ctx, project, id); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ─── service monitoring: service level objectives ─────────────────────────────
+
+func (p *Provider) ListServiceLevelObjectives(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	service := strParam(nr, "service")
+	page, _, next, err := p.core.ListServiceLevelObjectives(ctx, project, service, strParam(nr, "filter"),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(page) > 0 {
+		arr := make([]any, 0, len(page))
+		for _, slo := range page {
+			arr = append(arr, serviceLevelObjectiveToJSON(slo, project))
+		}
+		out["serviceLevelObjectives"] = arr
+	}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+func (p *Provider) GetServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, service, id, ok := core.SplitServiceLevelObjectiveName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service level objective name: " + strParam(nr, "name"))
+	}
+	slo, err := p.core.GetServiceLevelObjective(ctx, project, service, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceLevelObjectiveToJSON(slo, project)), nil
+}
+
+func (p *Provider) CreateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	service := strParam(nr, "service")
+	slo, err := p.core.CreateServiceLevelObjective(ctx, project, service, strParam(nr, "serviceLevelObjectiveId"), serviceLevelObjectiveFromJSON(bodyOf(nr)))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceLevelObjectiveToJSON(slo, project)), nil
+}
+
+func (p *Provider) UpdateServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, service, id, ok := core.SplitServiceLevelObjectiveName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service level objective name: " + strParam(nr, "name"))
+	}
+	slo, err := p.core.UpdateServiceLevelObjective(ctx, project, service, id, serviceLevelObjectiveFromJSON(bodyOf(nr)), updateMaskFromQuery(nr.Params["updateMask"]))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(serviceLevelObjectiveToJSON(slo, project)), nil
+}
+
+func (p *Provider) DeleteServiceLevelObjective(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, service, id, ok := core.SplitServiceLevelObjectiveName(strParam(nr, "name"))
+	if !ok {
+		return nil, invalidArgument("invalid service level objective name: " + strParam(nr, "name"))
+	}
+	if err := p.core.DeleteServiceLevelObjective(ctx, project, service, id); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }

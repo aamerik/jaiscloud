@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 278,
-  "passed": 278,
+  "total": 288,
+  "passed": 288,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 278,
-    "passed": 278,
+    "checks": 288,
+    "passed": 288,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -93,8 +93,8 @@
     },
     {
       "service": "monitoring",
-      "total": 24,
-      "passed": 24,
+      "total": 34,
+      "passed": 34,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1408,6 +1408,76 @@
       "method": "DeleteNotificationChannel",
       "status": "pass",
       "key_field": "channel absent after delete"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateService",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "service.name/display_name/identifier"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetService",
+      "method": "GetService",
+      "status": "pass",
+      "key_field": "service.display_name/identifier"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListServices",
+      "method": "ListServices",
+      "status": "pass",
+      "key_field": "services[] contains service"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "UpdateService",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "masked display_name applied"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "CreateServiceLevelObjective",
+      "method": "CreateServiceLevelObjective",
+      "status": "pass",
+      "key_field": "slo.name/goal/rolling_period"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "GetServiceLevelObjective",
+      "method": "GetServiceLevelObjective",
+      "status": "pass",
+      "key_field": "slo.display_name/indicator"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "ListServiceLevelObjectives",
+      "method": "ListServiceLevelObjectives",
+      "status": "pass",
+      "key_field": "serviceLevelObjectives[] contains slo"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "UpdateServiceLevelObjective",
+      "method": "UpdateServiceLevelObjective",
+      "status": "pass",
+      "key_field": "masked goal applied"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteServiceLevelObjective",
+      "method": "DeleteServiceLevelObjective",
+      "status": "pass",
+      "key_field": "slo absent after delete"
+    },
+    {
+      "service": "monitoring",
+      "rpc": "DeleteService",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "service absent after delete"
     },
     {
       "service": "workflowexecutions",

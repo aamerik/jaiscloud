@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **771**
+Cells: **791**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 531 |
+| ga | 551 |
 | limited | 100 |
 | preview | 37 |
 | unsupported | 103 |
@@ -21,8 +21,8 @@ Cells: **771**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 271 | 89 | 37 | 9 |
-| grpc | 260 | 11 | 0 | 94 |
+| rest | 281 | 89 | 37 | 9 |
+| grpc | 270 | 11 | 0 | 94 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -686,57 +686,77 @@ _38 cell(s): ga=26 limited=2 preview=0 unsupported=10_
 
 ## monitoring
 
-_48 cell(s): ga=48 limited=0 preview=0 unsupported=0_
+_68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | CreateAlertPolicy | grpc | ga | — |
 | CreateMetricDescriptor | grpc | ga | — |
 | CreateNotificationChannel | grpc | ga | — |
+| CreateService | grpc | ga | — |
+| CreateServiceLevelObjective | grpc | ga | — |
 | CreateServiceTimeSeries | grpc | ga | — |
 | CreateTimeSeries | grpc | ga | — |
 | DeleteAlertPolicy | grpc | ga | — |
 | DeleteMetricDescriptor | grpc | ga | — |
 | DeleteNotificationChannel | grpc | ga | — |
+| DeleteService | grpc | ga | — |
+| DeleteServiceLevelObjective | grpc | ga | — |
 | GetAlertPolicy | grpc | ga | — |
 | GetMetricDescriptor | grpc | ga | — |
 | GetMonitoredResourceDescriptor | grpc | ga | — |
 | GetNotificationChannel | grpc | ga | — |
 | GetNotificationChannelDescriptor | grpc | ga | — |
 | GetNotificationChannelVerificationCode | grpc | ga | — |
+| GetService | grpc | ga | — |
+| GetServiceLevelObjective | grpc | ga | — |
 | ListAlertPolicies | grpc | ga | — |
 | ListMetricDescriptors | grpc | ga | — |
 | ListMonitoredResourceDescriptors | grpc | ga | — |
 | ListNotificationChannelDescriptors | grpc | ga | — |
 | ListNotificationChannels | grpc | ga | — |
+| ListServiceLevelObjectives | grpc | ga | — |
+| ListServices | grpc | ga | — |
 | ListTimeSeries | grpc | ga | — |
 | Monitoring.CreateAlertPolicy | rest | ga | — |
 | Monitoring.CreateMetricDescriptor | rest | ga | — |
 | Monitoring.CreateNotificationChannel | rest | ga | — |
+| Monitoring.CreateService | rest | ga | — |
+| Monitoring.CreateServiceLevelObjective | rest | ga | — |
 | Monitoring.CreateServiceTimeSeries | rest | ga | — |
 | Monitoring.CreateTimeSeries | rest | ga | — |
 | Monitoring.DeleteAlertPolicy | rest | ga | — |
 | Monitoring.DeleteMetricDescriptor | rest | ga | — |
 | Monitoring.DeleteNotificationChannel | rest | ga | — |
+| Monitoring.DeleteService | rest | ga | — |
+| Monitoring.DeleteServiceLevelObjective | rest | ga | — |
 | Monitoring.GetAlertPolicy | rest | ga | — |
 | Monitoring.GetMetricDescriptor | rest | ga | — |
 | Monitoring.GetMonitoredResourceDescriptor | rest | ga | — |
 | Monitoring.GetNotificationChannel | rest | ga | — |
 | Monitoring.GetNotificationChannelDescriptor | rest | ga | — |
 | Monitoring.GetNotificationChannelVerificationCode | rest | ga | — |
+| Monitoring.GetService | rest | ga | — |
+| Monitoring.GetServiceLevelObjective | rest | ga | — |
 | Monitoring.ListAlertPolicies | rest | ga | — |
 | Monitoring.ListMetricDescriptors | rest | ga | — |
 | Monitoring.ListMonitoredResourceDescriptors | rest | ga | — |
 | Monitoring.ListNotificationChannelDescriptors | rest | ga | — |
 | Monitoring.ListNotificationChannels | rest | ga | — |
+| Monitoring.ListServiceLevelObjectives | rest | ga | — |
+| Monitoring.ListServices | rest | ga | — |
 | Monitoring.ListTimeSeries | rest | ga | — |
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | — |
 | Monitoring.UpdateNotificationChannel | rest | ga | — |
+| Monitoring.UpdateService | rest | ga | — |
+| Monitoring.UpdateServiceLevelObjective | rest | ga | — |
 | Monitoring.VerifyNotificationChannel | rest | ga | — |
 | SendNotificationChannelVerificationCode | grpc | ga | — |
 | UpdateAlertPolicy | grpc | ga | — |
 | UpdateNotificationChannel | grpc | ga | — |
+| UpdateService | grpc | ga | — |
+| UpdateServiceLevelObjective | grpc | ga | — |
 | VerifyNotificationChannel | grpc | ga | — |
 
 ## operations
