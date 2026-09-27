@@ -19,8 +19,8 @@
 // any other key, operator, or malformed clause is rejected rather than silently
 // matching everything.
 //
-// Documented limitations: only condition_threshold alert conditions are
-// evaluated by the background worker; ListTimeSeries supports the
+// Documented limitations: only condition_threshold and condition_absent alert
+// conditions are evaluated by the background worker; ListTimeSeries supports the
 // metric.type/resource.type and metric.labels.<k>/resource.labels.<k> filter
 // subset (equality and starts_with) plus per-series alignment and cross-series
 // reduction; SendNotificationChannelVerificationCode performs no delivery.

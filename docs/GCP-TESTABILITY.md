@@ -98,7 +98,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
 | `firestoreadmin` | grpc | 4/32 | 🟢 | Shape only | Shape only | Composite-index CRUD only; Databases/Backups/UserCreds/Schedules/Fields/Export/Import are `unsupported` stubs. |
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
-| `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; only `condition_threshold` is evaluated. |
+| `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; `condition_threshold` + `condition_absent` are evaluated. |
 | `logging` | grpc, rest | 10/11 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
 | `iam` | grpc, rest | 16/16 | 🟢 | Shape only | Shape only | Service accounts + policy: authz is **not enforced**. |
 | `eventarc` | grpc, rest | 30/57 | 🟢 | Shape only | Shape only | Metadata only; no event-delivery engine. gRPC trigger/channel/provider CRUD over one core; the other 27 Eventarc RPCs are `unsupported` stubs. |
@@ -155,7 +155,7 @@ behind a wire-conformant API.
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
-| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 31/54, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, sink routing is evaluated but not delivered, and the logging bucket/view/link/CMEK gRPC RPCs are `unsupported` stubs; only `condition_threshold` evaluated. |
+| CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 31/54, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, sink routing is evaluated but not delivered, and the logging bucket/view/link/CMEK gRPC RPCs are `unsupported` stubs; `condition_threshold` + `condition_absent` evaluated. |
 | EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Metadata only — no delivery engine. |
 | Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
 | Athena / Redshift | **BigQuery** | 🔴 `preview` (0/23) | **None** — real GCP required. |

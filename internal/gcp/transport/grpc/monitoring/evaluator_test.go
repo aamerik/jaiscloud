@@ -307,3 +307,307 @@ func TestEvaluatorCrossSeriesReducer(t *testing.T) {
 		t.Fatalf("REDUCE_MAX incidents = %+v, want one", got)
 	}
 }
+
+// ─── condition_absent ─────────────────────────────────────────────────────────
+
+func absentCondition(name, filter string, duration time.Duration, trigger *monitoringpb.AlertPolicy_Condition_Trigger) *monitoringpb.AlertPolicy_Condition {
+	return &monitoringpb.AlertPolicy_Condition{
+		DisplayName: name,
+		Condition: &monitoringpb.AlertPolicy_Condition_ConditionAbsent{ConditionAbsent: &monitoringpb.AlertPolicy_Condition_MetricAbsence{
+			Filter:   filter,
+			Duration: durationpb.New(duration),
+			Trigger:  trigger,
+		}},
+	}
+}
+
+func absentTriggerCount(count int32) *monitoringpb.AlertPolicy_Condition_Trigger {
+	return &monitoringpb.AlertPolicy_Condition_Trigger{
+		Type: &monitoringpb.AlertPolicy_Condition_Trigger_Count{Count: count},
+	}
+}
+
+func absentTriggerPercent(percent float64) *monitoringpb.AlertPolicy_Condition_Trigger {
+	return &monitoringpb.AlertPolicy_Condition_Trigger{
+		Type: &monitoringpb.AlertPolicy_Condition_Trigger_Percent{Percent: percent},
+	}
+}
+
+func TestEvaluatorAbsentOpensIncidentWhenDataStops(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	putChannel(t, store, "test", "nc1", "pubsub", map[string]string{"topic": "projects/test/topics/alerts"})
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND,
+		[]string{"projects/test/notificationChannels/nc1"},
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+	// The only point is older than the 5m absence window.
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now().Add(-10*time.Minute))
+
+	ev.EvaluateAll(ctx)
+
+	inc, err := store.FindOpenIncident(ctx, "test", policyID)
+	if err != nil {
+		t.Fatalf("expected an open incident: %v", err)
+	}
+	if inc.State != monitoringstore.IncidentOpen {
+		t.Fatalf("incident state = %q, want OPEN", inc.State)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("published %d notifications, want 1", pub.count())
+	}
+
+	// A second evaluation with the series still absent must not re-open or
+	// re-notify.
+	ev.EvaluateAll(ctx)
+	if pub.count() != 1 {
+		t.Fatalf("published %d notifications after second tick, want 1 (no duplicate)", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentRecentDataDoesNotFire(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now())
+
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("find open incident err = %v, want ErrIncidentNotFound (recent data)", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentResolveClosesIncident(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	putChannel(t, store, "test", "nc1", "pubsub", map[string]string{"topic": "projects/test/topics/alerts"})
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND,
+		[]string{"projects/test/notificationChannels/nc1"},
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now().Add(-10*time.Minute))
+
+	ev.EvaluateAll(ctx)
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); err != nil {
+		t.Fatalf("expected open incident: %v", err)
+	}
+
+	// Fresh data within the absence window resolves the incident.
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now())
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("find open incident after resolve err = %v, want ErrIncidentNotFound", err)
+	}
+	incidents, err := store.ListIncidents(ctx, "test")
+	if err != nil || len(incidents) != 1 {
+		t.Fatalf("incidents = %+v, %v", incidents, err)
+	}
+	if incidents[0].State != monitoringstore.IncidentClosed || incidents[0].EndedAt.IsZero() {
+		t.Fatalf("closed incident = %+v", incidents[0])
+	}
+	if pub.count() != 2 {
+		t.Fatalf("published %d notifications, want 2 (open + resolve)", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentNeverSeenDoesNotFire(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+
+	ev.EvaluateAll(ctx)
+
+	// Real Cloud Monitoring requires at least one measurement before a
+	// metric-absence condition can be met; a filter matching nothing never fires.
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("find open incident err = %v, want ErrIncidentNotFound (never seen)", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentTriggerCountAndPercent(t *testing.T) {
+	store, _, ev := newEvalFixture(t)
+	ctx := context.Background()
+	// Two series for the same metric type: one present, one absent.
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", map[string]string{"instance": "a"}, 0.5, clock.Now())
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", map[string]string{"instance": "b"}, 0.5, clock.Now().Add(-10*time.Minute))
+
+	// Default: any series absent fires.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("any", cpuFilter(), 5*time.Minute, nil))
+	// count=2: only one series is absent -> does not fire.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("count2", cpuFilter(), 5*time.Minute, absentTriggerCount(2)))
+	// percent=100: only 50% absent -> does not fire.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("pct100", cpuFilter(), 5*time.Minute, absentTriggerPercent(100)))
+	// percent=50: 50% absent -> fires.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("pct50", cpuFilter(), 5*time.Minute, absentTriggerPercent(50)))
+
+	ev.EvaluateAll(ctx)
+
+	incidents, err := store.ListIncidents(ctx, "test")
+	if err != nil {
+		t.Fatalf("list incidents: %v", err)
+	}
+	if len(incidents) != 2 {
+		t.Fatalf("incidents = %+v, want 2 (default-any + percent-50)", incidents)
+	}
+	for _, inc := range incidents {
+		if inc.ConditionName == "count2" || inc.ConditionName == "pct100" {
+			t.Fatalf("unexpected firing condition %q", inc.ConditionName)
+		}
+	}
+}
+
+func TestEvaluatorAbsentCombinerAndWithThreshold(t *testing.T) {
+	store, _, ev := newEvalFixture(t)
+	ctx := context.Background()
+	// CPU is absent (fires) but memory is below threshold (does not fire), so
+	// the AND policy must not open an incident.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil),
+		thresholdCondition("mem high", `metric.type = "custom.googleapis.com/mem"`, monitoringpb.ComparisonType_COMPARISON_GT, 0.9))
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now().Add(-10*time.Minute))
+	putSeries(t, store, "test", "custom.googleapis.com/mem", "global", nil, 0.1, clock.Now())
+
+	ev.EvaluateAll(ctx)
+
+	if got, _ := store.ListIncidents(ctx, "test"); len(got) != 0 {
+		t.Fatalf("AND incidents = %+v, want none", got)
+	}
+}
+
+func TestEvaluatorAbsentStringPointCountsAsPresent(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+	// A non-numeric point still counts as data for absence.
+	s := "up"
+	if err := store.CreateTimeSeries(ctx, "test", monitoringstore.TimeSeries{
+		MetricType:   "custom.googleapis.com/cpu",
+		ResourceType: "global",
+		MetricKind:   1,
+		ValueType:    1,
+		Points:       []monitoringstore.Point{{EndTime: clock.Now(), Value: monitoringstore.TypedValue{StringValue: &s}}},
+	}); err != nil {
+		t.Fatalf("create string series: %v", err)
+	}
+
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("find open incident err = %v, want ErrIncidentNotFound (string point present)", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentWithoutDurationDoesNotFire(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	cond := &monitoringpb.AlertPolicy_Condition{
+		DisplayName: "cpu absent",
+		Condition: &monitoringpb.AlertPolicy_Condition_ConditionAbsent{ConditionAbsent: &monitoringpb.AlertPolicy_Condition_MetricAbsence{
+			Filter: cpuFilter(),
+		}},
+	}
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil, cond)
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now().Add(-10*time.Minute))
+
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("find open incident err = %v, want ErrIncidentNotFound (no duration)", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentNonMatchingFilterDoesNotFire(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("mem absent", `metric.type = "custom.googleapis.com/mem"`, 5*time.Minute, nil))
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.5, clock.Now().Add(-10*time.Minute))
+
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("non-matching filter err = %v, want ErrIncidentNotFound", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentPointLessSeriesDoesNotFire(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	policyID := putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("cpu absent", cpuFilter(), 5*time.Minute, nil))
+	// A point-less series carries no measurement, so it cannot satisfy the
+	// "at least one successful measurement" requirement.
+	if err := store.CreateTimeSeries(ctx, "test", monitoringstore.TimeSeries{
+		MetricType:   "custom.googleapis.com/cpu",
+		ResourceType: "global",
+	}); err != nil {
+		t.Fatalf("create point-less series: %v", err)
+	}
+
+	ev.EvaluateAll(ctx)
+
+	if _, err := store.FindOpenIncident(ctx, "test", policyID); !errors.Is(err, monitoringstore.ErrIncidentNotFound) {
+		t.Fatalf("point-less series err = %v, want ErrIncidentNotFound", err)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("published %d notifications, want 0", pub.count())
+	}
+}
+
+func TestEvaluatorAbsentTriggerCountFires(t *testing.T) {
+	store, _, ev := newEvalFixture(t)
+	ctx := context.Background()
+	// One of two series is absent; count=1 fires.
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", map[string]string{"instance": "a"}, 0.5, clock.Now())
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", map[string]string{"instance": "b"}, 0.5, clock.Now().Add(-10*time.Minute))
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_AND, nil,
+		absentCondition("count1", cpuFilter(), 5*time.Minute, absentTriggerCount(1)))
+
+	ev.EvaluateAll(ctx)
+
+	if got, _ := store.ListIncidents(ctx, "test"); len(got) != 1 {
+		t.Fatalf("count=1 incidents = %+v, want one", got)
+	}
+}
+
+func TestEvaluatorCombinerOrWithUnnamedConditionFires(t *testing.T) {
+	store, pub, ev := newEvalFixture(t)
+	ctx := context.Background()
+	putChannel(t, store, "test", "nc1", "pubsub", map[string]string{"topic": "projects/test/topics/alerts"})
+	// A condition's display_name is optional; an OR policy must still fire.
+	putPolicy(t, store, "test", monitoringpb.AlertPolicy_OR,
+		[]string{"projects/test/notificationChannels/nc1"},
+		thresholdCondition("", cpuFilter(), monitoringpb.ComparisonType_COMPARISON_GT, 0.9))
+	putSeries(t, store, "test", "custom.googleapis.com/cpu", "global", nil, 0.95, clock.Now())
+
+	ev.EvaluateAll(ctx)
+
+	if pub.count() != 1 {
+		t.Fatalf("OR with unnamed condition published %d notifications, want 1", pub.count())
+	}
+	if got, _ := store.ListIncidents(ctx, "test"); len(got) != 1 || got[0].State != monitoringstore.IncidentOpen {
+		t.Fatalf("OR incidents = %+v, want one OPEN", got)
+	}
+}
