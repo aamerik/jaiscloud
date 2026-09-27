@@ -1659,7 +1659,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=2/2 pass)"
+        "transport=grpc (conformance=3/3 pass)"
       ]
     },
     {
@@ -1699,7 +1699,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=3/3 pass)"
+        "transport=grpc (conformance=4/4 pass)"
       ]
     },
     {
