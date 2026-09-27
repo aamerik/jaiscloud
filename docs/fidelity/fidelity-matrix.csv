@@ -284,6 +284,7 @@ functions,Function.ListLocations,rest,ga,
 functions,Function.ListOperations,rest,ga,
 functions,Function.ListRuntimes,rest,ga,
 functions,Function.UpdateFunction,rest,ga,
+functions,Function.WaitOperation,rest,ga,google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it
 functions,GenerateDownloadUrl,grpc,ga,
 functions,GenerateUploadUrl,grpc,ga,
 functions,GetFunction,grpc,ga,

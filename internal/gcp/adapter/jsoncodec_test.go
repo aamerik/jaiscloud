@@ -257,6 +257,7 @@ func TestFunctionsV2Decode(t *testing.T) {
 		{"GET", "/v2/projects/p/locations/us-central1/operations", "ListOperations"},
 		{"GET", "/v2/projects/p/locations/us-central1/operations/op1", "GetOperation"},
 		{"POST", "/v2/projects/p/locations/us-central1/operations/op1:cancel", "CancelOperation"},
+		{"POST", "/v2/projects/p/locations/us-central1/operations/op1:wait", "WaitOperation"},
 		{"DELETE", "/v2/projects/p/locations/us-central1/operations/op1", "DeleteOperation"},
 		{"GET", "/v2/projects/p/locations", "ListLocations"},
 		{"GET", "/v2/projects/p/locations/us-central1", "GetLocation"},

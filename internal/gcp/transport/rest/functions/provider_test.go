@@ -284,48 +284,103 @@ func TestFunctionCRUDv2(t *testing.T) {
 	}
 }
 
-// TestOperationsV2 pins the v2 LRO surface: get returns a done v2 Operation,
-// list is empty, and cancel/delete return empty objects.
+// TestOperationsV2 pins the v2 LRO surface: mutations persist an operation that
+// get/list/wait read back with the typed response, unknown ids are NotFound, and
+// cancel/delete operate on the store.
 func TestOperationsV2(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t, store.NewMemoryResourceStore(), nil)
 
-	resp, err := p.GetOperation(ctx, newNRv2(map[string]any{
-		"location": "us-central1", "name": "locations/us-central1/operations/op1",
+	create, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "ops-fn",
+		"body":       map[string]any{"buildConfig": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}},
 	}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	name, _ := create.Data["name"].(string)
+	if name == "" {
+		t.Fatalf("create did not return an operation name: %v", create.Data)
+	}
+
+	// Get returns the persisted done operation with a typed v2 Function response.
+	resp, err := p.GetOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": name}))
 	if err != nil {
 		t.Fatalf("get operation: %v", err)
 	}
 	if resp.Data["done"] != true {
 		t.Errorf("expected done operation, got %v", resp.Data)
 	}
-	if resp.Data["name"] != "projects/proj/locations/us-central1/operations/op1" {
-		t.Errorf("unexpected operation name: %v", resp.Data["name"])
+	if resp.Data["name"] != name {
+		t.Errorf("operation name = %v, want %v", resp.Data["name"], name)
 	}
 	if got, _ := resp.Data["metadata"].(map[string]any)["@type"].(string); got != operationMetadataTypeV2 {
 		t.Errorf("operation metadata @type = %q, want v2", got)
 	}
-	if got, _ := resp.Data["response"].(map[string]any)["@type"].(string); got != emptyTypeURL {
-		t.Errorf("operation response @type = %q, want %q", got, emptyTypeURL)
+	if got, _ := resp.Data["response"].(map[string]any)["@type"].(string); got != functionTypeURLV2 {
+		t.Errorf("operation response @type = %q, want %q", got, functionTypeURLV2)
 	}
 
+	// :wait returns the same persisted done operation.
+	resp, err = p.WaitOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": name}))
+	if err != nil {
+		t.Fatalf("wait operation: %v", err)
+	}
+	if resp.Data["name"] != name || resp.Data["done"] != true {
+		t.Errorf("wait operation = %v", resp.Data)
+	}
+
+	// list returns the persisted operation.
 	resp, err = p.ListOperations(ctx, newNRv2(map[string]any{"location": "us-central1"}))
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}
-	if ops, _ := resp.Data["operations"].([]any); len(ops) != 0 {
-		t.Errorf("expected no operations, got %v", ops)
+	ops, _ := resp.Data["operations"].([]any)
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 operation, got %v", ops)
+	}
+	if got, _ := ops[0].(map[string]any)["name"].(string); got != name {
+		t.Errorf("listed operation name = %q, want %q", got, name)
 	}
 
-	if _, err := p.CancelOperation(ctx, newNRv2(map[string]any{
-		"location": "us-central1", "name": "locations/us-central1/operations/op1",
+	// Unknown operations are NotFound (never synthesized).
+	if _, err := p.GetOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": "locations/us-central1/operations/missing"})); err == nil {
+		t.Errorf("expected NotFound for unknown operation")
+	}
+
+	// A delete mutation persists an operation whose response is an Empty Any.
+	if _, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "ops-del",
+		"body":       map[string]any{"buildConfig": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}},
 	})); err != nil {
+		t.Fatalf("create del: %v", err)
+	}
+	delOp, err := p.DeleteFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/ops-del",
+	}))
+	if err != nil {
+		t.Fatalf("delete function: %v", err)
+	}
+	delName, _ := delOp.Data["name"].(string)
+	resp, err = p.GetOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": delName}))
+	if err != nil {
+		t.Fatalf("get delete operation: %v", err)
+	}
+	if got, _ := resp.Data["response"].(map[string]any)["@type"].(string); got != emptyTypeURL {
+		t.Errorf("delete operation response @type = %q, want %q", got, emptyTypeURL)
+	}
+
+	// cancel and delete operate on the store; a second delete is NotFound.
+	if _, err := p.CancelOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": name})); err != nil {
 		t.Fatalf("cancel operation: %v", err)
 	}
-	if _, err := p.DeleteOperation(ctx, newNRv2(map[string]any{
-		"location": "us-central1", "name": "locations/us-central1/operations/op1",
-	})); err != nil {
+	if _, err := p.DeleteOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": name})); err != nil {
 		t.Fatalf("delete operation: %v", err)
+	}
+	if _, err := p.DeleteOperation(ctx, newNRv2(map[string]any{"location": "us-central1", "name": name})); err == nil {
+		t.Errorf("expected NotFound deleting a deleted operation")
 	}
 
 	// A malformed operation name is rejected.

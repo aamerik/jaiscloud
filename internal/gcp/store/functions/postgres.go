@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 
 	"jaiscloud/internal/clock"
@@ -24,8 +25,15 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 // nullableJSON marshals v to JSONB, or returns nil (SQL NULL) when v is nil.
+// A typed-nil pointer (e.g. a nil *EventTrigger or *Function) is also nil: it
+// would otherwise marshal to the JSON literal "null", which reads back as a
+// non-nil zero value (a delete operation would then render a Function response
+// instead of google.protobuf.Empty).
 func nullableJSON(v any) any {
 	if v == nil {
+		return nil
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return nil
 	}
 	b, _ := json.Marshal(v)
@@ -235,4 +243,83 @@ func (s *PostgresStore) ListFunctionsAllLocations(ctx context.Context, projectID
 
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_functions`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_functions_operations`)
+}
+
+// --- Operations ---
+
+func (s *PostgresStore) CreateOperation(ctx context.Context, projectID, location string, op Operation) error {
+	if op.CreateTime.IsZero() {
+		op.CreateTime = clock.Now()
+	}
+	if op.EndTime.IsZero() {
+		op.EndTime = op.CreateTime
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_functions_operations
+			(project_id, location, operation_id, done, verb, target, function, create_time, end_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, projectID, location, op.ID, op.Done, op.Verb, op.Target, nullableJSON(op.Function), op.CreateTime, op.EndTime)
+	return err
+}
+
+func scanOperation(row pgx.Row) (Operation, error) {
+	var op Operation
+	var function []byte
+	err := row.Scan(&op.ID, &op.Location, &op.Done, &op.Verb, &op.Target, &function, &op.CreateTime, &op.EndTime)
+	if err != nil {
+		return Operation{}, err
+	}
+	if len(function) > 0 {
+		// Unmarshal into a pointer so a JSON null (a delete operation's absent
+		// response snapshot) stays nil rather than yielding a zero Function.
+		var f *Function
+		if err := json.Unmarshal(function, &f); err != nil {
+			return Operation{}, err
+		}
+		op.Function = f
+	}
+	return op, nil
+}
+
+func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, id string) (Operation, error) {
+	op, err := scanOperation(s.pool.QueryRow(ctx, `
+		SELECT operation_id, location, done, verb, target, function, create_time, end_time
+		FROM jc_functions_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Operation{}, ErrNoSuchOperation
+	}
+	return op, err
+}
+
+func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_functions_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchOperation
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT operation_id, location, done, verb, target, function, create_time, end_time
+		FROM jc_functions_operations WHERE project_id=$1 AND location=$2 ORDER BY operation_id
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, op)
+	}
+	return result, rows.Err()
 }

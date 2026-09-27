@@ -50,7 +50,11 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 		return functionsstore.Function{}, Operation{}, err
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	return f, NewOperation(location, "create", target, &f), nil
+	op := NewOperation(location, "create", target, &f)
+	if err := s.persistOperation(ctx, project, op); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
+	return f, op, nil
 }
 
 // GetFunction returns one function.
@@ -129,7 +133,11 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		s.discardSource(ctx, old.SourceBlobKey)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	return f, NewOperation(location, "update", target, &f), nil
+	op := NewOperation(location, "update", target, &f)
+	if err := s.persistOperation(ctx, project, op); err != nil {
+		return functionsstore.Function{}, Operation{}, err
+	}
+	return f, op, nil
 }
 
 // DeleteFunction deletes a function and returns its done delete operation (whose
@@ -147,7 +155,11 @@ func (s *Service) DeleteFunction(ctx context.Context, project, location, id stri
 	}
 	s.discardSource(ctx, f.SourceBlobKey)
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	return NewOperation(location, "delete", target, nil), nil
+	op := NewOperation(location, "delete", target, nil)
+	if err := s.persistOperation(ctx, project, op); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
 }
 
 // CallFunction invokes a function synchronously via the Lambda executor. The

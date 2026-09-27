@@ -1,6 +1,8 @@
 package functions
 
 import (
+	"time"
+
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
 
@@ -164,20 +166,25 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 }
 
 // Operation is a completed Cloud Functions long-running operation. Function
-// mutations complete synchronously, so Done is always true and the operation is
-// never persisted or pollable. Function is the create/update response; it is nil
-// for a delete (whose response is a google.protobuf.Empty Any).
+// mutations complete synchronously, so Done is always true; the operation is
+// persisted (see store/functions) so operations.get/list and REST :wait can read
+// it back. Function is the create/update response; it is nil for a delete (whose
+// response is a google.protobuf.Empty Any).
 type Operation struct {
-	ID       string
-	Location string
-	Verb     string // "create" | "update" | "delete"
-	Target   string // full function resource name
-	Function *functionsstore.Function
+	ID         string
+	Location   string
+	Verb       string // "create" | "update" | "delete"
+	Target     string // full function resource name
+	Function   *functionsstore.Function
+	CreateTime time.Time
+	EndTime    time.Time
 }
 
-// NewOperation builds a completed operation for a function mutation.
+// NewOperation builds a completed operation for a function mutation. The
+// timestamps default to the business clock and are stable once stored.
 func NewOperation(location, verb, target string, f *functionsstore.Function) Operation {
-	return Operation{ID: newUUID(), Location: location, Verb: verb, Target: target, Function: f}
+	t := now()
+	return Operation{ID: newUUID(), Location: location, Verb: verb, Target: target, Function: f, CreateTime: t, EndTime: t}
 }
 
 // OperationName returns the full long-running-operation resource name for op.
@@ -228,14 +235,22 @@ func anyResponse(typeURL string, body map[string]any) map[string]any {
 // operationMetadataMap renders the version-specific OperationMetadata carried
 // on a function operation. v1 uses OperationMetadataV1 ({target, type,
 // updateTime}); v2 uses OperationMetadata ({target, verb, operationType,
-// apiVersion, createTime, endTime}).
+// apiVersion, createTime, endTime}). Both timestamps are the operation's stored
+// values (falling back to the business clock when unset).
 func operationMetadataMap(v Version, op Operation) map[string]any {
+	start := op.CreateTime
+	if start.IsZero() {
+		start = now()
+	}
+	end := op.EndTime
+	if end.IsZero() {
+		end = start
+	}
 	if v == V2 {
-		t := formatTimestamp(now())
 		return map[string]any{
 			"@type":         operationMetadataTypeV2,
-			"createTime":    t,
-			"endTime":       t,
+			"createTime":    formatTimestamp(start),
+			"endTime":       formatTimestamp(end),
 			"target":        op.Target,
 			"verb":          op.Verb,
 			"operationType": operationTypeFor(op.Verb),
@@ -246,23 +261,7 @@ func operationMetadataMap(v Version, op Operation) map[string]any {
 		"@type":      operationMetadataType,
 		"target":     op.Target,
 		"type":       operationTypeFor(op.Verb),
-		"updateTime": formatTimestamp(now()),
-	}
-}
-
-// SynthesizedOperationJSON renders a done google.longrunning.Operation for a
-// GetOperation lookup. Function mutations are returned inline and never
-// persisted, so there is no stored operation; a done operation with an empty
-// (google.protobuf.Empty-typed) response is synthesized for the requested name.
-func SynthesizedOperationJSON(v Version, project, location, id string) map[string]any {
-	op := Operation{ID: id, Location: location}
-	return map[string]any{
-		"name":       OperationName(project, op),
-		"metadata":   operationMetadataMap(v, op),
-		"done":       true,
-		"response":   anyResponse(emptyTypeURL, nil),
-		"createTime": formatTimestamp(now()),
-		"updateTime": formatTimestamp(now()),
+		"updateTime": formatTimestamp(end),
 	}
 }
 

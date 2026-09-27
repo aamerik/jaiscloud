@@ -295,6 +295,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 		switch {
 		case custom == "cancel":
 			return "CancelOperation"
+		case custom == "wait":
+			return "WaitOperation"
 		case isCollection && method == http.MethodGet:
 			return "ListOperations"
 		case method == http.MethodGet:

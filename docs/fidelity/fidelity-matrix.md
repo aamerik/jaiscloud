@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **792**
+Cells: **793**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 557 |
+| ga | 558 |
 | limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
@@ -21,7 +21,7 @@ Cells: **792**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 285 | 86 | 37 | 9 |
+| rest | 286 | 86 | 37 | 9 |
 | grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -355,7 +355,7 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_30 cell(s): ga=30 limited=0 preview=0 unsupported=0_
+_31 cell(s): ga=31 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -380,6 +380,7 @@ _30 cell(s): ga=30 limited=0 preview=0 unsupported=0_
 | Function.ListOperations | rest | ga | — |
 | Function.ListRuntimes | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
+| Function.WaitOperation | rest | ga | google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it |
 | GenerateDownloadUrl | grpc | ga | — |
 | GenerateUploadUrl | grpc | ga | — |
 | GetFunction | grpc | ga | — |

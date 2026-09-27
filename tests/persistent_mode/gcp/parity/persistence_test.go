@@ -262,20 +262,45 @@ func seedFirestore(d *driver, suffix string) (func() error, func() error, error)
 	return d.verifyPresent(get), d.verifyGone(get), nil
 }
 
-// seedFunctions creates a function (v1 projects.locations.functions.create).
+// seedFunctions creates a function (v1 projects.locations.functions.create) and
+// verifies that both the function and its persisted long-running operation
+// survive a restart (and clear on reset).
 func seedFunctions(d *driver, suffix string) (func() error, func() error, error) {
 	id := "fn-" + suffix
 	name := fmt.Sprintf("projects/%s/locations/%s/functions/%s", project, location, id)
 	post := fmt.Sprintf("/v1/projects/%s/locations/%s/functions?functionId=%s", project, location, url.QueryEscape(id))
-	if err := d.expect("POST", post, jsonBody(map[string]any{
+	code, resp, err := d.do("POST", post, jsonBody(map[string]any{
 		"name":       name,
 		"runtime":    "nodejs20",
 		"entryPoint": "helloWorld",
-	}), http.StatusOK); err != nil {
+	}))
+	if err != nil {
 		return nil, nil, err
 	}
+	if code != http.StatusOK {
+		return nil, nil, fmt.Errorf("POST %s: got HTTP %d (want 200): %s", post, code, truncate(resp))
+	}
+	var op struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(resp), &op); err != nil || op.Name == "" {
+		return nil, nil, fmt.Errorf("POST %s: no operation name in response: %s", post, truncate(resp))
+	}
 	get := fmt.Sprintf("/v1/projects/%s/locations/%s/functions/%s", project, location, id)
-	return d.verifyPresent(get), d.verifyGone(get), nil
+	opPath := "/v2/" + strings.TrimPrefix(op.Name, "/")
+	survived := func() error {
+		if err := d.verifyPresent(get)(); err != nil {
+			return err
+		}
+		return d.verifyPresent(opPath)()
+	}
+	cleared := func() error {
+		if err := d.verifyGone(get)(); err != nil {
+			return err
+		}
+		return d.verifyGone(opPath)()
+	}
+	return survived, cleared, nil
 }
 
 // seedManagedKafka creates a cluster (v1 projects.locations.clusters.create).

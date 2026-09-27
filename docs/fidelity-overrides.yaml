@@ -116,14 +116,16 @@ operations:
   # override.
   #
   # Cloud Functions REST common-API methods: GetLocation is the shared
-  # google.cloud.location.Locations method and CancelOperation/DeleteOperation
-  # are the shared google.longrunning.Operations methods (the Cloud Functions
-  # RPC reference lists both interfaces). The service Discovery document
-  # deliberately does not enumerate common-API methods, so the classifier
-  # reports these as limited ("no matching Discovery method") even though the
-  # handlers are served and wire-tested (DELETE /v2/.../operations/{id},
-  # POST /v2/.../operations/{id}:cancel, GET /v1/projects/{p}/locations/{l});
-  # the cells are therefore upgraded to ga.
+  # google.cloud.location.Locations method and CancelOperation/DeleteOperation/
+  # WaitOperation are the shared google.longrunning.Operations methods (the Cloud
+  # Functions RPC reference lists both interfaces). The service Discovery
+  # document deliberately does not enumerate common-API methods, so the
+  # classifier reports these as limited ("no matching Discovery method") even
+  # though the handlers are served and wire-tested (DELETE /v2/.../operations/{id},
+  # POST /v2/.../operations/{id}:cancel, POST /v2/.../operations/{id}:wait,
+  # GET /v1/projects/{p}/locations/{l}); the cells are therefore upgraded to ga.
+  # WaitOperation is gRPC-only in the canonical proto (no HTTP annotation); REST
+  # :wait is an emulator extension, kept for symmetry with the other LRO verbs.
   - service: functions
     operation: Function.GetLocation
     state: ga
@@ -139,6 +141,11 @@ operations:
     state: ga
     allow_upgrade: true
     reason: "shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested"
+  - service: functions
+    operation: Function.WaitOperation
+    state: ga
+    allow_upgrade: true
+    reason: "google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it"
   # Service Usage gRPC is control-plane only: the service/get/list/enable/disable
   # surface is implemented, while BatchGetServices is an explicit Unimplemented
   # stub (the REST surface does not implement it either).
