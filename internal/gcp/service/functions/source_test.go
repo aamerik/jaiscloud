@@ -248,3 +248,82 @@ func TestLoadCodeWithoutSourceIsNil(t *testing.T) {
 		t.Fatalf("LoadCode = %q, %v; want nil,nil", code, err)
 	}
 }
+
+// fakeBucketEnsurer records EnsureBucket calls for the upload-url tests.
+type fakeBucketEnsurer struct {
+	buckets []string
+	err     error
+}
+
+func (f *fakeBucketEnsurer) EnsureBucket(_ context.Context, project, bucket, location string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.buckets = append(f.buckets, project+"/"+bucket+"/"+location)
+	return nil
+}
+
+func TestGenerateUploadURLProvisionsBucket(t *testing.T) {
+	ctx := context.Background()
+	ensurer := &fakeBucketEnsurer{}
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithBlobs(blobfs.NewMemoryBlobStore()), WithSourceBuckets(ensurer))
+	up, err := s.GenerateUploadURL(ctx, "proj", "us-central1", "http://localhost:8080/")
+	if err != nil {
+		t.Fatalf("GenerateUploadURL: %v", err)
+	}
+	wantBucket := SourceBucket("proj", "us-central1")
+	if up.Bucket != wantBucket || up.Object == "" || !strings.HasSuffix(up.Object, ".zip") {
+		t.Fatalf("upload target = %+v, want bucket %q", up, wantBucket)
+	}
+	if want := "http://localhost:8080/" + wantBucket + "/" + up.Object; up.URL != want {
+		t.Fatalf("upload URL = %q, want %q", up.URL, want)
+	}
+	if len(ensurer.buckets) != 1 || ensurer.buckets[0] != "proj/"+wantBucket+"/us-central1" {
+		t.Fatalf("ensurer calls = %v", ensurer.buckets)
+	}
+}
+
+func TestGenerateUploadURLSingleBucketName(t *testing.T) {
+	// A function's location names the bucket deterministically (not per upload),
+	// so two uploads share one bucket and only the object id changes.
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(), WithBlobs(blobfs.NewMemoryBlobStore()))
+	first, err := s.GenerateUploadURL(context.Background(), "proj", "us-central1", "http://h")
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := s.GenerateUploadURL(context.Background(), "proj", "us-central1", "http://h")
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if first.Bucket != second.Bucket {
+		t.Fatalf("bucket drifted: %q vs %q", first.Bucket, second.Bucket)
+	}
+	if first.Object == second.Object {
+		t.Fatalf("object id not unique: %q", first.Object)
+	}
+}
+
+func TestGenerateUploadURLWithoutStorage(t *testing.T) {
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	if _, err := s.GenerateUploadURL(context.Background(), "proj", "us-central1", "http://h"); err == nil {
+		t.Fatal("expected an error when source storage is not configured")
+	}
+}
+
+func TestSourceBucketSanitizedAndCapped(t *testing.T) {
+	if got := SourceBucket("My_Project", "US Central"); got != "gcf-v2-sources-my_project-us-central" {
+		t.Fatalf("SourceBucket = %q", got)
+	}
+	long := SourceBucket(strings.Repeat("p", 80), strings.Repeat("l", 80))
+	if len(long) > maxGCSCBucketName {
+		t.Fatalf("bucket name %d chars exceeds %d: %q", len(long), maxGCSCBucketName, long)
+	}
+}
+
+func TestStoreSourceRejectsEmptyArchive(t *testing.T) {
+	s := newSourceTestService(t, blobfs.NewMemoryBlobStore(), &fakeFetcher{objects: map[string][]byte{}}, nil)
+	if _, _, _, err := s.StoreSource(context.Background(), "p", "us", "f", nil); err == nil {
+		t.Fatal("expected empty-archive rejection")
+	}
+}

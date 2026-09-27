@@ -203,11 +203,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
   `functions` service and serialize the v2 shape (`state`, `buildConfig`, `serviceConfig`);
   `gcloud functions list` and `gcloud functions describe` pass. v2 runtime resolution works
-  (`GET /v2/.../runtimes` + gRPC `ListRuntimes`), so `gcloud functions deploy --gen2` gets past the
-  runtime lookup. Source referenced by a GCS object (v1 `sourceArchiveUrl` or v2
+  (`GET /v2/.../runtimes` + gRPC `ListRuntimes`), and v2 `generateUploadUrl` provisions a
+  GCS-backed upload target (`gcf-v2-sources-*`, with a `storageSource` in the response) whose
+  `uploadUrl` points at the emulator, so `gcloud functions deploy --gen2` runs end-to-end
+  (upload → create → poll). Source referenced by a GCS object (v1 `sourceArchiveUrl` or v2
   `buildConfig.source.storageSource`) is fetched, persisted with a revision hash, and executed in
-  Docker/K8s mode, but the v2 `generateUploadUrl` resumable source upload + build/stage step is not
-  modelled, so `gcloud functions deploy --gen2` still stops at the upload. `Function.GetLocation` is
+  Docker/K8s mode; a deployed function renders a `serviceConfig.revision` with
+  `allTrafficOnLatestRevision`. `Function.GetLocation` is
   `limited` (no matching Discovery method). The gRPC surface
   registers both `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete

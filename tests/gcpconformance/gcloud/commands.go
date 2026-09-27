@@ -51,9 +51,10 @@ const WorkflowSource = "main:\n  steps:\n  - return: ok\n"
 // are suffixed with a run-unique ID so the suite is safe to run against a
 // non-ephemeral emulator.
 type fixtures struct {
-	sid string // run-unique, lowercase alphanumeric
-	tmp string // path to a small text file containing ConformanceText
-	wf  string // path to a minimal workflow YAML source
+	sid   string // run-unique, lowercase alphanumeric
+	tmp   string // path to a small text file containing ConformanceText
+	wf    string // path to a minimal workflow YAML source
+	fnSrc string // path to a minimal Cloud Functions source directory
 }
 
 // commands returns the curated matrix in execution order. Create commands
@@ -269,13 +270,23 @@ func commands(f fixtures) []Command {
 		},
 
 		// ── Cloud Functions ──────────────────────────────────────────────────
-		// gcloud 585 speaks Cloud Functions v2 (paths under /v2/projects/...):
-		// list fans out to both the v2 (GEN_2 filter) and v1 list endpoints and
-		// merges them, so this exercises the v2 routing. The function is seeded
-		// directly against the emulator's v2 REST API before the table runs
-		// because `gcloud functions deploy` also requires a resumable source
-		// upload and build/stage step, which the emulator does not model (the
-		// /v2/.../runtimes runtime lookup is served).
+		// gcloud 586 speaks Cloud Functions v2 (paths under /v2/projects/...).
+		// A gen2 deploy exercises the FU4 end-to-end path: runtimes.list → a
+		// GCS-backed generateUploadUrl → a raw PUT to the returned uploadUrl →
+		// create with buildConfig.source.storageSource → operations.get. It
+		// needs SERVICEUSAGE and CLOUDRESOURCEMANAGER overrides (BuildEnv routes
+		// them at the emulator) and --build-service-account to skip gcloud's
+		// Cloud Build defaultServiceAccount lookup, which the emulator does not
+		// serve. list/describe then read the deployed function back.
+		{
+			Name: "functions deploy (gen2)", Service: "functions",
+			Args: []string{"functions", "deploy", fn, "--gen2", "--runtime=python312",
+				"--entry-point=handler", "--trigger-http", "--region=us-central1",
+				"--source=" + f.fnSrc, "--no-allow-unauthenticated",
+				"--build-service-account=projects/" + EmulatorProjectDefault + "/serviceAccounts/build@" + EmulatorProjectDefault + ".iam.gserviceaccount.com",
+				"--format=json"},
+			Assert: contains(fn), Expect: ExpectPass,
+		},
 		{
 			Name: "functions list", Service: "functions",
 			Args:   []string{"functions", "list", "--format=json"},

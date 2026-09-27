@@ -183,6 +183,12 @@ func startCmd() *cobra.Command {
 			if !cmd.Flags().Changed("port") && os.Getenv("JAISCLOUD_PORT") == "" {
 				cfg.Port = 8080
 			}
+			// Cloud Functions v2 source-upload URLs must point back at this
+			// emulator: `gcloud functions deploy --gen2` PUTs the archive directly
+			// to the returned uploadUrl and the Storage endpoint override does not
+			// apply to that raw URL. The REST transport derives it per request; the
+			// gRPC transport uses this origin.
+			functionsUploadBase := functionsUploadOrigin(cfg.Port)
 			clock.SetGlobalClock(cfg.Clock)
 
 			// Resolve which wire transports to expose. Only the selected
@@ -280,6 +286,7 @@ func startCmd() *cobra.Command {
 					functionscore.WithExecutor(lambdaExec),
 					functionscore.WithBlobs(stores.blobs),
 					functionscore.WithSourceFetcher(storageP),
+					functionscore.WithSourceBuckets(storageP),
 				)
 				if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
 					dockerExec.SetCodeLoader(functionsCore)
@@ -487,8 +494,8 @@ func startCmd() *cobra.Command {
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
-			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID)
-			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID)
+			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
+			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID, functionsUploadBase)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -1411,4 +1418,22 @@ func snapshotInspectCmd() *cobra.Command {
 	}
 	cmd.Flags().String("host", defaultHost, "Emulator host URL")
 	return cmd
+}
+
+// functionsUploadOrigin returns the origin used to build Cloud Functions v2
+// source-upload URLs for the gRPC transport (the REST transport derives it from
+// the request host). It honours STORAGE_EMULATOR_HOST /
+// JAISCLOUD_GCS_EMULATOR_ENDPOINT (the same precedence as the Dataproc Spark
+// wiring) so a deploy through a port-forward or k3d address reaches the
+// emulator, and otherwise falls back to the local REST listener.
+func functionsUploadOrigin(port int) string {
+	for _, env := range []string{"STORAGE_EMULATOR_HOST", "JAISCLOUD_GCS_EMULATOR_ENDPOINT"} {
+		if v := os.Getenv(env); v != "" {
+			if !strings.Contains(v, "://") {
+				v = "http://" + v
+			}
+			return strings.TrimRight(v, "/")
+		}
+	}
+	return fmt.Sprintf("http://localhost:%d", port)
 }

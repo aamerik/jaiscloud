@@ -2673,6 +2673,30 @@ func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) 
 	return p.decryptObjectWithKey(ctx, "", meta, ciphertext, nil)
 }
 
+// EnsureBucket creates a GCS bucket if it does not already exist. It backs the
+// Cloud Functions v2 generateUploadUrl source bucket (gcf-v2-sources-*), which
+// the emulator provisions lazily; a bucket the user already created is left
+// untouched. It is idempotent and safe to call concurrently.
+func (p *Provider) EnsureBucket(ctx context.Context, project, bucket, location string) error {
+	if _, err := p.objects.GetBucket(ctx, bucket); err == nil {
+		return nil
+	} else if !errors.Is(err, gcs.ErrNoSuchBucket) {
+		return err
+	}
+	if project == "" {
+		project = "jaiscloud-project"
+	}
+	if location == "" {
+		location = "US"
+	}
+	now := clock.Now().Format(time.RFC3339Nano)
+	b := bucketMeta{Name: bucket, Location: location, StorageClass: "STANDARD", Metageneration: "1", TimeCreated: now, Updated: now}
+	if err := p.objects.CreateBucket(ctx, project, bucket, bucketToMap(b)); err != nil && !errors.Is(err, gcs.ErrAlreadyExists) {
+		return err
+	}
+	return nil
+}
+
 // ObjectsUpdate implements objects.update (HTTP PUT). GCS PUT semantics are a
 // strict replacement of the object's writable metadata: fields omitted from
 // the request body are cleared (or reset to defaults), not preserved.

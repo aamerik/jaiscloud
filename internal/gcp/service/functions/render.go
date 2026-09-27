@@ -135,6 +135,13 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		// that read serviceConfig.service get a stable value.
 		"service": resourceID(project)("cloud-run-service", f.Location+"/"+f.ID),
 	}
+	// A deployed function has one synthesized revision (derived from its stored
+	// source hash); all traffic serves it. Persisted revision history + traffic
+	// splitting are FD5 concerns.
+	if rev := functionRevision(f); rev != "" {
+		svc["revision"] = resourceID(project)("cloud-function-revision", f.Location+"/"+f.ID+"/"+rev)
+		svc["allTrafficOnLatestRevision"] = true
+	}
 	if f.HttpsTriggerURL != "" {
 		svc["uri"] = f.HttpsTriggerURL
 	}
@@ -277,6 +284,17 @@ func operationTypeFor(verb string) string {
 		return "DELETE_FUNCTION"
 	}
 	return ""
+}
+
+// functionRevision derives the rendered revision id for a deployed function from
+// its persisted source hash. A function with no stored source has no revision
+// (the pre-deploy metadata-only case). FD5 (revisions + traffic) replaces this
+// derived value with a persisted revision record.
+func functionRevision(f functionsstore.Function) string {
+	if len(f.SourceSHA256) > 12 {
+		return f.SourceSHA256[:12]
+	}
+	return f.SourceSHA256
 }
 
 // hasGSPrefix reports whether s starts with "gs://".

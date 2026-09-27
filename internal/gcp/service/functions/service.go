@@ -99,6 +99,7 @@ type Service struct {
 	executor      lambdaexec.LambdaExecutor
 	blobs         blobfs.BlobStore // deployed source archives (functions-source)
 	sourceFetcher SourceFetcher    // resolves GCS source references; nil = disabled
+	sourceBuckets SourceBucketEnsurer
 }
 
 // Option configures Service.
@@ -120,6 +121,13 @@ func WithBlobs(b blobfs.BlobStore) Option {
 // object reference. A nil fetcher disables resolution.
 func WithSourceFetcher(f SourceFetcher) Option {
 	return func(s *Service) { s.sourceFetcher = f }
+}
+
+// WithSourceBuckets sets the ensurer used to create the GCS bucket a v2
+// generateUploadUrl upload lands in (gcf-v2-sources-*). A nil ensurer skips
+// bucket creation (the bucket must already exist for the upload to succeed).
+func WithSourceBuckets(e SourceBucketEnsurer) Option {
+	return func(s *Service) { s.sourceBuckets = e }
 }
 
 // NewService returns a Functions core backed by the given store. resources backs

@@ -41,6 +41,11 @@ var endpointOverrideServices = []string{
 	"CLOUDFUNCTIONS",
 	"WORKFLOWS",
 	"DATAPROC",
+	// Cloud Functions' gen2 deploy checks that the Cloud Run/Cloud Build/
+	// Artifact Registry APIs are enabled (Service Usage) and resolves the
+	// project number (Resource Manager); both are emulated and must route here.
+	"SERVICEUSAGE",
+	"CLOUDRESOURCEMANAGER",
 }
 
 // BuildEnv returns the exact environment that makes gcloud talk to the emulator

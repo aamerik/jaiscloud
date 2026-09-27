@@ -203,11 +203,6 @@ func (s *Service) CallFunction(ctx context.Context, project, location, id, data 
 	return executionID, string(res.Payload), "", nil
 }
 
-// GenerateUploadURL returns a fake signed upload URL for source deployment.
-func (s *Service) GenerateUploadURL(project, location string) string {
-	return "https://storage.googleapis.com/uploads/" + project + "/" + location + "/" + newUUID() + ".zip"
-}
-
 // GenerateDownloadURL returns a fake signed download URL for a function's source
 // archive. The function must exist (NotFound otherwise), matching real Cloud
 // Functions.

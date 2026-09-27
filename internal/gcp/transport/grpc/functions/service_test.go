@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"jaiscloud/internal/blobfs"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	core "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -20,11 +21,13 @@ import (
 )
 
 func newTestV1() *Service {
-	return NewService(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
+	return NewService(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		core.WithBlobs(blobfs.NewMemoryBlobStore())), "proj", "http://localhost:8080")
 }
 
 func newTestV2() *ServiceV2 {
-	return NewServiceV2(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
+	return NewServiceV2(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		core.WithBlobs(blobfs.NewMemoryBlobStore())), "proj", "http://localhost:8080")
 }
 
 func createV1Req(id string) *functionspb.CreateFunctionRequest {
@@ -207,7 +210,8 @@ func newTestV1WithExecutor(e lambdaexec.LambdaExecutor) *Service {
 		functionsstore.NewMemoryStore(),
 		store.NewMemoryResourceStore(),
 		core.WithExecutor(e),
-	), "proj")
+		core.WithBlobs(blobfs.NewMemoryBlobStore()),
+	), "proj", "http://localhost:8080")
 }
 
 // TestCallFunctionV1 covers runtime invocation over the shared Lambda executor:

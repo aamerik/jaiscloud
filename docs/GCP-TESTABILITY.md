@@ -110,7 +110,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
 | `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. `ListWorkflowRevisions` is an unsupported stub. |
 | `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
-| `functions` | grpc, rest | 31/31 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 runtime catalog (`/v2/.../runtimes`, gRPC `ListRuntimes`) served; common-API `GetLocation`/`CancelOperation`/`DeleteOperation`/`WaitOperation` served; function mutations persist a pollable `google.longrunning` operation store (memory + Postgres + snapshot), so `operations.get`/`list` and REST `:wait` return the typed response; GCS-referenced source archives (`sourceArchiveUrl` / `storageSource`) are fetched, persisted with a revision hash, and executed under Docker/K8s; v2 deploy (resumable source upload + build/stage) unsupported. |
+| `functions` | grpc, rest | 31/31 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 runtime catalog (`/v2/.../runtimes`, gRPC `ListRuntimes`) served; common-API `GetLocation`/`CancelOperation`/`DeleteOperation`/`WaitOperation` served; function mutations persist a pollable `google.longrunning` operation store (memory + Postgres + snapshot), so `operations.get`/`list` and REST `:wait` return the typed response; GCS-referenced source archives (`sourceArchiveUrl` / `storageSource`) are fetched, persisted with a revision hash, and executed under Docker/K8s; v2 `generateUploadUrl` provisions a GCS-backed upload target so `gcloud functions deploy --gen2` runs end-to-end, and a deployed function renders `serviceConfig.revision` + `allTrafficOnLatestRevision` (no real container build; single revision, no traffic splitting — that is FD5). |
 | `compute` | rest | 0/33 | 🟡 | Metadata only | Metadata only | No VM/disk/network data plane. |
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |
@@ -134,7 +134,7 @@ behind a wire-conformant API.
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |
-| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (no delivery engine), `firestoreadmin` (composite-index CRUD only), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no v2 deploy) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
+| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (no delivery engine), `firestoreadmin` (composite-index CRUD only), `managedkafka` (no broker), `metastore` (no Hive plane), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no real container build; single revision) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
 | **Metadata only** | `compute`, `cloudsql`, `clouddns`, `memorystore` | Resource records + `get`/`list`; nothing actually runs. |
 | **None (preview)** | `bigquery` (no SQL engine), `iceberg` | Nothing local counts as evidence. |
 
@@ -151,7 +151,7 @@ behind a wire-conformant API.
 | SQS | **Pub/Sub** | 🟢 `ga` (44/44) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (52/52) | High — full read surface (`ReadObject` + `BidiReadObject`). |
 | DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Firestore Admin 4/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
-| Lambda | **Cloud Functions** | 🟡 `limited` (24/29) | Control plane + GCS-referenced source execution (Docker/K8s); v2 deploy unsupported. |
+| Lambda | **Cloud Functions** | 🟡 `limited` (24/29) | Control plane + GCS-referenced source execution (Docker/K8s); v2 `gcloud functions deploy --gen2` end-to-end (upload → create → poll), single synthesized revision. |
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
@@ -185,11 +185,13 @@ evidence for any of them.
       no control/data plane locally — only resource records. Test the real data plane.
 - [ ] **BigQuery.** No SQL engine ships locally; `jobs.query` evaluates nothing. All
       query behaviour must be tested against real BigQuery.
-- [ ] **Cloud Functions v2 deploy.** v2 request/response *shapes* are served (gcloud
-      `list`/`describe` pass), runtime resolution works (`/v2/.../runtimes`), and source referenced
-      by a GCS object (`sourceArchiveUrl` / `storageSource`) is fetched and executed in Docker/K8s
-      mode. The v2 `generateUploadUrl` resumable source upload and build/stage pipeline are still
-      not modelled. Test that deploy path end-to-end on GCP.
+- [ ] **Cloud Functions v2 build.** v2 request/response *shapes* are served, runtime resolution
+      works (`/v2/.../runtimes`), `gcloud functions deploy --gen2` runs end-to-end
+      (`generateUploadUrl` → GCS-backed upload → create → poll), and source referenced by a GCS
+      object (`sourceArchiveUrl` / `storageSource`) is fetched and executed in Docker/K8s mode.
+      There is **no real container build** (the archive is only checked non-empty) and only a
+      single synthesized revision is rendered; build failures, revision history, and traffic
+      splitting must be exercised on real GCP.
 - [ ] **Quotas, throttling, and retry/backoff.** No rate limits or quota plane is
       modelled, so backoff and quota-exhaustion paths are never exercised locally.
 - [ ] **Frozen-clock OCC / TTL.** With the clock frozen (`POST /_jaiscloud/clock`),

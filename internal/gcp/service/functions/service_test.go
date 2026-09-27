@@ -135,6 +135,28 @@ func TestFunctionJSONVersions(t *testing.T) {
 	}
 }
 
+func TestFunctionJSONV2Revision(t *testing.T) {
+	// A deployed function (with a persisted source hash) renders a synthesized
+	// serviceConfig.revision and allTrafficOnLatestRevision; a metadata-only
+	// function renders neither.
+	deployed := FunctionJSON(V2, "p", functionsstore.Function{
+		ID: "f1", Location: "us-central1", Status: "ACTIVE", SourceSHA256: "abcdef0123456789",
+	})
+	sc, _ := deployed["serviceConfig"].(map[string]any)
+	if sc["revision"] != "projects/p/locations/us-central1/functions/f1/revisions/abcdef012345" {
+		t.Fatalf("revision = %v", sc["revision"])
+	}
+	if sc["allTrafficOnLatestRevision"] != true {
+		t.Fatalf("allTrafficOnLatestRevision = %v", sc["allTrafficOnLatestRevision"])
+	}
+
+	metadataOnly := FunctionJSON(V2, "p", functionsstore.Function{ID: "f2", Location: "us-central1", Status: "ACTIVE"})
+	sc2, _ := metadataOnly["serviceConfig"].(map[string]any)
+	if _, ok := sc2["revision"]; ok {
+		t.Fatalf("metadata-only function must not render a revision: %v", sc2)
+	}
+}
+
 func TestFunctionInputV2SourceUploadURL(t *testing.T) {
 	in := FunctionInputFromMap(map[string]any{
 		"buildConfig": map[string]any{

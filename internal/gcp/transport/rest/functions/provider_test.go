@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/blobfs"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/functions"
@@ -59,7 +60,8 @@ func newNRv2(params map[string]any) *model.NormalizedRequest {
 
 func newProvider(t *testing.T, resources store.ResourceStore, exec lambdaexec.LambdaExecutor) *Provider {
 	t.Helper()
-	return NewProvider(core.NewService(functionsstore.NewMemoryStore(), resources, core.WithExecutor(exec)), "proj")
+	return NewProvider(core.NewService(functionsstore.NewMemoryStore(), resources,
+		core.WithExecutor(exec), core.WithBlobs(blobfs.NewMemoryBlobStore())), "proj")
 }
 
 // operationResponse asserts resp is a done google.longrunning.Operation and
@@ -598,13 +600,39 @@ func TestListRuntimes(t *testing.T) {
 func TestGenerateUploadUrl(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	// v1: uploadUrl only (the v1 response has no storageSource field).
 	nr := newNR(map[string]any{"location": "us-central1"})
 	resp, err := p.GenerateUploadUrl(ctx, nr)
 	if err != nil {
-		t.Fatalf("generateUploadUrl: %v", err)
+		t.Fatalf("generateUploadUrl v1: %v", err)
 	}
 	if u, _ := resp.Data["uploadUrl"].(string); u == "" {
-		t.Errorf("expected non-empty uploadUrl")
+		t.Errorf("expected non-empty v1 uploadUrl")
+	}
+	if _, ok := resp.Data["storageSource"]; ok {
+		t.Errorf("v1 response must not carry storageSource: %v", resp.Data)
+	}
+
+	// v2: uploadUrl + storageSource(bucket/object), URL pointed at the request host.
+	nr2 := newNRv2(map[string]any{"location": "us-central1"})
+	resp, err = p.GenerateUploadUrl(ctx, nr2)
+	if err != nil {
+		t.Fatalf("generateUploadUrl v2: %v", err)
+	}
+	u, _ := resp.Data["uploadUrl"].(string)
+	ss, _ := resp.Data["storageSource"].(map[string]any)
+	if u == "" || ss == nil {
+		t.Fatalf("v2 response = %v", resp.Data)
+	}
+	if got, want := ss["bucket"], core.SourceBucket("proj", "us-central1"); got != want {
+		t.Errorf("storageSource.bucket = %v, want %v", got, want)
+	}
+	if obj, _ := ss["object"].(string); obj == "" || !strings.HasSuffix(obj, ".zip") {
+		t.Errorf("storageSource.object = %v", ss["object"])
+	}
+	if !strings.Contains(u, "/"+ss["bucket"].(string)+"/") {
+		t.Errorf("uploadUrl %q must contain the storage bucket %v", u, ss["bucket"])
 	}
 }
 
