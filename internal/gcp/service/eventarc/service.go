@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
@@ -40,6 +41,14 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// FunctionExister reports whether a Cloud Functions function exists, so Eventarc
+// can validate a destination.cloudFunction without importing the functions
+// core. A nil FunctionExister disables the existence check (the destination is
+// still validated structurally).
+type FunctionExister interface {
+	FunctionExists(ctx context.Context, project, location, id string) (bool, error)
+}
 
 // rtTopic is the Pub/Sub topic resource type in the shared ResourceStore
 // (mirrors provider/pubsub's unexported constant). Eventarc validates
@@ -58,12 +67,17 @@ type Service struct {
 	store     eventarcstore.Store
 	resources store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
 	workflows workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
+	functions FunctionExister      // Cloud Functions existence (destination.cloudFunction)
 }
 
 // NewService returns an Eventarc core backed by the given stores.
 func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows workflowsstore.Store) *Service {
 	return &Service{store: s, resources: resources, workflows: workflows}
 }
+
+// SetFunctionExister wires the Cloud Functions existence check used to validate
+// a destination.cloudFunction. A nil exister (the default) skips the check.
+func (s *Service) SetFunctionExister(f FunctionExister) { s.functions = f }
 
 // Reset wipes the store.
 func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
@@ -294,16 +308,18 @@ func applyChannelMask(stored, incoming map[string]any, paths []string) (map[stri
 // --- validation ---
 
 // validateDestination enforces the destination oneof contract: exactly one of
-// cloudRun / gke / workflow / httpEndpoint must be set, and the read-only
-// cloudFunction field is rejected.
+// cloudFunction / cloudRun / gke / workflow / httpEndpoint must be set. A
+// destination.cloudFunction names a deployed function (as the Cloud Functions
+// service itself sets when it provisions an Eventarc trigger); the existence
+// check lives in validateReferences.
 func validateDestination(dest map[string]any) error {
 	if dest == nil {
 		return invalidArgument("destination is required")
 	}
-	if cf, _ := dest["cloudFunction"].(string); cf != "" {
-		return invalidArgument("destination.cloudFunction is read-only; creating a Cloud Functions trigger is only supported via Cloud Functions")
-	}
 	set := 0
+	if cf, _ := dest["cloudFunction"].(string); cf != "" {
+		set++
+	}
 	if m, _ := dest["cloudRun"].(map[string]any); m != nil {
 		set++
 	}
@@ -317,10 +333,10 @@ func validateDestination(dest map[string]any) error {
 		set++
 	}
 	if set == 0 {
-		return invalidArgument("destination must specify one of cloudRun, gke, workflow, or httpEndpoint")
+		return invalidArgument("destination must specify one of cloudFunction, cloudRun, gke, workflow, or httpEndpoint")
 	}
 	if set > 1 {
-		return invalidArgument("destination must specify exactly one of cloudRun, gke, workflow, or httpEndpoint")
+		return invalidArgument("destination must specify exactly one of cloudFunction, cloudRun, gke, workflow, or httpEndpoint")
 	}
 	return nil
 }
@@ -370,6 +386,21 @@ func (s *Service) validateReferences(ctx context.Context, project string, body m
 			}
 			if _, err := s.workflows.GetWorkflow(ctx, project, loc, id); err != nil {
 				return model.NewProviderError("NotFound", "destination.workflow not found: "+wf, 404)
+			}
+		}
+		if cf, _ := dest["cloudFunction"].(string); cf != "" {
+			loc, id := locationOf(cf), lastSegment(cf)
+			if loc == "" || id == "" {
+				return invalidArgument("invalid destination.cloudFunction resource name")
+			}
+			if s.functions != nil {
+				ok, err := s.functions.FunctionExists(ctx, project, loc, id)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return model.NewProviderError("NotFound", "destination.cloudFunction not found: "+cf, 404)
+				}
 			}
 		}
 	}
@@ -824,4 +855,128 @@ func (s *Service) ChannelTestIamPermissions(ctx context.Context, project, locati
 		return nil, err
 	}
 	return policy.TestPermissions(perms), nil
+}
+
+// --- event delivery ---
+
+// TargetsForEvent returns the Cloud Functions functions that Eventarc triggers
+// route an event to. Eventarc delivery is a metadata-driven match: for a
+// Pub/Sub event, every trigger whose transport.pubsub.topic names the event's
+// topic and whose destination.cloudFunction names a function produces one
+// target, provided the trigger's type/attribute eventFilters match. Triggers
+// with non-function destinations (Cloud Run, Workflows, GKE, HTTP) are ignored:
+// the emulator only executes Cloud Functions. It implements eventing.TargetIndex
+// so the functions delivery engine never imports this package.
+func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []eventing.Target {
+	if ev.Source != eventing.SourcePubSub {
+		// Eventarc triggers are backed by a Pub/Sub topic; the emulator's
+		// storage producer does not (yet) publish to the Eventarc-provisioned
+		// topic, so only Pub/Sub events route through Eventarc.
+		return nil
+	}
+	triggers, err := s.store.ListTriggersAllLocations(ctx, ev.Project)
+	if err != nil {
+		return nil
+	}
+	topic := eventing.ResourceID(ev.Resource)
+	var out []eventing.Target
+	for _, t := range triggers {
+		body := decodeBody(t.Config)
+		dest := bodyMap(body, "destination")
+		cf, _ := dest["cloudFunction"].(string)
+		if cf == "" {
+			continue
+		}
+		if !eventarcSourceMatches(body, topic) {
+			continue
+		}
+		if !eventarcFiltersMatch(body, ev) {
+			continue
+		}
+		loc, id := locationOf(cf), lastSegment(cf)
+		if loc == "" || id == "" {
+			continue
+		}
+		out = append(out, eventing.Target{
+			Project:    ev.Project,
+			Location:   loc,
+			FunctionID: id,
+			Retry:      eventarcRetries(body),
+		})
+	}
+	return out
+}
+
+// eventarcSourceMatches reports whether a trigger's transport.pubsub.topic
+// names the given topic id.
+func eventarcSourceMatches(body map[string]any, topic string) bool {
+	if topic == "" {
+		return false
+	}
+	transport := bodyMap(body, "transport")
+	if transport == nil {
+		return false
+	}
+	pubsub := bodyMap(transport, "pubsub")
+	if pubsub == nil {
+		return false
+	}
+	src, _ := pubsub["topic"].(string)
+	return eventing.ResourceID(src) == topic
+}
+
+// eventarcFiltersMatch evaluates a trigger's eventFilters against an event. An
+// empty operator is an exact match; "match-path-pattern" is a prefix match on
+// the value (GCP treats the rest as a path wildcard). The required "type" filter
+// is compared through the shared event-type normalization so a trigger may name
+// either the CloudEvent type or a Cloud Functions alias.
+func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
+	filters, _ := body["eventFilters"].([]any)
+	for _, f := range filters {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		attr, _ := fm["attribute"].(string)
+		value, _ := fm["value"].(string)
+		operator, _ := fm["operator"].(string)
+		if attr == "" {
+			continue
+		}
+		if attr == "type" {
+			if !eventing.TypeMatches(value, ev.EventType) {
+				return false
+			}
+			continue
+		}
+		got := ev.Attributes[attr]
+		if operator == "match-path-pattern" {
+			// GCP's match-path-pattern treats the trailing segment(s) as a
+			// wildcard; the emulator compares the literal prefix.
+			if !strings.HasPrefix(got, strings.TrimSuffix(value, "*")) {
+				return false
+			}
+			continue
+		}
+		if got != value {
+			return false
+		}
+	}
+	return true
+}
+
+// eventarcRetries reports whether a trigger's retryPolicy retries a failed
+// delivery.
+func eventarcRetries(body map[string]any) bool {
+	rp, _ := body["retryPolicy"].(map[string]any)
+	if rp == nil {
+		return false
+	}
+	switch n := rp["maxAttempts"].(type) {
+	case float64:
+		return n > 0
+	case int:
+		return n > 0
+	}
+	return false
 }

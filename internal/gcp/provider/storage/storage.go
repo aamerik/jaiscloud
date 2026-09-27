@@ -29,6 +29,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/downscope"
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
@@ -121,12 +122,21 @@ type Provider struct {
 
 	notifMu   sync.Mutex // serialises notification ID allocation
 	publisher EventPublisher
+	// dispatcher routes object events to Cloud Functions whose eventTrigger
+	// subscribes to the bucket. Nil disables function delivery.
+	dispatcher eventing.Dispatcher
 }
 
 // SetEventPublisher wires the Pub/Sub publisher used to fan object events out
 // to a bucket's notificationConfigs. Called once at startup; nil disables
 // notification delivery (unit tests that don't exercise fan-out).
 func (p *Provider) SetEventPublisher(ev EventPublisher) { p.publisher = ev }
+
+// SetFunctionDispatcher wires the Cloud Functions event-delivery engine, so an
+// object finalize/delete reaches every function whose eventTrigger subscribes to
+// the bucket. The provider holds only the interface, so it never imports the
+// functions core.
+func (p *Provider) SetFunctionDispatcher(d eventing.Dispatcher) { p.dispatcher = d }
 
 // completedSession is a lightweight tombstone for a finished resumable upload,
 // holding the finalized object resource so a post-completion status query can
@@ -1176,6 +1186,7 @@ func notificationKey(bucket, id string) string { return bucket + "/" + id }
 // attributes such as overwroteGeneration/overwrittenByGeneration. Best-effort:
 // publish errors are swallowed.
 func (p *Provider) publishObjectEvent(ctx context.Context, account, bucket, object, eventType string, meta gcs.ObjectMeta, eventTime time.Time, extra map[string]string) {
+	p.dispatchObjectEvent(ctx, account, bucket, object, eventType, meta, eventTime)
 	if p.publisher == nil {
 		return
 	}
@@ -1222,6 +1233,47 @@ func (p *Provider) publishObjectEvent(ctx context.Context, account, bucket, obje
 		}
 		_, _ = p.publisher.PublishEvent(ctx, account, cfg.Topic, data, attrs)
 	}
+}
+
+// dispatchObjectEvent routes an object event to Cloud Functions whose
+// eventTrigger subscribes to the bucket. It is independent of the bucket's
+// notificationConfigs (a function trigger is not a user-visible notification):
+// finalize and delete map to the canonical Cloud Functions storage event types;
+// other GCS events (e.g. archive) have no Cloud Functions analogue and are
+// ignored. No-op when no dispatcher is wired.
+func (p *Provider) dispatchObjectEvent(ctx context.Context, account, bucket, object, eventType string, meta gcs.ObjectMeta, eventTime time.Time) {
+	if p.dispatcher == nil {
+		return
+	}
+	var canonical string
+	switch eventType {
+	case "OBJECT_FINALIZE":
+		canonical = eventing.TypeStorageFinalize
+	case "OBJECT_DELETE":
+		canonical = eventing.TypeStorageDelete
+	default:
+		return
+	}
+	if eventTime.IsZero() {
+		eventTime = clock.Now()
+	}
+	attrs := map[string]string{
+		"eventType":        eventType,
+		"bucketId":         bucket,
+		"objectId":         object,
+		"objectGeneration": meta.Generation,
+		"eventTime":        eventTime.UTC().Format(time.RFC3339Nano),
+	}
+	p.dispatcher.DispatchEvent(ctx, eventing.Event{
+		Project:    account,
+		EventType:  canonical,
+		Resource:   resource.ResourceID("")("gcs-bucket-policy", bucket),
+		EventID:    bucket + "/" + object + "/" + meta.Generation,
+		Source:     eventing.SourceStorage,
+		Data:       objectEventData(meta),
+		Attributes: attrs,
+		OccurredAt: eventTime,
+	})
 }
 
 // notificationEventMatches reports whether an event type passes a config's

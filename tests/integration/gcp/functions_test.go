@@ -1,15 +1,150 @@
 package gcp_test
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// functionDeliveryRecords parses the emulator export and returns the persisted
+// Cloud Functions event-delivery records. Real Cloud Functions exposes no
+// delivery API, so the export (the registered "functions" snapshotter) is the
+// observation surface for retry / dead-letter outcomes.
+func functionDeliveryRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	resp, body := do(t, "GET", "/_jaiscloud/export", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "export: %s", body)
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err)
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	var env struct {
+		Stores map[string]json.RawMessage `json:"stores"`
+	}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if hdr.Name != "envelope.json" {
+			continue
+		}
+		raw, rerr := io.ReadAll(tr)
+		require.NoError(t, rerr)
+		require.NoError(t, json.Unmarshal(raw, &env))
+	}
+	raw := env.Stores["functions"]
+	require.NotEmpty(t, raw, "functions snapshot missing from export")
+	var snap struct {
+		Deliveries map[string]map[string]struct {
+			FunctionID string `json:"functionId"`
+			Status     string `json:"status"`
+			Result     string `json:"result"`
+			Attempts   int    `json:"attempts"`
+		} `json:"deliveries"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &snap))
+	var out []map[string]any
+	for _, byID := range snap.Deliveries {
+		for _, d := range byID {
+			out = append(out, map[string]any{
+				"functionId": d.FunctionID, "status": d.Status, "result": d.Result, "attempts": d.Attempts,
+			})
+		}
+	}
+	return out
+}
+
+// waitForDelivery polls until a delivery record for functionID appears.
+func waitForDelivery(t *testing.T, functionID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, d := range functionDeliveryRecords(t) {
+			if d["functionId"] == functionID {
+				return d
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("no event delivery recorded for function %s", functionID)
+	return nil
+}
+
+// TestFunctionsEventTriggerDelivery covers FD4 over the wire: a Pub/Sub publish,
+// a GCS object finalize, and an Eventarc trigger (destination.cloudFunction) each
+// invoke their function, and the delivery is recorded.
+func TestFunctionsEventTriggerDelivery(t *testing.T) {
+	resetState(t)
+	const project = "proj"
+	const location = "us-central1"
+	fnBase := "/v1/projects/" + project + "/locations/" + location + "/functions"
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+
+	// A topic-triggered function.
+	resp, body := do(t, "PUT", "/v1/projects/"+project+"/topics/events", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "topic create: %s", body)
+	resp, body = do(t, "POST", fnBase+"?functionId=onsub",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"google.pubsub.topic.publish","resource":"projects/proj/topics/events"}}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create onsub: %s", body)
+
+	// A bucket-triggered function (v1 object.change catch-all).
+	const bucket = "evt-bucket"
+	createBucket(t, bucket)
+	resp, body = do(t, "POST", fnBase+"?functionId=onstor",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"providers/cloud.storage/eventTypes/object.change","resource":"projects/_/buckets/evt-bucket"}}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create onstor: %s", body)
+
+	// A function with no trigger of its own, targeted by an Eventarc trigger.
+	resp, body = do(t, "POST", fnBase+"?functionId=onevarc",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler"}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create onevarc: %s", body)
+	resp, body = do(t, "PUT", "/v1/projects/"+project+"/topics/evarc", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "topic evarc: %s", body)
+	resp, body = do(t, "POST", "/v1/projects/"+project+"/locations/"+location+"/triggers?triggerId=evarc-trigger",
+		[]byte(`{"destination":{"cloudFunction":"projects/proj/locations/us-central1/functions/onevarc"},`+
+			`"transport":{"pubsub":{"topic":"projects/proj/topics/evarc"}},`+
+			`"eventFilters":[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "eventarc trigger: %s", body)
+
+	// Publish to the topic: the topic-subscribed function receives the payload.
+	resp, body = do(t, "POST", "/v1/projects/"+project+"/topics/events:publish",
+		[]byte(`{"messages":[{"data":"aGVsbG8="}]}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "publish: %s", body)
+	d := waitForDelivery(t, "onsub")
+	require.Equal(t, "delivered", d["status"])
+	require.Equal(t, "hello", d["result"])
+
+	// An object upload finalizes and triggers the bucket function (the payload is
+	// the GCS object event JSON).
+	resp, body = do(t, "POST", "/upload/storage/v1/b/"+bucket+"/o?uploadType=media&name=obj.txt",
+		[]byte("world"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "upload: %s", body)
+	d = waitForDelivery(t, "onstor")
+	require.Equal(t, "delivered", d["status"])
+	require.Contains(t, d["result"], "obj.txt")
+
+	// The Eventarc trigger routes a publish to its function.
+	resp, body = do(t, "POST", "/v1/projects/"+project+"/topics/evarc:publish",
+		[]byte(`{"messages":[{"data":"dmlh"}]}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "publish evarc: %s", body)
+	d = waitForDelivery(t, "onevarc")
+	require.Equal(t, "delivered", d["status"])
+	require.Equal(t, "via", d["result"])
+}
 
 // zipArchive builds a minimal in-memory zip.
 func zipArchive(t *testing.T, name, content string) []byte {

@@ -29,6 +29,7 @@ import (
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	lambdaexec "jaiscloud/internal/executor/lambda"
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -100,6 +101,8 @@ type Service struct {
 	blobs         blobfs.BlobStore // deployed source archives (functions-source)
 	sourceFetcher SourceFetcher    // resolves GCS source references; nil = disabled
 	sourceBuckets SourceBucketEnsurer
+	eventTargets  eventing.TargetIndex // Eventarc cloudFunction destinations; nil = disabled
+	deliveries    *deliveryEngine
 }
 
 // Option configures Service.
@@ -130,6 +133,13 @@ func WithSourceBuckets(e SourceBucketEnsurer) Option {
 	return func(s *Service) { s.sourceBuckets = e }
 }
 
+// WithEventTargets sets the index of external triggers (Eventarc triggers whose
+// destination is a cloudFunction) that route events to functions. A nil index
+// disables external-trigger delivery.
+func WithEventTargets(idx eventing.TargetIndex) Option {
+	return func(s *Service) { s.eventTargets = idx }
+}
+
 // NewService returns a Functions core backed by the given store. resources backs
 // the function IAM policy surface. The executor defaults to a MockExecutor.
 func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...Option) *Service {
@@ -140,11 +150,30 @@ func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...
 	if s.executor == nil {
 		s.executor = &lambdaexec.MockExecutor{}
 	}
+	s.deliveries = newDeliveryEngine(s)
 	return s
 }
 
-// Reset wipes the underlying store and any persisted source archives.
+// Start launches the event-delivery workers. The Cloud Functions binary calls
+// it once, alongside the other background workers; before it is called dispatch
+// runs inline (useful for tests).
+func (s *Service) Start(ctx context.Context) {
+	if s.deliveries != nil {
+		s.deliveries.Start(ctx)
+	}
+}
+
+// SetEventTargets wires the index of external triggers (Eventarc triggers whose
+// destination is a cloudFunction) that route events to functions. It is a
+// setter because the Eventarc core is constructed after the functions core.
+func (s *Service) SetEventTargets(idx eventing.TargetIndex) { s.eventTargets = idx }
+
+// Reset wipes the underlying store and any persisted source archives, and
+// invalidates in-flight deliveries.
 func (s *Service) Reset(ctx context.Context) {
+	if s.deliveries != nil {
+		s.deliveries.reset()
+	}
 	s.functions.Reset(ctx)
 	s.resetSources(ctx)
 }

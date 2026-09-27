@@ -152,8 +152,15 @@ func TestTriggerValidation(t *testing.T) {
 			"destination":  map[string]any{"workflow": "projects/proj/locations/us-central1/workflows/w1"},
 			"eventFilters": []any{map[string]any{"attribute": "type", "value": ""}},
 		}, "InvalidArgument"},
-		{"cloudFunction destination rejected", map[string]any{
-			"destination":  map[string]any{"cloudFunction": "projects/proj/locations/us-central1/functions/f"},
+		{"destination oneof conflict", map[string]any{
+			"destination": map[string]any{
+				"cloudFunction": "projects/proj/locations/us-central1/functions/f",
+				"cloudRun":      map[string]any{"service": "svc"},
+			},
+			"eventFilters": []any{map[string]any{"attribute": "type", "value": "x"}},
+		}, "InvalidArgument"},
+		{"malformed cloudFunction name", map[string]any{
+			"destination":  map[string]any{"cloudFunction": "bogus"},
 			"eventFilters": []any{map[string]any{"attribute": "type", "value": "x"}},
 		}, "InvalidArgument"},
 		{"workflow not found", triggerBody("projects/proj/locations/us-central1/workflows/missing"), "NotFound"},
@@ -184,6 +191,23 @@ func TestTriggerWithPubsubTopicSucceeds(t *testing.T) {
 	}
 	if _, err := p.CreateTrigger(ctx, newNR(map[string]any{"location": "us-central1", "triggerId": "t", "body": body})); err != nil {
 		t.Fatalf("CreateTrigger with existing topic: %v", err)
+	}
+}
+
+func TestTriggerWithCloudFunctionDestination(t *testing.T) {
+	ctx := context.Background()
+	p, resources, _ := newProvider()
+	createTopic(t, resources, "my-topic")
+
+	body := map[string]any{
+		"destination":  map[string]any{"cloudFunction": "projects/proj/locations/us-central1/functions/a-function"},
+		"eventFilters": []any{map[string]any{"attribute": "type", "value": "google.cloud.pubsub.topic.v1.messagePublished"}},
+		"transport":    map[string]any{"pubsub": map[string]any{"topic": "projects/proj/topics/my-topic"}},
+	}
+	// destination.cloudFunction is a documented Eventarc destination and is
+	// accepted; with no FunctionExister wired the existence check is skipped.
+	if _, err := p.CreateTrigger(ctx, newNR(map[string]any{"location": "us-central1", "triggerId": "t", "body": body})); err != nil {
+		t.Fatalf("CreateTrigger with a cloudFunction destination: %v", err)
 	}
 }
 

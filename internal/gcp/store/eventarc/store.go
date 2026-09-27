@@ -80,6 +80,11 @@ type Store interface {
 	// update landing between the check and the delete.
 	DeleteTriggerAtomic(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error
 	ListTriggers(ctx context.Context, projectID, location string) ([]Trigger, error)
+	// ListTriggersAllLocations returns every trigger for a project across all
+	// locations, for event delivery: a Pub/Sub event carries no Eventarc
+	// location, so every trigger subscribing to its source topic must be
+	// considered.
+	ListTriggersAllLocations(ctx context.Context, projectID string) ([]Trigger, error)
 
 	CreateChannel(ctx context.Context, projectID, location string, c Channel) error
 	GetChannel(ctx context.Context, projectID, location, id string) (Channel, error)

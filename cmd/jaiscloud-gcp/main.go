@@ -296,6 +296,12 @@ func startCmd() *cobra.Command {
 				}
 			}
 			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
+			// Producers hand events to the functions core's delivery engine. The
+			// core is nil when functions is disabled, so only wire it then.
+			if functionsCore != nil {
+				pubsubP.SetFunctionDispatcher(functionsCore)
+				storageP.SetFunctionDispatcher(functionsCore)
+			}
 
 			workflowsEngine := workflowengine.New()
 			// Cloud Workflows' transport-neutral core is shared by the REST
@@ -395,6 +401,14 @@ func startCmd() *cobra.Command {
 			var eventarcCore *eventarccore.Service
 			if serviceEnabled("eventarc") {
 				eventarcCore = eventarccore.NewService(stores.eventarc, stores.resources, stores.workflows)
+			}
+			// Eventarc validates destination.cloudFunction against the functions
+			// core, and the functions delivery engine consults Eventarc triggers
+			// whose destination is a cloudFunction. Both are optional cross-links,
+			// so they are wired only when each side is enabled.
+			if eventarcCore != nil && functionsCore != nil {
+				eventarcCore.SetFunctionExister(functionsCore)
+				functionsCore.SetEventTargets(eventarcCore)
 			}
 			eventarcP := resteventarc.NewProvider(eventarcCore, cfg.ProjectID)
 
@@ -599,6 +613,12 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.documents)
 			adminHandler.RegisterResetter(stores.entities)
 			adminHandler.RegisterResetter(stores.functions)
+			// The functions core owns the event-delivery engine; register it so
+			// /_jaiscloud/reset invalidates in-flight deliveries (and clears the
+			// persisted source archives) in addition to the store reset above.
+			if functionsCore != nil {
+				adminHandler.RegisterResetter(functionsCore)
+			}
 			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.dataproc)
 			adminHandler.RegisterResetter(stores.managedkafka)
@@ -811,6 +831,14 @@ func startCmd() *cobra.Command {
 				go monitoringEval.Run(evalCtx)
 			}
 			defer evalCancel()
+
+			// Cloud Functions event-trigger delivery workers. Stopped cleanly on
+			// shutdown; before this point dispatch runs inline.
+			if functionsCore != nil {
+				deliverCtx, deliverCancel := context.WithCancel(ctx)
+				functionsCore.Start(deliverCtx)
+				defer deliverCancel()
+			}
 
 			// Serve gRPC on its own listener (plaintext h2c) alongside the HTTP
 			// gateway. Emulator-mode SDKs point FIRESTORE_EMULATOR_HOST here.

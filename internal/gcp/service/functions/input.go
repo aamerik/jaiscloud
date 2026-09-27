@@ -61,6 +61,13 @@ func FunctionInputFromMap(body map[string]any, v Version) FunctionInput {
 			Resource:  stringOf(et["resource"]),
 			Service:   stringOf(et["service"]),
 		}
+		// v1 expresses retry as the presence of eventTrigger.failurePolicy.retry
+		// (an empty Retry message); its absence means failures are ignored.
+		if fp, ok := et["failurePolicy"].(map[string]any); ok {
+			if _, ok := fp["retry"]; ok {
+				in.EventTrigger.Retry = true
+			}
+		}
 	}
 	return in
 }
@@ -102,8 +109,9 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 		// across; storing the v2 email here would surface it under the v1
 		// service field on a cross-version read.
 		in.EventTrigger = &functionsstore.EventTrigger{
-			EventType: stringOf(et["eventType"]),
-			Resource:  stringOf(et["pubsubTopic"]),
+			EventType:   stringOf(et["eventType"]),
+			Resource:    stringOf(et["pubsubTopic"]),
+			RetryPolicy: stringOf(et["retryPolicy"]),
 		}
 	}
 	return in

@@ -14,6 +14,7 @@ type MemoryStore struct {
 	mu         sync.RWMutex
 	functions  map[string]map[string]Function  // projectID+"/"+location → id → function
 	operations map[string]map[string]Operation // projectID+"/"+location → id → operation
+	deliveries map[string]map[string]Delivery  // projectID+"/"+location → id → delivery
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -21,6 +22,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		functions:  make(map[string]map[string]Function),
 		operations: make(map[string]map[string]Operation),
+		deliveries: make(map[string]map[string]Delivery),
 	}
 }
 
@@ -133,6 +135,63 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	defer s.mu.Unlock()
 	s.functions = make(map[string]map[string]Function)
 	s.operations = make(map[string]map[string]Operation)
+	s.deliveries = make(map[string]map[string]Delivery)
+}
+
+// --- Deliveries ---
+
+func (s *MemoryStore) CreateDelivery(_ context.Context, projectID, location string, d Delivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d.CreateTime.IsZero() {
+		d.CreateTime = clock.Now()
+	}
+	if d.UpdateTime.IsZero() {
+		d.UpdateTime = d.CreateTime
+	}
+	key := lkey(projectID, location)
+	if s.deliveries[key] == nil {
+		s.deliveries[key] = make(map[string]Delivery)
+	}
+	d.Project = projectID
+	d.Location = location
+	s.deliveries[key][d.ID] = d
+	return nil
+}
+
+func (s *MemoryStore) UpdateDelivery(_ context.Context, projectID, location string, d Delivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := lkey(projectID, location)
+	if _, ok := s.deliveries[key][d.ID]; !ok {
+		return ErrNoSuchDelivery
+	}
+	d.Project = projectID
+	d.Location = location
+	s.deliveries[key][d.ID] = d
+	return nil
+}
+
+func (s *MemoryStore) GetDelivery(_ context.Context, projectID, location, id string) (Delivery, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.deliveries[lkey(projectID, location)][id]
+	if !ok {
+		return Delivery{}, ErrNoSuchDelivery
+	}
+	return d, nil
+}
+
+func (s *MemoryStore) ListDeliveries(_ context.Context, projectID, location string) ([]Delivery, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.deliveries[lkey(projectID, location)]
+	result := make([]Delivery, 0, len(m))
+	for _, d := range m {
+		result = append(result, d)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
 }
 
 // --- Operations ---

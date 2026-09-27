@@ -38,11 +38,16 @@ func functionJSONV1(project string, f functionsstore.Function) map[string]any {
 		out["sourceArchiveUrl"] = f.SourceArchiveURL
 	}
 	if f.EventTrigger != nil {
-		out["eventTrigger"] = map[string]any{
+		et := map[string]any{
 			"eventType": f.EventTrigger.EventType,
 			"resource":  f.EventTrigger.Resource,
 			"service":   f.EventTrigger.Service,
 		}
+		if f.EventTrigger.Retry {
+			// v1 signals retry by the presence of an (empty) Retry message.
+			et["failurePolicy"] = map[string]any{"retry": map[string]any{}}
+		}
+		out["eventTrigger"] = et
 	} else if f.HttpsTriggerURL != "" {
 		out["httpsTrigger"] = map[string]any{
 			"url":           f.HttpsTriggerURL,
@@ -164,10 +169,14 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		out["description"] = f.Description
 	}
 	if f.EventTrigger != nil {
-		out["eventTrigger"] = map[string]any{
+		et := map[string]any{
 			"eventType":   f.EventTrigger.EventType,
 			"pubsubTopic": f.EventTrigger.Resource,
 		}
+		if f.EventTrigger.RetryPolicy != "" {
+			et["retryPolicy"] = f.EventTrigger.RetryPolicy
+		}
+		out["eventTrigger"] = et
 	}
 	return out
 }
