@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **793**
+Cells: **794**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 558 |
+| ga | 559 |
 | limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
@@ -21,7 +21,7 @@ Cells: **793**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 286 | 86 | 37 | 9 |
+| rest | 287 | 86 | 37 | 9 |
 | grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -355,7 +355,7 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_31 cell(s): ga=31 limited=0 preview=0 unsupported=0_
+_32 cell(s): ga=32 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -375,6 +375,7 @@ _31 cell(s): ga=31 limited=0 preview=0 unsupported=0_
 | Function.GetFunction | rest | ga | — |
 | Function.GetLocation | rest | ga | shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested |
 | Function.GetOperation | rest | ga | — |
+| Function.InvokeTrigger | rest | ga | deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested |
 | Function.ListFunctions | rest | ga | — |
 | Function.ListLocations | rest | ga | — |
 | Function.ListOperations | rest | ga | — |

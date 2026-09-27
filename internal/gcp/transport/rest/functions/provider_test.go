@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -952,5 +953,151 @@ func TestFunctionValidation(t *testing.T) {
 	_, err = p.DeleteFunction(ctx, newNR(map[string]any{"location": "us-central1", "name": "badname"}))
 	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
 		t.Errorf("malformed delete name: code=%q, want InvalidArgument", perr.Code)
+	}
+}
+
+// blockingExecutor blocks until the invocation context is cancelled, modelling
+// a function that runs past its configured timeout.
+type blockingExecutor struct{}
+
+func (e *blockingExecutor) Invoke(ctx context.Context, _ lambdaexec.InvokeRequest) (lambdaexec.InvokeResult, error) {
+	<-ctx.Done()
+	return lambdaexec.InvokeResult{}, ctx.Err()
+}
+func (e *blockingExecutor) DeleteFunction(_ context.Context, _ string) {}
+func (e *blockingExecutor) Reset(_ context.Context)                    {}
+func (e *blockingExecutor) Close() error                               { return nil }
+
+// TestInvokeTrigger covers the HTTPS-trigger handler: an HTTP-triggered function
+// echoes the request body with HTTP 200, while a missing or event-only function
+// is NotFound (event functions have no HTTPS endpoint).
+func TestInvokeTrigger(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	if _, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "httpfn",
+		"body": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"},
+	})); err != nil {
+		t.Fatalf("create http fn: %v", err)
+	}
+	resp, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "httpfn", "payload": "hello trigger",
+	}))
+	if err != nil {
+		t.Fatalf("invoke trigger: %v", err)
+	}
+	if resp.HTTPStatus != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.HTTPStatus)
+	}
+	if body, _ := resp.Data["body"].([]byte); string(body) != "hello trigger" {
+		t.Errorf("body = %q, want hello trigger", body)
+	}
+
+	// Unknown function → NotFound.
+	if _, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "missing",
+	})); err == nil {
+		t.Errorf("expected NotFound invoking a missing function")
+	}
+
+	// Event-only function has no HTTPS endpoint → NotFound.
+	if _, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "evtfn",
+		"body": map[string]any{"runtime": "nodejs20", "entryPoint": "handler",
+			"eventTrigger": map[string]any{"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t"}},
+	})); err != nil {
+		t.Fatalf("create event fn: %v", err)
+	}
+	if _, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "evtfn",
+	})); err == nil {
+		t.Errorf("expected NotFound invoking an event-only function")
+	}
+}
+
+// TestInvokeTriggerTimeout verifies the configured function timeout is enforced
+// by the trigger path: a function that outruns it returns HTTP 500.
+func TestInvokeTriggerTimeout(t *testing.T) {
+	ctx := context.Background()
+	p := NewProvider(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		core.WithExecutor(&blockingExecutor{})), "proj")
+
+	if _, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "slow",
+		"body": map[string]any{"runtime": "nodejs20", "entryPoint": "handler", "timeout": "1s"},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	resp, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "slow", "payload": "x",
+	}))
+	if err != nil {
+		t.Fatalf("invoke trigger: %v", err)
+	}
+	if resp.HTTPStatus != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 on timeout", resp.HTTPStatus)
+	}
+	if body, _ := resp.Data["body"].([]byte); len(body) == 0 {
+		t.Errorf("expected a timeout error body")
+	}
+}
+
+// TestInvokeTriggerUnlistedRegion proves a function created in a region outside
+// the advertised catalog still serves its synthesized URL: when the host label
+// cannot be resolved against the region catalog, the provider resolves it
+// against the stored functions.
+func TestInvokeTriggerUnlistedRegion(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	if _, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "me-west1", "functionId": "regfn",
+		"body": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	resp, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"functionId": "regfn", "triggerLabel": "me-west1-proj", "payload": "hi",
+	}))
+	if err != nil {
+		t.Fatalf("invoke trigger: %v", err)
+	}
+	if body, _ := resp.Data["body"].([]byte); string(body) != "hi" {
+		t.Errorf("body = %q, want hi", body)
+	}
+
+	// A label that does not end in the resolved project is NotFound.
+	if _, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"functionId": "regfn", "triggerLabel": "me-west1-other", "payload": "hi",
+	})); err == nil {
+		t.Errorf("expected NotFound for a label not matching the resolved project")
+	}
+}
+
+// TestInvokeTriggerExecutorErrorIs500 pins that a non-timeout executor failure
+// also returns HTTP 500 with the error text.
+func TestInvokeTriggerExecutorErrorIs500(t *testing.T) {
+	ctx := context.Background()
+	p := NewProvider(core.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		core.WithExecutor(&stubExecutor{err: errors.New("boom")})), "proj")
+
+	if _, err := p.CreateFunction(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "f",
+		"body": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	resp, err := p.InvokeTrigger(ctx, newNR(map[string]any{
+		"location": "us-central1", "functionId": "f", "payload": "x",
+	}))
+	if err != nil {
+		t.Fatalf("invoke trigger: %v", err)
+	}
+	if resp.HTTPStatus != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.HTTPStatus)
+	}
+	if body, _ := resp.Data["body"].([]byte); string(body) != "boom" {
+		t.Errorf("body = %q, want boom", body)
 	}
 }

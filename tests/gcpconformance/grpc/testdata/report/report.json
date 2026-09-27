@@ -2170,7 +2170,7 @@
       "rpc": "GenerateUploadUrl (v2)",
       "method": "GenerateUploadUrl",
       "status": "pass",
-      "key_field": "non-empty uploadUrl"
+      "key_field": "non-empty uploadUrl + storageSource"
     },
     {
       "service": "functions",

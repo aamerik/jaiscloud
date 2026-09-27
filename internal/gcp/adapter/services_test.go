@@ -70,6 +70,31 @@ func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
 	}
 }
 
+// TestDetectServiceFunctionTriggerHost locks host-based detection of a deployed
+// function's HTTPS-trigger URL: the trigger host resolves to functions with
+// SourceHost, while the control-plane host stays path-detected.
+func TestDetectServiceFunctionTriggerHost(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/my-func", nil)
+	r.Host = "us-central1-proj.cloudfunctions.net"
+	if svc, src := DetectService(r); svc != "functions" || src != SourceHost {
+		t.Errorf("trigger host = (%q, %v), want (functions, SourceHost)", svc, src)
+	}
+
+	// The trigger path alone (no trigger host) is not a functions path; it
+	// falls through to the GCS raw-media fallback.
+	r2, _ := http.NewRequest(http.MethodGet, "/my-func", nil)
+	if svc, _ := DetectService(r2); svc == "functions" {
+		t.Errorf("bare path detected as functions without a trigger host")
+	}
+
+	// The control-plane host is unaffected (path-detected).
+	r3, _ := http.NewRequest(http.MethodGet, "/v1/projects/p/locations/us-central1/functions", nil)
+	r3.Host = "cloudfunctions.googleapis.com"
+	if svc, src := DetectService(r3); svc != "functions" || src != SourcePath {
+		t.Errorf("control-plane host = (%q, %v), want (functions, SourcePath)", svc, src)
+	}
+}
+
 // TestDetectServiceMonitoringV3 locks the /v3/ namespace to Cloud Monitoring:
 // every v3 path (metric descriptors, time series, alert policies, notification
 // channels/descriptors, monitored resource descriptors) resolves to

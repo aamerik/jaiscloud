@@ -279,6 +279,7 @@ functions,Function.GenerateUploadUrl,rest,ga,
 functions,Function.GetFunction,rest,ga,
 functions,Function.GetLocation,rest,ga,"shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested"
 functions,Function.GetOperation,rest,ga,
+functions,Function.InvokeTrigger,rest,ga,"deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested"
 functions,Function.ListFunctions,rest,ga,
 functions,Function.ListLocations,rest,ga,
 functions,Function.ListOperations,rest,ga,

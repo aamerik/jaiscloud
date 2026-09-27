@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	functionscore "jaiscloud/internal/gcp/service/functions"
 	servicelogging "jaiscloud/internal/gcp/service/logging"
 )
 
@@ -13,11 +14,20 @@ type DetectionSource int
 const (
 	SourceUnknown DetectionSource = iota
 	SourcePath                    // URL path prefix matched a service
+	SourceHost                    // request host matched a service (Function URL)
 )
 
 // DetectService identifies the GCP service from the HTTP request path.
 // GCP has no SigV4 scope; the path is the sole reliable discriminator.
 func DetectService(r *http.Request) (service string, source DetectionSource) {
+	// A request addressed to a deployed function's synthesized HTTPS-trigger
+	// host ({location}-{project}.cloudfunctions.net) is a data-plane invocation,
+	// not a control-plane API call. It must be detected by host: the trigger
+	// path (/{functionId}) is otherwise indistinguishable from a GCS raw-media
+	// path and would be mis-served.
+	if functionscore.IsTriggerHost(r.Host) {
+		return "functions", SourceHost
+	}
 	p := r.URL.Path
 	// SDK test clients concatenate an endpoint that may already end in "/" with
 	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading

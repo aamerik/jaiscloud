@@ -3,6 +3,7 @@ package gcp_test
 import (
 	"archive/zip"
 	"bytes"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -202,4 +203,91 @@ func TestFunctionsAcceptanceFlow(t *testing.T) {
 	// Gone after delete.
 	resp, _ = do(t, "GET", base+"/hello", nil, nil)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// doHost performs an HTTP request with an explicit Host header. It is used to
+// invoke a deployed function at its synthesized HTTPS-trigger URL
+// ({location}-{project}.cloudfunctions.net), which is host-scoped rather than
+// path-scoped.
+func doHost(t *testing.T, method, path, host string, body []byte, headers map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, gcpBase()+path, rd)
+	require.NoError(t, err)
+	req.Host = host
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp, b
+}
+
+// TestFunctionsHTTPSTrigger covers FD3 over the wire: a deployed HTTP-triggered
+// function is invokable at its synthesized trigger host
+// ({location}-{project}.cloudfunctions.net/{id}); the raw request body is the
+// payload (any method), while an unknown function and an event-only function
+// are 404 (event functions have no HTTPS endpoint).
+func TestFunctionsHTTPSTrigger(t *testing.T) {
+	resetState(t)
+
+	const project = "proj"
+	const location = "us-central1"
+	triggerHost := location + "-" + project + ".cloudfunctions.net"
+	base := "/v1/projects/" + project + "/locations/" + location + "/functions"
+
+	// HTTP-triggered function.
+	resp, body := do(t, "POST", base+"?functionId=web",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler"}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create: %s", body)
+
+	// The synthesized httpsTrigger.url names the trigger host.
+	resp, body = do(t, "GET", base+"/web", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	ht, _ := jsonMap(t, body)["httpsTrigger"].(map[string]any)
+	require.Equal(t, "https://"+triggerHost+"/web", ht["url"])
+
+	// Invoke it: the body is the payload and the mock executor echoes it.
+	resp, body = doHost(t, "POST", "/web", triggerHost, []byte("ping"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "trigger: %s", body)
+	require.Equal(t, "ping", string(body))
+
+	// Any method is accepted (GET with no body).
+	resp, _ = doHost(t, "GET", "/web", triggerHost, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Unknown function → 404.
+	resp, _ = doHost(t, "POST", "/nope", triggerHost, []byte("x"), nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	// Event-only function → 404.
+	resp, body = do(t, "POST", base+"?functionId=evt",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"google.pubsub.topic.publish","resource":"projects/proj/topics/t"}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create event fn: %s", body)
+	resp, _ = doHost(t, "POST", "/evt", triggerHost, []byte("x"), nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	// A sub-path still addresses the function (real Cloud Functions route the
+	// remainder to the function itself).
+	resp, body = doHost(t, "POST", "/web/v1/route", triggerHost, []byte("sub"), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "sub-path trigger: %s", body)
+	require.Equal(t, "sub", string(body))
+
+	// A function created in a region outside the advertised catalog still serves
+	// its synthesized URL (the ambiguous label is resolved against the store).
+	resp, body = do(t, "POST", "/v1/projects/"+project+"/locations/me-west1/functions?functionId=regional",
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler"}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create regional: %s", body)
+	resp, body = doHost(t, "POST", "/regional", "me-west1-"+project+".cloudfunctions.net", []byte("regional"), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "regional trigger: %s", body)
+	require.Equal(t, "regional", string(body))
 }

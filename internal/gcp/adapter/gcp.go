@@ -17,6 +17,7 @@ import (
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/gcp/resource"
+	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	"jaiscloud/internal/model"
 )
 
@@ -25,6 +26,9 @@ import (
 type GCPAdapter struct {
 	codecs         map[string]adapter.Codec
 	serviceAccount string // default SA identity when the token carries none
+	// functionTrigger is the codec for a deployed function's HTTPS-trigger URL.
+	// It is selected by request host (SourceHost), not by the service map.
+	functionTrigger adapter.Codec
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
@@ -43,8 +47,9 @@ func NewAdapter(serviceAccount string) *GCPAdapter {
 		}
 	}
 	return &GCPAdapter{
-		codecs:         codecs,
-		serviceAccount: serviceAccount,
+		codecs:          codecs,
+		serviceAccount:  serviceAccount,
+		functionTrigger: restfunctions.NewTriggerCodec(),
 	}
 }
 
@@ -83,11 +88,19 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	if service == "" {
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target GCP service", 404)
 	}
-	_ = source
 
-	codec, err := a.CodecFor(service)
-	if err != nil {
-		return nil, nil, err
+	// A host-detected request is a deployed function's HTTPS trigger, which has
+	// its own raw-HTTP codec instead of the control-plane JSON codec. Every
+	// path-detected request uses the service map as before.
+	var codec adapter.Codec
+	if source == SourceHost {
+		codec = a.functionTrigger
+	} else {
+		c, err := a.CodecFor(service)
+		if err != nil {
+			return nil, nil, err
+		}
+		codec = c
 	}
 	nr, err := codec.Decode(r, body)
 	if err != nil {

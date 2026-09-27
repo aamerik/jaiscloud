@@ -164,3 +164,26 @@ func TestGCPAdapter_DetectAndDecode_Unknown(t *testing.T) {
 		t.Errorf("expected GCP detection error, got %v", err)
 	}
 }
+
+// TestGCPAdapter_FunctionTriggerHost verifies the adapter selects the raw-HTTP
+// trigger codec (not the control-plane JSON codec) when the request is
+// addressed to a deployed function's HTTPS-trigger host.
+func TestGCPAdapter_FunctionTriggerHost(t *testing.T) {
+	a := gcp.New()
+	r := httptest.NewRequest("POST", "/hello", strings.NewReader("payload"))
+	r.Host = "us-central1-proj.cloudfunctions.net"
+
+	nr, _, err := a.DetectAndDecode(r, []byte("payload"))
+	if err != nil {
+		t.Fatalf("DetectAndDecode: %v", err)
+	}
+	if nr.Service != "functions" || nr.Action != "InvokeTrigger" {
+		t.Fatalf("got service=%q action=%q, want functions/InvokeTrigger", nr.Service, nr.Action)
+	}
+	if nr.Params["project"] != "proj" || nr.Params["location"] != "us-central1" || nr.Params["functionId"] != "hello" {
+		t.Errorf("params = %v", nr.Params)
+	}
+	if nr.Params["payload"] != "payload" {
+		t.Errorf("payload = %v, want payload", nr.Params["payload"])
+	}
+}

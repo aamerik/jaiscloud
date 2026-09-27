@@ -6,17 +6,20 @@
 // and gRPC transports call the SAME core Service (one store, one Lambda
 // executor), so they cannot drift.
 //
-// Unlike the other /v1/projects/{project}/... services, Cloud Functions is
-// detected by the generic JSONCodec{Service: "functions"} plus v2 path
-// detection in the adapter router; this package therefore has no Codec of its
-// own.
+// Unlike the other /v1/projects/{project}/... services, the Cloud Functions
+// control plane is detected by the generic JSONCodec{Service: "functions"} plus
+// v2 path detection in the adapter router. This package also owns the codec for
+// the data-plane HTTPS-trigger URL (trigger.go), which the adapter selects by
+// request Host.
 package functions
 
 import (
 	"context"
+	"net/http"
 
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/functions"
+	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -41,6 +44,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Function.UpdateFunction":             p.UpdateFunction,
 		"Function.DeleteFunction":             p.DeleteFunction,
 		"Function.CallFunction":               p.CallFunction,
+		"Function.InvokeTrigger":              p.InvokeTrigger,
 		"Function.ListRuntimes":               p.ListRuntimes,
 		"Function.GenerateUploadUrl":          p.GenerateUploadUrl,
 		"Function.GenerateDownloadUrl":        p.GenerateDownloadUrl,
@@ -182,6 +186,62 @@ func (p *Provider) CallFunction(ctx context.Context, nr *model.NormalizedRequest
 		return provider.OK(map[string]any{"executionId": executionID, "error": invokeErr}), nil
 	}
 	return provider.OK(map[string]any{"executionId": executionID, "result": result}), nil
+}
+
+// InvokeTrigger serves a function at its synthesized HTTPS-trigger URL
+// ("{location}-{project}.cloudfunctions.net/{functionId}"). The trigger codec
+// (trigger.go) resolves the project/location from the host when the location is
+// in the advertised region catalog; otherwise the ambiguous label is resolved
+// against the stored functions (core.ResolveHTTPTriggerFunction), so a function
+// created in a region outside the catalog still serves its synthesized URL. The
+// raw request body is the function payload (any HTTP method). Only
+// HTTP-triggered functions have such a URL, so an event-only function is
+// NotFound, matching real Cloud Functions. The function's result is returned as
+// the raw HTTP response; an executor failure — including a function timeout,
+// enforced by the core — is an HTTP 500, matching an unhandled exception.
+func (p *Provider) InvokeTrigger(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	id := strParam(nr, "functionId")
+	if id == "" {
+		return nil, triggerNotFound()
+	}
+	project, f, err := p.triggerTarget(ctx, nr, id)
+	if err != nil {
+		return nil, err
+	}
+	if f.HttpsTriggerURL == "" {
+		// Event-triggered functions have no HTTPS endpoint.
+		return nil, triggerNotFound()
+	}
+	_, result, invokeErr, err := p.core.CallFunction(ctx, project, f.Location, id, strParam(nr, "payload"))
+	if err != nil {
+		return nil, err
+	}
+	if invokeErr != "" {
+		return triggerResponse(http.StatusInternalServerError, invokeErr), nil
+	}
+	return triggerResponse(http.StatusOK, result), nil
+}
+
+// triggerTarget resolves the (project, function) a trigger request addresses.
+// When the codec resolved a location from the advertised region catalog it does
+// a direct lookup; otherwise it resolves the ambiguous trigger label against the
+// stored functions.
+func (p *Provider) triggerTarget(ctx context.Context, nr *model.NormalizedRequest, id string) (string, functionsstore.Function, error) {
+	if location := strParam(nr, "location"); location != "" {
+		project := p.project(nr)
+		f, err := p.core.GetFunction(ctx, project, location, id)
+		return project, f, err
+	}
+	return p.core.ResolveHTTPTriggerFunction(ctx, strParam(nr, "triggerLabel"), id)
+}
+
+// triggerResponse builds the raw HTTP response the trigger codec writes: the
+// status plus the function's result as text/plain.
+func triggerResponse(status int, body string) *model.ProviderResponse {
+	return &model.ProviderResponse{
+		HTTPStatus: status,
+		Data:       map[string]any{"body": []byte(body)},
+	}
 }
 
 // ListRuntimes returns the v2 runtime catalog
