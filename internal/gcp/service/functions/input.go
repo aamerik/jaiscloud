@@ -28,6 +28,20 @@ type FunctionInput struct {
 	Timeout              string // canonical duration string, e.g. "60s"
 	AvailableMemoryMB    int
 	EventTrigger         *functionsstore.EventTrigger
+
+	// The v2 ServiceConfig instance/concurrency settings (FD6). The Has* flags
+	// record whether the request body actually carried the field, so an
+	// empty-mask update cannot silently zero a stored value while an explicit
+	// updateMask path still applies an explicit 0/"" (the FieldMask semantics
+	// real Cloud Functions uses).
+	MinInstanceCount                 int
+	MaxInstanceCount                 int
+	MaxInstanceRequestConcurrency    int
+	AvailableCPU                     string
+	HasMinInstanceCount              bool
+	HasMaxInstanceCount              bool
+	HasMaxInstanceRequestConcurrency bool
+	HasAvailableCPU                  bool
 }
 
 // FunctionInputFromMap extracts the wire-version-appropriate fields from a
@@ -91,6 +105,20 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 	if secs, ok := sc["timeoutSeconds"].(float64); ok && secs > 0 {
 		in.Timeout = durationString(int(secs))
 	}
+	// v2 ServiceConfig instance/concurrency settings (FD6). The Has* flags track
+	// presence so an empty-mask update does not clear an unconfigured field.
+	if n, ok := bodyInt(sc, "minInstanceCount"); ok {
+		in.MinInstanceCount, in.HasMinInstanceCount = n, true
+	}
+	if n, ok := bodyInt(sc, "maxInstanceCount"); ok {
+		in.MaxInstanceCount, in.HasMaxInstanceCount = n, true
+	}
+	if n, ok := bodyInt(sc, "maxInstanceRequestConcurrency"); ok {
+		in.MaxInstanceRequestConcurrency, in.HasMaxInstanceRequestConcurrency = n, true
+	}
+	if s, ok := sc["availableCpu"].(string); ok {
+		in.AvailableCPU, in.HasAvailableCPU = s, true
+	}
 	if src := nestedMap(bc, "source"); src != nil {
 		if ss := nestedMap(src, "storageSource"); ss != nil {
 			in.SourceBucket = bodyString(ss, "bucket")
@@ -148,6 +176,10 @@ func newFunction(project, location, id string, in FunctionInput) functionsstore.
 	if in.Timeout != "" {
 		f.Timeout = in.Timeout
 	}
+	f.MinInstanceCount = in.MinInstanceCount
+	f.MaxInstanceCount = in.MaxInstanceCount
+	f.MaxInstanceRequestConcurrency = in.MaxInstanceRequestConcurrency
+	f.AvailableCPU = in.AvailableCPU
 	if in.EventTrigger != nil {
 		f.EventTrigger = in.EventTrigger
 	} else {
@@ -190,6 +222,15 @@ var functionUpdateFields = map[string]string{
 	"serviceconfig.available_memory":      "availableMemoryMb",
 	"serviceconfig.timeoutseconds":        "timeout",
 	"serviceconfig.timeout_seconds":       "timeout",
+	// v2 ServiceConfig instance/concurrency settings (FD6).
+	"serviceconfig.mininstancecount":                 "minInstanceCount",
+	"serviceconfig.min_instance_count":               "minInstanceCount",
+	"serviceconfig.maxinstancecount":                 "maxInstanceCount",
+	"serviceconfig.max_instance_count":               "maxInstanceCount",
+	"serviceconfig.maxinstancerequestconcurrency":    "maxInstanceRequestConcurrency",
+	"serviceconfig.max_instance_request_concurrency": "maxInstanceRequestConcurrency",
+	"serviceconfig.availablecpu":                     "availableCpu",
+	"serviceconfig.available_cpu":                    "availableCpu",
 }
 
 // canonicalMaskField normalizes an updateMask path to its canonical field name.
@@ -273,6 +314,22 @@ func ApplyFunctionUpdate(f *functionsstore.Function, in FunctionInput, mask []st
 	}
 	if apply("availableMemoryMb") && in.AvailableMemoryMB > 0 {
 		f.AvailableMemoryMB = in.AvailableMemoryMB
+	}
+	// v2 ServiceConfig instance/concurrency settings (FD6): a non-empty mask
+	// selecting the path applies its value even when explicitly 0/"" (FieldMask
+	// semantics); an empty mask applies only fields the body actually carried,
+	// so it cannot silently clear an unconfigured field.
+	if apply("minInstanceCount") && (len(mask) > 0 || in.HasMinInstanceCount) {
+		f.MinInstanceCount = in.MinInstanceCount
+	}
+	if apply("maxInstanceCount") && (len(mask) > 0 || in.HasMaxInstanceCount) {
+		f.MaxInstanceCount = in.MaxInstanceCount
+	}
+	if apply("maxInstanceRequestConcurrency") && (len(mask) > 0 || in.HasMaxInstanceRequestConcurrency) {
+		f.MaxInstanceRequestConcurrency = in.MaxInstanceRequestConcurrency
+	}
+	if apply("availableCpu") && (len(mask) > 0 || in.HasAvailableCPU) {
+		f.AvailableCPU = in.AvailableCPU
 	}
 	if apply("eventTrigger") && in.EventTrigger != nil {
 		f.EventTrigger = in.EventTrigger

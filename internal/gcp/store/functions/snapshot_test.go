@@ -10,7 +10,8 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
 	f := Function{ID: "a", Runtime: "nodejs20", EntryPoint: "hello",
-		EnvironmentVariables: map[string]string{"K": "V"}, Labels: map[string]string{"team": "x"}}
+		EnvironmentVariables: map[string]string{"K": "V"}, Labels: map[string]string{"team": "x"},
+		MinInstanceCount: 2, MaxInstanceCount: 10, MaxInstanceRequestConcurrency: 80, AvailableCPU: "0.5"}
 	if err := s.CreateFunction(ctx, "proj", "us-central1", "a", f); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -29,6 +30,9 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	}
 	if got.Runtime != "nodejs20" || got.EntryPoint != "hello" || got.EnvironmentVariables["K"] != "V" || got.Labels["team"] != "x" {
 		t.Fatalf("restored function wrong: %+v", got)
+	}
+	if got.MinInstanceCount != 2 || got.MaxInstanceCount != 10 || got.MaxInstanceRequestConcurrency != 80 || got.AvailableCPU != "0.5" {
+		t.Fatalf("instance config not restored: %+v", got)
 	}
 }
 

@@ -65,6 +65,17 @@ type Function struct {
 	Timeout              string // e.g. "60s"
 	Description          string
 
+	// MinInstanceCount, MaxInstanceCount, MaxInstanceRequestConcurrency, and
+	// AvailableCPU are the Cloud Functions v2 ServiceConfig instance/concurrency
+	// settings (FD6). They are v2-only on the wire and render under
+	// serviceConfig; zero/empty means the client did not configure the field.
+	// MaxInstanceCount == 0 means "no configured limit" (real GCP's default
+	// behaviour), not a limit of zero.
+	MinInstanceCount              int
+	MaxInstanceCount              int
+	MaxInstanceRequestConcurrency int
+	AvailableCPU                  string
+
 	// SourceSHA256 is the hex sha256 of the persisted source archive — the
 	// function's revision hash — or "" when no archive has been stored.
 	SourceSHA256 string

@@ -87,6 +87,25 @@ func operationResponse(t *testing.T, resp *model.ProviderResponse) map[string]an
 	return m
 }
 
+// operationResponseV2 is operationResponse for a v2 operation (its metadata
+// @type is google.cloud.functions.v2.OperationMetadata, which operationResponse
+// asserts against v1).
+func operationResponseV2(t *testing.T, resp *model.ProviderResponse) map[string]any {
+	t.Helper()
+	if done, _ := resp.Data["done"].(bool); !done {
+		t.Fatalf("expected done operation, got %v", resp.Data)
+	}
+	meta, _ := resp.Data["metadata"].(map[string]any)
+	if meta == nil || meta["@type"] != operationMetadataTypeV2 {
+		t.Fatalf("expected v2 OperationMetadata, got %v", resp.Data["metadata"])
+	}
+	m, ok := resp.Data["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected response object, got %v", resp.Data["response"])
+	}
+	return m
+}
+
 func TestFunctionCRUD(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t, store.NewMemoryResourceStore(), nil)
@@ -284,6 +303,87 @@ func TestFunctionCRUDv2(t *testing.T) {
 	}
 	if del, _ := resp.Data["response"].(map[string]any); del["@type"] != emptyTypeURL || len(del) != 1 {
 		t.Errorf("delete v2 response = %v, want a bare Empty Any", del)
+	}
+}
+
+// TestFunctionInstanceConfigV2 exercises the FD6 v2 ServiceConfig
+// instance/concurrency configuration over REST: create persists it, get renders
+// it, an updateMask path merges it, and an out-of-range value is an
+// InvalidArgument.
+func TestFunctionInstanceConfigV2(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	resp, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "cfg",
+		"body": map[string]any{
+			"buildConfig": map[string]any{"runtime": "nodejs22", "entryPoint": "h"},
+			"serviceConfig": map[string]any{
+				"minInstanceCount":              float64(2),
+				"maxInstanceCount":              float64(10),
+				"maxInstanceRequestConcurrency": float64(80),
+				"availableCpu":                  "1",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+	created := operationResponseV2(t, resp)
+	sc, _ := created["serviceConfig"].(map[string]any)
+	if sc["minInstanceCount"] != 2 || sc["maxInstanceCount"] != 10 ||
+		sc["maxInstanceRequestConcurrency"] != 80 || sc["availableCpu"] != "1" {
+		t.Fatalf("create serviceConfig = %+v", sc)
+	}
+
+	resp, err = p.GetFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/cfg",
+	}))
+	if err != nil {
+		t.Fatalf("get v2: %v", err)
+	}
+	sc, _ = resp.Data["serviceConfig"].(map[string]any)
+	if sc["minInstanceCount"] != 2 || sc["availableCpu"] != "1" {
+		t.Fatalf("get serviceConfig = %+v", sc)
+	}
+
+	// An explicit updateMask path applies the new value.
+	resp, err = p.UpdateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"name":       "locations/us-central1/functions/cfg",
+		"updateMask": "serviceConfig.maxInstanceCount",
+		"body":       map[string]any{"serviceConfig": map[string]any{"maxInstanceCount": float64(20)}},
+	}))
+	if err != nil {
+		t.Fatalf("update v2: %v", err)
+	}
+	sc, _ = operationResponseV2(t, resp)["serviceConfig"].(map[string]any)
+	if sc["maxInstanceCount"] != 20 {
+		t.Fatalf("updated serviceConfig = %+v", sc)
+	}
+
+	// Out-of-range values are rejected before they are persisted.
+	_, err = p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location":   "us-central1",
+		"functionId": "bad",
+		"body": map[string]any{
+			"buildConfig":   map[string]any{"runtime": "nodejs22"},
+			"serviceConfig": map[string]any{"maxInstanceRequestConcurrency": float64(1001)},
+		},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Fatalf("code = %q, want InvalidArgument", perr.Code)
+	}
+
+	// v1 availableMemoryMb accepts only the documented sizes.
+	_, err = p.CreateFunction(ctx, newNR(map[string]any{
+		"location":   "us-central1",
+		"functionId": "badmem",
+		"body":       map[string]any{"runtime": "nodejs20", "availableMemoryMb": float64(300)},
+	}))
+	if perr := providerError(t, err); perr.Code != "InvalidArgument" {
+		t.Fatalf("v1 memory code = %q, want InvalidArgument", perr.Code)
 	}
 }
 

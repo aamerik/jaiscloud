@@ -294,6 +294,20 @@ func bodyString(body map[string]any, key string) string {
 	return s
 }
 
+// bodyInt returns body[key] as an int, reporting whether the key was present as
+// a JSON number. A present-but-non-numeric value reports false, and a JSON null
+// is indistinguishable from absent (both report false).
+func bodyInt(body map[string]any, key string) (int, bool) {
+	if body == nil {
+		return 0, false
+	}
+	n, ok := body[key].(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(n), true
+}
+
 func stringOf(v any) string {
 	s, _ := v.(string)
 	return s

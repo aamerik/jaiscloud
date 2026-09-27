@@ -146,6 +146,82 @@ func TestCreateFunctionV2_TypedOperation(t *testing.T) {
 	}
 }
 
+// TestInstanceConfigV2_FD6 pins the v2 ServiceConfig instance/concurrency
+// settings over gRPC: they survive the protojson round-trip on create and get,
+// and an out-of-range value maps to InvalidArgument.
+func TestInstanceConfigV2_FD6(t *testing.T) {
+	s := newTestV2()
+	ctx := context.Background()
+	op, err := s.CreateFunction(ctx, &apiv2functionspb.CreateFunctionRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		FunctionId: "cfg",
+		Function: &apiv2functionspb.Function{
+			BuildConfig: &apiv2functionspb.BuildConfig{Runtime: "nodejs22"},
+			ServiceConfig: &apiv2functionspb.ServiceConfig{
+				MinInstanceCount:              2,
+				MaxInstanceCount:              10,
+				MaxInstanceRequestConcurrency: 80,
+				AvailableCpu:                  "1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	var created apiv2functionspb.Function
+	if err := op.GetResponse().UnmarshalTo(&created); err != nil {
+		t.Fatalf("response UnmarshalTo: %v", err)
+	}
+	cs := created.GetServiceConfig()
+	if cs.GetMinInstanceCount() != 2 || cs.GetMaxInstanceCount() != 10 ||
+		cs.GetMaxInstanceRequestConcurrency() != 80 || cs.GetAvailableCpu() != "1" {
+		t.Fatalf("create serviceConfig = %+v", cs)
+	}
+
+	got, err := s.GetFunction(ctx, &apiv2functionspb.GetFunctionRequest{
+		Name: "projects/proj/locations/us-central1/functions/cfg",
+	})
+	if err != nil {
+		t.Fatalf("GetFunction: %v", err)
+	}
+	gs := got.GetServiceConfig()
+	if gs.GetMinInstanceCount() != 2 || gs.GetMaxInstanceCount() != 10 ||
+		gs.GetMaxInstanceRequestConcurrency() != 80 || gs.GetAvailableCpu() != "1" {
+		t.Fatalf("get serviceConfig = %+v", gs)
+	}
+
+	// An updateMask path applies the new value over gRPC (protojson round-trip).
+	upd, err := s.UpdateFunction(ctx, &apiv2functionspb.UpdateFunctionRequest{
+		Function: &apiv2functionspb.Function{
+			Name:          "projects/proj/locations/us-central1/functions/cfg",
+			ServiceConfig: &apiv2functionspb.ServiceConfig{MaxInstanceCount: 20},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"serviceConfig.maxInstanceCount"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateFunction: %v", err)
+	}
+	var updated apiv2functionspb.Function
+	if err := upd.GetResponse().UnmarshalTo(&updated); err != nil {
+		t.Fatalf("update response UnmarshalTo: %v", err)
+	}
+	if updated.GetServiceConfig().GetMaxInstanceCount() != 20 {
+		t.Fatalf("updated serviceConfig = %+v", updated.GetServiceConfig())
+	}
+
+	_, err = s.CreateFunction(ctx, &apiv2functionspb.CreateFunctionRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		FunctionId: "bad",
+		Function: &apiv2functionspb.Function{
+			BuildConfig:   &apiv2functionspb.BuildConfig{Runtime: "nodejs22"},
+			ServiceConfig: &apiv2functionspb.ServiceConfig{MaxInstanceCount: 1001},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateFunction out-of-range = %v, want InvalidArgument", err)
+	}
+}
+
 func TestGenerateURLs(t *testing.T) {
 	ctx := context.Background()
 	s := newTestV1()
