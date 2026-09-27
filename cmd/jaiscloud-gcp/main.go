@@ -273,6 +273,13 @@ func startCmd() *cobra.Command {
 				lambdaCfg.Region = cfg.Region
 				lambdaCfg.InstanceID = instanceID
 				lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+				// K8s mode mounts source archives via a code-fetch init container,
+				// which downloads them from the admin API. Prefer an explicit
+				// JAISCLOUD_LAMBDA_CODE_URL (already read into lambdaCfg), else
+				// derive it from a cluster-reachable emulator origin.
+				if lambdaCfg.CodeURL == "" {
+					lambdaCfg.CodeURL = lambdaCodeURL()
+				}
 				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
 				defer lambdaExec.Close()
 				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
@@ -1476,4 +1483,23 @@ func functionsUploadOrigin(port int) string {
 		}
 	}
 	return fmt.Sprintf("http://localhost:%d", port)
+}
+
+// lambdaCodeURL returns the admin base a K8s code-fetch init container uses to
+// download a Cloud Function's source archive, including the /_jaiscloud prefix
+// (the executor appends /lambda/code/{account}/{key}/$LATEST). It derives the
+// base from the cluster-reachable JAISCLOUD_GCS_EMULATOR_ENDPOINT (the in-cluster
+// Service DNS name) and returns "" when it is unset, so the code mount stays
+// disabled rather than guessing an unreachable localhost address.
+// JAISCLOUD_LAMBDA_CODE_URL takes precedence and is applied earlier (the executor
+// reads it in DefaultLambdaConfig).
+func lambdaCodeURL() string {
+	v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT")
+	if v == "" {
+		return ""
+	}
+	if !strings.Contains(v, "://") {
+		v = "http://" + v
+	}
+	return strings.TrimRight(v, "/") + "/_jaiscloud"
 }

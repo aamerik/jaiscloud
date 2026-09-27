@@ -552,6 +552,17 @@ test-e2e-functions-docker: _check-docker-prereq build-gcp ## Cloud Functions sou
 	  FUNCTIONS_E2E_DOCKER_IMAGE=$(LAMBDA_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
 	    go test -v -tags functions_e2e -timeout 5m ./tests/persistent_mode/gcp/functions/
 
+test-e2e-functions-k8s: _check-gcp-samples-prereq ## Cloud Functions source execution under K8s — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."
+	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
+	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_LAMBDA_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_LAMBDA_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
+	  go test -v -tags functions_e2e -timeout 15m -run TestFunctionSourceCodeMountK8s ./tests/persistent_mode/gcp/functions/
+
 ##@ GCP integration tests
 
 test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an ephemeral server (REST :8080 + gRPC :8081)
