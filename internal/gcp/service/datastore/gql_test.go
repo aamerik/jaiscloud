@@ -145,6 +145,20 @@ func TestParseGQLComposite(t *testing.T) {
 	}
 }
 
+func TestParseGQLHasAncestor(t *testing.T) {
+	q, err := ParseGQL(GQLQuery{
+		QueryString:   "SELECT * FROM Task WHERE __key__ HAS ANCESTOR KEY('Parent', 1)",
+		AllowLiterals: true,
+	})
+	if err != nil {
+		t.Fatalf("ParseGQL HAS ANCESTOR: %v", err)
+	}
+	pf := propFilter(t, q.Filter, "__key__", PropertyHasAncestor)
+	if pf.Value.KeyValue == nil {
+		t.Fatalf("HAS ANCESTOR value = %+v, want a key", pf.Value)
+	}
+}
+
 func TestParseGQLBindings(t *testing.T) {
 	// Named binding.
 	q, err := ParseGQL(GQLQuery{
@@ -263,13 +277,13 @@ func TestParseGQLErrors(t *testing.T) {
 		"SELECT * FROM Task WHERE",         // missing condition
 		"SELECT * FROM Task WHERE n",       // missing operator
 		"SELECT * FROM Task WHERE n === 1", // bad operator
-		"SELECT * FROM Task WHERE n = 'unterminated",             // unterminated string
-		"SELECT * FROM Task WHERE n HAS ANCESTOR KEY('Task', 1)", // unsupported HAS
-		"SELECT * FROM Task WHERE tags CONTAINS 'x'",             // unsupported CONTAINS
-		"SELECT * FROM Task WHERE NOT n = 1",                     // unsupported NOT
-		"SELECT * FROM Task WHERE n = 1 + 2",                     // trailing tokens
-		"SELECT * FROM Task # comment",                           // unexpected character
-		"SELECT * FROM Task WHERE n = @",                         // empty binding
+		"SELECT * FROM Task WHERE n = 'unterminated",                     // unterminated string
+		"SELECT * FROM Task WHERE __key__ HAS DESCENDANT KEY('Task', 1)", // unsupported HAS
+		"SELECT * FROM Task WHERE tags CONTAINS 'x'",                     // unsupported CONTAINS
+		"SELECT * FROM Task WHERE NOT n = 1",                             // unsupported NOT
+		"SELECT * FROM Task WHERE n = 1 + 2",                             // trailing tokens
+		"SELECT * FROM Task # comment",                                   // unexpected character
+		"SELECT * FROM Task WHERE n = @",                                 // empty binding
 	}
 	for _, qs := range queries {
 		t.Run(qs, func(t *testing.T) {
@@ -338,7 +352,7 @@ func TestRunQueryGQLEndToEnd(t *testing.T) {
 	seed("a", 1)
 	seed("b", 5)
 
-	res, err := s.RunQueryGQL(ctx, "p", GQLQuery{QueryString: "SELECT * FROM Task WHERE n >= 4", AllowLiterals: true}, nil)
+	res, err := s.RunQueryGQL(ctx, "p", GQLQuery{QueryString: "SELECT * FROM Task WHERE n >= 4", AllowLiterals: true}, nil, "", "")
 	if err != nil {
 		t.Fatalf("RunQueryGQL: %v", err)
 	}
@@ -346,7 +360,7 @@ func TestRunQueryGQLEndToEnd(t *testing.T) {
 		t.Fatalf("RunQueryGQL results = %+v", res.Entities)
 	}
 
-	agg, err := s.RunAggregationQueryGQL(ctx, "p", GQLQuery{QueryString: "AGGREGATE COUNT(*) OVER (SELECT * FROM Task)", AllowLiterals: true}, nil)
+	agg, err := s.RunAggregationQueryGQL(ctx, "p", GQLQuery{QueryString: "AGGREGATE COUNT(*) OVER (SELECT * FROM Task)", AllowLiterals: true}, nil, "", "")
 	if err != nil {
 		t.Fatalf("RunAggregationQueryGQL: %v", err)
 	}
@@ -355,7 +369,7 @@ func TestRunQueryGQLEndToEnd(t *testing.T) {
 	}
 
 	// A malformed GQL query surfaces a parse error rather than running.
-	if _, err := s.RunQueryGQL(ctx, "p", GQLQuery{QueryString: "not gql"}, nil); err == nil {
+	if _, err := s.RunQueryGQL(ctx, "p", GQLQuery{QueryString: "not gql"}, nil, "", ""); err == nil {
 		t.Fatal("malformed GQL should error")
 	}
 }

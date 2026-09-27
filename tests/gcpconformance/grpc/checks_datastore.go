@@ -37,6 +37,8 @@ func datastoreChecks() []Check {
 		{Service: "datastore", RPC: "Rollback", Method: "Rollback", KeyField: "entity absent after rollback", Run: checkDatastoreRollback},
 		{Service: "datastore", RPC: "AllocateIds", Method: "AllocateIds", KeyField: "keys[].id", Run: checkDatastoreAllocateIDs},
 		{Service: "datastore", RPC: "ReserveIds", Method: "ReserveIds", KeyField: "keys[].id > reserved", Run: checkDatastoreReserveIDs},
+		{Service: "datastore", RPC: "Commit/Lookup (ancestor key)", Method: "Lookup", KeyField: "ancestor-scoped entity round-trip", Run: checkDatastoreAncestor},
+		{Service: "datastore", RPC: "RunQuery (namespace)", Method: "RunQuery", KeyField: "namespaced entity isolation", Run: checkDatastoreNamespace},
 	}
 }
 
@@ -468,6 +470,74 @@ func checkDatastoreReserveIDs(ctx context.Context, cfg Config) error {
 	got := resp.GetKeys()[0].GetPath()[0].GetId()
 	if got <= reserved {
 		return fmt.Errorf("AllocateIds returned %d after reserving %d, want > %d", got, reserved, reserved)
+	}
+	return nil
+}
+
+// Check 12: an entity stored under an ancestor key must round-trip, and an
+// ancestor query must return exactly it.
+func checkDatastoreAncestor(ctx context.Context, cfg Config) error {
+	client, err := newDatastoreClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	parent := datastore.NameKey(datastoreKind+"List", cfg.ResourceName("gcpc-ds-parent"), nil)
+	child := datastore.NameKey(datastoreKind, cfg.ResourceName("gcpc-ds-child"), parent)
+	if _, err := client.Put(ctx, child, &dsTask{Description: cfg.ResourceName("gcpc-ds-ancestor"), Priority: 4}); err != nil {
+		return fmt.Errorf("Put child: %w", err)
+	}
+	defer client.Delete(ctx, child)
+
+	var got dsTask
+	if err := client.Get(ctx, child, &got); err != nil {
+		return fmt.Errorf("Get child: %w", err)
+	}
+	if got.Priority != 4 {
+		return fmt.Errorf("child priority = %d, want 4", got.Priority)
+	}
+
+	var results []dsTask
+	if _, err := client.GetAll(ctx, datastore.NewQuery(datastoreKind).Ancestor(parent), &results); err != nil {
+		return fmt.Errorf("ancestor query: %w", err)
+	}
+	if len(results) != 1 {
+		return fmt.Errorf("ancestor query returned %d entities, want 1", len(results))
+	}
+	return nil
+}
+
+// Check 13: a namespaced entity must be isolated from the default namespace.
+func checkDatastoreNamespace(ctx context.Context, cfg Config) error {
+	client, err := newDatastoreClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	ns := cfg.ResourceName("gcpc-ds-ns")
+	name := cfg.ResourceName("gcpc-ds-ns-entity")
+	key := datastore.NameKey(datastoreKind, name, nil)
+	key.Namespace = ns
+	if _, err := client.Put(ctx, key, &dsTask{Description: ns, Priority: 5}); err != nil {
+		return fmt.Errorf("Put namespaced: %w", err)
+	}
+	defer client.Delete(ctx, key)
+
+	// The same kind+name in the default namespace is absent.
+	def := datastore.NameKey(datastoreKind, name, nil)
+	var got dsTask
+	if err := client.Get(ctx, def, &got); !errors.Is(err, datastore.ErrNoSuchEntity) {
+		return fmt.Errorf("default-namespace Get = %v, want ErrNoSuchEntity", err)
+	}
+
+	var results []dsTask
+	if _, err := client.GetAll(ctx, datastore.NewQuery(datastoreKind).Namespace(ns), &results); err != nil {
+		return fmt.Errorf("namespace query: %w", err)
+	}
+	if len(results) != 1 {
+		return fmt.Errorf("namespace query returned %d entities, want 1", len(results))
 	}
 	return nil
 }

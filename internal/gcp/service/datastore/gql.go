@@ -535,12 +535,30 @@ func (p *gqlParser) parseCondition() (*Filter, error) {
 		}
 		return propertyFilter(prop, PropertyEqual, nullValue()), nil
 	case p.atKeyword("HAS"):
-		return nil, p.errorf("HAS ANCESTOR/DESCENDANT is not supported")
+		return p.parseHasFilter(prop)
 	case p.atKeyword("CONTAINS"):
 		return nil, p.errorf("CONTAINS is not supported")
 	default:
 		return nil, p.errorf("expected an operator after property %q, got %q", prop, p.peek().text)
 	}
+}
+
+// parseHasFilter parses "HAS ANCESTOR <key>" (the only supported HAS form),
+// producing the special __key__ HAS_ANCESTOR operator. HAS DESCENDANT remains
+// unsupported.
+func (p *gqlParser) parseHasFilter(prop string) (*Filter, error) {
+	p.next() // HAS
+	if p.atKeyword("DESCENDANT") {
+		return nil, p.errorf("HAS DESCENDANT is not supported")
+	}
+	if err := p.expectKeyword("ANCESTOR"); err != nil {
+		return nil, err
+	}
+	v, err := p.parseValue()
+	if err != nil {
+		return nil, err
+	}
+	return propertyFilter(prop, PropertyHasAncestor, v), nil
 }
 
 // parseInFilter parses "IN @binding" (an array value) or "IN (v1, v2, ...)".
@@ -879,21 +897,24 @@ func nullValue() dsstore.Value {
 // ─── core entry points ────────────────────────────────────────────────────────
 
 // RunQueryGQL parses a GQL SELECT and runs it through the same engine as
-// RunQuery, so GQL and structured queries share one implementation.
-func (s *Service) RunQueryGQL(ctx context.Context, project string, q GQLQuery, txn []byte) (*QueryResult, error) {
+// RunQuery (in the request's partition), so GQL and structured queries share
+// one implementation.
+func (s *Service) RunQueryGQL(ctx context.Context, project string, q GQLQuery, txn []byte, namespace, database string) (*QueryResult, error) {
 	parsed, err := ParseGQL(q)
 	if err != nil {
 		return nil, err
 	}
+	parsed.Namespace, parsed.Database = namespace, database
 	return s.RunQuery(ctx, project, parsed, txn)
 }
 
 // RunAggregationQueryGQL parses a GQL aggregation query and runs it through the
-// same engine as RunAggregationQuery.
-func (s *Service) RunAggregationQueryGQL(ctx context.Context, project string, q GQLQuery, txn []byte) (*AggregationResult, error) {
+// same engine as RunAggregationQuery (in the request's partition).
+func (s *Service) RunAggregationQueryGQL(ctx context.Context, project string, q GQLQuery, txn []byte, namespace, database string) (*AggregationResult, error) {
 	parsed, err := ParseGQLAggregation(q)
 	if err != nil {
 		return nil, err
 	}
+	parsed.Nested.Namespace, parsed.Nested.Database = namespace, database
 	return s.RunAggregationQuery(ctx, project, parsed, txn)
 }

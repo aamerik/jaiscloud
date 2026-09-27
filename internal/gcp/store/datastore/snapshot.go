@@ -98,7 +98,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var row snapRow
 		var nameOrID string
 		var props []byte
-		if err := rows.Scan(&row.Project, &row.Entity.Kind, &nameOrID, &props); err != nil {
+		if err := rows.Scan(&row.Project, &row.Entity.Kind, &nameOrID, &props, &row.Entity.Version, &row.Entity.UpdateTime); err != nil {
 			return err
 		}
 		if len(props) > 0 {
@@ -107,7 +107,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		if row.Entity.Properties == nil {
 			row.Entity.Properties = map[string]Value{}
 		}
-		row.Entity.Key = row.Entity.Kind + "/" + nameOrID
+		// name_or_id is the full canonical key.
+		row.Entity.Key = nameOrID
 		snap.Entities = append(snap.Entities, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -149,14 +150,18 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	for _, row := range snap.Entities {
-		kind, nameOrID, ok := SplitKey(row.Entity.Key)
+		kind, nameOrID, ok := keyCols(row.Entity.Key)
 		if !ok {
 			return ErrInvalidKey
 		}
+		version := row.Entity.Version
+		if version == 0 {
+			version = 1
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties)
-			VALUES ($1,$2,$3,$4)
-		`, row.Project, kind, nameOrID, propertiesJSON(row.Entity.Properties)); err != nil {
+			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, row.Project, kind, nameOrID, propertiesJSON(row.Entity.Properties), version, row.Entity.UpdateTime); err != nil {
 			return err
 		}
 	}

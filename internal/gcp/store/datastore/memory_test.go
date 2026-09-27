@@ -259,67 +259,77 @@ func TestMemoryStoreAdvanceIDs(t *testing.T) {
 }
 
 func TestKeyHelpers(t *testing.T) {
-	if KeyOfID("Task", 42) != "4:Task/id:42" {
-		t.Fatalf("KeyOfID = %q", KeyOfID("Task", 42))
+	if got := KeyOfID("Task", 42); got != "v1|0:0:4:Taski2:42" {
+		t.Fatalf("KeyOfID = %q", got)
 	}
-	if KeyOfName("Task", "foo") != "4:Task/name:foo" {
-		t.Fatalf("KeyOfName = %q", KeyOfName("Task", "foo"))
+	if got := KeyOfName("Task", "foo"); got != "v1|0:0:4:Taskn3:foo" {
+		t.Fatalf("KeyOfName = %q", got)
 	}
-	kind, idOrName, ok := SplitKey("4:Task/name:foo")
-	if !ok || kind != "Task" || idOrName != "name:foo" {
-		t.Fatalf("SplitKey = %q %q %v", kind, idOrName, ok)
+	db, ns, path, ok := ParseKey(KeyOfName("Task", "foo"))
+	if !ok || db != "" || ns != "" || len(path) != 1 {
+		t.Fatalf("ParseKey = %q %q %+v %v", db, ns, path, ok)
 	}
-	id, name, isID := ParseIDOrName("id:42")
-	if !isID || id != 42 || name != "" {
-		t.Fatalf("ParseIDOrName id = %d %q %v", id, name, isID)
+	if path[0].Kind != "Task" || !path[0].HasName || path[0].HasID || path[0].Name != "foo" {
+		t.Fatalf("parsed element = %+v", path[0])
 	}
-	id, name, isID = ParseIDOrName("name:foo")
-	if isID || id != 0 || name != "foo" {
-		t.Fatalf("ParseIDOrName name = %d %q %v", id, name, isID)
+	if got := KeyKind(KeyOfID("Task", 42)); got != "Task" {
+		t.Fatalf("KeyKind = %q", got)
+	}
+}
+
+// TestKeyOfPath verifies the full path + partition round-trip: ancestors,
+// namespace, database, and a numeric ID, all of which must survive ParseKey.
+func TestKeyOfPath(t *testing.T) {
+	path := []PathElement{
+		{Kind: "Parent", ID: 1, HasID: true},
+		{Kind: "Child", Name: "x", HasName: true},
+	}
+	key := KeyOfPath("db1", "ns1", path)
+	db, ns, got, ok := ParseKey(key)
+	if !ok || db != "db1" || ns != "ns1" {
+		t.Fatalf("ParseKey(%q) partition = %q %q %v", key, db, ns, ok)
+	}
+	if len(got) != 2 || got[0] != path[0] || got[1] != path[1] {
+		t.Fatalf("ParseKey(%q) path = %+v", key, got)
+	}
+	if KeyKind(key) != "Child" {
+		t.Fatalf("KeyKind = %q", KeyKind(key))
 	}
 }
 
 // TestKeyHelpers_KindContainingSlash verifies the bug the length-prefixed
-// encoding fixes: a kind containing "/" used to corrupt SplitKey's parse
-// (it split on the first "/", which could land inside the kind instead of
-// at the kind/id-or-name boundary). Length-prefixing the kind makes the
-// boundary explicit regardless of what characters the kind contains.
+// encoding fixes: a kind containing "/" (or a name containing "/" and ":")
+// must round-trip without corrupting the parse. Length-prefixing every field
+// makes the boundaries explicit regardless of the contents.
 func TestKeyHelpers_KindContainingSlash(t *testing.T) {
 	key := KeyOfID("my/kind", 7)
-	kind, idOrName, ok := SplitKey(key)
-	if !ok || kind != "my/kind" || idOrName != "id:7" {
-		t.Fatalf("SplitKey(%q) = %q %q %v, want \"my/kind\" \"id:7\" true", key, kind, idOrName, ok)
-	}
-	id, _, isID := ParseIDOrName(idOrName)
-	if !isID || id != 7 {
-		t.Fatalf("ParseIDOrName(%q) = %d _ %v", idOrName, id, isID)
+	_, _, path, ok := ParseKey(key)
+	if !ok || len(path) != 1 || path[0].Kind != "my/kind" || !path[0].HasID || path[0].ID != 7 {
+		t.Fatalf("ParseKey(%q) = %+v %v, want kind \"my/kind\" id 7", key, path, ok)
 	}
 
 	// A name containing both "/" and ":" must also still round-trip.
 	key = KeyOfName("k/i:nd", "a/b:c")
-	kind, idOrName, ok = SplitKey(key)
-	if !ok || kind != "k/i:nd" || idOrName != "name:a/b:c" {
-		t.Fatalf("SplitKey(%q) = %q %q %v", key, kind, idOrName, ok)
-	}
-	_, name, isID := ParseIDOrName(idOrName)
-	if isID || name != "a/b:c" {
-		t.Fatalf("ParseIDOrName(%q) = _ %q %v", idOrName, name, isID)
+	_, _, path, ok = ParseKey(key)
+	if !ok || len(path) != 1 || path[0].Kind != "k/i:nd" || !path[0].HasName || path[0].Name != "a/b:c" {
+		t.Fatalf("ParseKey(%q) = %+v %v", key, path, ok)
 	}
 }
 
-func TestSplitKey_Malformed(t *testing.T) {
+func TestParseKey_Malformed(t *testing.T) {
 	for _, bad := range []string{
 		"",
 		"no-length-prefix",
-		"abc:Task/id:1", // non-numeric length
-		"-1:Task/id:1",  // negative length
-		"100:Task/id:1", // length longer than remaining string
-		"4:Task|id:1",   // missing "/" at the length boundary
-		"0:/id:1",       // empty kind
-		"4:Task/",       // empty id-or-name
+		"4:Task/id:42",      // pre-ancestors encoding, no version prefix
+		"v1|abc",            // non-numeric length
+		"v1|0:0:",           // empty path
+		"v1|0:0:0:",         // empty kind
+		"v1|0:0:4:Taskx1:1", // unknown tag
+		"v1|0:0:4:Taski",    // missing id value
+		"v1|0:0:4:Taski9:1", // value length longer than remaining string
 	} {
-		if _, _, ok := SplitKey(bad); ok {
-			t.Errorf("SplitKey(%q): expected ok=false", bad)
+		if _, _, _, ok := ParseKey(bad); ok {
+			t.Errorf("ParseKey(%q): expected ok=false", bad)
 		}
 	}
 }

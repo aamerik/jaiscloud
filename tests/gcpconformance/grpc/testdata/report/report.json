@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 290,
-  "passed": 290,
+  "total": 292,
+  "passed": 292,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 290,
-    "passed": 290,
+    "checks": 292,
+    "passed": 292,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "datastore",
-      "total": 13,
-      "passed": 13,
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1072,6 +1072,20 @@
       "method": "ReserveIds",
       "status": "pass",
       "key_field": "keys[].id \u003e reserved"
+    },
+    {
+      "service": "datastore",
+      "rpc": "Commit/Lookup (ancestor key)",
+      "method": "Lookup",
+      "status": "pass",
+      "key_field": "ancestor-scoped entity round-trip"
+    },
+    {
+      "service": "datastore",
+      "rpc": "RunQuery (namespace)",
+      "method": "RunQuery",
+      "status": "pass",
+      "key_field": "namespaced entity isolation"
     },
     {
       "service": "logging",

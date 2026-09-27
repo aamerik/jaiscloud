@@ -110,18 +110,30 @@ func TestReserveIdsIncompleteKeyInvalid(t *testing.T) {
 	}
 }
 
-func TestReserveIdsDatabaseScopedInvalid(t *testing.T) {
+func TestReserveIdsWithDatabase(t *testing.T) {
 	client, cleanup := testServer(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	_, err := client.ReserveIds(ctx, &datastorepb.ReserveIdsRequest{
+	// Reserving an explicit ID in a named database advances the project's
+	// allocator, so a later AllocateIds never reissues it.
+	if _, err := client.ReserveIds(ctx, &datastorepb.ReserveIdsRequest{
 		ProjectId:  "test",
 		DatabaseId: "other-db",
 		Keys:       []*datastorepb.Key{idKey("Task", 1)},
+	}); err != nil {
+		t.Fatalf("reserve with database id: %v", err)
+	}
+
+	got, err := client.AllocateIds(ctx, &datastorepb.AllocateIdsRequest{
+		ProjectId: "test",
+		Keys:      []*datastorepb.Key{incompleteKey("Task")},
 	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("reserve with database id err = %v, want InvalidArgument", err)
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].GetPath()[0].GetId() != 2 {
+		t.Fatalf("allocated = %v, want id 2 (1 was reserved)", got.Keys)
 	}
 }
 
