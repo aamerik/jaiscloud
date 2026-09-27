@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **794**
+Cells: **801**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 559 |
+| ga | 566 |
 | limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
@@ -21,7 +21,7 @@ Cells: **794**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 287 | 86 | 37 | 9 |
+| rest | 294 | 86 | 37 | 9 |
 | grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -355,18 +355,22 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_32 cell(s): ga=32 limited=0 preview=0 unsupported=0_
+_39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | CallFunction | grpc | ga | — |
 | CreateFunction | grpc | ga | — |
 | DeleteFunction | grpc | ga | — |
+| Function.AbortFunctionUpgrade | rest | ga | — |
 | Function.CallFunction | rest | ga | — |
 | Function.CancelOperation | rest | ga | shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested |
+| Function.CommitFunctionUpgrade | rest | ga | — |
+| Function.CommitFunctionUpgradeAsGen2 | rest | ga | — |
 | Function.CreateFunction | rest | ga | — |
 | Function.DeleteFunction | rest | ga | — |
 | Function.DeleteOperation | rest | ga | shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested |
+| Function.DetachFunction | rest | ga | — |
 | Function.FunctionGetIamPolicy | rest | ga | — |
 | Function.FunctionSetIamPolicy | rest | ga | — |
 | Function.FunctionTestIamPermissions | rest | ga | — |
@@ -380,6 +384,9 @@ _32 cell(s): ga=32 limited=0 preview=0 unsupported=0_
 | Function.ListLocations | rest | ga | — |
 | Function.ListOperations | rest | ga | — |
 | Function.ListRuntimes | rest | ga | — |
+| Function.RedirectFunctionUpgradeTraffic | rest | ga | — |
+| Function.RollbackFunctionUpgradeTraffic | rest | ga | — |
+| Function.SetupFunctionUpgradeConfig | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
 | Function.WaitOperation | rest | ga | google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it |
 | GenerateDownloadUrl | grpc | ga | — |

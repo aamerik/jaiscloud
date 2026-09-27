@@ -311,6 +311,38 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/v2/${fnop}"},
 	)
 
+	// ─── Cloud Functions v2 upgrade / traffic control plane (FD5) ─────────────
+	// The seven 1st→2nd gen upgrade verbs are custom POST methods on a function
+	// name (REST-only: documented as FunctionService RPCs, but absent from the
+	// public googleapis proto mirror and all generated clients). A fresh function
+	// is upgraded through
+	// setup → redirect → rollback → redirect → abort, then setup → redirect →
+	// commit, then setup → redirect → commitAsGen2 → detach, then deleted.
+	upgID := "conf-upg-" + suffix
+	sc = append(sc,
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/projects/" + p + "/locations/us-central1/functions?functionId=" + url.QueryEscape(upgID),
+			Body: `{"buildConfig":{"runtime":"nodejs20","entryPoint":"handler"}}`,
+			Save: map[string]string{"upgFn": "response.name"}},
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/${upgFn}:setupFunctionUpgradeConfig",
+			Body: `{"buildConfigOverrides":{"runtime":"nodejs22"},"serviceConfigOverrides":{"maxInstanceCount":4}}`},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:redirectFunctionUpgradeTraffic"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:rollbackFunctionUpgradeTraffic"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:redirectFunctionUpgradeTraffic"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:abortFunctionUpgrade"},
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/${upgFn}:setupFunctionUpgradeConfig",
+			Body: `{"buildConfigOverrides":{"runtime":"nodejs22"}}`},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:redirectFunctionUpgradeTraffic"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:commitFunctionUpgrade"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:setupFunctionUpgradeConfig"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:redirectFunctionUpgradeTraffic"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:commitFunctionUpgradeAsGen2"},
+		Scenario{Service: "functions", Method: "POST", Path: "/v2/${upgFn}:detachFunction"},
+		Scenario{Service: "functions", Method: "DELETE", Path: "/v2/${upgFn}"},
+	)
+
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
 	mType := "conf.metric_" + suffix
 	tsType := "conf.ts_" + suffix

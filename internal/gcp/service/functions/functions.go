@@ -35,6 +35,8 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 	}
 	if blobKey != "" {
 		f.SourceSHA256, f.SourceSize, f.SourceBlobKey = sha, size, blobKey
+		// First deployed revision of the function.
+		f.Revision = 1
 	}
 	if err := s.functions.CreateFunction(ctx, project, location, id, f); err != nil {
 		if errors.Is(err, functionsstore.ErrAlreadyExists) {
@@ -120,6 +122,8 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		}
 		if blobKey != "" {
 			f.SourceSHA256, f.SourceSize, f.SourceBlobKey = sha, size, blobKey
+			// Each new source archive is a new revision.
+			f.Revision++
 		}
 		return f, nil
 	})
@@ -128,8 +132,8 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		return functionsstore.Function{}, Operation{}, mapErr(err)
 	}
 	if blobKey != "" && old.SourceBlobKey != "" && old.SourceBlobKey != blobKey {
-		// Only the latest revision is retained (content-addressed by hash);
-		// revision history is a future (FD5) concern.
+		// Only the latest revision's archive is retained; the revision counter
+		// and rendered revision name are persisted on the function row (FD5).
 		s.discardSource(ctx, old.SourceBlobKey)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)

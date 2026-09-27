@@ -73,6 +73,25 @@ type Function struct {
 	// SourceBlobKey is the blobfs key of the archive in the "functions-source"
 	// namespace (see service/functions/source.go). "" when absent.
 	SourceBlobKey string
+
+	// Revision is the 1-based deploy revision counter, bumped each time a new
+	// source archive is deployed. It is rendered as serviceConfig.revision; 0
+	// means the function has no deployed revision (the metadata-only case).
+	Revision int
+	// UpgradeState is the persisted UpgradeInfo.upgradeState enum value driven
+	// by the v2 1st→2nd gen upgrade methods (FD5). "" means unspecified (the
+	// function has not entered the upgrade flow).
+	UpgradeState string
+	// UpgradeRuntime and UpgradeMaxInstances are the Gen2 config overrides
+	// captured by setupFunctionUpgradeConfig (buildConfigOverrides.runtime and
+	// serviceConfigOverrides.maxInstanceCount). They are reverted by
+	// abortFunctionUpgrade.
+	UpgradeRuntime      string
+	UpgradeMaxInstances int
+	// UpgradeTrafficGen2 is true once redirectFunctionUpgradeTraffic has moved
+	// traffic to the Gen2 copy; allTrafficOnLatestRevision renders false while
+	// it is set (rollbackFunctionUpgradeTraffic clears it).
+	UpgradeTrafficGen2 bool
 }
 
 // Operation is a persisted Cloud Functions long-running operation returned by a

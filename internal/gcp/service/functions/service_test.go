@@ -140,20 +140,70 @@ func TestFunctionJSONV2Revision(t *testing.T) {
 	// serviceConfig.revision and allTrafficOnLatestRevision; a metadata-only
 	// function renders neither.
 	deployed := FunctionJSON(V2, "p", functionsstore.Function{
-		ID: "f1", Location: "us-central1", Status: "ACTIVE", SourceSHA256: "abcdef0123456789",
+		ID: "f1", Location: "us-central1", Status: "ACTIVE", SourceSHA256: "abcdef0123456789", Revision: 1,
 	})
 	sc, _ := deployed["serviceConfig"].(map[string]any)
-	if sc["revision"] != "projects/p/locations/us-central1/functions/f1/revisions/abcdef012345" {
+	// The revision is the backing Cloud Run revision
+	// (…/services/{id}/revisions/{id}-{NNNNN}-{sha8}), not a functions path.
+	if sc["revision"] != "projects/p/locations/us-central1/services/f1/revisions/f1-00001-abcdef01" {
 		t.Fatalf("revision = %v", sc["revision"])
 	}
 	if sc["allTrafficOnLatestRevision"] != true {
 		t.Fatalf("allTrafficOnLatestRevision = %v", sc["allTrafficOnLatestRevision"])
 	}
 
+	// A second deployed revision bumps the counter and hash suffix.
+	redeployed := FunctionJSON(V2, "p", functionsstore.Function{
+		ID: "f1", Location: "us-central1", Status: "ACTIVE", SourceSHA256: "0123456789abcdef", Revision: 2,
+	})
+	sc1, _ := redeployed["serviceConfig"].(map[string]any)
+	if sc1["revision"] != "projects/p/locations/us-central1/services/f1/revisions/f1-00002-01234567" {
+		t.Fatalf("revision (rev 2) = %v", sc1["revision"])
+	}
+
 	metadataOnly := FunctionJSON(V2, "p", functionsstore.Function{ID: "f2", Location: "us-central1", Status: "ACTIVE"})
 	sc2, _ := metadataOnly["serviceConfig"].(map[string]any)
 	if _, ok := sc2["revision"]; ok {
 		t.Fatalf("metadata-only function must not render a revision: %v", sc2)
+	}
+}
+
+func TestFunctionJSONV2UpgradeInfo(t *testing.T) {
+	// Traffic redirected to the Gen2 copy renders allTrafficOnLatestRevision
+	// false and an upgradeInfo block carrying the persisted state.
+	f := functionsstore.Function{
+		ID: "f1", Location: "us-central1", Status: "ACTIVE",
+		SourceSHA256: "abcdef0123456789", Revision: 1,
+		UpgradeState:        UpgradeStateRedirectSuccessful,
+		UpgradeRuntime:      "nodejs22",
+		UpgradeMaxInstances: 5,
+		UpgradeTrafficGen2:  true,
+	}
+	v2 := FunctionJSON(V2, "p", f)
+	sc, _ := v2["serviceConfig"].(map[string]any)
+	if sc["allTrafficOnLatestRevision"] != false {
+		t.Fatalf("allTrafficOnLatestRevision = %v, want false with traffic on Gen2", sc["allTrafficOnLatestRevision"])
+	}
+	ui, ok := v2["upgradeInfo"].(map[string]any)
+	if !ok {
+		t.Fatalf("upgradeInfo missing: %+v", v2)
+	}
+	if ui["upgradeState"] != UpgradeStateRedirectSuccessful {
+		t.Fatalf("upgradeState = %v", ui["upgradeState"])
+	}
+	bc, _ := ui["buildConfig"].(map[string]any)
+	if bc["runtime"] != "nodejs22" {
+		t.Fatalf("upgradeInfo.buildConfig.runtime = %v", bc["runtime"])
+	}
+	usvc, _ := ui["serviceConfig"].(map[string]any)
+	if usvc["maxInstanceCount"] != 5 {
+		t.Fatalf("upgradeInfo.serviceConfig.maxInstanceCount = %v", usvc["maxInstanceCount"])
+	}
+
+	// A function that never entered the upgrade flow omits upgradeInfo.
+	plain := FunctionJSON(V2, "p", functionsstore.Function{ID: "f2", Location: "l", Status: "ACTIVE"})
+	if _, ok := plain["upgradeInfo"]; ok {
+		t.Fatalf("upgradeInfo must be omitted for a non-upgrading function: %+v", plain)
 	}
 }
 

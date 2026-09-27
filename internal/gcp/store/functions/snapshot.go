@@ -79,7 +79,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, function_id, location, runtime, entry_point, source_upload_url, source_archive_url,
 		       https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key
+		       available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
+		       revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2
 		FROM jc_functions ORDER BY project_id, location, function_id
 	`)
 	if err != nil {
@@ -92,7 +93,9 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			&r.Function.SourceUploadURL, &r.Function.SourceArchiveURL, &r.Function.HttpsTriggerURL, &eventTrigger, &env,
 			&r.Function.Status, &r.Function.CreateTime, &r.Function.UpdateTime, &labels, &r.Function.AvailableMemoryMB,
 			&r.Function.Timeout, &r.Function.Description,
-			&r.Function.SourceSHA256, &r.Function.SourceSize, &r.Function.SourceBlobKey); err != nil {
+			&r.Function.SourceSHA256, &r.Function.SourceSize, &r.Function.SourceBlobKey,
+			&r.Function.Revision, &r.Function.UpgradeState, &r.Function.UpgradeRuntime,
+			&r.Function.UpgradeMaxInstances, &r.Function.UpgradeTrafficGen2); err != nil {
 			rows.Close()
 			return err
 		}
@@ -220,13 +223,16 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			INSERT INTO jc_functions
 				(project_id, location, function_id, runtime, entry_point, source_upload_url, source_archive_url,
 				 https_trigger_url, event_trigger, environment_variables, status, create_time, update_time, labels,
-				 available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+				 available_memory_mb, timeout, description, source_sha256, source_size, source_blob_key,
+				 revision, upgrade_state, upgrade_runtime, upgrade_max_instances, upgrade_traffic_gen2)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
 		`, r.ProjectID, r.Function.Location, r.Function.ID, r.Function.Runtime, r.Function.EntryPoint,
 			r.Function.SourceUploadURL, r.Function.SourceArchiveURL, r.Function.HttpsTriggerURL, nullableJSON(r.Function.EventTrigger),
 			json.RawMessage(env), r.Function.Status, r.Function.CreateTime, r.Function.UpdateTime, json.RawMessage(labels),
 			r.Function.AvailableMemoryMB, r.Function.Timeout, r.Function.Description,
-			r.Function.SourceSHA256, r.Function.SourceSize, r.Function.SourceBlobKey); err != nil {
+			r.Function.SourceSHA256, r.Function.SourceSize, r.Function.SourceBlobKey,
+			r.Function.Revision, r.Function.UpgradeState, r.Function.UpgradeRuntime,
+			r.Function.UpgradeMaxInstances, r.Function.UpgradeTrafficGen2); err != nil {
 			return err
 		}
 	}

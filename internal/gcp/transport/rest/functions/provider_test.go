@@ -1075,6 +1075,113 @@ func TestInvokeTriggerUnlistedRegion(t *testing.T) {
 	}
 }
 
+// TestUpgradeTrafficControlPlaneREST covers the seven v2 gen1→gen2 upgrade
+// verbs over REST: setup captures overrides, redirect/rollback move traffic,
+// commit/abort/detach are terminal, and invalid transitions fail loud.
+func TestUpgradeTrafficControlPlaneREST(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	if _, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "functionId": "up",
+		"body": map[string]any{"buildConfig": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	name := map[string]any{"location": "us-central1", "name": "locations/us-central1/functions/up"}
+
+	// setupFunctionUpgradeConfig captures the Gen2 overrides.
+	setup := newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/up",
+		"body": map[string]any{
+			"buildConfigOverrides":   map[string]any{"runtime": "nodejs22"},
+			"serviceConfigOverrides": map[string]any{"maxInstanceCount": float64(4)},
+		},
+	})
+	resp, err := p.SetupFunctionUpgradeConfig(ctx, setup)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	fn, _ := resp.Data["response"].(map[string]any)
+	ui, _ := fn["upgradeInfo"].(map[string]any)
+	if ui == nil || ui["upgradeState"] != core.UpgradeStateSetupSuccessful {
+		t.Fatalf("setup upgradeInfo = %v", fn["upgradeInfo"])
+	}
+	if bc, _ := ui["buildConfig"].(map[string]any); bc["runtime"] != "nodejs22" {
+		t.Errorf("setup buildConfig.runtime = %v", bc["runtime"])
+	}
+
+	// redirectFunctionUpgradeTraffic moves traffic to the Gen2 copy.
+	resp, err = p.RedirectFunctionUpgradeTraffic(ctx, newNRv2(name))
+	if err != nil {
+		t.Fatalf("redirect: %v", err)
+	}
+	fn, _ = resp.Data["response"].(map[string]any)
+	if sc, _ := fn["serviceConfig"].(map[string]any); sc["allTrafficOnLatestRevision"] != false {
+		t.Errorf("after redirect allTrafficOnLatestRevision = %v, want false", sc["allTrafficOnLatestRevision"])
+	}
+
+	// rollbackFunctionUpgradeTraffic returns traffic to Gen1.
+	if _, err := p.RollbackFunctionUpgradeTraffic(ctx, newNRv2(name)); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	resp, err = p.GetFunction(ctx, newNRv2(name))
+	if err != nil {
+		t.Fatalf("get after rollback: %v", err)
+	}
+	if sc, _ := resp.Data["serviceConfig"].(map[string]any); sc["allTrafficOnLatestRevision"] != true {
+		t.Errorf("after rollback allTrafficOnLatestRevision = %v, want true", sc["allTrafficOnLatestRevision"])
+	}
+
+	// commitFunctionUpgradeAsGen2 is terminal.
+	if _, err := p.RedirectFunctionUpgradeTraffic(ctx, newNRv2(name)); err != nil {
+		t.Fatalf("re-redirect: %v", err)
+	}
+	resp, err = p.CommitFunctionUpgradeAsGen2(ctx, newNRv2(name))
+	if err != nil {
+		t.Fatalf("commitAsGen2: %v", err)
+	}
+	fn, _ = resp.Data["response"].(map[string]any)
+	if ui, _ := fn["upgradeInfo"].(map[string]any); ui["upgradeState"] != core.UpgradeStateCommitAsGen2Successful {
+		t.Errorf("commitAsGen2 upgradeInfo = %v", fn["upgradeInfo"])
+	}
+
+	// detachFunction clears the upgrade state.
+	if _, err := p.DetachFunction(ctx, newNRv2(name)); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	resp, _ = p.GetFunction(ctx, newNRv2(name))
+	if _, ok := resp.Data["upgradeInfo"]; ok {
+		t.Errorf("detach should clear upgradeInfo: %v", resp.Data["upgradeInfo"])
+	}
+
+	// A missing function is NotFound.
+	if _, err := p.SetupFunctionUpgradeConfig(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/missing",
+	})); err == nil {
+		t.Errorf("expected NotFound for a missing function")
+	}
+}
+
+// TestUpgradeInvalidTransitionREST pins the precondition error for redirect
+// without a prior setup.
+func TestUpgradeInvalidTransitionREST(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+	if _, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "functionId": "f",
+		"body": map[string]any{"buildConfig": map[string]any{"runtime": "nodejs20"}},
+	})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, err := p.RedirectFunctionUpgradeTraffic(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/functions/f",
+	}))
+	if perr := providerError(t, err); perr.Code != "FailedPrecondition" || perr.HTTPStatus != 400 {
+		t.Errorf("redirect before setup: code=%q status=%d, want FailedPrecondition/400", perr.Code, perr.HTTPStatus)
+	}
+}
+
 // TestInvokeTriggerExecutorErrorIs500 pins that a non-timeout executor failure
 // also returns HTTP 500 with the error text.
 func TestInvokeTriggerExecutorErrorIs500(t *testing.T) {

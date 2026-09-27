@@ -58,6 +58,14 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Function.WaitOperation":              p.WaitOperation,
 		"Function.CancelOperation":            p.CancelOperation,
 		"Function.DeleteOperation":            p.DeleteOperation,
+		// v2 1st→2nd gen upgrade / traffic control plane (FD5).
+		"Function.SetupFunctionUpgradeConfig":     p.SetupFunctionUpgradeConfig,
+		"Function.RedirectFunctionUpgradeTraffic": p.RedirectFunctionUpgradeTraffic,
+		"Function.RollbackFunctionUpgradeTraffic": p.RollbackFunctionUpgradeTraffic,
+		"Function.CommitFunctionUpgrade":          p.CommitFunctionUpgrade,
+		"Function.CommitFunctionUpgradeAsGen2":    p.CommitFunctionUpgradeAsGen2,
+		"Function.AbortFunctionUpgrade":           p.AbortFunctionUpgrade,
+		"Function.DetachFunction":                 p.DetachFunction,
 	}
 }
 
@@ -434,4 +442,111 @@ func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
+}
+
+// --- v2 upgrade / traffic control plane (FD5) ---
+//
+// The seven v2 gen1→gen2 upgrade methods are custom POST verbs on a function
+// name. Each returns a done google.longrunning.Operation carrying the updated
+// Function, exactly like create/update. They are served REST-only: Google's RPC
+// reference documents them as google.cloud.functions.v2.FunctionService RPCs,
+// but the public googleapis proto mirror (and every generated client) omits
+// them, so the emulator's generated-proto gRPC transport cannot register them.
+
+// upgradeTarget parses a function name into its project/location/id plus the
+// requested wire version.
+func (p *Provider) upgradeTarget(nr *model.NormalizedRequest) (project, location, id string, v core.Version, err error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	_, location, id, err = core.ParseFunctionName(name)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return p.project(nr), location, id, p.version(nr), nil
+}
+
+func (p *Provider) SetupFunctionUpgradeConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.SetupFunctionUpgradeConfig(ctx, project, location, id, core.UpgradeInputFromMap(bodyOf(nr)), v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) RedirectFunctionUpgradeTraffic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.RedirectFunctionUpgradeTraffic(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) RollbackFunctionUpgradeTraffic(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.RollbackFunctionUpgradeTraffic(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) CommitFunctionUpgrade(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.CommitFunctionUpgrade(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) CommitFunctionUpgradeAsGen2(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.CommitFunctionUpgradeAsGen2(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) AbortFunctionUpgrade(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.AbortFunctionUpgrade(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
+}
+
+func (p *Provider) DetachFunction(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id, v, err := p.upgradeTarget(nr)
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.core.DetachFunction(ctx, project, location, id, v)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(v, project, op)), nil
 }
