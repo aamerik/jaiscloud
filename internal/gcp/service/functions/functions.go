@@ -57,6 +57,12 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 		s.discardSource(ctx, blobKey)
 		return functionsstore.Function{}, Operation{}, err
 	}
+	// Materialize the backing Eventarc trigger (and its dead-letter
+	// subscription) for a Pub/Sub event trigger (FD9).
+	if s.triggerProvisioner != nil && isPubSubTrigger(f.EventTrigger) {
+		f = s.ensureTrigger(ctx, project, location, id, f)
+		s.persistTriggerFields(ctx, project, location, id, f)
+	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
 	op := NewOperation(location, "create", target, &f)
 	if err := s.persistOperation(ctx, project, op); err != nil {
@@ -148,6 +154,21 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		// and rendered revision name are persisted on the function row (FD5).
 		s.discardSource(ctx, old.SourceBlobKey)
 	}
+	// Re-materialize (or remove) the backing Eventarc trigger to match the
+	// function's current Pub/Sub event trigger (FD9).
+	if s.triggerProvisioner != nil {
+		if isPubSubTrigger(f.EventTrigger) {
+			// Only re-ensure when the trigger materially changed (or was never
+			// provisioned), so a PATCH of an unrelated field does not bump the
+			// backing trigger's updateTime/etag.
+			if f.EventTrigger.Trigger == "" || !triggerEqual(old.EventTrigger, f.EventTrigger) {
+				f = s.ensureTrigger(ctx, project, location, id, f)
+				s.persistTriggerFields(ctx, project, location, id, f)
+			}
+		} else if old.EventTrigger != nil {
+			s.deleteTrigger(ctx, project, location, id)
+		}
+	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
 	op := NewOperation(location, "update", target, &f)
 	if err := s.persistOperation(ctx, project, op); err != nil {
@@ -170,6 +191,7 @@ func (s *Service) DeleteFunction(ctx context.Context, project, location, id stri
 		return Operation{}, mapErr(err)
 	}
 	s.discardSource(ctx, f.SourceBlobKey)
+	s.deleteTrigger(ctx, project, location, id)
 	target := resourceID(project)("cloud-function", location+"/"+id)
 	op := NewOperation(location, "delete", target, nil)
 	if err := s.persistOperation(ctx, project, op); err != nil {

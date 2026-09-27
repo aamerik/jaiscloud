@@ -509,6 +509,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 		}
 	case "subscriptions":
 		switch {
+		case method == http.MethodPatch && !isCollection:
+			return "SubscriptionUpdate"
 		case method == http.MethodPut && !isCollection:
 			return "SubscriptionCreate"
 		case isCollection && method == http.MethodGet:

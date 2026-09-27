@@ -156,7 +156,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	deliveries := make([]deliveryRow, 0)
 	drows, err := s.pool.Query(ctx, `
 		SELECT project_id, delivery_id, location, function_id, source, event_type, resource, event_id,
-		       data, attributes, attempts, status, error, result, create_time, update_time
+		       data, attributes, attempts, status, error, result, dead_letter_topic, create_time, update_time
 		FROM jc_functions_deliveries ORDER BY project_id, location, delivery_id
 	`)
 	if err != nil {
@@ -168,7 +168,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		if err := drows.Scan(&r.ProjectID, &r.Delivery.ID, &r.Delivery.Location, &r.Delivery.FunctionID,
 			&r.Delivery.Source, &r.Delivery.EventType, &r.Delivery.Resource, &r.Delivery.EventID, &r.Delivery.Data,
 			&attrs, &r.Delivery.Attempts, &r.Delivery.Status, &r.Delivery.Error, &r.Delivery.Result,
-			&r.Delivery.CreateTime, &r.Delivery.UpdateTime); err != nil {
+			&r.Delivery.DeadLetterTopic, &r.Delivery.CreateTime, &r.Delivery.UpdateTime); err != nil {
 			drows.Close()
 			return err
 		}
@@ -257,11 +257,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_functions_deliveries
 				(project_id, location, delivery_id, function_id, source, event_type, resource, event_id,
-				 data, attributes, attempts, status, error, result, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+				 data, attributes, attempts, status, error, result, dead_letter_topic, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		`, r.ProjectID, r.Delivery.Location, r.Delivery.ID, r.Delivery.FunctionID, r.Delivery.Source,
 			r.Delivery.EventType, r.Delivery.Resource, r.Delivery.EventID, r.Delivery.Data, json.RawMessage(attrs),
-			r.Delivery.Attempts, r.Delivery.Status, r.Delivery.Error, r.Delivery.Result,
+			r.Delivery.Attempts, r.Delivery.Status, r.Delivery.Error, r.Delivery.Result, r.Delivery.DeadLetterTopic,
 			r.Delivery.CreateTime, r.Delivery.UpdateTime); err != nil {
 			return err
 		}

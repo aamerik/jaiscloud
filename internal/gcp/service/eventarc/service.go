@@ -64,10 +64,11 @@ const (
 
 // Service is the transport-neutral Eventarc v1 service.
 type Service struct {
-	store     eventarcstore.Store
-	resources store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
-	workflows workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
-	functions FunctionExister      // Cloud Functions existence (destination.cloudFunction)
+	store         eventarcstore.Store
+	resources     store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
+	workflows     workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
+	functions     FunctionExister      // Cloud Functions existence (destination.cloudFunction)
+	subscriptions eventing.SubscriptionProvisioner
 }
 
 // NewService returns an Eventarc core backed by the given stores.
@@ -78,6 +79,11 @@ func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows 
 // SetFunctionExister wires the Cloud Functions existence check used to validate
 // a destination.cloudFunction. A nil exister (the default) skips the check.
 func (s *Service) SetFunctionExister(f FunctionExister) { s.functions = f }
+
+// SetSubscriptionProvisioner wires the Pub/Sub provisioner that creates the
+// transport subscription backing an Eventarc trigger (its dead-letter surface).
+// A nil provisioner (the default) skips subscription provisioning.
+func (s *Service) SetSubscriptionProvisioner(p eventing.SubscriptionProvisioner) { s.subscriptions = p }
 
 // Reset wipes the store.
 func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
@@ -484,6 +490,9 @@ func (s *Service) CreateTrigger(ctx context.Context, project, location, triggerI
 	if err := s.store.CreateTrigger(ctx, project, location, t); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, mapErr(err)
 	}
+	if err := s.SyncTriggerSubscription(ctx, project, t); err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
 	return t, newOperation(location, "create", target), nil
 }
 
@@ -564,6 +573,9 @@ func (s *Service) UpdateTrigger(ctx context.Context, project, location, triggerI
 	if err != nil {
 		return eventarcstore.Trigger{}, Operation{}, mapErr(err)
 	}
+	if err := s.SyncTriggerSubscription(ctx, project, updated); err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
 	return updated, newOperation(location, "update", target), nil
 }
 
@@ -616,6 +628,7 @@ func (s *Service) DeleteTrigger(ctx context.Context, project, location, triggerI
 	}); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, mapErr(err)
 	}
+	s.DeleteTriggerSubscription(ctx, project, deleted)
 	return deleted, newOperation(location, "delete", target), nil
 }
 
@@ -898,10 +911,11 @@ func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []even
 			continue
 		}
 		out = append(out, eventing.Target{
-			Project:    ev.Project,
-			Location:   loc,
-			FunctionID: id,
-			Retry:      eventarcRetries(body),
+			Project:      ev.Project,
+			Location:     loc,
+			FunctionID:   id,
+			Retry:        eventarcRetries(body),
+			Subscription: eventing.EventarcSubscriptionID(t.Location, t.Name),
 		})
 	}
 	return out

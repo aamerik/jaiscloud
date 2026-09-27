@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,9 @@ type deliveryTarget struct {
 	location string
 	id       string
 	retry    bool
+	// subscription is the short id of the function's backing Pub/Sub
+	// subscription (the dead-letter surface), or "" when none exists.
+	subscription string
 }
 
 // deliveryJob is one queued delivery: the resolved function, the source event,
@@ -39,6 +43,9 @@ type deliveryJob struct {
 	gen   uint64 // engine generation; a mismatch means Reset invalidated the job
 	rec   functionsstore.Delivery
 	retry bool // the trigger's failure policy retries a failed invocation
+	// subscription is the backing subscription whose deadLetterPolicy governs
+	// the dead-letter outcome, or "" when the target has none.
+	subscription string
 }
 
 // deliveryEngine delivers produced events to event-triggered functions. It runs
@@ -112,7 +119,7 @@ func (e *deliveryEngine) dispatch(ctx context.Context, ev eventing.Event) {
 			slog.Warn("functions: persist delivery", "function", t.id, "err", err)
 			continue
 		}
-		job := deliveryJob{gen: e.gen.Load(), rec: rec, retry: t.retry}
+		job := deliveryJob{gen: e.gen.Load(), rec: rec, retry: t.retry, subscription: t.subscription}
 		if !e.started.Load() {
 			// Not started (unit tests, or a binary that never called Start):
 			// run inline so the event is never silently dropped.
@@ -134,8 +141,12 @@ func (e *deliveryEngine) dispatch(ctx context.Context, ev eventing.Event) {
 // request returns).
 func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	rec := job.rec
+	// A terminal retry failure is forwarded to the backing subscription's
+	// dead-letter topic when one is configured (FD9); its maxDeliveryAttempts
+	// replaces the emulator's bounded cap.
+	dlqTopic, maxAttempts := e.deadLetter(ctx, job)
 	var lastErr string
-	for attempt := 1; attempt <= maxDeliveryAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if !e.active(ctx, job.gen) {
 			return
 		}
@@ -155,7 +166,7 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 			lastErr = invokeErr
 		}
 		rec.Error = lastErr
-		if !job.retry || attempt >= maxDeliveryAttempts {
+		if !job.retry || attempt >= maxAttempts {
 			break
 		}
 		if !sleepCtx(ctx, backoffFor(attempt)) {
@@ -164,11 +175,58 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	}
 	if job.retry {
 		rec.Status = functionsstore.DeliveryDeadLetter
+		if dlqTopic != "" && e.forwardToDeadLetter(ctx, rec, job.subscription, dlqTopic) {
+			rec.DeadLetterTopic = dlqTopic
+		}
 	} else {
 		rec.Status = functionsstore.DeliveryFailed
 	}
 	rec.Error = lastErr
 	e.persist(ctx, rec)
+}
+
+// deadLetter resolves the job's backing subscription deadLetterPolicy. It
+// returns the dead-letter topic (short id) and the attempt cap: the configured
+// maxDeliveryAttempts when a policy is set, else the emulator's bounded default.
+// A target with no subscription, a subscription with no policy, or a disabled
+// provisioner leaves dead-lettering terminal (the FD4 behaviour).
+func (e *deliveryEngine) deadLetter(ctx context.Context, job deliveryJob) (string, int) {
+	if !job.retry || e.svc.subscriptions == nil || job.subscription == "" {
+		return "", maxDeliveryAttempts
+	}
+	topic, attempts, ok, err := e.svc.subscriptions.SubscriptionDeadLetter(ctx, job.rec.Project, job.subscription)
+	if err != nil {
+		slog.Warn("functions: resolve dead-letter policy", "subscription", job.subscription, "err", err)
+		return "", maxDeliveryAttempts
+	}
+	if !ok || topic == "" {
+		return "", maxDeliveryAttempts
+	}
+	if attempts <= 0 {
+		attempts = maxDeliveryAttempts
+	}
+	return topic, attempts
+}
+
+// forwardToDeadLetter republishes an exhausted event to a dead-letter topic with
+// the real Pub/Sub CloudPubSubDeadLetterSource* attributes, reporting whether it
+// was forwarded. A dead-letter topic equal to the event's own source topic is
+// skipped to prevent a self-retry loop.
+func (e *deliveryEngine) forwardToDeadLetter(ctx context.Context, rec functionsstore.Delivery, subscription, topic string) bool {
+	if eventing.ResourceID(rec.Resource) == topic {
+		slog.Warn("functions: dead-letter topic equals source topic; not forwarding", "topic", topic)
+		return false
+	}
+	attrs := map[string]string{
+		"CloudPubSubDeadLetterSourceSubscription":        subscription,
+		"CloudPubSubDeadLetterSourceSubscriptionProject": rec.Project,
+		"CloudPubSubDeadLetterSourceDeliveryCount":       strconv.Itoa(rec.Attempts),
+	}
+	if err := e.svc.subscriptions.PublishDeadLetter(ctx, rec.Project, topic, []byte(rec.Data), attrs); err != nil {
+		slog.Warn("functions: forward dead-letter", "topic", topic, "err", err)
+		return false
+	}
+	return true
 }
 
 func (e *deliveryEngine) active(ctx context.Context, gen uint64) bool {
@@ -185,17 +243,23 @@ func (e *deliveryEngine) persist(ctx context.Context, rec functionsstore.Deliver
 // those whose stored eventTrigger matches, plus any Eventarc trigger (whose
 // destination is a cloudFunction) that routes this event.
 func (s *Service) resolveTargets(ctx context.Context, ev eventing.Event) []deliveryTarget {
-	seen := map[string]bool{}
+	byKey := map[string]int{}
 	var out []deliveryTarget
 	add := func(t deliveryTarget) {
 		if t.project == "" || t.location == "" || t.id == "" {
 			return
 		}
 		key := t.location + "\x00" + t.id
-		if seen[key] {
+		if i, ok := byKey[key]; ok {
+			// Merge: prefer the target that carries a backing subscription (the
+			// Eventarc path knows it even when the function match does not).
+			if out[i].subscription == "" && t.subscription != "" {
+				out[i].subscription = t.subscription
+				out[i].retry = out[i].retry || t.retry
+			}
 			return
 		}
-		seen[key] = true
+		byKey[key] = len(out)
 		out = append(out, t)
 	}
 	if fns, err := s.functions.ListFunctionsAllLocations(ctx, ev.Project); err == nil {
@@ -203,14 +267,20 @@ func (s *Service) resolveTargets(ctx context.Context, ev eventing.Event) []deliv
 			if !functionMatchesEvent(f, ev) {
 				continue
 			}
-			add(deliveryTarget{project: ev.Project, location: f.Location, id: f.ID, retry: f.EventTrigger.Retries()})
+			add(deliveryTarget{
+				project:      ev.Project,
+				location:     f.Location,
+				id:           f.ID,
+				retry:        f.EventTrigger.Retries(),
+				subscription: f.EventTrigger.Subscription,
+			})
 		}
 	} else {
 		slog.Warn("functions: list functions for event", "err", err)
 	}
 	if s.eventTargets != nil {
 		for _, t := range s.eventTargets.TargetsForEvent(ctx, ev) {
-			add(deliveryTarget{project: t.Project, location: t.Location, id: t.FunctionID, retry: t.Retry})
+			add(deliveryTarget{project: t.Project, location: t.Location, id: t.FunctionID, retry: t.Retry, subscription: t.Subscription})
 		}
 	}
 	return out

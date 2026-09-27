@@ -301,6 +301,10 @@ func startCmd() *cobra.Command {
 			if functionsCore != nil {
 				pubsubP.SetFunctionDispatcher(functionsCore)
 				storageP.SetFunctionDispatcher(functionsCore)
+				// Dead-letter resolution/forwarding (FD9) goes through the Pub/Sub
+				// provider; the Eventarc trigger provisioner is wired below once
+				// the Eventarc core exists.
+				functionsCore.SetSubscriptions(pubsubP)
 			}
 
 			workflowsEngine := workflowengine.New()
@@ -401,6 +405,10 @@ func startCmd() *cobra.Command {
 			var eventarcCore *eventarccore.Service
 			if serviceEnabled("eventarc") {
 				eventarcCore = eventarccore.NewService(stores.eventarc, stores.resources, stores.workflows)
+				// The platform-provisioned backing Pub/Sub subscription of a
+				// trigger (its dead-letter surface) is created by the Pub/Sub
+				// provider (FD9).
+				eventarcCore.SetSubscriptionProvisioner(pubsubP)
 			}
 			// Eventarc validates destination.cloudFunction against the functions
 			// core, and the functions delivery engine consults Eventarc triggers
@@ -409,6 +417,10 @@ func startCmd() *cobra.Command {
 			if eventarcCore != nil && functionsCore != nil {
 				eventarcCore.SetFunctionExister(functionsCore)
 				functionsCore.SetEventTargets(eventarcCore)
+				// A Pub/Sub event trigger materializes a backing Eventarc trigger
+				// (FD9); the functions core holds it as an interface so it never
+				// imports the Eventarc core.
+				functionsCore.SetTriggerProvisioner(eventarcCore)
 			}
 			eventarcP := resteventarc.NewProvider(eventarcCore, cfg.ProjectID)
 

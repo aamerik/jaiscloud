@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 801,
+    "total": 802,
     "by_state": {
-      "ga": 566,
+      "ga": 567,
       "limited": 97,
       "preview": 37,
       "unsupported": 101
@@ -15,7 +15,7 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 294,
+        "ga": 295,
         "limited": 86,
         "preview": 37,
         "unsupported": 9
@@ -92,7 +92,7 @@
         "ga": 5
       },
       "pubsub": {
-        "ga": 44
+        "ga": 45
       },
       "resourcemanager": {
         "ga": 8,
@@ -7136,6 +7136,17 @@
       "state": "ga",
       "evidence": [
         "discovery=pubsub.projects.subscriptions.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "pubsub",
+      "operation": "PubSub.SubscriptionUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=pubsub.projects.subscriptions.patch",
+        "mutating",
         "postgres=yes"
       ]
     },

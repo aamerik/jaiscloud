@@ -27,10 +27,24 @@ const (
 	TypeStorageFinalize = "google.storage.object.finalize"
 	TypeStorageDelete   = "google.storage.object.delete"
 
+	// TypePubSubPublishCloudEvent is the Eventarc CloudEvent spelling of the
+	// Pub/Sub message-published event; a materialized Eventarc trigger filters
+	// on it. NormalizeEventType folds it onto TypePubSubPublish.
+	TypePubSubPublishCloudEvent = "google.cloud.pubsub.topic.v1.messagePublished"
+
 	// legacyStorageObjectChange is the v1 catch-all storage event type: a
 	// trigger declaring it receives every storage object event.
 	legacyStorageObjectChange = "storage.object.change"
 )
+
+// EventarcSubscriptionID is the deterministic short id of the transport Pub/Sub
+// subscription the emulator provisions for an Eventarc trigger. Real Eventarc
+// auto-created subscription ids begin with "eventarc-{region}-"; the emulator
+// keeps that shape and appends the trigger id, so the subscription is
+// discoverable in subscriptions.list and addressable by subscriptions.update.
+func EventarcSubscriptionID(location, triggerID string) string {
+	return "eventarc-" + location + "-" + triggerID
+}
 
 // Source identifies the producer that raised an Event.
 const (
@@ -71,6 +85,11 @@ type Target struct {
 	// Retry mirrors the trigger's retryPolicy: true when the trigger retries a
 	// failed delivery.
 	Retry bool
+	// Subscription is the short id of the transport Pub/Sub subscription that
+	// backs the trigger (real Eventarc's transport.pubsub.subscription). It is
+	// the surface a user configures a deadLetterPolicy on. Empty when the
+	// trigger has no backing subscription.
+	Subscription string
 }
 
 // TargetIndex resolves external trigger targets for an event. The Eventarc core
@@ -78,6 +97,57 @@ type Target struct {
 // created directly (or by another client) routes to its function.
 type TargetIndex interface {
 	TargetsForEvent(ctx context.Context, ev Event) []Target
+}
+
+// FunctionTriggerSpec describes a Pub/Sub event trigger a Cloud Functions
+// function declares. The Eventarc core materializes it as a backing trigger:
+// one Eventarc trigger per Pub/Sub-triggered function, backed by a
+// platform-provisioned Pub/Sub subscription whose deadLetterPolicy is the
+// user-configurable dead-letter surface (FD9).
+type FunctionTriggerSpec struct {
+	Project    string
+	Location   string
+	FunctionID string
+	// Topic is the Pub/Sub topic the trigger observes (a short id or
+	// "projects/{p}/topics/{t}").
+	Topic string
+}
+
+// TriggerProvisioner materializes and removes the backing Eventarc trigger of a
+// function's Pub/Sub event trigger. The Eventarc core implements it; the Cloud
+// Functions core holds it as this interface so it never imports Eventarc and
+// the two cores cannot drift.
+type TriggerProvisioner interface {
+	// EnsureFunctionTrigger creates or updates the backing Eventarc trigger and
+	// returns its resource name plus the short id of its transport Pub/Sub
+	// subscription (the dead-letter surface).
+	EnsureFunctionTrigger(ctx context.Context, spec FunctionTriggerSpec) (triggerName, subscription string, err error)
+	// DeleteFunctionTrigger removes the backing trigger and its subscription,
+	// tolerating an absent trigger.
+	DeleteFunctionTrigger(ctx context.Context, project, location, functionID string) error
+}
+
+// SubscriptionProvisioner manages the platform-provisioned Pub/Sub subscription
+// that backs an Eventarc trigger and forwards an exhausted delivery to its
+// configured dead-letter topic. The Pub/Sub provider implements it; the
+// Eventarc and Cloud Functions cores hold it as this interface so they never
+// import the Pub/Sub provider.
+type SubscriptionProvisioner interface {
+	// EnsureEventarcSubscription idempotently creates the transport
+	// subscription of an Eventarc trigger on topic, returning its short id. An
+	// existing subscription is left untouched so a user-configured
+	// deadLetterPolicy survives re-provisioning.
+	EnsureEventarcSubscription(ctx context.Context, project, location, triggerID, topic string) (string, error)
+	// DeleteEventarcSubscription removes a trigger's transport subscription,
+	// tolerating absence.
+	DeleteEventarcSubscription(ctx context.Context, project, subscription string) error
+	// SubscriptionDeadLetter reports the subscription's configured
+	// deadLetterPolicy: the dead-letter topic (short id), the maximum delivery
+	// attempts, and whether a policy is set.
+	SubscriptionDeadLetter(ctx context.Context, project, subscription string) (topic string, maxAttempts int, ok bool, err error)
+	// PublishDeadLetter publishes data with attributes to a dead-letter topic
+	// (short id or full name) on behalf of a subscription's deadLetterPolicy.
+	PublishDeadLetter(ctx context.Context, project, topic string, data []byte, attrs map[string]string) error
 }
 
 // NormalizeEventType maps a declared Cloud Functions or Eventarc event type onto
@@ -98,7 +168,7 @@ func NormalizeEventType(t string) string {
 	t = strings.TrimSpace(t)
 	switch t {
 	case TypePubSubPublish, "providers/cloud.pubsub/eventTypes/topic.publish",
-		"google.cloud.pubsub.topic.v1.messagePublished":
+		TypePubSubPublishCloudEvent:
 		return TypePubSubPublish
 	case TypeStorageFinalize, "google.cloud.storage.object.v1.finalized":
 		return TypeStorageFinalize

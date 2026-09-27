@@ -146,6 +146,65 @@ func TestFunctionsEventTriggerDelivery(t *testing.T) {
 	require.Equal(t, "via", d["result"])
 }
 
+// TestFunctionsEventDeadLetterSubscription covers FD9 over the wire: a Pub/Sub
+// event trigger materializes a backing Eventarc trigger whose
+// transport.pubsub.subscription is a real, user-configurable Pub/Sub
+// subscription whose deadLetterPolicy is set with subscriptions.patch.
+func TestFunctionsEventDeadLetterSubscription(t *testing.T) {
+	resetState(t)
+	const project = "proj"
+	const location = "us-central1"
+	const fn = "ondlq"
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+	fnBase := "/v1/projects/" + project + "/locations/" + location + "/functions"
+
+	resp, body := do(t, "PUT", "/v1/projects/"+project+"/topics/src-events", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "topic create: %s", body)
+	resp, body = do(t, "PUT", "/v1/projects/"+project+"/topics/dlq-events", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "dlq topic create: %s", body)
+	resp, body = do(t, "POST", fnBase+"?functionId="+fn,
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"google.pubsub.topic.publish","resource":"projects/proj/topics/src-events"}}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create %s: %s", fn, body)
+
+	// The v2 render exposes the output-only backing Eventarc trigger.
+	resp, body = do(t, "GET", "/v2/projects/"+project+"/locations/"+location+"/functions/"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get function: %s", body)
+	fm := jsonMap(t, body)
+	et, _ := fm["eventTrigger"].(map[string]any)
+	trigger, _ := et["trigger"].(string)
+	require.Equal(t, "projects/proj/locations/us-central1/triggers/functions-"+fn, trigger)
+
+	// The Eventarc trigger's transport subscription is the backing subscription.
+	resp, body = do(t, "GET", "/v1/projects/"+project+"/locations/"+location+"/triggers/functions-"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get trigger: %s", body)
+	tm := jsonMap(t, body)
+	transport, _ := tm["transport"].(map[string]any)
+	pubsub, _ := transport["pubsub"].(map[string]any)
+	subFull, _ := pubsub["subscription"].(string)
+	require.Equal(t, "projects/proj/subscriptions/eventarc-us-central1-functions-"+fn, subFull)
+	subID := subFull[strings.LastIndex(subFull, "/")+1:]
+
+	// Configure a deadLetterPolicy on that subscription over REST.
+	resp, body = do(t, "PATCH", "/v1/projects/"+project+"/subscriptions/"+subID,
+		[]byte(`{"subscription":{"deadLetterPolicy":{"deadLetterTopic":"projects/proj/topics/dlq-events","maxDeliveryAttempts":5}},"updateMask":"deadLetterPolicy"}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "patch subscription: %s", body)
+	require.Contains(t, string(body), "dlq-events")
+
+	// The policy round-trips on GET.
+	resp, body = do(t, "GET", "/v1/projects/"+project+"/subscriptions/"+subID, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get subscription: %s", body)
+	require.Contains(t, string(body), `"deadLetterPolicy"`)
+	require.Contains(t, string(body), "dlq-events")
+
+	// Deleting the function tears down its backing trigger and subscription.
+	resp, body = do(t, "DELETE", fnBase+"/"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "delete function: %s", body)
+	resp, _ = do(t, "GET", "/v1/projects/"+project+"/subscriptions/"+subID, nil, nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "backing subscription should be gone with the function")
+}
+
 // zipArchive builds a minimal in-memory zip.
 func zipArchive(t *testing.T, name, content string) []byte {
 	t.Helper()

@@ -33,6 +33,18 @@ type EventTrigger struct {
 	// (RETRY_POLICY_RETRY / RETRY_POLICY_DO_NOT_RETRY / RETRY_POLICY_UNSPECIFIED).
 	// Empty means unset (do not retry). It is not rendered for v1.
 	RetryPolicy string `json:"retryPolicy,omitempty"`
+
+	// Trigger is the resource name of the backing Eventarc trigger the platform
+	// provisions for this Pub/Sub event trigger — real GCP's output-only
+	// eventTrigger.trigger (FD9). Empty when no backing trigger was provisioned
+	// (a non-Pub/Sub source, a missing topic, or no provisioner wired).
+	Trigger string `json:"trigger,omitempty"`
+	// Subscription is the short id of the backing Pub/Sub subscription that
+	// carries this trigger's transport and holds its user-configurable
+	// deadLetterPolicy. It is internal (real GCP does not expose it on the
+	// function); the user reaches it through the Eventarc trigger's
+	// transport.pubsub.subscription or subscriptions.list.
+	Subscription string `json:"subscription,omitempty"`
 }
 
 // Retries reports whether an event trigger's failure policy retries a failed
@@ -150,8 +162,12 @@ type Delivery struct {
 	Status     string            `json:"status"`
 	Error      string            `json:"error,omitempty"`
 	Result     string            `json:"result,omitempty"`
-	CreateTime time.Time         `json:"createTime"`
-	UpdateTime time.Time         `json:"updateTime"`
+	// DeadLetterTopic is the short id of the dead-letter topic the event was
+	// forwarded to when retries were exhausted under a subscription
+	// deadLetterPolicy, or "" when no policy was set (FD9).
+	DeadLetterTopic string    `json:"deadLetterTopic,omitempty"`
+	CreateTime      time.Time `json:"createTime"`
+	UpdateTime      time.Time `json:"updateTime"`
 }
 
 // Store is the Cloud Functions v1 store.

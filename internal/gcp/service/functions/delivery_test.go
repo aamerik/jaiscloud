@@ -30,6 +30,46 @@ func (f fakeTargets) TargetsForEvent(context.Context, eventing.Event) []eventing
 	return f.targets
 }
 
+// fakeSubs is a recording eventing.SubscriptionProvisioner.
+type fakeSubs struct {
+	dlqTopic    string
+	maxAttempts int
+	ok          bool
+	published   int
+	lastAttrs   map[string]string
+}
+
+func (f *fakeSubs) EnsureEventarcSubscription(context.Context, string, string, string, string) (string, error) {
+	return "sub", nil
+}
+func (f *fakeSubs) DeleteEventarcSubscription(context.Context, string, string) error { return nil }
+func (f *fakeSubs) SubscriptionDeadLetter(context.Context, string, string) (string, int, bool, error) {
+	return f.dlqTopic, f.maxAttempts, f.ok, nil
+}
+func (f *fakeSubs) PublishDeadLetter(_ context.Context, _, _ string, _ []byte, attrs map[string]string) error {
+	f.published++
+	f.lastAttrs = attrs
+	return nil
+}
+
+// setDeliverySubscription records a backing subscription on a stored function so
+// the delivery engine can resolve its deadLetterPolicy.
+func setDeliverySubscription(t *testing.T, fs *functionsstore.MemoryStore, id, sub string) {
+	t.Helper()
+	ctx := context.Background()
+	f, err := fs.GetFunction(ctx, "proj", "us-central1", id)
+	if err != nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	if f.EventTrigger == nil {
+		t.Fatalf("%s has no event trigger", id)
+	}
+	f.EventTrigger.Subscription = sub
+	if err := fs.UpdateFunction(ctx, "proj", "us-central1", id, f); err != nil {
+		t.Fatalf("update %s: %v", id, err)
+	}
+}
+
 func newDeliveryService(t *testing.T, opts ...Option) (*Service, *functionsstore.MemoryStore) {
 	t.Helper()
 	fs := functionsstore.NewMemoryStore()
@@ -155,6 +195,69 @@ func TestDispatchRetryDeadLetter(t *testing.T) {
 	}
 	if d := byFn["noretry"]; d.Status != functionsstore.DeliveryFailed || d.Attempts != 1 {
 		t.Fatalf("no-retry delivery = %+v", d)
+	}
+}
+
+func TestDispatchForwardToDeadLetter(t *testing.T) {
+	ctx := context.Background()
+	fail := &failingExecutor{}
+	// maxAttempts 2 exercises the configured cap without the ~3s a real policy's
+	// minimum of 5 attempts would cost; the value is honoured verbatim.
+	subs := &fakeSubs{dlqTopic: "dlq", maxAttempts: 2, ok: true}
+	s, fs := newDeliveryService(t, WithExecutor(fail), WithSubscriptions(subs))
+	createEventFunction(t, s, "fn", map[string]any{
+		"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t",
+		"failurePolicy": map[string]any{"retry": map[string]any{}},
+	})
+	setDeliverySubscription(t, fs, "fn", "eventarc-us-central1-functions-fn")
+
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub,
+		EventID: "m1", Data: []byte("payload"),
+	})
+
+	got := deliveries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(got))
+	}
+	d := got[0]
+	if d.Status != functionsstore.DeliveryDeadLetter || d.Attempts != 2 || d.DeadLetterTopic != "dlq" {
+		t.Fatalf("delivery = %+v", d)
+	}
+	if subs.published != 1 {
+		t.Fatalf("published = %d, want 1", subs.published)
+	}
+	if subs.lastAttrs["CloudPubSubDeadLetterSourceSubscription"] != "eventarc-us-central1-functions-fn" {
+		t.Fatalf("attrs = %+v", subs.lastAttrs)
+	}
+	if subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"] != "2" {
+		t.Fatalf("delivery count attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	}
+}
+
+func TestDispatchNoDeadLetterWithoutPolicy(t *testing.T) {
+	ctx := context.Background()
+	fail := &failingExecutor{}
+	subs := &fakeSubs{ok: false}
+	s, fs := newDeliveryService(t, WithExecutor(fail), WithSubscriptions(subs))
+	createEventFunction(t, s, "fn", map[string]any{
+		"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t",
+		"failurePolicy": map[string]any{"retry": map[string]any{}},
+	})
+	setDeliverySubscription(t, fs, "fn", "sub")
+
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub, Data: []byte("x"),
+	})
+
+	d := deliveries(t, s)[0]
+	if d.Status != functionsstore.DeliveryDeadLetter || d.Attempts != maxDeliveryAttempts || d.DeadLetterTopic != "" {
+		t.Fatalf("delivery = %+v", d)
+	}
+	if subs.published != 0 {
+		t.Fatalf("published without a policy = %d", subs.published)
 	}
 }
 

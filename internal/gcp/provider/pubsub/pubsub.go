@@ -70,6 +70,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"PubSub.TopicPublish":                   p.TopicPublish,
 		"PubSub.SubscriptionCreate":             p.SubscriptionCreate,
 		"PubSub.SubscriptionGet":                p.SubscriptionGet,
+		"PubSub.SubscriptionUpdate":             p.SubscriptionUpdate,
 		"PubSub.SubscriptionDelete":             p.SubscriptionDelete,
 		"PubSub.SubscriptionDetach":             p.SubscriptionDetach,
 		"PubSub.SubscriptionList":               p.SubscriptionList,
@@ -369,6 +370,16 @@ func (p *Provider) dispatchTopicEvents(ctx context.Context, project, topicFull s
 // the fully-qualified "//pubsub.googleapis.com/projects/{p}/topics/{t}" form.
 // A missing topic is NotFound (real Pub/Sub rejects a publish to it).
 func (p *Provider) PublishEvent(ctx context.Context, accountID, topicName string, data []byte, attributes map[string]string) (string, error) {
+	return p.publishMessage(ctx, accountID, topicName, data, attributes, true)
+}
+
+// publishMessage is the shared publish path. dispatch controls whether the
+// produced message is also handed to the Cloud Functions event-delivery engine:
+// a dead-letter republish passes false so forwarding cannot re-enter the
+// delivery engine (a function subscribed to its own dead-letter topic would
+// otherwise recurse). The message still fans out to the topic's pull
+// subscriptions and push endpoints.
+func (p *Provider) publishMessage(ctx context.Context, accountID, topicName string, data []byte, attributes map[string]string, dispatch bool) (string, error) {
 	project, t := topicProjectAndID(topicName)
 	if t == "" {
 		return "", model.NewProviderError("InvalidArgument", "missing topic", 400)
@@ -420,7 +431,7 @@ func (p *Provider) PublishEvent(ctx context.Context, accountID, topicName string
 	}
 	topicFull := resource.ResourceID(project)("pubsub-topic", t)
 	p.deliverPush(ctx, project, topicFull, msg, base64.StdEncoding.EncodeToString(data))
-	if p.dispatcher != nil {
+	if dispatch && p.dispatcher != nil {
 		p.dispatcher.DispatchEvent(ctx, eventing.Event{
 			Project:    project,
 			EventType:  eventing.TypePubSubPublish,

@@ -34,6 +34,7 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/topics/t:testIamPermissions", "TopicTestIamPermissions"},
 		{"PUT", "/v1/projects/p/subscriptions/s", "SubscriptionCreate"},
 		{"GET", "/v1/projects/p/subscriptions", "SubscriptionList"},
+		{"PATCH", "/v1/projects/p/subscriptions/s", "SubscriptionUpdate"},
 		{"POST", "/v1/projects/p/subscriptions/s:pull", "SubscriptionPull"},
 		{"POST", "/v1/projects/p/subscriptions/s:acknowledge", "SubscriptionAcknowledge"},
 		{"GET", "/v1/projects/p/subscriptions/s:getIamPolicy", "SubscriptionGetIamPolicy"},

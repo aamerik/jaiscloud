@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
 )
@@ -143,6 +144,21 @@ func TriggerJSON(project string, t eventarcstore.Trigger) map[string]any {
 	out["etag"] = t.Etag
 	out["createTime"] = formatTimestamp(t.CreateTime)
 	out["updateTime"] = formatTimestamp(t.UpdateTime)
+	// transport.pubsub.subscription is output-only: the short id of the
+	// platform-provisioned subscription that carries the trigger's transport and
+	// holds its deadLetterPolicy. The emulator provisions one for every trigger
+	// whose destination is a Cloud Functions function.
+	if topic := triggerTransportTopic(out); topic != "" {
+		if dest := bodyMap(out, "destination"); dest != nil {
+			if cf, _ := dest["cloudFunction"].(string); cf != "" {
+				transport := bodyMap(out, "transport")
+				pubsub := bodyMap(transport, "pubsub")
+				if pubsub != nil {
+					pubsub["subscription"] = resource.ResourceID(project)("pubsub-subscription", eventing.EventarcSubscriptionID(t.Location, t.Name))
+				}
+			}
+		}
+	}
 	labels := t.Labels
 	if labels == nil {
 		labels = map[string]string{}
