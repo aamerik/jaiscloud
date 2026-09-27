@@ -12,8 +12,8 @@ Cells: **792**
 
 | state | count |
 | --- | --- |
-| ga | 554 |
-| limited | 100 |
+| ga | 557 |
+| limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
 
@@ -21,7 +21,7 @@ Cells: **792**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 282 | 89 | 37 | 9 |
+| rest | 285 | 86 | 37 | 9 |
 | grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -355,7 +355,7 @@ _32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
 
 ## functions
 
-_30 cell(s): ga=27 limited=3 preview=0 unsupported=0_
+_30 cell(s): ga=30 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -363,17 +363,17 @@ _30 cell(s): ga=27 limited=3 preview=0 unsupported=0_
 | CreateFunction | grpc | ga | — |
 | DeleteFunction | grpc | ga | — |
 | Function.CallFunction | rest | ga | — |
-| Function.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Function.CancelOperation | rest | ga | shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested |
 | Function.CreateFunction | rest | ga | — |
 | Function.DeleteFunction | rest | ga | — |
-| Function.DeleteOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Function.DeleteOperation | rest | ga | shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested |
 | Function.FunctionGetIamPolicy | rest | ga | — |
 | Function.FunctionSetIamPolicy | rest | ga | — |
 | Function.FunctionTestIamPermissions | rest | ga | — |
 | Function.GenerateDownloadUrl | rest | ga | — |
 | Function.GenerateUploadUrl | rest | ga | — |
 | Function.GetFunction | rest | ga | — |
-| Function.GetLocation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Function.GetLocation | rest | ga | shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested |
 | Function.GetOperation | rest | ga | — |
 | Function.ListFunctions | rest | ga | — |
 | Function.ListLocations | rest | ga | — |
