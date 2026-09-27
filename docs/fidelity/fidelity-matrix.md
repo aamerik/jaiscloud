@@ -380,7 +380,7 @@ _31 cell(s): ga=31 limited=0 preview=0 unsupported=0_
 | Function.ListOperations | rest | ga | — |
 | Function.ListRuntimes | rest | ga | — |
 | Function.UpdateFunction | rest | ga | — |
-| Function.WaitOperation | rest | ga | shared google.longrunning.Operations.WaitOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:wait) and wire-tested |
+| Function.WaitOperation | rest | ga | google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it |
 | GenerateDownloadUrl | grpc | ga | — |
 | GenerateUploadUrl | grpc | ga | — |
 | GetFunction | grpc | ga | — |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 
 	"jaiscloud/internal/clock"
@@ -24,8 +25,15 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 // nullableJSON marshals v to JSONB, or returns nil (SQL NULL) when v is nil.
+// A typed-nil pointer (e.g. a nil *EventTrigger or *Function) is also nil: it
+// would otherwise marshal to the JSON literal "null", which reads back as a
+// non-nil zero value (a delete operation would then render a Function response
+// instead of google.protobuf.Empty).
 func nullableJSON(v any) any {
 	if v == nil {
+		return nil
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return nil
 	}
 	b, _ := json.Marshal(v)
@@ -263,11 +271,13 @@ func scanOperation(row pgx.Row) (Operation, error) {
 		return Operation{}, err
 	}
 	if len(function) > 0 {
-		var f Function
+		// Unmarshal into a pointer so a JSON null (a delete operation's absent
+		// response snapshot) stays nil rather than yielding a zero Function.
+		var f *Function
 		if err := json.Unmarshal(function, &f); err != nil {
 			return Operation{}, err
 		}
-		op.Function = &f
+		op.Function = f
 	}
 	return op, nil
 }

@@ -52,11 +52,25 @@ func TestPostgresOperationCRUD(t *testing.T) {
 		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
 	}
 
+	// A delete operation carries no Function snapshot; it must not read back as
+	// a non-nil zero Function (which would render a Function response instead of
+	// google.protobuf.Empty).
+	if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op2", Done: true, Verb: "delete"}); err != nil {
+		t.Fatalf("create delete op: %v", err)
+	}
+	del, err := s.GetOperation(ctx, "proj", "us-central1", "op2")
+	if err != nil {
+		t.Fatalf("get delete op: %v", err)
+	}
+	if del.Function != nil {
+		t.Fatalf("delete operation Function = %+v, want nil", del.Function)
+	}
+
 	all, err := s.ListOperations(ctx, "proj", "us-central1")
 	if err != nil {
 		t.Fatalf("list ops: %v", err)
 	}
-	if len(all) != 1 || all[0].ID != "op1" {
+	if len(all) != 2 || all[0].ID != "op1" || all[1].ID != "op2" {
 		t.Fatalf("unexpected op list: %+v", all)
 	}
 

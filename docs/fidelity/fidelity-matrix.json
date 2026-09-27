@@ -3259,7 +3259,7 @@
       "operation": "Function.WaitOperation",
       "transport": "rest",
       "state": "ga",
-      "reason": "shared google.longrunning.Operations.WaitOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:wait) and wire-tested",
+      "reason": "google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it",
       "evidence": [
         "postgres=yes"
       ]

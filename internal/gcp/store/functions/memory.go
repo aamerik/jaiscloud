@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"jaiscloud/internal/clock"
 )
 
 // MemoryStore is an in-memory Store.
@@ -138,6 +140,12 @@ func (s *MemoryStore) Reset(_ context.Context) {
 func (s *MemoryStore) CreateOperation(_ context.Context, projectID, location string, op Operation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if op.CreateTime.IsZero() {
+		op.CreateTime = clock.Now()
+	}
+	if op.EndTime.IsZero() {
+		op.EndTime = op.CreateTime
+	}
 	key := lkey(projectID, location)
 	if s.operations[key] == nil {
 		s.operations[key] = make(map[string]Operation)
