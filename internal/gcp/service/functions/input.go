@@ -198,6 +198,25 @@ func canonicalMaskField(path string) (string, bool) {
 	return f, ok
 }
 
+// maskAppliesSource reports whether an update mask selects any source field
+// (an empty mask selects every mutable field). It mirrors ApplyFunctionUpdate's
+// apply() checks, so the source archive is only (re)resolved when the mask
+// actually lets the source change.
+func maskAppliesSource(mask []string) bool {
+	if len(mask) == 0 {
+		return true
+	}
+	for _, m := range mask {
+		if c, ok := canonicalMaskField(m); ok {
+			switch c {
+			case "source", "sourceArchiveUrl", "sourceUploadUrl":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ApplyFunctionUpdate merges an update body into f. A non-empty mask names the
 // paths to overlay (masked paths take the incoming body value, unmasked paths
 // retain the stored value); an empty mask overlays every mutable field present

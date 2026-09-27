@@ -537,6 +537,21 @@ test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence test
 	cd tests/persistent_mode/gcp/parity-grpc && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...
 
+test-e2e-functions-docker: _check-docker-prereq build-gcp ## Cloud Functions source execution under Docker — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
+	@docker pull $(LAMBDA_IMAGE) > /dev/null
+	@docker network inspect jaiscloud-net > /dev/null 2>&1 || docker network create jaiscloud-net > /dev/null
+	@set -e; \
+	  JAISCLOUD_EXECUTOR_MODE=docker JAISCLOUD_FUNCTIONS_IMAGE=$(LAMBDA_IMAGE) \
+	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-functions.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-functions.log; exit 1; fi; sleep 1; \
+	  done; \
+	  FUNCTIONS_E2E_DOCKER_IMAGE=$(LAMBDA_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
+	    go test -v -tags functions_e2e -timeout 5m ./tests/persistent_mode/gcp/functions/
+
 ##@ GCP integration tests
 
 test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an ephemeral server (REST :8080 + gRPC :8081)

@@ -41,6 +41,15 @@ type Function struct {
 	AvailableMemoryMB    int
 	Timeout              string // e.g. "60s"
 	Description          string
+
+	// SourceSHA256 is the hex sha256 of the persisted source archive — the
+	// function's revision hash — or "" when no archive has been stored.
+	SourceSHA256 string
+	// SourceSize is the persisted archive size in bytes (0 when absent).
+	SourceSize int64
+	// SourceBlobKey is the blobfs key of the archive in the "functions-source"
+	// namespace (see service/functions/source.go). "" when absent.
+	SourceBlobKey string
 }
 
 // Store is the Cloud Functions v1 store.
