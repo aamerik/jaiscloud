@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **801**
+Cells: **802**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 566 |
+| ga | 567 |
 | limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
@@ -21,7 +21,7 @@ Cells: **801**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 294 | 86 | 37 | 9 |
+| rest | 295 | 86 | 37 | 9 |
 | grpc | 272 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -783,7 +783,7 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 ## pubsub
 
-_44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
+_45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -816,6 +816,7 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 | PubSub.SubscriptionPull | rest | ga | — |
 | PubSub.SubscriptionSetIamPolicy | rest | ga | — |
 | PubSub.SubscriptionTestIamPermissions | rest | ga | — |
+| PubSub.SubscriptionUpdate | rest | ga | — |
 | PubSub.TopicCreate | rest | ga | — |
 | PubSub.TopicDelete | rest | ga | — |
 | PubSub.TopicGet | rest | ga | — |

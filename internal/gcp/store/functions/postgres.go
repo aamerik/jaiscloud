@@ -360,10 +360,11 @@ func (s *PostgresStore) CreateDelivery(ctx context.Context, projectID, location 
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_functions_deliveries
 			(project_id, location, delivery_id, function_id, source, event_type, resource, event_id,
-			 data, attributes, attempts, status, error, result, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			 data, attributes, attempts, status, error, result, dead_letter_topic, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 	`, projectID, location, d.ID, d.FunctionID, d.Source, d.EventType, d.Resource, d.EventID,
-		d.Data, json.RawMessage(attrs), d.Attempts, d.Status, d.Error, d.Result, d.CreateTime, d.UpdateTime)
+		d.Data, json.RawMessage(attrs), d.Attempts, d.Status, d.Error, d.Result, d.DeadLetterTopic,
+		d.CreateTime, d.UpdateTime)
 	return err
 }
 
@@ -371,7 +372,8 @@ func scanDelivery(row pgx.Row) (Delivery, error) {
 	var d Delivery
 	var attrs []byte
 	err := row.Scan(&d.ID, &d.Location, &d.FunctionID, &d.Source, &d.EventType, &d.Resource, &d.EventID,
-		&d.Data, &attrs, &d.Attempts, &d.Status, &d.Error, &d.Result, &d.CreateTime, &d.UpdateTime)
+		&d.Data, &attrs, &d.Attempts, &d.Status, &d.Error, &d.Result, &d.DeadLetterTopic,
+		&d.CreateTime, &d.UpdateTime)
 	if err != nil {
 		return Delivery{}, err
 	}
@@ -386,10 +388,11 @@ func (s *PostgresStore) UpdateDelivery(ctx context.Context, projectID, location 
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_functions_deliveries
 		SET function_id=$4, source=$5, event_type=$6, resource=$7, event_id=$8,
-		    data=$9, attributes=$10, attempts=$11, status=$12, error=$13, result=$14, update_time=$15
+		    data=$9, attributes=$10, attempts=$11, status=$12, error=$13, result=$14,
+		    dead_letter_topic=$15, update_time=$16
 		WHERE project_id=$1 AND location=$2 AND delivery_id=$3
 	`, projectID, location, d.ID, d.FunctionID, d.Source, d.EventType, d.Resource, d.EventID,
-		d.Data, json.RawMessage(attrs), d.Attempts, d.Status, d.Error, d.Result, d.UpdateTime)
+		d.Data, json.RawMessage(attrs), d.Attempts, d.Status, d.Error, d.Result, d.DeadLetterTopic, d.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -402,7 +405,7 @@ func (s *PostgresStore) UpdateDelivery(ctx context.Context, projectID, location 
 func (s *PostgresStore) GetDelivery(ctx context.Context, projectID, location, id string) (Delivery, error) {
 	d, err := scanDelivery(s.pool.QueryRow(ctx, `
 		SELECT delivery_id, location, function_id, source, event_type, resource, event_id,
-		       data, attributes, attempts, status, error, result, create_time, update_time
+		       data, attributes, attempts, status, error, result, dead_letter_topic, create_time, update_time
 		FROM jc_functions_deliveries WHERE project_id=$1 AND location=$2 AND delivery_id=$3
 	`, projectID, location, id))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -414,7 +417,7 @@ func (s *PostgresStore) GetDelivery(ctx context.Context, projectID, location, id
 func (s *PostgresStore) ListDeliveries(ctx context.Context, projectID, location string) ([]Delivery, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT delivery_id, location, function_id, source, event_type, resource, event_id,
-		       data, attributes, attempts, status, error, result, create_time, update_time
+		       data, attributes, attempts, status, error, result, dead_letter_topic, create_time, update_time
 		FROM jc_functions_deliveries WHERE project_id=$1 AND location=$2 ORDER BY delivery_id
 	`, projectID, location)
 	if err != nil {

@@ -197,6 +197,11 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		if f.EventTrigger.RetryPolicy != "" {
 			et["retryPolicy"] = f.EventTrigger.RetryPolicy
 		}
+		// trigger is output-only: the backing Eventarc trigger the platform
+		// materializes for a Pub/Sub event trigger (FD9).
+		if f.EventTrigger.Trigger != "" {
+			et["trigger"] = f.EventTrigger.Trigger
+		}
 		out["eventTrigger"] = et
 	}
 	if ui := upgradeInfoJSON(project, f); ui != nil {
