@@ -59,6 +59,7 @@ func TestDetectServiceLoggingAndFunctionsV2(t *testing.T) {
 		{http.MethodGet, "/v2/projects/p/locations/us-central1"},
 		{http.MethodGet, "/v2/projects/p/locations/us-central1/functions"},
 		{http.MethodGet, "/v2/projects/p/locations/us-central1/functions/myfn"},
+		{http.MethodGet, "/v2/projects/p/locations/us-central1/runtimes"},
 		{http.MethodGet, "/v2/projects/p/locations/us-central1/operations/op"},
 	}
 	for _, tc := range functionsPaths {

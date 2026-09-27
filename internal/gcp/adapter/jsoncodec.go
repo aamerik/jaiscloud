@@ -82,8 +82,9 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
-	// Cloud Functions: surface the location segment for store scoping.
-	if resourceType == "functions" {
+	// Cloud Functions (functions + the v2 runtimes catalog): surface the
+	// location segment for store scoping / request validation.
+	if resourceType == "functions" || resourceType == "runtimes" {
 		for i, s := range rest {
 			if s == "locations" && i+1 < len(rest) {
 				nr.Params["location"] = rest[i+1]
@@ -227,6 +228,10 @@ func detectResourceType(segs []string) string {
 			hasServiceAccounts = true
 		case "functions":
 			return "functions"
+		case "runtimes":
+			// Cloud Functions v2 runtime catalog
+			// (…/projects/{p}/locations/{l}/runtimes).
+			return "runtimes"
 		case "operations":
 			// Workflows long-running operations (…/locations/{l}/operations/{id}).
 			return "operations"
@@ -274,6 +279,15 @@ func detectResourceType(segs []string) string {
 // LRO surface differs between the two (its operation verbs are location-scoped
 // and unambiguous, unlike the shared /v1 operations path).
 func deriveAction(resourceType string, isCollection bool, name, method, custom, apiVersion string) string {
+	// Cloud Functions v2 runtime catalog. `runtimes.list` is the only v2
+	// runtime method real GCP declares (no get), and the resource exists only
+	// in v2, so a non-list method fails loud.
+	if apiVersion == "v2" && resourceType == "runtimes" {
+		if isCollection && method == http.MethodGet {
+			return "ListRuntimes"
+		}
+		return ""
+	}
 	// Cloud Functions v2 long-running operations. These reuse the standard
 	// google.longrunning action names; the v1 path is untouched because its
 	// operations route through the shared Workflows surface.

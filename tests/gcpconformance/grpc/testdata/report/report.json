@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 293,
-  "passed": 293,
+  "total": 294,
+  "passed": 294,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 293,
-    "passed": 293,
+    "checks": 294,
+    "passed": 294,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -51,8 +51,8 @@
     },
     {
       "service": "functions",
-      "total": 19,
-      "passed": 19,
+      "total": 20,
+      "passed": 20,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2178,6 +2178,13 @@
       "method": "GenerateDownloadUrl",
       "status": "pass",
       "key_field": "non-empty downloadUrl"
+    },
+    {
+      "service": "functions",
+      "rpc": "ListRuntimes (v2)",
+      "method": "ListRuntimes",
+      "status": "pass",
+      "key_field": "runtime catalog includes nodejs20 (GEN_2)"
     },
     {
       "service": "functions",

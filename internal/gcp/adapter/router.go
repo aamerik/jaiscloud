@@ -309,7 +309,7 @@ func detectV2Service(path string) string {
 		return "functions"
 	}
 	switch rest[2] {
-	case "functions", "operations":
+	case "functions", "operations", "runtimes":
 		return "functions"
 	}
 	return ""

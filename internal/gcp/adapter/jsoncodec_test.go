@@ -191,6 +191,8 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3": "kms",
 		"/v1/projects/p/serviceAccounts/sa@x.com":                                  "iam",
 		"/v1/projects/p/locations/us-central1/functions/f":                         "functions",
+		// The v2 runtime catalog is not a v1 surface.
+		"/v1/projects/p/locations/us-central1/runtimes": "",
 		// Cloud Workflows management + executions share the path shape; the
 		// executions segment claims the workflowexecutions service.
 		"/v1/projects/p/locations/us-central1/workflows/w":                     "workflows",
@@ -251,6 +253,7 @@ func TestFunctionsV2Decode(t *testing.T) {
 		{"PATCH", "/v2/projects/p/locations/us-central1/functions/f", "UpdateFunction"},
 		{"DELETE", "/v2/projects/p/locations/us-central1/functions/f", "DeleteFunction"},
 		{"POST", "/v2/projects/p/locations/us-central1/functions:generateUploadUrl", "GenerateUploadUrl"},
+		{"GET", "/v2/projects/p/locations/us-central1/runtimes", "ListRuntimes"},
 		{"GET", "/v2/projects/p/locations/us-central1/operations", "ListOperations"},
 		{"GET", "/v2/projects/p/locations/us-central1/operations/op1", "GetOperation"},
 		{"POST", "/v2/projects/p/locations/us-central1/operations/op1:cancel", "CancelOperation"},
@@ -291,6 +294,7 @@ func TestDetectV2Service(t *testing.T) {
 		"/v2/projects/p/locations/-/functions":                             "functions",
 		"/v2/projects/p/locations/us-central1/functions/f":                 "functions",
 		"/v2/projects/p/locations/us-central1/functions:generateUploadUrl": "functions",
+		"/v2/projects/p/locations/us-central1/runtimes":                    "functions",
 		"/v2/projects/p/locations/us-central1/operations":                  "functions",
 		"/v2/projects/p/locations/us-central1/operations/op1":              "functions",
 		"/v2/projects/p/locations/us-central1/operations/op1:cancel":       "functions",

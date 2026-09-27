@@ -70,6 +70,17 @@ func functionToProtoV2(project string, f functionsstore.Function) *apiv2function
 	return out
 }
 
+// runtimeToProto renders a core runtime as the v2 proto Runtime via the shared
+// Discovery renderer (RuntimeJSON), so the REST and gRPC transports cannot
+// drift on the field names/enums.
+func runtimeToProto(rt core.Runtime) *apiv2functionspb.ListRuntimesResponse_Runtime {
+	out := &apiv2functionspb.ListRuntimesResponse_Runtime{}
+	if err := mapToProto(core.RuntimeJSON(rt), out); err != nil {
+		return &apiv2functionspb.ListRuntimesResponse_Runtime{Name: rt.Name, DisplayName: rt.DisplayName}
+	}
+	return out
+}
+
 // operationToProtoV1 packs a done v1 operation with typed Any metadata
 // (OperationMetadataV1) and a typed Any response (CloudFunction, or Empty for a
 // delete).

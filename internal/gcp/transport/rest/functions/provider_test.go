@@ -488,6 +488,58 @@ func TestCallFunctionMockEcho(t *testing.T) {
 	}
 }
 
+func TestListRuntimes(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	resp, err := p.ListRuntimes(ctx, newNRv2(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("list runtimes: %v", err)
+	}
+	rts, _ := resp.Data["runtimes"].([]any)
+	if len(rts) == 0 {
+		t.Fatal("expected a non-empty runtime catalog")
+	}
+	// The real v2 method declares no pagination, so the response must not
+	// invent nextPageToken.
+	if _, ok := resp.Data["nextPageToken"]; ok {
+		t.Errorf("ListRuntimes must not emit nextPageToken: %v", resp.Data["nextPageToken"])
+	}
+	var node map[string]any
+	for _, v := range rts {
+		m, _ := v.(map[string]any)
+		if m["name"] == "nodejs20" {
+			node = m
+		}
+	}
+	if node == nil {
+		t.Fatalf("nodejs20 missing from %v", rts)
+	}
+	if node["environment"] != "GEN_2" || node["stage"] != "GA" || node["displayName"] != "Node.js 20" {
+		t.Errorf("nodejs20 = %v", node)
+	}
+
+	// The filter narrows the catalog.
+	resp, err = p.ListRuntimes(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "filter": `name="python312"`,
+	}))
+	if err != nil {
+		t.Fatalf("filtered list runtimes: %v", err)
+	}
+	rts, _ = resp.Data["runtimes"].([]any)
+	if len(rts) != 1 {
+		t.Fatalf("expected 1 filtered runtime, got %d", len(rts))
+	}
+	if m, _ := rts[0].(map[string]any); m["name"] != "python312" {
+		t.Errorf("filtered runtime = %v", rts[0])
+	}
+
+	// A missing location is InvalidArgument.
+	if _, err := p.ListRuntimes(ctx, newNRv2(map[string]any{})); err == nil {
+		t.Errorf("expected InvalidArgument for missing location")
+	}
+}
+
 func TestGenerateUploadUrl(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t, store.NewMemoryResourceStore(), nil)

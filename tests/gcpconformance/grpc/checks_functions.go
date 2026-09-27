@@ -26,9 +26,9 @@ import (
 // The two API versions share one emulator store, so a v1-created function is
 // visible to v2.
 //
-// CallFunction (v1 runtime invocation) is probed over the shared executor;
-// ListRuntimes (v2) is deliberately not probed: it is an explicit Unimplemented
-// stub (control plane only).
+// CallFunction (v1 runtime invocation) is probed over the shared executor, and
+// ListRuntimes (v2) is probed over the shared runtime catalog (the v2-deploy
+// enabler: a client resolves a runtime from this list).
 func functionsChecks() []Check {
 	return []Check{
 		// v1 CloudFunctionsService.
@@ -51,6 +51,7 @@ func functionsChecks() []Check {
 		{Service: "functions", RPC: "DeleteFunction (v2)", Method: "DeleteFunction", KeyField: "NotFound after delete", Run: checkFnDeleteV2},
 		{Service: "functions", RPC: "GenerateUploadUrl (v2)", Method: "GenerateUploadUrl", KeyField: "non-empty uploadUrl", Run: checkFnGenerateUploadURLV2},
 		{Service: "functions", RPC: "GenerateDownloadUrl (v2)", Method: "GenerateDownloadUrl", KeyField: "non-empty downloadUrl", Run: checkFnGenerateDownloadURLV2},
+		{Service: "functions", RPC: "ListRuntimes (v2)", Method: "ListRuntimes", KeyField: "runtime catalog includes nodejs20 (GEN_2)", Run: checkFnListRuntimesV2},
 		// Dual-protocol invariant: one store behind both API versions.
 		{Service: "functions", RPC: "GetFunction (v1-created, v2-read)", Method: "GetFunction", KeyField: "v1-created function visible to v2", Run: checkFnCrossVersion},
 	}
@@ -569,6 +570,35 @@ func checkFnGenerateDownloadURLV2(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("empty downloadUrl")
 	}
 	return nil
+}
+
+// checkFnListRuntimesV2 lists the v2 runtime catalog and asserts the gen2
+// deploy path can resolve a runtime (nodejs20, environment GEN_2).
+func checkFnListRuntimesV2(ctx context.Context, cfg Config) error {
+	client, err := newFunctionsV2Client(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	resp, err := client.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{Parent: functionsParent(cfg)})
+	if err != nil {
+		return fmt.Errorf("ListRuntimes: %w", err)
+	}
+	if len(resp.GetRuntimes()) == 0 {
+		return fmt.Errorf("ListRuntimes returned no runtimes")
+	}
+	for _, rt := range resp.GetRuntimes() {
+		if rt.GetName() == "nodejs20" {
+			if rt.GetEnvironment() != apiv2functionspb.Environment_GEN_2 {
+				return fmt.Errorf("nodejs20 environment = %v, want GEN_2", rt.GetEnvironment())
+			}
+			if rt.GetStage() != apiv2functionspb.ListRuntimesResponse_GA {
+				return fmt.Errorf("nodejs20 stage = %v, want GA", rt.GetStage())
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("nodejs20 missing from ListRuntimes")
 }
 
 // checkFnCrossVersion creates a function via the v1 API and reads it via the v2

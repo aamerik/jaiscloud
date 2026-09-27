@@ -41,6 +41,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Function.UpdateFunction":             p.UpdateFunction,
 		"Function.DeleteFunction":             p.DeleteFunction,
 		"Function.CallFunction":               p.CallFunction,
+		"Function.ListRuntimes":               p.ListRuntimes,
 		"Function.GenerateUploadUrl":          p.GenerateUploadUrl,
 		"Function.GenerateDownloadUrl":        p.GenerateDownloadUrl,
 		"Function.ListLocations":              p.ListLocations,
@@ -180,6 +181,21 @@ func (p *Provider) CallFunction(ctx context.Context, nr *model.NormalizedRequest
 		return provider.OK(map[string]any{"executionId": executionID, "error": invokeErr}), nil
 	}
 	return provider.OK(map[string]any{"executionId": executionID, "result": result}), nil
+}
+
+// ListRuntimes returns the v2 runtime catalog
+// (GET /v2/projects/{p}/locations/{l}/runtimes). It is the v2-deploy enabler:
+// gcloud resolves a function's runtime from this list before uploading source.
+func (p *Provider) ListRuntimes(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	runtimes, err := p.core.ListRuntimes(p.project(nr), strParam(nr, "location"), strParam(nr, "filter"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(runtimes))
+	for _, rt := range runtimes {
+		items = append(items, core.RuntimeJSON(rt))
+	}
+	return provider.OK(map[string]any{"runtimes": items}), nil
 }
 
 // GenerateUploadUrl returns a fake signed upload URL for source deployment.

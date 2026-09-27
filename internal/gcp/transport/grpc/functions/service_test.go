@@ -265,11 +265,67 @@ func TestCallFunctionV1(t *testing.T) {
 	}
 }
 
-// TestListRuntimesUnimplemented pins the remaining control-plane-only decision:
-// v2 ListRuntimes has no emulator implementation and fails loud.
-func TestListRuntimesUnimplemented(t *testing.T) {
+// TestListRuntimesV2 returns the v2 runtime catalog over the shared core: the
+// catalog is non-empty, nodejs20 is GEN_2/GA, a filter narrows it to one
+// runtime, and a malformed parent is InvalidArgument.
+func TestListRuntimesV2(t *testing.T) {
+	ctx := context.Background()
 	v2 := newTestV2()
-	if _, err := v2.ListRuntimes(context.Background(), &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj/locations/us-central1"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("ListRuntimes = %v, want Unimplemented", err)
+
+	resp, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj/locations/us-central1"})
+	if err != nil {
+		t.Fatalf("ListRuntimes: %v", err)
+	}
+	if len(resp.GetRuntimes()) == 0 {
+		t.Fatal("empty runtime list")
+	}
+	var node bool
+	for _, rt := range resp.GetRuntimes() {
+		if rt.GetName() == "nodejs20" {
+			node = true
+			if rt.GetEnvironment() != apiv2functionspb.Environment_GEN_2 ||
+				rt.GetStage() != apiv2functionspb.ListRuntimesResponse_GA {
+				t.Fatalf("nodejs20 = %+v", rt)
+			}
+		}
+	}
+	if !node {
+		t.Fatal("nodejs20 missing from catalog")
+	}
+
+	// A deprecated runtime must transcode its stage, warnings, and
+	// deprecationDate (the nested google.type.Date) onto the proto.
+	var node18 *apiv2functionspb.ListRuntimesResponse_Runtime
+	for _, rt := range resp.GetRuntimes() {
+		if rt.GetName() == "nodejs18" {
+			node18 = rt
+		}
+	}
+	if node18 == nil {
+		t.Fatal("nodejs18 missing from catalog")
+	}
+	if node18.GetStage() != apiv2functionspb.ListRuntimesResponse_DEPRECATED {
+		t.Fatalf("nodejs18 stage = %v, want DEPRECATED", node18.GetStage())
+	}
+	if len(node18.GetWarnings()) == 0 {
+		t.Fatal("nodejs18 missing warnings")
+	}
+	if d := node18.GetDeprecationDate(); d == nil || d.GetYear() != 2025 {
+		t.Fatalf("nodejs18 deprecationDate = %v", d)
+	}
+
+	filtered, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{
+		Parent: "projects/proj/locations/us-central1",
+		Filter: `name="python312"`,
+	})
+	if err != nil {
+		t.Fatalf("ListRuntimes filter: %v", err)
+	}
+	if len(filtered.GetRuntimes()) != 1 || filtered.GetRuntimes()[0].GetName() != "python312" {
+		t.Fatalf("filtered = %+v", filtered.GetRuntimes())
+	}
+
+	if _, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("malformed parent = %v, want InvalidArgument", err)
 	}
 }
