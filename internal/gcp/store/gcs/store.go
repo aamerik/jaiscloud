@@ -242,6 +242,16 @@ type ObjectStore interface {
 	// ErrPreconditionFailed — without applying the write — on a mismatch.
 	PutObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
 	PutObjectGenerationChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	// UpdateObjectMetaChecked updates the live generation's metadata in place:
+	// the generation id, creation time, size/checksums, encryption material,
+	// and every other (noncurrent) generation are left untouched. This is the
+	// GCS objects.patch/objects.update (and gRPC UpdateObject) write: a
+	// metadata change does not create a new generation, only a new
+	// metageneration. precondition (if non-nil) is validated against the
+	// current live-generation state atomically with the write. Returns
+	// ErrNoSuchObject when no live generation exists and ErrPreconditionFailed
+	// — without applying the write — on a mismatch.
+	UpdateObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
 	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
 	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
 	// DeleteObjectGeneration removes exactly one generation (live or non-live)

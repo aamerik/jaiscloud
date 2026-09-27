@@ -431,6 +431,61 @@ func TestGetObjectHonorsGeneration(t *testing.T) {
 	}
 }
 
+// TestUpdateObjectKeepsVersionedGenerations verifies gRPC UpdateObject modifies
+// the live generation's metadata in place: the generation is unchanged, the
+// metageneration bumps, and the noncurrent generation survives untouched.
+func TestUpdateObjectKeepsVersionedGenerations(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "bucket-a",
+		Bucket: &storagepb.Bucket{
+			Project:    "projects/test-project",
+			Location:   "US",
+			Versioning: &storagepb.Bucket_Versioning{Enabled: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	v1 := writeSingleShot(t, client, testBucket, "upd-obj", "text/plain", []byte("version-one"))
+	v2 := writeSingleShot(t, client, testBucket, "upd-obj", "application/json", []byte("version-two"))
+	if v1.GetGeneration() == v2.GetGeneration() {
+		t.Fatal("expected distinct generations")
+	}
+
+	updated, err := client.UpdateObject(ctx, &storagepb.UpdateObjectRequest{
+		Object:     &storagepb.Object{Name: "upd-obj", Bucket: testBucket, Metadata: map[string]string{"updated": "true"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.updated"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateObject: %v", err)
+	}
+	if updated.GetGeneration() != v2.GetGeneration() {
+		t.Fatalf("UpdateObject changed generation: got %d, want %d", updated.GetGeneration(), v2.GetGeneration())
+	}
+	if updated.GetMetageneration() <= v2.GetMetageneration() {
+		t.Fatalf("UpdateObject metageneration = %d, want > %d", updated.GetMetageneration(), v2.GetMetageneration())
+	}
+	if updated.GetMetadata()["updated"] != "true" {
+		t.Fatalf("UpdateObject metadata = %v, want updated=true", updated.GetMetadata())
+	}
+
+	// The noncurrent generation is untouched and still addressable.
+	old, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "upd-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("GetObject(noncurrent): %v", err)
+	}
+	if old.GetContentType() != "text/plain" || old.GetMetadata()["updated"] != "" {
+		t.Fatalf("noncurrent generation mutated: contentType=%q metadata=%v", old.GetContentType(), old.GetMetadata())
+	}
+}
+
 func TestDeleteAndUpdatePreconditions(t *testing.T) {
 	client, cleanup := storageTestService(t)
 	defer cleanup()

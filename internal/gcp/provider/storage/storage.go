@@ -2679,9 +2679,15 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	if err := p.objects.PutObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
+	// Metadata update is in-place: real GCS keeps the generation and every
+	// noncurrent generation, bumping only the metageneration (the
+	// replace-semantics PutObjectMeta* would discard noncurrent versions).
+	if err := p.objects.UpdateObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		if errors.Is(err, gcs.ErrPreconditionFailed) {
 			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
@@ -2729,9 +2735,15 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	}
 	o.Metageneration = bumpMeta(o.Metageneration)
 	o.Updated = clock.Now().Format(time.RFC3339Nano)
-	if err := p.objects.PutObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
+	// Metadata update is in-place: real GCS keeps the generation and every
+	// noncurrent generation, bumping only the metageneration (the
+	// replace-semantics PutObjectMeta* would discard noncurrent versions).
+	if err := p.objects.UpdateObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
+		}
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		if errors.Is(err, gcs.ErrPreconditionFailed) {
 			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)

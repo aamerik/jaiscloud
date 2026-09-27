@@ -234,6 +234,50 @@ func (s *MemoryObjectStore) PutObjectGenerationChecked(_ context.Context, bucket
 	return nil
 }
 
+// UpdateObjectMetaChecked updates the live generation's metadata in place,
+// preserving every other (noncurrent) generation and the live generation's
+// immutable fields (id, creation time, size, checksums, encryption material —
+// including WrappedDEK, which has no wire representation). The precondition is
+// validated against the current live generation under the same write lock.
+func (s *MemoryObjectStore) UpdateObjectMetaChecked(_ context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gens := s.objects[bucket][name]
+	idx := -1
+	for i := len(gens) - 1; i >= 0; i-- {
+		if gens[i].TimeDeleted == nil {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ErrNoSuchObject
+	}
+	if !objectPreconditionMatches(gens[idx], true, precondition) {
+		return ErrPreconditionFailed
+	}
+	meta.Bucket = bucket
+	meta.Name = name
+	normalizeMeta(&meta)
+	// Mutate only the mutable metadata fields on the stored live generation,
+	// taking the immutables (generation, size, checksums, creation time, and
+	// key material such as WrappedDEK) from storage — the caller's meta is
+	// built from the wire object, which omits WrappedDEK. Replacing the whole
+	// struct would zero the wrapped DEK and make a CMEK object unreadable.
+	cur := gens[idx]
+	cur.ContentType = meta.ContentType
+	cur.StorageClass = meta.StorageClass
+	cur.Metadata = meta.Metadata
+	cur.TemporaryHold = meta.TemporaryHold
+	cur.EventBasedHold = meta.EventBasedHold
+	cur.Retention = meta.Retention
+	cur.Metageneration = meta.Metageneration
+	cur.Updated = meta.Updated
+	gens[idx] = cur
+	s.objects[bucket][name] = gens
+	return nil
+}
+
 func (s *MemoryObjectStore) DeleteObjectMetaChecked(_ context.Context, bucket, name string, precondition *Precondition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

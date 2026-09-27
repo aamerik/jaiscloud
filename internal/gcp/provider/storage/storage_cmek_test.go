@@ -78,6 +78,58 @@ func TestGCSCMEKRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGCSCMEKMetadataUpdateKeepsReadable verifies that objects.patch on a CMEK
+// object preserves the stored wrapped DEK, so the object stays readable. The
+// wire object carries no WrappedDEK, so a whole-struct store replacement would
+// silently zero it and make the object undecryptable.
+func TestGCSCMEKMetadataUpdateKeepsReadable(t *testing.T) {
+	ctx := context.Background()
+	kmsStore := kms.NewMemoryStore()
+	enc := crypto.NewEnvelopeEncryptor(kmsStore)
+	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobfs.NewMemoryBlobStore(), enc)
+
+	projectID := "my-project"
+	kmsKeyName := "projects/" + projectID + "/locations/global/keyRings/r/cryptoKeys/k"
+	if err := kmsStore.CreateKeyRing(ctx, projectID, "global", "r", kms.KeyRing{ID: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.CreateCryptoKey(ctx, projectID, "global", "r", "k", kms.CryptoKey{ID: "k", Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+		t.Fatal(err)
+	}
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{
+		"name":       "cmek-upd",
+		"encryption": map[string]any{"defaultKmsKeyName": kmsKeyName},
+	}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "cmek-upd"
+	nr.Params["object"] = "secret.txt"
+	nr.Params[wire.MediaKey] = []byte("top secret")
+	nr.Params[wire.ContentTypeKey] = "text/plain"
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert object: %v", err)
+	}
+
+	// PATCH metadata; the wrapped DEK must survive so the media still decrypts.
+	nr = bucketParamsWithObj("cmek-upd", "secret.txt")
+	nr.Params["body"] = map[string]any{"contentType": "application/json"}
+	if _, err := p.ObjectsPatch(ctx, nr); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	nr = bucketParamsWithObj("cmek-upd", "secret.txt")
+	media, err := p.ObjectsGetMedia(ctx, nr)
+	if err != nil {
+		t.Fatalf("get media after patch: %v", err)
+	}
+	if got := string(streamBytes(t, media)); got != "top secret" {
+		t.Fatalf("media after patch = %q, want %q", got, "top secret")
+	}
+}
+
 func TestGCSCSEKRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
