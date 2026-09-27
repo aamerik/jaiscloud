@@ -26,8 +26,9 @@ import (
 // The two API versions share one emulator store, so a v1-created function is
 // visible to v2.
 //
-// CallFunction (v1 runtime invocation) and ListRuntimes (v2) are deliberately
-// not probed: they are explicit Unimplemented stubs (control plane only).
+// CallFunction (v1 runtime invocation) is probed over the shared executor;
+// ListRuntimes (v2) is deliberately not probed: it is an explicit Unimplemented
+// stub (control plane only).
 func functionsChecks() []Check {
 	return []Check{
 		// v1 CloudFunctionsService.
@@ -38,6 +39,7 @@ func functionsChecks() []Check {
 		{Service: "functions", RPC: "DeleteFunction (v1)", Method: "DeleteFunction", KeyField: "NotFound after delete", Run: checkFnDeleteV1},
 		{Service: "functions", RPC: "GenerateUploadUrl (v1)", Method: "GenerateUploadUrl", KeyField: "non-empty uploadUrl", Run: checkFnGenerateUploadURLV1},
 		{Service: "functions", RPC: "GenerateDownloadUrl (v1)", Method: "GenerateDownloadUrl", KeyField: "non-empty downloadUrl", Run: checkFnGenerateDownloadURLV1},
+		{Service: "functions", RPC: "CallFunction (v1)", Method: "CallFunction", KeyField: "executionId + echoed result", Run: checkFnCallV1},
 		{Service: "functions", RPC: "SetIamPolicy (v1)", Method: "SetIamPolicy", KeyField: "binding round-trip", Run: checkFnSetIamV1},
 		{Service: "functions", RPC: "GetIamPolicy (v1)", Method: "GetIamPolicy", KeyField: "stored binding returned", Run: checkFnGetIamV1},
 		{Service: "functions", RPC: "TestIamPermissions (v1)", Method: "TestIamPermissions", KeyField: "requested permission echoed", Run: checkFnTestIamV1},
@@ -286,6 +288,40 @@ func checkFnGenerateDownloadURLV1(ctx context.Context, cfg Config) error {
 	}
 	if resp.GetDownloadUrl() == "" {
 		return fmt.Errorf("empty downloadUrl")
+	}
+	return nil
+}
+
+// checkFnCallV1 invokes a function through the v1 runtime-invocation RPC. The
+// emulator's default mock executor echoes the request payload, so a successful
+// call returns a non-empty executionId and the payload as result, with no
+// in-band error.
+func checkFnCallV1(ctx context.Context, cfg Config) error {
+	client, err := newFunctionsV1Client(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-fn-v1-call")
+	if err := ensureFunctionV1(ctx, client, cfg, id); err != nil {
+		return err
+	}
+	const payload = `{"hello":"world"}`
+	resp, err := client.CallFunction(ctx, &functionspb.CallFunctionRequest{
+		Name: functionsV1Name(cfg, id),
+		Data: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("CallFunction: %w", err)
+	}
+	if resp.GetExecutionId() == "" {
+		return fmt.Errorf("empty executionId")
+	}
+	if resp.GetError() != "" {
+		return fmt.Errorf("unexpected in-band error: %q", resp.GetError())
+	}
+	if resp.GetResult() != payload {
+		return fmt.Errorf("result = %q, want %q", resp.GetResult(), payload)
 	}
 	return nil
 }
