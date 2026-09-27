@@ -51,6 +51,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Function.FunctionTestIamPermissions": p.FunctionTestIamPermissions,
 		"Function.GetOperation":               p.GetOperation,
 		"Function.ListOperations":             p.ListOperations,
+		"Function.WaitOperation":              p.WaitOperation,
 		"Function.CancelOperation":            p.CancelOperation,
 		"Function.DeleteOperation":            p.DeleteOperation,
 	}
@@ -300,34 +301,64 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	op, err := p.core.GetOperationJSON(p.project(nr), name, p.version(nr))
+	op, err := p.core.GetOperationJSON(ctx, p.project(nr), name, p.version(nr))
 	if err != nil {
 		return nil, err
 	}
 	return provider.OK(op), nil
 }
 
-func (p *Provider) ListOperations(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"operations": p.core.ListOperations()}), nil
-}
-
-func (p *Provider) CancelOperation(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+// WaitOperation serves the google.longrunning.Operations.WaitOperation custom
+// method (POST /v2/projects/{p}/locations/{l}/operations/{id}:wait). Every
+// emulated operation completes synchronously, so it returns the persisted, done
+// operation immediately.
+func (p *Provider) WaitOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.core.CancelOperation(name); err != nil {
+	op, err := p.core.WaitOperation(ctx, p.project(nr), name, p.version(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(op), nil
+}
+
+func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	v := p.version(nr)
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, op := range page {
+		items = append(items, core.OperationJSON(v, project, op))
+	}
+	resp := map[string]any{"operations": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
+}
+
+func (p *Provider) CancelOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.core.CancelOperation(ctx, p.project(nr), name); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
 }
 
-func (p *Provider) DeleteOperation(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.core.DeleteOperation(name); err != nil {
+	if err := p.core.DeleteOperation(ctx, p.project(nr), name); err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil

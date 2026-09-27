@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrNoSuchFunction = errors.New("NoSuchFunction")
-	ErrAlreadyExists  = errors.New("AlreadyExists")
+	ErrNoSuchFunction  = errors.New("NoSuchFunction")
+	ErrAlreadyExists   = errors.New("AlreadyExists")
+	ErrNoSuchOperation = errors.New("NoSuchOperation")
 )
 
 // EventTrigger is a source that fires events in response to a condition in
@@ -52,6 +53,22 @@ type Function struct {
 	SourceBlobKey string
 }
 
+// Operation is a persisted Cloud Functions long-running operation returned by a
+// create/update/delete mutation. Function is the version-independent response
+// snapshot carried by a create/update (nil for a delete, whose response is a
+// google.protobuf.Empty); storing the record — rather than pre-rendered JSON —
+// lets the shared renderer emit either the v1 or v2 wire shape on read.
+type Operation struct {
+	ID         string    `json:"id"`
+	Location   string    `json:"location"`
+	Done       bool      `json:"done"`
+	Verb       string    `json:"verb"`
+	Target     string    `json:"target"`
+	Function   *Function `json:"function,omitempty"`
+	CreateTime time.Time `json:"createTime"`
+	EndTime    time.Time `json:"endTime"`
+}
+
 // Store is the Cloud Functions v1 store.
 type Store interface {
 	CreateFunction(ctx context.Context, projectID, location, id string, f Function) error
@@ -69,6 +86,14 @@ type Store interface {
 	// ListFunctionsAllLocations returns every function for a project across all
 	// locations, for the "locations/-/functions" (all-locations) wildcard.
 	ListFunctionsAllLocations(ctx context.Context, projectID string) ([]Function, error)
+
+	// Operations persist the done google.longrunning.Operation returned by a
+	// function create/update/delete so a poll can read it back. They are
+	// project+location scoped and keyed by their opaque id.
+	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
+	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
+	DeleteOperation(ctx context.Context, projectID, location, id string) error
+	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
 	Reset(ctx context.Context)
 }

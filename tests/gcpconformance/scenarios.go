@@ -283,23 +283,32 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/v2/projects/" + p + "/locations/us-central1/runtimes?filter=" + url.QueryEscape(`name="nodejs20"`)},
 	)
 
-	// ─── Cloud Functions common APIs ──────────────────────────────────────────
+	// ─── Cloud Functions common APIs + long-running operations ────────────────
 	// GetLocation is the shared google.cloud.location.Locations method and
-	// CancelOperation/DeleteOperation are the shared google.longrunning
-	// Operations methods. None are enumerated in the service Discovery document
-	// (the classifier upgrades those cells in docs/fidelity-overrides.yaml),
-	// so these scenarios pin the served shapes: a Location record and the
-	// empty google.protobuf.Empty bodies returned by cancel/delete.
-	fnOp := "locations/us-central1/operations/conf-op-" + suffix
+	// CancelOperation/DeleteOperation/WaitOperation are the shared
+	// google.longrunning.Operations methods. None are enumerated in the service
+	// Discovery document (the classifier upgrades those cells in
+	// docs/fidelity-overrides.yaml), so these scenarios pin the served shapes.
+	// A create first captures the persisted operation name so get/list/wait/
+	// cancel/delete exercise a real stored operation (unknown ids are NotFound).
+	fnID := "conf-fn-" + suffix
 	sc = append(sc,
 		Scenario{Service: "functions", Method: "GET",
 			Path: "/v1/projects/" + p + "/locations/us-central1"},
-		Scenario{Service: "functions", Method: "GET",
-			Path: "/v2/projects/" + p + "/" + fnOp},
 		Scenario{Service: "functions", Method: "POST",
-			Path: "/v2/projects/" + p + "/" + fnOp + ":cancel"},
+			Path: "/v2/projects/" + p + "/locations/us-central1/functions?functionId=" + url.QueryEscape(fnID),
+			Body: `{"buildConfig":{"runtime":"nodejs20","entryPoint":"handler"}}`,
+			Save: map[string]string{"fnop": "name"}},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v2/${fnop}"},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + p + "/locations/us-central1/operations"},
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/${fnop}:wait"},
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/${fnop}:cancel"},
 		Scenario{Service: "functions", Method: "DELETE",
-			Path: "/v2/projects/" + p + "/" + fnOp},
+			Path: "/v2/${fnop}"},
 	)
 
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────

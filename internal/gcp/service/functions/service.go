@@ -148,6 +148,9 @@ func mapErr(err error) error {
 	if errors.Is(err, functionsstore.ErrNoSuchFunction) {
 		return model.NewProviderError("NotFound", "function not found", 404)
 	}
+	if errors.Is(err, functionsstore.ErrNoSuchOperation) {
+		return model.NewProviderError("NotFound", "operation not found", 404)
+	}
 	return err
 }
 
