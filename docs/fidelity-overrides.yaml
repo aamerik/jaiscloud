@@ -114,6 +114,31 @@ operations:
   # catalog on both transports (REST GET /v2/.../runtimes + gRPC ListRuntimes),
   # verified by the official gRPC client conformance suite, so it needs no
   # override.
+  #
+  # Cloud Functions REST common-API methods: GetLocation is the shared
+  # google.cloud.location.Locations method and CancelOperation/DeleteOperation
+  # are the shared google.longrunning.Operations methods (the Cloud Functions
+  # RPC reference lists both interfaces). The service Discovery document
+  # deliberately does not enumerate common-API methods, so the classifier
+  # reports these as limited ("no matching Discovery method") even though the
+  # handlers are served and wire-tested (DELETE /v2/.../operations/{id},
+  # POST /v2/.../operations/{id}:cancel, GET /v1/projects/{p}/locations/{l});
+  # the cells are therefore upgraded to ga.
+  - service: functions
+    operation: Function.GetLocation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested"
+  - service: functions
+    operation: Function.CancelOperation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested"
+  - service: functions
+    operation: Function.DeleteOperation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested"
   # Service Usage gRPC is control-plane only: the service/get/list/enable/disable
   # surface is implemented, while BatchGetServices is an explicit Unimplemented
   # stub (the REST surface does not implement it either).

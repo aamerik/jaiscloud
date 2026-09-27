@@ -283,6 +283,25 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/v2/projects/" + p + "/locations/us-central1/runtimes?filter=" + url.QueryEscape(`name="nodejs20"`)},
 	)
 
+	// ─── Cloud Functions common APIs ──────────────────────────────────────────
+	// GetLocation is the shared google.cloud.location.Locations method and
+	// CancelOperation/DeleteOperation are the shared google.longrunning
+	// Operations methods. None are enumerated in the service Discovery document
+	// (the classifier upgrades those cells in docs/fidelity-overrides.yaml),
+	// so these scenarios pin the served shapes: a Location record and the
+	// empty google.protobuf.Empty bodies returned by cancel/delete.
+	fnOp := "locations/us-central1/operations/conf-op-" + suffix
+	sc = append(sc,
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v1/projects/" + p + "/locations/us-central1"},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + p + "/" + fnOp},
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v2/projects/" + p + "/" + fnOp + ":cancel"},
+		Scenario{Service: "functions", Method: "DELETE",
+			Path: "/v2/projects/" + p + "/" + fnOp},
+	)
+
 	// ─── Cloud Monitoring (REST data plane) ───────────────────────────────────
 	mType := "conf.metric_" + suffix
 	tsType := "conf.ts_" + suffix

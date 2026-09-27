@@ -3,8 +3,8 @@
   "summary": {
     "total": 792,
     "by_state": {
-      "ga": 554,
-      "limited": 100,
+      "ga": 557,
+      "limited": 97,
       "preview": 37,
       "unsupported": 101
     },
@@ -15,8 +15,8 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 282,
-        "limited": 89,
+        "ga": 285,
+        "limited": 86,
         "preview": 37,
         "unsupported": 9
       }
@@ -56,8 +56,7 @@
         "unsupported": 28
       },
       "functions": {
-        "ga": 27,
-        "limited": 3
+        "ga": 30
       },
       "iam": {
         "ga": 18
@@ -3083,8 +3082,8 @@
       "service": "functions",
       "operation": "Function.CancelOperation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
+      "reason": "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested",
       "evidence": [
         "mutating",
         "postgres=yes"
@@ -3116,8 +3115,8 @@
       "service": "functions",
       "operation": "Function.DeleteOperation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
+      "reason": "shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested",
       "evidence": [
         "mutating",
         "postgres=yes"
@@ -3188,8 +3187,8 @@
       "service": "functions",
       "operation": "Function.GetLocation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
+      "reason": "shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested",
       "evidence": [
         "postgres=yes"
       ]

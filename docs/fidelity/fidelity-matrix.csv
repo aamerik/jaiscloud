@@ -267,17 +267,17 @@ functions,CallFunction,grpc,ga,
 functions,CreateFunction,grpc,ga,
 functions,DeleteFunction,grpc,ga,
 functions,Function.CallFunction,rest,ga,
-functions,Function.CancelOperation,rest,limited,no matching Discovery method (unverified against the official schema)
+functions,Function.CancelOperation,rest,ga,"shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested"
 functions,Function.CreateFunction,rest,ga,
 functions,Function.DeleteFunction,rest,ga,
-functions,Function.DeleteOperation,rest,limited,no matching Discovery method (unverified against the official schema)
+functions,Function.DeleteOperation,rest,ga,"shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested"
 functions,Function.FunctionGetIamPolicy,rest,ga,
 functions,Function.FunctionSetIamPolicy,rest,ga,
 functions,Function.FunctionTestIamPermissions,rest,ga,
 functions,Function.GenerateDownloadUrl,rest,ga,
 functions,Function.GenerateUploadUrl,rest,ga,
 functions,Function.GetFunction,rest,ga,
-functions,Function.GetLocation,rest,limited,no matching Discovery method (unverified against the official schema)
+functions,Function.GetLocation,rest,ga,"shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested"
 functions,Function.GetOperation,rest,ga,
 functions,Function.ListFunctions,rest,ga,
 functions,Function.ListLocations,rest,ga,
