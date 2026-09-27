@@ -118,7 +118,15 @@ func putAbsolute(t *testing.T, url string, body []byte, contentType string) (int
 // then invokes it and asserts the handler actually ran (not mock echo).
 func TestFunctionSourceExecutionDocker(t *testing.T) {
 	requireDockerEnv(t)
-	reset(t)
+	testFunctionSourceExecution(t)
+}
+
+// deploySourceFunction uploads a Python source archive through the v2
+// generateUploadUrl flow (a GCS-backed upload target) and creates a v2 function
+// with the given id referencing it. Shared by the Docker and K8s
+// source-execution tests.
+func deploySourceFunction(t *testing.T, id string) {
+	t.Helper()
 
 	zipBytes := buildZip(t, map[string]string{
 		"lambda_function.py": "def handler(event, context):\n    return {\"hello\": \"world\", \"input\": event}\n",
@@ -150,10 +158,20 @@ func TestFunctionSourceExecutionDocker(t *testing.T) {
 	// 2. Create a v2 function referencing the uploaded storageSource.
 	create := []byte(`{"buildConfig":{"runtime":"python312","entryPoint":"lambda_function.handler",` +
 		`"source":{"storageSource":{"bucket":"` + up.StorageSource.Bucket + `","object":"` + up.StorageSource.Object + `"}}}}`)
-	if code, body := do(t, "POST", "/v2/projects/proj/locations/us-central1/functions?functionId=hello",
+	if code, body := do(t, "POST", "/v2/projects/proj/locations/us-central1/functions?functionId="+id,
 		create, "application/json"); code != http.StatusOK {
 		t.Fatalf("create function: HTTP %d: %s", code, body)
 	}
+}
+
+// testFunctionSourceExecution is the shared Cloud Functions source-execution
+// flow, run against a Docker- or K8s-backed emulator. It deploys a function
+// from a GCS-uploaded archive, invokes it, and asserts the handler actually ran
+// (not mock echo).
+func testFunctionSourceExecution(t *testing.T) {
+	t.Helper()
+	reset(t)
+	deploySourceFunction(t, "hello")
 
 	// 3. Invoke synchronously. A cold container start can exceed the first
 	// request's readiness window, so retry until the deadline.

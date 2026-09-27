@@ -186,7 +186,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `--log-level`/`JAISCLOUD_LOG_LEVEL`, `--metrics`. The k3d manifest additionally sets
   `JAISCLOUD_SPARK_EXECUTOR_MODE=k8s`, `JAISCLOUD_K8S_SPARK_IMAGE`,
   `JAISCLOUD_K8S_SPARK_SUBMIT_PATH`, `JAISCLOUD_GCS_EMULATOR_ENDPOINT`, and
-  `JAISCLOUD_PLATFORM_TLS_ENABLED`. Full table:
+  `JAISCLOUD_PLATFORM_TLS_ENABLED`. K8s Cloud Functions code mounting uses
+  `JAISCLOUD_LAMBDA_CODE_URL` (the admin base including `/_jaiscloud`; defaults to
+  `JAISCLOUD_GCS_EMULATOR_ENDPOINT` + `/_jaiscloud` when set). Full table:
   [README-GCP Configuration](../README-GCP.md#configuration).
 
 ---

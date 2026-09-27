@@ -281,6 +281,46 @@ func (e *K8sExecutor) getOrCreate(ctx context.Context, req InvokeRequest) (*warm
 	}
 }
 
+// codeArchiveEnvName is the env var the code-fetch init container reads the
+// resolved archive URL from. The URL ends in a literal "$LATEST" qualifier;
+// passing it through the environment (and quoting the reference) keeps the
+// shell from expanding that token to an empty string, which would request
+// `.../{key}/` and 404.
+const codeArchiveEnvName = "JAISCLOUD_LAMBDA_CODE_ARCHIVE_URL"
+
+// applyCodeMount injects the source code-fetch init container into a pod spec
+// when both a CodeLoader and a CodeURL base are configured. The init container
+// downloads the archive over the admin HTTP API and unpacks it into a shared
+// emptyDir mounted (read-only) at /var/task in the runtime container.
+//
+// The URL is {CodeURL}/lambda/code/{account}/{codeKey}/$LATEST; CodeURL must
+// therefore be the admin base including the /_jaiscloud prefix (see
+// LambdaConfig.CodeURL). A nil loader or empty CodeURL is a no-op, leaving the
+// mock/mounted-elsewhere behavior unchanged.
+func applyCodeMount(spec *k8stypes.PodSpec, cfg LambdaConfig, req InvokeRequest, loader CodeLoader) {
+	if loader == nil || cfg.CodeURL == "" || len(spec.Containers) == 0 {
+		return
+	}
+	codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", cfg.CodeURL, req.AccountID, codeKey(req))
+	spec.Volumes = append(spec.Volumes, k8stypes.Volume{
+		Name:     "code",
+		EmptyDir: &k8stypes.EmptyDirVol{},
+	})
+	// Append rather than replace so any init containers the platform layer
+	// already added (e.g. the TLS materializer) are preserved.
+	spec.InitContainers = append(spec.InitContainers, k8stypes.Container{
+		Name:         "code-fetch",
+		Image:        cfg.InitImage,
+		Command:      []string{"/bin/sh", "-c"},
+		Args:         []string{`wget -qO /tmp/code.zip "$` + codeArchiveEnvName + `" && unzip /tmp/code.zip -d /var/task`},
+		Env:          []k8stypes.EnvVar{{Name: codeArchiveEnvName, Value: codeURL}},
+		VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: "/var/task"}},
+	})
+	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts,
+		k8stypes.VolumeMount{Name: "code", MountPath: "/var/task", ReadOnly: true},
+	)
+}
+
 func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPod, error) {
 	ns := e.cfg.Namespace
 	image := ImageForRuntime(req, e.cfg)
@@ -350,24 +390,7 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 
 	// Code volume: inject an init container that fetches the zip and unpacks it
 	// into /var/task via a shared emptyDir when a code URL base is configured.
-	if e.codeLoader != nil && e.cfg.CodeURL != "" {
-		codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", e.cfg.CodeURL, req.AccountID, codeKey(req))
-		podSpec.Volumes = append(podSpec.Volumes, k8stypes.Volume{
-			Name:     "code",
-			EmptyDir: &k8stypes.EmptyDirVol{},
-		})
-		podSpec.InitContainers = []k8stypes.Container{{
-			Name:         "code-fetch",
-			Image:        e.cfg.InitImage,
-			Command:      []string{"/bin/sh", "-c"},
-			Args:         []string{fmt.Sprintf("wget -qO /tmp/code.zip %s && unzip /tmp/code.zip -d /var/task", codeURL)},
-			Env:          []k8stypes.EnvVar{{Name: "JAISCLOUD_LAMBDA_CODE_URL", Value: codeURL}},
-			VolumeMounts: []k8stypes.VolumeMount{{Name: "code", MountPath: "/var/task"}},
-		}}
-		podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts,
-			k8stypes.VolumeMount{Name: "code", MountPath: "/var/task", ReadOnly: true},
-		)
-	}
+	applyCodeMount(&podSpec, e.cfg, req, e.codeLoader)
 
 	podLabels := map[string]string{
 		"app":                      labelApp,
