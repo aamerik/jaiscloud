@@ -82,6 +82,50 @@ func TestGCSObjectUpdateVsPatch(t *testing.T) {
 	require.Nil(t, obj["metadata"])
 }
 
+// TestGCSVersionedMetadataUpdateKeepsGenerations verifies that patching an
+// object's metadata in a versioned bucket updates the live generation in place:
+// the generation is unchanged and every noncurrent generation survives, as in
+// real GCS (generation is immutable; only metageneration increments).
+func TestGCSVersionedMetadataUpdateKeepsGenerations(t *testing.T) {
+	resetState(t)
+	createBucket(t, "vmeta-bucket")
+
+	resp, _ := do(t, "PATCH", "/storage/v1/b/vmeta-bucket",
+		[]byte(`{"versioning":{"enabled":true}}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	upload := func(data string) string {
+		resp, body := do(t, "POST", "/upload/storage/v1/b/vmeta-bucket/o?uploadType=media&name=v.txt",
+			[]byte(data), map[string]string{"Content-Type": "text/plain"})
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		gen, _ := jsonMap(t, body)["generation"].(string)
+		require.NotEmpty(t, gen)
+		return gen
+	}
+	gen1 := upload("one")
+	gen2 := upload("two")
+	require.NotEqual(t, gen1, gen2)
+
+	// PATCH the live generation's metadata; the generation must not change.
+	resp, body := do(t, "PATCH", "/storage/v1/b/vmeta-bucket/o/v.txt",
+		[]byte(`{"contentType":"application/json"}`), map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	patched := jsonMap(t, body)
+	require.Equal(t, gen2, patched["generation"], "metadata patch must not change the generation")
+	require.Equal(t, "application/json", patched["contentType"])
+
+	// Both generations survive in a versions listing.
+	resp, body = do(t, "GET", "/storage/v1/b/vmeta-bucket/o?versions=true", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	items, _ := jsonMap(t, body)["items"].([]any)
+	require.Len(t, items, 2, "metadata patch must preserve the noncurrent generation")
+
+	// The noncurrent generation is unchanged and still addressable by id.
+	resp, body = do(t, "GET", "/storage/v1/b/vmeta-bucket/o/v.txt?generation="+gen1, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "text/plain", jsonMap(t, body)["contentType"])
+}
+
 // TestGCSObjectIAM exercises objects.getIamPolicy/setIamPolicy over the wire.
 func TestGCSObjectIAM(t *testing.T) {
 	resetState(t)

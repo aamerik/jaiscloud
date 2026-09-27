@@ -382,6 +382,50 @@ func (s *PostgresObjectStore) PutObjectGenerationChecked(ctx context.Context, bu
 	})
 }
 
+// UpdateObjectMetaChecked updates the live generation's metadata in place,
+// preserving every other (noncurrent) generation and the live generation's
+// immutable columns (generation, time_created, size, checksums, encryption
+// material). Only the mutable metadata columns change — mirroring GCS
+// objects.patch/objects.update, which keep the generation and bump only the
+// metageneration. The precondition is validated against the row-locked live
+// generation inside the same Serializable transaction as the update.
+func (s *PostgresObjectStore) UpdateObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error {
+	return retrySerializableErr(ctx, func() error {
+		meta.Bucket = bucket
+		meta.Name = name
+		normalizeMeta(&meta)
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		current, exists, err := lockLiveGeneration(ctx, tx, bucket, name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNoSuchObject
+		}
+		if !objectPreconditionMatches(current, exists, precondition) {
+			return ErrPreconditionFailed
+		}
+		metaRaw, _ := json.Marshal(meta.Metadata)
+		retainUntil, retentionMode := retentionArgs(&meta)
+		if _, err := tx.Exec(ctx, `
+			UPDATE jc_gcs_objects
+			SET metageneration=$4, content_type=$5, storage_class=$6, metadata=$7,
+			    updated=$8, temporary_hold=$9, event_based_hold=$10,
+			    retain_until=$11, retention_mode=$12
+			WHERE bucket=$1 AND name=$2 AND generation=$3
+		`, bucket, name, current.Generation, meta.Metageneration, meta.ContentType,
+			meta.StorageClass, json.RawMessage(metaRaw), meta.Updated, meta.TemporaryHold,
+			meta.EventBasedHold, retainUntil, retentionMode); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	})
+}
+
 func (s *PostgresObjectStore) DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error {
 	return retrySerializableErr(ctx, func() error {
 		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})

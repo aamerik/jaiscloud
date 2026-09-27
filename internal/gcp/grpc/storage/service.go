@@ -1136,8 +1136,16 @@ func (s *Service) UpdateObject(ctx context.Context, req *storagepb.UpdateObjectR
 
 	meta.Metageneration = bumpMeta(meta.Metageneration)
 	meta.Updated = clock.Now()
-	if err := s.objects.PutObjectMeta(ctx, bucket, object, meta); err != nil {
-		return nil, mapError(err)
+	// In-place metadata update: real GCS keeps the generation and every
+	// noncurrent generation (a metadata change bumps only the metageneration).
+	// Re-validate the preconditions atomically with the write to close the race
+	// between the check above and the store update.
+	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
+	if err := s.objects.UpdateObjectMetaChecked(ctx, bucket, object, meta, pre); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, mapError(model.NewProviderError("NotFound", "object not found", 404))
+		}
+		return nil, mapError(preconditionResult(err))
 	}
 	return objectToProto(meta), nil
 }
