@@ -1,6 +1,7 @@
 package functions
 
 import (
+	"fmt"
 	"time"
 
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -140,12 +141,17 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		// that read serviceConfig.service get a stable value.
 		"service": resourceID(project)("cloud-run-service", f.Location+"/"+f.ID),
 	}
-	// A deployed function has one synthesized revision (derived from its stored
-	// source hash); all traffic serves it. Persisted revision history + traffic
-	// splitting are FD5 concerns.
-	if rev := functionRevision(f); rev != "" {
-		svc["revision"] = resourceID(project)("cloud-function-revision", f.Location+"/"+f.ID+"/"+rev)
-		svc["allTrafficOnLatestRevision"] = true
+	// A deployed function's backing Cloud Run revision is derived from its
+	// persisted revision counter + source hash; all traffic serves it unless the
+	// 1st→2nd gen upgrade flow has redirected traffic to the Gen2 copy (FD5).
+	if rev := functionRevisionName(project, f); rev != "" {
+		svc["revision"] = rev
+	}
+	// The traffic flag is meaningful once the function has a deployed revision
+	// or has entered the upgrade flow, so a redirect is observable even on a
+	// function with no persisted source archive.
+	if f.Revision > 0 || f.UpgradeState != "" || f.UpgradeTrafficGen2 {
+		svc["allTrafficOnLatestRevision"] = !f.UpgradeTrafficGen2
 	}
 	if f.HttpsTriggerURL != "" {
 		svc["uri"] = f.HttpsTriggerURL
@@ -178,6 +184,9 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		}
 		out["eventTrigger"] = et
 	}
+	if ui := upgradeInfoJSON(project, f); ui != nil {
+		out["upgradeInfo"] = ui
+	}
 	return out
 }
 
@@ -189,7 +198,7 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 type Operation struct {
 	ID         string
 	Location   string
-	Verb       string // "create" | "update" | "delete"
+	Verb       string // "create" | "update" | "delete" | a v2 upgrade/traffic method name
 	Target     string // full function resource name
 	Function   *functionsstore.Function
 	CreateTime time.Time
@@ -295,15 +304,56 @@ func operationTypeFor(verb string) string {
 	return ""
 }
 
-// functionRevision derives the rendered revision id for a deployed function from
-// its persisted source hash. A function with no stored source has no revision
-// (the pre-deploy metadata-only case). FD5 (revisions + traffic) replaces this
-// derived value with a persisted revision record.
-func functionRevision(f functionsstore.Function) string {
-	if len(f.SourceSHA256) > 12 {
-		return f.SourceSHA256[:12]
+// functionRevisionName renders the Cloud Run revision backing a deployed
+// function — "projects/{p}/locations/{l}/services/{id}/revisions/{id}-{NNNNN}-
+// {sha8}" — from its persisted revision counter and source hash. It is "" when
+// the function has no deployed revision (the metadata-only case), so a function
+// created without a source archive renders no revision.
+func functionRevisionName(project string, f functionsstore.Function) string {
+	if f.Revision <= 0 {
+		return ""
 	}
-	return f.SourceSHA256
+	rev := fmt.Sprintf("%s-%05d", f.ID, f.Revision)
+	if len(f.SourceSHA256) >= 8 {
+		rev += "-" + f.SourceSHA256[:8]
+	}
+	return resourceID(project)("cloud-run-revision", f.Location+"/"+f.ID+"/"+rev)
+}
+
+// upgradeInfoJSON renders the v2 Function.upgradeInfo (output-only) once the
+// function has entered the 1st→2nd gen upgrade flow. It carries the documented
+// upgradeState enum plus the Gen2 copy's build/service configuration derived
+// from the persisted overrides; it is nil (the field is omitted) for a function
+// that has never been through an upgrade method.
+func upgradeInfoJSON(project string, f functionsstore.Function) map[string]any {
+	if f.UpgradeState == "" {
+		return nil
+	}
+	runtime := f.Runtime
+	if f.UpgradeRuntime != "" {
+		runtime = f.UpgradeRuntime
+	}
+	build := map[string]any{}
+	if runtime != "" {
+		build["runtime"] = runtime
+	}
+	if f.EntryPoint != "" {
+		build["entryPoint"] = f.EntryPoint
+	}
+	svc := map[string]any{
+		"service": resourceID(project)("cloud-run-service", f.Location+"/"+f.ID),
+	}
+	if f.UpgradeMaxInstances > 0 {
+		svc["maxInstanceCount"] = f.UpgradeMaxInstances
+	}
+	ui := map[string]any{"upgradeState": f.UpgradeState}
+	if len(build) > 0 {
+		ui["buildConfig"] = build
+	}
+	if len(svc) > 0 {
+		ui["serviceConfig"] = svc
+	}
+	return ui
 }
 
 // hasGSPrefix reports whether s starts with "gs://".

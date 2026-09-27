@@ -261,6 +261,14 @@ func TestFunctionsV2Decode(t *testing.T) {
 		{"DELETE", "/v2/projects/p/locations/us-central1/operations/op1", "DeleteOperation"},
 		{"GET", "/v2/projects/p/locations", "ListLocations"},
 		{"GET", "/v2/projects/p/locations/us-central1", "GetLocation"},
+		// v2 1st→2nd gen upgrade / traffic control plane (custom POST verbs).
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:setupFunctionUpgradeConfig", "SetupFunctionUpgradeConfig"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:redirectFunctionUpgradeTraffic", "RedirectFunctionUpgradeTraffic"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:rollbackFunctionUpgradeTraffic", "RollbackFunctionUpgradeTraffic"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:commitFunctionUpgrade", "CommitFunctionUpgrade"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:commitFunctionUpgradeAsGen2", "CommitFunctionUpgradeAsGen2"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:abortFunctionUpgrade", "AbortFunctionUpgrade"},
+		{"POST", "/v2/projects/p/locations/us-central1/functions/f:detachFunction", "DetachFunction"},
 	}
 	for _, tc := range cases {
 		nr, err := c.Decode(httptest.NewRequest(tc.method, tc.path, nil), nil)

@@ -208,9 +208,15 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `uploadUrl` points at the emulator, so `gcloud functions deploy --gen2` runs end-to-end
   (upload → create → poll). Source referenced by a GCS object (v1 `sourceArchiveUrl` or v2
   `buildConfig.source.storageSource`) is fetched, persisted with a revision hash, and executed in
-  Docker/K8s mode; a deployed function renders a `serviceConfig.revision` with
-  `allTrafficOnLatestRevision`. `Function.GetLocation` is
-  `limited` (no matching Discovery method). The gRPC surface
+  Docker/K8s mode; each deploy bumps a persisted revision counter, so a deployed function renders
+  the backing Cloud Run revision (`serviceConfig.revision`) with `allTrafficOnLatestRevision`. The
+  v2 1st→2nd gen upgrade/traffic control plane (`setupFunctionUpgradeConfig`,
+  `redirect`/`rollbackFunctionUpgradeTraffic`, `commitFunctionUpgrade`/`commitFunctionUpgradeAsGen2`,
+  `abortFunctionUpgrade`, `detachFunction`) is served over REST with a persisted `upgradeInfo`
+  state machine — REST-only in practice: the RPCs are documented in the Cloud Functions RPC
+  reference, but the public `googleapis` proto and every generated client omit them.
+  `Function.GetLocation` is served as the shared `google.cloud.location` common API (the service
+  Discovery document does not enumerate it). The gRPC surface
   registers both `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`

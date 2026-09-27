@@ -444,6 +444,22 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "FunctionSetIamPolicy"
 			case "testIamPermissions":
 				return "FunctionTestIamPermissions"
+			// v2 1st→2nd gen upgrade / traffic control plane (custom POST
+			// verbs on a function name; v2-only in real GCP).
+			case "setupFunctionUpgradeConfig":
+				return "SetupFunctionUpgradeConfig"
+			case "redirectFunctionUpgradeTraffic":
+				return "RedirectFunctionUpgradeTraffic"
+			case "rollbackFunctionUpgradeTraffic":
+				return "RollbackFunctionUpgradeTraffic"
+			case "commitFunctionUpgrade":
+				return "CommitFunctionUpgrade"
+			case "commitFunctionUpgradeAsGen2":
+				return "CommitFunctionUpgradeAsGen2"
+			case "abortFunctionUpgrade":
+				return "AbortFunctionUpgrade"
+			case "detachFunction":
+				return "DetachFunction"
 			}
 		case "triggers":
 			switch custom {

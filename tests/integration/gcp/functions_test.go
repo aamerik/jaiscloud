@@ -213,8 +213,9 @@ func TestFunctionsV2DeployUploadFlow(t *testing.T) {
 	sc, _ := fn["serviceConfig"].(map[string]any)
 	require.NotNil(t, sc)
 	rev, _ := sc["revision"].(string)
-	require.True(t, strings.HasPrefix(rev, "projects/"+project+"/locations/"+location+"/functions/srcfn/revisions/"), "revision = %q", rev)
-	require.NotEqual(t, "projects/"+project+"/locations/"+location+"/functions/srcfn/revisions/", rev)
+	// The revision is the backing Cloud Run service revision (FD5).
+	require.True(t, strings.HasPrefix(rev, "projects/"+project+"/locations/"+location+"/services/srcfn/revisions/srcfn-"),
+		"revision = %q", rev)
 	require.Equal(t, true, sc["allTrafficOnLatestRevision"])
 
 	// The uploaded object is now a real GCS object.
@@ -425,4 +426,92 @@ func TestFunctionsHTTPSTrigger(t *testing.T) {
 	resp, body = doHost(t, "POST", "/regional", "me-west1-"+project+".cloudfunctions.net", []byte("regional"), nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "regional trigger: %s", body)
 	require.Equal(t, "regional", string(body))
+}
+
+// TestFunctionsV2UpgradeTraffic covers FD5 over the wire: the seven v2 1st→2nd
+// gen upgrade/traffic methods (custom POST verbs on a function name) drive a
+// persisted upgradeInfo state machine and flip allTrafficOnLatestRevision, while
+// an invalid transition is a 400.
+func TestFunctionsV2UpgradeTraffic(t *testing.T) {
+	resetState(t)
+
+	const project = "proj"
+	const location = "us-central1"
+	base := "/v2/projects/" + project + "/locations/" + location + "/functions"
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+
+	// Create a v2 function.
+	resp, body := do(t, "POST", base+"?functionId=upg",
+		[]byte(`{"buildConfig":{"runtime":"nodejs20","entryPoint":"handler"}}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create: %s", body)
+
+	state := func() string {
+		t.Helper()
+		resp, body := do(t, "GET", base+"/upg", nil, nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "get: %s", body)
+		ui, _ := jsonMap(t, body)["upgradeInfo"].(map[string]any)
+		s, _ := ui["upgradeState"].(string)
+		return s
+	}
+	traffic := func() bool {
+		t.Helper()
+		resp, body := do(t, "GET", base+"/upg", nil, nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "get: %s", body)
+		sc, _ := jsonMap(t, body)["serviceConfig"].(map[string]any)
+		b, _ := sc["allTrafficOnLatestRevision"].(bool)
+		return b
+	}
+
+	// setupFunctionUpgradeConfig captures the Gen2 overrides without moving
+	// traffic.
+	resp, body = do(t, "POST", base+"/upg:setupFunctionUpgradeConfig",
+		[]byte(`{"buildConfigOverrides":{"runtime":"nodejs22"},"serviceConfigOverrides":{"maxInstanceCount":4}}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "setup: %s", body)
+	require.Equal(t, "SETUP_FUNCTION_UPGRADE_CONFIG_SUCCESSFUL", state())
+	require.True(t, traffic())
+
+	// redirect moves traffic to the Gen2 copy; rollback reverts it.
+	resp, body = do(t, "POST", base+"/upg:redirectFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "redirect: %s", body)
+	require.Equal(t, "REDIRECT_FUNCTION_UPGRADE_TRAFFIC_SUCCESSFUL", state())
+	require.False(t, traffic())
+
+	resp, body = do(t, "POST", base+"/upg:rollbackFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "rollback: %s", body)
+	require.True(t, traffic())
+
+	// abort discards the Gen2 copy.
+	resp, body = do(t, "POST", base+"/upg:redirectFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "re-redirect: %s", body)
+	resp, body = do(t, "POST", base+"/upg:abortFunctionUpgrade", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "abort: %s", body)
+	require.Empty(t, state())
+
+	// commitAsGen2 is terminal; detach clears the upgrade state.
+	resp, body = do(t, "POST", base+"/upg:setupFunctionUpgradeConfig", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "re-setup: %s", body)
+	resp, body = do(t, "POST", base+"/upg:redirectFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "re-redirect: %s", body)
+	resp, body = do(t, "POST", base+"/upg:commitFunctionUpgradeAsGen2", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "commitAsGen2: %s", body)
+	require.Equal(t, "COMMIT_FUNCTION_UPGRADE_AS_GEN2_SUCCESSFUL", state())
+	resp, body = do(t, "POST", base+"/upg:detachFunction", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "detach: %s", body)
+	require.Empty(t, state())
+
+	// commitFunctionUpgrade (the plain variant) finalizes after a redirect.
+	resp, body = do(t, "POST", base+"/upg:setupFunctionUpgradeConfig", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "setup: %s", body)
+	resp, body = do(t, "POST", base+"/upg:redirectFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "redirect: %s", body)
+	resp, body = do(t, "POST", base+"/upg:commitFunctionUpgrade", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "commit: %s", body)
+	require.Empty(t, state())
+
+	// An invalid transition (redirect before setup) is a 400.
+	resp, body = do(t, "POST", base+"?functionId=fresh",
+		[]byte(`{"buildConfig":{"runtime":"nodejs20"}}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create fresh: %s", body)
+	resp, body = do(t, "POST", base+"/fresh:redirectFunctionUpgradeTraffic", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "redirect before setup: %s", body)
 }

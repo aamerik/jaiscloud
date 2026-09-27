@@ -143,9 +143,13 @@ func TestUpdateFunctionReplacesSourceAndGCsPrior(t *testing.T) {
 		"b/two.zip": []byte("zip-two"),
 	}}
 	s := newSourceTestService(t, blobs, fetcher, nil)
-	if _, _, err := s.CreateFunction(ctx, "p", "us", "f",
-		FunctionInput{Runtime: "nodejs20", SourceBucket: "b", SourceObject: "one.zip"}, V1); err != nil {
+	created, _, err := s.CreateFunction(ctx, "p", "us", "f",
+		FunctionInput{Runtime: "nodejs20", SourceBucket: "b", SourceObject: "one.zip"}, V1)
+	if err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if created.Revision != 1 {
+		t.Fatalf("create revision = %d, want 1", created.Revision)
 	}
 	f, _, err := s.UpdateFunction(ctx, "p", "us", "f",
 		FunctionInput{SourceBucket: "b", SourceObject: "two.zip"}, []string{"build_config.source"}, V1)
@@ -154,6 +158,14 @@ func TestUpdateFunctionReplacesSourceAndGCsPrior(t *testing.T) {
 	}
 	if f.SourceSHA256 != sha256hex([]byte("zip-two")) {
 		t.Fatalf("revision not updated: %q", f.SourceSHA256)
+	}
+	if f.Revision != 2 {
+		t.Fatalf("revision counter = %d, want 2 after a redeploy", f.Revision)
+	}
+	// The two revisions render distinct Cloud Run revision names.
+	sc := FunctionJSON(V2, "p", f)["serviceConfig"].(map[string]any)
+	if sc["revision"] != "projects/p/locations/us/services/f/revisions/f-00002-"+f.SourceSHA256[:8] {
+		t.Fatalf("rendered revision = %v", sc["revision"])
 	}
 	keys, _ := blobs.List(ctx, functionsSourceBucket, "")
 	if len(keys) != 1 {

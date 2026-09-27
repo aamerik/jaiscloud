@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 794,
+    "total": 801,
     "by_state": {
-      "ga": 559,
+      "ga": 566,
       "limited": 97,
       "preview": 37,
       "unsupported": 101
@@ -15,7 +15,7 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 287,
+        "ga": 294,
         "limited": 86,
         "preview": 37,
         "unsupported": 9
@@ -56,7 +56,7 @@
         "unsupported": 28
       },
       "functions": {
-        "ga": 32
+        "ga": 39
       },
       "iam": {
         "ga": 18
@@ -3070,6 +3070,16 @@
     },
     {
       "service": "functions",
+      "operation": "Function.AbortFunctionUpgrade",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.abortFunctionUpgrade",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
       "operation": "Function.CallFunction",
       "transport": "rest",
       "state": "ga",
@@ -3085,6 +3095,28 @@
       "state": "ga",
       "reason": "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested",
       "evidence": [
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.CommitFunctionUpgrade",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.commitFunctionUpgrade",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.CommitFunctionUpgradeAsGen2",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.commitFunctionUpgradeAsGen2",
         "mutating",
         "postgres=yes"
       ]
@@ -3118,6 +3150,17 @@
       "state": "ga",
       "reason": "shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested",
       "evidence": [
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.DetachFunction",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.detachFunction",
         "mutating",
         "postgres=yes"
       ]
@@ -3250,6 +3293,36 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudfunctions.projects.locations.runtimes.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.RedirectFunctionUpgradeTraffic",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.redirectFunctionUpgradeTraffic",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.RollbackFunctionUpgradeTraffic",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.rollbackFunctionUpgradeTraffic",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "functions",
+      "operation": "Function.SetupFunctionUpgradeConfig",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudfunctions.projects.locations.functions.setupFunctionUpgradeConfig",
         "postgres=yes"
       ]
     },
