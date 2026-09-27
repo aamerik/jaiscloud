@@ -3,6 +3,7 @@ package eventarc
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -104,6 +105,28 @@ func (s *MemoryStore) ListTriggers(_ context.Context, projectID, location string
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func (s *MemoryStore) ListTriggersAllLocations(_ context.Context, projectID string) ([]Trigger, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Trigger
+	for key, m := range s.triggers {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, t := range m {
+			result = append(result, t)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
 	return result, nil
 }
 

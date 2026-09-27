@@ -14,6 +14,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
@@ -44,14 +45,21 @@ var pushClient = &http.Client{Timeout: 10 * time.Second}
 
 // Provider handles Pub/Sub topics and subscriptions.
 type Provider struct {
-	resources store.ResourceStore  // topics + subscriptions (control-plane)
-	messages  pubsubstore.Messages // published messages (data plane)
-	encryptor crypto.EnvelopeEncryptor
+	resources  store.ResourceStore  // topics + subscriptions (control-plane)
+	messages   pubsubstore.Messages // published messages (data plane)
+	encryptor  crypto.EnvelopeEncryptor
+	dispatcher eventing.Dispatcher // event-trigger delivery; nil = disabled
 }
 
 func New(resources store.ResourceStore, messages pubsubstore.Messages, encryptor crypto.EnvelopeEncryptor) *Provider {
 	return &Provider{resources: resources, messages: messages, encryptor: encryptor}
 }
+
+// SetFunctionDispatcher wires the Cloud Functions event-delivery engine, so a
+// published message reaches every function whose eventTrigger subscribes to the
+// topic. The provider holds only the interface, so it never imports the
+// functions core.
+func (p *Provider) SetFunctionDispatcher(d eventing.Dispatcher) { p.dispatcher = d }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
@@ -256,6 +264,7 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 	ids := make([]string, 0, len(msgs))
 	stored := make([]pubsubstore.Message, 0, len(msgs))
 	plainData := make([]string, 0, len(msgs))
+	plainBytes := make([][]byte, 0, len(msgs))
 	publishTime := clock.Now()
 	for _, m := range msgs {
 		mm, _ := m.(map[string]any)
@@ -299,6 +308,7 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 		}
 		stored = append(stored, msg)
 		plainData = append(plainData, data)
+		plainBytes = append(plainBytes, plain)
 		ids = append(ids, id)
 	}
 
@@ -321,7 +331,34 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 	for i, msg := range stored {
 		p.deliverPush(ctx, nr.AccountID, topicFull, msg, plainData[i])
 	}
+	p.dispatchTopicEvents(ctx, nr.AccountID, topicFull, stored, plainBytes)
 	return provider.OK(map[string]any{"messageIds": ids}), nil
+}
+
+// dispatchTopicEvents hands each published message to the Cloud Functions
+// event-delivery engine so a function whose eventTrigger subscribes to the topic
+// receives it. payloads holds the decoded (plaintext) message bytes indexed to
+// match msgs. No-op when no dispatcher is wired.
+func (p *Provider) dispatchTopicEvents(ctx context.Context, project, topicFull string, msgs []pubsubstore.Message, payloads [][]byte) {
+	if p.dispatcher == nil {
+		return
+	}
+	for i, m := range msgs {
+		var data []byte
+		if i < len(payloads) {
+			data = payloads[i]
+		}
+		p.dispatcher.DispatchEvent(ctx, eventing.Event{
+			Project:    project,
+			EventType:  eventing.TypePubSubPublish,
+			Resource:   topicFull,
+			EventID:    m.MessageID,
+			Source:     eventing.SourcePubSub,
+			Data:       data,
+			Attributes: m.Attributes,
+			OccurredAt: m.PublishTime,
+		})
+	}
 }
 
 // PublishEvent publishes one message (plaintext bytes + string attributes) to a
@@ -381,8 +418,20 @@ func (p *Provider) PublishEvent(ctx context.Context, accountID, topicName string
 			return "", err
 		}
 	}
-	p.deliverPush(ctx, project, resource.ResourceID(project)("pubsub-topic", t), msg,
-		base64.StdEncoding.EncodeToString(data))
+	topicFull := resource.ResourceID(project)("pubsub-topic", t)
+	p.deliverPush(ctx, project, topicFull, msg, base64.StdEncoding.EncodeToString(data))
+	if p.dispatcher != nil {
+		p.dispatcher.DispatchEvent(ctx, eventing.Event{
+			Project:    project,
+			EventType:  eventing.TypePubSubPublish,
+			Resource:   topicFull,
+			EventID:    id,
+			Source:     eventing.SourcePubSub,
+			Data:       data,
+			Attributes: attributes,
+			OccurredAt: msg.PublishTime,
+		})
+	}
 	return id, nil
 }
 

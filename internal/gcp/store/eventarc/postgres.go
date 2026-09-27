@@ -186,6 +186,32 @@ func (s *PostgresStore) ListTriggers(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListTriggersAllLocations(ctx context.Context, projectID string) ([]Trigger, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, trigger_id, config, labels, uid, etag, create_time, update_time
+		FROM jc_eventarc_triggers WHERE project_id=$1 ORDER BY location, trigger_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Trigger
+	for rows.Next() {
+		t, err := scanTrigger(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, rows.Err()
+}
+
 // --- Channels ---
 
 func (s *PostgresStore) CreateChannel(ctx context.Context, projectID, location string, c Channel) error {

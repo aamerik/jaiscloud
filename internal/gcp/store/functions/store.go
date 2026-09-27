@@ -14,6 +14,7 @@ var (
 	ErrNoSuchFunction  = errors.New("NoSuchFunction")
 	ErrAlreadyExists   = errors.New("AlreadyExists")
 	ErrNoSuchOperation = errors.New("NoSuchOperation")
+	ErrNoSuchDelivery  = errors.New("NoSuchDelivery")
 )
 
 // EventTrigger is a source that fires events in response to a condition in
@@ -22,6 +23,27 @@ type EventTrigger struct {
 	EventType string `json:"eventType"`
 	Resource  string `json:"resource"`
 	Service   string `json:"service,omitempty"`
+
+	// Retry is the v1 failurePolicy.retry flag: true when the create/update body
+	// carried a failurePolicy.retry object, meaning a failed invocation is
+	// retried rather than dropped (matching the v1 FailurePolicy default of
+	// "ignore failures" when absent). It is not rendered for v2.
+	Retry bool `json:"retry,omitempty"`
+	// RetryPolicy is the v2 EventTrigger.retryPolicy enum value
+	// (RETRY_POLICY_RETRY / RETRY_POLICY_DO_NOT_RETRY / RETRY_POLICY_UNSPECIFIED).
+	// Empty means unset (do not retry). It is not rendered for v1.
+	RetryPolicy string `json:"retryPolicy,omitempty"`
+}
+
+// Retries reports whether an event trigger's failure policy retries a failed
+// invocation. v1 enables it with a failurePolicy.retry object, v2 with the
+// RETRY_POLICY_RETRY enum; every other value drops the event (matching the
+// Cloud Functions default of ignoring failures).
+func (e *EventTrigger) Retries() bool {
+	if e == nil {
+		return false
+	}
+	return e.Retry || e.RetryPolicy == "RETRY_POLICY_RETRY"
 }
 
 // Function is Cloud Functions v1 function metadata.
@@ -69,6 +91,39 @@ type Operation struct {
 	EndTime    time.Time `json:"endTime"`
 }
 
+// Delivery status values. A delivery starts pending, becomes delivered when the
+// function invocation succeeds, failed when it fails and the trigger's policy
+// does not retry, or dead_letter when retries are exhausted.
+const (
+	DeliveryPending    = "pending"
+	DeliveryDelivered  = "delivered"
+	DeliveryFailed     = "failed"
+	DeliveryDeadLetter = "dead_letter"
+)
+
+// Delivery is a persisted record of one event delivered (or attempted) to a
+// function. Real Cloud Functions does not expose delivery records; the emulator
+// persists them so retries and dead-letter outcomes are observable and survive a
+// restart under --dsn.
+type Delivery struct {
+	ID         string            `json:"id"`
+	Project    string            `json:"project"`
+	Location   string            `json:"location"`
+	FunctionID string            `json:"functionId"`
+	Source     string            `json:"source"`    // "pubsub" | "storage" | "eventarc"
+	EventType  string            `json:"eventType"` // canonical event type
+	Resource   string            `json:"resource"`  // normalized source resource
+	EventID    string            `json:"eventId,omitempty"`
+	Data       string            `json:"data,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+	Attempts   int               `json:"attempts"`
+	Status     string            `json:"status"`
+	Error      string            `json:"error,omitempty"`
+	Result     string            `json:"result,omitempty"`
+	CreateTime time.Time         `json:"createTime"`
+	UpdateTime time.Time         `json:"updateTime"`
+}
+
 // Store is the Cloud Functions v1 store.
 type Store interface {
 	CreateFunction(ctx context.Context, projectID, location, id string, f Function) error
@@ -94,6 +149,15 @@ type Store interface {
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
 	DeleteOperation(ctx context.Context, projectID, location, id string) error
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
+
+	// Deliveries persist one event-trigger delivery per (project, location,
+	// function). They are project+location scoped and keyed by their opaque id;
+	// ListDeliveries returns every delivery in a location so an operator can
+	// observe retries and dead-letter outcomes.
+	CreateDelivery(ctx context.Context, projectID, location string, d Delivery) error
+	UpdateDelivery(ctx context.Context, projectID, location string, d Delivery) error
+	GetDelivery(ctx context.Context, projectID, location, id string) (Delivery, error)
+	ListDeliveries(ctx context.Context, projectID, location string) ([]Delivery, error)
 
 	Reset(ctx context.Context)
 }
