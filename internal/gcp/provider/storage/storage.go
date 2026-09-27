@@ -2646,6 +2646,33 @@ func (p *Provider) decryptObjectWithKey(ctx context.Context, project string, met
 	return kmsstore.DecryptData(rawDEK, ciphertext, nil)
 }
 
+// FetchObjectBytes returns the plaintext bytes of the live generation of
+// bucket/object. It is the server-side object read used by other emulated
+// services (Cloud Functions source-archive resolution) that hold a plain
+// gs://bucket/object reference rather than a request. Unlike ObjectsGetMedia it
+// has no NormalizedRequest, so a customer-supplied encryption key cannot be
+// supplied: a CSEK-encrypted object is rejected. gcs.ErrNoSuchObject is
+// returned when the object (or its bytes) is absent.
+func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error) {
+	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	if meta.CSEKeySHA256 != "" {
+		return nil, fmt.Errorf("storage: object %s/%s is customer-supplied-encryption encrypted; server-side fetch is unsupported", bucket, object)
+	}
+	rc, err := p.blobs.GetStream(ctx, blobsNamespace, BlobKey(bucket, object, meta.Generation), 0, -1)
+	if err != nil {
+		return nil, gcs.ErrNoSuchObject
+	}
+	defer rc.Close()
+	ciphertext, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+	return p.decryptObjectWithKey(ctx, "", meta, ciphertext, nil)
+}
+
 // ObjectsUpdate implements objects.update (HTTP PUT). GCS PUT semantics are a
 // strict replacement of the object's writable metadata: fields omitted from
 // the request body are cleared (or reset to defaults), not preserved.

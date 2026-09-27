@@ -2352,3 +2352,37 @@ func TestObjectFinalizedTimes(t *testing.T) {
 		t.Fatalf("timeStorageClassUpdated missing: %#v", o)
 	}
 }
+
+// TestFetchObjectBytesRoundTrip verifies the server-side object read used by
+// Cloud Functions source resolution returns the stored plaintext bytes, and
+// reports gcs.ErrNoSuchObject for a missing object.
+func TestFetchObjectBytesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	want := []byte("PK\x03\x04 source archive")
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "src/o.zip"
+	nr.Params[wire.MediaKey] = want
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert object: %v", err)
+	}
+
+	got, err := p.FetchObjectBytes(ctx, "bkt", "src/o.zip")
+	if err != nil {
+		t.Fatalf("FetchObjectBytes: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("FetchObjectBytes = %q, want %q", got, want)
+	}
+
+	if _, err := p.FetchObjectBytes(ctx, "bkt", "missing.zip"); !errors.Is(err, gcs.ErrNoSuchObject) {
+		t.Fatalf("missing object err = %v, want gcs.ErrNoSuchObject", err)
+	}
+}

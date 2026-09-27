@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/policy"
@@ -93,9 +94,11 @@ const defaultFunctionTimeout = 60 * time.Second
 
 // Service is the transport-neutral Cloud Functions core.
 type Service struct {
-	functions functionsstore.Store
-	resources store.ResourceStore // IAM policies (control plane)
-	executor  lambdaexec.LambdaExecutor
+	functions     functionsstore.Store
+	resources     store.ResourceStore // IAM policies (control plane)
+	executor      lambdaexec.LambdaExecutor
+	blobs         blobfs.BlobStore // deployed source archives (functions-source)
+	sourceFetcher SourceFetcher    // resolves GCS source references; nil = disabled
 }
 
 // Option configures Service.
@@ -105,6 +108,18 @@ type Option func(*Service)
 // falls back to a MockExecutor (echo) so CallFunction works out of the box.
 func WithExecutor(e lambdaexec.LambdaExecutor) Option {
 	return func(s *Service) { s.executor = e }
+}
+
+// WithBlobs sets the blob store holding deployed source archives. A nil store
+// disables source persistence (the pre-FD1 metadata-only behavior).
+func WithBlobs(b blobfs.BlobStore) Option {
+	return func(s *Service) { s.blobs = b }
+}
+
+// WithSourceFetcher sets the resolver used to read a source archive from a GCS
+// object reference. A nil fetcher disables resolution.
+func WithSourceFetcher(f SourceFetcher) Option {
+	return func(s *Service) { s.sourceFetcher = f }
 }
 
 // NewService returns a Functions core backed by the given store. resources backs
@@ -120,8 +135,11 @@ func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...
 	return s
 }
 
-// Reset wipes the underlying store.
-func (s *Service) Reset(ctx context.Context) { s.functions.Reset(ctx) }
+// Reset wipes the underlying store and any persisted source archives.
+func (s *Service) Reset(ctx context.Context) {
+	s.functions.Reset(ctx)
+	s.resetSources(ctx)
+}
 
 // --- errors ---
 

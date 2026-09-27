@@ -192,6 +192,12 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 		`{"accountId":"`+sa+`"}`, "application/json"); code != http.StatusOK {
 		t.Fatalf("create SA: got HTTP %d", code)
 	}
+	// Cloud Functions function (exercises the source_sha256/source_size/
+	// source_blob_key columns added by FD1).
+	if code, body := doRequest(t, host, "POST", "/v1/projects/proj/locations/us-central1/functions?functionId=persist-fn",
+		`{"runtime":"nodejs20","entryPoint":"h"}`, "application/json"); code != http.StatusOK {
+		t.Fatalf("create function: got HTTP %d: %s", code, body)
+	}
 
 	// ── Phase 2: restart against the same backend ──────────────────────────────
 	stopProcess(t, proc1)
@@ -214,5 +220,11 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	saEmail := sa + "@proj.iam.gserviceaccount.com"
 	if code, _ := doRequest(t, host, "GET", "/v1/projects/proj/serviceAccounts/"+saEmail, "", ""); code != http.StatusOK {
 		t.Fatalf("get SA after restart: got HTTP %d", code)
+	}
+	// The Cloud Functions row (with its source columns) survives the restart.
+	if code, body := doRequest(t, host, "GET", "/v1/projects/proj/locations/us-central1/functions/persist-fn", "", ""); code != http.StatusOK {
+		t.Fatalf("get function after restart: got HTTP %d: %s", code, body)
+	} else if !strings.Contains(body, `"runtime":"nodejs20"`) {
+		t.Fatalf("function row did not survive restart: %s", body)
 	}
 }

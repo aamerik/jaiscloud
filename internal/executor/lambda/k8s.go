@@ -351,7 +351,7 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	// Code volume: inject an init container that fetches the zip and unpacks it
 	// into /var/task via a shared emptyDir when a code URL base is configured.
 	if e.codeLoader != nil && e.cfg.CodeURL != "" {
-		codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", e.cfg.CodeURL, req.AccountID, req.FunctionName)
+		codeURL := fmt.Sprintf("%s/lambda/code/%s/%s/$LATEST", e.cfg.CodeURL, req.AccountID, codeKey(req))
 		podSpec.Volumes = append(podSpec.Volumes, k8stypes.Volume{
 			Name:     "code",
 			EmptyDir: &k8stypes.EmptyDirVol{},

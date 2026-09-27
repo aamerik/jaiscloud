@@ -29,10 +29,24 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 		return functionsstore.Function{}, Operation{}, invalidArgument("missing runtime")
 	}
 	f := newFunction(project, location, id, in)
+	sha, size, blobKey, serr := s.resolveSource(ctx, project, location, id, in)
+	if serr != nil {
+		return functionsstore.Function{}, Operation{}, serr
+	}
+	if blobKey != "" {
+		f.SourceSHA256, f.SourceSize, f.SourceBlobKey = sha, size, blobKey
+	}
 	if err := s.functions.CreateFunction(ctx, project, location, id, f); err != nil {
 		if errors.Is(err, functionsstore.ErrAlreadyExists) {
+			// A content-addressed key can collide with the existing function's
+			// archive; never delete a blob the stored function still points at.
+			if cur, cerr := s.functions.GetFunction(ctx, project, location, id); cerr == nil && cur.SourceBlobKey == blobKey {
+				blobKey = ""
+			}
+			s.discardSource(ctx, blobKey)
 			return functionsstore.Function{}, Operation{}, model.NewProviderError("AlreadyExists", "function already exists", 409)
 		}
+		s.discardSource(ctx, blobKey)
 		return functionsstore.Function{}, Operation{}, err
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
@@ -82,14 +96,37 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 	if location == "" || id == "" {
 		return functionsstore.Function{}, Operation{}, invalidArgument("missing location or function name")
 	}
+	old, gerr := s.GetFunction(ctx, project, location, id)
+	if gerr != nil {
+		return functionsstore.Function{}, Operation{}, gerr
+	}
+	var sha string
+	var size int64
+	var blobKey string
+	if maskAppliesSource(mask) {
+		var serr error
+		sha, size, blobKey, serr = s.resolveSource(ctx, project, location, id, in)
+		if serr != nil {
+			return functionsstore.Function{}, Operation{}, serr
+		}
+	}
 	f, err := s.functions.UpdateFunctionAtomic(ctx, project, location, id, func(f functionsstore.Function) (functionsstore.Function, error) {
 		if uerr := ApplyFunctionUpdate(&f, in, mask); uerr != nil {
 			return functionsstore.Function{}, uerr
 		}
+		if blobKey != "" {
+			f.SourceSHA256, f.SourceSize, f.SourceBlobKey = sha, size, blobKey
+		}
 		return f, nil
 	})
 	if err != nil {
+		s.discardSource(ctx, blobKey)
 		return functionsstore.Function{}, Operation{}, mapErr(err)
+	}
+	if blobKey != "" && old.SourceBlobKey != "" && old.SourceBlobKey != blobKey {
+		// Only the latest revision is retained (content-addressed by hash);
+		// revision history is a future (FD5) concern.
+		s.discardSource(ctx, old.SourceBlobKey)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
 	return f, NewOperation(location, "update", target, &f), nil
@@ -101,9 +138,14 @@ func (s *Service) DeleteFunction(ctx context.Context, project, location, id stri
 	if location == "" || id == "" {
 		return Operation{}, invalidArgument("missing location or function name")
 	}
+	f, gerr := s.functions.GetFunction(ctx, project, location, id)
+	if gerr != nil {
+		return Operation{}, mapErr(gerr)
+	}
 	if err := s.functions.DeleteFunction(ctx, project, location, id); err != nil {
 		return Operation{}, mapErr(err)
 	}
+	s.discardSource(ctx, f.SourceBlobKey)
 	target := resourceID(project)("cloud-function", location+"/"+id)
 	return NewOperation(location, "delete", target, nil), nil
 }
@@ -127,13 +169,19 @@ func (s *Service) CallFunction(ctx context.Context, project, location, id, data 
 
 	req := lambdaexec.InvokeRequest{
 		FunctionName: f.ID,
-		Runtime:      f.Runtime,
-		Handler:      f.EntryPoint,
-		EnvVars:      f.EnvironmentVariables,
-		Payload:      []byte(data),
-		AccountID:    project,
-		MemoryMB:     f.AvailableMemoryMB,
-		TimeoutSecs:  int(timeout.Seconds()),
+		// CodeKey carries project+location+id to the shared executor's
+		// CodeLoader (whose interface has only account+name); Image maps the
+		// GCP runtime onto the executor's container image. Both are no-ops in
+		// mock mode, which stays the default.
+		CodeKey:     CodeKey(location, id),
+		Image:       RuntimeImage(f.Runtime),
+		Runtime:     f.Runtime,
+		Handler:     f.EntryPoint,
+		EnvVars:     f.EnvironmentVariables,
+		Payload:     []byte(data),
+		AccountID:   project,
+		MemoryMB:    f.AvailableMemoryMB,
+		TimeoutSecs: int(timeout.Seconds()),
 	}
 	executionID = newUUID()
 	res, ierr := s.executor.Invoke(invCtx, req)

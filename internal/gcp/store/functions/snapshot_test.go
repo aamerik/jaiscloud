@@ -31,3 +31,29 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("restored function wrong: %+v", got)
 	}
 }
+
+func TestMemoryStoreSnapshotKeepsSourceMetadata(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	f := Function{ID: "s", Runtime: "python312", EntryPoint: "main.handler",
+		SourceSHA256: "abc123", SourceSize: 42, SourceBlobKey: "functions/p/us/s/abc123.zip"}
+	if err := s.CreateFunction(ctx, "p", "us", "s", f); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	dst := NewMemoryStore()
+	if err := dst.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := dst.GetFunction(ctx, "p", "us", "s")
+	if err != nil {
+		t.Fatalf("get after restore: %v", err)
+	}
+	if got.SourceSHA256 != "abc123" || got.SourceSize != 42 || got.SourceBlobKey != "functions/p/us/s/abc123.zip" {
+		t.Fatalf("source metadata not restored: %+v", got)
+	}
+}

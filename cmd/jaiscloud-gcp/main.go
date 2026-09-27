@@ -270,7 +270,23 @@ func startCmd() *cobra.Command {
 				lambdaExec := lambdaexec.NewExecutor(lambdaCfg)
 				defer lambdaExec.Close()
 				slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
-				functionsCore = functionscore.NewService(stores.functions, stores.resources, functionscore.WithExecutor(lambdaExec))
+				// The core is its own lambdaexec.CodeLoader: it resolves a
+				// function's persisted source archive (FD1) from the blob store
+				// so Docker/K8s mode mounts and runs real code (mock stays the
+				// default). It reads GCS source references (v1 sourceArchiveUrl /
+				// v2 storageSource) through the storage provider, which owns
+				// object decryption.
+				functionsCore = functionscore.NewService(stores.functions, stores.resources,
+					functionscore.WithExecutor(lambdaExec),
+					functionscore.WithBlobs(stores.blobs),
+					functionscore.WithSourceFetcher(storageP),
+				)
+				if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
+					dockerExec.SetCodeLoader(functionsCore)
+				}
+				if k8sExec, ok := lambdaExec.(*lambdaexec.K8sExecutor); ok {
+					k8sExec.SetCodeLoader(functionsCore)
+				}
 			}
 			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
 
@@ -563,6 +579,12 @@ func startCmd() *cobra.Command {
 			}
 
 			adminHandler := admin.NewHandler()
+			// Cloud Functions source archives are served to the K8s code-mount
+			// init container through the shared /lambda/code admin route (the
+			// executor's codeKey is path-safe: "location.id").
+			if functionsCore != nil {
+				adminHandler.SetLambdaCodeFetcher(functionsCore)
+			}
 			adminHandler.RegisterResetter(stores.objects)
 			adminHandler.RegisterResetter(stores.messages)
 			adminHandler.RegisterResetter(stores.secrets)

@@ -204,8 +204,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `functions` service and serialize the v2 shape (`state`, `buildConfig`, `serviceConfig`);
   `gcloud functions list` and `gcloud functions describe` pass. v2 runtime resolution works
   (`GET /v2/.../runtimes` + gRPC `ListRuntimes`), so `gcloud functions deploy --gen2` gets past the
-  runtime lookup, but deploy still needs a resumable source upload + build/stage step, which is not
-  modelled. `Function.GetLocation` is `limited` (no matching Discovery method). The gRPC surface
+  runtime lookup. Source referenced by a GCS object (v1 `sourceArchiveUrl` or v2
+  `buildConfig.source.storageSource`) is fetched, persisted with a revision hash, and executed in
+  Docker/K8s mode, but the v2 `generateUploadUrl` resumable source upload + build/stage step is not
+  modelled, so `gcloud functions deploy --gen2` still stops at the upload. `Function.GetLocation` is
+  `limited` (no matching Discovery method). The gRPC surface
   registers both `google.cloud.functions.v1.CloudFunctionsService` and
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
