@@ -2602,6 +2602,28 @@ func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, b
 	return "", nil, "", nil
 }
 
+// Documented GCS reasons for customer-supplied encryption key (CSEK) failures.
+// The JSON API returns these (lower camel case) as error.errors[].reason; the
+// XML API uses the same name with a leading capital as the <Code>. All are HTTP
+// 400. See the GCS JSON/XML status-code references.
+const (
+	csekReasonAlgorithmInvalid     = "customerEncryptionAlgorithmIsInvalid"
+	csekReasonKeyFormatInvalid     = "customerEncryptionKeyFormatIsInvalid"
+	csekReasonKeySha256Invalid     = "customerEncryptionKeySha256IsInvalid"
+	csekReasonKeyIncorrect         = "customerEncryptionKeyIsIncorrect"
+	csekReasonResourceEncrypted    = "resourceIsEncryptedWithCustomerEncryptionKey"
+	csekReasonResourceNotEncrypted = "resourceNotEncryptedWithCustomerEncryptionKey"
+)
+
+// csekError builds the HTTP 400 ProviderError for a CSEK failure. The Code stays
+// the canonical "InvalidArgument" so gRPC error mapping (gcperr.Resolve) is
+// unchanged; Data["reason"] carries the documented GCS reason the REST codec
+// emits in error.errors[].reason.
+func csekError(reason, message string) *model.ProviderError {
+	return model.NewProviderError("InvalidArgument", message, 400).
+		WithData(map[string]any{"reason": reason})
+}
+
 // resolveCSEK validates a customer-supplied encryption key header set and
 // returns the decoded 32-byte AES-256 key plus its computed base64 SHA-256.
 // The param names are explicit so the same helper validates the destination key
@@ -2609,9 +2631,10 @@ func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, b
 // (x-goog-copy-source-encryption-*). It returns (nil, "", nil) when no key
 // material is present at all (the object is server-DEK/CMEK encrypted).
 //
-// Per the GCS contract, the algorithm must be AES256 when supplied, the key
-// must be base64 of exactly 32 bytes, and the caller-supplied SHA-256 must
-// match the key.
+// Per the GCS contract, the algorithm must be AES256, the key must be base64 of
+// exactly 32 bytes, and the caller-supplied SHA-256 must match the key. When
+// any key material is present the algorithm is required (a missing algorithm is
+// customerEncryptionAlgorithmIsInvalid).
 func resolveCSEK(params map[string]any, algKey, keyKey, shaKey string) ([]byte, string, error) {
 	alg, _ := params[algKey].(string)
 	keyB64, _ := params[keyKey].(string)
@@ -2619,23 +2642,28 @@ func resolveCSEK(params map[string]any, algKey, keyKey, shaKey string) ([]byte, 
 	if alg == "" && keyB64 == "" && gotSHA == "" {
 		return nil, "", nil
 	}
-	if alg != "" && !strings.EqualFold(alg, "AES256") {
-		return nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption algorithm must be AES256", 400)
+	if !strings.EqualFold(alg, "AES256") {
+		return nil, "", csekError(csekReasonAlgorithmInvalid,
+			"customer-supplied encryption algorithm must be AES256")
 	}
 	if keyB64 == "" {
-		return nil, "", model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key", 400)
+		return nil, "", csekError(csekReasonKeyFormatInvalid,
+			"missing customer-supplied encryption key")
 	}
 	key, err := base64.StdEncoding.DecodeString(keyB64)
 	if err != nil || len(key) != 32 {
-		return nil, "", model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+		return nil, "", csekError(csekReasonKeyFormatInvalid,
+			"invalid customer-supplied encryption key")
 	}
 	if gotSHA == "" {
-		return nil, "", model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key sha256", 400)
+		return nil, "", csekError(csekReasonKeySha256Invalid,
+			"missing customer-supplied encryption key sha256")
 	}
 	sum := sha256.Sum256(key)
 	expected := base64.StdEncoding.EncodeToString(sum[:])
 	if gotSHA != expected {
-		return nil, "", model.NewProviderError("InvalidArgument", "customer-supplied encryption key hash mismatch", 400)
+		return nil, "", csekError(csekReasonKeySha256Invalid,
+			"customer-supplied encryption key sha256 mismatch")
 	}
 	return key, expected, nil
 }
@@ -2659,54 +2687,80 @@ func copySourceCSEKParams(nr *model.NormalizedRequest) map[string]any {
 }
 
 // decryptObject returns the plaintext for a stored ciphertext, using the CSEK
-// key (when the object is CSEK-encrypted) or the envelope DEK otherwise.
+// key (when the object is CSEK-encrypted) or the envelope DEK otherwise. It
+// maps every CSEK failure to the reason the real GCS JSON/XML API documents.
 func (p *Provider) decryptObject(ctx context.Context, nr *model.NormalizedRequest, meta gcs.ObjectMeta, ciphertext []byte) ([]byte, error) {
-	var cseKey []byte
-	if meta.CSEKeySHA256 != "" {
-		if alg, _ := nr.Params[wire.CSEKAlgorithm].(string); alg != "" && !strings.EqualFold(alg, "AES256") {
-			return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption algorithm must be AES256", 400)
+	alg, _ := nr.Params[wire.CSEKAlgorithm].(string)
+	keyB64, _ := nr.Params[wire.CSEKKey].(string)
+	gotSHA, _ := nr.Params[wire.CSEKKeySHA256].(string)
+	if meta.CSEKeySHA256 == "" {
+		// The object is not CSEK-encrypted: supplying a key is an error rather
+		// than being silently ignored (real GCS 400).
+		if alg != "" || keyB64 != "" || gotSHA != "" {
+			return nil, csekError(csekReasonResourceNotEncrypted,
+				"the resource is not encrypted with a customer-supplied encryption key")
 		}
-		keyB64, _ := nr.Params[wire.CSEKKey].(string)
-		if keyB64 == "" {
-			return nil, model.NewProviderError("InvalidArgument", "missing customer-supplied encryption key", 400)
-		}
-		key, err := base64.StdEncoding.DecodeString(keyB64)
-		if err != nil || len(key) != 32 {
-			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
-		}
-		// A caller-supplied sha256, when present, must match the provided key.
-		// The stored hash is separately checked by decryptObjectWithKey.
-		if gotSHA, _ := nr.Params[wire.CSEKKeySHA256].(string); gotSHA != "" {
-			sum := sha256.Sum256(key)
-			if base64.StdEncoding.EncodeToString(sum[:]) != gotSHA {
-				return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption key sha256 mismatch", 400)
-			}
-		}
-		cseKey = key
+		return p.decryptObjectWithKey(ctx, nr.AccountID, meta, ciphertext, nil)
 	}
-	return p.decryptObjectWithKey(ctx, nr.AccountID, meta, ciphertext, cseKey)
+	if alg == "" && keyB64 == "" && gotSHA == "" {
+		// The object is CSEK-encrypted but the request carried no key material.
+		return nil, csekError(csekReasonResourceEncrypted,
+			"the resource is encrypted with a customer-supplied encryption key")
+	}
+	if !strings.EqualFold(alg, "AES256") {
+		return nil, csekError(csekReasonAlgorithmInvalid,
+			"customer-supplied encryption algorithm must be AES256")
+	}
+	if keyB64 == "" {
+		return nil, csekError(csekReasonKeyFormatInvalid,
+			"missing customer-supplied encryption key")
+	}
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil || len(key) != 32 {
+		return nil, csekError(csekReasonKeyFormatInvalid,
+			"invalid customer-supplied encryption key")
+	}
+	// The sha256 header is required for a CSEK read: a missing or mismatched
+	// hash is customerEncryptionKeySha256IsInvalid. The stored hash is
+	// separately checked by decryptObjectWithKey.
+	if gotSHA == "" {
+		return nil, csekError(csekReasonKeySha256Invalid,
+			"missing customer-supplied encryption key sha256")
+	}
+	sum := sha256.Sum256(key)
+	if base64.StdEncoding.EncodeToString(sum[:]) != gotSHA {
+		return nil, csekError(csekReasonKeySha256Invalid,
+			"customer-supplied encryption key sha256 mismatch")
+	}
+	return p.decryptObjectWithKey(ctx, nr.AccountID, meta, ciphertext, key)
 }
 
 // decryptObjectWithKey returns the plaintext for a stored ciphertext given the
 // already-resolved CSEK key (nil for server-DEK/CMEK-encrypted objects). This
 // is the transport-agnostic core shared by the REST read path and the gRPC
-// ReadObject.
+// ReadObject. cseKey is non-nil only when the caller supplied CSEK material.
 func (p *Provider) decryptObjectWithKey(ctx context.Context, project string, meta gcs.ObjectMeta, ciphertext []byte, cseKey []byte) ([]byte, error) {
-	if meta.CSEKeySHA256 != "" {
-		if len(cseKey) != 32 {
-			return nil, model.NewProviderError("InvalidArgument", "invalid customer-supplied encryption key", 400)
+	if meta.CSEKeySHA256 == "" {
+		if len(cseKey) != 0 {
+			return nil, csekError(csekReasonResourceNotEncrypted,
+				"the resource is not encrypted with a customer-supplied encryption key")
 		}
-		sum := sha256.Sum256(cseKey)
-		if base64.StdEncoding.EncodeToString(sum[:]) != meta.CSEKeySHA256 {
-			return nil, model.NewProviderError("InvalidArgument", "customer-supplied encryption key mismatch", 400)
+		rawDEK, err := p.encryptor.Unwrap(ctx, project, meta.KmsKeyName, meta.WrappedDEK)
+		if err != nil {
+			return nil, err
 		}
-		return kmsstore.DecryptData(cseKey, ciphertext, nil)
+		return kmsstore.DecryptData(rawDEK, ciphertext, nil)
 	}
-	rawDEK, err := p.encryptor.Unwrap(ctx, project, meta.KmsKeyName, meta.WrappedDEK)
-	if err != nil {
-		return nil, err
+	if len(cseKey) != 32 {
+		return nil, csekError(csekReasonKeyFormatInvalid,
+			"invalid customer-supplied encryption key")
 	}
-	return kmsstore.DecryptData(rawDEK, ciphertext, nil)
+	sum := sha256.Sum256(cseKey)
+	if base64.StdEncoding.EncodeToString(sum[:]) != meta.CSEKeySHA256 {
+		return nil, csekError(csekReasonKeyIncorrect,
+			"the provided customer-supplied encryption key is incorrect")
+	}
+	return kmsstore.DecryptData(cseKey, ciphertext, nil)
 }
 
 // FetchObjectBytes returns the plaintext bytes of the live generation of

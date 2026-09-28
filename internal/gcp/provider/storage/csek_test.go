@@ -121,15 +121,13 @@ func TestGCSCSEKReadWrongSHARejected(t *testing.T) {
 	nr := bucketParams()
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "csek.txt"
+	nr.Params[wire.CSEKAlgorithm] = "AES256"
 	nr.Params[wire.CSEKKey] = keyB64
 	nr.Params[wire.CSEKKeySHA256] = otherSHA
 	if _, err := p.ObjectsGetMedia(ctx, nr); err == nil {
 		t.Fatal("expected error for mismatched caller-supplied sha256")
-	} else {
-		var pe *model.ProviderError
-		if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
-			t.Fatalf("expected 400 ProviderError, got %v", err)
-		}
+	} else if got := csekErrorReason(t, err); got != csekReasonKeySha256Invalid {
+		t.Fatalf("reason = %q, want %q", got, csekReasonKeySha256Invalid)
 	}
 }
 
@@ -149,11 +147,8 @@ func TestGCSCopySourceInvalidAlgorithmRejected(t *testing.T) {
 	nr.Params[wire.CopySourceCSEKKeySHA256] = shaB64
 	if _, err := p.ObjectsCopy(ctx, nr); err == nil {
 		t.Fatal("expected error for non-AES256 copy-source algorithm")
-	} else {
-		var pe *model.ProviderError
-		if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
-			t.Fatalf("expected 400 ProviderError, got %v", err)
-		}
+	} else if got := csekErrorReason(t, err); got != csekReasonAlgorithmInvalid {
+		t.Fatalf("reason = %q, want %q", got, csekReasonAlgorithmInvalid)
 	}
 }
 
@@ -224,11 +219,8 @@ func TestGCSCopyCSEKSourceRequiresSourceKey(t *testing.T) {
 	nr.Params["destinationObject"] = "plain.txt"
 	if _, err := p.ObjectsCopy(ctx, nr); err == nil {
 		t.Fatal("expected error copying CSEK source without the source key")
-	} else {
-		var pe *model.ProviderError
-		if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
-			t.Fatalf("expected 400 ProviderError, got %v", err)
-		}
+	} else if got := csekErrorReason(t, err); got != csekReasonResourceEncrypted {
+		t.Fatalf("reason = %q, want %q", got, csekReasonResourceEncrypted)
 	}
 }
 
@@ -247,6 +239,7 @@ func TestGCSCopyDropsSourceCSEKWhenNoDestinationKey(t *testing.T) {
 	nr.Params["sourceObject"] = "csek.txt"
 	nr.Params["destinationBucket"] = "bkt"
 	nr.Params["destinationObject"] = "plain.txt"
+	nr.Params[wire.CopySourceCSEKAlgorithm] = "AES256"
 	nr.Params[wire.CopySourceCSEKKey] = keyB64
 	nr.Params[wire.CopySourceCSEKKeySHA256] = shaB64
 	if _, err := p.ObjectsCopy(ctx, nr); err != nil {
@@ -296,6 +289,7 @@ func TestGCSCopyCSEKSourceWithKeys(t *testing.T) {
 	nr.Params["sourceObject"] = "csek.txt"
 	nr.Params["destinationBucket"] = "bkt"
 	nr.Params["destinationObject"] = "copy.txt"
+	nr.Params[wire.CopySourceCSEKAlgorithm] = "AES256"
 	nr.Params[wire.CopySourceCSEKKey] = srcB64
 	nr.Params[wire.CopySourceCSEKKeySHA256] = srcSHA
 	nr.Params[wire.CSEKAlgorithm] = "AES256"
@@ -320,12 +314,183 @@ func TestGCSCopyCSEKSourceWithKeys(t *testing.T) {
 	nr = bucketParams()
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "copy.txt"
+	nr.Params[wire.CSEKAlgorithm] = "AES256"
 	nr.Params[wire.CSEKKey] = dstB64
+	nr.Params[wire.CSEKKeySHA256] = dstSHA
 	media, err := p.ObjectsGetMedia(ctx, nr)
 	if err != nil {
 		t.Fatalf("get destination media: %v", err)
 	}
 	if got := string(streamBytes(t, media)); got != "classified" {
 		t.Fatalf("expected %q, got %q", "classified", got)
+	}
+}
+
+// csekErrorReason returns the documented CSEK reason carried on a 400
+// ProviderError, failing the test if the error is not a CSEK ProviderError.
+func csekErrorReason(t *testing.T, err error) string {
+	t.Helper()
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected ProviderError, got %v", err)
+	}
+	if pe.HTTPStatus != 400 {
+		t.Fatalf("expected HTTP 400, got %d (%v)", pe.HTTPStatus, err)
+	}
+	r, _ := pe.Data["reason"].(string)
+	if r == "" {
+		t.Fatalf("expected a reason in ProviderError.Data, got %v", err)
+	}
+	return r
+}
+
+// TestGCSCSEKErrorReasons verifies each CSEK failure carries the documented
+// GCS reason (J35), and that a key on a non-CSEK object is rejected rather than
+// silently ignored (J36).
+func TestGCSCSEKErrorReasons(t *testing.T) {
+	ctx := context.Background()
+	key := []byte("0123456789abcdef0123456789abcdef")
+	keyB64, shaB64 := csekMaterial(key)
+	otherB64, otherSHA := csekMaterial([]byte("fedcba9876543210fedcba9876543210"))
+
+	setup := func(t *testing.T) *Provider {
+		t.Helper()
+		p := newTestProvider()
+		newCSEKBucket(t, p, keyB64, shaB64) // bkt + csek.txt
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = "plain.txt"
+		nr.Params[wire.MediaKey] = []byte("plain")
+		if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert plain object: %v", err)
+		}
+		return p
+	}
+	insert := func(p *Provider, mut func(map[string]any)) error {
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = "new.txt"
+		nr.Params[wire.MediaKey] = []byte("data")
+		mut(nr.Params)
+		_, err := p.ObjectsInsert(ctx, nr)
+		return err
+	}
+	read := func(p *Provider, object string, mut func(map[string]any)) error {
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = object
+		if mut != nil {
+			mut(nr.Params)
+		}
+		_, err := p.ObjectsGetMedia(ctx, nr)
+		return err
+	}
+
+	shortKey := base64.StdEncoding.EncodeToString([]byte("short"))
+	tests := []struct {
+		name   string
+		reason string
+		run    func(p *Provider) error
+	}{
+		{"insert algorithm invalid", csekReasonAlgorithmInvalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES128"
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"insert algorithm missing", csekReasonAlgorithmInvalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"insert key missing", csekReasonKeyFormatInvalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"insert key malformed", csekReasonKeyFormatInvalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = shortKey
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"insert sha missing", csekReasonKeySha256Invalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = keyB64
+			})
+		}},
+		{"insert sha mismatch", csekReasonKeySha256Invalid, func(p *Provider) error {
+			return insert(p, func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = otherSHA
+			})
+		}},
+		{"read encrypted without key", csekReasonResourceEncrypted, func(p *Provider) error {
+			return read(p, "csek.txt", nil)
+		}},
+		{"read encrypted wrong key", csekReasonKeyIncorrect, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = otherB64
+				m[wire.CSEKKeySHA256] = otherSHA
+			})
+		}},
+		{"read encrypted algorithm invalid", csekReasonAlgorithmInvalid, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES128"
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"read encrypted key malformed", csekReasonKeyFormatInvalid, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = shortKey
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"read encrypted algorithm missing", csekReasonAlgorithmInvalid, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+		{"read encrypted sha missing", csekReasonKeySha256Invalid, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = keyB64
+			})
+		}},
+		{"read encrypted sha mismatch", csekReasonKeySha256Invalid, func(p *Provider) error {
+			return read(p, "csek.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = otherSHA
+			})
+		}},
+		{"read plain with key", csekReasonResourceNotEncrypted, func(p *Provider) error {
+			return read(p, "plain.txt", func(m map[string]any) {
+				m[wire.CSEKAlgorithm] = "AES256"
+				m[wire.CSEKKey] = keyB64
+				m[wire.CSEKKeySHA256] = shaB64
+			})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(setup(t))
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := csekErrorReason(t, err); got != tc.reason {
+				t.Errorf("reason = %q, want %q", got, tc.reason)
+			}
+		})
 	}
 }
