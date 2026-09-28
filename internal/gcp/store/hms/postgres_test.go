@@ -81,3 +81,53 @@ func TestPostgresTableJSONVerbatim(t *testing.T) {
 		t.Fatalf("table JSON not verbatim after restore:\n got  %s\n want %s", got.TableJSON, tblJSON)
 	}
 }
+
+// TestPostgresPartitionJSONVerbatim verifies the full Partition JSON survives a
+// Postgres Snapshot/Restore round trip byte-for-byte.
+func TestPostgresPartitionJSONVerbatim(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres partition snapshot test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	if err := s.CreateDatabase(ctx, Database{Name: "default"}); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	if err := s.CreateTable(ctx, "default", "t1", Table{DBName: "default", TableName: "t1", TableJSON: json.RawMessage(`["o",[[1,["s","t1"]]]]`)}); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	const partJSONStr = `["o",[[1,["a",11,[["s","2024"],["s","01"]]]],[2,["s","default"]],[3,["s","t1"]],[4,["i",1700000000]],[7,["m",11,11,[[["s","k"],["s","v"]]]]]]]`
+	if err := s.CreatePartition(ctx, "default", "t1", Partition{DBName: "default", TableName: "t1", Values: []string{"2024", "01"}, PartJSON: json.RawMessage(partJSONStr)}); err != nil {
+		t.Fatalf("create partition: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	s.Reset(ctx)
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got, err := s.GetPartition(ctx, "default", "t1", []string{"2024", "01"})
+	if err != nil {
+		t.Fatalf("get partition after restore: %v", err)
+	}
+	if string(got.PartJSON) != partJSONStr {
+		t.Fatalf("partition JSON not verbatim after restore:\n got  %s\n want %s", got.PartJSON, partJSONStr)
+	}
+}

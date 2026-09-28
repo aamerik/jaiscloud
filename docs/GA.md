@@ -270,8 +270,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `SubmitJobAsOperation` completes inline in the default mock executor but cannot be `Wait`-polled
   while a k8s-executor job is still in flight (the generic `google.longrunning.Operations` stub
   does not read the Dataproc store; the REST `operations.get` path does); Metastore's Hive Thrift
-  serving plane (:9083) implements databases/tables/locks (a single global catalog), but
-  partition methods and get_table_meta/Hive-3.x are stubbed. The gRPC control plane
+  serving plane (:9083) implements databases/tables/partitions/locks (a single global catalog);
+  get_table_meta/Hive-3.x and the niche partition methods (exchange, drop-by-request,
+  get_partition_values, get_partitions_by_expr, event marking) are explicit unsupported stubs. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
   proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
 - **Cloud Monitoring alert evaluation** — the background worker evaluates
