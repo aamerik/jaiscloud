@@ -44,6 +44,21 @@ const (
 // comment; get_table_meta surfaces it as TableMeta.comments.
 const tableCommentKey = "comment"
 
+// get_table_req / get_table_objects_by_name_req request and result fields
+// (hive_metastore.thrift, Hive 2.3+). Both requests carry dbName (1) and either
+// tblName (2) or tblNames (2), plus an optional catName at field 4 (the older
+// get_table positional form had no catName; the request structs do). The reply
+// wraps the table(s) inside GetTableResult.table / GetTablesResult.tables at
+// field 1, which is itself the result-struct's field 0.
+const (
+	reqDBName       int16 = 1
+	reqTblName      int16 = 2 // get_table_req: string
+	reqTblNames     int16 = 2 // get_table_objects_by_name_req: list<string>
+	reqCatName      int16 = 4
+	reqResultTable  int16 = 1 // GetTableResult.table
+	reqResultTables int16 = 1 // GetTablesResult.tables
+)
+
 // Partition fields (hive_metastore.thrift Partition struct).
 const (
 	partValues         int16 = 1

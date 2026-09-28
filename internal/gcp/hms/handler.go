@@ -40,6 +40,18 @@ func matchName(pattern, name string) bool {
 	return re.MatchString(name)
 }
 
+// --- Identity ---
+
+// setUgi implements set_ugi(user, group_names) -> list<string>: the caller
+// identity announcement Hive's client issues once per new binary-NOSASL
+// connection (hive.metastore.execute.setugi). The emulator enforces no authz, so
+// it echoes the requested groups (matching a metastore with no group
+// resolution) rather than returning a server-resolved set. The declared
+// MetaException belongs at result field 1 but is never raised.
+func (s *Server) setUgi(_ context.Context, args *Struct) (*Struct, error) {
+	return NewBuilder().ListStr(0, stringElems(args.List(2))).Build(), nil
+}
+
 // --- Databases ---
 
 func (s *Server) createDatabase(ctx context.Context, args *Struct) (*Struct, error) {
@@ -176,9 +188,11 @@ func (s *Server) createTable(ctx context.Context, args *Struct) (*Struct, error)
 	return voidResult(), nil
 }
 
-func (s *Server) getTable(ctx context.Context, args *Struct) (*Struct, error) {
-	db := args.String(1)
-	tbl := args.String(2)
+// tableStruct loads and decodes the stored Table for (db, tbl) as a wire Table
+// struct. The declared exceptions (MetaException at result field 1,
+// NoSuchObjectException at field 2) are shared by get_table and get_table_req,
+// whose throws clauses match.
+func (s *Server) tableStruct(ctx context.Context, db, tbl string) (*Struct, error) {
 	t, err := s.store.GetTable(ctx, db, tbl)
 	if err != nil {
 		switch {
@@ -192,7 +206,30 @@ func (s *Server) getTable(ctx context.Context, args *Struct) (*Struct, error) {
 	if err != nil {
 		return nil, declared(1, excMetaException, err.Error())
 	}
+	return st, nil
+}
+
+func (s *Server) getTable(ctx context.Context, args *Struct) (*Struct, error) {
+	st, err := s.tableStruct(ctx, args.String(1), args.String(2))
+	if err != nil {
+		return nil, err
+	}
 	return result0(StructV(st)), nil
+}
+
+// getTableReq implements get_table_req(GetTableRequest) -> GetTableResult: the
+// request-struct form of get_table that Hive 2.3+ clients (including the Go
+// hms-client-go client) use. dbName/tblName come from the nested request's
+// fields 1/2; catName (field 4) is ignored because the serving plane is a single
+// global catalog. The reply wraps the Table in GetTableResult.table, i.e. result
+// field 0 holds a struct whose field 1 is the table.
+func (s *Server) getTableReq(ctx context.Context, args *Struct) (*Struct, error) {
+	req := args.Struct(1)
+	st, err := s.tableStruct(ctx, req.String(reqDBName), req.String(reqTblName))
+	if err != nil {
+		return nil, err
+	}
+	return result0(StructV(NewBuilder().Struct(reqResultTable, st).Build())), nil
 }
 
 func (s *Server) listTables(ctx context.Context, args *Struct) (*Struct, error) {
@@ -213,19 +250,14 @@ func (s *Server) listTables(ctx context.Context, args *Struct) (*Struct, error) 
 	return b.Build(), nil
 }
 
-// getTableObjectsByName implements get_table_objects_by_name(dbname,
-// list<string>) -> list<Table>. It is not in D3's enumerated subset but is on
-// the real Iceberg HiveCatalog.listTables critical path (verified Iceberg
-// 1.5.2 HiveCatalog.java:133), so it is implemented rather than stubbed.
-func (s *Server) getTableObjectsByName(ctx context.Context, args *Struct) (*Struct, error) {
-	db := args.String(1)
-	names := args.List(2)
+// tableStructsByName decodes the stored Table structs for names, skipping names
+// that do not exist (the client filters missing tables itself). A store failure
+// surfaces as MetaException (result field 1), the declared exception shared by
+// the positional and request-struct forms.
+func (s *Server) tableStructsByName(ctx context.Context, db string, names []string) ([]*Struct, error) {
 	var tables []*Struct
-	for _, n := range names {
-		if n.T != thrift.STRING {
-			continue
-		}
-		t, err := s.store.GetTable(ctx, db, n.Str)
+	for _, name := range names {
+		t, err := s.store.GetTable(ctx, db, name)
 		if err != nil {
 			if err == hmsstore.ErrTableNotFound {
 				continue // tolerate missing tables (the client filters them)
@@ -238,9 +270,45 @@ func (s *Server) getTableObjectsByName(ctx context.Context, args *Struct) (*Stru
 		}
 		tables = append(tables, st)
 	}
-	b := NewBuilder()
-	b.ListStruct(0, tables)
-	return b.Build(), nil
+	return tables, nil
+}
+
+// getTableObjectsByName implements get_table_objects_by_name(dbname,
+// list<string>) -> list<Table>. It is not in D3's enumerated subset but is on
+// the real Iceberg HiveCatalog.listTables critical path (verified Iceberg
+// 1.5.2 HiveCatalog.java:133), so it is implemented rather than stubbed.
+func (s *Server) getTableObjectsByName(ctx context.Context, args *Struct) (*Struct, error) {
+	tables, err := s.tableStructsByName(ctx, args.String(1), stringElems(args.List(2)))
+	if err != nil {
+		return nil, err
+	}
+	return NewBuilder().ListStruct(0, tables).Build(), nil
+}
+
+// getTableObjectsByNameReq implements get_table_objects_by_name_req(
+// GetTablesRequest) -> GetTablesResult: the request-struct form of
+// get_table_objects_by_name (tblNames at field 2; optional catName at field 4,
+// ignored). The reply wraps the table list in GetTablesResult.tables, i.e.
+// result field 0 holds a struct whose field 1 is the list.
+func (s *Server) getTableObjectsByNameReq(ctx context.Context, args *Struct) (*Struct, error) {
+	req := args.Struct(1)
+	tables, err := s.tableStructsByName(ctx, req.String(reqDBName), stringElems(req.List(reqTblNames)))
+	if err != nil {
+		return nil, err
+	}
+	return result0(StructV(NewBuilder().ListStruct(reqResultTables, tables).Build())), nil
+}
+
+// stringElems returns the string values of a decoded list, ignoring elements of
+// any other type (the emulator is lenient about malformed lists).
+func stringElems(v []Value) []string {
+	out := make([]string, 0, len(v))
+	for _, e := range v {
+		if e.T == thrift.STRING {
+			out = append(out, e.Str)
+		}
+	}
+	return out
 }
 
 // alterTable handles alter_table/alter_table_with_environment_context: a plain
