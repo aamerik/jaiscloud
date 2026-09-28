@@ -202,6 +202,36 @@ func TestGCSCodecEncodeError(t *testing.T) {
 	}
 }
 
+// TestGCSCodecEncodeErrorReason verifies a provider-supplied documented reason
+// (e.g. the CSEK customerEncryption* reasons) wins over the canonical-code
+// mapping in the JSON error envelope.
+func TestGCSCodecEncodeErrorReason(t *testing.T) {
+	c := &GCSCodec{}
+	perr := model.NewProviderError("InvalidArgument",
+		"the resource is encrypted with a customer-supplied encryption key", 400).
+		WithData(map[string]any{"reason": "resourceIsEncryptedWithCustomerEncryptionKey"})
+	status, hdr, body := c.EncodeError(nil, perr)
+	if status != 400 {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if ct := hdr.Get("Content-Type"); ct != "application/json; charset=UTF-8" {
+		t.Fatalf("expected json content type, got %q", ct)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	errObj, _ := env["error"].(map[string]any)
+	errorsArr, _ := errObj["errors"].([]any)
+	if len(errorsArr) == 0 {
+		t.Fatal("expected errors[] array")
+	}
+	first, _ := errorsArr[0].(map[string]any)
+	if first["reason"] != "resourceIsEncryptedWithCustomerEncryptionKey" {
+		t.Errorf("reason = %v, want resourceIsEncryptedWithCustomerEncryptionKey", first["reason"])
+	}
+}
+
 func TestGCSCodecRewriteRouting(t *testing.T) {
 	c := &GCSCodec{}
 	r := httptest.NewRequest("POST", "/storage/v1/b/srcbkt/o/dir/src.txt/rewriteTo/b/dstbkt/o/dir/dst.txt", nil)

@@ -629,12 +629,18 @@ func (c *GCSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 		}
 	}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+	// A provider may carry the documented GCS reason (e.g. the CSEK
+	// customerEncryption* reasons); it wins over the canonical-code mapping.
+	reason := gcpReason(perr.Code)
+	if r, _ := perr.Data["reason"].(string); r != "" {
+		reason = r
+	}
 	env := map[string]any{
 		"error": map[string]any{
 			"errors": []any{
 				map[string]any{
 					"domain":  "global",
-					"reason":  gcpReason(perr.Code),
+					"reason":  reason,
 					"message": perr.Message,
 				},
 			},

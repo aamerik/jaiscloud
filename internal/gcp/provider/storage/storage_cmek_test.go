@@ -150,6 +150,7 @@ func TestGCSCSEKRoundTrip(t *testing.T) {
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "csek.txt"
 	nr.Params[wire.MediaKey] = []byte("classified")
+	nr.Params[wire.CSEKAlgorithm] = "AES256"
 	nr.Params[wire.CSEKKey] = keyB64
 	nr.Params[wire.CSEKKeySHA256] = shaB64
 	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
@@ -170,7 +171,9 @@ func TestGCSCSEKRoundTrip(t *testing.T) {
 	nr = bucketParams()
 	nr.Params["bucket"] = "bkt"
 	nr.Params["object"] = "csek.txt"
+	nr.Params[wire.CSEKAlgorithm] = "AES256"
 	nr.Params[wire.CSEKKey] = keyB64
+	nr.Params[wire.CSEKKeySHA256] = shaB64
 	media, err := p.ObjectsGetMedia(ctx, nr)
 	if err != nil {
 		t.Fatalf("get media with key: %v", err)
