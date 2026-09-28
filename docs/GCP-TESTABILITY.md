@@ -200,8 +200,9 @@ evidence for any of them.
       and a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) plus a
       project-wide account cap is enforced by an invocation admission gate that returns HTTP
       429 `RESOURCE_EXHAUSTED` with no available instance. The project quota/account-settings
-      API itself is still not modelled (real GCP exposes Cloud Functions quotas through the
-      separate Cloud Quotas / Service Usage APIs).
+      API itself is still not modelled (FD11): Cloud Functions declares no account/quota method
+      (real GCP exposes quotas only through the separate Cloud Quotas / Service Usage APIs), so
+      Lambda's `GetAccountSettings` has no Cloud Functions analogue and is deliberately not faked.
 - [ ] **Frozen-clock OCC / TTL.** With the clock frozen (`POST /_jaiscloud/clock`),
       Datastore optimistic-concurrency conflict detection and DynamoDB-style TTL edge cases can
       behave differently. (Firestore's `UpdateTime` OCC token is kept strictly monotonic per
