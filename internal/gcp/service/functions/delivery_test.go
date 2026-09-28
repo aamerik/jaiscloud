@@ -30,6 +30,24 @@ func (f fakeTargets) TargetsForEvent(context.Context, eventing.Event) []eventing
 	return f.targets
 }
 
+// fakeProvisioner records backing-Eventarc-trigger provisioning calls.
+type fakeProvisioner struct {
+	specs   []eventing.FunctionTriggerSpec
+	deleted []string
+}
+
+func (f *fakeProvisioner) EnsureFunctionTrigger(_ context.Context, spec eventing.FunctionTriggerSpec) (string, string, error) {
+	f.specs = append(f.specs, spec)
+	trigger := "projects/" + spec.Project + "/locations/" + spec.Location + "/triggers/functions-" + spec.FunctionID
+	sub := eventing.EventarcSubscriptionID(spec.Location, "functions-"+spec.FunctionID)
+	return trigger, sub, nil
+}
+
+func (f *fakeProvisioner) DeleteFunctionTrigger(_ context.Context, _, _, functionID string) error {
+	f.deleted = append(f.deleted, functionID)
+	return nil
+}
+
 // fakeSubs is a recording eventing.SubscriptionProvisioner.
 type fakeSubs struct {
 	dlqTopic    string
@@ -39,6 +57,10 @@ type fakeSubs struct {
 	lastAttrs   map[string]string
 }
 
+func (f *fakeSubs) EnsureEventarcTopic(context.Context, string, string, string) (string, error) {
+	return "topic", nil
+}
+func (f *fakeSubs) DeleteEventarcTopic(context.Context, string, string) error { return nil }
 func (f *fakeSubs) EnsureEventarcSubscription(context.Context, string, string, string, string) (string, error) {
 	return "sub", nil
 }
@@ -233,6 +255,133 @@ func TestDispatchForwardToDeadLetter(t *testing.T) {
 	}
 	if subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"] != "2" {
 		t.Fatalf("delivery count attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	}
+}
+
+// TestDispatchForwardToDeadLetterStorage covers FP2: a Cloud Storage event that
+// exhausts its retries is forwarded to the dead-letter topic of the function's
+// backing (Eventarc-provisioned) subscription, exactly like a Pub/Sub event.
+func TestDispatchForwardToDeadLetterStorage(t *testing.T) {
+	ctx := context.Background()
+	fail := &failingExecutor{}
+	subs := &fakeSubs{dlqTopic: "dlq", maxAttempts: 2, ok: true}
+	s, fs := newDeliveryService(t, WithExecutor(fail), WithSubscriptions(subs))
+	createEventFunction(t, s, "gcsfn", map[string]any{
+		"eventType":     "google.storage.object.finalize",
+		"resource":      "projects/_/buckets/bkt",
+		"failurePolicy": map[string]any{"retry": map[string]any{}},
+	})
+	setDeliverySubscription(t, fs, "gcsfn", eventing.EventarcSubscriptionID("us-central1", "functions-gcsfn"))
+
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypeStorageFinalize,
+		Resource: "projects/_/buckets/bkt", Source: eventing.SourceStorage,
+		EventID: "obj1", Data: []byte("payload"),
+	})
+
+	got := deliveries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(got))
+	}
+	d := got[0]
+	if d.Status != functionsstore.DeliveryDeadLetter || d.Attempts != 2 || d.DeadLetterTopic != "dlq" {
+		t.Fatalf("delivery = %+v", d)
+	}
+	if d.Source != eventing.SourceStorage {
+		t.Fatalf("delivery source = %q", d.Source)
+	}
+	if subs.published != 1 {
+		t.Fatalf("published = %d, want 1", subs.published)
+	}
+	if subs.lastAttrs["CloudPubSubDeadLetterSourceSubscription"] != eventing.EventarcSubscriptionID("us-central1", "functions-gcsfn") {
+		t.Fatalf("attrs = %+v", subs.lastAttrs)
+	}
+}
+
+// TestCreateFunctionProvisionsStorageTrigger covers FP2 provisioning: creating a
+// Cloud Storage-triggered function materializes a backing Eventarc trigger and
+// stores its subscription (the dead-letter surface) on the function.
+func TestCreateFunctionProvisionsStorageTrigger(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvisioner{}
+	s, fs := newDeliveryService(t, WithTriggerProvisioner(prov))
+	createEventFunction(t, s, "gcsfn", map[string]any{
+		"eventType": "providers/cloud.storage/eventTypes/object.change",
+		"resource":  "projects/_/buckets/bkt",
+	})
+
+	if len(prov.specs) != 1 {
+		t.Fatalf("provision calls = %+v", prov.specs)
+	}
+	spec := prov.specs[0]
+	if !eventing.IsStorageEventType(spec.EventType) || spec.Resource != "projects/_/buckets/bkt" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	stored, err := fs.GetFunction(ctx, "proj", "us-central1", "gcsfn")
+	if err != nil {
+		t.Fatalf("get function: %v", err)
+	}
+	if stored.EventTrigger == nil || stored.EventTrigger.Trigger == "" || stored.EventTrigger.Subscription == "" {
+		t.Fatalf("backing trigger not persisted: %+v", stored.EventTrigger)
+	}
+}
+
+// TestCreateHTTPFunctionDoesNotProvision verifies only eventarc-backed event
+// triggers (Pub/Sub, Cloud Storage) are provisioned; an HTTP-triggered function
+// has no backing Eventarc trigger.
+func TestCreateHTTPFunctionDoesNotProvision(t *testing.T) {
+	prov := &fakeProvisioner{}
+	s, _ := newDeliveryService(t, WithTriggerProvisioner(prov))
+	in := FunctionInputFromMap(map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}, V1)
+	if _, _, err := s.CreateFunction(context.Background(), "proj", "us-central1", "httpfn", in, V1); err != nil {
+		t.Fatalf("create httpfn: %v", err)
+	}
+	if len(prov.specs) != 0 {
+		t.Fatalf("provisioned an HTTP function: %+v", prov.specs)
+	}
+}
+
+// TestV2StorageEventTriggerShape covers the Gen2 Cloud Storage trigger shape: the
+// source bucket arrives as an eventFilters bucket (pubsubTopic is Pub/Sub-only),
+// is rendered back the same way, and is provisioned like any eventarc-backed
+// trigger (FP2).
+func TestV2StorageEventTriggerShape(t *testing.T) {
+	in := FunctionInputFromMap(map[string]any{
+		"buildConfig": map[string]any{"runtime": "nodejs20"},
+		"eventTrigger": map[string]any{
+			"eventType":    "google.cloud.storage.object.v1.finalized",
+			"eventFilters": []any{map[string]any{"attribute": "bucket", "value": "bkt"}},
+			"retryPolicy":  "RETRY_POLICY_RETRY",
+		},
+	}, V2)
+	if in.EventTrigger == nil || in.EventTrigger.Resource != "projects/_/buckets/bkt" {
+		t.Fatalf("v2 storage source not parsed: %+v", in.EventTrigger)
+	}
+
+	rendered := functionJSONV2("proj", functionsstore.Function{
+		ID: "f", Location: "us-central1", EventTrigger: in.EventTrigger,
+	})
+	et, _ := rendered["eventTrigger"].(map[string]any)
+	if _, ok := et["pubsubTopic"]; ok {
+		t.Fatalf("v2 storage trigger must not render pubsubTopic: %+v", et)
+	}
+	filters, _ := et["eventFilters"].([]any)
+	if len(filters) != 1 {
+		t.Fatalf("eventFilters = %+v", filters)
+	}
+	fm, _ := filters[0].(map[string]any)
+	if fm["attribute"] != "bucket" || fm["value"] != "bkt" {
+		t.Fatalf("bucket filter = %+v", fm)
+	}
+
+	// The parsed bucket source is provisioned like any eventarc-backed trigger.
+	prov := &fakeProvisioner{}
+	s, _ := newDeliveryService(t, WithTriggerProvisioner(prov))
+	if _, _, err := s.CreateFunction(context.Background(), "proj", "us-central1", "gcsfn", in, V2); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(prov.specs) != 1 || !eventing.IsStorageEventType(prov.specs[0].EventType) || prov.specs[0].Resource != "projects/_/buckets/bkt" {
+		t.Fatalf("provision calls = %+v", prov.specs)
 	}
 }
 

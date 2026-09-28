@@ -94,6 +94,49 @@ func TestEventarcSubscriptionLifecycle(t *testing.T) {
 	}
 }
 
+// TestEventarcManagedTopicLifecycle covers the Eventarc-managed transport topic
+// the platform auto-provisions for a non-Pub/Sub trigger (a Cloud Storage
+// trigger, FP2): idempotent creation, a subscription on it, and deletion.
+func TestEventarcManagedTopicLifecycle(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	wantID := eventing.EventarcTopicID("us-central1", "functions-gcsfn")
+	topic, err := p.EnsureEventarcTopic(ctx, "proj", "us-central1", "functions-gcsfn")
+	if err != nil {
+		t.Fatalf("ensure eventarc topic: %v", err)
+	}
+	if topic != wantID {
+		t.Fatalf("topic id = %q, want %q", topic, wantID)
+	}
+	// Idempotent: a second ensure returns the same id without erroring.
+	if again, err := p.EnsureEventarcTopic(ctx, "proj", "us-central1", "functions-gcsfn"); err != nil || again != wantID {
+		t.Fatalf("re-ensure = %q, %v", again, err)
+	}
+	// The topic is discoverable.
+	resp, err := p.TopicGet(ctx, newNR(map[string]any{"name": "topics/" + wantID}))
+	if err != nil {
+		t.Fatalf("topic get: %v", err)
+	}
+	if name, _ := resp.Data["name"].(string); name != "projects/proj/topics/"+wantID {
+		t.Fatalf("topic name = %q", name)
+	}
+	// The auto topic satisfies the subscription's topic-existence validation.
+	if _, err := p.EnsureEventarcSubscription(ctx, "proj", "us-central1", "functions-gcsfn", wantID); err != nil {
+		t.Fatalf("ensure subscription on auto topic: %v", err)
+	}
+	// Delete tolerates absence (a repeat is a no-op).
+	if err := p.DeleteEventarcTopic(ctx, "proj", wantID); err != nil {
+		t.Fatalf("delete eventarc topic: %v", err)
+	}
+	if err := p.DeleteEventarcTopic(ctx, "proj", wantID); err != nil {
+		t.Fatalf("delete eventarc topic (repeat): %v", err)
+	}
+	if _, err := p.TopicGet(ctx, newNR(map[string]any{"name": "topics/" + wantID})); err == nil {
+		t.Fatal("expected the deleted topic to be NotFound")
+	}
+}
+
 // TestSubscriptionUpdateValidation covers the updateMask contract: the filter is
 // immutable and an unknown path fails loud.
 func TestSubscriptionUpdateValidation(t *testing.T) {

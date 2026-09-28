@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 	"jaiscloud/internal/model"
 )
@@ -133,16 +134,42 @@ func functionInputFromMapV2(body map[string]any) FunctionInput {
 	}
 	if et := nestedMap(body, "eventTrigger"); et != nil {
 		// EventTrigger.Service models the v1 "service" hostname, not the v2
-		// serviceAccountEmail, so only the event type and topic are carried
+		// serviceAccountEmail, so only the event type and source are carried
 		// across; storing the v2 email here would surface it under the v1
 		// service field on a cross-version read.
+		//
+		// A v2 trigger expresses its source as an event_filters bucket (Cloud
+		// Storage) or a pubsubTopic (Pub/Sub, the only event type it is valid
+		// for); the unified Resource carries whichever is set.
+		src := stringOf(et["pubsubTopic"])
+		if bucket := eventFilterValue(et["eventFilters"], "bucket"); bucket != "" {
+			src = resource.ResourceID("")("gcs-bucket-policy", bucket)
+		}
 		in.EventTrigger = &functionsstore.EventTrigger{
 			EventType:   stringOf(et["eventType"]),
-			Resource:    stringOf(et["pubsubTopic"]),
+			Resource:    src,
 			RetryPolicy: stringOf(et["retryPolicy"]),
 		}
 	}
 	return in
+}
+
+// eventFilterValue returns the value of the first v2 eventFilters entry whose
+// attribute matches attr. The filters arrive in the decoded JSON/protojson
+// []any-of-objects shape.
+func eventFilterValue(raw any, attr string) string {
+	filters, _ := raw.([]any)
+	for _, f := range filters {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		if a, _ := fm["attribute"].(string); a == attr {
+			v, _ := fm["value"].(string)
+			return v
+		}
+	}
+	return ""
 }
 
 // durationString renders whole seconds as the canonical Cloud Functions

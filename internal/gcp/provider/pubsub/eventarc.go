@@ -11,6 +11,41 @@ import (
 	"jaiscloud/internal/store"
 )
 
+// EnsureEventarcTopic idempotently creates the Eventarc-managed transport topic
+// that backs a trigger whose source is not a Pub/Sub topic (a Cloud Storage
+// trigger), returning its short id. Real Eventarc auto-creates this topic
+// alongside the trigger's subscription; the emulator mirrors that naming so the
+// paired topic/subscription are discoverable in topics.list /
+// subscriptions.list. An existing topic is left untouched.
+func (p *Provider) EnsureEventarcTopic(ctx context.Context, project, location, triggerID string) (string, error) {
+	id := eventing.EventarcTopicID(location, triggerID)
+	meta := map[string]any{
+		"name":   resource.ResourceID(project)("pubsub-topic", id),
+		"labels": map[string]string{"goog-eventarc-trigger": triggerID},
+	}
+	data, _ := json.Marshal(meta)
+	if err := p.resources.Create(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtTopic, ID: id, Data: data}); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return id, nil
+		}
+		return "", err
+	}
+	return id, nil
+}
+
+// DeleteEventarcTopic removes an Eventarc-managed transport topic, detaching
+// any subscriptions (they are re-pointed at the "_deleted-topic_" sentinel, the
+// real Pub/Sub behaviour) and tolerating absence.
+func (p *Provider) DeleteEventarcTopic(ctx context.Context, project, topic string) error {
+	if err := p.deleteTopic(ctx, project, lastSegment(topic)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // EnsureEventarcSubscription idempotently creates the transport subscription of
 // an Eventarc trigger on topic, returning its short id. An existing subscription
 // is left untouched so a user-configured deadLetterPolicy survives

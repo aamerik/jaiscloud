@@ -61,3 +61,38 @@ func TestMemoryStoreSnapshotKeepsSourceMetadata(t *testing.T) {
 		t.Fatalf("source metadata not restored: %+v", got)
 	}
 }
+
+// TestMemoryStoreSnapshotKeepsEventTriggerBacking covers the FP2 persisted
+// surface: a storage event trigger's provisioned backing trigger name and
+// dead-letter subscription survive a snapshot/restore cycle (they are stored as
+// JSONB, so no migration is needed).
+func TestMemoryStoreSnapshotKeepsEventTriggerBacking(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	f := Function{ID: "g", Runtime: "nodejs20", EntryPoint: "handler",
+		EventTrigger: &EventTrigger{
+			EventType:    "google.storage.object.finalize",
+			Resource:     "projects/_/buckets/bkt",
+			Trigger:      "projects/p/locations/us/triggers/functions-g",
+			Subscription: "eventarc-us-functions-g",
+		}}
+	if err := s.CreateFunction(ctx, "p", "us", "g", f); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	dst := NewMemoryStore()
+	if err := dst.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := dst.GetFunction(ctx, "p", "us", "g")
+	if err != nil {
+		t.Fatalf("get after restore: %v", err)
+	}
+	if got.EventTrigger == nil || got.EventTrigger.Trigger == "" || got.EventTrigger.Subscription != "eventarc-us-functions-g" {
+		t.Fatalf("event trigger backing not restored: %+v", got.EventTrigger)
+	}
+}
