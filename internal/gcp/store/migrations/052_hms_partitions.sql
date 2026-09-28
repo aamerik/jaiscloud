@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS jc_hms_partitions (
     PRIMARY KEY (db_name, table_name, part_key),
     -- Enforce table existence and cascade on table/database drop at the DB
     -- level, mirroring jc_hms_tables' database FK.
+    -- ON UPDATE CASCADE keeps a table rename (which re-keys jc_hms_tables)
+    -- from dropping the partitions it owns; ON DELETE CASCADE still drops them
+    -- with the table/database.
     CONSTRAINT jc_hms_partitions_table_fk FOREIGN KEY (db_name, table_name)
-        REFERENCES jc_hms_tables (db_name, table_name) ON DELETE CASCADE
+        REFERENCES jc_hms_tables (db_name, table_name) ON DELETE CASCADE ON UPDATE CASCADE
 );

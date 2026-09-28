@@ -113,20 +113,42 @@ func partitionFromStruct(p *Struct) (db, tbl string, values []string, raw []byte
 	return db, tbl, values, raw, err
 }
 
-// tablePartitionKeys returns the partition-key column names (Table.partitionKeys,
+// partitionColumn is one partition-key column: its name and Hive type.
+type partitionColumn struct {
+	name string
+	typ  string
+}
+
+// tablePartitionColumns returns the partition-key columns (Table.partitionKeys,
 // field 8) in order.
-func tablePartitionKeys(t hmsstore.Table) ([]string, error) {
+func tablePartitionColumns(t hmsstore.Table) ([]partitionColumn, error) {
 	st, err := UnmarshalStruct(t.TableJSON)
 	if err != nil {
 		return nil, err
 	}
-	var keys []string
+	var cols []partitionColumn
 	for _, v := range st.List(tblPartitionKeys) {
 		if v.T == thrift.STRUCT && v.S != nil {
-			keys = append(keys, v.S.String(fsName))
+			cols = append(cols, partitionColumn{name: v.S.String(fsName), typ: v.S.String(fsType)})
 		}
 	}
-	return keys, nil
+	return cols, nil
+}
+
+func columnNames(cols []partitionColumn) []string {
+	names := make([]string, 0, len(cols))
+	for _, c := range cols {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+func columnTypes(cols []partitionColumn) map[string]string {
+	types := make(map[string]string, len(cols))
+	for _, c := range cols {
+		types[c.name] = c.typ
+	}
+	return types
 }
 
 // tableSDLocation returns Table.sd.location (Table field 7 -> StorageDescriptor
@@ -187,7 +209,9 @@ func partitionName(keys, vals []string) string {
 		if i > 0 {
 			b.WriteByte('/')
 		}
-		b.WriteString(escapePathName(keys[i]))
+		// Hive's Warehouse.makePartName lowercases the column name but not the
+		// value, so names round-trip with the canonical key casing.
+		b.WriteString(escapePathName(strings.ToLower(keys[i])))
 		b.WriteByte('=')
 		b.WriteString(escapePathName(vals[i]))
 	}
@@ -247,20 +271,26 @@ func escapePathName(s string) string {
 
 // --- partition filter (get_partitions_by_filter / *_by_expr subset) ---
 
-type filterNode interface{ eval(map[string]string) bool }
+type filterNode interface {
+	eval(values, types map[string]string) bool
+}
 
 type filterOr struct{ l, r filterNode }
 
-func (n filterOr) eval(m map[string]string) bool { return n.l.eval(m) || n.r.eval(m) }
+func (n filterOr) eval(values, types map[string]string) bool {
+	return n.l.eval(values, types) || n.r.eval(values, types)
+}
 
 type filterAnd struct{ l, r filterNode }
 
-func (n filterAnd) eval(m map[string]string) bool { return n.l.eval(m) && n.r.eval(m) }
+func (n filterAnd) eval(values, types map[string]string) bool {
+	return n.l.eval(values, types) && n.r.eval(values, types)
+}
 
 type filterCmp struct{ key, op, val string }
 
-func (n filterCmp) eval(m map[string]string) bool {
-	v, ok := m[n.key]
+func (n filterCmp) eval(values, types map[string]string) bool {
+	v, ok := values[n.key]
 	if !ok {
 		return false
 	}
@@ -270,30 +300,46 @@ func (n filterCmp) eval(m map[string]string) bool {
 	case "!=", "<>":
 		return v != n.val
 	case "<":
-		return comparePartitionValue(v, n.val) < 0
+		return comparePartitionValue(v, n.val, types[n.key]) < 0
 	case "<=":
-		return comparePartitionValue(v, n.val) <= 0
+		return comparePartitionValue(v, n.val, types[n.key]) <= 0
 	case ">":
-		return comparePartitionValue(v, n.val) > 0
+		return comparePartitionValue(v, n.val, types[n.key]) > 0
 	case ">=":
-		return comparePartitionValue(v, n.val) >= 0
+		return comparePartitionValue(v, n.val, types[n.key]) >= 0
 	case "like":
 		return likeMatch(v, n.val)
 	}
 	return false
 }
 
-func comparePartitionValue(a, b string) int {
-	af, aerr := strconv.ParseFloat(a, 64)
-	bf, berr := strconv.ParseFloat(b, 64)
-	if aerr == nil && berr == nil {
-		switch {
-		case af < bf:
-			return -1
-		case af > bf:
-			return 1
-		default:
-			return 0
+// isNumericType reports whether a Hive column type compares numerically.
+func isNumericType(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	for _, p := range []string{"tinyint", "smallint", "int", "bigint", "float", "double", "decimal", "numeric"} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// comparePartitionValue compares two partition values as Hive would: numeric
+// for numeric column types, lexicographic otherwise (so "10" < "9" for a
+// string-typed partition column).
+func comparePartitionValue(a, b, typ string) int {
+	if isNumericType(typ) {
+		af, aerr := strconv.ParseFloat(a, 64)
+		bf, berr := strconv.ParseFloat(b, 64)
+		if aerr == nil && berr == nil {
+			switch {
+			case af < bf:
+				return -1
+			case af > bf:
+				return 1
+			default:
+				return 0
+			}
 		}
 	}
 	return strings.Compare(a, b)
@@ -388,7 +434,10 @@ func (p *filterParser) peek() string {
 }
 
 func (p *filterParser) next() string {
-	t := p.peek()
+	if p.pos >= len(p.toks) {
+		return ""
+	}
+	t := p.toks[p.pos]
 	p.pos++
 	return t
 }
@@ -451,13 +500,14 @@ func (p *filterParser) parseComparison() (filterNode, error) {
 	default:
 		return nil, fmt.Errorf("unsupported filter operator %q", op)
 	}
-	val := p.next()
-	if strings.HasPrefix(val, "STR:") {
-		val = val[4:]
-	}
-	if val == "" && op != "=" {
+	// A quoted empty string tokenizes as "STR:" (non-empty); a genuinely
+	// missing token is "" — reject the latter so a trailing operator cannot
+	// index past the token slice.
+	tok := p.next()
+	if tok == "" {
 		return nil, errors.New("missing filter value")
 	}
+	val := strings.TrimPrefix(tok, "STR:")
 	return filterCmp{key: key, op: op, val: val}, nil
 }
 
@@ -476,7 +526,7 @@ func parsePartitionFilter(s string) (filterNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.pos != len(p.toks) {
+	if p.pos < len(p.toks) {
 		return nil, fmt.Errorf("unexpected token %q in filter", p.toks[p.pos])
 	}
 	return n, nil
@@ -546,6 +596,12 @@ func cloneWithLocation(sd *Struct, loc string) *Struct {
 	return &Struct{Fields: fields}
 }
 
+// isAbsolutePath reports whether a path carries its own scheme/root (so it must
+// not be re-parented under the table root).
+func isAbsolutePath(p string) bool {
+	return strings.Contains(p, "://") || strings.HasPrefix(p, "/")
+}
+
 func relativePath(root, loc string) string {
 	if root == "" || loc == "" {
 		return loc
@@ -593,9 +649,9 @@ func buildPartitionSpecs(db, tbl, rootPath string, parts []*Struct) []*Struct {
 			}
 			b := NewBuilder().Add(partValues, ListV(thrift.STRING, stringValues(vals)))
 			b.I32(2, p.I32(partCreateTime)).I32(3, p.I32(partLastAccessTime))
-			if rel := relativePath(rootPath, loc); rel != "" {
-				b.Str(4, rel)
-			}
+			// PartitionWithoutSD.relativePath is a required field: emit it even
+			// when empty (root-level partition).
+			b.Str(4, relativePath(rootPath, loc))
 			if params := p.MapStrStr(partParameters); len(params) > 0 {
 				b.MapStrStr(5, params)
 			}
@@ -635,11 +691,18 @@ func expandPartitionSpec(spec *Struct) ([]hmsstore.Partition, error) {
 			}
 			pws := pv.S
 			values := valueStrings(pws.List(1))
+			// Reconstruct the absolute location: root + relativePath, unless
+			// relativePath is itself absolute (a partition outside the root).
 			sd := cloneWithLocation(sharedSD, "")
-			if loc := strings.TrimRight(root, "/"); pws.String(4) != "" {
-				sd = cloneWithLocation(sharedSD, loc+"/"+strings.TrimLeft(pws.String(4), "/"))
-			} else if root != "" {
-				sd = cloneWithLocation(sharedSD, root)
+			switch rel := pws.String(4); {
+			case rel == "":
+				if root != "" {
+					sd = cloneWithLocation(sharedSD, root)
+				}
+			case isAbsolutePath(rel):
+				sd = cloneWithLocation(sharedSD, rel)
+			default:
+				sd = cloneWithLocation(sharedSD, strings.TrimRight(root, "/")+"/"+strings.TrimLeft(rel, "/"))
 			}
 			b := NewBuilder().
 				Add(partValues, ListV(thrift.STRING, stringValues(values))).
@@ -753,7 +816,12 @@ func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, e
 	if v, ok := req.Get(5); ok && v.T == thrift.BOOL {
 		needResult = v.B
 	}
-	var added []Value
+	type pending struct {
+		db, tbl string
+		values  []string
+		raw     []byte
+	}
+	var pend []pending
 	for _, v := range req.List(3) {
 		if v.T != thrift.STRUCT || v.S == nil {
 			continue
@@ -768,7 +836,22 @@ func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, e
 		if ptbl == "" {
 			ptbl = tbl
 		}
-		cerr := s.store.CreatePartition(ctx, pdb, ptbl, hmsstore.Partition{DBName: pdb, TableName: ptbl, Values: values, PartJSON: raw})
+		pend = append(pend, pending{db: pdb, tbl: ptbl, values: values, raw: raw})
+	}
+	// add_partitions_req is transactional in Hive: with ifNotExists=false a
+	// pre-existing partition fails the whole call before anything is written.
+	if !ifNotExists {
+		for _, p := range pend {
+			if _, err := s.store.GetPartition(ctx, p.db, p.tbl, p.values); err == nil {
+				return nil, declared(2, excAlreadyExistsException, "partition already exists")
+			} else if !errors.Is(err, hmsstore.ErrPartitionNotFound) {
+				return nil, s.addPartitionErr(err)
+			}
+		}
+	}
+	var added []Value
+	for _, p := range pend {
+		cerr := s.store.CreatePartition(ctx, p.db, p.tbl, hmsstore.Partition{DBName: p.db, TableName: p.tbl, Values: p.values, PartJSON: p.raw})
 		if cerr != nil {
 			if errors.Is(cerr, hmsstore.ErrPartitionExists) && ifNotExists {
 				continue
@@ -776,7 +859,7 @@ func (s *Server) addPartitionsReq(ctx context.Context, args *Struct) (*Struct, e
 			return nil, s.addPartitionErr(cerr)
 		}
 		if needResult {
-			if st, err := UnmarshalStruct(raw); err == nil {
+			if st, err := UnmarshalStruct(p.raw); err == nil {
 				added = append(added, StructV(st))
 			}
 		}
@@ -817,13 +900,24 @@ func (s *Server) appendPartition(ctx context.Context, args *Struct) (*Struct, er
 	if db == "" {
 		db = "default"
 	}
+	// Hive derives the partition location from the table root + partition name;
+	// do the same so the returned/stored partition has a usable sd.location.
+	sd := NewBuilder()
+	if tblStore, terr := s.store.GetTable(ctx, db, tbl); terr == nil {
+		cols, _ := tablePartitionColumns(tblStore)
+		if root := tableSDLocation(tblStore); root != "" {
+			sd.Str(sdLocation, strings.TrimRight(root, "/")+"/"+partitionName(columnNames(cols), values))
+		}
+	} else {
+		return nil, s.addPartitionErr(terr)
+	}
 	st := NewBuilder().
 		Add(partValues, ListV(thrift.STRING, stringValues(values))).
 		Str(partDBName, db).
 		Str(partTableName, tbl).
 		I32(partCreateTime, int32(clock.Now().Unix())).
 		I32(partLastAccessTime, 0).
-		Struct(partSD, &Struct{}).
+		Struct(partSD, sd.Build()).
 		Build()
 	raw, err := MarshalStruct(st)
 	if err != nil {
@@ -946,7 +1040,7 @@ func (s *Server) filterPartitions(ctx context.Context, db, tbl, filter string) (
 	if err != nil {
 		return nil, s.getPartitionErrA(err)
 	}
-	keys, err := tablePartitionKeys(tblStore)
+	cols, err := tablePartitionColumns(tblStore)
 	if err != nil {
 		return nil, declared(1, excMetaException, err.Error())
 	}
@@ -954,6 +1048,8 @@ func (s *Server) filterPartitions(ctx context.Context, db, tbl, filter string) (
 	if perr != nil {
 		return nil, s.getPartitionErrA(perr)
 	}
+	names := columnNames(cols)
+	types := columnTypes(cols)
 	parts, err := s.listAllPartitions(ctx, db, tbl)
 	if err != nil {
 		return nil, s.getPartitionErrA(err)
@@ -964,8 +1060,8 @@ func (s *Server) filterPartitions(ctx context.Context, db, tbl, filter string) (
 			out = append(out, p)
 			continue
 		}
-		m := partitionSpecMap(keys, valueStrings(p.List(partValues)))
-		if m != nil && node.eval(m) {
+		m := partitionSpecMap(names, valueStrings(p.List(partValues)))
+		if m != nil && node.eval(m, types) {
 			out = append(out, p)
 		}
 	}
@@ -1019,10 +1115,11 @@ func (s *Server) getPartitionNames(ctx context.Context, args *Struct) (*Struct, 
 	if err != nil {
 		return nil, metaOnlyErr(err)
 	}
-	keys, err := tablePartitionKeys(tblStore)
+	cols, err := tablePartitionColumns(tblStore)
 	if err != nil {
 		return nil, metaOnlyErr(err)
 	}
+	keys := columnNames(cols)
 	parts, err := s.store.ListPartitions(ctx, db, tbl)
 	if err != nil {
 		return nil, metaOnlyErr(err)
@@ -1042,19 +1139,25 @@ func (s *Server) getPartitionNamesPs(ctx context.Context, args *Struct) (*Struct
 	if err != nil {
 		return nil, s.getPartitionErrA(err)
 	}
-	keys, err := tablePartitionKeys(tblStore)
+	cols, err := tablePartitionColumns(tblStore)
 	if err != nil {
 		return nil, declared(1, excMetaException, err.Error())
 	}
+	keys := columnNames(cols)
 	parts, err := s.store.ListPartitions(ctx, db, tbl)
 	if err != nil {
 		return nil, s.getPartitionErrA(err)
 	}
-	names := []string{}
-	for _, p := range capParts(parts, int32(args.I16(4))) {
+	// Filter by the partial spec first, THEN apply max_parts (Hive semantics).
+	filtered := make([]hmsstore.Partition, 0, len(parts))
+	for _, p := range parts {
 		if hasValuePrefix(p.Values, prefix) {
-			names = append(names, partitionName(keys, p.Values))
+			filtered = append(filtered, p)
 		}
+	}
+	names := make([]string, 0, len(filtered))
+	for _, p := range capParts(filtered, int32(args.I16(4))) {
+		names = append(names, partitionName(keys, p.Values))
 	}
 	return NewBuilder().ListStr(0, names).Build(), nil
 }
@@ -1173,6 +1276,9 @@ func (s *Server) renamePartition(ctx context.Context, args *Struct) (*Struct, er
 
 // --- drop ---
 
+// dropPartition removes partition metadata. The deleteData flag (field 4) is a
+// documented no-op: the emulator owns no table data files, and deleting GCS
+// objects would cross into the storage plane (recorded in the plan).
 func (s *Server) dropPartition(ctx context.Context, args *Struct) (*Struct, error) {
 	values := valueStrings(args.List(3))
 	if err := s.store.DropPartition(ctx, args.String(1), args.String(2), values); err != nil {

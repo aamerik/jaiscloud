@@ -316,6 +316,26 @@ func (s *MemoryStore) RenameTable(_ context.Context, srcDB, srcName, dstDB, dstN
 	t.DBName = dstDB
 	t.TableName = dstName
 	s.tables[dstDB][dstName] = t
+
+	// Hive preserves partition metadata across a table rename, so re-key the
+	// source table's partitions onto the destination table.
+	if tp := s.partitions[srcDB][srcName]; tp != nil {
+		delete(s.partitions[srcDB], srcName)
+		if len(s.partitions[srcDB]) == 0 {
+			delete(s.partitions, srcDB)
+		}
+		if s.partitions[dstDB] == nil {
+			s.partitions[dstDB] = make(map[string]map[string]Partition)
+		}
+		if s.partitions[dstDB][dstName] == nil {
+			s.partitions[dstDB][dstName] = make(map[string]Partition)
+		}
+		for k, p := range tp {
+			p.DBName = dstDB
+			p.TableName = dstName
+			s.partitions[dstDB][dstName][k] = p
+		}
+	}
 	return t, nil
 }
 

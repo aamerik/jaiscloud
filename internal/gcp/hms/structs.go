@@ -42,9 +42,10 @@ const (
 	sdLocation int16 = 2
 )
 
-// FieldSchema fields (only the name is read).
+// FieldSchema fields.
 const (
 	fsName int16 = 1
+	fsType int16 = 2
 )
 
 // LockComponent fields.

@@ -298,13 +298,13 @@ func (s *PostgresStore) RenameTable(ctx context.Context, srcDB, srcName, dstDB, 
 		return Table{}, err
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM jc_hms_tables WHERE db_name=$1 AND table_name=$2`, srcDB, srcName); err != nil {
-		return Table{}, err
-	}
+	// Re-key the table in place: the jc_hms_partitions FK is ON UPDATE CASCADE,
+	// so this preserves partition metadata across the rename (a DELETE+INSERT
+	// would cascade-drop it).
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_hms_tables (db_name, table_name, table_json)
-		VALUES ($1,$2,$3)
-	`, dstDB, dstName, jsonObj(json.RawMessage(t.TableJSON))); err != nil {
+		UPDATE jc_hms_tables SET db_name=$1, table_name=$2, table_json=$3
+		WHERE db_name=$4 AND table_name=$5
+	`, dstDB, dstName, jsonObj(json.RawMessage(t.TableJSON)), srcDB, srcName); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return Table{}, ErrTableExists

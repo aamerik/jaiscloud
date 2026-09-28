@@ -243,6 +243,21 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected ErrPartitionNotFound on re-drop, got %v", err)
 	}
 
+	// Renaming a table preserves its partitions (Hive keeps partition metadata).
+	if _, err := s.RenameTable(ctx, "db2", "c", "db2", "c_renamed", Table{DBName: "db2", TableName: "c_renamed", TableJSON: tblJSON}); err != nil {
+		t.Fatalf("rename table: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c_renamed", []string{"2025"}); err != nil {
+		t.Fatalf("partitions lost on table rename: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2025"}); err != ErrTableNotFound {
+		t.Fatalf("expected old table gone after rename, got %v", err)
+	}
+	// Rename back so the cascade check below still targets c.
+	if _, err := s.RenameTable(ctx, "db2", "c_renamed", "db2", "c", Table{DBName: "db2", TableName: "c", TableJSON: tblJSON}); err != nil {
+		t.Fatalf("rename table back: %v", err)
+	}
+
 	// Dropping the table cascades to its partitions.
 	if err := s.DropTable(ctx, "db2", "c"); err != nil {
 		t.Fatalf("drop table: %v", err)
