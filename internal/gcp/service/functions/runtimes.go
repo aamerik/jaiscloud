@@ -1,6 +1,9 @@
 package functions
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Runtime is one Cloud Functions v2 runtime descriptor
 // (google.cloud.functions.v2.ListRuntimesResponse.Runtime). It is the
@@ -120,11 +123,14 @@ func RuntimeJSON(rt Runtime) map[string]any {
 	return out
 }
 
-// filterRuntimes applies an AIP-160-style filter over the catalog. Only the
-// fields the Runtime schema exposes are supported; an unknown field or a
-// malformed expression is InvalidArgument, matching real Cloud Functions.
+// filterRuntimes applies an AIP-160 filter over the catalog. Only the fields
+// the Runtime schema exposes are supported (name/displayName/stage/environment);
+// an unknown field, an unsupported operator (e.g. an AIP-160 function call), or
+// a malformed expression is InvalidArgument, matching real Cloud Functions — a
+// filter the emulator cannot evaluate is rejected rather than silently returning
+// a wrong (e.g. empty) result.
 func filterRuntimes(catalog []Runtime, filter string) ([]Runtime, error) {
-	clauses, err := parseRuntimeFilter(filter)
+	pred, err := compileRuntimeFilter(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -132,38 +138,11 @@ func filterRuntimes(catalog []Runtime, filter string) ([]Runtime, error) {
 	// package-level catalog (or its Warnings sub-slices) through the result.
 	out := make([]Runtime, 0, len(catalog))
 	for _, rt := range catalog {
-		ok := true
-		for _, c := range clauses {
-			if !c.matches(rt) {
-				ok = false
-				break
-			}
-		}
-		if ok {
+		if pred.match(rt) {
 			out = append(out, rt)
 		}
 	}
 	return out, nil
-}
-
-// runtimeFilterClause is one `field = "value"` equality clause.
-type runtimeFilterClause struct {
-	field string
-	value string
-}
-
-func (c runtimeFilterClause) matches(rt Runtime) bool {
-	switch c.field {
-	case "name":
-		return rt.Name == c.value
-	case "displayName":
-		return rt.DisplayName == c.value
-	case "stage":
-		return rt.Stage == c.value
-	case "environment":
-		return rt.Environment == c.value
-	}
-	return false
 }
 
 // runtimeFilterFields is the set of filterable Runtime fields.
@@ -174,96 +153,295 @@ var runtimeFilterFields = map[string]bool{
 	"environment": true,
 }
 
-// parseRuntimeFilter parses the AIP-160 subset real clients use for runtimes:
-// one or more `field = "value"` equality clauses joined by AND (the keyword is
-// case-insensitive). An empty filter yields no clauses. A clause without `=`, an
-// unknown field, an unsupported operator (OR/NOT/parentheses), or a malformed
-// value is InvalidArgument — a filter the emulator cannot evaluate is rejected
-// rather than silently returning a wrong (e.g. empty) result.
-func parseRuntimeFilter(filter string) ([]runtimeFilterClause, error) {
-	filter = strings.TrimSpace(filter)
-	if filter == "" {
-		return nil, nil
-	}
-	// Split on a top-level AND, case-insensitively, outside quotes.
-	parts := splitFilterAnd(filter)
-	clauses := make([]runtimeFilterClause, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			return nil, invalidArgument("malformed runtimes filter " + filter)
-		}
-		eq := strings.IndexByte(p, '=')
-		if eq < 0 {
-			return nil, invalidArgument("unsupported runtimes filter " + filter)
-		}
-		field := strings.TrimSpace(p[:eq])
-		if !runtimeFilterFields[field] {
-			return nil, invalidArgument("unsupported runtimes filter field " + field)
-		}
-		value, err := parseFilterValue(strings.TrimSpace(p[eq+1:]))
-		if err != nil {
-			return nil, invalidArgument("malformed runtimes filter " + filter)
-		}
-		clauses = append(clauses, runtimeFilterClause{field: field, value: value})
-	}
-	return clauses, nil
+// runtimePredicate is a compiled filter expression evaluated against a runtime.
+type runtimePredicate interface {
+	match(rt Runtime) bool
 }
 
-// parseFilterValue parses a single equality value: either a double-quoted
-// string (with no embedded quote) or a single bare token with no whitespace,
-// quote, parenthesis, or '='. Anything else is rejected so unsupported
-// operators (OR/NOT/parentheses) cannot be mistaken for a value.
-func parseFilterValue(raw string) (string, error) {
-	if raw == "" {
-		return "", invalidArgument("empty value")
-	}
-	if strings.HasPrefix(raw, `"`) {
-		if len(raw) < 2 || !strings.HasSuffix(raw, `"`) {
-			return "", invalidArgument("unterminated quoted value")
-		}
-		value := raw[1 : len(raw)-1]
-		if strings.ContainsAny(value, `"`) {
-			return "", invalidArgument("malformed quoted value")
-		}
-		return value, nil
-	}
-	if strings.ContainsAny(raw, ` "()=`) {
-		return "", invalidArgument("malformed unquoted value")
-	}
-	return raw, nil
+// matchAllRuntime matches every runtime (the empty filter).
+type matchAllRuntime struct{}
+
+func (matchAllRuntime) match(Runtime) bool { return true }
+
+type andRuntime struct{ l, r runtimePredicate }
+
+func (p andRuntime) match(rt Runtime) bool { return p.l.match(rt) && p.r.match(rt) }
+
+type orRuntime struct{ l, r runtimePredicate }
+
+func (p orRuntime) match(rt Runtime) bool { return p.l.match(rt) || p.r.match(rt) }
+
+type notRuntime struct{ inner runtimePredicate }
+
+func (p notRuntime) match(rt Runtime) bool { return !p.inner.match(rt) }
+
+// cmpRuntime is one `field OP value` predicate. Every Runtime field is a string,
+// so the ordering operators compare lexicographically (AIP-160 string order)
+// and `:` performs the AIP-160 "has" (substring) match.
+type cmpRuntime struct {
+	field string
+	op    string
+	value string
 }
 
-// splitFilterAnd splits an AIP-160 expression on the top-level "AND" operator
-// (case-insensitive), ignoring AND inside double quotes.
-func splitFilterAnd(s string) []string {
-	var parts []string
-	var b strings.Builder
-	inQuote := false
-	for i := 0; i < len(s); i++ {
+func (p cmpRuntime) match(rt Runtime) bool {
+	var actual string
+	switch p.field {
+	case "name":
+		actual = rt.Name
+	case "displayName":
+		actual = rt.DisplayName
+	case "stage":
+		actual = rt.Stage
+	case "environment":
+		actual = rt.Environment
+	default:
+		return false
+	}
+	switch p.op {
+	case "=":
+		return actual == p.value
+	case "!=":
+		return actual != p.value
+	case ":":
+		return strings.Contains(actual, p.value)
+	case "<":
+		return actual < p.value
+	case "<=":
+		return actual <= p.value
+	case ">":
+		return actual > p.value
+	case ">=":
+		return actual >= p.value
+	}
+	return false
+}
+
+// compileRuntimeFilter parses an AIP-160 expression over the Runtime fields:
+//
+//	expr       := and
+//	and        := or ( "AND" or )*
+//	or         := unary ( "OR" unary )*
+//	unary      := "NOT" unary | primary
+//	primary    := "(" expr ")" | comparison
+//	comparison := field ( "=" | "!=" | ":" | "<" | "<=" | ">" | ">=" ) value
+//
+// Per AIP-160, OR binds tighter than AND (`a AND b OR c` is `a AND (b OR c)`),
+// matching the logging filter evaluator. field is one of
+// name/displayName/stage/environment (case-sensitive) and value is a
+// double-quoted string or a bare token. Keywords are case-insensitive. An
+// empty filter matches everything. Anything outside this grammar (an unknown
+// field, an AIP-160 function call, a dangling operator, ...) is InvalidArgument.
+func compileRuntimeFilter(filter string) (runtimePredicate, error) {
+	if strings.TrimSpace(filter) == "" {
+		return matchAllRuntime{}, nil
+	}
+	toks, err := tokenizeRuntimeFilter(filter)
+	if err != nil {
+		return nil, invalidArgument(err.Error())
+	}
+	p := &runtimeFilterParser{toks: toks}
+	pred, err := p.parseAnd()
+	if err != nil {
+		return nil, invalidArgument(err.Error())
+	}
+	if p.peek().kind != rtTokEOF {
+		return nil, invalidArgument("unsupported runtimes filter " + filter)
+	}
+	return pred, nil
+}
+
+// ─── tokenizer ────────────────────────────────────────────────────────────────
+
+type runtimeFilterTokenKind int
+
+const (
+	rtTokEOF runtimeFilterTokenKind = iota
+	rtTokIdent
+	rtTokString
+	rtTokOp
+	rtTokLParen
+	rtTokRParen
+)
+
+type runtimeFilterToken struct {
+	kind runtimeFilterTokenKind
+	text string
+}
+
+// tokenizeRuntimeFilter splits an AIP-160 expression into identifiers, quoted
+// strings, comparison operators, and parentheses. An unterminated string or an
+// unexpected character is an error.
+func tokenizeRuntimeFilter(s string) ([]runtimeFilterToken, error) {
+	var toks []runtimeFilterToken
+	i := 0
+	for i < len(s) {
 		c := s[i]
-		if c == '"' {
-			inQuote = !inQuote
-			b.WriteByte(c)
-			continue
-		}
-		if !inQuote && i+3 <= len(s) && strings.EqualFold(s[i:i+3], "and") {
-			// Require word boundaries around AND.
-			leftOK := i == 0 || isSpace(s[i-1])
-			rightOK := i+3 == len(s) || isSpace(s[i+3])
-			if leftOK && rightOK {
-				parts = append(parts, b.String())
-				b.Reset()
-				i += 2 // skip "AND"; loop increments past the third char
-				continue
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			i++
+		case c == '(':
+			toks = append(toks, runtimeFilterToken{kind: rtTokLParen, text: "("})
+			i++
+		case c == ')':
+			toks = append(toks, runtimeFilterToken{kind: rtTokRParen, text: ")"})
+			i++
+		case c == '"':
+			j := i + 1
+			var b strings.Builder
+			closed := false
+			for j < len(s) {
+				if s[j] == '\\' && j+1 < len(s) {
+					b.WriteByte(s[j+1])
+					j += 2
+					continue
+				}
+				if s[j] == '"' {
+					closed = true
+					j++
+					break
+				}
+				b.WriteByte(s[j])
+				j++
 			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated string literal in runtimes filter")
+			}
+			toks = append(toks, runtimeFilterToken{kind: rtTokString, text: b.String()})
+			i = j
+		case c == '=' || c == '!' || c == '<' || c == '>' || c == ':':
+			if i+1 < len(s) {
+				switch s[i : i+2] {
+				case "!=", "<=", ">=":
+					toks = append(toks, runtimeFilterToken{kind: rtTokOp, text: s[i : i+2]})
+					i += 2
+					continue
+				}
+			}
+			if c == '!' {
+				return nil, fmt.Errorf("unexpected character %q in runtimes filter", string(c))
+			}
+			toks = append(toks, runtimeFilterToken{kind: rtTokOp, text: string(c)})
+			i++
+		case isRuntimeIdentStart(c):
+			j := i + 1
+			for j < len(s) && isRuntimeIdentPart(s[j]) {
+				j++
+			}
+			toks = append(toks, runtimeFilterToken{kind: rtTokIdent, text: s[i:j]})
+			i = j
+		default:
+			return nil, fmt.Errorf("unexpected character %q in runtimes filter", string(c))
 		}
-		b.WriteByte(c)
 	}
-	parts = append(parts, b.String())
-	return parts
+	toks = append(toks, runtimeFilterToken{kind: rtTokEOF})
+	return toks, nil
 }
 
-func isSpace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+func isRuntimeIdentStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isRuntimeIdentPart(c byte) bool {
+	return isRuntimeIdentStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '.'
+}
+
+// ─── parser ───────────────────────────────────────────────────────────────────
+
+type runtimeFilterParser struct {
+	toks []runtimeFilterToken
+	pos  int
+}
+
+func (p *runtimeFilterParser) peek() runtimeFilterToken { return p.toks[p.pos] }
+
+func (p *runtimeFilterParser) next() runtimeFilterToken {
+	t := p.toks[p.pos]
+	if t.kind != rtTokEOF {
+		p.pos++
+	}
+	return t
+}
+
+func (p *runtimeFilterParser) isKeyword(kw string) bool {
+	t := p.peek()
+	return t.kind == rtTokIdent && strings.EqualFold(t.text, kw)
+}
+
+func (p *runtimeFilterParser) parseAnd() (runtimePredicate, error) {
+	l, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	for p.isKeyword("and") {
+		p.next()
+		r, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		l = andRuntime{l, r}
+	}
+	return l, nil
+}
+
+func (p *runtimeFilterParser) parseOr() (runtimePredicate, error) {
+	l, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
+	for p.isKeyword("or") {
+		p.next()
+		r, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		l = orRuntime{l, r}
+	}
+	return l, nil
+}
+
+func (p *runtimeFilterParser) parseUnary() (runtimePredicate, error) {
+	if p.isKeyword("not") {
+		p.next()
+		inner, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return notRuntime{inner}, nil
+	}
+	return p.parsePrimary()
+}
+
+func (p *runtimeFilterParser) parsePrimary() (runtimePredicate, error) {
+	if p.peek().kind == rtTokLParen {
+		p.next()
+		inner, err := p.parseAnd()
+		if err != nil {
+			return nil, err
+		}
+		if p.next().kind != rtTokRParen {
+			return nil, fmt.Errorf("missing closing parenthesis in runtimes filter")
+		}
+		return inner, nil
+	}
+	return p.parseComparison()
+}
+
+func (p *runtimeFilterParser) parseComparison() (runtimePredicate, error) {
+	field := p.next()
+	if field.kind != rtTokIdent {
+		return nil, fmt.Errorf("expected runtimes filter field, got %q", field.text)
+	}
+	if !runtimeFilterFields[field.text] {
+		return nil, fmt.Errorf("unsupported runtimes filter field %q", field.text)
+	}
+	op := p.next()
+	if op.kind != rtTokOp {
+		return nil, fmt.Errorf("expected comparison operator after %q", field.text)
+	}
+	value := p.next()
+	if value.kind != rtTokString && value.kind != rtTokIdent {
+		return nil, fmt.Errorf("expected value after %q", op.text)
+	}
+	return cmpRuntime{field: field.text, op: op.text, value: value.text}, nil
 }

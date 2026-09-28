@@ -475,6 +475,15 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		}
 		meta["deadLetterPolicy"] = normalized
 	}
+	if rp := req.GetRetryPolicy(); rp != nil {
+		normalized, err := normalizeRetryPolicy(rp)
+		if err != nil {
+			return nil, err
+		}
+		if len(normalized) > 0 {
+			meta["retryPolicy"] = normalized
+		}
+	}
 	if pc := req.GetPushConfig(); pc != nil && pc.GetPushEndpoint() != "" {
 		meta["pushConfig"] = map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
 	}
@@ -1089,6 +1098,15 @@ func (s *Service) UpdateSubscription(ctx context.Context, req *pubsubpb.UpdateSu
 		paths = []string{"labels"}
 	}
 	for _, p := range paths {
+		// retry_policy is handled before the switch: its nested field-mask
+		// leaves need per-leaf merge semantics (AIP-161), and folding the path
+		// keeps snake_case/camelCase parity with the REST transport.
+		if _, _, ok := retryPolicyLeaf(p); ok {
+			if err := applyRetryPolicyUpdateProto(meta, in, p); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		switch p {
 		case "filter":
 			return nil, mapError(model.NewProviderError("InvalidArgument",
@@ -1770,6 +1788,22 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 			p.MaxDeliveryAttempts = int32(mda)
 		}
 		sub.DeadLetterPolicy = p
+	}
+	if rp, ok := meta["retryPolicy"].(map[string]any); ok {
+		p := &pubsubpb.RetryPolicy{}
+		if s, _ := rp["minimumBackoff"].(string); s != "" {
+			if d, err := parseProtoDuration(s); err == nil {
+				p.MinimumBackoff = durationpb.New(d)
+			}
+		}
+		if s, _ := rp["maximumBackoff"].(string); s != "" {
+			if d, err := parseProtoDuration(s); err == nil {
+				p.MaximumBackoff = durationpb.New(d)
+			}
+		}
+		if p.MinimumBackoff != nil || p.MaximumBackoff != nil {
+			sub.RetryPolicy = p
+		}
 	}
 	if pc, ok := meta["pushConfig"].(map[string]any); ok {
 		p := &pubsubpb.PushConfig{}

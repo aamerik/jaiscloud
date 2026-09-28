@@ -692,6 +692,18 @@ func TestListRuntimes(t *testing.T) {
 		t.Errorf("filtered runtime = %v", rts[0])
 	}
 
+	// The AIP-160 subset (substring + OR) is honored over REST too.
+	resp, err = p.ListRuntimes(ctx, newNRv2(map[string]any{
+		"location": "us-central1", "filter": `name:"nodejs" OR name="go122"`,
+	}))
+	if err != nil {
+		t.Fatalf("OR list runtimes: %v", err)
+	}
+	rts, _ = resp.Data["runtimes"].([]any)
+	if len(rts) != 5 {
+		t.Fatalf("expected 5 runtimes (4 nodejs + go122), got %d", len(rts))
+	}
+
 	// A missing location is InvalidArgument.
 	if _, err := p.ListRuntimes(ctx, newNRv2(map[string]any{})); err == nil {
 		t.Errorf("expected InvalidArgument for missing location")

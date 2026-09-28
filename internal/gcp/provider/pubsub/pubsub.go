@@ -613,6 +613,19 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		}
 		meta["deadLetterPolicy"] = normalized
 	}
+	if raw, ok := body["retryPolicy"]; ok {
+		rp, isObject := raw.(map[string]any)
+		if !isObject {
+			return nil, model.NewProviderError("InvalidArgument", "retryPolicy must be an object", 400)
+		}
+		normalized, err := normalizeRetryPolicy(rp)
+		if err != nil {
+			return nil, err
+		}
+		if len(normalized) > 0 {
+			meta["retryPolicy"] = normalized
+		}
+	}
 	if pc, ok := body["pushConfig"].(map[string]any); ok {
 		meta["pushConfig"] = pc
 	}

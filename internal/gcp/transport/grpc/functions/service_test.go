@@ -405,6 +405,18 @@ func TestListRuntimesV2(t *testing.T) {
 		t.Fatalf("filtered = %+v", filtered.GetRuntimes())
 	}
 
+	// The AIP-160 subset (OR + parentheses) is honored over gRPC too.
+	ored, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{
+		Parent: "projects/proj/locations/us-central1",
+		Filter: `(name="python312" OR name="go122") AND environment="GEN_2"`,
+	})
+	if err != nil {
+		t.Fatalf("ListRuntimes OR filter: %v", err)
+	}
+	if len(ored.GetRuntimes()) != 2 {
+		t.Fatalf("OR filter = %+v, want 2 runtimes", ored.GetRuntimes())
+	}
+
 	if _, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("malformed parent = %v, want InvalidArgument", err)
 	}
