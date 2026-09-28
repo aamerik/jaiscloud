@@ -30,6 +30,11 @@ var (
 	ErrTableExists = errors.New("TableExists")
 	// ErrTableNotFound is returned when addressing a missing table.
 	ErrTableNotFound = errors.New("TableNotFound")
+	// ErrPartitionExists is returned when creating a partition whose values
+	// already exist, or renaming onto an existing partition.
+	ErrPartitionExists = errors.New("PartitionExists")
+	// ErrPartitionNotFound is returned when addressing a missing partition.
+	ErrPartitionNotFound = errors.New("PartitionNotFound")
 )
 
 // LockState is the on-wire Hive LockState enum value (hive_metastore.thrift).
@@ -63,6 +68,33 @@ type Table struct {
 	DBName    string          `json:"dbName"`
 	TableName string          `json:"tableName"`
 	TableJSON json.RawMessage `json:"table"`
+}
+
+// Partition is a Hive partition record: the full Hive Partition struct encoded
+// as the codec's canonical (type-tagged, lossless) JSON, keyed by
+// (dbName, tableName, values). Like Table, the JSON is persisted and returned
+// verbatim so get_partition -> alter_partition round-trips every field the
+// client sent (F5). Values is the ordered partition-key tuple
+// (Partition.values, field 1); it is the natural key and is also persisted
+// separately so both backends can address a partition without decoding the
+// codec-owned JSON.
+type Partition struct {
+	DBName    string          `json:"dbName"`
+	TableName string          `json:"tableName"`
+	Values    []string        `json:"values"`
+	PartJSON  json.RawMessage `json:"partition"`
+}
+
+// PartitionKey returns the canonical store key for a partition value tuple.
+// Both backends derive it identically so memory and Postgres keys agree; the
+// JSON encoding keeps arbitrary value strings (including "/" and "=") from
+// colliding across different tuples. A nil slice is normalized to an empty one.
+func PartitionKey(values []string) string {
+	if values == nil {
+		values = []string{}
+	}
+	b, _ := json.Marshal(values)
+	return string(b)
 }
 
 // Lock is the minimal record a lock() call captures: the first LockComponent's
@@ -106,6 +138,31 @@ type Store interface {
 	// Missing source -> ErrTableNotFound; existing destination ->
 	// ErrTableExists; missing destination database -> ErrDatabaseNotFound.
 	RenameTable(ctx context.Context, srcDB, srcName, dstDB, dstName string, t Table) (Table, error)
+
+	// CreatePartition adds a partition to an existing table. Missing table ->
+	// ErrTableNotFound; duplicate (dbName, tableName, values) ->
+	// ErrPartitionExists.
+	CreatePartition(ctx context.Context, dbName, tableName string, p Partition) error
+	// GetPartition returns the partition identified by its value tuple.
+	// Missing table or partition -> ErrTableNotFound / ErrPartitionNotFound.
+	GetPartition(ctx context.Context, dbName, tableName string, values []string) (Partition, error)
+	// ListPartitions returns every partition of a table, ordered by value
+	// tuple for deterministic responses.
+	ListPartitions(ctx context.Context, dbName, tableName string) ([]Partition, error)
+	// AlterPartition atomically applies mutate to the partition identified by
+	// (dbName, tableName, values), returning the committed Partition. The
+	// mutate closure runs under the store's lock (or within a Serializable
+	// transaction) and an error aborts without writing. Missing table or
+	// partition -> ErrTableNotFound / ErrPartitionNotFound. The address tuple
+	// does not change (use RenamePartition to re-key).
+	AlterPartition(ctx context.Context, dbName, tableName string, values []string, mutate func(Partition) (Partition, error)) (Partition, error)
+	// DropPartition removes the partition identified by its value tuple.
+	// Missing -> ErrPartitionNotFound.
+	DropPartition(ctx context.Context, dbName, tableName string, values []string) error
+	// RenamePartition atomically re-keys a partition from oldValues to the
+	// values in p. Missing source -> ErrPartitionNotFound; existing
+	// destination -> ErrPartitionExists.
+	RenamePartition(ctx context.Context, dbName, tableName string, oldValues, newValues []string, p Partition) (Partition, error)
 
 	// Lock persists a row with state=ACQUIRED and returns its monotonically
 	// increasing lock id.

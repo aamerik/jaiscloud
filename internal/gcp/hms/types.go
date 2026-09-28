@@ -100,6 +100,13 @@ func (s *Struct) String(id int16) string {
 	return ""
 }
 
+func (s *Struct) I16(id int16) int16 {
+	if v, ok := s.Get(id); ok && v.T == thrift.I16 {
+		return v.I16
+	}
+	return 0
+}
+
 func (s *Struct) I32(id int16) int32 {
 	if v, ok := s.Get(id); ok && v.T == thrift.I32 {
 		return v.I32

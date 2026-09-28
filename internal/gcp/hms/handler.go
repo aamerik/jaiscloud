@@ -386,44 +386,13 @@ func (s *Server) getNextNotification(_ context.Context, _ *Struct) (*Struct, err
 	return result0(StructV(NewBuilder().Add(notifEvents, ListV(thrift.STRUCT, nil)).Build())), nil
 }
 
-// --- Partition stubs (D3: return empty / NoSuchObjectException, never crash) ---
+// --- Partition helpers ---
 
-// partitionNotFound is the shared NoSuchObjectException for single-partition
-// get/add methods.
-func partitionNotFound(msg string) error {
-	return declared(2, excNoSuchObjectException, msg)
-}
-
-func (s *Server) stubPartitionNotFound(_ context.Context, args *Struct) (*Struct, error) {
-	return nil, partitionNotFound("partition not found")
-}
-
-func (s *Server) stubPartitionList(_ context.Context, _ *Struct) (*Struct, error) {
-	return result0(ListV(thrift.STRUCT, nil)), nil
-}
-
-func (s *Server) stubPartitionNameList(_ context.Context, _ *Struct) (*Struct, error) {
-	return result0(ListV(thrift.STRING, nil)), nil
-}
-
-func (s *Server) stubPartitionBoolFalse(_ context.Context, _ *Struct) (*Struct, error) {
-	return result0(BoolV(false)), nil
-}
-
+// stubPartitionBoolTrue is the valid-return stub for
+// partition_name_has_valid_characters: the emulator accepts any value the
+// client sends, so validating them as "valid" is correct (not a gap).
 func (s *Server) stubPartitionBoolTrue(_ context.Context, _ *Struct) (*Struct, error) {
 	return result0(BoolV(true)), nil
-}
-
-func (s *Server) stubPartitionI32Zero(_ context.Context, _ *Struct) (*Struct, error) {
-	return result0(I32V(0)), nil
-}
-
-func (s *Server) stubPartitionVoid(_ context.Context, _ *Struct) (*Struct, error) {
-	return voidResult(), nil
-}
-
-func (s *Server) stubPartitionNameSpec(_ context.Context, _ *Struct) (*Struct, error) {
-	return result0(MapV(thrift.STRING, thrift.STRING, nil)), nil
 }
 
 // --- Unsupported (honest failure, not a silent ACK — F10) ---

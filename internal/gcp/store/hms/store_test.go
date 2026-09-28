@@ -160,6 +160,135 @@ func runStoreTests(t *testing.T, s Store) {
 	if err := s.Unlock(ctx, id); err != nil {
 		t.Fatalf("unlock should be idempotent: %v", err)
 	}
+
+	// --- Partitions ---
+	// Missing table -> ErrTableNotFound (distinct from a missing partition).
+	if _, err := s.GetPartition(ctx, "db2", "nope", []string{"2024"}); err != ErrTableNotFound {
+		t.Fatalf("expected ErrTableNotFound, got %v", err)
+	}
+	pA := Partition{DBName: "db2", TableName: "c", Values: []string{"2024"}, PartJSON: partJSON("2024")}
+	if err := s.CreatePartition(ctx, "db2", "c", pA); err != nil {
+		t.Fatalf("create partition: %v", err)
+	}
+	if err := s.CreatePartition(ctx, "db2", "c", pA); err != ErrPartitionExists {
+		t.Fatalf("expected ErrPartitionExists, got %v", err)
+	}
+	if err := s.CreatePartition(ctx, "missing_db", "c", pA); err != ErrTableNotFound {
+		t.Fatalf("expected ErrTableNotFound on create, got %v", err)
+	}
+	gotP, err := s.GetPartition(ctx, "db2", "c", []string{"2024"})
+	if err != nil || len(gotP.Values) != 1 || gotP.Values[0] != "2024" || string(gotP.PartJSON) != string(pA.PartJSON) {
+		t.Fatalf("get partition: %v %+v", err, gotP)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2025"}); err != ErrPartitionNotFound {
+		t.Fatalf("expected ErrPartitionNotFound, got %v", err)
+	}
+
+	// List: ordered by value tuple.
+	pB := Partition{DBName: "db2", TableName: "c", Values: []string{"2025"}, PartJSON: partJSON("2025")}
+	pC := Partition{DBName: "db2", TableName: "c", Values: []string{"2023"}, PartJSON: partJSON("2023")}
+	if err := s.CreatePartition(ctx, "db2", "c", pB); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePartition(ctx, "db2", "c", pC); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := s.ListPartitions(ctx, "db2", "c")
+	if err != nil || len(listed) != 3 {
+		t.Fatalf("list partitions: %v %+v", err, listed)
+	}
+	if listed[0].Values[0] != "2023" || listed[1].Values[0] != "2024" || listed[2].Values[0] != "2025" {
+		t.Fatalf("list partitions not ordered: %+v", listed)
+	}
+
+	// AlterPartition is a full overwrite keyed by the value tuple.
+	newPJ := partJSON("2024-updated")
+	if _, err := s.AlterPartition(ctx, "db2", "c", []string{"2024"}, func(Partition) (Partition, error) {
+		return Partition{DBName: "db2", TableName: "c", Values: []string{"2024"}, PartJSON: newPJ}, nil
+	}); err != nil {
+		t.Fatalf("alter partition: %v", err)
+	}
+	gotP, _ = s.GetPartition(ctx, "db2", "c", []string{"2024"})
+	if string(gotP.PartJSON) != string(newPJ) {
+		t.Fatalf("alter partition did not overwrite: %s", gotP.PartJSON)
+	}
+	if _, err := s.AlterPartition(ctx, "db2", "c", []string{"1999"}, func(Partition) (Partition, error) {
+		return Partition{}, nil
+	}); err != ErrPartitionNotFound {
+		t.Fatalf("expected ErrPartitionNotFound on alter, got %v", err)
+	}
+
+	// RenamePartition re-keys; collision -> ErrPartitionExists.
+	if _, err := s.RenamePartition(ctx, "db2", "c", []string{"2024"}, []string{"2024b"}, Partition{PartJSON: newPJ}); err != nil {
+		t.Fatalf("rename partition: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2024"}); err != ErrPartitionNotFound {
+		t.Fatalf("expected old partition gone, got %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2024b"}); err != nil {
+		t.Fatalf("expected renamed partition present, got %v", err)
+	}
+	if _, err := s.RenamePartition(ctx, "db2", "c", []string{"2025"}, []string{"2024b"}, Partition{}); err != ErrPartitionExists {
+		t.Fatalf("expected ErrPartitionExists on colliding rename, got %v", err)
+	}
+	if _, err := s.RenamePartition(ctx, "db2", "c", []string{"nope"}, []string{"x"}, Partition{}); err != ErrPartitionNotFound {
+		t.Fatalf("expected ErrPartitionNotFound on rename, got %v", err)
+	}
+
+	// DropPartition.
+	if err := s.DropPartition(ctx, "db2", "c", []string{"2024b"}); err != nil {
+		t.Fatalf("drop partition: %v", err)
+	}
+	if err := s.DropPartition(ctx, "db2", "c", []string{"2024b"}); err != ErrPartitionNotFound {
+		t.Fatalf("expected ErrPartitionNotFound on re-drop, got %v", err)
+	}
+
+	// Renaming a table preserves its partitions (Hive keeps partition metadata).
+	if _, err := s.RenameTable(ctx, "db2", "c", "db2", "c_renamed", Table{DBName: "db2", TableName: "c_renamed", TableJSON: tblJSON}); err != nil {
+		t.Fatalf("rename table: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c_renamed", []string{"2025"}); err != nil {
+		t.Fatalf("partitions lost on table rename: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2025"}); err != ErrTableNotFound {
+		t.Fatalf("expected old table gone after rename, got %v", err)
+	}
+	// Rename back so the cascade check below still targets c.
+	if _, err := s.RenameTable(ctx, "db2", "c_renamed", "db2", "c", Table{DBName: "db2", TableName: "c", TableJSON: tblJSON}); err != nil {
+		t.Fatalf("rename table back: %v", err)
+	}
+
+	// Dropping the table cascades to its partitions.
+	if err := s.DropTable(ctx, "db2", "c"); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := s.ListPartitions(ctx, "db2", "c"); err != ErrTableNotFound {
+		t.Fatalf("expected partitions gone with table, got %v", err)
+	}
+
+	// Dropping a database with cascade removes its partitions too.
+	if err := s.CreateDatabase(ctx, Database{Name: "db3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTable(ctx, "db3", "t", Table{DBName: "db3", TableName: "t", TableJSON: tblJSON}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePartition(ctx, "db3", "t", Partition{DBName: "db3", TableName: "t", Values: []string{"p"}, PartJSON: partJSON("p")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DropDatabase(ctx, "db3", true); err != nil {
+		t.Fatalf("drop database cascade: %v", err)
+	}
+	if _, err := s.GetPartition(ctx, "db3", "t", []string{"p"}); err != ErrTableNotFound {
+		t.Fatalf("expected partitions gone with database, got %v", err)
+	}
+}
+
+// partJSON builds a minimal but well-formed canonical Partition JSON (the first
+// value tuple is populated) for store-level tests, which persist it verbatim.
+func partJSON(value string) json.RawMessage {
+	b, _ := json.Marshal([]any{"o", []any{[]any{1, []any{"a", 11, []any{[]any{"s", value}}}}}})
+	return b
 }
 
 var errTestMutate = context.Canceled // arbitrary sentinel distinct from store errors
@@ -247,6 +376,9 @@ func TestSnapshotRestore(t *testing.T) {
 	if err := s.CreateTable(ctx, "db", "t", Table{DBName: "db", TableName: "t", TableJSON: json.RawMessage(`["o",[[1,["s","t"]]]]`)}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.CreatePartition(ctx, "db", "t", Partition{DBName: "db", TableName: "t", Values: []string{"2024"}, PartJSON: partJSON("2024")}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Lock(ctx, Lock{}); err != nil {
 		t.Fatal(err)
 	}
@@ -267,5 +399,8 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	if got, err := s.GetTable(ctx, "db", "t"); err != nil || string(got.TableJSON) != `["o",[[1,["s","t"]]]]` {
 		t.Fatalf("table lost in restore: %v %+v", err, got)
+	}
+	if got, err := s.GetPartition(ctx, "db", "t", []string{"2024"}); err != nil || string(got.PartJSON) != string(partJSON("2024")) {
+		t.Fatalf("partition lost in restore: %v %+v", err, got)
 	}
 }

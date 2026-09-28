@@ -19,8 +19,33 @@ const (
 
 // Table fields.
 const (
-	tblTableName int16 = 1
-	tblDBName    int16 = 2
+	tblTableName     int16 = 1
+	tblDBName        int16 = 2
+	tblSD            int16 = 7
+	tblPartitionKeys int16 = 8
+)
+
+// Partition fields (hive_metastore.thrift Partition struct).
+const (
+	partValues         int16 = 1
+	partDBName         int16 = 2
+	partTableName      int16 = 3
+	partCreateTime     int16 = 4
+	partLastAccessTime int16 = 5
+	partSD             int16 = 6
+	partParameters     int16 = 7
+	partPrivileges     int16 = 8
+)
+
+// StorageDescriptor fields (only the ones read here).
+const (
+	sdLocation int16 = 2
+)
+
+// FieldSchema fields.
+const (
+	fsName int16 = 1
+	fsType int16 = 2
 )
 
 // LockComponent fields.

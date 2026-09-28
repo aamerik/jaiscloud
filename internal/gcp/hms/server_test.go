@@ -3,6 +3,7 @@ package hms
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,21 +328,381 @@ func TestServerUnknownMethod(t *testing.T) {
 	}
 }
 
-func TestServerPartitionStubs(t *testing.T) {
+// testPartitionedTable builds an EXTERNAL_TABLE with the given partition keys
+// (Table.partitionKeys, field 8) and warehouse root (sd.location). A key may be
+// "name" (string) or "name:type".
+func testPartitionedTable(db, tbl, root string, keys ...string) *Struct {
+	fs := make([]*Struct, 0, len(keys))
+	for _, k := range keys {
+		name, typ := k, "string"
+		if i := strings.Index(k, ":"); i >= 0 {
+			name, typ = k[:i], k[i+1:]
+		}
+		fs = append(fs, NewBuilder().Str(fsName, name).Str(fsType, typ).Str(3, "").Build())
+	}
+	serde := NewBuilder().
+		Str(1, tbl).
+		Str(2, "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe").
+		MapStrStr(3, map[string]string{"serialization.format": "1"}).
+		Build()
+	sd := NewBuilder().
+		ListStruct(1, nil).
+		Str(sdLocation, root).
+		Str(3, "org.apache.hadoop.mapred.FileInputFormat").
+		Str(4, "org.apache.hadoop.mapred.FileOutputFormat").
+		Bool(5, false).
+		I32(6, 0).
+		Struct(7, serde).
+		ListStr(8, nil).
+		ListStruct(9, nil).
+		MapStrStr(10, nil).
+		Bool(12, false).
+		Build()
+	return NewBuilder().
+		Str(tblTableName, tbl).
+		Str(tblDBName, db).
+		Str(3, "spark").
+		I32(4, 1700000000).
+		I32(5, 0).
+		I32(6, 0).
+		Struct(tblSD, sd).
+		ListStruct(tblPartitionKeys, fs).
+		MapStrStr(9, nil).
+		Str(10, "").
+		Str(11, "").
+		Str(12, "EXTERNAL_TABLE").
+		Build()
+}
+
+// testPartition builds a Partition struct with the given values and location.
+func testPartition(db, tbl, location string, values ...string) *Struct {
+	return NewBuilder().
+		Add(partValues, ListV(thrift.STRING, strList(values))).
+		Str(partDBName, db).
+		Str(partTableName, tbl).
+		I32(partCreateTime, 1700000000).
+		I32(partLastAccessTime, 0).
+		Struct(partSD, NewBuilder().Str(sdLocation, location).Build()).
+		MapStrStr(partParameters, map[string]string{"numFiles": "3"}).
+		Build()
+}
+
+func TestServerPartitions(t *testing.T) {
 	store := hmsstore.NewMemoryStore()
 	addr, stop := startServer(t, store)
 	defer stop()
 
-	r := hmsCall(t, addr, "get_partitions", NewBuilder().Str(1, "db").Str(2, "tbl").I16(3, -1).Build())
-	if r.msgType != thrift.REPLY {
-		t.Fatalf("get_partitions msgType=%d", r.msgType)
+	// Databases + partitioned tables.
+	if r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
 	}
-	if l := r.result.List(0); l == nil || len(l) != 0 {
-		t.Fatalf("get_partitions should be empty list, got %+v", r.result)
+	root := "gs://bucket/wh/default/tp"
+	for _, tbl := range []string{"tp", "tp2"} {
+		r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testPartitionedTable("default", tbl, "gs://bucket/wh/default/"+tbl, "ds", "hr")).Build())
+		if r.msgType != thrift.REPLY || len(r.result.Fields) != 0 {
+			t.Fatalf("create_table %s: type=%d result=%+v", tbl, r.msgType, r.result)
+		}
 	}
 
-	r = hmsCall(t, addr, "get_partition", NewBuilder().Str(1, "db").Str(2, "tbl").Add(3, ListV(thrift.STRING, nil)).Build())
-	if f := r.result.Fields; len(f) != 1 || f[0].ID != 2 { // NoSuchObjectException
-		t.Fatalf("get_partition should throw NoSuchObjectException, got %+v", f)
+	// add_partition returns the added partition.
+	p1 := testPartition("default", "tp", root+"/ds=2024/hr=01", "2024", "01")
+	r := hmsCall(t, addr, "add_partition", NewBuilder().Struct(1, p1).Build())
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("add_partition msgType=%d result=%+v", r.msgType, r.result)
+	}
+	if got := r.result.Struct(0); got == nil || got.String(partTableName) != "tp" {
+		t.Fatalf("add_partition result wrong: %+v", r.result)
+	}
+	p2 := testPartition("default", "tp", root+"/ds=2024/hr=02", "2024", "02")
+	if r := hmsCall(t, addr, "add_partition", NewBuilder().Struct(1, p2).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("add_partition 2: %+v", r.result)
+	}
+	// Duplicate -> AlreadyExistsException (field 2 for the add clause).
+	if r := hmsCall(t, addr, "add_partition", NewBuilder().Struct(1, p1).Build()); len(r.result.Fields) != 1 || r.result.Fields[0].ID != 2 {
+		t.Fatalf("add_partition duplicate should throw AlreadyExistsException at field 2, got %+v", r.result.Fields)
+	}
+
+	// get_partition / get_partition_by_name.
+	getP := NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024", "01"}))).Build()
+	r = hmsCall(t, addr, "get_partition", getP)
+	if r.msgType != thrift.REPLY || r.result.Struct(0) == nil {
+		t.Fatalf("get_partition: %+v", r.result)
+	}
+	if m := r.result.Struct(0).MapStrStr(partParameters); m["numFiles"] != "3" {
+		t.Fatalf("get_partition params lost: %v", m)
+	}
+	r = hmsCall(t, addr, "get_partition_by_name", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds=2024/hr=01").Build())
+	if r.msgType != thrift.REPLY || r.result.Struct(0) == nil {
+		t.Fatalf("get_partition_by_name: %+v", r.result)
+	}
+
+	// get_partitions / get_partition_names (sorted, max_parts=-1).
+	r = hmsCall(t, addr, "get_partitions", NewBuilder().Str(1, "default").Str(2, "tp").I16(3, -1).Build())
+	if l := r.result.List(0); len(l) != 2 {
+		t.Fatalf("get_partitions should return 2: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partition_names", NewBuilder().Str(1, "default").Str(2, "tp").I16(3, -1).Build())
+	if l := r.result.List(0); len(l) != 2 || l[0].Str != "ds=2024/hr=01" || l[1].Str != "ds=2024/hr=02" {
+		t.Fatalf("get_partition_names wrong: %+v", r.result)
+	}
+
+	// get_partitions_ps / get_partition_names_ps (prefix).
+	r = hmsCall(t, addr, "get_partitions_ps", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024", "01"}))).I16(4, -1).Build())
+	if l := r.result.List(0); len(l) != 1 {
+		t.Fatalf("get_partitions_ps prefix should return 1: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partition_names_ps", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024"}))).I16(4, -1).Build())
+	if l := r.result.List(0); len(l) != 2 {
+		t.Fatalf("get_partition_names_ps prefix should return 2: %+v", r.result)
+	}
+	// max_parts is applied AFTER the prefix filter (Hive semantics).
+	r = hmsCall(t, addr, "get_partition_names_ps", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024", "02"}))).I16(4, 1).Build())
+	if l := r.result.List(0); len(l) != 1 || l[0].Str != "ds=2024/hr=02" {
+		t.Fatalf("get_partition_names_ps max_parts ordering wrong: %+v", r.result)
+	}
+
+	// get_num_partitions_by_filter / get_partitions_by_filter.
+	r = hmsCall(t, addr, "get_num_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds='2024'").Build())
+	if r.result.I32(0) != 2 {
+		t.Fatalf("get_num_partitions_by_filter = %d, want 2", r.result.I32(0))
+	}
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "hr='02'").I16(4, -1).Build())
+	if l := r.result.List(0); len(l) != 1 {
+		t.Fatalf("get_partitions_by_filter hr='02' should return 1: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds = '2024' and hr >= '02'").I16(4, -1).Build())
+	if l := r.result.List(0); len(l) != 1 {
+		t.Fatalf("get_partitions_by_filter compound should return 1: %+v", r.result)
+	}
+	// Bad filter -> MetaException (field 1 for this clause).
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds ==").I16(4, -1).Build())
+	if f := r.result.Fields; len(f) != 1 || f[0].ID != 1 {
+		t.Fatalf("bad filter should throw MetaException at field 1, got %+v", f)
+	}
+	// A trailing operator must not panic the server (regression: index out of range).
+	for _, bad := range []string{"ds=", "ds =", "ds = '2024' and hr =", "a = 'x' and b="} {
+		r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, bad).I16(4, -1).Build())
+		if f := r.result.Fields; len(f) != 1 || f[0].ID != 1 {
+			t.Fatalf("malformed filter %q should throw MetaException at field 1, got %+v", bad, f)
+		}
+	}
+	// Server is still healthy after the malformed filters.
+	r = hmsCall(t, addr, "get_partitions", NewBuilder().Str(1, "default").Str(2, "tp").I16(3, -1).Build())
+	if len(r.result.List(0)) != 2 {
+		t.Fatalf("server unhealthy after malformed filters: %+v", r.result)
+	}
+	// Filter operators: like, or, parentheses, and precedence.
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "hr like '0%'").I16(4, -1).Build())
+	if len(r.result.List(0)) != 2 {
+		t.Fatalf("like filter should return 2: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "(ds = '2024' and hr = '01') or hr = '02'").I16(4, -1).Build())
+	if len(r.result.List(0)) != 2 {
+		t.Fatalf("parenthesised or filter should return 2: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "hr = '01' or hr = '02' and ds = 'x'").I16(4, -1).Build())
+	if len(r.result.List(0)) != 1 {
+		t.Fatalf("precedence filter should return 1: %+v", r.result)
+	}
+
+	// partition_name_to_vals / _spec.
+	r = hmsCall(t, addr, "partition_name_to_vals", NewBuilder().Str(1, "ds=2024/hr=01").Build())
+	if l := r.result.List(0); len(l) != 2 || l[0].Str != "2024" || l[1].Str != "01" {
+		t.Fatalf("partition_name_to_vals wrong: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "partition_name_to_spec", NewBuilder().Str(1, "ds=2024/hr=01").Build())
+	if m := r.result.MapStrStr(0); m["ds"] != "2024" || m["hr"] != "01" {
+		t.Fatalf("partition_name_to_spec wrong: %+v", r.result)
+	}
+
+	// get_partitions_pspec groups both partitions under one shared SD.
+	r = hmsCall(t, addr, "get_partitions_pspec", NewBuilder().Str(1, "default").Str(2, "tp").I32(3, -1).Build())
+	specs := r.result.List(0)
+	if len(specs) != 1 || specs[0].S == nil {
+		t.Fatalf("get_partitions_pspec should return 1 spec: %+v", r.result)
+	}
+	shared := specs[0].S.Struct(4)
+	if shared == nil || len(shared.List(1)) != 2 || shared.Struct(2) == nil {
+		t.Fatalf("get_partitions_pspec shared SD wrong: %+v", specs[0].S)
+	}
+	if rel := shared.List(1)[0].S.String(4); rel != "ds=2024/hr=01" {
+		t.Fatalf("get_partitions_pspec relativePath = %q", rel)
+	}
+
+	// add_partitions_pspec round-trips: drop both, re-add from the spec.
+	for _, vals := range [][]string{{"2024", "01"}, {"2024", "02"}} {
+		if r := hmsCall(t, addr, "drop_partition", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList(vals))).Bool(4, false).Build()); r.msgType != thrift.REPLY || !r.result.Bool(0) {
+			t.Fatalf("drop_partition: %+v", r.result)
+		}
+	}
+	r = hmsCall(t, addr, "add_partitions_pspec", NewBuilder().Add(1, ListV(thrift.STRUCT, []Value{StructV(specs[0].S)})).Build())
+	if r.msgType != thrift.REPLY || r.result.I32(0) != 2 {
+		t.Fatalf("add_partitions_pspec count = %d, want 2", r.result.I32(0))
+	}
+	r = hmsCall(t, addr, "get_partitions", NewBuilder().Str(1, "default").Str(2, "tp").I16(3, -1).Build())
+	if l := r.result.List(0); len(l) != 2 {
+		t.Fatalf("partitions not restored by pspec: %+v", r.result)
+	}
+	// The reconstructed location must be root + relativePath.
+	r = hmsCall(t, addr, "get_partition", getP)
+	if sd := r.result.Struct(0).Struct(partSD); sd == nil || sd.String(sdLocation) != root+"/ds=2024/hr=01" {
+		t.Fatalf("pspec-restored location wrong: %+v", r.result.Struct(0))
+	}
+
+	// alter_partition (full overwrite, keyed by new_part.values).
+	altered := testPartition("default", "tp", root+"/ds=2024/hr=01", "2024", "01")
+	altered.Set(partParameters, MapV(thrift.STRING, thrift.STRING, []MapEntry{{K: StringV("numFiles"), V: StringV("9")}}))
+	if r := hmsCall(t, addr, "alter_partition", NewBuilder().Str(1, "default").Str(2, "tp").Struct(3, altered).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("alter_partition: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partition", getP)
+	if m := r.result.Struct(0).MapStrStr(partParameters); m["numFiles"] != "9" {
+		t.Fatalf("alter_partition did not overwrite: %v", m)
+	}
+
+	// rename_partition: (2024,01) -> (2024,03).
+	renamed := testPartition("default", "tp", root+"/ds=2024/hr=03", "2024", "03")
+	if r := hmsCall(t, addr, "rename_partition", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024", "01"}))).Struct(4, renamed).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("rename_partition: %+v", r.result)
+	}
+	if r := hmsCall(t, addr, "get_partition_by_name", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds=2024/hr=03").Build()); r.result.Struct(0) == nil {
+		t.Fatalf("renamed partition not found: %+v", r.result)
+	}
+	if r := hmsCall(t, addr, "get_partition", getP); len(r.result.Fields) != 1 || r.result.Fields[0].ID != 2 {
+		t.Fatalf("old partition should be gone (NoSuchObjectException field 2), got %+v", r.result.Fields)
+	}
+
+	// add_partitions on tp2 -> count, then drop_partition_by_name.
+	b1 := testPartition("default", "tp2", "gs://bucket/wh/default/tp2/ds=2025/hr=01", "2025", "01")
+	b2 := testPartition("default", "tp2", "gs://bucket/wh/default/tp2/ds=2025/hr=02", "2025", "02")
+	r = hmsCall(t, addr, "add_partitions", NewBuilder().Add(1, ListV(thrift.STRUCT, []Value{StructV(b1), StructV(b2)})).Build())
+	if r.msgType != thrift.REPLY || r.result.I32(0) != 2 {
+		t.Fatalf("add_partitions count = %d, want 2", r.result.I32(0))
+	}
+	if r := hmsCall(t, addr, "drop_partition_by_name", NewBuilder().Str(1, "default").Str(2, "tp2").Str(3, "ds=2025/hr=01").Bool(4, false).Build()); r.msgType != thrift.REPLY || !r.result.Bool(0) {
+		t.Fatalf("drop_partition_by_name: %+v", r.result)
+	}
+	// Missing drop -> NoSuchObjectException (field 1 for the drop clause).
+	if r := hmsCall(t, addr, "drop_partition", NewBuilder().Str(1, "default").Str(2, "tp2").Add(3, ListV(thrift.STRING, strList([]string{"2025", "01"}))).Bool(4, false).Build()); len(r.result.Fields) != 1 || r.result.Fields[0].ID != 1 {
+		t.Fatalf("missing drop should throw NoSuchObjectException at field 1, got %+v", r.result.Fields)
+	}
+
+	// get_partitions_by_names tolerates missing names (returns found only).
+	r = hmsCall(t, addr, "get_partitions_by_names", NewBuilder().Str(1, "default").Str(2, "tp2").Add(3, ListV(thrift.STRING, strList([]string{"ds=2025/hr=02", "ds=2025/hr=zz"}))).Build())
+	if l := r.result.List(0); len(l) != 1 {
+		t.Fatalf("get_partitions_by_names should return 1 found: %+v", r.result)
+	}
+
+	// partition_name_has_valid_characters stays a valid true stub.
+	if r := hmsCall(t, addr, "partition_name_has_valid_characters", NewBuilder().Add(1, ListV(thrift.STRING, strList([]string{"2024"}))).Bool(2, false).Build()); !r.result.Bool(0) {
+		t.Fatalf("partition_name_has_valid_characters should be true: %+v", r.result)
+	}
+}
+
+func TestServerPartitionFiltersAndSpecs(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	if r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
+	}
+	if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testPartitionedTable("default", "tp", "gs://bucket/wh/default/tp", "ds", "hr")).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create tp: %+v", r.result)
+	}
+	if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testPartitionedTable("default", "tn", "gs://bucket/wh/default/tn", "n:int")).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create tn: %+v", r.result)
+	}
+	for _, p := range []*Struct{
+		testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2024/hr=01", "2024", "01"),
+		testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2024/hr=02", "2024", "02"),
+		testPartition("default", "tn", "gs://bucket/wh/default/tn/n=9", "9"),
+		testPartition("default", "tn", "gs://bucket/wh/default/tn/n=10", "10"),
+	} {
+		if r := hmsCall(t, addr, "add_partition", NewBuilder().Struct(1, p).Build()); r.msgType != thrift.REPLY {
+			t.Fatalf("add_partition: %+v", r.result)
+		}
+	}
+
+	// int column: numeric comparison ("10" > "9"); a lexicographic compare would
+	// return 0 rows instead of 1.
+	r := hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tn").Str(3, "n > '9'").I16(4, -1).Build())
+	if l := r.result.List(0); len(l) != 1 || l[0].S.List(partValues)[0].Str != "10" {
+		t.Fatalf("int partition filter should be numeric: %+v", r.result)
+	}
+	// string column: lexicographic ("01" < "1").
+	r = hmsCall(t, addr, "get_partitions_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "hr < '1'").I16(4, -1).Build())
+	if len(r.result.List(0)) != 2 {
+		t.Fatalf("string partition filter should be lexicographic: %+v", r.result)
+	}
+
+	// get_part_specs_by_filter -> one shared-SD spec holding both matches.
+	r = hmsCall(t, addr, "get_part_specs_by_filter", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds = '2024'").I32(4, -1).Build())
+	if specs := r.result.List(0); len(specs) != 1 || specs[0].S.Struct(4) == nil || len(specs[0].S.Struct(4).List(1)) != 2 {
+		t.Fatalf("get_part_specs_by_filter wrong: %+v", r.result)
+	}
+
+	// alter_partitions updates every listed partition.
+	withParams := func(p *Struct, v string) *Struct {
+		p.Set(partParameters, MapV(thrift.STRING, thrift.STRING, []MapEntry{{K: StringV("numFiles"), V: StringV(v)}}))
+		return p
+	}
+	a1 := withParams(testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2024/hr=01", "2024", "01"), "7")
+	a2 := withParams(testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2024/hr=02", "2024", "02"), "7")
+	if r := hmsCall(t, addr, "alter_partitions", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRUCT, []Value{StructV(a1), StructV(a2)})).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("alter_partitions: %+v", r.result)
+	}
+	r = hmsCall(t, addr, "get_partition_by_name", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds=2024/hr=01").Build())
+	if m := r.result.Struct(0).MapStrStr(partParameters); m["numFiles"] != "7" {
+		t.Fatalf("alter_partitions did not apply: %v", m)
+	}
+
+	// add_partitions_req: ifNotExists=false on an existing partition fails the
+	// whole call before writing (AlreadyExists at field 2).
+	reqArgs := func(ifNotExists, needResult bool) *Struct {
+		req := NewBuilder().Str(1, "default").Str(2, "tp").
+			Add(3, ListV(thrift.STRUCT, []Value{StructV(testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2024/hr=01", "2024", "01"))})).
+			Bool(4, ifNotExists).Bool(5, needResult).Build()
+		return NewBuilder().Struct(1, req).Build()
+	}
+	if r := hmsCall(t, addr, "add_partitions_req", reqArgs(false, true)); len(r.result.Fields) != 1 || r.result.Fields[0].ID != 2 {
+		t.Fatalf("add_partitions_req duplicate should throw AlreadyExists at field 2, got %+v", r.result.Fields)
+	}
+	if r := hmsCall(t, addr, "add_partitions_req", reqArgs(true, false)); r.msgType != thrift.REPLY {
+		t.Fatalf("add_partitions_req ifNotExists: %+v", r.result)
+	}
+
+	// append_partition derives sd.location from the table root + partition name.
+	r = hmsCall(t, addr, "append_partition", NewBuilder().Str(1, "default").Str(2, "tp").Add(3, ListV(thrift.STRING, strList([]string{"2024", "05"}))).Build())
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("append_partition: %+v", r.result)
+	}
+	if sd := r.result.Struct(0).Struct(partSD); sd == nil || sd.String(sdLocation) != "gs://bucket/wh/default/tp/ds=2024/hr=05" {
+		t.Fatalf("append_partition location wrong: %+v", r.result.Struct(0))
+	}
+
+	// add_partitions_pspec composing form (field 5: PartitionListComposingSpec).
+	part := testPartition("default", "tp", "gs://bucket/wh/default/tp/ds=2025/hr=01", "2025", "01")
+	comp := NewBuilder().Add(1, ListV(thrift.STRUCT, []Value{StructV(part)})).Build()
+	spec := NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "gs://bucket/wh/default/tp").Add(5, StructV(comp)).Build()
+	r = hmsCall(t, addr, "add_partitions_pspec", NewBuilder().Add(1, ListV(thrift.STRUCT, []Value{StructV(spec)})).Build())
+	if r.msgType != thrift.REPLY || r.result.I32(0) != 1 {
+		t.Fatalf("add_partitions_pspec composing count = %d, want 1", r.result.I32(0))
+	}
+	if r := hmsCall(t, addr, "get_partition_by_name", NewBuilder().Str(1, "default").Str(2, "tp").Str(3, "ds=2025/hr=01").Build()); r.result.Struct(0) == nil {
+		t.Fatalf("composing pspec partition not found: %+v", r.result)
+	}
+}
+
+func TestServerPartitionDeferredFailLoud(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	for _, m := range []string{"drop_partitions_req", "get_partition_values", "get_partitions_by_expr", "exchange_partition", "exchange_partitions"} {
+		r := hmsCall(t, addr, m, &Struct{})
+		if r.msgType != thrift.EXCEPTION {
+			t.Fatalf("%s should fail loud with a TApplicationException, got msgType=%d", m, r.msgType)
+		}
 	}
 }

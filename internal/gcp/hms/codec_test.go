@@ -419,25 +419,53 @@ func TestRoundTripTable(t *testing.T) {
 	})
 }
 
-// TestRoundTripPartition covers the Partition struct (used only by stubs, but
-// the codec must still round-trip it).
+// TestRoundTripPartition covers the FULL Partition struct: every field
+// populated (values, identity, times, sd, parameters, privileges, catName).
+// The store persists this struct verbatim, so it must round-trip losslessly.
 func TestRoundTripPartition(t *testing.T) {
+	priv := refStruct{fields: []refField{
+		{thrift.MAP, 1, rfMap(thrift.STRING, thrift.STRUCT,
+			rfEntry(rfStr("user"), rfStruct(refStruct{fields: []refField{{thrift.LIST, 1, rfList(thrift.STRING, rfStr("SELECT"))}}})))},
+	}}
 	src := refStruct{fields: []refField{
 		{thrift.LIST, 1, rfList(thrift.STRING, rfStr("2024"), rfStr("01"))},
 		{thrift.STRING, 2, rfStr("default")},
 		{thrift.STRING, 3, rfStr("tbl")},
 		{thrift.I32, 4, rfI32(1700000000)},
-		{thrift.I32, 5, rfI32(0)},
-		{thrift.STRUCT, 6, rfStruct(refStruct{fields: []refField{{thrift.STRING, 2, rfStr("loc")}}})},
-		{thrift.MAP, 7, rfMap(thrift.STRING, thrift.STRING)},
+		{thrift.I32, 5, rfI32(1700000100)},
+		{thrift.STRUCT, 6, rfStruct(refStruct{fields: []refField{
+			{thrift.STRING, 2, rfStr("gs://bucket/wh/default/tbl/2024=01")},
+			{thrift.STRING, 3, rfStr("org.apache.hadoop.mapred.FileInputFormat")},
+		}})},
+		{thrift.MAP, 7, rfMap(thrift.STRING, thrift.STRING,
+			rfEntry(rfStr("numFiles"), rfStr("3")),
+			rfEntry(rfStr("totalSize"), rfStr("1024")),
+		)},
+		{thrift.STRUCT, 8, rfStruct(priv)},
+		{thrift.STRING, 9, rfStr("hive")},
 	}}
 	got := refEncode(src)
 	assertRoundTrip(t, "Partition", src, got, func(s *Struct) {
-		if l := s.List(1); len(l) != 2 || l[0].Str != "2024" {
+		if l := s.List(partValues); len(l) != 2 || l[0].Str != "2024" || l[1].Str != "01" {
 			t.Fatal("partition values wrong")
 		}
-		if s.String(2) != "default" || s.String(3) != "tbl" {
+		if s.String(partDBName) != "default" || s.String(partTableName) != "tbl" {
 			t.Fatal("partition identity wrong")
+		}
+		if s.I32(partCreateTime) != 1700000000 || s.I32(partLastAccessTime) != 1700000100 {
+			t.Fatal("partition times wrong")
+		}
+		if sd := s.Struct(partSD); sd == nil || sd.String(sdLocation) == "" {
+			t.Fatal("partition sd wrong")
+		}
+		if m := s.MapStrStr(partParameters); m["numFiles"] != "3" || m["totalSize"] != "1024" {
+			t.Fatalf("partition parameters wrong: %v", m)
+		}
+		if s.Struct(partPrivileges) == nil {
+			t.Fatal("partition privileges wrong")
+		}
+		if s.String(9) != "hive" {
+			t.Fatal("partition catName wrong")
 		}
 	})
 }
