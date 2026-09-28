@@ -494,3 +494,134 @@ func TestGCSCSEKErrorReasons(t *testing.T) {
 		})
 	}
 }
+
+// TestGCSComposeCSEKSources verifies objects.compose reads its source objects
+// with the customer-supplied encryption key (CSEK) supplied on the compose
+// request and encrypts the resulting composite object with that same key (J38).
+// Real GCS requires every CSEK component to use the same key and encrypts the
+// composite with it.
+func TestGCSComposeCSEKSources(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	key := []byte("0123456789abcdef0123456789abcdef")
+	keyB64, shaB64 := csekMaterial(key)
+	otherB64, otherSHA := csekMaterial([]byte("fedcba9876543210fedcba9876543210"))
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	for name, content := range map[string]string{"a.txt": "aaa", "b.txt": "bbb"} {
+		nr = bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = name
+		nr.Params[wire.MediaKey] = []byte(content)
+		nr.Params[wire.CSEKAlgorithm] = "AES256"
+		nr.Params[wire.CSEKKey] = keyB64
+		nr.Params[wire.CSEKKeySHA256] = shaB64
+		if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	withKey := func(b64, sha string) func(map[string]any) {
+		return func(m map[string]any) {
+			m[wire.CSEKAlgorithm] = "AES256"
+			m[wire.CSEKKey] = b64
+			m[wire.CSEKKeySHA256] = sha
+		}
+	}
+	compose := func(mut func(map[string]any)) (*model.ProviderResponse, error) {
+		nr := bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = "ab.txt"
+		nr.Params["body"] = map[string]any{
+			"sourceObjects": []any{
+				map[string]any{"name": "a.txt"},
+				map[string]any{"name": "b.txt"},
+			},
+		}
+		if mut != nil {
+			mut(nr.Params)
+		}
+		return p.ObjectsCompose(ctx, nr)
+	}
+
+	// Without the key a CSEK source cannot be read.
+	if _, err := compose(nil); csekErrorReason(t, err) != csekReasonResourceEncrypted {
+		t.Fatalf("compose without key: got %v", err)
+	}
+	// A different key is an incorrect source key.
+	if _, err := compose(withKey(otherB64, otherSHA)); csekErrorReason(t, err) != csekReasonKeyIncorrect {
+		t.Fatalf("compose wrong key: got %v", err)
+	}
+
+	// The correct key composes the sources and encrypts the destination with it.
+	resp, err := compose(withKey(keyB64, shaB64))
+	if err != nil {
+		t.Fatalf("compose CSEK sources: %v", err)
+	}
+	if cc, _ := resp.Data["componentCount"].(float64); int64(cc) != 2 {
+		t.Errorf("componentCount = %v, want 2", resp.Data["componentCount"])
+	}
+	ce, _ := resp.Data["customerEncryption"].(map[string]any)
+	if ce == nil || ce["keySha256"] != shaB64 {
+		t.Fatalf("destination customerEncryption = %#v, want keySha256 %q", resp.Data["customerEncryption"], shaB64)
+	}
+
+	// The composite reads back with the key and is unreadable without it.
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "ab.txt"
+	withKey(keyB64, shaB64)(nr.Params)
+	media, err := p.ObjectsGetMedia(ctx, nr)
+	if err != nil {
+		t.Fatalf("get composite with key: %v", err)
+	}
+	if got := string(streamBytes(t, media)); got != "aaabbb" {
+		t.Fatalf("composite content = %q, want %q", got, "aaabbb")
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "ab.txt"
+	if _, err := p.ObjectsGetMedia(ctx, nr); err == nil {
+		t.Fatal("expected composite to be unreadable without the key")
+	}
+}
+
+// TestGCSComposeCSEKRejectsPlainSource verifies that supplying a CSEK key to a
+// compose whose source is not CSEK-encrypted is rejected (J36 semantics), since
+// real GCS requires every component of a CSEK compose to use the same key.
+func TestGCSComposeCSEKRejectsPlainSource(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	keyB64, shaB64 := csekMaterial([]byte("0123456789abcdef0123456789abcdef"))
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "plain.txt"
+	nr.Params[wire.MediaKey] = []byte("plain")
+	if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert plain object: %v", err)
+	}
+
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "out.txt"
+	nr.Params["body"] = map[string]any{
+		"sourceObjects": []any{map[string]any{"name": "plain.txt"}},
+	}
+	nr.Params[wire.CSEKAlgorithm] = "AES256"
+	nr.Params[wire.CSEKKey] = keyB64
+	nr.Params[wire.CSEKKeySHA256] = shaB64
+	_, err := p.ObjectsCompose(ctx, nr)
+	if got := csekErrorReason(t, err); got != csekReasonResourceNotEncrypted {
+		t.Fatalf("reason = %q, want %q", got, csekReasonResourceNotEncrypted)
+	}
+}

@@ -1182,6 +1182,12 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 
 	project := s.projectForBucket(ctx, bucket)
 
+	// CSEK: the request's common object request params carry the key that real
+	// GCS requires for every source of a customer-supplied-key compose; the
+	// resulting composite object is encrypted with the same key. Sources are
+	// read (and the destination written) with it.
+	cseKey, cseKeySHA := cseKeyFromParams(req.GetCommonObjectRequestParams())
+
 	var buf bytes.Buffer
 	for _, src := range sources {
 		if src.GetName() == "" {
@@ -1191,7 +1197,7 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 		if src.GetGeneration() > 0 {
 			gen = int64ToGen(src.GetGeneration())
 		}
-		_, raw, err := s.provider.GetObjectData(ctx, project, bucket, src.GetName(), gen, nil)
+		_, raw, err := s.provider.GetObjectData(ctx, project, bucket, src.GetName(), gen, cseKey)
 		if err != nil {
 			return nil, mapError(err)
 		}
@@ -1218,7 +1224,7 @@ func (s *Service) ComposeObject(ctx context.Context, req *storagepb.ComposeObjec
 	// (ComposeObjectRequest has no not-match variants) guard the write
 	// atomically via the store's *Checked path.
 	pre := grpcObjectPrecondition(req.IfGenerationMatch, nil, req.IfMetagenerationMatch, nil)
-	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, nil, "", pre)
+	finalMeta, err := s.provider.PutObjectData(ctx, project, meta, buf.Bytes(), versioned, priorBlobKey, false, meta.KmsKeyName, cseKey, cseKeySHA, pre)
 	if err != nil {
 		return nil, mapError(preconditionResult(err))
 	}

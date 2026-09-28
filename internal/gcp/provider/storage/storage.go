@@ -2523,7 +2523,13 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 		if name == "" {
 			return nil, model.NewProviderError("InvalidRequest", "compose source object missing name", 400)
 		}
-		srcParams := map[string]any{}
+		// CSEK: real GCS requires every component of a customer-supplied-key
+		// compose to be encrypted with the same key the caller supplies for the
+		// destination, and encrypts the resulting composite object with it. The
+		// request's x-goog-encryption-* headers therefore apply to the source
+		// reads as well as the destination write (writeObjectRaw resolves the
+		// destination key independently).
+		srcParams := csekParamsFrom(nr.Params, wire.CSEKAlgorithm, wire.CSEKKey, wire.CSEKKeySHA256)
 		if g, _ := sm["generation"].(string); g != "" {
 			srcParams["generation"] = g
 		}
@@ -2673,17 +2679,28 @@ func resolveCSEK(params map[string]any, algKey, keyKey, shaKey string) ([]byte, 
 // (wire.CSEKKey/wire.CSEKKeySHA256). Empty when the request carried no
 // copy-source key (the source is server-DEK/CMEK encrypted).
 func copySourceCSEKParams(nr *model.NormalizedRequest) map[string]any {
-	params := map[string]any{}
-	if v, _ := nr.Params[wire.CopySourceCSEKAlgorithm].(string); v != "" {
-		params[wire.CSEKAlgorithm] = v
+	return csekParamsFrom(nr.Params, wire.CopySourceCSEKAlgorithm, wire.CopySourceCSEKKey, wire.CopySourceCSEKKeySHA256)
+}
+
+// csekParamsFrom copies three CSEK request params (algorithm, base64 key,
+// base64 SHA-256) from a request's params map into a fresh map, keyed the way
+// readSourceRaw/decryptObject expect (wire.CSEKAlgorithm/Key/KeySHA256). It is
+// shared by the copy/rewrite source key (x-goog-copy-source-encryption-*) and
+// the compose key (x-goog-encryption-*, which real GCS applies to both the
+// destination and every source object). It returns an empty map when no key
+// material is present.
+func csekParamsFrom(params map[string]any, algKey, keyKey, shaKey string) map[string]any {
+	out := map[string]any{}
+	if v, _ := params[algKey].(string); v != "" {
+		out[wire.CSEKAlgorithm] = v
 	}
-	if v, _ := nr.Params[wire.CopySourceCSEKKey].(string); v != "" {
-		params[wire.CSEKKey] = v
+	if v, _ := params[keyKey].(string); v != "" {
+		out[wire.CSEKKey] = v
 	}
-	if v, _ := nr.Params[wire.CopySourceCSEKKeySHA256].(string); v != "" {
-		params[wire.CSEKKeySHA256] = v
+	if v, _ := params[shaKey].(string); v != "" {
+		out[wire.CSEKKeySHA256] = v
 	}
-	return params
+	return out
 }
 
 // decryptObject returns the plaintext for a stored ciphertext, using the CSEK
