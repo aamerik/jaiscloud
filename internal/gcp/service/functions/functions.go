@@ -58,8 +58,8 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 		return functionsstore.Function{}, Operation{}, err
 	}
 	// Materialize the backing Eventarc trigger (and its dead-letter
-	// subscription) for a Pub/Sub event trigger (FD9).
-	if s.triggerProvisioner != nil && isPubSubTrigger(f.EventTrigger) {
+	// subscription) for a Pub/Sub or Cloud Storage event trigger (FD9, FP2).
+	if s.triggerProvisioner != nil && isEventarcBackedTrigger(f.EventTrigger) {
 		f = s.ensureTrigger(ctx, project, location, id, f)
 		s.persistTriggerFields(ctx, project, location, id, f)
 	}
@@ -155,9 +155,9 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		s.discardSource(ctx, old.SourceBlobKey)
 	}
 	// Re-materialize (or remove) the backing Eventarc trigger to match the
-	// function's current Pub/Sub event trigger (FD9).
+	// function's current Pub/Sub or Cloud Storage event trigger (FD9, FP2).
 	if s.triggerProvisioner != nil {
-		if isPubSubTrigger(f.EventTrigger) {
+		if isEventarcBackedTrigger(f.EventTrigger) {
 			// Only re-ensure when the trigger materially changed (or was never
 			// provisioned), so a PATCH of an unrelated field does not bump the
 			// backing trigger's updateTime/etag.

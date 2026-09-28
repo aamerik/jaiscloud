@@ -162,16 +162,24 @@ func (p *Provider) TopicDelete(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, err
 	}
 	t := strings.TrimPrefix(name, "topics/")
-	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtTopic, t); err != nil {
+	if err := p.deleteTopic(ctx, nr.AccountID, t); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "topic not found", 404)
 		}
 		return nil, err
 	}
-	// Existing subscriptions are not deleted; their topic is set to the
-	// sentinel "_deleted-topic_" (real Pub/Sub behaviour).
-	topicFull := nr.ResourceID("pubsub-topic", t)
-	if entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, ""); err == nil {
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// deleteTopic removes a topic and detaches its subscriptions: per real Pub/Sub,
+// each subscription whose topic was deleted has its topic set to the
+// "_deleted-topic_" sentinel. A missing topic reports store.ErrNotFound.
+func (p *Provider) deleteTopic(ctx context.Context, account, t string) error {
+	if err := p.resources.Delete(ctx, account, store.GlobalRegion, rtTopic, t); err != nil {
+		return err
+	}
+	topicFull := resource.ResourceID(account)("pubsub-topic", t)
+	if entries, err := p.resources.List(ctx, account, store.GlobalRegion, rtSubscription, ""); err == nil {
 		for _, e := range entries {
 			var meta map[string]any
 			if json.Unmarshal(e.Data, &meta) != nil {
@@ -182,10 +190,10 @@ func (p *Provider) TopicDelete(ctx context.Context, nr *model.NormalizedRequest)
 			}
 			meta["topic"] = "_deleted-topic_"
 			data, _ := json.Marshal(meta)
-			_ = p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: e.ID, Data: data})
+			_ = p.resources.Update(ctx, account, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: e.ID, Data: data})
 		}
 	}
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+	return nil
 }
 
 // SubscriptionDetach implements subscriptions.detach: the subscription stops

@@ -103,8 +103,8 @@ type Service struct {
 	sourceBuckets SourceBucketEnsurer
 	eventTargets  eventing.TargetIndex // Eventarc cloudFunction destinations; nil = disabled
 	// triggerProvisioner materializes the backing Eventarc trigger (and its
-	// transport subscription) for a function's Pub/Sub event trigger (FD9).
-	// nil = disabled (no backing trigger is provisioned).
+	// transport subscription) for a function's Pub/Sub or Cloud Storage event
+	// trigger (FD9, FP2). nil = disabled (no backing trigger is provisioned).
 	triggerProvisioner eventing.TriggerProvisioner
 	// subscriptions resolves the backing subscription's deadLetterPolicy and
 	// forwards exhausted deliveries to its dead-letter topic (FD9).
@@ -156,8 +156,8 @@ func WithEventTargets(idx eventing.TargetIndex) Option {
 }
 
 // WithTriggerProvisioner sets the provisioner that materializes the backing
-// Eventarc trigger (and its transport Pub/Sub subscription) for a function's
-// Pub/Sub event trigger. A nil provisioner disables backing-trigger
+// Eventarc trigger (and its transport subscription) for a function's Pub/Sub or
+// Cloud Storage event trigger. A nil provisioner disables backing-trigger
 // provisioning: the function still receives events, but has no user-configurable
 // dead-letter subscription.
 func WithTriggerProvisioner(p eventing.TriggerProvisioner) Option {
@@ -213,9 +213,9 @@ func (s *Service) Start(ctx context.Context) {
 func (s *Service) SetEventTargets(idx eventing.TargetIndex) { s.eventTargets = idx }
 
 // SetTriggerProvisioner wires the Eventarc provisioner that materializes the
-// backing trigger for a function's Pub/Sub event trigger. It is a setter because
-// the Eventarc core is constructed after the functions core. A nil provisioner
-// disables provisioning.
+// backing trigger for a function's Pub/Sub or Cloud Storage event trigger. It is
+// a setter because the Eventarc core is constructed after the functions core. A
+// nil provisioner disables provisioning.
 func (s *Service) SetTriggerProvisioner(p eventing.TriggerProvisioner) { s.triggerProvisioner = p }
 
 // SetSubscriptions wires the Pub/Sub provisioner used for dead-letter

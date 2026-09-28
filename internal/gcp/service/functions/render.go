@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"jaiscloud/internal/gcp/eventing"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
 
@@ -190,15 +191,21 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 		out["description"] = f.Description
 	}
 	if f.EventTrigger != nil {
-		et := map[string]any{
-			"eventType":   f.EventTrigger.EventType,
-			"pubsubTopic": f.EventTrigger.Resource,
+		et := map[string]any{"eventType": f.EventTrigger.EventType}
+		if eventing.IsStorageEventType(f.EventTrigger.EventType) {
+			// A v2 Cloud Storage trigger expresses its source as an event_filters
+			// bucket; pubsubTopic is valid only for a Pub/Sub trigger.
+			if bucket := eventing.ResourceID(f.EventTrigger.Resource); bucket != "" {
+				et["eventFilters"] = []any{map[string]any{"attribute": "bucket", "value": bucket}}
+			}
+		} else {
+			et["pubsubTopic"] = f.EventTrigger.Resource
 		}
 		if f.EventTrigger.RetryPolicy != "" {
 			et["retryPolicy"] = f.EventTrigger.RetryPolicy
 		}
 		// trigger is output-only: the backing Eventarc trigger the platform
-		// materializes for a Pub/Sub event trigger (FD9).
+		// materializes for a Pub/Sub or Cloud Storage event trigger (FD9, FP2).
 		if f.EventTrigger.Trigger != "" {
 			et["trigger"] = f.EventTrigger.Trigger
 		}

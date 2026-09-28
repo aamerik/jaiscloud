@@ -9,22 +9,24 @@ import (
 )
 
 // ensureTrigger materializes the backing Eventarc trigger (and its transport
-// Pub/Sub subscription) for a function's Pub/Sub event trigger, returning a
-// copy of f with EventTrigger.Trigger/Subscription populated. It is a no-op for
-// a nil provisioner, an HTTP-triggered function, or a non-Pub/Sub event source.
+// Pub/Sub subscription) for a function's Pub/Sub or Cloud Storage event
+// trigger, returning a copy of f with EventTrigger.Trigger/Subscription
+// populated. It is a no-op for a nil provisioner, an HTTP-triggered function,
+// or any other event source.
 //
 // A provisioning failure is non-fatal: the function still receives events via
 // the direct delivery engine (FD4); it just has no user-configurable
 // dead-letter subscription, so the failure is logged rather than returned.
 func (s *Service) ensureTrigger(ctx context.Context, project, location, id string, f functionsstore.Function) functionsstore.Function {
-	if s.triggerProvisioner == nil || !isPubSubTrigger(f.EventTrigger) {
+	if s.triggerProvisioner == nil || !isEventarcBackedTrigger(f.EventTrigger) {
 		return f
 	}
 	triggerName, sub, err := s.triggerProvisioner.EnsureFunctionTrigger(ctx, eventing.FunctionTriggerSpec{
 		Project:    project,
 		Location:   location,
 		FunctionID: id,
-		Topic:      f.EventTrigger.Resource,
+		EventType:  f.EventTrigger.EventType,
+		Resource:   f.EventTrigger.Resource,
 	})
 	if err != nil {
 		slog.Warn("functions: provision backing event trigger", "function", id, "err", err)
@@ -72,16 +74,16 @@ func (s *Service) deleteTrigger(ctx context.Context, project, location, id strin
 	}
 }
 
-// isPubSubTrigger reports whether a trigger observes a Pub/Sub topic. The
-// emulator materializes a backing Eventarc trigger only for Pub/Sub-triggered
-// functions: its transport subscription carries the Pub/Sub dead-letter surface.
-// GCS triggers are delivered directly by the storage producer and have no
-// backing subscription.
-func isPubSubTrigger(et *functionsstore.EventTrigger) bool {
-	if et == nil {
+// isEventarcBackedTrigger reports whether the emulator materializes a backing
+// Eventarc trigger (and its transport subscription, the dead-letter surface) for
+// an event trigger. A Pub/Sub trigger materializes one on the observed topic; a
+// Cloud Storage trigger materializes one on an Eventarc-managed transport topic
+// (FP2). Any other source has no backing transport.
+func isEventarcBackedTrigger(et *functionsstore.EventTrigger) bool {
+	if et == nil || et.Resource == "" {
 		return false
 	}
-	return eventing.NormalizeEventType(et.EventType) == eventing.TypePubSubPublish
+	return eventing.IsPubSubEventType(et.EventType) || eventing.IsStorageEventType(et.EventType)
 }
 
 // triggerEqual reports whether two event triggers are materially the same

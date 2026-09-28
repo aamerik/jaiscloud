@@ -205,6 +205,118 @@ func TestFunctionsEventDeadLetterSubscription(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, resp.StatusCode, "backing subscription should be gone with the function")
 }
 
+// TestFunctionsGCSDeadLetterSubscription covers FP2 over the wire: a Cloud
+// Storage event trigger materializes a backing Eventarc trigger whose
+// transport.pubsub.subscription is a real, user-configurable Pub/Sub
+// subscription on an Eventarc-managed transport topic, so a GCS-triggered
+// function has a dead-letter surface just like a Pub/Sub-triggered one.
+func TestFunctionsGCSDeadLetterSubscription(t *testing.T) {
+	resetState(t)
+	const project = "proj"
+	const location = "us-central1"
+	const fn = "ongcsdlq"
+	const bucket = "gcs-dlq-bucket"
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+	fnBase := "/v1/projects/" + project + "/locations/" + location + "/functions"
+
+	createBucket(t, bucket)
+	resp, body := do(t, "PUT", "/v1/projects/"+project+"/topics/dlq-gcs", []byte(`{}`), jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "dlq topic create: %s", body)
+	resp, body = do(t, "POST", fnBase+"?functionId="+fn,
+		[]byte(`{"runtime":"nodejs20","entryPoint":"handler","eventTrigger":{"eventType":"providers/cloud.storage/eventTypes/object.change","resource":"projects/_/buckets/`+bucket+`"}}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create %s: %s", fn, body)
+
+	// The v2 render exposes the output-only backing Eventarc trigger.
+	resp, body = do(t, "GET", "/v2/projects/"+project+"/locations/"+location+"/functions/"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get function: %s", body)
+	fm := jsonMap(t, body)
+	et, _ := fm["eventTrigger"].(map[string]any)
+	trigger, _ := et["trigger"].(string)
+	require.Equal(t, "projects/proj/locations/us-central1/triggers/functions-"+fn, trigger)
+
+	// The backing trigger's transport is an Eventarc-managed topic + its
+	// subscription (the dead-letter surface).
+	resp, body = do(t, "GET", "/v1/projects/"+project+"/locations/"+location+"/triggers/functions-"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get trigger: %s", body)
+	tm := jsonMap(t, body)
+	transport, _ := tm["transport"].(map[string]any)
+	pubsub, _ := transport["pubsub"].(map[string]any)
+	topicFull, _ := pubsub["topic"].(string)
+	require.Equal(t, "projects/proj/topics/eventarc-us-central1-functions-"+fn, topicFull)
+	subFull, _ := pubsub["subscription"].(string)
+	require.Equal(t, "projects/proj/subscriptions/eventarc-us-central1-functions-"+fn, subFull)
+	// The Eventarc-managed transport topic is discoverable.
+	resp, _ = do(t, "GET", "/v1/projects/"+project+"/topics/eventarc-us-central1-functions-"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "transport topic must exist")
+	subID := subFull[strings.LastIndex(subFull, "/")+1:]
+
+	// Configure a deadLetterPolicy on that subscription over REST.
+	resp, body = do(t, "PATCH", "/v1/projects/"+project+"/subscriptions/"+subID,
+		[]byte(`{"subscription":{"deadLetterPolicy":{"deadLetterTopic":"projects/proj/topics/dlq-gcs","maxDeliveryAttempts":5}},"updateMask":"deadLetterPolicy"}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "patch subscription: %s", body)
+	require.Contains(t, string(body), "dlq-gcs")
+
+	// Deleting the function tears down the backing trigger, subscription, and the
+	// Eventarc-managed transport topic.
+	resp, body = do(t, "DELETE", fnBase+"/"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "delete function: %s", body)
+	resp, _ = do(t, "GET", "/v1/projects/"+project+"/subscriptions/"+subID, nil, nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "backing subscription should be gone with the function")
+	resp, _ = do(t, "GET", "/v1/projects/"+project+"/topics/eventarc-us-central1-functions-"+fn, nil, nil)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "transport topic should be gone with the function")
+}
+
+// TestFunctionsV2StorageEventTrigger covers the Gen2 Cloud Storage trigger path
+// (FP2): the source bucket arrives as an eventFilters bucket (not pubsubTopic),
+// the function receives a backing Eventarc trigger + transport subscription, and
+// an object upload still invokes it.
+func TestFunctionsV2StorageEventTrigger(t *testing.T) {
+	resetState(t)
+	const project = "proj"
+	const location = "us-central1"
+	const fn = "v2gcsfn"
+	const bucket = "v2-gcs-bucket"
+	jsonHdr := map[string]string{"Content-Type": "application/json"}
+	v2base := "/v2/projects/" + project + "/locations/" + location + "/functions"
+
+	createBucket(t, bucket)
+	resp, body := do(t, "POST", v2base+"?functionId="+fn,
+		[]byte(`{"buildConfig":{"runtime":"nodejs20","entryPoint":"handler"},`+
+			`"eventTrigger":{"eventType":"google.cloud.storage.object.v1.finalized",`+
+			`"eventFilters":[{"attribute":"bucket","value":"`+bucket+`"}]}}`),
+		jsonHdr)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create %s: %s", fn, body)
+
+	// The v2 render keeps the bucket source in eventFilters (not pubsubTopic) and
+	// exposes the output-only backing Eventarc trigger.
+	resp, body = do(t, "GET", v2base+"/"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get: %s", body)
+	et, _ := jsonMap(t, body)["eventTrigger"].(map[string]any)
+	require.NotContains(t, et, "pubsubTopic")
+	filters, _ := et["eventFilters"].([]any)
+	require.Len(t, filters, 1)
+	fm, _ := filters[0].(map[string]any)
+	require.Equal(t, "bucket", fm["attribute"])
+	require.Equal(t, bucket, fm["value"])
+	require.Equal(t, "projects/"+project+"/locations/"+location+"/triggers/functions-"+fn, et["trigger"])
+
+	// The backing trigger's transport subscription (the dead-letter surface) is a
+	// real, provisioned Pub/Sub subscription.
+	resp, body = do(t, "GET", "/v1/projects/"+project+"/locations/"+location+"/triggers/functions-"+fn, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get trigger: %s", body)
+	transport, _ := jsonMap(t, body)["transport"].(map[string]any)
+	pubsub, _ := transport["pubsub"].(map[string]any)
+	require.Equal(t, "projects/"+project+"/subscriptions/eventarc-"+location+"-functions-"+fn, pubsub["subscription"])
+
+	// The bucket source parsed from eventFilters still routes object events.
+	resp, body = do(t, "POST", "/upload/storage/v1/b/"+bucket+"/o?uploadType=media&name=o.txt",
+		[]byte("world"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "upload: %s", body)
+	require.Equal(t, "delivered", waitForDelivery(t, fn)["status"])
+}
+
 // zipArchive builds a minimal in-memory zip.
 func zipArchive(t *testing.T, name, content string) []byte {
 	t.Helper()

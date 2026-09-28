@@ -46,6 +46,16 @@ func EventarcSubscriptionID(location, triggerID string) string {
 	return "eventarc-" + location + "-" + triggerID
 }
 
+// EventarcTopicID is the deterministic short id of the transport Pub/Sub topic
+// Eventarc auto-provisions for a trigger whose source is not a Pub/Sub topic
+// (a Cloud Storage trigger). Real Eventarc owns both the transport topic and
+// its subscription; the emulator mirrors that by creating a topic whose id has
+// the same eventarc-{location}-{trigger} shape as the subscription, so the
+// pairing is discoverable in topics.list / subscriptions.list (FP2).
+func EventarcTopicID(location, triggerID string) string {
+	return "eventarc-" + location + "-" + triggerID
+}
+
 // Source identifies the producer that raised an Event.
 const (
 	SourcePubSub   = "pubsub"
@@ -99,24 +109,46 @@ type TargetIndex interface {
 	TargetsForEvent(ctx context.Context, ev Event) []Target
 }
 
-// FunctionTriggerSpec describes a Pub/Sub event trigger a Cloud Functions
-// function declares. The Eventarc core materializes it as a backing trigger:
-// one Eventarc trigger per Pub/Sub-triggered function, backed by a
-// platform-provisioned Pub/Sub subscription whose deadLetterPolicy is the
-// user-configurable dead-letter surface (FD9).
+// FunctionTriggerSpec describes an event trigger a Cloud Functions function
+// declares. The Eventarc core materializes it as a backing trigger: one Eventarc
+// trigger per event-triggered function, backed by a platform-provisioned Pub/Sub
+// subscription whose deadLetterPolicy is the user-configurable dead-letter
+// surface (FD9). A Pub/Sub trigger observes the declared topic; a Cloud Storage
+// trigger observes the declared bucket and is backed by an Eventarc-managed
+// transport topic (FP2).
 type FunctionTriggerSpec struct {
 	Project    string
 	Location   string
 	FunctionID string
-	// Topic is the Pub/Sub topic the trigger observes (a short id or
-	// "projects/{p}/topics/{t}").
-	Topic string
+	// EventType is the declared trigger event type (a v1/v2 or CloudEvent
+	// spelling); NormalizeEventType selects the transport. A Pub/Sub event type
+	// uses Resource as the observed topic; a Cloud Storage event type
+	// provisions an Eventarc-managed transport topic instead.
+	EventType string
+	// Resource is the declared source resource: "projects/{p}/topics/{t}" for a
+	// Pub/Sub trigger or "projects/_/buckets/{bucket}" for a Cloud Storage one.
+	Resource string
+}
+
+// IsPubSubEventType reports whether a declared event type names a Pub/Sub
+// message-published event, in any of the v1, v2, or CloudEvent spellings.
+func IsPubSubEventType(t string) bool { return NormalizeEventType(t) == TypePubSubPublish }
+
+// IsStorageEventType reports whether a declared event type names a Cloud Storage
+// object event: a v2 CloudEvent, a v1 finalize/delete, or the v1 object.change
+// catch-all.
+func IsStorageEventType(t string) bool {
+	switch NormalizeEventType(t) {
+	case TypeStorageFinalize, TypeStorageDelete, legacyStorageObjectChange:
+		return true
+	}
+	return false
 }
 
 // TriggerProvisioner materializes and removes the backing Eventarc trigger of a
-// function's Pub/Sub event trigger. The Eventarc core implements it; the Cloud
-// Functions core holds it as this interface so it never imports Eventarc and
-// the two cores cannot drift.
+// function's Pub/Sub or Cloud Storage event trigger. The Eventarc core implements
+// it; the Cloud Functions core holds it as this interface so it never imports
+// Eventarc and the two cores cannot drift.
 type TriggerProvisioner interface {
 	// EnsureFunctionTrigger creates or updates the backing Eventarc trigger and
 	// returns its resource name plus the short id of its transport Pub/Sub
@@ -133,6 +165,13 @@ type TriggerProvisioner interface {
 // Eventarc and Cloud Functions cores hold it as this interface so they never
 // import the Pub/Sub provider.
 type SubscriptionProvisioner interface {
+	// EnsureEventarcTopic idempotently creates the Eventarc-managed transport
+	// topic that backs a non-Pub/Sub trigger (a Cloud Storage trigger),
+	// returning its short id. An existing topic is left untouched.
+	EnsureEventarcTopic(ctx context.Context, project, location, triggerID string) (string, error)
+	// DeleteEventarcTopic removes an Eventarc-managed transport topic,
+	// tolerating absence.
+	DeleteEventarcTopic(ctx context.Context, project, topic string) error
 	// EnsureEventarcSubscription idempotently creates the transport
 	// subscription of an Eventarc trigger on topic, returning its short id. An
 	// existing subscription is left untouched so a user-configured
