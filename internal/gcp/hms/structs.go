@@ -23,7 +23,26 @@ const (
 	tblDBName        int16 = 2
 	tblSD            int16 = 7
 	tblPartitionKeys int16 = 8
+	tblParameters    int16 = 9
+	tblTableType     int16 = 12
+	tblCatName       int16 = 16
 )
+
+// TableMeta fields (hive_metastore.thrift). 1-4 are the branch-2.3 set; 5
+// (catName) is Hive 3.x, and 6-7 (ownerName/ownerType) are Hive 4. The serving
+// plane emits 1-4 plus catName when the stored Table carries one; older clients
+// skip the unknown optional field.
+const (
+	tmDBName    int16 = 1
+	tmTableName int16 = 2
+	tmTableType int16 = 3
+	tmComments  int16 = 4
+	tmCatName   int16 = 5
+)
+
+// tableCommentKey is the Table.parameters key Hive uses to store the table
+// comment; get_table_meta surfaces it as TableMeta.comments.
+const tableCommentKey = "comment"
 
 // Partition fields (hive_metastore.thrift Partition struct).
 const (
@@ -95,6 +114,25 @@ func buildDatabaseStruct(db hmsstore.Database) *Struct {
 	if db.Owner != "" {
 		b.Str(dbOwnerName, db.Owner)
 		b.I32(dbOwnerType, principalTypeUser)
+	}
+	return b.Build()
+}
+
+// buildTableMeta renders a stored Table as the wire TableMeta struct
+// (hive_metastore.thrift): the required dbName/tableName/tableType, plus the
+// optional comments (the Table's "comment" parameter) and catName when present.
+// Fields are emitted in ascending ID order (1,2,3,4[,5]) so hand-encoded golden
+// fixtures round-trip byte-for-byte.
+func buildTableMeta(dbName, tableName, tableType string, t *Struct) *Struct {
+	b := NewBuilder().
+		Str(tmDBName, dbName).
+		Str(tmTableName, tableName).
+		Str(tmTableType, tableType)
+	if comment := t.MapStrStr(tblParameters)[tableCommentKey]; comment != "" {
+		b.Str(tmComments, comment)
+	}
+	if cat := t.String(tblCatName); cat != "" {
+		b.Str(tmCatName, cat)
 	}
 	return b.Build()
 }

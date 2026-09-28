@@ -57,6 +57,8 @@ func (s *Server) methodTable() map[string]methodHandler {
 		"get_table_objects_by_name":             s.getTableObjectsByName,
 		"alter_table":                           s.alterTable,
 		"alter_table_with_environment_context":  s.alterTable,
+		"alter_table_with_cascade":              s.alterTable, // cascade ignored: partitions keep their own SD (MP9)
+		"get_table_meta":                        s.getTableMeta,
 		"drop_table":                            s.dropTable,
 		"drop_table_with_environment_context":   s.dropTable,
 
@@ -134,7 +136,6 @@ func (s *Server) methodTable() map[string]methodHandler {
 		"abort_txn":           s.unsupportedMethod,
 		"abort_txns":          s.unsupportedMethod,
 		"commit_txn":          s.unsupportedMethod,
-		"get_table_meta":      s.unsupportedMethod,
 	}
 }
 
