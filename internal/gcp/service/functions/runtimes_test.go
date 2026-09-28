@@ -77,6 +77,72 @@ func TestListRuntimesFilter(t *testing.T) {
 		}
 	}
 
+	// OR of two name clauses
+	or, err := s.ListRuntimes("proj", "us-central1", `name="nodejs20" OR name="python311"`)
+	if err != nil {
+		t.Fatalf("OR filter: %v", err)
+	}
+	if len(or) != 2 {
+		t.Fatalf("OR filter returned %d, want 2", len(or))
+	}
+
+	// NOT: the whole catalog is GEN_2, so NOT GEN_2 is empty.
+	notGen, err := s.ListRuntimes("proj", "us-central1", `NOT environment="GEN_2"`)
+	if err != nil {
+		t.Fatalf("NOT filter: %v", err)
+	}
+	if len(notGen) != 0 {
+		t.Fatalf("NOT filter returned %d, want 0", len(notGen))
+	}
+
+	// parentheses group an OR under an AND
+	paren, err := s.ListRuntimes("proj", "us-central1", `(name="nodejs20" OR name="nodejs22") AND stage="GA"`)
+	if err != nil {
+		t.Fatalf("parenthesised filter: %v", err)
+	}
+	if len(paren) != 2 {
+		t.Fatalf("parenthesised filter returned %d, want 2", len(paren))
+	}
+
+	// AIP-160 "has": name substring
+	has, err := s.ListRuntimes("proj", "us-central1", `name:"nodejs"`)
+	if err != nil {
+		t.Fatalf("has filter: %v", err)
+	}
+	if len(has) != 4 {
+		t.Fatalf("name:nodejs returned %d, want 4", len(has))
+	}
+
+	// lexicographic ordering: stage >= "GA" excludes the DEPRECATED runtimes
+	ge, err := s.ListRuntimes("proj", "us-central1", `stage>="GA"`)
+	if err != nil {
+		t.Fatalf("ordering filter: %v", err)
+	}
+	if len(ge) == 0 || len(ge) == len(all) {
+		t.Fatalf("stage>=GA returned %d, want a strict subset of %d", len(ge), len(all))
+	}
+	for _, rt := range ge {
+		if rt.Stage == "DEPRECATED" {
+			t.Fatalf("stage>=GA leaked DEPRECATED runtime %+v", rt)
+		}
+	}
+
+	// AIP-160: OR binds tighter than AND. This groups as
+	// name="nodejs20" AND (stage="GA" OR stage="DEPRECATED") → just nodejs20,
+	// not the conventional (nodejs20 AND GA) OR DEPRECATED which would add the
+	// two deprecated runtimes.
+	prec, err := s.ListRuntimes("proj", "us-central1", `name="nodejs20" AND stage="GA" OR stage="DEPRECATED"`)
+	if err != nil {
+		t.Fatalf("precedence filter: %v", err)
+	}
+	if len(prec) != 1 || prec[0].Name != "nodejs20" {
+		t.Fatalf("OR-tighter precedence broken: %+v", prec)
+	}
+	explicit, err := s.ListRuntimes("proj", "us-central1", `name="nodejs20" AND (stage="GA" OR stage="DEPRECATED")`)
+	if err != nil || len(explicit) != len(prec) {
+		t.Fatalf("implicit/explicit precedence mismatch: %v vs %v", prec, explicit)
+	}
+
 	// a filter that matches nothing yields an empty (non-nil) slice
 	none, err := s.ListRuntimes("proj", "us-central1", `name="does-not-exist"`)
 	if err != nil {
@@ -89,7 +155,16 @@ func TestListRuntimesFilter(t *testing.T) {
 
 func TestListRuntimesFilterErrors(t *testing.T) {
 	s := newRuntimeService()
-	for _, filter := range []string{`bogus="x"`, `name`, `name="x" AND`, `name="a" OR name="b"`, `name=="x"`} {
+	for _, filter := range []string{
+		`bogus="x"`,             // unknown field
+		`name`,                  // missing operator
+		`name="x" AND`,          // dangling AND
+		`name=="x"`,             // double equals is not an operator
+		`name="a" XOR name="b"`, // unsupported keyword
+		`starts_with("node")`,   // AIP-160 function call is not modelled
+		`(name="a"`,             // unbalanced parenthesis
+		`name="a" OR`,           // dangling OR
+	} {
 		if _, err := s.ListRuntimes("proj", "us-central1", filter); err == nil {
 			t.Fatalf("filter %q: expected InvalidArgument", filter)
 		}

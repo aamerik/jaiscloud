@@ -18,8 +18,9 @@ import (
 // mask is a body field ("updateMask"; a query fallback is tolerated). It mirrors
 // the gRPC UpdateSubscription handler so the two transports cannot drift: filter
 // is immutable, and labels, ackDeadlineSeconds, enableExactlyOnceDelivery,
-// enableMessageOrdering, and deadLetterPolicy are supported. An unknown mask
-// path fails loud with InvalidArgument rather than being silently ignored.
+// enableMessageOrdering, deadLetterPolicy, and retryPolicy are supported. An
+// unknown mask path fails loud with InvalidArgument rather than being silently
+// ignored.
 func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -57,6 +58,14 @@ func (p *Provider) SubscriptionUpdate(ctx context.Context, nr *model.NormalizedR
 		paths = []string{"labels"}
 	}
 	for _, path := range paths {
+		// retryPolicy is handled before the root switch because its nested
+		// field-mask leaves need per-leaf merge semantics (AIP-161).
+		if _, _, ok := retryPolicyLeaf(path); ok {
+			if err := applyRetryPolicyUpdate(meta, in, path); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		switch normalizeMaskPath(maskRoot(path)) {
 		case "filter":
 			return nil, model.NewProviderError("InvalidArgument",
