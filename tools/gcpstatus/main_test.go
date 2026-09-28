@@ -172,6 +172,48 @@ func TestAssignOrders(t *testing.T) {
 	}
 }
 
+func TestAnnotateWavesCopiesService(t *testing.T) {
+	items := []*Item{
+		// Empty inferred service -> filled from the aliased detail row.
+		{ID: "W1.1", Kind: "wave", Aliases: []string{"FP1"}},
+		{ID: "FP1", Kind: "backlog", Service: "functions"},
+		// Wrong inferred service (e.g. "storage" from "GCS") -> overridden by
+		// the authoritative detail service.
+		{ID: "W4.2", Kind: "wave", Service: "storage", Aliases: []string{"FD3"}},
+		{ID: "FD3", Kind: "backlog", Service: "functions"},
+		// No aliased item with a service -> the inferred value stands.
+		{ID: "W9.9", Kind: "wave", Service: "compute", Aliases: []string{"ZZ9"}},
+		// Multiple aliases: the first one with a service wins (deterministic).
+		{ID: "W3.7", Kind: "wave", Aliases: []string{"J20", "J21"}},
+		{ID: "J20", Kind: "backlog", Service: "iam"},
+		{ID: "J21", Kind: "backlog", Service: "auth"},
+		// Impact is still copied when the wave has none.
+		{ID: "W2.2", Kind: "wave", Aliases: []string{"FD5"}},
+		{ID: "FD5", Kind: "backlog", Service: "functions", Impact: "medium"},
+	}
+	annotateWaves(items)
+
+	byID := map[string]*Item{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	if got := byID["W1.1"].Service; got != "functions" {
+		t.Errorf("W1.1 service = %q, want functions (filled from alias)", got)
+	}
+	if got := byID["W4.2"].Service; got != "functions" {
+		t.Errorf("W4.2 service = %q, want functions (authoritative override)", got)
+	}
+	if got := byID["W9.9"].Service; got != "compute" {
+		t.Errorf("W9.9 service = %q, want compute (no alias service)", got)
+	}
+	if got := byID["W3.7"].Service; got != "iam" {
+		t.Errorf("W3.7 service = %q, want iam (first non-empty alias)", got)
+	}
+	if got := byID["W2.2"].Impact; got != "medium" {
+		t.Errorf("W2.2 impact = %q, want medium (copied from alias)", got)
+	}
+}
+
 // ─── classification ───────────────────────────────────────────────────────────
 
 func TestClassify(t *testing.T) {
@@ -331,6 +373,7 @@ func TestCollectEndToEnd(t *testing.T) {
 	if len(docPaths) != 1 {
 		t.Fatalf("docPaths = %v", docPaths)
 	}
+	annotateWaves(items)
 	byID := map[string]*Item{}
 	for _, it := range items {
 		byID[it.ID] = it
@@ -338,6 +381,11 @@ func TestCollectEndToEnd(t *testing.T) {
 	w, ok := byID["W1.1"]
 	if !ok || w.Kind != "wave" || w.Series != "x" || w.Branch != "feat/gcp-thing" {
 		t.Fatalf("wave item = %+v", w)
+	}
+	// The wave row's Service(s) text ("svc thing") yields no inferService match,
+	// so the service is backfilled from the aliased detail row (T1 -> svc).
+	if w.Service != "svc" {
+		t.Fatalf("wave service = %q, want svc (from aliased detail row)", w.Service)
 	}
 	b, ok := byID["T1"]
 	if !ok || b.Kind != "backlog" || b.Disposition != "fix" {
