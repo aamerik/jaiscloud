@@ -7,8 +7,9 @@ PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
 # other families sort after these, alphabetically. The Java-compat effort owns
-# waves W1–W3 today.
-SERIES ?= java-compat
+# waves W1–W3 today. The AWS-parity families run next; the BigQuery engine
+# decision (bigquery-ga) is deliberately deprioritized behind them.
+SERIES ?= java-compat,functions-parity,metastore-parity,bigquery-ga
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
