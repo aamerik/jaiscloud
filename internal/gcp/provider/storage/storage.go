@@ -1421,10 +1421,12 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, err
 	}
 	delim, _ := nr.Params["delimiter"].(string)
-	// startOffset filters the listing to names lexicographically equal to or
-	// after it (GCS objects.list). It composes with prefix/delimiter and is
-	// applied before the pageToken cursor.
+	// startOffset/endOffset filter the listing to names lexicographically in
+	// [startOffset, endOffset) (GCS objects.list; either bound may be absent).
+	// They compose with prefix/delimiter and are applied before the pageToken
+	// cursor.
 	startOffset, _ := nr.Params["startOffset"].(string)
+	endOffset, _ := nr.Params["endOffset"].(string)
 	if versions == "true" {
 		delim = "" // versions listing does not group prefixes
 	}
@@ -1444,9 +1446,10 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 			if !strings.HasPrefix(m.Name, pfx) {
 				continue
 			}
-			// startOffset filters object names before common prefixes are
-			// derived, so a prefix survives if any of its objects is in range.
-			if startOffset != "" && m.Name < startOffset {
+			// startOffset/endOffset filter object names before common
+			// prefixes are derived, so a prefix survives if any of its
+			// objects is in range.
+			if !objectNameInOffsetRange(m.Name, startOffset, endOffset) {
 				continue
 			}
 			rest := m.Name[len(pfx):]
@@ -1501,22 +1504,16 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		return provider.OK(resp), nil
 	}
 
-	// No delimiter: prefix filter + startOffset + pagination.
+	// No delimiter: prefix filter + [startOffset, endOffset) + pagination.
 	var filtered []gcs.ObjectMeta
 	for _, m := range objs {
-		if pfx == "" || strings.HasPrefix(m.Name, pfx) {
-			filtered = append(filtered, m)
+		if pfx != "" && !strings.HasPrefix(m.Name, pfx) {
+			continue
 		}
-	}
-	if startOffset != "" {
-		kept := 0
-		for _, m := range filtered {
-			if m.Name >= startOffset {
-				filtered[kept] = m
-				kept++
-			}
+		if !objectNameInOffsetRange(m.Name, startOffset, endOffset) {
+			continue
 		}
-		filtered = filtered[:kept]
+		filtered = append(filtered, m)
 	}
 
 	// Cursor pagination over object names. The versions listing is ordered by
@@ -1575,6 +1572,20 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		resp["nextPageToken"] = next
 	}
 	return provider.OK(resp), nil
+}
+
+// objectNameInOffsetRange reports whether name falls in the lexicographic
+// half-open range [startOffset, endOffset) used by objects.list (REST
+// startOffset/endOffset and the gRPC lexicographic bounds). An empty bound is
+// unbounded on that side.
+func objectNameInOffsetRange(name, startOffset, endOffset string) bool {
+	if startOffset != "" && name < startOffset {
+		return false
+	}
+	if endOffset != "" && name >= endOffset {
+		return false
+	}
+	return true
 }
 
 func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

@@ -139,15 +139,8 @@ func TestObjectsListStartOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	items, _ := resp.Data["items"].([]any)
-	names := make([]string, 0, len(items))
-	for _, it := range items {
-		m, _ := it.(map[string]any)
-		n, _ := m["name"].(string)
-		names = append(names, n)
-	}
 	want := []string{"list-order-raw/B", "list-order-raw/C"}
-	if !reflect.DeepEqual(names, want) {
+	if names := objectNames(t, resp); !reflect.DeepEqual(names, want) {
 		t.Fatalf("startOffset listing = %v, want %v", names, want)
 	}
 }
@@ -179,6 +172,174 @@ func TestObjectsListStartOffsetWithDelimiter(t *testing.T) {
 	}
 }
 
+// objectNames extracts item names from an ObjectsList response, in order.
+func objectNames(t *testing.T, resp *model.ProviderResponse) []string {
+	t.Helper()
+	items, _ := resp.Data["items"].([]any)
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		n, _ := m["name"].(string)
+		names = append(names, n)
+	}
+	return names
+}
+
+// TestObjectsListEndOffset guards J33: endOffset filters the listing to names
+// lexicographically before it, composed with prefix.
+func TestObjectsListEndOffset(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "bkt")
+	for _, name := range []string{"end-order-raw/A", "end-order-raw/C", "end-order-raw/B"} {
+		insertObjectTyped(t, p, "bkt", name, "application/octet-stream", nil)
+	}
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["prefix"] = "end-order-raw/"
+	nr.Params["endOffset"] = "end-order-raw/C"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	want := []string{"end-order-raw/A", "end-order-raw/B"}
+	if got := objectNames(t, resp); !reflect.DeepEqual(got, want) {
+		t.Fatalf("endOffset listing = %v, want %v", got, want)
+	}
+}
+
+// TestObjectsListEndOffsetWithDelimiter verifies endOffset filters object names
+// before common prefixes are derived: a prefix survives when any of its objects
+// is before the offset, and disappears when none is.
+func TestObjectsListEndOffsetWithDelimiter(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "bkt")
+	insertObjectTyped(t, p, "bkt", "dir/a", "application/octet-stream", nil)
+	insertObjectTyped(t, p, "bkt", "dir/z", "application/octet-stream", nil)
+
+	// dir/a is in range, so the "dir/" prefix survives.
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["delimiter"] = "/"
+	nr.Params["endOffset"] = "dir/m"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if prefixes, _ := resp.Data["prefixes"].([]string); !reflect.DeepEqual(prefixes, []string{"dir/"}) {
+		t.Fatalf("prefixes = %v, want [dir/]", resp.Data["prefixes"])
+	}
+	if got := objectNames(t, resp); len(got) != 0 {
+		t.Fatalf("expected no in-range items, got %v", got)
+	}
+
+	// No object is before "dir/0", so no prefix is derived at all.
+	nr2 := bucketParams()
+	nr2.Params["bucket"] = "bkt"
+	nr2.Params["delimiter"] = "/"
+	nr2.Params["endOffset"] = "dir/0"
+	resp2, err := p.ObjectsList(ctx, nr2)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if prefixes, _ := resp2.Data["prefixes"].([]string); len(prefixes) != 0 {
+		t.Fatalf("prefixes = %v, want none", prefixes)
+	}
+	if got := objectNames(t, resp2); len(got) != 0 {
+		t.Fatalf("expected no items, got %v", got)
+	}
+}
+
+// TestObjectsListEndOffsetWithVersions verifies endOffset applies to the
+// versions listing too, keeping only generations of names before it.
+func TestObjectsListEndOffsetWithVersions(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createVersionedBucket(t, p, "bkt")
+	insertObjectTyped(t, p, "bkt", "v/A", "text/plain", []byte("a"))
+	insertObjectTyped(t, p, "bkt", "v/B", "text/plain", []byte("b1"))
+	insertObjectTyped(t, p, "bkt", "v/B", "text/plain", []byte("b2"))
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["versions"] = "true"
+	nr.Params["endOffset"] = "v/B"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if got, want := objectNames(t, resp), []string{"v/A"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("versions endOffset listing = %v, want %v", got, want)
+	}
+}
+
+// TestObjectsListOffsetRange verifies startOffset (inclusive) and endOffset
+// (exclusive) compose into a half-open range.
+func TestObjectsListOffsetRange(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "bkt")
+	for _, name := range []string{"range-raw/A", "range-raw/B", "range-raw/C", "range-raw/D"} {
+		insertObjectTyped(t, p, "bkt", name, "application/octet-stream", nil)
+	}
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["prefix"] = "range-raw/"
+	nr.Params["startOffset"] = "range-raw/B"
+	nr.Params["endOffset"] = "range-raw/D"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	want := []string{"range-raw/B", "range-raw/C"}
+	if got := objectNames(t, resp); !reflect.DeepEqual(got, want) {
+		t.Fatalf("offset range listing = %v, want %v", got, want)
+	}
+}
+
+// TestObjectsListEndOffsetPagination verifies endOffset bounds both pages: the
+// pageToken cursor never walks past the offset.
+func TestObjectsListEndOffsetPagination(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "bkt")
+	for _, name := range []string{"page-end/A", "page-end/B", "page-end/C"} {
+		insertObjectTyped(t, p, "bkt", name, "application/octet-stream", nil)
+	}
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["prefix"] = "page-end/"
+	nr.Params["endOffset"] = "page-end/C"
+	nr.Params["maxResults"] = "1"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list page 1: %v", err)
+	}
+	if got, want := objectNames(t, resp), []string{"page-end/A"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("page 1 = %v, want %v", got, want)
+	}
+	tok, _ := resp.Data["nextPageToken"].(string)
+	if tok == "" {
+		t.Fatal("expected nextPageToken")
+	}
+
+	nr.Params["pageToken"] = tok
+	resp2, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("list page 2: %v", err)
+	}
+	if got, want := objectNames(t, resp2), []string{"page-end/B"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("page 2 = %v, want %v", got, want)
+	}
+	if next, _ := resp2.Data["nextPageToken"].(string); next != "" {
+		t.Fatalf("unexpected nextPageToken %q past endOffset", next)
+	}
+}
+
 // TestObjectsListStartOffsetWithVersions verifies startOffset applies to the
 // versions listing too, keeping only generations of names at or after it.
 func TestObjectsListStartOffsetWithVersions(t *testing.T) {
@@ -197,13 +358,11 @@ func TestObjectsListStartOffsetWithVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list versions: %v", err)
 	}
-	items, _ := resp.Data["items"].([]any)
-	if len(items) == 0 {
+	names := objectNames(t, resp)
+	if len(names) == 0 {
 		t.Fatal("expected at least one version at/after startOffset")
 	}
-	for _, it := range items {
-		m, _ := it.(map[string]any)
-		name, _ := m["name"].(string)
+	for _, name := range names {
 		if name < "v/B" {
 			t.Fatalf("version listing included %q before startOffset", name)
 		}
