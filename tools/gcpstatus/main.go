@@ -1071,6 +1071,7 @@ func annotateWaves(items []*Item) {
 		if it.Kind != "wave" {
 			continue
 		}
+		svcFromAlias := false
 		for _, a := range it.Aliases {
 			src, ok := byID[a]
 			if !ok {
@@ -1081,6 +1082,18 @@ func annotateWaves(items []*Item) {
 			}
 			if it.Impact == "" {
 				it.Impact = src.Impact
+			}
+			// The detail table's `service` column is authoritative; a wave row's
+			// own Service is only a heuristic over its Service(s) text (which can
+			// miss — e.g. "functions" has no inferService key — or misfire on an
+			// incidental word). Prefer the first aliased detail row's service so
+			// wave rows are attributed to the real service (and are found by
+			// `gcp-status-check SERVICE=<svc>`). The first non-empty alias wins so
+			// a multi-service wave is deterministic; an alias with no service
+			// leaves the inferred value in place.
+			if !svcFromAlias && src.Service != "" {
+				it.Service = src.Service
+				svcFromAlias = true
 			}
 		}
 	}
