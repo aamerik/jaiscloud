@@ -294,6 +294,10 @@ func startCmd() *cobra.Command {
 					functionscore.WithBlobs(stores.blobs),
 					functionscore.WithSourceFetcher(storageP),
 					functionscore.WithSourceBuckets(storageP),
+					// The executor is the shared concurrency resource, so its
+					// account-level cap is also the project-wide admission cap
+					// (FP1). JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000.
+					functionscore.WithAccountConcurrencyLimit(lambdaCfg.ConcurrencyLimit),
 				)
 				if dockerExec, ok := lambdaExec.(*lambdaexec.DockerExecutor); ok {
 					dockerExec.SetCodeLoader(functionsCore)

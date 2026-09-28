@@ -111,6 +111,13 @@ type Service struct {
 	// nil = disabled (a terminal dead_letter record only).
 	subscriptions eventing.SubscriptionProvisioner
 	deliveries    *deliveryEngine
+	// accountConcurrency caps concurrent invocations across every function in a
+	// project (the GCP analogue of Lambda's account-level concurrency limit),
+	// derived from the shared executor's account cap. 0 = unlimited.
+	accountConcurrency int64
+	// gate enforces per-function and per-project admission (FP1). It is always
+	// non-nil after NewService.
+	gate *concurrencyGate
 }
 
 // Option configures Service.
@@ -165,6 +172,17 @@ func WithSubscriptions(p eventing.SubscriptionProvisioner) Option {
 	return func(s *Service) { s.subscriptions = p }
 }
 
+// WithAccountConcurrencyLimit sets the project-wide cap on concurrent function
+// invocations (the GCP analogue of Lambda's account concurrency limit). A value
+// <= 0 means unlimited, which is the default for a core-only construction; the
+// Cloud Functions binary wires the shared executor's configured account cap
+// (JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000). The gate stays inert only
+// when a function has no configured maxInstanceCount and the project cap is
+// unlimited.
+func WithAccountConcurrencyLimit(limit int64) Option {
+	return func(s *Service) { s.accountConcurrency = limit }
+}
+
 // NewService returns a Functions core backed by the given store. resources backs
 // the function IAM policy surface. The executor defaults to a MockExecutor.
 func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...Option) *Service {
@@ -176,6 +194,7 @@ func NewService(fs functionsstore.Store, resources store.ResourceStore, opts ...
 		s.executor = &lambdaexec.MockExecutor{}
 	}
 	s.deliveries = newDeliveryEngine(s)
+	s.gate = newConcurrencyGate()
 	return s
 }
 
@@ -205,11 +224,13 @@ func (s *Service) SetTriggerProvisioner(p eventing.TriggerProvisioner) { s.trigg
 func (s *Service) SetSubscriptions(p eventing.SubscriptionProvisioner) { s.subscriptions = p }
 
 // Reset wipes the underlying store and any persisted source archives, and
-// invalidates in-flight deliveries.
+// invalidates in-flight deliveries. In-flight concurrency counts are dropped as
+// well, so a reset cannot inherit a count from an aborted invocation.
 func (s *Service) Reset(ctx context.Context) {
 	if s.deliveries != nil {
 		s.deliveries.reset()
 	}
+	s.gate.reset()
 	s.functions.Reset(ctx)
 	s.resetSources(ctx)
 }

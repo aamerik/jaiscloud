@@ -101,6 +101,25 @@ func parseAvailableCPU(s string) (float64, bool) {
 	return 0, false
 }
 
+// effectiveConcurrencyLimit returns a function's concurrent-invocation capacity
+// for the admission gate (FP1). Cloud Functions 2nd gen scales to at most
+// maxInstanceCount instances, each serving up to maxInstanceRequestConcurrency
+// requests concurrently, so the capacity is their product. An unset
+// maxInstanceRequestConcurrency counts as one request per instance (the default
+// single-concurrency case); a zero or negative maxInstanceCount means "no
+// configured limit" and returns 0 (unlimited), matching the stored-record
+// convention documented on functionsstore.Function.
+func effectiveConcurrencyLimit(f functionsstore.Function) int64 {
+	if f.MaxInstanceCount <= 0 {
+		return 0
+	}
+	per := f.MaxInstanceRequestConcurrency
+	if per < 1 {
+		per = 1
+	}
+	return int64(f.MaxInstanceCount) * int64(per)
+}
+
 // validateConfigRelations validates the relationships that are only checkable on
 // the merged record: minInstanceCount must not exceed a configured
 // maxInstanceCount, and a sub-1-vCPU function must keep request concurrency at
