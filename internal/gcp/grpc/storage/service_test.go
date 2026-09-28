@@ -1569,3 +1569,124 @@ func TestCancelResumableWrite(t *testing.T) {
 		t.Fatalf("completed object content = %q, want %q", got, payload)
 	}
 }
+
+// TestComposeObjectCSEKSources verifies ComposeObject reads its source objects
+// with the customer-supplied encryption key in common_object_request_params and
+// encrypts the composite destination with that key (J38), matching real GCS:
+// all CSEK components must use the same key and the result inherits it.
+func TestComposeObjectCSEKSources(t *testing.T) {
+	client, _, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	key := bytes.Repeat([]byte{0x42}, 32)
+	names := []string{"csek-a", "csek-b"}
+	payloads := [][]byte{[]byte("part-a-"), []byte("part-b")}
+
+	for i, name := range names {
+		w, err := client.BidiWriteObject(ctx)
+		if err != nil {
+			t.Fatalf("BidiWriteObject: %v", err)
+		}
+		if err := w.Send(&storagepb.BidiWriteObjectRequest{
+			FirstMessage: &storagepb.BidiWriteObjectRequest_WriteObjectSpec{
+				WriteObjectSpec: &storagepb.WriteObjectSpec{
+					Resource: &storagepb.Object{Name: name, Bucket: testBucket, ContentType: "text/plain"},
+				},
+			},
+			WriteOffset:               0,
+			Data:                      &storagepb.BidiWriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: payloads[i]}},
+			FinishWrite:               true,
+			CommonObjectRequestParams: &storagepb.CommonObjectRequestParams{EncryptionAlgorithm: "AES256", EncryptionKeyBytes: key},
+		}); err != nil {
+			t.Fatalf("BidiWriteObject Send: %v", err)
+		}
+		if _, err := w.Recv(); err != nil {
+			t.Fatalf("BidiWriteObject Recv: %v", err)
+		}
+	}
+
+	sources := []*storagepb.ComposeObjectRequest_SourceObject{{Name: "csek-a"}, {Name: "csek-b"}}
+	csekParams := func(k []byte) *storagepb.CommonObjectRequestParams {
+		return &storagepb.CommonObjectRequestParams{EncryptionAlgorithm: "AES256", EncryptionKeyBytes: k}
+	}
+
+	// Without the key a CSEK source cannot be read.
+	if _, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:   &storagepb.Object{Name: "csek-composed", Bucket: testBucket},
+		SourceObjects: sources,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ComposeObject without key err = %v, want InvalidArgument", err)
+	}
+	// A different key is an incorrect source key.
+	if _, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:               &storagepb.Object{Name: "csek-composed", Bucket: testBucket},
+		SourceObjects:             sources,
+		CommonObjectRequestParams: csekParams(bytes.Repeat([]byte{0x24}, 32)),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ComposeObject wrong key err = %v, want InvalidArgument", err)
+	}
+	// A key on a non-CSEK source is rejected (J36 semantics).
+	writeSingleShot(t, client, testBucket, "plain-src", "text/plain", []byte("plain"))
+	if _, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:               &storagepb.Object{Name: "plain-composed", Bucket: testBucket},
+		SourceObjects:             []*storagepb.ComposeObjectRequest_SourceObject{{Name: "plain-src"}},
+		CommonObjectRequestParams: csekParams(key),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ComposeObject plain source with key err = %v, want InvalidArgument", err)
+	}
+
+	// With the key the composite is created.
+	composed, err := client.ComposeObject(ctx, &storagepb.ComposeObjectRequest{
+		Destination:               &storagepb.Object{Name: "csek-composed", Bucket: testBucket},
+		SourceObjects:             sources,
+		CommonObjectRequestParams: csekParams(key),
+	})
+	if err != nil {
+		t.Fatalf("ComposeObject: %v", err)
+	}
+	if composed.GetComponentCount() != 2 {
+		t.Fatalf("componentCount = %d, want 2", composed.GetComponentCount())
+	}
+
+	// The composite is encrypted with the key: readable with it, not without.
+	if got := readObjectCSEK(t, client, testBucket, "csek-composed", key); string(got) != "part-a-part-b" {
+		t.Fatalf("composed content = %q, want %q", got, "part-a-part-b")
+	}
+	stream, err := client.ReadObject(ctx, &storagepb.ReadObjectRequest{Bucket: testBucket, Object: "csek-composed"})
+	if err != nil {
+		t.Fatalf("ReadObject: %v", err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("read without key err = %v, want InvalidArgument", err)
+	}
+}
+
+// readObjectCSEK reads an object's full content via ReadObject, carrying the
+// customer-supplied encryption key in common_object_request_params.
+func readObjectCSEK(t *testing.T, client storagepb.StorageClient, bucket, object string, key []byte) []byte {
+	t.Helper()
+	stream, err := client.ReadObject(context.Background(), &storagepb.ReadObjectRequest{
+		Bucket:                    bucket,
+		Object:                    object,
+		CommonObjectRequestParams: &storagepb.CommonObjectRequestParams{EncryptionAlgorithm: "AES256", EncryptionKeyBytes: key},
+	})
+	if err != nil {
+		t.Fatalf("ReadObject with CSEK: %v", err)
+	}
+	var out []byte
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadObject Recv: %v", err)
+		}
+		if cd := msg.GetChecksummedData(); cd != nil {
+			out = append(out, cd.GetContent()...)
+		}
+	}
+	return out
+}

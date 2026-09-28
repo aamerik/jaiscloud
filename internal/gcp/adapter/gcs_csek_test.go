@@ -115,3 +115,37 @@ func TestDetectServiceUnsignedRawPut(t *testing.T) {
 		t.Fatalf("expected storage for unsigned raw PUT, got %q", svc)
 	}
 }
+
+// TestGCSCodecComposeCSEKHeaders verifies an objects.compose request routes to
+// ObjectsCompose and captures the x-goog-encryption-* headers, which the
+// provider applies to both the source reads and the destination write (J38).
+func TestGCSCodecComposeCSEKHeaders(t *testing.T) {
+	c := &GCSCodec{}
+	r := httptest.NewRequest("POST", "/storage/v1/b/bkt/o/dst.txt/compose", nil)
+	r.Header.Set("x-goog-encryption-algorithm", "AES256")
+	r.Header.Set("x-goog-encryption-key", "CK")
+	r.Header.Set("x-goog-encryption-key-sha256", "CS")
+
+	nr, err := c.Decode(r, []byte(`{"sourceObjects":[{"name":"src.txt"}]}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if nr.Action != "ObjectsCompose" {
+		t.Fatalf("expected ObjectsCompose, got %q", nr.Action)
+	}
+	if b, _ := nr.Params["bucket"].(string); b != "bkt" {
+		t.Errorf("expected bucket bkt, got %q", b)
+	}
+	if o, _ := nr.Params["object"].(string); o != "dst.txt" {
+		t.Errorf("expected object dst.txt, got %q", o)
+	}
+	if alg, _ := nr.Params[wire.CSEKAlgorithm].(string); alg != "AES256" {
+		t.Errorf("expected CSEK algorithm AES256, got %q", alg)
+	}
+	if k, _ := nr.Params[wire.CSEKKey].(string); k != "CK" {
+		t.Errorf("expected CSEK key CK, got %q", k)
+	}
+	if sha, _ := nr.Params[wire.CSEKKeySHA256].(string); sha != "CS" {
+		t.Errorf("expected CSEK sha CS, got %q", sha)
+	}
+}
