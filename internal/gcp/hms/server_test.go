@@ -849,3 +849,105 @@ func TestServerAlterTableWithCascade(t *testing.T) {
 		t.Fatalf("renamed table not found: %+v", r.result)
 	}
 }
+
+// TestServerSetUgi covers set_ugi(user, group_names) -> list<string>: Hive
+// clients issue it on connect, and strict clients (hms-client-go) refuse to
+// connect if it is missing. The emulator echoes the requested groups.
+func TestServerSetUgi(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	args := NewBuilder().Str(1, "alice").Add(2, ListV(thrift.STRING, strList([]string{"g1", "g2"}))).Build()
+	r := hmsCall(t, addr, "set_ugi", args)
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("set_ugi: type=%d result=%+v", r.msgType, r.result)
+	}
+	l := r.result.List(0)
+	if len(l) != 2 || l[0].Str != "g1" || l[1].Str != "g2" {
+		t.Fatalf("set_ugi groups not echoed: %+v", r.result)
+	}
+}
+
+// TestServerGetTableReq covers get_table_req(GetTableRequest) -> GetTableResult,
+// the Hive 2.3+/Hive 4 request-struct form of get_table (get_table_req carries no
+// legacy fallback in Hive 4 IDL-generated clients).
+func TestServerGetTableReq(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	if r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().
+		Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
+	}
+	ml := "gs://bucket/wh/default/t1/metadata/00001.metadata.json"
+	if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testTable("default", "t1", ml)).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_table: %+v", r.result)
+	}
+
+	// engine(10)/id(11) are required Hive-4 additions the schema-free codec
+	// ignores; catName(4) is omitted (default catalog).
+	req := NewBuilder().Str(reqDBName, "default").Str(reqTblName, "t1").Str(10, "hive").I64(11, -1).Build()
+	r := hmsCall(t, addr, "get_table_req", NewBuilder().Struct(1, req).Build())
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("get_table_req: type=%d result=%+v", r.msgType, r.result)
+	}
+	inner := r.result.Struct(0)
+	if inner == nil {
+		t.Fatalf("get_table_req missing result struct: %+v", r.result)
+	}
+	tbl := inner.Struct(reqResultTable)
+	if tbl == nil || tbl.String(tblTableName) != "t1" {
+		t.Fatalf("get_table_req table wrong: %+v", inner)
+	}
+	if m := tbl.MapStrStr(tblParameters); m["metadata_location"] != ml {
+		t.Fatalf("get_table_req params wrong: %v", m)
+	}
+
+	// Missing table -> NoSuchObjectException at result field 2.
+	req = NewBuilder().Str(reqDBName, "default").Str(reqTblName, "nope").Build()
+	r = hmsCall(t, addr, "get_table_req", NewBuilder().Struct(1, req).Build())
+	if len(r.result.Fields) != 1 || r.result.Fields[0].ID != 2 {
+		t.Fatalf("get_table_req missing should throw NoSuchObjectException at field 2: %+v", r.result.Fields)
+	}
+}
+
+// TestServerGetTableObjectsByNameReq covers
+// get_table_objects_by_name_req(GetTablesRequest) -> GetTablesResult, the
+// request-struct form of get_table_objects_by_name. Missing names are skipped.
+func TestServerGetTableObjectsByNameReq(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	if r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().
+		Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
+	}
+	for _, tbl := range []string{"t1", "t2"} {
+		md := "gs://bucket/wh/default/" + tbl + "/metadata/00001.metadata.json"
+		if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testTable("default", tbl, md)).Build()); r.msgType != thrift.REPLY {
+			t.Fatalf("create_table %s: %+v", tbl, r.result)
+		}
+	}
+
+	req := NewBuilder().Str(reqDBName, "default").
+		Add(reqTblNames, ListV(thrift.STRING, strList([]string{"t1", "missing", "t2"}))).Build()
+	r := hmsCall(t, addr, "get_table_objects_by_name_req", NewBuilder().Struct(1, req).Build())
+	if r.msgType != thrift.REPLY {
+		t.Fatalf("get_table_objects_by_name_req: type=%d result=%+v", r.msgType, r.result)
+	}
+	inner := r.result.Struct(0)
+	if inner == nil {
+		t.Fatalf("missing result struct: %+v", r.result)
+	}
+	tables := inner.List(reqResultTables)
+	if len(tables) != 2 {
+		t.Fatalf("want 2 tables (missing skipped), got %d: %+v", len(tables), inner)
+	}
+	if tables[0].S == nil || tables[0].S.String(tblTableName) != "t1" ||
+		tables[1].S == nil || tables[1].S.String(tblTableName) != "t2" {
+		t.Fatalf("table order/names wrong: %+v", tables)
+	}
+}

@@ -508,6 +508,7 @@ jobs:
         run: |
           go mod download
           (cd tests/persistent_mode/gcp/parity-grpc && go mod download)
+          (cd tests/persistent_mode/gcp/hms && go mod download)
 
       - name: Build jaiscloud-gcp
         run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -537,4 +538,11 @@ jobs:
           DATASTORE_EMULATOR_HOST: localhost:8081
           LOGGING_EMULATOR_HOST: localhost:8081
           MONITORING_EMULATOR_HOST: localhost:8081
+        run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./...
+
+      - name: Run GCP Hive Metastore persistence tests
+        working-directory: tests/persistent_mode/gcp/hms
+        env:
+          JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
+          JAISCLOUD_GCP_BIN: ${{ github.workspace }}/jaiscloud-gcp
         run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./...

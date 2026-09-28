@@ -51,10 +51,12 @@ func (s *Server) methodTable() map[string]methodHandler {
 		"create_table":                          s.createTable,
 		"create_table_with_environment_context": s.createTable,
 		"get_table":                             s.getTable,
-		"get_table_by_name":                     s.getTable, // alias: same (dbname, tbl_name) -> Table shape
+		"get_table_req":                         s.getTableReq, // Hive 2.3+ request-struct form
+		"get_table_by_name":                     s.getTable,    // alias: same (dbname, tbl_name) -> Table shape
 		"get_all_tables":                        s.listTables,
 		"get_tables":                            s.listTables,
 		"get_table_objects_by_name":             s.getTableObjectsByName,
+		"get_table_objects_by_name_req":         s.getTableObjectsByNameReq, // Hive 2.3+ request-struct form
 		"alter_table":                           s.alterTable,
 		"alter_table_with_environment_context":  s.alterTable,
 		"alter_table_with_cascade":              s.alterTable, // cascade ignored: partitions keep their own SD (MP9)
@@ -73,6 +75,11 @@ func (s *Server) methodTable() map[string]methodHandler {
 		"lock":       s.lock,
 		"check_lock": s.checkLock,
 		"unlock":     s.unlock,
+
+		// Identity: set_ugi is the caller-identity announcement Hive clients
+		// issue once per new binary-NOSASL connection. Without it, strict
+		// clients (e.g. hms-client-go) refuse to connect.
+		"set_ugi": s.setUgi,
 
 		// Misc (valid empty stubs).
 		"get_current_notificationEventId": s.getCurrentNotificationEventID,
