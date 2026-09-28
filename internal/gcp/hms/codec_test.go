@@ -510,3 +510,47 @@ func TestRoundTripLocks(t *testing.T) {
 		}
 	})
 }
+
+// TestRoundTripTableMeta pins the wire shape get_table_meta returns
+// (hive_metastore.thrift TableMeta): required dbName/tableName/tableType plus
+// the optional comments (4) and catName (5).
+func TestRoundTripTableMeta(t *testing.T) {
+	src := refStruct{fields: []refField{
+		{thrift.STRING, 1, rfStr("default")},
+		{thrift.STRING, 2, rfStr("t1")},
+		{thrift.STRING, 3, rfStr("MANAGED_TABLE")},
+		{thrift.STRING, 4, rfStr("the comment")},
+		{thrift.STRING, 5, rfStr("hive")},
+	}}
+	got := refEncode(src)
+	assertRoundTrip(t, "TableMeta", src, got, func(s *Struct) {
+		if s.String(tmDBName) != "default" || s.String(tmTableName) != "t1" || s.String(tmTableType) != "MANAGED_TABLE" {
+			t.Fatal("TableMeta identity wrong")
+		}
+		if s.String(tmComments) != "the comment" || s.String(tmCatName) != "hive" {
+			t.Fatal("TableMeta comments/catName wrong")
+		}
+	})
+}
+
+// TestBuildTableMeta pins the field-omission rules: comments and catName are
+// emitted only when the stored Table supplies them.
+func TestBuildTableMeta(t *testing.T) {
+	full := buildTableMeta("default", "t1", "MANAGED_TABLE", NewBuilder().
+		MapStrStr(tblParameters, map[string]string{tableCommentKey: "c"}).
+		Str(tblCatName, "hive").
+		Build())
+	if full.String(tmDBName) != "default" || full.String(tmTableName) != "t1" || full.String(tmTableType) != "MANAGED_TABLE" {
+		t.Fatalf("identity wrong: %+v", full)
+	}
+	if full.String(tmComments) != "c" || full.String(tmCatName) != "hive" {
+		t.Fatalf("optional fields wrong: %+v", full)
+	}
+	bare := buildTableMeta("default", "t2", "EXTERNAL_TABLE", &Struct{})
+	if _, ok := bare.Get(tmComments); ok {
+		t.Fatalf("empty comment should be omitted: %+v", bare)
+	}
+	if _, ok := bare.Get(tmCatName); ok {
+		t.Fatalf("empty catName should be omitted: %+v", bare)
+	}
+}

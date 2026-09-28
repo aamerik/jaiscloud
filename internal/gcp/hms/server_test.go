@@ -706,3 +706,146 @@ func TestServerPartitionDeferredFailLoud(t *testing.T) {
 		}
 	}
 }
+
+// metaTable builds a minimal Hive Table with the fields get_table_meta reads:
+// tableType (12), the optional "comment" parameter (9), and catName (16).
+func metaTable(db, tbl, tableType, comment, catName string) *Struct {
+	b := NewBuilder().
+		Str(tblTableName, tbl).
+		Str(tblDBName, db).
+		Str(3, "spark").
+		Struct(tblSD, NewBuilder().Str(sdLocation, "gs://bucket/wh/"+db+"/"+tbl).Build()).
+		ListStruct(tblPartitionKeys, nil)
+	if comment != "" {
+		b.MapStrStr(tblParameters, map[string]string{tableCommentKey: comment})
+	}
+	b.Str(tblTableType, tableType)
+	if catName != "" {
+		b.Str(tblCatName, catName)
+	}
+	return b.Build()
+}
+
+func TestServerGetTableMeta(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	for _, db := range []string{"default", "other"} {
+		r := hmsCall(t, addr, "create_database", NewBuilder().Struct(1, NewBuilder().
+			Str(dbName, db).Str(dbLocationURI, "gs://bucket/wh/"+db).Build()).Build())
+		if r.msgType != thrift.REPLY {
+			t.Fatalf("create_database %s: %+v", db, r.result)
+		}
+	}
+	create := func(tbl *Struct) {
+		r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, tbl).Build())
+		if r.msgType != thrift.REPLY || len(r.result.Fields) != 0 {
+			t.Fatalf("create_table failed: type=%d result=%+v", r.msgType, r.result)
+		}
+	}
+	create(metaTable("default", "t1", "MANAGED_TABLE", "first", ""))
+	create(metaTable("default", "t2", "EXTERNAL_TABLE", "", ""))
+	create(metaTable("other", "t1", "MANAGED_TABLE", "", "hive"))
+
+	meta := func(dbPattern, tblPattern string, types []string) []*Struct {
+		args := NewBuilder().Str(1, dbPattern).Str(2, tblPattern)
+		if types != nil {
+			args.Add(3, ListV(thrift.STRING, strList(types)))
+		}
+		r := hmsCall(t, addr, "get_table_meta", args.Build())
+		if r.msgType != thrift.REPLY {
+			t.Fatalf("get_table_meta(%q,%q,%v): msgType=%d result=%+v", dbPattern, tblPattern, types, r.msgType, r.result)
+		}
+		vals := r.result.List(0)
+		out := make([]*Struct, 0, len(vals))
+		for _, v := range vals {
+			if v.S == nil {
+				t.Fatalf("TableMeta is not a struct: %+v", v)
+			}
+			out = append(out, v.S)
+		}
+		return out
+	}
+
+	// Empty patterns match every db/table; order is deterministic (db, then table).
+	all := meta("", "", nil)
+	if len(all) != 3 {
+		t.Fatalf("want 3 TableMeta, got %d: %+v", len(all), all)
+	}
+	if all[0].String(tmDBName) != "default" || all[0].String(tmTableName) != "t1" ||
+		all[0].String(tmTableType) != "MANAGED_TABLE" || all[0].String(tmComments) != "first" {
+		t.Fatalf("meta[0] wrong: %+v", all[0])
+	}
+	if _, ok := all[0].Get(tmCatName); ok {
+		t.Fatalf("meta[0] should omit an empty catName: %+v", all[0])
+	}
+	if all[1].String(tmTableName) != "t2" || all[1].String(tmTableType) != "EXTERNAL_TABLE" {
+		t.Fatalf("meta[1] wrong: %+v", all[1])
+	}
+	if _, ok := all[1].Get(tmComments); ok {
+		t.Fatalf("meta[1] should omit an empty comment: %+v", all[1])
+	}
+	if all[2].String(tmDBName) != "other" || all[2].String(tmTableName) != "t1" || all[2].String(tmCatName) != "hive" {
+		t.Fatalf("meta[2] wrong: %+v", all[2])
+	}
+
+	// db pattern narrows to one database.
+	if got := meta("default", "", nil); len(got) != 2 {
+		t.Fatalf("db filter: want 2, got %d", len(got))
+	}
+	// table pattern spans databases (regex semantics).
+	if got := meta("", "^t1$", nil); len(got) != 2 || got[0].String(tmDBName) != "default" || got[1].String(tmDBName) != "other" {
+		t.Fatalf("table filter wrong: %+v", got)
+	}
+	// tbl_types filters on the exact table type.
+	if got := meta(".*", "t.*", []string{"EXTERNAL_TABLE"}); len(got) != 1 || got[0].String(tmTableName) != "t2" {
+		t.Fatalf("type filter wrong: %+v", got)
+	}
+	if got := meta("", "", []string{"MANAGED_TABLE"}); len(got) != 2 {
+		t.Fatalf("managed filter: want 2, got %d", len(got))
+	}
+	// no match -> empty list, not an error.
+	if got := meta("nope", "", nil); len(got) != 0 {
+		t.Fatalf("no-match should be empty, got %+v", got)
+	}
+}
+
+func TestServerAlterTableWithCascade(t *testing.T) {
+	store := hmsstore.NewMemoryStore()
+	addr, stop := startServer(t, store)
+	defer stop()
+
+	createDB := NewBuilder().Struct(1, NewBuilder().
+		Str(dbName, "default").Str(dbLocationURI, "gs://bucket/wh/default").Build()).Build()
+	if r := hmsCall(t, addr, "create_database", createDB); r.msgType != thrift.REPLY {
+		t.Fatalf("create_database: %+v", r.result)
+	}
+	ml1 := "gs://bucket/wh/default/t1/metadata/00001.metadata.json"
+	if r := hmsCall(t, addr, "create_table", NewBuilder().Struct(1, testTable("default", "t1", ml1)).Build()); r.msgType != thrift.REPLY {
+		t.Fatalf("create_table: %+v", r.result)
+	}
+
+	// alter_table_with_cascade carries the extra bool at field 4; it behaves as
+	// alter_table (cascade does not touch stored partitions — MP9).
+	ml2 := "gs://bucket/wh/default/t1/metadata/00002.metadata.json"
+	alter := NewBuilder().Str(1, "default").Str(2, "t1").Struct(3, testTable("default", "t1", ml2)).Bool(4, true).Build()
+	if r := hmsCall(t, addr, "alter_table_with_cascade", alter); r.msgType != thrift.REPLY || len(r.result.Fields) != 0 {
+		t.Fatalf("alter_table_with_cascade: type=%d result=%+v", r.msgType, r.result)
+	}
+	r := hmsCall(t, addr, "get_table", NewBuilder().Str(1, "default").Str(2, "t1").Build())
+	if m := r.result.Struct(0).MapStrStr(tblParameters); m["metadata_location"] != ml2 {
+		t.Fatalf("cascade alter did not overwrite table: %v", m)
+	}
+
+	// Rename through the cascade path.
+	renamed := testTable("default", "t1_renamed", ml2)
+	alter = NewBuilder().Str(1, "default").Str(2, "t1").Struct(3, renamed).Bool(4, true).Build()
+	if r := hmsCall(t, addr, "alter_table_with_cascade", alter); r.msgType != thrift.REPLY || len(r.result.Fields) != 0 {
+		t.Fatalf("cascade rename: type=%d result=%+v", r.msgType, r.result)
+	}
+	r = hmsCall(t, addr, "get_table", NewBuilder().Str(1, "default").Str(2, "t1_renamed").Build())
+	if r.msgType != thrift.REPLY || r.result.Struct(0) == nil {
+		t.Fatalf("renamed table not found: %+v", r.result)
+	}
+}

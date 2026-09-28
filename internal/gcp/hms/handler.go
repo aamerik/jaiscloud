@@ -297,6 +297,66 @@ func (s *Server) alterTable(ctx context.Context, args *Struct) (*Struct, error) 
 	return voidResult(), nil
 }
 
+// getTableMeta implements get_table_meta(db_patterns, tbl_patterns, tbl_types)
+// -> list<TableMeta>: the pattern-based bulk metadata lookup Hive 3.x clients
+// (HiveMetaStoreClient.getTableMeta) use. It reuses the get_databases/get_tables
+// pattern semantics (matchName) and derives each TableMeta from the stored Table
+// struct (tableType field 12; comments from parameters field 9). tbl_types, when
+// supplied, filters on the exact table type. A missing database/table is skipped;
+// only store failures surface as MetaException (result field 1).
+func (s *Server) getTableMeta(ctx context.Context, args *Struct) (*Struct, error) {
+	dbPattern := args.String(1)
+	tblPattern := args.String(2)
+	var types map[string]bool
+	if l := args.List(3); len(l) > 0 {
+		types = make(map[string]bool, len(l))
+		for _, v := range l {
+			if v.T == thrift.STRING {
+				types[v.Str] = true
+			}
+		}
+	}
+
+	dbs, err := s.store.ListDatabases(ctx)
+	if err != nil {
+		return nil, declared(1, excMetaException, err.Error())
+	}
+	metas := make([]*Struct, 0)
+	for _, db := range dbs {
+		if !matchName(dbPattern, db) {
+			continue
+		}
+		names, err := s.store.ListTables(ctx, db)
+		if err != nil {
+			return nil, declared(1, excMetaException, err.Error())
+		}
+		for _, name := range names {
+			if !matchName(tblPattern, name) {
+				continue
+			}
+			t, err := s.store.GetTable(ctx, db, name)
+			if err != nil {
+				if err == hmsstore.ErrTableNotFound {
+					continue // raced with a concurrent drop
+				}
+				return nil, declared(1, excMetaException, err.Error())
+			}
+			st, err := UnmarshalStruct(t.TableJSON)
+			if err != nil {
+				return nil, declared(1, excMetaException, err.Error())
+			}
+			tableType := st.String(tblTableType)
+			if types != nil && !types[tableType] {
+				continue
+			}
+			metas = append(metas, buildTableMeta(db, name, tableType, st))
+		}
+	}
+	b := NewBuilder()
+	b.ListStruct(0, metas)
+	return b.Build(), nil
+}
+
 func (s *Server) dropTable(ctx context.Context, args *Struct) (*Struct, error) {
 	db := args.String(1)
 	tbl := args.String(2)
@@ -398,7 +458,7 @@ func (s *Server) stubPartitionBoolTrue(_ context.Context, _ *Struct) (*Struct, e
 // --- Unsupported (honest failure, not a silent ACK — F10) ---
 
 // unsupportedMethod returns a TApplicationException(INTERNAL_ERROR) for methods
-// that are out of scope (ACID txn, heartbeat, Hive-3.x table-meta, ...). A
+// that are out of scope (ACID txn, heartbeat, niche partition methods, ...). A
 // TApplicationException (msg type EXCEPTION) is used rather than a declared
 // exception so the failure is unambiguous even for methods with no throws
 // clause (get_open_txns, etc.).
