@@ -452,6 +452,40 @@ func TestFunctionsInstanceConfig(t *testing.T) {
 	require.Contains(t, string(body), "INVALID_ARGUMENT")
 }
 
+// TestFunctionsConcurrencyAdmission covers FP1 over the wire: a function whose
+// v2 ServiceConfig caps instances at one still serves sequential synchronous
+// invocations (v1 :call and the synthesized HTTPS trigger) — the admission gate
+// only throttles when a configured limit is actually exceeded, never a lone
+// invocation. The throttling path itself is covered by the admission unit tests
+// and the Docker e2e test (the mock executor is instant here, so a wire-level
+// throttle is not deterministic).
+func TestFunctionsConcurrencyAdmission(t *testing.T) {
+	resetState(t)
+
+	const project = "proj"
+	const location = "us-central1"
+	v2base := "/v2/projects/" + project + "/locations/" + location + "/functions"
+	v1base := "/v1/projects/" + project + "/locations/" + location + "/functions"
+	triggerHost := location + "-" + project + ".cloudfunctions.net"
+
+	resp, body := do(t, "POST", v2base+"?functionId=cc",
+		[]byte(`{"buildConfig":{"runtime":"nodejs22","entryPoint":"h"},`+
+			`"serviceConfig":{"maxInstanceCount":1,"maxInstanceRequestConcurrency":1}}`),
+		map[string]string{"Content-Type": "application/json"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create: %s", body)
+
+	for i := 0; i < 3; i++ {
+		resp, body = do(t, "POST", v1base+"/cc:call",
+			[]byte(`{"data":"ping"}`), map[string]string{"Content-Type": "application/json"})
+		require.Equal(t, http.StatusOK, resp.StatusCode, "call %d: %s", i, body)
+		require.Equal(t, "ping", jsonMap(t, body)["result"], "call %d", i)
+	}
+
+	resp, body = doHost(t, "POST", "/cc", triggerHost, []byte("ping"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, "trigger: %s", body)
+	require.Equal(t, "ping", string(body))
+}
+
 // doHost performs an HTTP request with an explicit Host header. It is used to
 // invoke a deployed function at its synthesized HTTPS-trigger URL
 // ({location}-{project}.cloudfunctions.net), which is host-scoped rather than

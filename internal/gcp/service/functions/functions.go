@@ -210,6 +210,17 @@ func (s *Service) CallFunction(ctx context.Context, project, location, id, data 
 	if err != nil {
 		return "", "", "", err
 	}
+	// Admission gate (FP1): reserve an in-flight slot against the function's
+	// configured instance/concurrency capacity and the project-wide account cap
+	// before doing any work. Every invocation entry point (REST/gRPC
+	// CallFunction, the HTTPS trigger, and event delivery) funnels through here,
+	// so the two transports and the delivery engine cannot drift. Throttling is
+	// RESOURCE_EXHAUSTED / HTTP 429.
+	release, err := s.gate.acquire(project, project+"/"+location+"/"+id, effectiveConcurrencyLimit(f), s.accountConcurrency)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer release()
 	timeout, terr := time.ParseDuration(f.Timeout)
 	if terr != nil || timeout <= 0 {
 		timeout = defaultFunctionTimeout
