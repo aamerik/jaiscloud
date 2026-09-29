@@ -5,15 +5,18 @@
 // messages and the core's typed API, and maps core errors to gRPC status codes.
 // It owns no business logic and no state beyond its default project.
 //
-// Cluster create/update/start/stop/delete and SubmitJobAsOperation return a
-// google.longrunning.Operation whose metadata and response are packed as typed
-// Any protos, so the generated client's Wait observes the result without
-// polling. WorkflowTemplateService, BatchController, Session* and
+// Cluster create/update/start/stop/delete are asynchronous: they return a
+// google.longrunning.Operation (done=false) whose metadata is packed as a typed
+// Any, and the client's Poll/Wait resolves it through the emulator's
+// google.longrunning.Operations service (see ResolveOperation), which drives the
+// core's lazy cluster state machine. SubmitJobAsOperation packs a typed Job as
+// its response. WorkflowTemplateService, BatchController, Session* and
 // AutoscalingPolicy are deliberately not registered.
 package dataproc
 
 import (
 	"context"
+	"strings"
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -193,6 +196,41 @@ func (s *Service) DeleteJob(ctx context.Context, req *dataprocpb.DeleteJobReques
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// ResolveOperation implements the google.longrunning.Operations resolver for
+// Dataproc. Cluster mutations are the emulator's only asynchronous operations,
+// and their operation names are region-scoped
+// (projects/{p}/regions/{r}/operations/{id}); a name outside that shape is not
+// ours (handled=false) so the generic terminal stub keeps serving it. Resolving
+// drives the core's lazy cluster state machine via core.GetOperation.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	project, region, id, ok := parseOperationName(name)
+	if !ok {
+		return nil, false, nil
+	}
+	op, err := s.core.GetOperation(ctx, project, region, id)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	proto, err := operationToProto(op)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	return proto, true, nil
+}
+
+// parseOperationName parses a Dataproc region operation name
+// projects/{project}/regions/{region}/operations/{id}.
+func parseOperationName(name string) (project, region, id string, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "regions" || parts[4] != "operations" {
+		return "", "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
 }
 
 // compile-time assertions that Service implements both generated servers.

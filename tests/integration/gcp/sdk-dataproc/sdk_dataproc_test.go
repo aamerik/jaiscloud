@@ -10,6 +10,7 @@ package sdk_dataproc_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -44,7 +45,8 @@ func TestSDKDataproc(t *testing.T) {
 	const region = "us-central1"
 	clusterName := unique("c")
 
-	// CreateCluster returns a done LRO in the emulator.
+	// CreateCluster returns an in-flight LRO; it completes when polled through
+	// operations.get.
 	op, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
 		ProjectId:   project,
 		ClusterName: clusterName,
@@ -54,8 +56,15 @@ func TestSDKDataproc(t *testing.T) {
 		},
 	}).Do()
 	require.NoError(t, err)
-	require.True(t, op.Done)
+	require.False(t, op.Done)
 	require.NotEmpty(t, op.Name)
+
+	createdOp := pollOperation(t, svc, op.Name)
+	require.True(t, createdOp.Done)
+	var created dataproc.Cluster
+	require.NoError(t, json.Unmarshal(createdOp.Response, &created))
+	require.Equal(t, clusterName, created.ClusterName)
+	require.Equal(t, "RUNNING", created.Status.State)
 
 	// GetCluster returns the logical cluster (created synchronously).
 	cluster, err := svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
@@ -105,12 +114,28 @@ func TestSDKDataproc(t *testing.T) {
 	require.Equal(t, "ERROR", hadoop.Status.State)
 	require.Contains(t, hadoop.Status.Details, "not supported")
 
-	// DeleteCluster returns a done LRO.
+	// DeleteCluster returns an in-flight LRO that completes when polled.
 	del, err := svc.Projects.Regions.Clusters.Delete(project, region, clusterName).Do()
 	require.NoError(t, err)
-	require.True(t, del.Done)
+	require.False(t, del.Done)
+	require.True(t, pollOperation(t, svc, del.Name).Done)
 
 	// The cluster is gone.
 	_, err = svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
 	require.Error(t, err)
+}
+
+// pollOperation polls operations.get until the named operation reports done.
+func pollOperation(t *testing.T, svc *dataproc.Service, name string) *dataproc.Operation {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := svc.Projects.Regions.Operations.Get(name).Do()
+		require.NoError(t, err)
+		if got.Done {
+			return got
+		}
+		require.False(t, time.Now().After(deadline), "operation %s did not complete", name)
+		time.Sleep(50 * time.Millisecond)
+	}
 }

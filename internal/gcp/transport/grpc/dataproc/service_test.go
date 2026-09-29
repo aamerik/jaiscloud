@@ -29,12 +29,14 @@ func createClusterReq(id string) *dataprocpb.CreateClusterRequest {
 
 func TestCreateCluster_TypedOperation(t *testing.T) {
 	s := newTestService()
-	op, err := s.CreateCluster(context.Background(), createClusterReq("c1"))
+	ctx := context.Background()
+	op, err := s.CreateCluster(ctx, createClusterReq("c1"))
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	if !op.GetDone() {
-		t.Fatal("operation not done")
+	// Cluster create is asynchronous: the returned operation is in flight.
+	if op.GetDone() {
+		t.Fatal("create operation unexpectedly done")
 	}
 	var meta dataprocpb.ClusterOperationMetadata
 	if err := op.GetMetadata().UnmarshalTo(&meta); err != nil {
@@ -43,8 +45,17 @@ func TestCreateCluster_TypedOperation(t *testing.T) {
 	if meta.GetClusterName() != "c1" || meta.GetOperationType() != "CREATE" {
 		t.Fatalf("metadata = %+v", &meta)
 	}
+	// Polling through the longrunning Operations resolver advances the cluster
+	// and completes the operation with the typed Cluster response.
+	polled, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	if !polled.GetDone() {
+		t.Fatal("polled operation not done")
+	}
 	var cl dataprocpb.Cluster
-	if err := op.GetResponse().UnmarshalTo(&cl); err != nil {
+	if err := polled.GetResponse().UnmarshalTo(&cl); err != nil {
 		t.Fatalf("response UnmarshalTo: %v", err)
 	}
 	if cl.GetClusterName() != "c1" || cl.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
@@ -98,8 +109,13 @@ func TestUpdateCluster_LabelsMask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateCluster: %v", err)
 	}
+	// The update is asynchronous: poll to settle the UPDATING transition.
+	polled, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
 	var cl dataprocpb.Cluster
-	if err := op.GetResponse().UnmarshalTo(&cl); err != nil {
+	if err := polled.GetResponse().UnmarshalTo(&cl); err != nil {
 		t.Fatalf("response UnmarshalTo: %v", err)
 	}
 	if cl.GetLabels()["env"] != "prod" {
@@ -117,8 +133,20 @@ func TestDeleteCluster_EmptyResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
 	}
-	if op.GetResponse().GetTypeUrl() != "type.googleapis.com/google.protobuf.Empty" {
-		t.Fatalf("delete response type = %q", op.GetResponse().GetTypeUrl())
+	if op.GetDone() {
+		t.Fatal("delete operation unexpectedly done")
+	}
+	// Polling settles the DELETING transition, removes the cluster, and packs
+	// the empty response.
+	polled, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	if !polled.GetDone() {
+		t.Fatal("polled delete operation not done")
+	}
+	if polled.GetResponse().GetTypeUrl() != "type.googleapis.com/google.protobuf.Empty" {
+		t.Fatalf("delete response type = %q", polled.GetResponse().GetTypeUrl())
 	}
 	if _, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "c1"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("GetCluster after delete = %v, want NotFound", err)

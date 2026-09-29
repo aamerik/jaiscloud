@@ -48,19 +48,41 @@ func TestCreateCluster_LRO(t *testing.T) {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 	op := resp.Data
-	if op["done"] != true {
-		t.Fatalf("expected done=true, got %v", op["done"])
+	// Create is asynchronous: the create response is an in-flight operation.
+	if op["done"] != false {
+		t.Fatalf("expected done=false on create, got %v", op["done"])
 	}
 	meta, _ := op["metadata"].(map[string]any)
 	if meta["@type"] != "type.googleapis.com/google.cloud.dataproc.v1.ClusterOperationMetadata" {
 		t.Fatalf("unexpected metadata @type: %v", meta["@type"])
 	}
+	if status, _ := meta["status"].(map[string]any); status["state"] != "RUNNING" {
+		t.Fatalf("operation status = %v, want RUNNING", meta["status"])
+	}
 	// name should be projects/{p}/regions/{r}/operations/{id} (id is random).
-	if name, _ := op["name"].(string); indexOf(name, "/regions/us-central1/operations/") < 0 {
+	name, _ := op["name"].(string)
+	if indexOf(name, "/regions/us-central1/operations/") < 0 {
 		t.Fatalf("operation name malformed: %q", name)
 	}
+	opID := name[indexOf(name, "/operations/")+len("/operations/"):]
 
-	// GetCluster returns the cluster (created synchronously).
+	// Polling the operation advances the cluster to RUNNING and completes it.
+	polled, err := p.GetOperation(ctx, testNR(map[string]any{"region": "us-central1", "operationId": opID}))
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if polled.Data["done"] != true {
+		t.Fatalf("expected done=true after poll, got %v", polled.Data)
+	}
+	response, _ := polled.Data["response"].(map[string]any)
+	if response["clusterName"] != "c1" {
+		t.Fatalf("operation response = %v, want the cluster", polled.Data["response"])
+	}
+	if status, _ := response["status"].(map[string]any); status["state"] != "RUNNING" {
+		t.Fatalf("polled cluster state = %v, want RUNNING", status["state"])
+	}
+
+	// GetCluster returns the settled cluster.
 	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"}))
 	if err != nil {
 		t.Fatalf("GetCluster: %v", err)

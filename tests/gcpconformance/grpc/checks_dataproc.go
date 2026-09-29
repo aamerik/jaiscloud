@@ -117,8 +117,10 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("CreateCluster: %w", err)
 	}
-	if !op.Done() {
-		return fmt.Errorf("CreateCluster operation not done")
+	// Cluster create is asynchronous: the operation is returned in flight and
+	// completes only when polled through google.longrunning.Operations.
+	if op.Done() {
+		return fmt.Errorf("CreateCluster completed inline; want an in-flight LRO")
 	}
 	meta, err := op.Metadata()
 	if err != nil {
@@ -126,6 +128,9 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	}
 	if meta.GetClusterName() != id || meta.GetOperationType() != "CREATE" {
 		return fmt.Errorf("operation metadata = %+v", meta)
+	}
+	if _, err := op.Poll(ctx); err != nil {
+		return fmt.Errorf("poll create operation: %w", err)
 	}
 	cluster, err := op.Wait(ctx)
 	if err != nil {
@@ -287,8 +292,12 @@ func checkDPDeleteCluster(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("DeleteCluster: %w", err)
 	}
-	if !delOp.Done() {
-		return fmt.Errorf("delete operation not done")
+	// Delete is asynchronous as well: poll the operation to completion.
+	if delOp.Done() {
+		return fmt.Errorf("DeleteCluster completed inline; want an in-flight LRO")
+	}
+	if err := delOp.Poll(ctx); err != nil {
+		return fmt.Errorf("poll delete operation: %w", err)
 	}
 	if err := delOp.Wait(ctx); err != nil {
 		return fmt.Errorf("delete wait: %w", err)

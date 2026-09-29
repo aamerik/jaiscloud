@@ -364,6 +364,16 @@ func startCmd() *cobra.Command {
 					gcpEmulatorCfg.GCSEndpoint = v
 				}
 				dataprocOpts = append(dataprocOpts, dataproccore.WithGCPEmulator(gcpEmulatorCfg))
+				// Cluster mutations are asynchronous and settle lazily on a read.
+				// The default (zero) settles on the first read; a positive value
+				// keeps clusters in CREATING/DELETING long enough to observe.
+				if v := os.Getenv("JAISCLOUD_DATAPROC_CLUSTER_READY_DELAY"); v != "" {
+					if d, err := time.ParseDuration(v); err != nil {
+						slog.Warn("dataproc: invalid JAISCLOUD_DATAPROC_CLUSTER_READY_DELAY", "value", v, "err", err)
+					} else {
+						dataprocOpts = append(dataprocOpts, dataproccore.WithClusterReadyDelay(d))
+					}
+				}
 				if sparkMode == "k8s" {
 					sparkImage := cfg.K8sSparkImage
 					if sparkImage == "" {
@@ -616,10 +626,14 @@ func startCmd() *cobra.Command {
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}
-				// google.longrunning.Operations is a stub: the emulator completes
-				// operations synchronously, so SDK init paths that poll Operations
-				// observe a terminal (done=true) state instead of erroring.
-				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New())
+				// google.longrunning.Operations serves every service: it reports
+				// synchronous operations as terminal and delegates genuinely
+				// asynchronous ones (Dataproc cluster mutations) to a resolver.
+				opsResolvers := []grpcoperations.Resolver{}
+				if transports.GRPCFor("dataproc") && dataprocCore != nil {
+					opsResolvers = append(opsResolvers, dataprocGRPC)
+				}
+				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New(opsResolvers...))
 			}
 
 			adminHandler := admin.NewHandler()
