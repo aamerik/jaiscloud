@@ -49,10 +49,19 @@ func ClusterJSON(c dpstore.Cluster) map[string]any {
 	if c.ClusterUUID != "" {
 		out["clusterUuid"] = c.ClusterUUID
 	}
+	// A GKE-backed cluster has a virtualClusterConfig and no GCE config, and a
+	// GCE cluster the reverse. An empty stored object (e.g. the Postgres JSONB
+	// "{}" sentinel) is treated as unset, so neither transport invents config:{}.
 	if len(c.Config) > 0 {
 		var config map[string]any
-		if json.Unmarshal(c.Config, &config) == nil && config != nil {
+		if json.Unmarshal(c.Config, &config) == nil && len(config) > 0 {
 			out["config"] = config
+		}
+	}
+	if len(c.VirtualClusterConfig) > 0 {
+		var vcc map[string]any
+		if json.Unmarshal(c.VirtualClusterConfig, &vcc) == nil && len(vcc) > 0 {
+			out["virtualClusterConfig"] = vcc
 		}
 	}
 	if c.Labels != nil {

@@ -17,12 +17,14 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected ErrNoSuchCluster, got %v", err)
 	}
 
+	const vccJSON = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}}}`
 	c := Cluster{
-		Name:        "my-cluster",
-		Config:      []byte(`{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}`),
-		Labels:      map[string]string{"env": "dev"},
-		Status:      ClusterStatus{State: "CREATING"},
-		ClusterUUID: "uuid-1",
+		Name:                 "my-cluster",
+		Config:               []byte(`{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}`),
+		VirtualClusterConfig: []byte(vccJSON),
+		Labels:               map[string]string{"env": "dev"},
+		Status:               ClusterStatus{State: "CREATING"},
+		ClusterUUID:          "uuid-1",
 	}
 	if err := s.CreateCluster(ctx, "proj", "us-central1", c); err != nil {
 		t.Fatalf("create cluster: %v", err)
@@ -40,6 +42,9 @@ func runStoreTests(t *testing.T, s Store) {
 	}
 	if string(got.Config) != `{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}` {
 		t.Fatalf("config not verbatim: %s", got.Config)
+	}
+	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vccJSON {
+		t.Fatalf("virtualClusterConfig not verbatim: %s", got.VirtualClusterConfig)
 	}
 
 	got.Status.State = "RUNNING"
@@ -144,10 +149,24 @@ func TestMemoryStoreReset(t *testing.T) {
 	}
 }
 
+func TestClusterIsGKEBacked(t *testing.T) {
+	if (Cluster{}).IsGKEBacked() {
+		t.Fatal("empty cluster must not be GKE-backed")
+	}
+	if (Cluster{VirtualClusterConfig: []byte(`{}`)}).IsGKEBacked() {
+		t.Fatal("empty virtualClusterConfig must not be GKE-backed")
+	}
+	if !(Cluster{VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{}}`)}).IsGKEBacked() {
+		t.Fatal("cluster with virtualClusterConfig should be GKE-backed")
+	}
+}
+
 func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
-	_ = s.CreateCluster(ctx, "p", "r", Cluster{Name: "c", Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}})
+	const vcc = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}}}`
+	_ = s.CreateCluster(ctx, "p", "r", Cluster{Name: "c", Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}, VirtualClusterConfig: []byte(vcc)})
+	_ = s.CreateCluster(ctx, "p", "r", Cluster{Name: "gce", Status: ClusterStatus{State: "RUNNING"}})
 	_ = s.CreateJob(ctx, "p", "r", Job{JobID: "j", Type: "sparkJob", TypeJob: []byte(`{"mainJarFileUri":"gs://b/a.jar"}`)})
 	_ = s.CreateOperation(ctx, "p", "r", Operation{ID: "op", Metadata: `{"@type":"m"}`, Response: `{"x":1}`})
 
@@ -163,6 +182,12 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	got, err := s2.GetCluster(ctx, "p", "r", "c")
 	if err != nil || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster lost after restore: %v %+v", err, got)
+	}
+	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vcc {
+		t.Fatalf("virtualClusterConfig lost after restore: %s", got.VirtualClusterConfig)
+	}
+	if gce, _ := s2.GetCluster(ctx, "p", "r", "gce"); gce.IsGKEBacked() {
+		t.Fatal("GCE cluster became GKE-backed after restore")
 	}
 	gotJob, err := s2.GetJob(ctx, "p", "r", "j")
 	if err != nil || string(gotJob.TypeJob) != `{"mainJarFileUri":"gs://b/a.jar"}` {

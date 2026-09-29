@@ -516,6 +516,61 @@ func TestOperationTTLSweep(t *testing.T) {
 	}
 }
 
+// TestCreateCluster_GKEVirtualClusterConfig verifies the REST transport parses
+// a virtualClusterConfig from the create body, renders it on get, and rejects a
+// malformed one with 400 InvalidArgument.
+func TestCreateCluster_GKEVirtualClusterConfig(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	vcc := map[string]any{
+		"stagingBucket": "dataproc-staging-proj",
+		"kubernetesClusterConfig": map[string]any{
+			"gkeClusterConfig": map[string]any{
+				"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/gke-1",
+			},
+		},
+	}
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "gke-1",
+			"virtualClusterConfig": vcc,
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "gke-1"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	gotVCC, _ := c.Data["virtualClusterConfig"].(map[string]any)
+	if gotVCC == nil {
+		t.Fatalf("virtualClusterConfig missing: %v", c.Data)
+	}
+	if _, ok := c.Data["config"]; ok {
+		t.Fatalf("GKE cluster must not render a GCE config: %v", c.Data)
+	}
+	kcc, _ := gotVCC["kubernetesClusterConfig"].(map[string]any)
+	gke, _ := kcc["gkeClusterConfig"].(map[string]any)
+	if gke["gkeClusterTarget"] != "projects/proj/locations/us-central1/clusters/gke-1" {
+		t.Fatalf("gkeClusterTarget lost: %v", gotVCC)
+	}
+
+	_, err = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":            "proj",
+			"clusterName":          "bad-gke",
+			"virtualClusterConfig": map[string]any{"stagingBucket": "b"},
+		},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("malformed virtualClusterConfig: expected 400 InvalidArgument, got %v", err)
+	}
+}
+
 // TestJobSubstateTerminalOmitted verifies a terminal job response omits
 // substate (every defined dataproc.v1 substate applies only to RUNNING) while
 // the RUNNING entry retained in statusHistory keeps QUEUED.

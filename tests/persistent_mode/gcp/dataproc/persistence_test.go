@@ -210,6 +210,15 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("create cluster: got HTTP %d body %s", code, body)
 	}
 
+	// ── Create a GKE-backed cluster (virtualClusterConfig) ───────────────────
+	const gkeClusterName = "exp-gke"
+	code, body = doRequest(t, host, "POST", base+"/clusters",
+		[]byte(`{"projectId":"`+project+`","clusterName":"`+gkeClusterName+`","virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1"}}}}`),
+		"application/json")
+	if code != http.StatusOK {
+		t.Fatalf("create GKE cluster: got HTTP %d body %s", code, body)
+	}
+
 	// ── Submit a mock-mode Spark job (completes synchronously → DONE) ────────
 	code, body = doRequest(t, host, "POST", base+"/jobs:submit",
 		[]byte(`{"job":{"reference":{"projectId":"`+project+`","jobId":"`+doneJob+`"},"placement":{"clusterName":"`+clusterName+`"},"sparkJob":{"mainJarFileUri":"gs://b/a.jar","mainClass":"Main"}}}`),
@@ -269,6 +278,19 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("cluster state after import: got %q body %s", state, body)
 	}
 
+	// ── Verify the restored GKE cluster's virtualClusterConfig ───────────────
+	code, body = doRequest(t, host, "GET", base+"/clusters/"+gkeClusterName, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("get GKE cluster after import: got HTTP %d body %s", code, body)
+	}
+	gkeVCC, _ := jsonObj(t, body)["virtualClusterConfig"].(map[string]any)
+	if gkeVCC == nil {
+		t.Fatalf("virtualClusterConfig lost after import: body %s", body)
+	}
+	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != "projects/proj/locations/us-central1/clusters/gke-1" {
+		t.Fatalf("gkeClusterTarget lost after import: got %q body %s", target, body)
+	}
+
 	// ── Verify restored jobs ──────────────────────────────────────────────────
 	code, body = doRequest(t, host, "GET", base+"/jobs/"+doneJob, nil, "")
 	if code != http.StatusOK {
@@ -295,8 +317,12 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("list clusters after import: got HTTP %d body %s", code, body)
 	}
 	clusters, _ := jsonObj(t, body)["clusters"].([]any)
-	if len(clusters) != 1 || strField(clusters[0].(map[string]any), "clusterName") != clusterName {
-		t.Fatalf("list clusters after import: expected [%s], got %v", clusterName, clusters)
+	names := map[string]bool{}
+	for _, cl := range clusters {
+		names[strField(cl.(map[string]any), "clusterName")] = true
+	}
+	if len(clusters) != 2 || !names[clusterName] || !names[gkeClusterName] {
+		t.Fatalf("list clusters after import: expected [%s %s], got %v", clusterName, gkeClusterName, clusters)
 	}
 
 	code, body = doRequest(t, host, "GET", base+"/jobs", nil, "")

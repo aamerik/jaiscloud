@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -32,17 +33,32 @@ type ClusterStatus struct {
 // object (gceClusterConfig, masterConfig/workerConfig/secondaryWorkerConfig,
 // softwareConfig, initializationActions, ...) stored verbatim as JSON so
 // read-back matches what the caller sent.
+//
+// VirtualClusterConfig is the dataproc.v1.VirtualClusterConfig wire object
+// (kubernetesClusterConfig, auxiliaryServicesConfig, stagingBucket, ...) for a
+// Dataproc-on-GKE cluster, also stored verbatim. It is mutually exclusive with
+// Config in the API: a GKE-backed cluster has a VirtualClusterConfig and no
+// GCE ClusterConfig.
 type Cluster struct {
-	ProjectID     string            `json:"projectId"`
-	Region        string            `json:"region"`
-	Name          string            `json:"clusterName"`
-	Config        json.RawMessage   `json:"config,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	Status        ClusterStatus     `json:"status"`
-	StatusHistory []ClusterStatus   `json:"statusHistory,omitempty"`
-	ClusterUUID   string            `json:"clusterUuid,omitempty"`
-	CreateTime    time.Time         `json:"createTime"`
-	UpdateTime    time.Time         `json:"updateTime"`
+	ProjectID            string            `json:"projectId"`
+	Region               string            `json:"region"`
+	Name                 string            `json:"clusterName"`
+	Config               json.RawMessage   `json:"config,omitempty"`
+	VirtualClusterConfig json.RawMessage   `json:"virtualClusterConfig,omitempty"`
+	Labels               map[string]string `json:"labels,omitempty"`
+	Status               ClusterStatus     `json:"status"`
+	StatusHistory        []ClusterStatus   `json:"statusHistory,omitempty"`
+	ClusterUUID          string            `json:"clusterUuid,omitempty"`
+	CreateTime           time.Time         `json:"createTime"`
+	UpdateTime           time.Time         `json:"updateTime"`
+}
+
+// IsGKEBacked reports whether the cluster was created with a
+// virtualClusterConfig (a Dataproc-on-GKE cluster) rather than a GCE
+// ClusterConfig. It is derived from the stored config, not persisted.
+func (c Cluster) IsGKEBacked() bool {
+	s := strings.TrimSpace(string(c.VirtualClusterConfig))
+	return s != "" && s != "{}" && s != "null"
 }
 
 // JobStatus mirrors dataproc.v1.JobStatus.
