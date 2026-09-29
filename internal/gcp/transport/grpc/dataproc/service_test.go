@@ -167,7 +167,25 @@ func submitReq(jobID string) *dataprocpb.SubmitJobRequest {
 	}
 }
 
-func TestSubmitJob_MockDONE(t *testing.T) {
+// pollJobTerminal reads a job through the gRPC surface until it reaches a
+// terminal state, exercising the lazy job state machine one hop per read.
+func pollJobTerminal(t *testing.T, ctx context.Context, s *Service, jobID string) *dataprocpb.Job {
+	t.Helper()
+	for i := 0; i < 16; i++ {
+		j, err := s.GetJob(ctx, &dataprocpb.GetJobRequest{ProjectId: "proj", Region: "us-central1", JobId: jobID})
+		if err != nil {
+			t.Fatalf("GetJob: %v", err)
+		}
+		switch j.GetStatus().GetState() {
+		case dataprocpb.JobStatus_DONE, dataprocpb.JobStatus_ERROR, dataprocpb.JobStatus_CANCELLED:
+			return j
+		}
+	}
+	t.Fatalf("job %s did not reach a terminal state", jobID)
+	return nil
+}
+
+func TestSubmitJob_MockProgression(t *testing.T) {
 	s := newTestService()
 	ctx := context.Background()
 	if _, err := s.CreateCluster(ctx, createClusterReq("c1")); err != nil {
@@ -177,11 +195,14 @@ func TestSubmitJob_MockDONE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitJob: %v", err)
 	}
-	if j.GetStatus().GetState() != dataprocpb.JobStatus_DONE {
-		t.Fatalf("job state = %v, want DONE", j.GetStatus().GetState())
+	if j.GetStatus().GetState() != dataprocpb.JobStatus_PENDING {
+		t.Fatalf("job state = %v, want PENDING", j.GetStatus().GetState())
 	}
 	if j.GetReference().GetJobId() != "j1" {
 		t.Fatalf("job reference = %+v", j.GetReference())
+	}
+	if got := pollJobTerminal(t, ctx, s, "j1").GetStatus().GetState(); got != dataprocpb.JobStatus_DONE {
+		t.Fatalf("job state = %v, want DONE", got)
 	}
 }
 
@@ -195,8 +216,8 @@ func TestSubmitJobAsOperation_TypedJobResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitJobAsOperation: %v", err)
 	}
-	if !op.GetDone() {
-		t.Fatal("mock-mode submit operation should be done")
+	if op.GetDone() {
+		t.Fatal("mock-mode submit operation should be in flight")
 	}
 	var meta dataprocpb.JobMetadata
 	if err := op.GetMetadata().UnmarshalTo(&meta); err != nil {
@@ -204,6 +225,18 @@ func TestSubmitJobAsOperation_TypedJobResponse(t *testing.T) {
 	}
 	if meta.GetJobId() != "j1" {
 		t.Fatalf("metadata = %+v", &meta)
+	}
+	// Polling through the longrunning Operations resolver advances the job and
+	// completes the operation with the typed Job response.
+	for i := 0; i < 16 && !op.GetDone(); i++ {
+		polled, handled, pollErr := s.ResolveOperation(ctx, op.GetName())
+		if pollErr != nil || !handled {
+			t.Fatalf("ResolveOperation: handled=%v err=%v", handled, pollErr)
+		}
+		op = polled
+	}
+	if !op.GetDone() {
+		t.Fatal("submit operation never completed")
 	}
 	var jb dataprocpb.Job
 	if err := op.GetResponse().UnmarshalTo(&jb); err != nil {
@@ -247,6 +280,8 @@ func TestDeleteJob_TerminalSucceeds(t *testing.T) {
 	if _, err := s.SubmitJob(ctx, submitReq("j1")); err != nil {
 		t.Fatalf("SubmitJob: %v", err)
 	}
+	// A mock-mode job is only deletable once it has reached a terminal state.
+	pollJobTerminal(t, ctx, s, "j1")
 	if _, err := s.DeleteJob(ctx, &dataprocpb.DeleteJobRequest{ProjectId: "proj", Region: "us-central1", JobId: "j1"}); err != nil {
 		t.Fatalf("DeleteJob terminal: %v", err)
 	}

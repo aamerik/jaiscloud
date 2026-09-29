@@ -40,6 +40,25 @@ func newK8sProvider(t *testing.T, client *fake.Clientset) *Service {
 	return p
 }
 
+// advanceJobToTerminal reads a job until it reaches a terminal state,
+// exercising the lazy job state machine end-to-end. With the default zero delay
+// each read settles one hop.
+func advanceJobToTerminal(t *testing.T, p *Service, project, region, jobID string) dataprocstore.Job {
+	t.Helper()
+	ctx := context.Background()
+	var j dataprocstore.Job
+	for i := 0; i < 16; i++ {
+		got, err := p.GetJob(ctx, project, region, jobID)
+		require.NoError(t, err)
+		j = got
+		if jobTerminal(j.Status.State) {
+			return j
+		}
+	}
+	t.Fatalf("job %s did not reach a terminal state (last %q)", jobID, j.Status.State)
+	return j
+}
+
 func newTestJob() dataprocstore.Job {
 	return dataprocstore.Job{
 		ProjectID:            "proj",
@@ -300,11 +319,11 @@ func TestCancelJob_TransitionsToCancelled(t *testing.T) {
 	cancelled, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
 	status, _ := JobJSON(cancelled)["status"].(map[string]any)
-	require.Equal(t, "CANCELLED", status["state"])
+	require.Equal(t, "CANCEL_PENDING", status["state"])
 
-	got, err := p.store.GetJob(context.Background(), j.ProjectID, j.Region, j.JobID)
-	require.NoError(t, err)
-	require.Equal(t, "CANCELLED", got.Status.State)
+	// Reads settle the cancel progression: CANCEL_STARTED -> CANCELLED.
+	final := advanceJobToTerminal(t, p, j.ProjectID, j.Region, j.JobID)
+	require.Equal(t, "CANCELLED", final.Status.State)
 
 	select {
 	case <-done:
@@ -374,11 +393,13 @@ func TestCancelJob_CompletesSubmitOperation(t *testing.T) {
 
 	cancelled, err := p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	require.Equal(t, "CANCELLED", JobJSON(cancelled)["status"].(map[string]any)["state"])
+	require.Equal(t, "CANCEL_PENDING", JobJSON(cancelled)["status"].(map[string]any)["state"])
 
+	// The lazy cancel progression reaches CANCELLED and closes the LRO.
+	advanceJobToTerminal(t, p, j.ProjectID, j.Region, j.JobID)
 	op, err := p.store.GetOperation(ctx, j.ProjectID, j.Region, j.JobID)
 	require.NoError(t, err)
-	require.True(t, op.Done, "operation must be closed once CancelJob transitions the job to CANCELLED")
+	require.True(t, op.Done, "operation must be closed once the cancel progression reaches CANCELLED")
 }
 
 // TestFinishJobDoesNotResurrectCancelledJob deterministically reproduces the
@@ -416,9 +437,15 @@ func TestCancelJobVsFinishJobConcurrent_ResponseMatchesFinalState(t *testing.T) 
 	require.NoError(t, err)
 
 	respState := JobJSON(cancelJob)["status"].(map[string]any)["state"]
-	if respState == "CANCELLED" {
+	switch respState {
+	case "CANCEL_PENDING":
 		require.Equal(t, "CANCELLED", got.Status.State,
-			"CancelJob told the client CANCELLED, but the job later resurrected to %q", got.Status.State)
+			"CancelJob started the cancel progression, but the job later resurrected to %q", got.Status.State)
+	case "DONE":
+		require.Equal(t, "DONE", got.Status.State,
+			"finishJob won the race, but the job later became %q", got.Status.State)
+	default:
+		require.Failf(t, "unexpected CancelJob response state", "state = %q", respState)
 	}
 
 	op, err := p.store.GetOperation(ctx, j.ProjectID, j.Region, j.JobID)
@@ -469,7 +496,8 @@ func TestCancelJob_ConcurrentCancels_SingleTerminal(t *testing.T) {
 		t.Fatal("runJob did not return after cancellation")
 	}
 
-	got, err := p.store.GetJob(ctx, j.ProjectID, j.Region, j.JobID)
-	require.NoError(t, err)
-	require.Equal(t, "CANCELLED", got.Status.State)
+	// The N concurrent cancels collapse to a single CANCEL_PENDING write; reads
+	// then settle it to a single terminal CANCELLED.
+	final := advanceJobToTerminal(t, p, j.ProjectID, j.Region, j.JobID)
+	require.Equal(t, "CANCELLED", final.Status.State)
 }

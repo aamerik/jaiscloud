@@ -104,6 +104,20 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("get op: %v %+v", err, gotOp)
 	}
 
+	// UpdateOperationAtomic performs a locked get-mutate-set cycle.
+	atomic, err := s.UpdateOperationAtomic(ctx, "proj", "us-central1", "op-1", func(cur Operation) (Operation, error) {
+		cur.Metadata = `{"@type":"y"}`
+		return cur, nil
+	})
+	if err != nil || atomic.Metadata != `{"@type":"y"}` {
+		t.Fatalf("UpdateOperationAtomic = %+v, %v", atomic, err)
+	}
+	if _, err := s.UpdateOperationAtomic(ctx, "proj", "us-central1", "nope", func(cur Operation) (Operation, error) {
+		return cur, nil
+	}); err != ErrNoSuchOperation {
+		t.Fatalf("UpdateOperationAtomic(missing) = %v, want ErrNoSuchOperation", err)
+	}
+
 	// Operation retention sweep: only operations older than the cutoff go.
 	if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op-old", Done: true, CreateTime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
 		t.Fatalf("create old op: %v", err)

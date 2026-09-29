@@ -134,8 +134,10 @@ func jobToStore(project, region string, in JobInput) dpstore.Job {
 		Type:                 in.Type,
 		TypeJob:              in.TypeJob,
 		Labels:               in.Labels,
-		Status:               dpstore.JobStatus{State: "RUNNING", StateStartTime: now, Substate: substateRunning},
-		JobUUID:              randomHex(32),
-		CreateTime:           now,
+		// A submitted job is born PENDING and advances through SETUP_DONE/
+		// RUNNING to a terminal state (see jobstate.go).
+		Status:     dpstore.JobStatus{State: jobStatePending, StateStartTime: now},
+		JobUUID:    randomHex(32),
+		CreateTime: now,
 	}
 }

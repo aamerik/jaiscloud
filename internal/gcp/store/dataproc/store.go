@@ -138,6 +138,12 @@ type Store interface {
 	CreateOperation(ctx context.Context, projectID, region string, op Operation) error
 	GetOperation(ctx context.Context, projectID, region, id string) (Operation, error)
 	UpdateOperation(ctx context.Context, projectID, region string, op Operation) error
+	// UpdateOperationAtomic performs a locked get-mutate-set cycle: mutate
+	// receives the current operation and returns the version to persist, or an
+	// error to abort. Used by the submit-operation poll so refreshing an
+	// in-flight operation's metadata can't clobber a concurrent poll that just
+	// completed it (which would resurrect a done operation).
+	UpdateOperationAtomic(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error)
 	// DeleteStaleOperations removes completed operations whose CreateTime
 	// predates cutoff (across every project/region scope), returning the number
 	// deleted. In-flight operations are retained. It is the store half of the

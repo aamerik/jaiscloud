@@ -12,13 +12,13 @@ import (
 )
 
 // substateRunning is the dataproc.v1.JobStatus.Substate rendered while a job is
-// non-terminal. The emulator hands a submitted job straight to the executor and
-// its only live state is RUNNING, so it reports the real QUEUED substate
-// ("the Job has been received and is awaiting execution"; dataproc.v1 documents
-// QUEUED as applying to RUNNING). The other defined substates (SUBMITTED,
-// STALE_STATUS) describe agent hand-off/staleness the emulator does not model,
-// and terminal jobs omit substate entirely because every defined substate
-// applies only to RUNNING.
+// in the RUNNING state. A submitted job walks PENDING -> SETUP_DONE -> RUNNING,
+// and once RUNNING it reports the real QUEUED substate ("the Job has been
+// received and is awaiting execution"; dataproc.v1 documents QUEUED as applying
+// to RUNNING). The other defined substates (SUBMITTED, STALE_STATUS) describe
+// agent hand-off/staleness the emulator does not model, and every non-RUNNING
+// state omits substate entirely because every defined substate applies only to
+// RUNNING.
 const substateRunning = "QUEUED"
 
 // formatTimestamp renders a business timestamp as the RFC3339Nano string the
@@ -132,15 +132,6 @@ func JobJSON(j dpstore.Job) map[string]any {
 	return out
 }
 
-// jobTerminal reports whether a job state is terminal (done).
-func jobTerminal(state string) bool {
-	switch state {
-	case "DONE", "ERROR", "CANCELLED":
-		return true
-	}
-	return false
-}
-
 // --- Operations ---
 
 // clusterOperationMetadata renders ClusterOperationMetadata for an operation.
@@ -175,15 +166,35 @@ func clusterOperationMetadata(clusterName, clusterUUID, operationType, opState s
 	}
 }
 
-// jobOperationMetadata renders JobMetadata for a submit-as-operation.
-func jobOperationMetadata(jobID, state, operationType string, start time.Time) map[string]any {
+// jobOperationMetadata renders JobMetadata for a submit-as-operation. Its
+// status is the job's full JobStatus (dataproc.v1.JobMetadata.status), so a
+// poller sees the job state advance, not just the first state.
+func jobOperationMetadata(jobID, operationType string, status dpstore.JobStatus, start time.Time) map[string]any {
 	return map[string]any{
 		"@type":         "type.googleapis.com/google.cloud.dataproc.v1.JobMetadata",
 		"jobId":         jobID,
 		"operationType": operationType,
 		"startTime":     formatTimestamp(start),
-		"status":        map[string]any{"state": state},
+		"status":        jobStatusMap(status),
 	}
+}
+
+// refreshJobOperationMetadata rewrites a persisted JobMetadata's status to the
+// job's current JobStatus, keeping an in-flight submit operation's polled
+// metadata in step with the job as it walks the state machine.
+func refreshJobOperationMetadata(metadata string, status dpstore.JobStatus) string {
+	if metadata == "" {
+		return metadata
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal([]byte(metadata), &meta); err != nil {
+		return metadata
+	}
+	meta["status"] = jobStatusMap(status)
+	if b, err := json.Marshal(meta); err == nil {
+		return string(b)
+	}
+	return metadata
 }
 
 // OperationJSON renders a stored Operation as a google.longrunning.Operation.

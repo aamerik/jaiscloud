@@ -8,8 +8,8 @@ import (
 )
 
 // TestJobSubstateRunning verifies the dataproc.v1 JobStatus.substate field: a
-// submitted/non-terminal job carries the real QUEUED substate, both in the
-// stored JobStatus and in the rendered job response.
+// job is born PENDING, and the RUNNING state it reaches carries the real QUEUED
+// substate, both in the stored JobStatus and in the rendered job response.
 func TestJobSubstateRunning(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
@@ -18,19 +18,27 @@ func TestJobSubstateRunning(t *testing.T) {
 		"placement":  map[string]any{"clusterName": "c1"},
 		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
 	}))
-	if j.Status.State != "RUNNING" || j.Status.Substate != "QUEUED" {
-		t.Fatalf("submitted job status = %+v, want RUNNING/QUEUED", j.Status)
-	}
-	if got := jobStatusMap(j.Status)["substate"]; got != "QUEUED" {
-		t.Fatalf("rendered substate = %v, want QUEUED", got)
+	if j.Status.State != "PENDING" {
+		t.Fatalf("submitted job status = %+v, want PENDING", j.Status)
 	}
 
 	if err := p.store.CreateJob(ctx, "proj", "us-central1", j); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
+	// Mock mode settles one hop per read: PENDING -> SETUP_DONE -> RUNNING.
 	got, err := p.GetJob(ctx, "proj", "us-central1", j.JobID)
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status.State != "SETUP_DONE" {
+		t.Fatalf("first read state = %q, want SETUP_DONE", got.Status.State)
+	}
+	got, err = p.GetJob(ctx, "proj", "us-central1", j.JobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status.State != "RUNNING" || got.Status.Substate != "QUEUED" {
+		t.Fatalf("running job status = %+v, want RUNNING/QUEUED", got.Status)
 	}
 	status, _ := JobJSON(got)["status"].(map[string]any)
 	if status["substate"] != "QUEUED" {

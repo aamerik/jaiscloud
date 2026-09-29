@@ -199,11 +199,11 @@ func (s *Service) DeleteJob(ctx context.Context, req *dataprocpb.DeleteJobReques
 }
 
 // ResolveOperation implements the google.longrunning.Operations resolver for
-// Dataproc. Cluster mutations are the emulator's only asynchronous operations,
-// and their operation names are region-scoped
+// Dataproc. Cluster mutations and job submits are asynchronous operations, and
+// their operation names are region-scoped
 // (projects/{p}/regions/{r}/operations/{id}); a name outside that shape is not
 // ours (handled=false) so the generic terminal stub keeps serving it. Resolving
-// drives the core's lazy cluster state machine via core.GetOperation.
+// drives the core's lazy cluster and job state machines via core.GetOperation.
 func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
 	project, region, id, ok := parseOperationName(name)
 	if !ok {

@@ -34,12 +34,12 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "StopCluster", Method: "StopCluster", KeyField: "STOPPED cluster returned", Run: checkDPStopCluster},
 		{Service: "dataproc", RPC: "StartCluster", Method: "StartCluster", KeyField: "RUNNING cluster returned", Run: checkDPStartCluster},
 		{Service: "dataproc", RPC: "DeleteCluster", Method: "DeleteCluster", KeyField: "NotFound after delete", Run: checkDPDeleteCluster},
-		{Service: "dataproc", RPC: "SubmitJob", Method: "SubmitJob", KeyField: "DONE job in mock mode", Run: checkDPSubmitJob},
-		{Service: "dataproc", RPC: "SubmitJobAsOperation", Method: "SubmitJobAsOperation", KeyField: "LRO done + typed Job response", Run: checkDPSubmitJobAsOperation},
+		{Service: "dataproc", RPC: "SubmitJob", Method: "SubmitJob", KeyField: "PENDING job polls to DONE", Run: checkDPSubmitJob},
+		{Service: "dataproc", RPC: "SubmitJobAsOperation", Method: "SubmitJobAsOperation", KeyField: "in-flight LRO -> typed Job response", Run: checkDPSubmitJobAsOperation},
 		{Service: "dataproc", RPC: "GetJob", Method: "GetJob", KeyField: "job reference round-trip", Run: checkDPGetJob},
 		{Service: "dataproc", RPC: "ListJobs", Method: "ListJobs", KeyField: "submitted job present", Run: checkDPListJobs},
 		{Service: "dataproc", RPC: "UpdateJob", Method: "UpdateJob", KeyField: "labels updated", Run: checkDPUpdateJob},
-		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "terminal job returned", Run: checkDPCancelJob},
+		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "CANCEL_PENDING polls to CANCELLED", Run: checkDPCancelJob},
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
 	}
 }
@@ -310,7 +310,23 @@ func checkDPDeleteCluster(ctx context.Context, cfg Config) error {
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-// Check 8: SubmitJob returns a DONE job in mock-executor mode.
+// dpPollJobTerminal polls GetJob until the job reaches a terminal state,
+// driving the emulator's lazy job state machine one hop per read.
+func dpPollJobTerminal(ctx context.Context, jc *dataproc.JobControllerClient, project, jobID string) (*dataprocpb.Job, error) {
+	for i := 0; i < 32; i++ {
+		j, err := jc.GetJob(ctx, &dataprocpb.GetJobRequest{ProjectId: project, Region: dataprocRegion, JobId: jobID})
+		if err != nil {
+			return nil, fmt.Errorf("GetJob: %w", err)
+		}
+		switch j.GetStatus().GetState() {
+		case dataprocpb.JobStatus_DONE, dataprocpb.JobStatus_ERROR, dataprocpb.JobStatus_CANCELLED:
+			return j, nil
+		}
+	}
+	return nil, fmt.Errorf("job %s did not reach a terminal state", jobID)
+}
+
+// Check 8: SubmitJob returns an in-flight job that walks to DONE in mock mode.
 func checkDPSubmitJob(ctx context.Context, cfg Config) error {
 	cc, err := newDataprocClusterClient(ctx, cfg)
 	if err != nil {
@@ -334,13 +350,21 @@ func checkDPSubmitJob(ctx context.Context, cfg Config) error {
 	if j.GetReference().GetJobId() != jobID {
 		return fmt.Errorf("job reference = %+v", j.GetReference())
 	}
-	if j.GetStatus().GetState() != dataprocpb.JobStatus_DONE {
-		return fmt.Errorf("job state = %v, want DONE", j.GetStatus().GetState())
+	if j.GetStatus().GetState() != dataprocpb.JobStatus_PENDING {
+		return fmt.Errorf("submitted job state = %v, want PENDING", j.GetStatus().GetState())
+	}
+	final, err := dpPollJobTerminal(ctx, jc, cfg.Project, jobID)
+	if err != nil {
+		return err
+	}
+	if final.GetStatus().GetState() != dataprocpb.JobStatus_DONE {
+		return fmt.Errorf("job state = %v, want DONE", final.GetStatus().GetState())
 	}
 	return nil
 }
 
-// Check 9: SubmitJobAsOperation returns a done LRO with a typed Job response.
+// Check 9: SubmitJobAsOperation returns an in-flight LRO that completes with a
+// typed Job response.
 func checkDPSubmitJobAsOperation(ctx context.Context, cfg Config) error {
 	cc, err := newDataprocClusterClient(ctx, cfg)
 	if err != nil {
@@ -361,8 +385,10 @@ func checkDPSubmitJobAsOperation(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("SubmitJobAsOperation: %w", err)
 	}
-	if !op.Done() {
-		return fmt.Errorf("SubmitJobAsOperation not done in mock mode")
+	// The job is asynchronous: the operation is returned in flight and
+	// completes when polled through google.longrunning.Operations.
+	if op.Done() {
+		return fmt.Errorf("SubmitJobAsOperation completed inline; want an in-flight LRO")
 	}
 	meta, err := op.Metadata()
 	if err != nil {
@@ -377,6 +403,9 @@ func checkDPSubmitJobAsOperation(ctx context.Context, cfg Config) error {
 	}
 	if job.GetReference().GetJobId() != jobID {
 		return fmt.Errorf("job = %+v", job)
+	}
+	if job.GetStatus().GetState() != dataprocpb.JobStatus_DONE {
+		return fmt.Errorf("job state = %v, want DONE", job.GetStatus().GetState())
 	}
 	return nil
 }
@@ -482,7 +511,7 @@ func checkDPUpdateJob(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 13: CancelJob returns a terminal job.
+// Check 13: CancelJob starts the cancel progression; polling settles CANCELLED.
 func checkDPCancelJob(ctx context.Context, cfg Config) error {
 	cc, err := newDataprocClusterClient(ctx, cfg)
 	if err != nil {
@@ -502,14 +531,17 @@ func checkDPCancelJob(ctx context.Context, cfg Config) error {
 	if _, err := jc.SubmitJob(ctx, &dataprocpb.SubmitJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, Job: dataprocJob(jobID, cluster)}); err != nil {
 		return fmt.Errorf("SubmitJob: %w", err)
 	}
-	got, err := jc.CancelJob(ctx, &dataprocpb.CancelJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, JobId: jobID})
-	if err != nil {
+	// CancelJob starts the cancel progression (CANCEL_PENDING); the job settles
+	// to CANCELLED when polled.
+	if _, err := jc.CancelJob(ctx, &dataprocpb.CancelJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, JobId: jobID}); err != nil {
 		return fmt.Errorf("CancelJob: %w", err)
 	}
-	switch got.GetStatus().GetState() {
-	case dataprocpb.JobStatus_DONE, dataprocpb.JobStatus_CANCELLED, dataprocpb.JobStatus_ERROR:
-	default:
-		return fmt.Errorf("job state after cancel = %v, want terminal", got.GetStatus().GetState())
+	final, err := dpPollJobTerminal(ctx, jc, cfg.Project, jobID)
+	if err != nil {
+		return err
+	}
+	if final.GetStatus().GetState() != dataprocpb.JobStatus_CANCELLED {
+		return fmt.Errorf("job state after cancel = %v, want CANCELLED", final.GetStatus().GetState())
 	}
 	return nil
 }
@@ -533,6 +565,10 @@ func checkDPDeleteJob(ctx context.Context, cfg Config) error {
 	jobID := cfg.ResourceName("gcpc-grpc-dp-job-del")
 	if _, err := jc.SubmitJob(ctx, &dataprocpb.SubmitJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, Job: dataprocJob(jobID, cluster)}); err != nil {
 		return fmt.Errorf("SubmitJob: %w", err)
+	}
+	// Only a terminal job can be deleted; poll it to DONE first.
+	if _, err := dpPollJobTerminal(ctx, jc, cfg.Project, jobID); err != nil {
+		return err
 	}
 	if err := jc.DeleteJob(ctx, &dataprocpb.DeleteJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, JobId: jobID}); err != nil {
 		return fmt.Errorf("DeleteJob: %w", err)
