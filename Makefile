@@ -7,10 +7,11 @@ PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
 # other families sort after these, alphabetically. ledger-integrity runs first
-# (it repairs merge-link accuracy so the planned list can be trusted), then the
-# Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
-# BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
-SERIES ?= ledger-integrity,java-compat,functions-parity,metastore-parity,bigquery-ga
+# (it repairs merge-link accuracy so the planned list can be trusted), then
+# dataproc-gke (the Dataproc-on-GKE completion work), then the Java-compat effort
+# owns waves W1–W3. The AWS-parity families run next; the BigQuery engine decision
+# (bigquery-ga) is deliberately deprioritized behind them.
+SERIES ?= ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
