@@ -223,6 +223,7 @@ func TestClassify(t *testing.T) {
 		want string
 	}{
 		{"stale-doc", &Item{State: "merged", DocState: "open"}, "stale-doc"},
+		{"merged wave-done", &Item{State: "merged", DocState: "open", WaveDone: true}, "done"},
 		{"merged", &Item{State: "merged"}, "done"},
 		{"intentional", &Item{State: "todo", Disposition: "no-fix"}, "intentional"},
 		{"optional intentional", &Item{State: "todo", Disposition: "optional"}, "intentional"},
@@ -503,24 +504,24 @@ func TestPrMatchesItem(t *testing.T) {
 	}
 }
 
-// TestCloseFinalizedRow checks the finalize-close rewrite of a wave index row.
+// TestCloseFinalizedRow checks the finalize-close rewrite of wave index rows.
 func TestCloseFinalizedRow(t *testing.T) {
 	md := "# plan\n\n| Wave | Session | IDs | Service(s) | Branch | Depends on |\n" +
 		"|---|---|---|---|---|---|\n" +
 		"| 1 | W1.1 | J10 | storage csek | `feat/gcp-storage-csek` | — |\n" +
-		"| 1 | W1.2 | J12-J13/R14-R15 | monitoring | `fix/gcp-monitoring` | W1.1 |\n"
+		"| 1 | W1.2 | J12-J13/R14-R15 | monitoring | `fix/gcp-monitoring` | W1.1 |\n" +
+		"| 1 | W1.3 | R16 | monitoring ops | `fix/gcp-monitoring` | W1.1 |\n"
 	got, ok := closeFinalizedRow(md, "R14", 194)
 	if !ok {
 		t.Fatal("expected the R14 row to match via its alias group")
 	}
-	if !strings.Contains(got, "DONE #194") {
-		t.Fatalf("row not closed:\n%s", got)
+	// Every row on the finalized branch (W1.2 and W1.3) is closed.
+	if strings.Count(got, "DONE #194") != 2 {
+		t.Fatalf("branch-sharing rows not closed together:\n%s", got)
 	}
-	if strings.Contains(got, "| W1.1 | J10 | storage csek |") {
-		// unchanged row must keep its — cell
-		if !strings.Contains(got, "storage csek | `feat/gcp-storage-csek` | — |") {
-			t.Fatalf("unrelated row was modified:\n%s", got)
-		}
+	// The unrelated branch row keeps its — cell.
+	if !strings.Contains(got, "storage csek | `feat/gcp-storage-csek` | — |") {
+		t.Fatalf("unrelated row was modified:\n%s", got)
 	}
 	if _, ok := closeFinalizedRow(md, "ZZ9", 1); ok {
 		t.Error("absent ID must not match")
@@ -554,6 +555,22 @@ func TestResolvedOverlay(t *testing.T) {
 	}
 }
 
+// TestRunQueryCheckPrefersIdentityMatch: a merged item that only mentions the
+// query word in its gap must not make an open identity/service match look done.
+func TestRunQueryCheckPrefersIdentityMatch(t *testing.T) {
+	items := []*Item{
+		{ID: "LG1", Service: "gcpstatus", State: "merged", Kind: "backlog", Gap: "falsely satisfies `iamcredentials`"},
+		{ID: "W3.2", Service: "iamcredentials", State: "todo", Kind: "backlog", Gap: "iamcredentials"},
+	}
+	if code := runQuery(items, "iamcredentials", "", true); code != 0 {
+		t.Fatalf("check = %d, want 0 (open identity match masked by a done gap-only hit)", code)
+	}
+	only := []*Item{{ID: "LG1", Service: "gcpstatus", State: "merged", Kind: "backlog", Gap: "mentions iamcredentials"}}
+	if code := runQuery(only, "iamcredentials", "", true); code != 2 {
+		t.Fatalf("check = %d, want 2 (fallback to all matches when no identity match)", code)
+	}
+}
+
 // TestLoadResolved validates overlay parsing + required fields.
 func TestLoadResolved(t *testing.T) {
 	if got, err := loadResolved(""); err != nil || got != nil {
@@ -574,6 +591,39 @@ func TestLoadResolved(t *testing.T) {
 	}
 	if _, err := loadResolved(bad); err == nil {
 		t.Fatal("expected error for entry without a match")
+	}
+}
+
+// TestWaveDoneScopedPerPlan pins the per-plan keying of wave done/order/series:
+// a "W1.1" marked DONE in one family must not leak WaveDone into another
+// family's W1.1 detail row.
+func TestWaveDoneScopedPerPlan(t *testing.T) {
+	dir := t.TempDir()
+	planA := "# a wave plan\n\n| Wave | Session | IDs | Service(s) | Branch | Depends on |\n" +
+		"|---|---|---|---|---|---|\n| 1 | W1.1 | AA1 | a | `feat/a` | DONE #1 |\n\n" +
+		"| ID | service | gap | impact | effort | verdict | prompt |\n" +
+		"|---|---|---|---|---|---|---|\n| AA1 | a | do a | low | S | fix | `feat/a` |\n"
+	planB := "# b wave plan\n\n| Wave | Session | IDs | Service(s) | Branch | Depends on |\n" +
+		"|---|---|---|---|---|---|\n| 1 | W1.1 | BB1 | b | `feat/b` | — |\n\n" +
+		"| ID | service | gap | impact | effort | verdict | prompt |\n" +
+		"|---|---|---|---|---|---|---|\n| BB1 | b | do b | low | S | fix | `feat/b` |\n"
+	if err := os.WriteFile(filepath.Join(dir, "gcp-a-wave-plan.md"), []byte(planA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gcp-b-wave-plan.md"), []byte(planB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items, _, waves := collect(dir, false, false)
+	items = applyWaveAliases(items, waves)
+	byID := map[string]*Item{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	if byID["AA1"] == nil || !byID["AA1"].WaveDone {
+		t.Fatalf("AA1 should be wave-done: %+v", byID["AA1"])
+	}
+	if byID["BB1"] == nil || byID["BB1"].WaveDone {
+		t.Fatalf("BB1 inherited another plan's wave-done: %+v", byID["BB1"])
 	}
 }
 

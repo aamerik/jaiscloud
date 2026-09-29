@@ -91,9 +91,13 @@ type table struct {
 // waveMeta captures the Java wave-plan index: alias→branch, alias→wave, and
 // which waves are already done, plus the alias groups used to merge J/R pairs.
 type waveMeta struct {
-	groups          [][]string
+	groups [][]string
+	// branch/wave are keyed by alias (IDs are unique across plans); the
+	// per-session maps are keyed by plan source + session so a "W1.1" in one
+	// family cannot inherit another family's done/order/series.
 	branchByAlias   map[string]string
 	waveByAlias     map[string]string
+	sourceByAlias   map[string]string
 	doneWaves       map[string]bool
 	orderBySession  map[string]int
 	seriesBySession map[string]string
@@ -103,11 +107,16 @@ func newWaveMeta() *waveMeta {
 	return &waveMeta{
 		branchByAlias:   map[string]string{},
 		waveByAlias:     map[string]string{},
+		sourceByAlias:   map[string]string{},
 		doneWaves:       map[string]bool{},
 		orderBySession:  map[string]int{},
 		seriesBySession: map[string]string{},
 	}
 }
+
+// wskey scopes a wave session to its plan so equal session names in different
+// plan families do not collide.
+func wskey(source, session string) string { return source + "\x00" + session }
 
 var waveSessionRe = regexp.MustCompile(`^W(\d+)\.(\d+)$`)
 
@@ -535,13 +544,13 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 		done := strings.Contains(strings.ToUpper(dep), "DONE")
 		order := waveOrder(session)
 		if order > 0 {
-			w.orderBySession[session] = order
+			w.orderBySession[wskey(source, session)] = order
 		}
 		series := stripFormatting(rowAt(idx, row, "series", "plan"))
 		if series == "" {
 			series = seriesFromSource(source)
 		}
-		w.seriesBySession[session] = series
+		w.seriesBySession[wskey(source, session)] = series
 		it := &Item{
 			ID:          session,
 			Kind:        "wave",
@@ -567,10 +576,11 @@ func waveFromTable(t table, source string, w *waveMeta) []*Item {
 					w.branchByAlias[id] = branch
 				}
 				w.waveByAlias[id] = session
+				w.sourceByAlias[id] = source
 				it.Aliases = appendUnique(it.Aliases, id)
 			}
 			if done {
-				w.doneWaves[session] = true
+				w.doneWaves[wskey(source, session)] = true
 			}
 		}
 		out = append(out, it)
@@ -1076,12 +1086,16 @@ func applyWaveAliases(items []*Item, w *waveMeta) []*Item {
 			best.Branch = b
 		}
 		if wv, ok := anyAlias(w.waveByAlias, members); ok {
+			key := wv
+			if src, ok := anyAlias(w.sourceByAlias, members); ok {
+				key = wskey(src, wv)
+			}
 			best.Wave = wv
-			best.WaveDone = w.doneWaves[wv]
-			if s := w.seriesBySession[wv]; s != "" {
+			best.WaveDone = w.doneWaves[key]
+			if s := w.seriesBySession[key]; s != "" {
 				best.Series = s
 			}
-			if o := w.orderBySession[wv]; o > 0 {
+			if o := w.orderBySession[key]; o > 0 {
 				best.Order = o
 				best.OrderSource = "wave"
 			}
@@ -1519,7 +1533,9 @@ func classifyAll(items []*Item) {
 
 func classify(it *Item) string {
 	if it.State == "merged" || it.State == "done" {
-		if it.DocState == "open" {
+		// A merged item whose wave index row is closed (DONE #N) is done; the
+		// detail row's stale "open" text must not re-audit as stale-doc.
+		if it.DocState == "open" && !it.WaveDone {
 			return "stale-doc"
 		}
 		return "done"
@@ -2287,7 +2303,24 @@ func runQuery(items []*Item, query, service string, check bool) int {
 		fmt.Println("status: no matching tracked item (likely new work)")
 		return 0
 	}
-	done, inflight, backlogHit := false, false, false
+	// Identity/service matches (ID, aliases, service) are authoritative for the
+	// verdict; gap-only keyword hits are context. Without this, a merged tooling
+	// row that merely quotes a query word (e.g. the ledger-integrity item whose
+	// gap mentions `iamcredentials`) would mask the real open item and report
+	// "already done".
+	verdictSet := matches
+	if len(terms) > 0 {
+		var strong []*Item
+		for _, it := range matches {
+			ident := strings.ToLower(it.ID + " " + strings.Join(it.Aliases, " ") + " " + it.Service)
+			if allTermsIn(ident, terms) {
+				strong = append(strong, it)
+			}
+		}
+		if len(strong) > 0 {
+			verdictSet = strong
+		}
+	}
 	for _, it := range matches {
 		pr := ""
 		if it.PR > 0 {
@@ -2298,6 +2331,9 @@ func runQuery(items []*Item, query, service string, check bool) int {
 		if it.PlanDoc != "" {
 			fmt.Printf("         plan doc: %s\n", it.PlanDoc)
 		}
+	}
+	done, inflight, backlogHit := false, false, false
+	for _, it := range verdictSet {
 		if it.Kind == "pr" || it.Kind == "matrix" {
 			continue // PR history / matrix gaps are context, not a commitment
 		}
@@ -2586,13 +2622,20 @@ func finalizePlan(plan, id, slugOverride string, pr int, dry bool) error {
 	return nil
 }
 
-// closeFinalizedRow rewrites the wave-index row whose IDs column contains id,
-// setting its "Depends on" cell to "DONE #<pr>" (waveFromTable reads that as
-// done). Returns the new content and whether a matching row was found.
+// closeFinalizedRow rewrites wave-index rows so their "Depends on" cell reads
+// "DONE #<pr>" (which waveFromTable derives as done). It closes the row whose
+// IDs column contains id, plus every row sharing that row's Branch — so a
+// multi-session plan finalized as one PR closes all its rows at once. Returns
+// the new content and whether any row matched.
 func closeFinalizedRow(content, id string, pr int) (string, bool) {
 	lines := strings.Split(content, "\n")
+
+	type waveRow struct {
+		line, idCol, depCol int
+		ids, branch         string
+	}
+	var rows []waveRow
 	var idx map[string]int
-	changed := false
 	for i, raw := range lines {
 		cells := splitRow(raw)
 		if !isTableRow(raw) || len(cells) < 2 {
@@ -2617,34 +2660,59 @@ func closeFinalizedRow(content, id string, pr int) (string, bool) {
 		if !ok || ii >= len(cells) {
 			continue
 		}
-		match := false
-		for _, g := range parseAliasGroups(cells[ii]) {
-			for _, a := range g {
-				if a == id {
-					match = true
-				}
-			}
-		}
-		if !match {
-			continue
-		}
 		di, ok := firstHeader(idx, "dependson", "depends", "status")
 		if !ok {
 			continue
 		}
-		for len(cells) <= di {
+		br := ""
+		if bi, ok := firstHeader(idx, "branch"); ok && bi < len(cells) {
+			br = cleanBranch(cells[bi])
+		}
+		rows = append(rows, waveRow{line: i, idCol: ii, depCol: di, ids: cells[ii], branch: br})
+	}
+
+	wantBranch := map[string]bool{}
+	found := false
+	for _, r := range rows {
+		if idsContain(r.ids, id) {
+			found = true
+			if r.branch != "" {
+				wantBranch[r.branch] = true
+			}
+		}
+	}
+	if !found {
+		return content, false
+	}
+	for _, r := range rows {
+		if !idsContain(r.ids, id) && !wantBranch[r.branch] {
+			continue
+		}
+		cells := splitRow(lines[r.line])
+		for len(cells) <= r.depCol {
 			cells = append(cells, "")
 		}
-		cells[di] = "DONE #" + strconv.Itoa(pr)
+		cells[r.depCol] = "DONE #" + strconv.Itoa(pr)
 		var b strings.Builder
 		b.WriteString("|")
 		for _, c := range cells {
 			b.WriteString(" " + c + " |")
 		}
-		lines[i] = b.String()
-		changed = true
+		lines[r.line] = b.String()
 	}
-	return strings.Join(lines, "\n"), changed
+	return strings.Join(lines, "\n"), true
+}
+
+// idsContain reports whether an index row's IDs cell (alias groups) names id.
+func idsContain(idsCell, id string) bool {
+	for _, g := range parseAliasGroups(idsCell) {
+		for _, a := range g {
+			if a == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func truncate(s string, n int) string {
