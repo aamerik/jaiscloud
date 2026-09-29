@@ -122,6 +122,20 @@ func jobIsTerminal(state string) bool {
 	return false
 }
 
+// jobStateMatcherFromProto maps the ListJobsRequest.JobStateMatcher enum onto
+// the core's transport-neutral JobStateMatcher. The zero value (ALL) and any
+// unknown enum both mean "match every job".
+func jobStateMatcherFromProto(m dataprocpb.ListJobsRequest_JobStateMatcher) core.JobStateMatcher {
+	switch m {
+	case dataprocpb.ListJobsRequest_ACTIVE:
+		return core.JobStateMatcherActive
+	case dataprocpb.ListJobsRequest_NON_ACTIVE:
+		return core.JobStateMatcherNonActive
+	default:
+		return core.JobStateMatcherAll
+	}
+}
+
 // jobStatusToProto maps a stored JobStatus onto the proto JobStatus.
 func jobStatusToProto(s dpstore.JobStatus) *dataprocpb.JobStatus {
 	out := &dataprocpb.JobStatus{

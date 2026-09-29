@@ -38,6 +38,7 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "SubmitJobAsOperation", Method: "SubmitJobAsOperation", KeyField: "in-flight LRO -> typed Job response", Run: checkDPSubmitJobAsOperation},
 		{Service: "dataproc", RPC: "GetJob", Method: "GetJob", KeyField: "job reference round-trip", Run: checkDPGetJob},
 		{Service: "dataproc", RPC: "ListJobs", Method: "ListJobs", KeyField: "submitted job present", Run: checkDPListJobs},
+		{Service: "dataproc", RPC: "ListJobs", Method: "ListJobs", KeyField: "filter selects matching labels", Run: checkDPListJobsFilter},
 		{Service: "dataproc", RPC: "UpdateJob", Method: "UpdateJob", KeyField: "labels updated", Run: checkDPUpdateJob},
 		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "CANCEL_PENDING polls to CANCELLED", Run: checkDPCancelJob},
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
@@ -95,6 +96,14 @@ func dataprocJob(jobID, cluster string) *dataprocpb.Job {
 			PysparkJob: &dataprocpb.PySparkJob{MainPythonFileUri: "gs://bucket/main.py"},
 		},
 	}
+}
+
+// dataprocJobWithLabels is dataprocJob plus labels, for the ListJobs filter
+// probe.
+func dataprocJobWithLabels(jobID, cluster string, labels map[string]string) *dataprocpb.Job {
+	j := dataprocJob(jobID, cluster)
+	j.Labels = labels
+	return j
 }
 
 // ─── Clusters ─────────────────────────────────────────────────────────────────
@@ -473,6 +482,59 @@ func checkDPListJobs(ctx context.Context, cfg Config) error {
 			return nil
 		}
 	}
+}
+
+// Check 11b: ListJobs honors a labels.<key> = value filter, returning the
+// matching job and excluding a job whose label value differs.
+func checkDPListJobsFilter(ctx context.Context, cfg Config) error {
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	cluster, err := ensureDataprocCluster(ctx, cc, cfg)
+	if err != nil {
+		return err
+	}
+	jc, err := newDataprocJobClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer jc.Close()
+
+	matchingID := cfg.ResourceName("gcpc-grpc-dp-job-filter-on")
+	otherID := cfg.ResourceName("gcpc-grpc-dp-job-filter-off")
+	for id, label := range map[string]string{matchingID: "only", otherID: "other"} {
+		if _, err := jc.SubmitJob(ctx, &dataprocpb.SubmitJobRequest{
+			ProjectId: cfg.Project, Region: dataprocRegion,
+			Job: dataprocJobWithLabels(id, cluster, map[string]string{"probe-filter": label}),
+		}); err != nil {
+			return fmt.Errorf("SubmitJob(%s): %w", id, err)
+		}
+	}
+
+	it := jc.ListJobs(ctx, &dataprocpb.ListJobsRequest{
+		ProjectId: cfg.Project, Region: dataprocRegion,
+		Filter: `labels.probe-filter = only`,
+	})
+	seen := map[string]bool{}
+	for {
+		got, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("ListJobs: %w", err)
+		}
+		seen[got.GetReference().GetJobId()] = true
+	}
+	if !seen[matchingID] {
+		return fmt.Errorf("filtered ListJobs did not include %q", matchingID)
+	}
+	if seen[otherID] {
+		return fmt.Errorf("filtered ListJobs included non-matching %q", otherID)
+	}
+	return nil
 }
 
 // Check 12: UpdateJob applies labels.

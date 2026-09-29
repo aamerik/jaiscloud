@@ -161,7 +161,9 @@ func (s *Service) GetJob(ctx context.Context, req *dataprocpb.GetJobRequest) (*d
 
 func (s *Service) ListJobs(ctx context.Context, req *dataprocpb.ListJobsRequest) (*dataprocpb.ListJobsResponse, error) {
 	project := s.resolveProject(ctx, req.GetProjectId())
-	page, next, err := s.core.ListJobs(ctx, project, req.GetRegion(), int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListJobs(ctx, project, req.GetRegion(),
+		req.GetClusterName(), req.GetFilter(), jobStateMatcherFromProto(req.GetJobStateMatcher()),
+		int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}

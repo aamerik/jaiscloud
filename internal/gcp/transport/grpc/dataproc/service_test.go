@@ -2,6 +2,8 @@ package dataproc
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"testing"
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
@@ -305,6 +307,70 @@ func TestDeleteJob_ActiveFailsPrecondition(t *testing.T) {
 	}
 	if _, err := s.DeleteJob(ctx, &dataprocpb.DeleteJobRequest{ProjectId: "proj", Region: "us-central1", JobId: "j-active"}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("DeleteJob active = %v, want FailedPrecondition", err)
+	}
+}
+
+// TestListJobs_FilterAndMatcher verifies the gRPC ListJobs cluster_name, filter
+// and job_state_matcher fields reach the shared core.
+func TestListJobs_FilterAndMatcher(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	for _, c := range []string{"c1", "c2"} {
+		if _, err := s.CreateCluster(ctx, createClusterReq(c)); err != nil {
+			t.Fatalf("CreateCluster(%s): %v", c, err)
+		}
+	}
+	submit := func(id, cluster string, labels map[string]string) {
+		t.Helper()
+		jr := submitReq(id)
+		jr.Job.Placement.ClusterName = cluster
+		jr.Job.Labels = labels
+		if _, err := s.SubmitJob(ctx, jr); err != nil {
+			t.Fatalf("SubmitJob(%s): %v", id, err)
+		}
+	}
+	submit("j1", "c1", map[string]string{"env": "staging"})
+	submit("j2", "c1", map[string]string{"env": "prod"})
+	submit("j3", "c2", map[string]string{"env": "staging"})
+
+	list := func(req *dataprocpb.ListJobsRequest) string {
+		t.Helper()
+		req.ProjectId = "proj"
+		req.Region = "us-central1"
+		resp, err := s.ListJobs(ctx, req)
+		if err != nil {
+			t.Fatalf("ListJobs: %v", err)
+		}
+		ids := make([]string, 0, len(resp.GetJobs()))
+		for _, j := range resp.GetJobs() {
+			ids = append(ids, j.GetReference().GetJobId())
+		}
+		sort.Strings(ids)
+		return strings.Join(ids, ",")
+	}
+
+	if got := list(&dataprocpb.ListJobsRequest{JobStateMatcher: dataprocpb.ListJobsRequest_ACTIVE}); got != "j1,j2,j3" {
+		t.Fatalf("ACTIVE matcher = %q, want j1,j2,j3", got)
+	}
+	if got := list(&dataprocpb.ListJobsRequest{ClusterName: "c1"}); got != "j1,j2" {
+		t.Fatalf("cluster_name = %q, want j1,j2", got)
+	}
+	if got := list(&dataprocpb.ListJobsRequest{Filter: `labels.env = staging`}); got != "j1,j3" {
+		t.Fatalf("filter = %q, want j1,j3", got)
+	}
+	if got := list(&dataprocpb.ListJobsRequest{ClusterName: "c1", Filter: `labels.env = staging`}); got != "j1" {
+		t.Fatalf("cluster+filter = %q, want j1", got)
+	}
+	// The three jobs are terminal after the reads above; NON_ACTIVE selects them
+	// and a filter still overrides the matcher.
+	if got := list(&dataprocpb.ListJobsRequest{JobStateMatcher: dataprocpb.ListJobsRequest_NON_ACTIVE}); got != "j1,j2,j3" {
+		t.Fatalf("NON_ACTIVE matcher = %q, want j1,j2,j3", got)
+	}
+	if got := list(&dataprocpb.ListJobsRequest{JobStateMatcher: dataprocpb.ListJobsRequest_NON_ACTIVE, Filter: `status.state = ACTIVE`}); got != "" {
+		t.Fatalf("filter overriding matcher = %q, want none", got)
+	}
+	if _, err := s.ListJobs(ctx, &dataprocpb.ListJobsRequest{ProjectId: "proj", Region: "us-central1", Filter: "bogus = 1"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("malformed filter = %v, want InvalidArgument", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package dataproc
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -468,6 +469,80 @@ func TestListJobs(t *testing.T) {
 	jobs, _ := resp.Data["jobs"].([]any)
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+}
+
+// TestListJobs_FilterAndMatcher verifies the REST query params clusterName,
+// filter and jobStateMatcher are honored (and an unknown matcher is 400).
+func TestListJobs_FilterAndMatcher(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	for _, c := range []string{"c1", "c2"} {
+		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+			"region": "us-central1",
+			"body":   map[string]any{"projectId": "proj", "clusterName": c},
+		})); err != nil {
+			t.Fatalf("CreateCluster(%s): %v", c, err)
+		}
+	}
+	submit := func(id, cluster string, labels map[string]any) {
+		t.Helper()
+		if _, err := p.SubmitJob(ctx, testNR(map[string]any{
+			"region": "us-central1",
+			"body": map[string]any{"job": map[string]any{
+				"reference":  map[string]any{"jobId": id},
+				"placement":  map[string]any{"clusterName": cluster},
+				"labels":     labels,
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+			}},
+		})); err != nil {
+			t.Fatalf("SubmitJob(%s): %v", id, err)
+		}
+	}
+	submit("j1", "c1", map[string]any{"env": "staging"})
+	submit("j2", "c1", map[string]any{"env": "prod"})
+	submit("j3", "c2", map[string]any{"env": "staging"})
+
+	list := func(params map[string]any) string {
+		t.Helper()
+		params["region"] = "us-central1"
+		resp, err := p.ListJobs(ctx, testNR(params))
+		if err != nil {
+			t.Fatalf("ListJobs(%v): %v", params, err)
+		}
+		jobs, _ := resp.Data["jobs"].([]any)
+		ids := make([]string, 0, len(jobs))
+		for _, raw := range jobs {
+			j, _ := raw.(map[string]any)
+			ref, _ := j["reference"].(map[string]any)
+			if id, ok := ref["jobId"].(string); ok {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		return strings.Join(ids, ",")
+	}
+
+	// Read order matters: jobs start PENDING and settle one hop per ListJobs.
+	if got := list(map[string]any{"jobStateMatcher": "ACTIVE"}); got != "j1,j2,j3" {
+		t.Fatalf("ACTIVE matcher = %q, want j1,j2,j3", got)
+	}
+	if got := list(map[string]any{"jobStateMatcher": "NON_ACTIVE"}); got != "" {
+		t.Fatalf("NON_ACTIVE matcher = %q, want none", got)
+	}
+	if got := list(map[string]any{"clusterName": "c1"}); got != "j1,j2" {
+		t.Fatalf("clusterName filter = %q, want j1,j2", got)
+	}
+	if got := list(map[string]any{"filter": `labels.env = staging`}); got != "j1,j3" {
+		t.Fatalf("label filter = %q, want j1,j3", got)
+	}
+	if got := list(map[string]any{"clusterName": "c1", "filter": `labels.env = staging`}); got != "j1" {
+		t.Fatalf("cluster+filter = %q, want j1", got)
+	}
+	if _, err := p.ListJobs(ctx, testNR(map[string]any{"region": "us-central1", "jobStateMatcher": "RUNNING"})); err == nil {
+		t.Fatal("unknown jobStateMatcher should be InvalidArgument")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("unknown jobStateMatcher error = %v, want 400", err)
 	}
 }
 
