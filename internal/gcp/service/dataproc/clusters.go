@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"jaiscloud/internal/clock"
@@ -12,10 +13,13 @@ import (
 )
 
 // ClusterInput carries the caller-supplied fields of a cluster create/update.
-// Config is the raw ClusterConfig JSON stored verbatim.
+// Config (a GCE ClusterConfig) and VirtualClusterConfig (a Dataproc-on-GKE
+// VirtualClusterConfig) are the raw wire JSON stored verbatim; the API treats
+// them as mutually exclusive.
 type ClusterInput struct {
-	Labels map[string]string
-	Config json.RawMessage
+	Labels               map[string]string
+	Config               json.RawMessage
+	VirtualClusterConfig json.RawMessage
 }
 
 // ClusterInputFromMap builds a ClusterInput from a Discovery/proto Cluster map.
@@ -26,7 +30,50 @@ func ClusterInputFromMap(body map[string]any) ClusterInput {
 			in.Config = data
 		}
 	}
+	if vcc, ok := body["virtualClusterConfig"].(map[string]any); ok {
+		if data, err := json.Marshal(vcc); err == nil {
+			in.VirtualClusterConfig = data
+		}
+	}
 	return in
+}
+
+// validateVirtualClusterConfig validates the required shape of a caller-supplied
+// dataproc.v1.VirtualClusterConfig. The emulator models the GKE placement as
+// metadata only (there is no GKE control plane), so this checks the API's
+// required structure: kubernetesClusterConfig.gkeClusterConfig must name a
+// target cluster (gkeClusterTarget) or at least one node pool
+// (nodePoolTarget). Unknown sub-fields are accepted and preserved verbatim.
+func validateVirtualClusterConfig(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var vcc map[string]any
+	if err := json.Unmarshal(raw, &vcc); err != nil {
+		return invalidArgument("virtualClusterConfig must be an object")
+	}
+	kcc, ok := vcc["kubernetesClusterConfig"].(map[string]any)
+	if !ok {
+		return invalidArgument("virtualClusterConfig requires kubernetesClusterConfig")
+	}
+	gke, ok := kcc["gkeClusterConfig"].(map[string]any)
+	if !ok {
+		return invalidArgument("kubernetesClusterConfig requires gkeClusterConfig")
+	}
+	target, _ := gke["gkeClusterTarget"].(string)
+	pools, _ := gke["nodePoolTarget"].([]any)
+	if target == "" && len(pools) == 0 {
+		return invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget")
+	}
+	return nil
+}
+
+// clusterPlacement is the human-readable placement of a cluster for logs.
+func clusterPlacement(c dpstore.Cluster) string {
+	if c.IsGKEBacked() {
+		return "GKE"
+	}
+	return "GCE"
 }
 
 // ParseMask splits a comma-separated update mask (REST query form) into paths.
@@ -38,22 +85,30 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if region == "" || name == "" {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("missing region or clusterName")
 	}
+	if len(in.Config) > 0 && len(in.VirtualClusterConfig) > 0 {
+		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
+	}
+	if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
 	now := clock.Now().UTC()
 	c := dpstore.Cluster{
-		ProjectID:     project,
-		Region:        region,
-		Name:          name,
-		Status:        dpstore.ClusterStatus{State: "RUNNING", StateStartTime: now},
-		StatusHistory: []dpstore.ClusterStatus{{State: "CREATING", StateStartTime: now}},
-		ClusterUUID:   randomHex(32),
-		CreateTime:    now,
-		UpdateTime:    now,
-		Labels:        in.Labels,
-		Config:        in.Config,
+		ProjectID:            project,
+		Region:               region,
+		Name:                 name,
+		Status:               dpstore.ClusterStatus{State: "RUNNING", StateStartTime: now},
+		StatusHistory:        []dpstore.ClusterStatus{{State: "CREATING", StateStartTime: now}},
+		ClusterUUID:          randomHex(32),
+		CreateTime:           now,
+		UpdateTime:           now,
+		Labels:               in.Labels,
+		Config:               in.Config,
+		VirtualClusterConfig: in.VirtualClusterConfig,
 	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
+	slog.Info("dataproc: cluster created", "project", project, "region", region, "cluster", name, "placement", clusterPlacement(c))
 	target := ClusterName(project, region, name)
 	op, err := s.storeOperation(ctx, project, region, "create", target,
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE"),
@@ -100,9 +155,17 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	apply := func(field string) bool {
 		return len(mask) == 0 || containsMaskField(mask, field)
 	}
+	if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
+		if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+			return dpstore.Cluster{}, dpstore.Operation{}, err
+		}
+	}
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
 		if apply("labels") && in.Labels != nil {
 			c.Labels = in.Labels
+		}
+		if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
+			c.VirtualClusterConfig = in.VirtualClusterConfig
 		}
 		if in.Config != nil {
 			stored := map[string]any{}
@@ -113,6 +176,9 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 			if data, err := json.Marshal(stored); err == nil {
 				c.Config = data
 			}
+		}
+		if len(c.Config) > 0 && len(c.VirtualClusterConfig) > 0 {
+			return c, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 		}
 		c.UpdateTime = clock.Now().UTC()
 		return c, nil
@@ -200,10 +266,13 @@ func pageClusters(clusters []dpstore.Cluster, params map[string]any) ([]dpstore.
 // --- mask helpers ---
 
 // containsMaskField reports whether the mask contains the given top-level field
-// (or a sub-path of it).
+// (or a sub-path of it). Mask segments are camelCase-normalized first so a
+// gRPC FieldMask's snake_case path (e.g. virtual_cluster_config) and a REST
+// updateMask's camelCase path (virtualClusterConfig) match the same field.
 func containsMaskField(mask []string, field string) bool {
 	for _, part := range mask {
-		if part == field || strings.HasPrefix(part, field+".") {
+		norm := camelKey(part)
+		if norm == field || strings.HasPrefix(norm, field+".") {
 			return true
 		}
 	}

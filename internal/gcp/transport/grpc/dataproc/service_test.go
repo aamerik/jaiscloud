@@ -275,6 +275,153 @@ func TestJobToProto_SparkHybridPreservesStatusAndJar(t *testing.T) {
 	}
 }
 
+// gkeClusterReq builds a CreateClusterRequest carrying a GKE
+// virtualClusterConfig with an existing-cluster target.
+func gkeClusterReq(id string) *dataprocpb.CreateClusterRequest {
+	return &dataprocpb.CreateClusterRequest{
+		ProjectId: "proj",
+		Region:    "us-central1",
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			VirtualClusterConfig: &dataprocpb.VirtualClusterConfig{
+				StagingBucket: "dataproc-staging-proj",
+				InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+							GkeClusterConfig: &dataprocpb.GkeClusterConfig{
+								GkeClusterTarget: "projects/proj/locations/us-central1/clusters/gke-1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestCreateCluster_GKEVirtualClusterConfig verifies the gRPC transport keeps a
+// virtualClusterConfig through create/get and never invents a GCE config.
+func TestCreateCluster_GKEVirtualClusterConfig(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, gkeClusterReq("gke-1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gke-1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if cl.GetConfig() != nil {
+		t.Fatalf("GKE cluster must not carry a GCE config: %+v", cl.GetConfig())
+	}
+	vcc := cl.GetVirtualClusterConfig()
+	if vcc == nil {
+		t.Fatal("virtualClusterConfig lost in gRPC transcode")
+	}
+	if vcc.GetStagingBucket() != "dataproc-staging-proj" {
+		t.Fatalf("stagingBucket = %q", vcc.GetStagingBucket())
+	}
+	if got := vcc.GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-1" {
+		t.Fatalf("gkeClusterTarget = %q", got)
+	}
+}
+
+// TestGetCluster_RESTCreatedGKEVirtualClusterConfig seeds a cluster from a
+// Discovery-shaped (REST) body and verifies it is served correctly over gRPC —
+// the cross-transport path that shares the core store.
+func TestGetCluster_RESTCreatedGKEVirtualClusterConfig(t *testing.T) {
+	st := dpstore.NewMemoryStore()
+	s := NewService(core.NewService(st, store.NewMemoryResourceStore()), "proj")
+	ctx := context.Background()
+	restBody := map[string]any{
+		"virtualClusterConfig": map[string]any{
+			"stagingBucket": "b",
+			"kubernetesClusterConfig": map[string]any{
+				"gkeClusterConfig": map[string]any{
+					"gkeClusterTarget": "projects/proj/locations/us-central1/clusters/gke-1",
+				},
+			},
+		},
+	}
+	if _, _, err := s.core.CreateCluster(ctx, "proj", "us-central1", "gke-1", core.ClusterInputFromMap(restBody)); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gke-1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if cl.GetConfig() != nil {
+		t.Fatalf("REST-created GKE cluster surfaced a GCE config over gRPC: %+v", cl.GetConfig())
+	}
+	if got := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-1" {
+		t.Fatalf("gkeClusterTarget = %q", got)
+	}
+}
+
+// TestCreateCluster_MalformedVirtualClusterConfig verifies the gRPC transport
+// maps a virtualClusterConfig without a GKE target to InvalidArgument.
+func TestCreateCluster_MalformedVirtualClusterConfig(t *testing.T) {
+	s := newTestService()
+	_, err := s.CreateCluster(context.Background(), &dataprocpb.CreateClusterRequest{
+		ProjectId: "proj",
+		Region:    "us-central1",
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: "bad-gke",
+			VirtualClusterConfig: &dataprocpb.VirtualClusterConfig{
+				InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+							GkeClusterConfig: &dataprocpb.GkeClusterConfig{},
+						},
+					},
+				},
+			},
+		},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateCluster malformed vcc = %v, want InvalidArgument", err)
+	}
+}
+
+// TestUpdateCluster_VirtualClusterConfigSnakeMask verifies a gRPC FieldMask's
+// snake_case virtual_cluster_config path is normalized and applies the update.
+func TestUpdateCluster_VirtualClusterConfigSnakeMask(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, gkeClusterReq("gke-1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if _, err := s.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   "proj",
+		Region:      "us-central1",
+		ClusterName: "gke-1",
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: "gke-1",
+			VirtualClusterConfig: &dataprocpb.VirtualClusterConfig{
+				InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+							GkeClusterConfig: &dataprocpb.GkeClusterConfig{
+								GkeClusterTarget: "projects/proj/locations/us-central1/clusters/gke-2",
+							},
+						},
+					},
+				},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"virtual_cluster_config"}},
+	}); err != nil {
+		t.Fatalf("UpdateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gke-1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if got := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-2" {
+		t.Fatalf("gkeClusterTarget = %q, want the updated target", got)
+	}
+}
+
 func TestDiagnoseCluster_Unimplemented(t *testing.T) {
 	s := newTestService()
 	_, err := s.DiagnoseCluster(context.Background(), &dataprocpb.DiagnoseClusterRequest{

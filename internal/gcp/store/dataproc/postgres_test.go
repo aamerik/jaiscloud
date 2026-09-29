@@ -49,7 +49,8 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	s.Reset(ctx)
 
 	const config = `{"gceClusterConfig":{"zoneUri":"z"},"softwareConfig":{"imageVersion":"2.2"},"initializationActions":[{"executableFile":"gs://b/init.sh"}]}`
-	c := Cluster{Name: "c1", Config: []byte(config), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}}
+	const vcc = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}},"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"projects/p/locations/us-central1/services/hms"}}}`
+	c := Cluster{Name: "c1", Config: []byte(config), VirtualClusterConfig: []byte(vcc), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}}
 	if err := s.CreateCluster(ctx, "proj", "us-central1", c); err != nil {
 		t.Fatalf("create cluster: %v", err)
 	}
@@ -75,6 +76,9 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	if !jsonEqual(string(got.Config), config) {
 		t.Fatalf("config not preserved: %q", got.Config)
 	}
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vcc) {
+		t.Fatalf("virtualClusterConfig not preserved: %q", got.VirtualClusterConfig)
+	}
 	if got.Labels["k"] != "v" || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster fields lost: %+v", got)
 	}
@@ -85,6 +89,46 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if !jsonEqual(string(gotJob.TypeJob), typeJob) {
 		t.Fatalf("type_job not preserved: %q", gotJob.TypeJob)
+	}
+}
+
+// TestPostgresStoreGKEVirtualClusterConfigNoConfig verifies that a GKE-only
+// cluster (virtualClusterConfig, no GCE config) does not read back an empty
+// `config` from the JSONB '{}' sentinel, and its virtualClusterConfig survives.
+func TestPostgresStoreGKEVirtualClusterConfigNoConfig(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres GKE round-trip test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	const vcc = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}}}`
+	if err := s.CreateCluster(ctx, "proj", "us-central1", Cluster{
+		Name: "gke", VirtualClusterConfig: []byte(vcc), Status: ClusterStatus{State: "RUNNING"},
+	}); err != nil {
+		t.Fatalf("create cluster: %v", err)
+	}
+	got, err := s.GetCluster(ctx, "proj", "us-central1", "gke")
+	if err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if len(got.Config) != 0 {
+		t.Fatalf("GKE cluster read back a GCE config: %q", got.Config)
+	}
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vcc) {
+		t.Fatalf("virtualClusterConfig not preserved: %q", got.VirtualClusterConfig)
 	}
 }
 
