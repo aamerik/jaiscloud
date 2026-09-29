@@ -309,7 +309,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
   and has no subworkflows/`listRevisions`/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
-  Dataproc `ListClusters`/`ListJobs` ignore `filter`/`clusterName`/`jobStateMatcher`, and
+  Dataproc `ListClusters` ignores `filter`/`clusterName`, while `ListJobs` honors `clusterName`,
+  `jobStateMatcher` and a bounded `filter` subset (`status.state`, `labels.<key>`, `insertTime`),
+  and
   `ListOperations` is not exposed (mutations return operations inline `done:true`);
   Eventarc has no event-delivery engine (trigger/channel/provider CRUD is the whole surface; the
   Eventarc gRPC proto defines no IAM RPCs, so Trigger/Channel IAM is served through the shared

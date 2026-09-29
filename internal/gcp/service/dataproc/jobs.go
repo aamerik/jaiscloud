@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
@@ -140,17 +141,31 @@ func (s *Service) GetJob(ctx context.Context, project, region, jobID string) (dp
 }
 
 // ListJobs returns a cursor page of the jobs in a region, settling each
-// transitional job first so a poller sees it progress.
-func (s *Service) ListJobs(ctx context.Context, project, region string, pageSize int, pageToken string) ([]dpstore.Job, string, error) {
+// transitional job first so a poller sees it progress. clusterName narrows the
+// result to jobs submitted to a cluster; filter is the bounded
+// dataproc.v1.ListJobsRequest.filter grammar and, when non-empty, overrides
+// matcher (the API's "If filter is provided, jobStateMatcher will be ignored"
+// rule). Filtering is applied before pagination so pageToken cursors stay
+// stable; paging.Page keeps the page sorted by job id. A malformed filter is
+// InvalidArgument.
+func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, filter string, matcher JobStateMatcher, pageSize int, pageToken string) ([]dpstore.Job, string, error) {
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
+	filter = strings.TrimSpace(filter)
+	var compiled jobFilter
+	if filter != "" {
+		var err error
+		if compiled, err = compileJobFilter(filter); err != nil {
+			return nil, "", err
+		}
+	}
+
 	jobs, err := s.store.ListJobs(ctx, project, region)
 	if err != nil {
 		return nil, "", err
 	}
-	// clusterName and filter are accepted but ignored (documented limitation).
-	settled := make([]dpstore.Job, 0, len(jobs))
+	filtered := make([]dpstore.Job, 0, len(jobs))
 	for _, j := range jobs {
 		advanced, advErr := s.advanceJob(ctx, project, region, j.JobID)
 		if errors.Is(advErr, dpstore.ErrNoSuchJob) {
@@ -159,9 +174,19 @@ func (s *Service) ListJobs(ctx context.Context, project, region string, pageSize
 		if advErr != nil {
 			return nil, "", mapErr(advErr)
 		}
-		settled = append(settled, advanced)
+		if clusterName != "" && advanced.PlacementClusterName != clusterName {
+			continue
+		}
+		if filter != "" {
+			if !compiled.match(advanced) {
+				continue
+			}
+		} else if !matchJobStateMatcher(advanced, matcher) {
+			continue
+		}
+		filtered = append(filtered, advanced)
 	}
-	page, next := paging.Page(settled, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	page, next := paging.Page(filtered, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
 	return page, next, nil
 }
 

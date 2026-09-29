@@ -175,7 +175,13 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListJobs(ctx, p.project(nr), strParam(nr, "region"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	matcher, err := core.ParseJobStateMatcher(strParam(nr, "jobStateMatcher"))
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListJobs(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "clusterName"), strParam(nr, "filter"), matcher,
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
