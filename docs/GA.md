@@ -288,7 +288,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   and Cloud Run are engine-bearing (registry proxy / container executor) and are deliberately not
   emulated.
 - **Explicit `Unimplemented` stubs (graded `unsupported` in the matrix)** — Dataproc Metastore
-  `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`;
+  `ExportMetadata`/`RestoreService`/`QueryMetadata`/`MoveTableToDatabase`/`AlterMetadataResourceLocation`
+  (admin/DR operations off the Spark job path with no AWS Glue analogue — backend-RDBMS SQL + a Cloud
+  Storage result manifest, a metadata-dump/restore format, and catalog mutations better served through
+  the Hive Thrift `alter_table` path; see the README Known Limitations);
   Dataproc `DiagnoseCluster`;
   Service Usage `BatchGetServices` (the gRPC surface is the get/list/enable/disable control plane);
   Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
