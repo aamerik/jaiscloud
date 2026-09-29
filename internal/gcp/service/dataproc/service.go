@@ -59,6 +59,18 @@ type Service struct {
 	// operations are GC'd after a similar TTL). Zero disables the sweep.
 	operationTTL time.Duration
 
+	// clusterReadyDelay is how long a cluster stays in a transitional state
+	// (CREATING/DELETING/UPDATING/STARTING/STOPPING) before a read advances it
+	// to its target state. The transition is lazy and clock-driven (no
+	// goroutine), matching the emulator's KMS-rotation pattern. Zero means the
+	// first read settles the cluster.
+	clusterReadyDelay time.Duration
+
+	// clusterErrorHook, when set, forces a cluster transition into ERROR
+	// instead of its target state. It is a test hook (real GCP reaches ERROR on
+	// provisioning failure, which the emulator cannot observe); nil disables it.
+	clusterErrorHook func(project, region, name string) bool
+
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -123,6 +135,20 @@ func WithProjectID(project string) Option {
 // the lazy sweep removes them. Zero disables the sweep (tests use a short TTL).
 func WithOperationTTL(d time.Duration) Option {
 	return func(s *Service) { s.operationTTL = d }
+}
+
+// WithClusterReadyDelay overrides how long a cluster stays in a transitional
+// state before a read settles it. The default is zero: the first read after the
+// mutation completes the transition. Tests inject a positive delay (with a
+// frozen clock) to observe CREATING/DELETING/UPDATING/STARTING/STOPPING.
+func WithClusterReadyDelay(d time.Duration) Option {
+	return func(s *Service) { s.clusterReadyDelay = d }
+}
+
+// WithClusterErrorHook installs a test hook that forces a settling cluster to
+// ERROR instead of its target state. Production never sets it.
+func WithClusterErrorHook(fn func(project, region, name string) bool) Option {
+	return func(s *Service) { s.clusterErrorHook = fn }
 }
 
 // NewService returns a Dataproc core backed by the given store.

@@ -234,7 +234,9 @@ func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) 
 	return j, nil
 }
 
-// GetOperation returns a persisted long-running operation.
+// GetOperation returns a persisted long-running operation. Polling a cluster
+// mutation's operation is what drives its lazy state machine: the cluster is
+// advanced and, once stable, the operation is finalized with its response.
 func (s *Service) GetOperation(ctx context.Context, project, region, opID string) (dpstore.Operation, error) {
 	if region == "" || opID == "" {
 		return dpstore.Operation{}, invalidArgument("missing region or operationId")
@@ -242,6 +244,15 @@ func (s *Service) GetOperation(ctx context.Context, project, region, opID string
 	op, err := s.store.GetOperation(ctx, project, region, opID)
 	if err != nil {
 		return dpstore.Operation{}, mapErr(err)
+	}
+	// Job-submit operations are completed by the job engine, not by the cluster
+	// state machine.
+	if !op.Done && op.Verb != "submit" {
+		advanced, advErr := s.advanceClusterOperation(ctx, op)
+		if advErr != nil {
+			return dpstore.Operation{}, mapErr(advErr)
+		}
+		return advanced, nil
 	}
 	return op, nil
 }

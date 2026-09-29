@@ -7,12 +7,14 @@ import (
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // operationsTestService dials a real in-process gRPC server backed by the
-// stub Operations service and returns the generated client.
-func operationsTestService(t *testing.T) (longrunningpb.OperationsClient, func()) {
+// Operations service and returns the generated client.
+func operationsTestService(t *testing.T, resolvers ...Resolver) (longrunningpb.OperationsClient, func()) {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -20,7 +22,7 @@ func operationsTestService(t *testing.T) (longrunningpb.OperationsClient, func()
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	longrunningpb.RegisterOperationsServer(srv, New())
+	longrunningpb.RegisterOperationsServer(srv, New(resolvers...))
 	go srv.Serve(ln)
 
 	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -114,5 +116,69 @@ func TestWaitOperation(t *testing.T) {
 	}
 	if !op.GetDone() {
 		t.Errorf("WaitOperation done = false, want true")
+	}
+}
+
+// fakeResolver owns a single operation name and delegates everything else.
+type fakeResolver struct {
+	name string
+	op   *longrunningpb.Operation
+	err  error
+}
+
+func (f fakeResolver) ResolveOperation(_ context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	if name != f.name {
+		return nil, false, nil
+	}
+	return f.op, true, f.err
+}
+
+// TestGetOperationDelegatesToResolver verifies a registered resolver's in-flight
+// operation is served ahead of the terminal stub.
+func TestGetOperationDelegatesToResolver(t *testing.T) {
+	dpName := "projects/p/regions/us-central1/operations/op-dp"
+	client, cleanup := operationsTestService(t, fakeResolver{
+		name: dpName,
+		op:   &longrunningpb.Operation{Name: dpName, Done: false},
+	})
+	defer cleanup()
+
+	op, err := client.GetOperation(context.Background(), &longrunningpb.GetOperationRequest{Name: dpName})
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if op.GetName() != dpName || op.GetDone() {
+		t.Fatalf("operation = %+v, want in-flight %s", op, dpName)
+	}
+}
+
+// TestGetOperationResolverError verifies a resolver's own error (e.g. NotFound)
+// is returned rather than silently falling through to the terminal stub.
+func TestGetOperationResolverError(t *testing.T) {
+	dpName := "projects/p/regions/us-central1/operations/missing"
+	client, cleanup := operationsTestService(t, fakeResolver{
+		name: dpName,
+		err:  status.Error(codes.NotFound, "operation not found"),
+	})
+	defer cleanup()
+
+	_, err := client.GetOperation(context.Background(), &longrunningpb.GetOperationRequest{Name: dpName})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetOperation err = %v, want NotFound", err)
+	}
+}
+
+// TestGetOperationFallsBackToStub verifies a name no resolver owns is still
+// reported terminal.
+func TestGetOperationFallsBackToStub(t *testing.T) {
+	client, cleanup := operationsTestService(t, fakeResolver{name: "projects/p/regions/us-central1/operations/op-dp"})
+	defer cleanup()
+
+	op, err := client.GetOperation(context.Background(), &longrunningpb.GetOperationRequest{Name: operationName})
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("fallback operation = %+v, want done", op)
 	}
 }

@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -143,14 +144,34 @@ func jobTerminal(state string) bool {
 // --- Operations ---
 
 // clusterOperationMetadata renders ClusterOperationMetadata for an operation.
-func clusterOperationMetadata(clusterName, clusterUUID, operationType string) map[string]any {
+// opState is the operation-status enum (PENDING|RUNNING|DONE), not the cluster
+// state: dataproc's ClusterOperationStatus tracks the *operation*, while the
+// cluster's own state (CREATING/DELETING/UPDATING/...) is exposed on the
+// Cluster resource. protojson rejects unknown enum values, so this must stay
+// within ClusterOperationStatus.State.
+func clusterOperationMetadata(clusterName, clusterUUID, operationType, opState string) map[string]any {
+	now := clock.Now().UTC()
+	entry := func(state string) map[string]any {
+		return map[string]any{"state": state, "stateStartTime": formatTimestamp(now)}
+	}
+	pending, running, done := entry("PENDING"), entry("RUNNING"), entry("DONE")
+	var status map[string]any
+	var history []any
+	switch opState {
+	case "PENDING":
+		status, history = pending, []any{pending}
+	case "DONE":
+		status, history = done, []any{pending, running, done}
+	default: // RUNNING — an in-flight create/update/start/stop/delete
+		status, history = running, []any{pending, running}
+	}
 	return map[string]any{
 		"@type":         "type.googleapis.com/google.cloud.dataproc.v1.ClusterOperationMetadata",
 		"clusterName":   clusterName,
 		"clusterUuid":   clusterUUID,
 		"operationType": operationType,
-		"status":        map[string]any{"state": "DONE"},
-		"statusHistory": []any{map[string]any{"state": "DONE"}},
+		"status":        status,
+		"statusHistory": history,
 	}
 }
 
@@ -186,32 +207,93 @@ func OperationJSON(op dpstore.Operation) map[string]any {
 	return out
 }
 
-// storeOperation persists a done operation and returns it.
-func (s *Service) storeOperation(ctx context.Context, project, region, verb, target string, metadata, response map[string]any) (dpstore.Operation, error) {
+// createClusterOperation persists a not-yet-done operation for a cluster
+// mutation. The response is filled in when a later read finalizes the
+// operation (see advanceClusterOperation).
+func (s *Service) createClusterOperation(ctx context.Context, project, region, verb, target string, metadata map[string]any) (dpstore.Operation, error) {
 	now := clock.Now().UTC()
 	op := dpstore.Operation{
 		ID:         randomHex(12),
 		ProjectID:  project,
 		Region:     region,
-		Done:       true,
+		Done:       false,
 		Verb:       verb,
 		Target:     target,
 		CreateTime: now,
-		EndTime:    now,
 	}
 	if metadata != nil {
-		metaJSON, _ := json.Marshal(metadata)
-		op.Metadata = string(metaJSON)
-	}
-	if response != nil {
-		respJSON, _ := json.Marshal(response)
-		op.Response = string(respJSON)
+		if b, err := json.Marshal(metadata); err == nil {
+			op.Metadata = string(b)
+		}
 	}
 	s.sweepOperations(ctx)
 	if err := s.store.CreateOperation(ctx, project, region, op); err != nil {
 		return dpstore.Operation{}, err
 	}
 	return op, nil
+}
+
+// advanceClusterOperation settles the cluster an in-flight cluster operation
+// targets and, once the cluster is stable, finalizes the operation with the
+// cluster (or an empty object for a delete). It is the read-time half of the
+// cluster LRO, invoked from GetOperation.
+func (s *Service) advanceClusterOperation(ctx context.Context, op dpstore.Operation) (dpstore.Operation, error) {
+	name := clusterNameFromTarget(op.Target)
+	if name == "" {
+		return op, nil
+	}
+	c, err := s.advanceCluster(ctx, op.ProjectID, op.Region, name)
+	if errors.Is(err, dpstore.ErrNoSuchCluster) {
+		if op.Verb == "delete" {
+			return s.finishClusterOperation(ctx, op, map[string]any{}), nil
+		}
+		// The cluster disappeared underneath the operation (e.g. deleted while
+		// still creating); terminate so the poll cannot hang forever.
+		return s.finishClusterOperation(ctx, op, nil), nil
+	}
+	if err != nil {
+		return op, err
+	}
+	if clusterTransitional(c.Status.State) {
+		return op, nil // transition not due yet
+	}
+	return s.finishClusterOperation(ctx, op, ClusterJSON(c)), nil
+}
+
+// finishClusterOperation marks an operation done, records its response, and
+// flips the cluster-operation metadata's status to DONE. It is best-effort on
+// the metadata rewrite (the operation is still returned done even if the store
+// update fails).
+func (s *Service) finishClusterOperation(ctx context.Context, op dpstore.Operation, response map[string]any) dpstore.Operation {
+	if op.Done {
+		return op
+	}
+	now := clock.Now().UTC()
+	op.Done = true
+	op.EndTime = now
+	if response != nil {
+		if b, err := json.Marshal(response); err == nil {
+			op.Response = string(b)
+		}
+	}
+	var meta map[string]any
+	if op.Metadata != "" {
+		_ = json.Unmarshal([]byte(op.Metadata), &meta)
+	}
+	if meta != nil {
+		done := map[string]any{"state": "DONE", "stateStartTime": formatTimestamp(now)}
+		meta["status"] = done
+		if history, ok := meta["statusHistory"].([]any); ok {
+			meta["statusHistory"] = append(history, done)
+		}
+		if b, err := json.Marshal(meta); err == nil {
+			op.Metadata = string(b)
+		}
+	}
+	if err := s.store.UpdateOperation(ctx, op.ProjectID, op.Region, op); err != nil {
+		slog.Warn("dataproc: finishClusterOperation failed", "operation", op.ID, "err", err)
+	}
+	return op
 }
 
 // sweepOperations lazily deletes completed operations older than the retention

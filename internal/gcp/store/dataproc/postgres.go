@@ -406,9 +406,10 @@ func (s *PostgresStore) UpdateOperation(ctx context.Context, projectID, region s
 	return nil
 }
 
-// DeleteStaleOperations removes operations older than cutoff (all scopes).
+// DeleteStaleOperations removes completed operations older than cutoff (all
+// scopes). In-flight operations (done=false) are retained.
 func (s *PostgresStore) DeleteStaleOperations(ctx context.Context, cutoff time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_dataproc_operations WHERE create_time < $1`, cutoff)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_dataproc_operations WHERE create_time < $1 AND done = true`, cutoff)
 	if err != nil {
 		return 0, err
 	}

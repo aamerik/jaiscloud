@@ -222,14 +222,16 @@ func (s *MemoryStore) UpdateOperation(_ context.Context, projectID, region strin
 	return nil
 }
 
-// DeleteStaleOperations removes operations older than cutoff across all scopes.
+// DeleteStaleOperations removes completed operations older than cutoff across
+// all scopes. In-flight operations (Done=false) are retained: a poll still has
+// to be able to advance and observe them.
 func (s *MemoryStore) DeleteStaleOperations(_ context.Context, cutoff time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for key, ops := range s.operations {
 		for id, op := range ops {
-			if op.CreateTime.Before(cutoff) {
+			if op.Done && op.CreateTime.Before(cutoff) {
 				delete(ops, id)
 				n++
 			}

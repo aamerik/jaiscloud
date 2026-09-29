@@ -125,6 +125,18 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("fresh op-1 should remain, got %v", err)
 	}
 
+	// An in-flight operation is never swept, even with an old CreateTime: its
+	// poll still has to advance the cluster state machine.
+	if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op-pending", Done: false, CreateTime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatalf("create in-flight op: %v", err)
+	}
+	if removed, err := s.DeleteStaleOperations(ctx, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil || removed != 0 {
+		t.Fatalf("DeleteStaleOperations = %d, %v; want 0 removed (in-flight retained)", removed, err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op-pending"); err != nil {
+		t.Fatalf("in-flight op should be retained, got %v", err)
+	}
+
 	// Delete cluster
 	if err := s.DeleteCluster(ctx, "proj", "us-central1", "my-cluster"); err != nil {
 		t.Fatalf("delete cluster: %v", err)
