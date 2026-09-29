@@ -879,8 +879,11 @@ func startCmd() *cobra.Command {
 			// Serve the Hive Metastore (Thrift) serving plane on its own TCP
 			// listener. Thrift is a binary protocol over raw TCP — it does not
 			// flow through the HTTP gateway or the gRPC server. The catalog is
-			// single-global: the per-Service endpoint_uri emitted by the
-			// control plane is cosmetic. Only started when metastore is enabled.
+			// single-global (accepted divergence, MP4): all control-plane
+			// Services share it, matching the AWS Glue Data Catalog's
+			// one-catalog-per-account+region model; the per-Service endpoint_uri
+			// emitted by the control plane is cosmetic. Only started when
+			// metastore is enabled.
 			if serviceEnabled("metastore") {
 				hmsPort, _ := cmd.Flags().GetInt("hms-port")
 				hmsServer := hms.NewServer(fmt.Sprintf(":%d", hmsPort), stores.hms)
