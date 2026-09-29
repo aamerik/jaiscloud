@@ -6,14 +6,20 @@
 PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
-# other families sort after these, alphabetically. The Java-compat effort owns
-# waves W1–W3 today. The AWS-parity families run next; the BigQuery engine
-# decision (bigquery-ga) is deliberately deprioritized behind them.
-SERIES ?= java-compat,functions-parity,metastore-parity,bigquery-ga
+# other families sort after these, alphabetically. ledger-integrity runs first
+# (it repairs merge-link accuracy so the planned list can be trusted), then the
+# Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
+# BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
+SERIES ?= ledger-integrity,java-compat,functions-parity,metastore-parity,bigquery-ga
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
 MATRIX ?= 1
+
+# Ledger resolution overlay: rows whose implementing PR merged but whose source
+# doc (gitignored plan_docs/ scratch) was never updated. A row is closed only
+# when the referenced PR is actually merged. Set RESOLVED= to disable.
+RESOLVED ?= docs/gcpstatus-resolved.yaml
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
@@ -742,28 +748,28 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)" $(if $(MATRIX),-from-matrix,)
+	@bin/gcpstatus -docs plan_docs -out plan_docs/STATUS.md -json plan_docs/status.json -series "$(SERIES)" -resolved "$(RESOLVED)" $(if $(MATRIX),-from-matrix,)
 
 gcp-status-check: ## Assess a proposed change against known state: Q="<keywords>" [SERVICE=<svc>] [include-archive=1]; exit 2 = already done, 3 = in flight
 	@test -n "$(Q)$(SERVICE)" || { echo 'usage: make gcp-status-check Q="<keywords>" [SERVICE=<svc>]'; exit 2; }
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -query "$(Q)" -service "$(SERVICE)" -check $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -query "$(Q)" -service "$(SERVICE)" -resolved "$(RESOLVED)" -check $(if $(include-archive),-include-archive,)
 
 gcp-status-audit: ## Classify not-done items: oversight? / unowned / stale-doc / abandoned / claimed-done / unscheduled / scheduled / intentional
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -audit -matrix docs/fidelity/fidelity-matrix.json $(if $(MATRIX),-from-matrix,) $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -audit -resolved "$(RESOLVED)" -matrix docs/fidelity/fidelity-matrix.json $(if $(MATRIX),-from-matrix,) $(if $(include-archive),-include-archive,)
 
 gcp-status-coverage: ## Fail if any plan_docs file has status markers but produced no ledger rows (audit blind spots)
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -coverage $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -coverage -resolved "$(RESOLVED)" $(if $(include-archive),-include-archive,)
 
 gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri, SERIES=a,b)
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) -series "$(SERIES)" $(if $(include-archive),-include-archive,)
+	@bin/gcpstatus -docs plan_docs -next -n $(if $(N),$(N),5) -by $(if $(BY),$(BY),wave) -series "$(SERIES)" -resolved "$(RESOLVED)" $(if $(include-archive),-include-archive,)
 
 gcp-status-lint-plans: ## Fail if any plan-shaped file under plan_docs has no parseable index/detail (skipped the template)
 	@mkdir -p bin
@@ -781,12 +787,12 @@ gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERV
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -new-plan "$(SERVICE)" -effort "$(if $(EFFORT),$(EFFORT),ga)" $(if $(FORCE),-force,)
 
-gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md ID=<J-id> [SLUG=...] [DRY=1] [OPS=1]
-	@test -n "$(PLAN)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [SLUG=...]'; exit 2; }
-	@test -n "$(ID)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id>'; exit 2; }
+gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>] [SLUG=...] [DRY=1] [OPS=1]
+	@test -n "$(PLAN)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>] [SLUG=...]'; exit 2; }
+	@test -n "$(ID)" || { echo 'usage: make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id> [PR=<n>]'; exit 2; }
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -finalize "$(PLAN)" -id "$(ID)" $(if $(SLUG),-slug "$(SLUG)",) $(if $(DRY),-dry,)
+	@bin/gcpstatus -finalize "$(PLAN)" -id "$(ID)" -finalize-pr "$(if $(PR),$(PR),0)" $(if $(SLUG),-slug "$(SLUG)",) $(if $(DRY),-dry,)
 	@if [ -z "$(DRY)" ]; then \
 	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
 	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/gcp; fi; \

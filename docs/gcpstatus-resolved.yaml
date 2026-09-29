@@ -1,0 +1,49 @@
+# Ledger resolution overlay for tools/gcpstatus (see plan_docs ledger-integrity).
+#
+# Closes ledger rows whose implementing PR merged but whose source doc was never
+# updated. Most source docs live under the gitignored plan_docs/ scratch tree, so
+# the durable fix is this committed overlay rather than editing them in place.
+#
+# Every entry is EVIDENCE-GATED: a matching row is marked done only when the
+# referenced PR is actually MERGED. An entry can therefore never mark unmade work
+# as done; a reverted/closed PR leaves the row open.
+#
+# Fields:
+#   source: optional substring that must appear in the row's source doc path
+#   match:  required — case-insensitive substring of the row's id/aliases/gap
+#   pr:     required — the merged PR that implemented the work
+#   note:   optional — recorded on the row
+#
+# Disable with `make ... RESOLVED=` or `-resolved ''`.
+
+entries:
+  # #151 shipped project-level IAM (resourcemanager projects.* IAM) — the source
+  # finding (gcp-terraform-compat-2026-09-22.md) still reads "not implemented".
+  - match: "cloud-resource-manager-project-level-iam"
+    pr: 151
+    note: "resolved: project-level IAM shipped in #151"
+
+  # #151 also shipped Service Usage v1 (Enable/Disable/BatchEnable/Get/List). The
+  # floci/terraform findings still list Service Usage as missing; the bundled
+  # "Cloud Run/Tasks/Scheduler/Service Usage" row is intentionally NOT matched
+  # (those other services are still absent).
+  - match: "service-usage-not-implemented"
+    pr: 151
+    note: "resolved: Service Usage v1 shipped in #151"
+
+  # #168 shipped the Pub/Sub cross-stream ack reconciliation registry
+  # (internal/gcp/grpc/pubsub/acktrack.go); the debt-plan remainder still lists it.
+  - source: "gcp-deferred-debt-plan"
+    match: "pub-sub-cross-stream-ack"
+    pr: 168
+    note: "resolved: cross-stream ack reconciliation shipped in #168"
+
+  # FU1/FU2 merged (#211/#212); the finalized FD14 index rows still read open.
+  - source: "final/FD14"
+    match: "FU1"
+    pr: 211
+    note: "resolved: Cloud Functions gRPC CallFunction shipped in #211"
+  - source: "final/FD14"
+    match: "FU2"
+    pr: 212
+    note: "resolved: v2 ListRuntimes shipped in #212"
