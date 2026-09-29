@@ -71,6 +71,18 @@ type Service struct {
 	// provisioning failure, which the emulator cannot observe); nil disables it.
 	clusterErrorHook func(project, region, name string) bool
 
+	// jobStateDelay is how long a job stays in a transitional state
+	// (PENDING/SETUP_DONE/RUNNING/CANCEL_*) before a read advances it. Like the
+	// cluster state machine the transition is lazy and clock-driven (no
+	// goroutine). Zero means the first read settles the next hop.
+	jobStateDelay time.Duration
+
+	// jobAttemptFailureHook, when set, forces the next RUNNING -> DONE hop to
+	// ATTEMPT_FAILURE (the state then settles to ERROR). It is a test hook: the
+	// emulator's Spark engine does not retry, so a transient failure has no
+	// natural producer. nil disables it.
+	jobAttemptFailureHook func(project, region, jobID string) bool
+
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -149,6 +161,21 @@ func WithClusterReadyDelay(d time.Duration) Option {
 // ERROR instead of its target state. Production never sets it.
 func WithClusterErrorHook(fn func(project, region, name string) bool) Option {
 	return func(s *Service) { s.clusterErrorHook = fn }
+}
+
+// WithJobStateDelay overrides how long a job stays in a transitional state
+// before a read settles the next hop. The default is zero: the first read after
+// a transition advances it. Tests inject a positive delay (with a frozen clock)
+// to observe PENDING/SETUP_DONE/RUNNING/CANCEL_PENDING/CANCEL_STARTED.
+func WithJobStateDelay(d time.Duration) Option {
+	return func(s *Service) { s.jobStateDelay = d }
+}
+
+// WithJobAttemptFailureHook installs a test hook that forces a job's next
+// RUNNING -> DONE hop to ATTEMPT_FAILURE (then ERROR). The emulator's Spark
+// engine does not retry, so production never sets it.
+func WithJobAttemptFailureHook(fn func(project, region, jobID string) bool) Option {
+	return func(s *Service) { s.jobAttemptFailureHook = fn }
 }
 
 // NewService returns a Dataproc core backed by the given store.

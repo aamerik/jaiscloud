@@ -282,7 +282,26 @@ func TestDiagnoseCluster_Unimplemented(t *testing.T) {
 	}
 }
 
-func TestSubmitJob_MockModeDONE(t *testing.T) {
+// pollRESTJobTerminal reads a job through the REST surface until it reaches a
+// terminal state, exercising the lazy job state machine one hop per read.
+func pollRESTJobTerminal(t *testing.T, p *Provider, jobID string) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < 16; i++ {
+		got, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": jobID}))
+		if err != nil {
+			t.Fatalf("GetJob: %v", err)
+		}
+		switch got.Data["status"].(map[string]any)["state"] {
+		case "DONE", "ERROR", "CANCELLED":
+			return got.Data
+		}
+	}
+	t.Fatalf("job %s did not reach a terminal state", jobID)
+	return nil
+}
+
+func TestSubmitJob_MockProgression(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
@@ -305,19 +324,19 @@ func TestSubmitJob_MockModeDONE(t *testing.T) {
 		t.Fatalf("SubmitJob: %v", err)
 	}
 	j := resp.Data
-	if j["status"].(map[string]any)["state"] != "DONE" {
-		t.Fatalf("expected DONE in mock mode, got %v", j["status"])
+	if j["status"].(map[string]any)["state"] != "PENDING" {
+		t.Fatalf("expected PENDING on submit, got %v", j["status"])
 	}
-	if j["done"] != true {
-		t.Fatalf("expected done=true, got %v", j["done"])
+	if j["done"] != false {
+		t.Fatalf("expected done=false on submit, got %v", j["done"])
 	}
 
-	got, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": "j1"}))
-	if err != nil {
-		t.Fatalf("GetJob: %v", err)
+	got := pollRESTJobTerminal(t, p, "j1")
+	if got["status"].(map[string]any)["state"] != "DONE" {
+		t.Fatalf("expected DONE, got %v", got)
 	}
-	if got.Data["status"].(map[string]any)["state"] != "DONE" {
-		t.Fatalf("GetJob expected DONE, got %v", got.Data)
+	if got["done"] != true {
+		t.Fatalf("expected done=true, got %v", got["done"])
 	}
 }
 
@@ -479,15 +498,26 @@ func TestSubmitJobAsOperation(t *testing.T) {
 	if meta["@type"] != "type.googleapis.com/google.cloud.dataproc.v1.JobMetadata" {
 		t.Fatalf("unexpected metadata @type: %v", meta["@type"])
 	}
-	// The operation can be fetched by its name.
+	if op["done"] != false {
+		t.Fatalf("expected an in-flight operation, got %v", op["done"])
+	}
+	// The operation can be fetched by its name; polling advances the job and
+	// completes the operation once the job is terminal.
 	opName, _ := op["name"].(string)
 	opID := ""
 	if i := indexOf(opName, "/operations/"); i >= 0 {
 		opID = opName[i+len("/operations/"):]
 	}
-	got, err := p.GetOperation(ctx, testNR(map[string]any{"region": "us-central1", "operationId": opID}))
-	if err != nil {
-		t.Fatalf("GetOperation: %v", err)
+	var got *model.ProviderResponse
+	for i := 0; i < 16; i++ {
+		g, gerr := p.GetOperation(ctx, testNR(map[string]any{"region": "us-central1", "operationId": opID}))
+		if gerr != nil {
+			t.Fatalf("GetOperation: %v", gerr)
+		}
+		got = g
+		if got.Data["done"] == true {
+			break
+		}
 	}
 	if got.Data["done"] != true {
 		t.Fatalf("expected done=true, got %v", got.Data)
@@ -605,7 +635,7 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
+	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
 		"body": map[string]any{
 			"job": map[string]any{
@@ -614,22 +644,30 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
 			},
 		},
-	}))
-	if err != nil {
+	})); err != nil {
 		t.Fatalf("SubmitJob: %v", err)
 	}
-	status, _ := resp.Data["status"].(map[string]any)
+	data := pollRESTJobTerminal(t, p, "j-sub")
+	status, _ := data["status"].(map[string]any)
 	if status["state"] != "DONE" {
 		t.Fatalf("expected DONE, got %v", status["state"])
 	}
 	if _, ok := status["substate"]; ok {
 		t.Fatalf("terminal job status must omit substate, got %v", status)
 	}
-	history, _ := resp.Data["statusHistory"].([]any)
-	if len(history) == 0 {
-		t.Fatalf("expected a RUNNING statusHistory entry, got %v", resp.Data["statusHistory"])
+	history, _ := data["statusHistory"].([]any)
+	var sawRunning bool
+	for _, h := range history {
+		hm, _ := h.(map[string]any)
+		if hm["state"] != "RUNNING" {
+			continue
+		}
+		sawRunning = true
+		if hm["substate"] != "QUEUED" {
+			t.Fatalf("history RUNNING entry substate = %v, want QUEUED", hm["substate"])
+		}
 	}
-	if h0, _ := history[0].(map[string]any); h0["substate"] != "QUEUED" {
-		t.Fatalf("history RUNNING entry substate = %v, want QUEUED", h0["substate"])
+	if !sawRunning {
+		t.Fatalf("expected a RUNNING statusHistory entry, got %v", data["statusHistory"])
 	}
 }

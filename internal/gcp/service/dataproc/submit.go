@@ -40,7 +40,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 
 	ep, sparkArgs, jarArgs, err := entryPointForJob(j)
 	if err != nil {
-		s.finishJob(project, region, j, "ERROR", err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error())
 		return
 	}
 
@@ -100,9 +100,15 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		}
 		slog.Warn("dataproc: SubmitClientMode failed", "job", jobID, "err", err)
 		s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
-		s.finishJob(project, region, j, "ERROR", err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error())
 		return
 	}
+
+	// The executor accepted the job: PENDING -> SETUP_DONE, then the driver pod
+	// is created -> RUNNING. Both transitions are no-ops if a cancel won the
+	// race (CANCEL_PENDING already set), so a cancelled job never runs again.
+	s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStatePending: true}, jobStateSetupDone, "")
+	s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStateSetupDone: true}, jobStateRunning, "")
 
 	final, err := sparkhelpers.WaitTerminal(runCtx, s.k8sClient, handle)
 	if err != nil {
@@ -111,7 +117,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		}
 		slog.Warn("dataproc: WaitTerminal failed", "job", jobID, "err", err)
 		s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
-		s.finishJob(project, region, j, "ERROR", err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error())
 		return
 	}
 
@@ -144,12 +150,12 @@ func (s *Service) persistSnapshot(ctx context.Context, project, region, jobID st
 // finalToJobState maps a sparkhelpers.Final to a Dataproc job state string.
 func finalToJobState(f sparkhelpers.Final) (state, reason string) {
 	if f.SparkSucceeded {
-		return "DONE", ""
+		return jobStateDone, ""
 	}
 	if f.Cancelled {
-		return "CANCELLED", ""
+		return jobStateCancelled, ""
 	}
-	return "ERROR", f.SparkReason
+	return jobStateError, f.SparkReason
 }
 
 // discardWriter drops driver logs (Dataproc has no per-job log sink in the

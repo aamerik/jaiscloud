@@ -12,9 +12,10 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// SubmitJob submits a job to a cluster. In mock mode the job completes
-// synchronously; in k8s mode a background goroutine runs it and the terminal
-// state is written back to the store.
+// SubmitJob submits a job to a cluster. The job is stored PENDING and walks the
+// full state machine to a terminal state. In mock mode the transition is lazy
+// and clock-driven (advanceJob); in k8s mode a background goroutine runs it and
+// writes SETUP_DONE/RUNNING/terminal back to the store.
 func (s *Service) SubmitJob(ctx context.Context, project, region string, in JobInput) (dpstore.Job, error) {
 	return s.submitJob(ctx, project, region, in)
 }
@@ -38,7 +39,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	if unsupportedJobTypes[j.Type] {
 		now := clock.Now().UTC()
 		j.Status = dpstore.JobStatus{
-			State:          "ERROR",
+			State:          jobStateError,
 			Details:        "job type " + j.Type + " is not supported by the emulator",
 			StateStartTime: now,
 		}
@@ -51,7 +52,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	// Validate the entry point before storing (malformed Spark job → ERROR).
 	if _, _, err := jobToEntryPoint(j.Type, mustJSONMap(j.TypeJob)); err != nil {
 		now := clock.Now().UTC()
-		j.Status = dpstore.JobStatus{State: "ERROR", Details: err.Error(), StateStartTime: now}
+		j.Status = dpstore.JobStatus{State: jobStateError, Details: err.Error(), StateStartTime: now}
 		if createErr := s.store.CreateJob(ctx, project, region, j); createErr != nil {
 			return dpstore.Job{}, mapCreateJobErr(createErr)
 		}
@@ -62,15 +63,10 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		return dpstore.Job{}, mapCreateJobErr(err)
 	}
 
-	// Mock mode: complete synchronously (no goroutine). K8s mode: run for real.
+	// Mock mode: the job stays PENDING and advances through SETUP_DONE /
+	// RUNNING / DONE lazily on reads (advanceJob), so pollers observe the state
+	// machine. K8s mode: run it for real and let the driver signals drive it.
 	if s.k8sClient == nil {
-		now := clock.Now().UTC()
-		j.StatusHistory = append(j.StatusHistory, j.Status)
-		j.Status = dpstore.JobStatus{State: "DONE", StateStartTime: now}
-		j.DriverOutputResourceURI = "gs://jaiscloud-dataproc/" + j.JobUUID + "/driveroutput"
-		if err := s.store.UpdateJob(ctx, project, region, j); err != nil {
-			slog.Warn("dataproc: mock SubmitJob update failed", "job", j.JobID, "err", err)
-		}
 		return j, nil
 	}
 
@@ -104,20 +100,23 @@ func (s *Service) SubmitJobAsOperation(ctx context.Context, project, region stri
 	}
 	target := JobName(project, region, j.JobID)
 	now := clock.Now().UTC()
+	terminal := jobTerminal(j.Status.State)
 	op := dpstore.Operation{
 		ID:         j.JobID,
 		ProjectID:  project,
 		Region:     region,
-		Done:       jobTerminal(j.Status.State),
+		Done:       terminal,
 		Verb:       "submit",
 		Target:     target,
 		CreateTime: now,
-		EndTime:    now,
 	}
-	if meta, err := json.Marshal(jobOperationMetadata(j.JobID, j.Status.State, "SUBMIT", now)); err == nil {
+	if terminal {
+		op.EndTime = now
+	}
+	if meta, err := json.Marshal(jobOperationMetadata(j.JobID, "SUBMIT", j.Status, now)); err == nil {
 		op.Metadata = string(meta)
 	}
-	if op.Done {
+	if terminal {
 		if resp, err := json.Marshal(JobJSON(j)); err == nil {
 			op.Response = string(resp)
 		}
@@ -128,19 +127,20 @@ func (s *Service) SubmitJobAsOperation(ctx context.Context, project, region stri
 	return op, nil
 }
 
-// GetJob returns one job.
+// GetJob returns one job, lazily settling a transitional state first.
 func (s *Service) GetJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	if region == "" || jobID == "" {
 		return dpstore.Job{}, invalidArgument("missing region or jobId")
 	}
-	j, err := s.store.GetJob(ctx, project, region, jobID)
+	j, err := s.advanceJob(ctx, project, region, jobID)
 	if err != nil {
 		return dpstore.Job{}, mapErr(err)
 	}
 	return j, nil
 }
 
-// ListJobs returns a cursor page of the jobs in a region.
+// ListJobs returns a cursor page of the jobs in a region, settling each
+// transitional job first so a poller sees it progress.
 func (s *Service) ListJobs(ctx context.Context, project, region string, pageSize int, pageToken string) ([]dpstore.Job, string, error) {
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
@@ -150,7 +150,18 @@ func (s *Service) ListJobs(ctx context.Context, project, region string, pageSize
 		return nil, "", err
 	}
 	// clusterName and filter are accepted but ignored (documented limitation).
-	page, next := paging.Page(jobs, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	settled := make([]dpstore.Job, 0, len(jobs))
+	for _, j := range jobs {
+		advanced, advErr := s.advanceJob(ctx, project, region, j.JobID)
+		if errors.Is(advErr, dpstore.ErrNoSuchJob) {
+			continue
+		}
+		if advErr != nil {
+			return nil, "", mapErr(advErr)
+		}
+		settled = append(settled, advanced)
+	}
+	page, next := paging.Page(settled, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
 	return page, next, nil
 }
 
@@ -197,8 +208,10 @@ func (s *Service) DeleteJob(ctx context.Context, project, region, jobID string) 
 	return nil
 }
 
-// CancelJob transitions a non-terminal job to CANCELLED and closes its
-// SubmitJobAsOperation LRO. A terminal job is a no-op.
+// CancelJob starts the cancel progression for a non-terminal job: it moves the
+// job to CANCEL_PENDING and stops the executor, and later reads settle it
+// CANCEL_STARTED -> CANCELLED (closing its SubmitJobAsOperation LRO). A job
+// that is already terminal, or already cancelling, is a no-op.
 func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	if region == "" || jobID == "" {
 		return dpstore.Job{}, invalidArgument("missing region or jobId")
@@ -206,12 +219,12 @@ func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) 
 	now := clock.Now().UTC()
 	var transitioned bool
 	j, err := s.store.UpdateJobAtomic(ctx, project, region, jobID, func(j dpstore.Job) (dpstore.Job, error) {
-		if jobTerminal(j.Status.State) {
-			return j, nil // already terminal — nothing to cancel
+		if jobTerminal(j.Status.State) || j.Status.State == jobStateCancelPending || j.Status.State == jobStateCancelStarted {
+			return j, nil // already terminal / already cancelling — nothing to do
 		}
 		transitioned = true
 		j.StatusHistory = append(j.StatusHistory, j.Status)
-		j.Status = dpstore.JobStatus{State: "CANCELLED", StateStartTime: now}
+		j.Status = dpstore.JobStatus{State: jobStateCancelPending, StateStartTime: now}
 		return j, nil
 	})
 	if err != nil {
@@ -221,22 +234,21 @@ func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) 
 		return j, nil
 	}
 
+	// Stop the executor (k8s mode). The cancel progression itself is lazy and
+	// settles on later reads / the operation poll, so finishJob cannot resurrect
+	// the job: it sees CANCEL_PENDING and lands on CANCELLED instead.
 	s.cancelsMu.Lock()
 	cancel, ok := s.cancels[cancelKey(project, region, jobID)]
 	s.cancelsMu.Unlock()
 	if ok {
 		cancel()
 	}
-	// Close out the SubmitJobAsOperation LRO for this transition — finishJob
-	// won't run it (or will see the job already terminal and no-op) once
-	// CancelJob has won the race for the terminal-state transition.
-	s.completeSubmitOperation(project, region, j)
 	return j, nil
 }
 
-// GetOperation returns a persisted long-running operation. Polling a cluster
-// mutation's operation is what drives its lazy state machine: the cluster is
-// advanced and, once stable, the operation is finalized with its response.
+// GetOperation returns a persisted long-running operation. Polling is what
+// drives the lazy state machine: a cluster mutation advances the cluster and a
+// submit advances the job, then the operation is finalized with its response.
 func (s *Service) GetOperation(ctx context.Context, project, region, opID string) (dpstore.Operation, error) {
 	if region == "" || opID == "" {
 		return dpstore.Operation{}, invalidArgument("missing region or operationId")
@@ -245,9 +257,16 @@ func (s *Service) GetOperation(ctx context.Context, project, region, opID string
 	if err != nil {
 		return dpstore.Operation{}, mapErr(err)
 	}
-	// Job-submit operations are completed by the job engine, not by the cluster
-	// state machine.
-	if !op.Done && op.Verb != "submit" {
+	// A submit operation is advanced by the job state machine (its id is the
+	// job id); a cluster mutation by the cluster state machine.
+	if !op.Done && op.Verb == "submit" {
+		advanced, advErr := s.advanceSubmitOperation(ctx, op)
+		if advErr != nil {
+			return dpstore.Operation{}, mapErr(advErr)
+		}
+		return advanced, nil
+	}
+	if !op.Done {
 		advanced, advErr := s.advanceClusterOperation(ctx, op)
 		if advErr != nil {
 			return dpstore.Operation{}, mapErr(advErr)
@@ -255,6 +274,41 @@ func (s *Service) GetOperation(ctx context.Context, project, region, opID string
 		return advanced, nil
 	}
 	return op, nil
+}
+
+// advanceSubmitOperation advances the job backing a SubmitJobAsOperation LRO
+// and reflects it on the operation: while the job is non-terminal the polled
+// JobMetadata.status tracks the job, and once terminal the operation is closed
+// with the job as its response.
+func (s *Service) advanceSubmitOperation(ctx context.Context, op dpstore.Operation) (dpstore.Operation, error) {
+	j, err := s.advanceJob(ctx, op.ProjectID, op.Region, op.ID)
+	if err != nil {
+		return op, err
+	}
+	if jobTerminal(j.Status.State) {
+		s.completeSubmitOperation(ctx, op.ProjectID, op.Region, j)
+		if done, gerr := s.store.GetOperation(ctx, op.ProjectID, op.Region, op.ID); gerr == nil {
+			return done, nil
+		}
+		return op, nil
+	}
+	// Refresh the polled metadata atomically: a concurrent poll may have
+	// completed the operation, and a blind overwrite of a stale snapshot would
+	// resurrect it.
+	refreshed, uerr := s.store.UpdateOperationAtomic(ctx, op.ProjectID, op.Region, op.ID, func(cur dpstore.Operation) (dpstore.Operation, error) {
+		if cur.Done {
+			return cur, nil
+		}
+		cur.Metadata = refreshJobOperationMetadata(cur.Metadata, j.Status)
+		return cur, nil
+	})
+	if uerr != nil {
+		if errors.Is(uerr, dpstore.ErrNoSuchOperation) {
+			return op, nil
+		}
+		return op, uerr
+	}
+	return refreshed, nil
 }
 
 // finishJob writes the terminal state back to the jobs store. The get-check-
@@ -271,9 +325,15 @@ func (s *Service) finishJob(project, region string, j dpstore.Job, state, detail
 		}
 		transitioned = true
 		fresh.StatusHistory = append(fresh.StatusHistory, fresh.Status)
-		fresh.Status = dpstore.JobStatus{State: state, Details: details, StateStartTime: now}
-		if state == "DONE" && fresh.DriverOutputResourceURI == "" {
-			fresh.DriverOutputResourceURI = "gs://jaiscloud-dataproc/" + fresh.JobUUID + "/driveroutput"
+		if fresh.Status.State == jobStateCancelPending || fresh.Status.State == jobStateCancelStarted {
+			// A cancel request won the race: the job lands on CANCELLED, not
+			// the executor's own result.
+			fresh.Status = dpstore.JobStatus{State: jobStateCancelled, StateStartTime: now}
+			return fresh, nil
+		}
+		fresh.Status = dpstore.JobStatus{State: state, Details: details, StateStartTime: now, Substate: jobSubstateFor(state)}
+		if state == jobStateDone && fresh.DriverOutputResourceURI == "" {
+			fresh.DriverOutputResourceURI = mockDriverOutputURI(fresh.JobUUID)
 		}
 		return fresh, nil
 	})
@@ -284,26 +344,30 @@ func (s *Service) finishJob(project, region string, j dpstore.Job, state, detail
 	if !transitioned {
 		return
 	}
-	s.completeSubmitOperation(project, region, fresh)
+	s.completeSubmitOperation(context.Background(), project, region, fresh)
 }
 
 // completeSubmitOperation flips the SubmitJobAsOperation long-running operation
 // (id == job id) to done=true with the terminal job as its response. No-op when
 // the job was submitted without an operation (plain SubmitJob) or the operation
 // is already terminal.
-func (s *Service) completeSubmitOperation(project, region string, j dpstore.Job) {
-	op, err := s.store.GetOperation(context.Background(), project, region, j.JobID)
-	if err != nil {
-		return
-	}
-	if op.Done {
-		return
-	}
-	resp, _ := json.Marshal(JobJSON(j))
-	op.Done = true
-	op.Response = string(resp)
-	op.EndTime = clock.Now().UTC()
-	if err := s.store.UpdateOperation(context.Background(), project, region, op); err != nil {
+func (s *Service) completeSubmitOperation(ctx context.Context, project, region string, j dpstore.Job) {
+	_, err := s.store.UpdateOperationAtomic(ctx, project, region, j.JobID, func(cur dpstore.Operation) (dpstore.Operation, error) {
+		if cur.Done {
+			return cur, nil
+		}
+		resp, _ := json.Marshal(JobJSON(j))
+		cur.Done = true
+		cur.Response = string(resp)
+		cur.EndTime = clock.Now().UTC()
+		if meta, mErr := json.Marshal(jobOperationMetadata(j.JobID, "SUBMIT", j.Status, cur.CreateTime)); mErr == nil {
+			cur.Metadata = string(meta)
+		}
+		return cur, nil
+	})
+	// No operation exists for a plain SubmitJob (only SubmitJobAsOperation
+	// persists one); that is not an error.
+	if err != nil && !errors.Is(err, dpstore.ErrNoSuchOperation) {
 		slog.Warn("dataproc: completeSubmitOperation failed", "job", j.JobID, "err", err)
 	}
 }

@@ -2009,14 +2009,14 @@
       "rpc": "SubmitJob",
       "method": "SubmitJob",
       "status": "pass",
-      "key_field": "DONE job in mock mode"
+      "key_field": "PENDING job polls to DONE"
     },
     {
       "service": "dataproc",
       "rpc": "SubmitJobAsOperation",
       "method": "SubmitJobAsOperation",
       "status": "pass",
-      "key_field": "LRO done + typed Job response"
+      "key_field": "in-flight LRO -\u003e typed Job response"
     },
     {
       "service": "dataproc",
@@ -2044,7 +2044,7 @@
       "rpc": "CancelJob",
       "method": "CancelJob",
       "status": "pass",
-      "key_field": "terminal job returned"
+      "key_field": "CANCEL_PENDING polls to CANCELLED"
     },
     {
       "service": "dataproc",

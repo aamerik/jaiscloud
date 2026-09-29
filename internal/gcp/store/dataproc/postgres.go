@@ -406,6 +406,55 @@ func (s *PostgresStore) UpdateOperation(ctx context.Context, projectID, region s
 	return nil
 }
 
+// UpdateOperationAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the operation for the
+// duration of mutate, so a metadata refresh cannot race a concurrent
+// completion into a last-write-wins regression.
+func (s *PostgresStore) UpdateOperationAtomic(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Operation{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var current Operation
+	err = tx.QueryRow(ctx, `
+		SELECT project_id, region, operation_id, done, metadata, response, verb, target, create_time, end_time
+		FROM jc_dataproc_operations WHERE project_id=$1 AND region=$2 AND operation_id=$3 FOR UPDATE
+	`, projectID, region, id).Scan(&current.ProjectID, &current.Region, &current.ID, &current.Done, &current.Metadata, &current.Response,
+		&current.Verb, &current.Target, &current.CreateTime, &current.EndTime)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Operation{}, ErrNoSuchOperation
+	}
+	if err != nil {
+		return Operation{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return Operation{}, err
+	}
+	if next.EndTime.IsZero() {
+		next.EndTime = clock.Now()
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_dataproc_operations SET done=$4, metadata=$5, response=$6, verb=$7, target=$8, end_time=$9
+		WHERE project_id=$1 AND region=$2 AND operation_id=$3
+	`, projectID, region, id, next.Done, next.Metadata, next.Response, next.Verb, next.Target, next.EndTime)
+	if err != nil {
+		return Operation{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Operation{}, ErrNoSuchOperation
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Operation{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	return next, nil
+}
+
 // DeleteStaleOperations removes completed operations older than cutoff (all
 // scopes). In-flight operations (done=false) are retained.
 func (s *PostgresStore) DeleteStaleOperations(ctx context.Context, cutoff time.Time) (int, error) {

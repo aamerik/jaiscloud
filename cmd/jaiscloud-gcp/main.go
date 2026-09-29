@@ -374,6 +374,16 @@ func startCmd() *cobra.Command {
 						dataprocOpts = append(dataprocOpts, dataproccore.WithClusterReadyDelay(d))
 					}
 				}
+				// Jobs walk PENDING -> SETUP_DONE -> RUNNING -> terminal lazily
+				// on a read in mock mode; a positive delay keeps each hop
+				// observable, the default (zero) settles one hop per read.
+				if v := os.Getenv("JAISCLOUD_DATAPROC_JOB_STATE_DELAY"); v != "" {
+					if d, err := time.ParseDuration(v); err != nil {
+						slog.Warn("dataproc: invalid JAISCLOUD_DATAPROC_JOB_STATE_DELAY", "value", v, "err", err)
+					} else {
+						dataprocOpts = append(dataprocOpts, dataproccore.WithJobStateDelay(d))
+					}
+				}
 				if sparkMode == "k8s" {
 					sparkImage := cfg.K8sSparkImage
 					if sparkImage == "" {

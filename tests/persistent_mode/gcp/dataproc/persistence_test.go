@@ -172,10 +172,31 @@ func strField(m map[string]any, path ...string) string {
 	return s
 }
 
+// pollJobTerminal polls a job until it reaches a terminal state, driving the
+// emulator's lazy job state machine one hop per read.
+func pollJobTerminal(t *testing.T, host, base, jobID string) map[string]any {
+	t.Helper()
+	deadline := clock.RealNow().Add(15 * time.Second)
+	for clock.RealNow().Before(deadline) {
+		code, body := doRequest(t, host, "GET", base+"/jobs/"+jobID, nil, "")
+		if code != http.StatusOK {
+			t.Fatalf("get job %s: got HTTP %d body %s", jobID, code, body)
+		}
+		obj := jsonObj(t, body)
+		switch strField(obj, "status", "state") {
+		case "DONE", "ERROR", "CANCELLED":
+			return obj
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("job %s did not reach a terminal state", jobID)
+	return nil
+}
+
 // TestDataprocExportImportRoundTrip creates a cluster and two jobs (a mock-mode
-// DONE sparkJob and an unsupported hiveJob that errors), exports the full
-// instance state, and imports it back — asserting the terminal job state and
-// status.details survive byte-for-byte.
+// sparkJob polled to DONE and an unsupported hiveJob that errors), exports the
+// full instance state, and imports it back — asserting the terminal job state
+// and status.details survive byte-for-byte.
 func TestDataprocExportImportRoundTrip(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
@@ -219,15 +240,18 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("create GKE cluster: got HTTP %d body %s", code, body)
 	}
 
-	// ── Submit a mock-mode Spark job (completes synchronously → DONE) ────────
+	// ── Submit a mock-mode Spark job (walks to DONE as it is polled) ─────────
 	code, body = doRequest(t, host, "POST", base+"/jobs:submit",
 		[]byte(`{"job":{"reference":{"projectId":"`+project+`","jobId":"`+doneJob+`"},"placement":{"clusterName":"`+clusterName+`"},"sparkJob":{"mainJarFileUri":"gs://b/a.jar","mainClass":"Main"}}}`),
 		"application/json")
 	if code != http.StatusOK {
 		t.Fatalf("submit spark job: got HTTP %d body %s", code, body)
 	}
-	if state := strField(jsonObj(t, body), "status", "state"); state != "DONE" {
-		t.Fatalf("expected DONE spark job, got state %q body %s", state, body)
+	if state := strField(jsonObj(t, body), "status", "state"); state != "PENDING" {
+		t.Fatalf("expected PENDING spark job, got state %q body %s", state, body)
+	}
+	if state := strField(pollJobTerminal(t, host, base, doneJob), "status", "state"); state != "DONE" {
+		t.Fatalf("expected DONE spark job, got state %q", state)
 	}
 
 	// ── Submit an unsupported job type → ERROR with terminal details ─────────

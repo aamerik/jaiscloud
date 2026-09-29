@@ -222,6 +222,24 @@ func (s *MemoryStore) UpdateOperation(_ context.Context, projectID, region strin
 	return nil
 }
 
+func (s *MemoryStore) UpdateOperationAtomic(_ context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	current, ok := s.operations[key][id]
+	if !ok {
+		return Operation{}, ErrNoSuchOperation
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return Operation{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	s.operations[key][id] = next
+	return next, nil
+}
+
 // DeleteStaleOperations removes completed operations older than cutoff across
 // all scopes. In-flight operations (Done=false) are retained: a poll still has
 // to be able to advance and observe them.

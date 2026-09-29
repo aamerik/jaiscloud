@@ -78,7 +78,8 @@ func TestSDKDataproc(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, list.Clusters)
 
-	// Submit a pyspark job (mock mode → DONE).
+	// Submit a pyspark job. It is asynchronous: returned PENDING, it advances
+	// through SETUP_DONE/RUNNING/DONE as GetJob is polled (mock executor).
 	jobID := unique("job")
 	submitted, err := svc.Projects.Regions.Jobs.Submit(project, region, &dataproc.SubmitJobRequest{
 		Job: &dataproc.Job{
@@ -90,12 +91,11 @@ func TestSDKDataproc(t *testing.T) {
 		},
 	}).Do()
 	require.NoError(t, err)
-	require.Equal(t, "DONE", submitted.Status.State)
-	require.True(t, submitted.Done)
+	require.Equal(t, "PENDING", submitted.Status.State)
+	require.False(t, submitted.Done)
 
-	// GetJob returns the completed job.
-	got, err := svc.Projects.Regions.Jobs.Get(project, region, jobID).Do()
-	require.NoError(t, err)
+	// GetJob polls the job to completion.
+	got := pollJob(t, svc, project, region, jobID)
 	require.Equal(t, "DONE", got.Status.State)
 	require.Equal(t, clusterName, got.Placement.ClusterName)
 
@@ -123,6 +123,22 @@ func TestSDKDataproc(t *testing.T) {
 	// The cluster is gone.
 	_, err = svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
 	require.Error(t, err)
+}
+
+// pollJob polls jobs.get until the job reaches a terminal state.
+func pollJob(t *testing.T, svc *dataproc.Service, project, region, jobID string) *dataproc.Job {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := svc.Projects.Regions.Jobs.Get(project, region, jobID).Do()
+		require.NoError(t, err)
+		switch got.Status.State {
+		case "DONE", "ERROR", "CANCELLED":
+			return got
+		}
+		require.False(t, time.Now().After(deadline), "job %s did not reach a terminal state", jobID)
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // pollOperation polls operations.get until the named operation reports done.
