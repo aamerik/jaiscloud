@@ -31,8 +31,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Item is one tracked entry with its derived state.
@@ -216,7 +219,9 @@ func main() {
 	finalize := flag.String("finalize", "", "move a completed plan doc into plan_docs/final/<ID>-<slug>.md")
 	finalizeID := flag.String("id", "", "backlog ID for -finalize (e.g. J10, R15, G7)")
 	finalizeSlug := flag.String("slug", "", "slug override for -finalize (default: derived from the filename)")
+	finalizePR := flag.Int("finalize-pr", 0, "with -finalize: PR number to record as DONE #N in the finalized session's index row")
 	finalizeDry := flag.Bool("dry", false, "print the -finalize action without moving the file")
+	resolvedPath := flag.String("resolved", "docs/gcpstatus-resolved.yaml", "resolution overlay: close a row when its implementing PR merged ('' to disable)")
 	matrixPath := flag.String("matrix", "docs/fidelity/fidelity-matrix.json", "fidelity matrix JSON")
 	fromMatrix := flag.Bool("from-matrix", false, "also ingest non-ga fidelity cells as matrix gaps (kind=matrix)")
 	matrixDiff := flag.String("matrix-diff", "", "git ref to diff the fidelity matrix against; exit 1 on a ga->worse regression")
@@ -233,7 +238,7 @@ func main() {
 		return
 	}
 	if *finalize != "" {
-		if err := finalizePlan(*finalize, *finalizeID, *finalizeSlug, *finalizeDry); err != nil {
+		if err := finalizePlan(*finalize, *finalizeID, *finalizeSlug, *finalizePR, *finalizeDry); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
@@ -255,6 +260,12 @@ func main() {
 	}
 	if *fromMatrix {
 		items = append(items, matrixItems(*matrixPath)...)
+	}
+	if entries, err := loadResolved(*resolvedPath); err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+		os.Exit(1)
+	} else {
+		applyResolved(items, entries, prs)
 	}
 	classifyAll(items)
 	sortItems(items)
@@ -310,9 +321,10 @@ func collect(root string, includeArchive, verbose bool) ([]*Item, []string, *wav
 	}
 
 	type docFile struct {
-		rel      string
-		content  string
-		archived bool
+		rel        string
+		content    string
+		archived   bool
+		superseded bool
 	}
 	var files []docFile
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -335,13 +347,32 @@ func collect(root string, includeArchive, verbose bool) ([]*Item, []string, *wav
 			return nil
 		}
 		docPaths = append(docPaths, rel)
-		files = append(files, docFile{rel: rel, content: string(content), archived: archived})
+		files = append(files, docFile{
+			rel:        rel,
+			content:    string(content),
+			archived:   archived,
+			superseded: hasSupersededMarker(string(content)),
+		})
 		return nil
 	})
 
 	// Pass 1 — structured tables + the debt-plan remainder list.
 	contributing := map[string]bool{}
 	for _, f := range files {
+		if f.superseded {
+			// A superseded historical report contributes no live backlog. Keep
+			// one record row so gcp-status-coverage still accounts for the doc.
+			add(&Item{
+				ID:          "superseded:" + slug(filepath.Base(f.rel)),
+				Kind:        "superseded",
+				Source:      f.rel,
+				Gap:         "superseded historical report — no live backlog",
+				DocState:    "deferred",
+				Disposition: "no-fix",
+			})
+			contributing[f.rel] = true
+			continue
+		}
 		for _, t := range parseTables(f.content) {
 			switch {
 			case isWaveTable(t.headers):
@@ -1247,25 +1278,129 @@ func enrich(items []*Item, prs []ghPR, branches map[string]bool, docPaths []stri
 	}
 }
 
+// prMatchesItem links a merged/open PR to a backlog/wave item. The declared
+// Branch is the authoritative anchor: when an item names a branch, only that
+// branch (or an explicit PR number) links the two. The canonical ID in the PR
+// title is a fallback for branch-less rows only.
+//
+// Aliases are deliberately NOT scanned: the wave-plan IDs column defines alias
+// identity for grouping (J/R unions), not for merge detection. Scanning aliases
+// let any meta/tooling PR that merely quoted a backlog ID (e.g. #180's title
+// containing "(B2-10)") falsely satisfy an unrelated item.
 func prMatchesItem(pr *ghPR, it *Item) bool {
 	if containsInt(it.PRs, pr.Number) {
 		return true
 	}
 	if it.Branch != "" {
-		if pr.HeadRefName == it.Branch || strings.HasSuffix(pr.HeadRefName, "/"+it.Branch) ||
-			strings.HasSuffix(it.Branch, "/"+pr.HeadRefName) {
-			return true
+		return pr.HeadRefName == it.Branch || strings.HasSuffix(pr.HeadRefName, "/"+it.Branch) ||
+			strings.HasSuffix(it.Branch, "/"+pr.HeadRefName)
+	}
+	// No declared branch (e.g. a PR-only backfill row): the canonical ID as a
+	// word-boundary token in the title is the only stable link.
+	return containsIDToken(pr.Title, it.ID)
+}
+
+// supersededMarker, on its own line (outside code fences), marks a doc as a
+// superseded historical report: its tables/bullets are no longer live backlog.
+// The doc still produces one record row so coverage accounting stays honest.
+const supersededMarker = "<!-- gcpstatus: superseded -->"
+
+// hasSupersededMarker reports whether content carries the marker as a standalone
+// line. It ignores fenced code and inline mentions, so a plan doc that merely
+// documents the marker is not itself treated as superseded.
+func hasSupersededMarker(content string) bool {
+	inFence := false
+	for _, raw := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(raw)
+		if strings.HasPrefix(t, "```") {
+			inFence = !inFence
+			continue
 		}
-	}
-	if containsIDToken(pr.Title, it.ID) {
-		return true
-	}
-	for _, a := range it.Aliases {
-		if containsIDToken(pr.Title, a) {
+		if inFence {
+			continue
+		}
+		if t == supersededMarker || strings.HasPrefix(t, supersededMarker) {
 			return true
 		}
 	}
 	return false
+}
+
+// ─── resolution overlay ──────────────────────────────────────────────────────
+
+// resolvedEntry closes a ledger row whose implementing PR merged but whose
+// source doc (usually gitignored plan_docs/ scratch) was never updated. A row is
+// only closed when the referenced PR is actually MERGED, so the overlay can
+// never mark unmade work as done.
+type resolvedEntry struct {
+	Source string `yaml:"source"` // optional: require a substring of the item source
+	Match  string `yaml:"match"`  // required: case-insensitive substring of id/aliases/gap
+	PR     int    `yaml:"pr"`     // implementing PR (must be merged)
+	Note   string `yaml:"note"`
+}
+
+type resolvedFile struct {
+	Entries []resolvedEntry `yaml:"entries"`
+}
+
+func loadResolved(path string) ([]resolvedEntry, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var f resolvedFile
+	if err := yaml.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("resolved overlay %s: %w", path, err)
+	}
+	for i, e := range f.Entries {
+		if strings.TrimSpace(e.Match) == "" || e.PR <= 0 {
+			return nil, fmt.Errorf("resolved overlay %s: entry %d needs a non-empty match and a positive pr", path, i+1)
+		}
+	}
+	return f.Entries, nil
+}
+
+// applyResolved closes overlay-matched rows that have real merged-PR evidence.
+func applyResolved(items []*Item, entries []resolvedEntry, prs []ghPR) {
+	if len(entries) == 0 {
+		return
+	}
+	merged := map[int]bool{}
+	for i := range prs {
+		if strings.EqualFold(prs[i].State, "MERGED") {
+			merged[prs[i].Number] = true
+		}
+	}
+	for _, it := range items {
+		hay := strings.ToLower(it.ID + " " + strings.Join(it.Aliases, " ") + " " + it.Gap)
+		for _, e := range entries {
+			if !merged[e.PR] {
+				continue
+			}
+			if e.Source != "" && !strings.Contains(strings.ToLower(it.Source), strings.ToLower(e.Source)) {
+				continue
+			}
+			if !strings.Contains(hay, strings.ToLower(e.Match)) {
+				continue
+			}
+			it.DocState = "done"
+			// Only upgrade a doc-derived state; never overwrite git/PR evidence.
+			switch it.State {
+			case "todo", "done?", "deferred":
+				it.State = "done"
+			}
+			if e.Note != "" {
+				it.Note = e.Note
+			}
+			break
+		}
+	}
 }
 
 func deriveFromDocs(it *Item) string {
@@ -1374,6 +1509,8 @@ func classifyAll(items []*Item) {
 			it.Class = "pr"
 		case "matrix":
 			it.Class = "matrix"
+		case "superseded":
+			it.Class = "superseded"
 		default:
 			it.Class = classify(it)
 		}
@@ -1546,7 +1683,7 @@ func runNext(items []*Item, n int, by string) {
 }
 
 func runAudit(items []*Item) {
-	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "matrix"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "superseded", "matrix"}
 	counts := map[string]int{}
 	byClass := map[string][]*Item{}
 	for _, it := range items {
@@ -2100,7 +2237,7 @@ func classCounts(items []*Item) map[string]int {
 }
 
 func countsLine(c map[string]int) string {
-	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "matrix"}
+	order := []string{"oversight?", "unowned", "stale-doc", "abandoned", "claimed-done", "unscheduled", "scheduled", "intentional", "done", "superseded", "matrix"}
 	var parts []string
 	for _, k := range order {
 		if c[k] > 0 {
@@ -2368,7 +2505,7 @@ var leadingIDRe = regexp.MustCompile(`^[A-Za-z]+[0-9]+-`)
 // ID-prefixed filename (e.g. plan_docs/final/J10-storage-csek.md) so the status
 // ledger can link the doc to its merged PR. plan_docs/ is gitignored, so this
 // is a plain rename, not `git mv`. Dry-run prints the intended action.
-func finalizePlan(plan, id, slugOverride string, dry bool) error {
+func finalizePlan(plan, id, slugOverride string, pr int, dry bool) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("finalize: an ID is required (-id, e.g. J10)")
@@ -2415,6 +2552,25 @@ func finalizePlan(plan, id, slugOverride string, dry bool) error {
 		return fmt.Errorf("finalize: destination already exists: plan_docs/final/%s", name)
 	}
 
+	// Close the finalized session's index row before the move, so a finalized
+	// plan stops re-auditing as stale-doc. Evidence-gated: only when the caller
+	// supplies the merged PR number.
+	if pr > 0 {
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			return fmt.Errorf("finalize: read %s: %w", plan, err)
+		}
+		closed, ok := closeFinalizedRow(string(b), id, pr)
+		if !ok {
+			return fmt.Errorf("finalize: no index row for %s in %s to mark DONE #%d (pass -finalize-pr only for a tracked session)", id, plan, pr)
+		}
+		if dry {
+			fmt.Printf("gcpstatus: would set %s index row -> DONE #%d\n", id, pr)
+		} else if err := os.WriteFile(abs, []byte(closed), 0o644); err != nil {
+			return fmt.Errorf("finalize: close %s row: %w", id, err)
+		}
+	}
+
 	if dry {
 		fmt.Printf("gcpstatus: would move %s -> plan_docs/final/%s\n", rel, name)
 	} else {
@@ -2428,6 +2584,67 @@ func finalizePlan(plan, id, slugOverride string, dry bool) error {
 	}
 	fmt.Printf("gcpstatus: put the backlog ID in the commit/PR title, e.g. \"fix(gcp/<svc>): ... (%s)\"\n", id)
 	return nil
+}
+
+// closeFinalizedRow rewrites the wave-index row whose IDs column contains id,
+// setting its "Depends on" cell to "DONE #<pr>" (waveFromTable reads that as
+// done). Returns the new content and whether a matching row was found.
+func closeFinalizedRow(content, id string, pr int) (string, bool) {
+	lines := strings.Split(content, "\n")
+	var idx map[string]int
+	changed := false
+	for i, raw := range lines {
+		cells := splitRow(raw)
+		if !isTableRow(raw) || len(cells) < 2 {
+			idx = nil
+			continue
+		}
+		if headerKey(cells[0]) == "wave" {
+			h := headerIndex(cells)
+			if _, ok := h["session"]; ok {
+				if _, ok := firstHeader(h, "dependson", "depends", "status"); ok {
+					idx = h
+					continue
+				}
+			}
+			idx = nil
+			continue
+		}
+		if idx == nil || isSeparatorRow(raw) {
+			continue
+		}
+		ii, ok := idx["ids"]
+		if !ok || ii >= len(cells) {
+			continue
+		}
+		match := false
+		for _, g := range parseAliasGroups(cells[ii]) {
+			for _, a := range g {
+				if a == id {
+					match = true
+				}
+			}
+		}
+		if !match {
+			continue
+		}
+		di, ok := firstHeader(idx, "dependson", "depends", "status")
+		if !ok {
+			continue
+		}
+		for len(cells) <= di {
+			cells = append(cells, "")
+		}
+		cells[di] = "DONE #" + strconv.Itoa(pr)
+		var b strings.Builder
+		b.WriteString("|")
+		for _, c := range cells {
+			b.WriteString(" " + c + " |")
+		}
+		lines[i] = b.String()
+		changed = true
+	}
+	return strings.Join(lines, "\n"), changed
 }
 
 func truncate(s string, n int) string {

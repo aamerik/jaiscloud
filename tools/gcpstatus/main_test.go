@@ -410,35 +410,49 @@ func TestFinalizePlan(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(wd) }()
 
+	plan := "# plan\n\n| Wave | Session | IDs | Service(s) | Branch | Depends on |\n" +
+		"|---|---|---|---|---|---|\n| 1 | W1.1 | J10 | storage csek | `feat/gcp-storage-csek` | — |\n"
 	src := filepath.Join(root, "plan_docs", "J10-storage-csek-plan.md")
-	if err := os.WriteFile(src, []byte("# plan\n"), 0o644); err != nil {
+	if err := os.WriteFile(src, []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Invalid ID is rejected before any move.
-	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "notanid", "", true); err == nil {
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "notanid", "", 0, true); err == nil {
 		t.Fatal("expected invalid-ID error")
 	}
-	// Dry run prints but does not move.
-	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", true); err != nil {
+	// Dry run prints but does not move (and reports the row close).
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", 10, true); err != nil {
 		t.Fatalf("dry finalize: %v", err)
 	}
 	if _, err := os.Stat(src); err != nil {
 		t.Fatalf("dry run moved the file: %v", err)
 	}
-	// Real move; the leading ID prefix is stripped, then re-prefixed.
-	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", false); err != nil {
+	// Real move; the leading ID prefix is stripped, then re-prefixed, and the
+	// index row is closed with the merged PR.
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", 10, false); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
 	dest := filepath.Join(root, "plan_docs", "final", "J10-storage-csek-plan.md")
-	if _, err := os.Stat(dest); err != nil {
+	b, err := os.ReadFile(dest)
+	if err != nil {
 		t.Fatalf("expected %s: %v", dest, err)
 	}
-	// A second finalize of the same ID collides.
-	if err := os.WriteFile(src, []byte("# plan\n"), 0o644); err != nil {
+	if !strings.Contains(string(b), "DONE #10") {
+		t.Fatalf("finalize did not close the index row:\n%s", b)
+	}
+	// A -finalize-pr with no matching index row is an error.
+	if err := os.WriteFile(src, []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", false); err == nil {
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J99", "", 10, false); err == nil {
+		t.Fatal("expected no-matching-row error")
+	}
+	// A second finalize of the same ID collides.
+	if err := os.WriteFile(src, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizePlan("plan_docs/J10-storage-csek-plan.md", "J10", "", 0, false); err == nil {
 		t.Fatal("expected destination-exists error")
 	}
 	// Explicit slug override is honored.
@@ -446,10 +460,138 @@ func TestFinalizePlan(t *testing.T) {
 	if err := os.WriteFile(src2, []byte("# plan\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := finalizePlan("plan_docs/notes.md", "R99", "custom-slug", false); err != nil {
+	if err := finalizePlan("plan_docs/notes.md", "R99", "custom-slug", 0, false); err != nil {
 		t.Fatalf("slug override: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "plan_docs", "final", "R99-custom-slug.md")); err != nil {
 		t.Fatalf("expected R99-custom-slug.md: %v", err)
+	}
+}
+
+// TestPrMatchesItem pins the merge-link rules: the declared Branch is the
+// authoritative anchor, aliases never link a merge, and the canonical ID in the
+// title only applies to branch-less rows.
+func TestPrMatchesItem(t *testing.T) {
+	// The #180 regression: a tooling PR whose title quotes an alias (B2-10) must
+	// not satisfy the iamcredentials item.
+	iamcred := &Item{ID: "J22", Branch: "feat/gcp-iamcredentials", Aliases: []string{"J22", "B2-10", "R22"}}
+	toolingPR := &ghPR{
+		Number:      180,
+		Title:       "fix(gcp): don't expand a dashed id (B2-10) as a range (#180)",
+		HeadRefName: "fix/gcp-status-id-expand",
+		State:       "MERGED",
+	}
+	if prMatchesItem(toolingPR, iamcred) {
+		t.Error("alias quoted in a meta PR title must not link a merge")
+	}
+	// The real branch is the anchor.
+	branchPR := &ghPR{Number: 999, Title: "feat(gcp): iamcredentials impersonation", HeadRefName: "feat/gcp-iamcredentials", State: "MERGED"}
+	if !prMatchesItem(branchPR, iamcred) {
+		t.Error("declared branch must link the merge")
+	}
+	// An explicit PR number still links.
+	if !prMatchesItem(&ghPR{Number: 180, HeadRefName: "unrelated"}, &Item{ID: "J22", PRs: []int{180}}) {
+		t.Error("explicit PRs must link")
+	}
+	// Branch-less rows fall back to the canonical ID, not aliases.
+	branchless := &Item{ID: "FP4", Aliases: []string{"FP4", "J2"}}
+	if !prMatchesItem(&ghPR{Number: 1, Title: "docs(gcp): note (FP4)"}, branchless) {
+		t.Error("branch-less canonical ID in title must link")
+	}
+	if prMatchesItem(&ghPR{Number: 2, Title: "docs(gcp): note (J2)"}, branchless) {
+		t.Error("branch-less alias in title must not link")
+	}
+}
+
+// TestCloseFinalizedRow checks the finalize-close rewrite of a wave index row.
+func TestCloseFinalizedRow(t *testing.T) {
+	md := "# plan\n\n| Wave | Session | IDs | Service(s) | Branch | Depends on |\n" +
+		"|---|---|---|---|---|---|\n" +
+		"| 1 | W1.1 | J10 | storage csek | `feat/gcp-storage-csek` | — |\n" +
+		"| 1 | W1.2 | J12-J13/R14-R15 | monitoring | `fix/gcp-monitoring` | W1.1 |\n"
+	got, ok := closeFinalizedRow(md, "R14", 194)
+	if !ok {
+		t.Fatal("expected the R14 row to match via its alias group")
+	}
+	if !strings.Contains(got, "DONE #194") {
+		t.Fatalf("row not closed:\n%s", got)
+	}
+	if strings.Contains(got, "| W1.1 | J10 | storage csek |") {
+		// unchanged row must keep its — cell
+		if !strings.Contains(got, "storage csek | `feat/gcp-storage-csek` | — |") {
+			t.Fatalf("unrelated row was modified:\n%s", got)
+		}
+	}
+	if _, ok := closeFinalizedRow(md, "ZZ9", 1); ok {
+		t.Error("absent ID must not match")
+	}
+}
+
+// TestResolvedOverlay checks that a row is closed only with merged-PR evidence.
+func TestResolvedOverlay(t *testing.T) {
+	entries := []resolvedEntry{
+		{Source: "gcp-terraform", Match: "project-level-iam", PR: 151, Note: "done in #151"},
+	}
+	prs := []ghPR{{Number: 151, State: "MERGED"}, {Number: 200, State: "OPEN"}}
+
+	// Not yet merged -> untouched.
+	open := &Item{ID: "prose:project-level-iam-x", State: "todo", DocState: "open", Disposition: "fix", Source: "plan_docs/gcp-terraform-compat.md"}
+	applyResolved([]*Item{open}, []resolvedEntry{{Match: "project-level-iam", PR: 200, Note: "x"}}, prs)
+	if open.State != "todo" || open.DocState != "open" {
+		t.Fatalf("unmerged PR must not close a row: %+v", open)
+	}
+	// Merged + matching -> closed.
+	closed := &Item{ID: "prose:project-level-iam-x", State: "todo", DocState: "open", Disposition: "fix", Source: "plan_docs/gcp-terraform-compat-2026-09-22.md"}
+	applyResolved([]*Item{closed}, entries, prs)
+	if closed.State != "done" || closed.DocState != "done" || closed.Note == "" {
+		t.Fatalf("merged overlay entry must close the row: %+v", closed)
+	}
+	// Source filter excludes non-matching docs.
+	other := &Item{ID: "prose:project-level-iam-y", State: "todo", DocState: "open", Source: "plan_docs/other.md"}
+	applyResolved([]*Item{other}, entries, prs)
+	if other.State != "todo" {
+		t.Fatalf("source filter must exclude non-matching docs: %+v", other)
+	}
+}
+
+// TestLoadResolved validates overlay parsing + required fields.
+func TestLoadResolved(t *testing.T) {
+	if got, err := loadResolved(""); err != nil || got != nil {
+		t.Fatalf("empty path = %v, %v", got, err)
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "resolved.yaml")
+	if err := os.WriteFile(p, []byte("entries:\n  - match: foo\n    pr: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadResolved(p)
+	if err != nil || len(got) != 1 || got[0].Match != "foo" || got[0].PR != 1 {
+		t.Fatalf("loadResolved = %+v, %v", got, err)
+	}
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("entries:\n  - pr: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadResolved(bad); err == nil {
+		t.Fatal("expected error for entry without a match")
+	}
+}
+
+// TestSupersededMarker verifies a marked doc contributes a record row, not
+// live backlog, and stays accounted for by coverage.
+func TestSupersededMarker(t *testing.T) {
+	dir := t.TempDir()
+	doc := "# superseded report\n\n" + supersededMarker + "\n\n| ID | service | gap | impact | effort | verdict | prompt |\n" +
+		"|---|---|---|---|---|---|---|\n| X1 | svc | still open thing | low | S | fix | `feat/x` |\n"
+	if err := os.WriteFile(filepath.Join(dir, "gcp-old-results.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _ := collect(dir, false, false)
+	if len(items) != 1 || items[0].Kind != "superseded" {
+		t.Fatalf("superseded doc items = %+v, want one superseded record", items)
+	}
+	classifyAll(items)
+	if items[0].Class != "superseded" {
+		t.Fatalf("class = %q, want superseded", items[0].Class)
 	}
 }

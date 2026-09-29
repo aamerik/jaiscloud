@@ -32,8 +32,10 @@ Rules:
   from 1) so families do not collide.
 - **IDs**: unique `[A-Z]{1,3}[0-9]+` (e.g. `BQ1`, `ICE2`). One ID per deliverable.
   Reuse an existing ID only when aliasing (e.g. `J2/R2`).
-- **Branch** is the branch the session will create; the ledger matches the merged
-  PR by this name (or by the ID in the PR title).
+- **Branch** is the branch the session will create; the ledger **anchors** the
+  merged PR on this branch. The canonical ID in the PR title is a fallback only
+  for rows with no `Branch` (e.g. PR-history rows); aliases from the `IDs` column
+  are never used to detect merges (they only union `J`/`R` id groups).
 - **Depends on**: `—`, another session, or `DONE #<pr>` once merged.
 
 ## 2. Detail — intent, impact, priority
