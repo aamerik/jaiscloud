@@ -42,6 +42,10 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "UpdateJob", Method: "UpdateJob", KeyField: "labels updated", Run: checkDPUpdateJob},
 		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "CANCEL_PENDING polls to CANCELLED", Run: checkDPCancelJob},
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
+		{Service: "dataproc", RPC: "CreateCluster (vcc)", Method: "CreateCluster", KeyField: "GKE virtualClusterConfig round-trip", Run: checkDPVirtualClusterConfig},
+		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
+		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
+		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
 	}
 }
 
@@ -604,6 +608,182 @@ func checkDPCancelJob(ctx context.Context, cfg Config) error {
 	}
 	if final.GetStatus().GetState() != dataprocpb.JobStatus_CANCELLED {
 		return fmt.Errorf("job state after cancel = %v, want CANCELLED", final.GetStatus().GetState())
+	}
+	return nil
+}
+
+// ─── New-surface probes (W4.1 / DPG8) ────────────────────────────────────────
+
+// gkeVirtualClusterConfig returns a minimal valid dataproc.v1.VirtualClusterConfig
+// for an existing-cluster GKE target.
+func gkeVirtualClusterConfig(target string) *dataprocpb.VirtualClusterConfig {
+	return &dataprocpb.VirtualClusterConfig{
+		StagingBucket: "dataproc-staging-probe",
+		InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+			KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+				Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+					GkeClusterConfig: &dataprocpb.GkeClusterConfig{GkeClusterTarget: target},
+				},
+			},
+		},
+	}
+}
+
+// dpGkeTarget is the GKE cluster target the probes reference (metadata only; the
+// emulator has no GKE control plane).
+func dpGkeTarget(cfg Config) string {
+	return "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gke-1"
+}
+
+// Check 15: a GKE-backed cluster keeps its virtualClusterConfig through gRPC and
+// never invents a GCE config.
+func checkDPVirtualClusterConfig(ctx context.Context, cfg Config) error {
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vcc")
+	target := dpGkeTarget(cfg)
+	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: gkeVirtualClusterConfig(target)},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if got.GetConfig() != nil {
+		return fmt.Errorf("GKE cluster carries a GCE config: %+v", got.GetConfig())
+	}
+	if t := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); t != target {
+		return fmt.Errorf("gkeClusterTarget = %q, want %q", t, target)
+	}
+	return nil
+}
+
+// Check 16: a cluster's auxiliaryServicesConfig.metastoreConfig round-trips over
+// gRPC. The attachment is validated against the Metastore control plane at
+// create, so a run-unique service is created first.
+func checkDPMetastoreAttachment(ctx context.Context, cfg Config) error {
+	mc, err := newMetastoreClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new metastore client: %w", err)
+	}
+	defer mc.Close()
+	svcName, err := ensureMetastoreService(ctx, mc, cfg)
+	if err != nil {
+		return err
+	}
+
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new dataproc client: %w", err)
+	}
+	defer cc.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-hms")
+	vcc := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+	vcc.AuxiliaryServicesConfig = &dataprocpb.AuxiliaryServicesConfig{
+		MetastoreConfig: &dataprocpb.MetastoreConfig{DataprocMetastoreService: svcName},
+	}
+	op, err := cc.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := cc.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	ref := got.GetVirtualClusterConfig().GetAuxiliaryServicesConfig().GetMetastoreConfig().GetDataprocMetastoreService()
+	if ref != svcName {
+		return fmt.Errorf("metastore attachment = %q, want %q", ref, svcName)
+	}
+	return nil
+}
+
+// Check 17: a submitted job's placement.clusterUuid is the cluster's
+// output-only UUID.
+func checkDPJobPlacementClusterUUID(ctx context.Context, cfg Config) error {
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	cluster, err := ensureDataprocCluster(ctx, cc, cfg)
+	if err != nil {
+		return err
+	}
+	cl, err := cc.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: cluster})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if cl.GetClusterUuid() == "" {
+		return fmt.Errorf("cluster %q has no clusterUuid", cluster)
+	}
+	jc, err := newDataprocJobClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer jc.Close()
+	jobID := cfg.ResourceName("gcpc-grpc-dp-job-uuid")
+	if _, err := jc.SubmitJob(ctx, &dataprocpb.SubmitJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, Job: dataprocJob(jobID, cluster)}); err != nil {
+		return fmt.Errorf("SubmitJob: %w", err)
+	}
+	got, err := jc.GetJob(ctx, &dataprocpb.GetJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, JobId: jobID})
+	if err != nil {
+		return fmt.Errorf("GetJob: %w", err)
+	}
+	if uuid := got.GetPlacement().GetClusterUuid(); uuid != cl.GetClusterUuid() {
+		return fmt.Errorf("placement.clusterUuid = %q, want %q", uuid, cl.GetClusterUuid())
+	}
+	return nil
+}
+
+// Check 18: a terminal job advertises non-empty driver output/control URIs.
+func checkDPDriverOutputURIs(ctx context.Context, cfg Config) error {
+	cc, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	cluster, err := ensureDataprocCluster(ctx, cc, cfg)
+	if err != nil {
+		return err
+	}
+	jc, err := newDataprocJobClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer jc.Close()
+	jobID := cfg.ResourceName("gcpc-grpc-dp-job-out")
+	if _, err := jc.SubmitJob(ctx, &dataprocpb.SubmitJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, Job: dataprocJob(jobID, cluster)}); err != nil {
+		return fmt.Errorf("SubmitJob: %w", err)
+	}
+	final, err := dpPollJobTerminal(ctx, jc, cfg.Project, jobID)
+	if err != nil {
+		return err
+	}
+	if final.GetDriverOutputResourceUri() == "" || final.GetDriverControlFilesUri() == "" {
+		return fmt.Errorf("terminal job driver URIs = %q / %q, want non-empty",
+			final.GetDriverOutputResourceUri(), final.GetDriverControlFilesUri())
 	}
 	return nil
 }

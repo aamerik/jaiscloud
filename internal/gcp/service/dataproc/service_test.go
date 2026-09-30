@@ -124,6 +124,33 @@ func TestUpdateCluster_NestedConfigMask(t *testing.T) {
 	}
 }
 
+// TestSubmitJob_PlacementClusterUUID verifies a submitted job captures the
+// cluster's output-only UUID as placement.clusterUuid (dataproc.v1.JobPlacement)
+// and renders it on the wire, so REST and gRPC agree.
+func TestSubmitJob_PlacementClusterUUID(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	c, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	j, err := p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+		"reference":  map[string]any{"jobId": "j1"},
+		"placement":  map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+	}))
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	if c.ClusterUUID == "" || j.PlacementClusterUUID != c.ClusterUUID {
+		t.Fatalf("stored placement clusterUuid = %q, want cluster UUID %q", j.PlacementClusterUUID, c.ClusterUUID)
+	}
+	placement, _ := JobJSON(j)["placement"].(map[string]any)
+	if placement["clusterUuid"] != c.ClusterUUID {
+		t.Fatalf("rendered placement.clusterUuid = %v, want %q", placement["clusterUuid"], c.ClusterUUID)
+	}
+}
+
 // TestResourceNames verifies the core uses the centralized formatters.
 func TestResourceNames(t *testing.T) {
 	if got, want := ClusterName("p", "us-central1", "c"), "projects/p/regions/us-central1/clusters/c"; got != want {

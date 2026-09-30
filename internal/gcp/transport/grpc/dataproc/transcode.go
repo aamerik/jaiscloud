@@ -99,7 +99,7 @@ func sanitizeJobOneofs(data map[string]any) {
 func jobScalarsToProto(j dpstore.Job) *dataprocpb.Job {
 	out := &dataprocpb.Job{
 		Reference:               &dataprocpb.JobReference{ProjectId: j.ProjectID, JobId: j.JobID},
-		Placement:               &dataprocpb.JobPlacement{ClusterName: j.PlacementClusterName},
+		Placement:               &dataprocpb.JobPlacement{ClusterName: j.PlacementClusterName, ClusterUuid: j.PlacementClusterUUID},
 		Status:                  jobStatusToProto(j.Status),
 		Labels:                  j.Labels,
 		JobUuid:                 j.JobUUID,

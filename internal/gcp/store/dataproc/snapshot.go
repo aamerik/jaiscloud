@@ -119,7 +119,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 
 	jrows, err := s.pool.Query(ctx, `
 		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid
 		FROM jc_dataproc_jobs ORDER BY project_id, region, job_id
 	`)
 	if err != nil {
@@ -130,7 +130,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var typeJob, labels, status, history []byte
 		if err := jrows.Scan(&r.ProjectID, &r.Job.Region, &r.Job.JobID, &r.Job.PlacementClusterName, &r.Job.Type, &typeJob,
 			&labels, &status, &history, &r.Job.DriverOutputResourceURI, &r.Job.DriverControlFilesURI,
-			&r.Job.JobUUID, &r.Job.CreateTime); err != nil {
+			&r.Job.JobUUID, &r.Job.CreateTime, &r.Job.PlacementClusterUUID); err != nil {
 			jrows.Close()
 			return err
 		}
@@ -221,11 +221,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_dataproc_jobs
 				(project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-				 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+				 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		`, r.ProjectID, r.Job.Region, r.Job.JobID, r.Job.PlacementClusterName, r.Job.Type, nullableJSONRaw(r.Job.TypeJob, "{}"),
 			nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Job.DriverOutputResourceURI,
-			r.Job.DriverControlFilesURI, r.Job.JobUUID, r.Job.CreateTime); err != nil {
+			r.Job.DriverControlFilesURI, r.Job.JobUUID, r.Job.CreateTime, r.Job.PlacementClusterUUID); err != nil {
 			return err
 		}
 	}

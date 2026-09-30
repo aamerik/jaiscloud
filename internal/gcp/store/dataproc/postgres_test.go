@@ -55,7 +55,7 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 		t.Fatalf("create cluster: %v", err)
 	}
 	const typeJob = `{"mainJarFileUri":"gs://b/a.jar","mainClass":"Main","args":["x"]}`
-	j := Job{JobID: "j1", PlacementClusterName: "c1", Type: "sparkJob", TypeJob: []byte(typeJob), Status: JobStatus{State: "DONE"}}
+	j := Job{JobID: "j1", PlacementClusterName: "c1", PlacementClusterUUID: "uuid-9", Type: "sparkJob", TypeJob: []byte(typeJob), Status: JobStatus{State: "DONE"}}
 	if err := s.CreateJob(ctx, "proj", "us-central1", j); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -89,6 +89,9 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if !jsonEqual(string(gotJob.TypeJob), typeJob) {
 		t.Fatalf("type_job not preserved: %q", gotJob.TypeJob)
+	}
+	if gotJob.PlacementClusterUUID != "uuid-9" {
+		t.Fatalf("placement_cluster_uuid not preserved: %q", gotJob.PlacementClusterUUID)
 	}
 }
 

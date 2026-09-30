@@ -210,11 +210,11 @@ func (s *PostgresStore) CreateJob(ctx context.Context, projectID, region string,
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_dataproc_jobs
 			(project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-			 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
 		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), j.DriverOutputResourceURI, j.DriverControlFilesURI,
-		j.JobUUID, j.CreateTime)
+		j.JobUUID, j.CreateTime, j.PlacementClusterUUID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -229,7 +229,7 @@ func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	var typeJob, labels, status, history []byte
 	err := row.Scan(&j.ProjectID, &j.Region, &j.JobID, &j.PlacementClusterName, &j.Type, &typeJob, &labels, &status, &history,
-		&j.DriverOutputResourceURI, &j.DriverControlFilesURI, &j.JobUUID, &j.CreateTime)
+		&j.DriverOutputResourceURI, &j.DriverControlFilesURI, &j.JobUUID, &j.CreateTime, &j.PlacementClusterUUID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -243,7 +243,7 @@ func scanJob(row pgx.Row) (Job, error) {
 func (s *PostgresStore) GetJob(ctx context.Context, projectID, region, jobID string) (Job, error) {
 	j, err := scanJob(s.pool.QueryRow(ctx, `
 		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid
 		FROM jc_dataproc_jobs WHERE project_id=$1 AND region=$2 AND job_id=$3
 	`, projectID, region, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -258,10 +258,10 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, region string,
 	history, _ := json.Marshal(j.StatusHistory)
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_dataproc_jobs SET placement_cluster_name=$4, job_type=$5, type_job=$6, labels=$7, status=$8,
-		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12
+		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12, placement_cluster_uuid=$13
 		WHERE project_id=$1 AND region=$2 AND job_id=$3
 	`, projectID, region, j.JobID, j.PlacementClusterName, j.Type, nullableJSONRaw(j.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), j.DriverOutputResourceURI, j.DriverControlFilesURI, j.JobUUID)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), j.DriverOutputResourceURI, j.DriverControlFilesURI, j.JobUUID, j.PlacementClusterUUID)
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, region, 
 
 	current, err := scanJob(tx.QueryRow(ctx, `
 		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid
 		FROM jc_dataproc_jobs WHERE project_id=$1 AND region=$2 AND job_id=$3 FOR UPDATE
 	`, projectID, region, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -305,10 +305,10 @@ func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, region, 
 	history, _ := json.Marshal(next.StatusHistory)
 	tag, err := tx.Exec(ctx, `
 		UPDATE jc_dataproc_jobs SET placement_cluster_name=$4, job_type=$5, type_job=$6, labels=$7, status=$8,
-		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12
+		       status_history=$9, driver_output_resource_uri=$10, driver_control_files_uri=$11, job_uuid=$12, placement_cluster_uuid=$13
 		WHERE project_id=$1 AND region=$2 AND job_id=$3
 	`, projectID, region, jobID, next.PlacementClusterName, next.Type, nullableJSONRaw(next.TypeJob, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.DriverOutputResourceURI, next.DriverControlFilesURI, next.JobUUID)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.DriverOutputResourceURI, next.DriverControlFilesURI, next.JobUUID, next.PlacementClusterUUID)
 	if err != nil {
 		return Job{}, err
 	}
@@ -337,7 +337,7 @@ func (s *PostgresStore) DeleteJob(ctx context.Context, projectID, region, jobID 
 func (s *PostgresStore) ListJobs(ctx context.Context, projectID, region string) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid
 		FROM jc_dataproc_jobs WHERE project_id=$1 AND region=$2 ORDER BY job_id
 	`, projectID, region)
 	if err != nil {

@@ -36,6 +36,10 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	if err != nil {
 		return dpstore.Job{}, model.NewProviderError("NotFound", "cluster not found: "+j.PlacementClusterName, 404)
 	}
+	// placement.clusterUuid is the output-only UUID of the cluster the job runs
+	// on (dataproc.v1.JobPlacement). Capture it at submit so the field survives
+	// the cluster being deleted before the job is terminal.
+	j.PlacementClusterUUID = cluster.ClusterUUID
 	// Allocate the driver-output/control-file URIs (and provision the staging
 	// bucket) now, so they are persisted with the job and survive the cluster
 	// being deleted before the job reaches a terminal state.

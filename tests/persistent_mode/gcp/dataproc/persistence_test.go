@@ -324,6 +324,23 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("done job state after import: got %q body %s", state, body)
 	}
 
+	// placement.clusterUuid is captured at submit and must survive export/import.
+	code, body = doRequest(t, host, "GET", base+"/clusters/"+clusterName, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("get cluster for uuid: got HTTP %d body %s", code, body)
+	}
+	clusterUUID := strField(jsonObj(t, body), "clusterUuid")
+	if clusterUUID == "" {
+		t.Fatalf("cluster has no clusterUuid: body %s", body)
+	}
+	code, body = doRequest(t, host, "GET", base+"/jobs/"+doneJob, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("get done job for placement: got HTTP %d body %s", code, body)
+	}
+	if got := strField(jsonObj(t, body), "placement", "clusterUuid"); got != clusterUUID {
+		t.Fatalf("placement.clusterUuid lost after import: got %q want %q", got, clusterUUID)
+	}
+
 	code, body = doRequest(t, host, "GET", base+"/jobs/"+errJob, nil, "")
 	if code != http.StatusOK {
 		t.Fatalf("get error job after import: got HTTP %d body %s", code, body)
