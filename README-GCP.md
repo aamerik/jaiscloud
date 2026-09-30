@@ -24,7 +24,7 @@
 | Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke via `:call` or the deployed HTTPS trigger URL (mock echo by default, Docker/K8s execution modes), locations, source URLs, v2 `serviceConfig` instance/concurrency config (`minInstanceCount`/`maxInstanceCount`/`maxInstanceRequestConcurrency`/`availableCpu`, validated, surfaced + admission-enforced) |
 | Cloud Workflows | REST + gRPC | Workflow definitions + executions, real YAML expression engine |
-| Cloud Dataproc | REST + gRPC | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR); optional cluster/job lifecycle events on Pub/Sub |
+| Cloud Dataproc | REST + gRPC | Clusters (GCE- or GKE-`virtualClusterConfig`-shaped) + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR); pollable async cluster/job long-running operations; real driver output/control files in GCS; optional Metastore attachment; optional cluster/job lifecycle events on Pub/Sub |
 | Dataproc Metastore | REST + gRPC | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); databases/tables/partitions/locks served (including the Hive-3.x `get_table_meta` and `alter_table_with_cascade` paths), see [Known Limitations](#known-limitations) |
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
@@ -309,6 +309,18 @@ A `Secret`'s `rotation` schedule (`nextRotationTime` + `rotationPeriod`) is pers
 ### Cloud Workflows: synchronous execution, no filter/orderBy
 
 Cloud Workflows is implemented over a real YAML expression engine: workflow definitions and executions are stored, and `executions.create` runs the workflow synchronously and returns it already in a terminal state (there is no asynchronous execution queue). List `filter`/`orderBy` are ignored; a `switch` with no matching condition fails the execution loudly; `http.*` auth is not modelled; `retry.predicate` fails loud; and subworkflows, `listRevisions`, IAM, and CMEK are not implemented.
+
+### Dataproc on GKE: `virtualClusterConfig` is metadata only
+
+A cluster may be created with a `virtualClusterConfig` (Dataproc-on-GKE) instead of a `config` (Dataproc-on-Compute-Engine). The emulator validates the GKE shape structurally — `kubernetesClusterConfig.gkeClusterConfig.gkeClusterTarget` or a non-empty `nodePoolTarget` is required — rejects supplying both `config` and `virtualClusterConfig` with `InvalidArgument`, and round-trips the raw `virtualClusterConfig` (including unknown sub-fields) on REST and gRPC. It is **metadata only**: there is no GKE/Container API, no node-pool CRUD, and no real GKE control plane — both placements run the same client-mode Spark pods, so a GKE-backed cluster is not scheduled onto an external GKE cluster.
+
+### Dataproc: asynchronous cluster/job state machine
+
+Cluster create/update/start/stop/delete return a pollable `google.longrunning.Operation` (`Done=false`) whose status advances lazily on each `operations.get` read — there is no background goroutine. A create shows the cluster `CREATING` then `RUNNING` (the readiness delay is clock-driven and overridable via `JAISCLOUD_DATAPROC_CLUSTER_READY_DELAY`); a delete keeps the `DELETING` record until the transition fires, then removes it. `ERROR` is reachable only through the test failure-injection hook, because real provisioning failures are not observable. Likewise `jobs.submit` writes `PENDING` and advances `SETUP_DONE → RUNNING → DONE` as the job is polled, and `jobs.cancel` walks `CANCEL_PENDING → CANCEL_STARTED → CANCELLED`. On the gRPC surface the generic `google.longrunning.Operations` stub does not read the Dataproc store, so a `SubmitJobAsOperation` LRO can only be `Wait`-polled once the job is terminal in the default mock executor; the REST `operations.get` path always reflects the store.
+
+### Dataproc: driver output is captured from the client-mode driver
+
+A job's `driverOutputResourceUri`/`driverControlFilesUri` are allocated at submit and point into a staging bucket (`config.tempBucket`/`config.configBucket`, else a derived `dataproc-staging-<project>-<region>-<hash8>`; real Dataproc uses `dataproc-staging-<region>-<projectNumber>-<random>`, but the name is opaque to clients). At terminal state the driver's stdout/stderr is written to `<driverOutputResourceUri>.000000000` and a control file under `driverControlFilesUri`, so `gcloud dataproc jobs wait` and log readers resolve real objects in the emulated GCS. Capture is from the client-mode `spark-submit` main container only (no YARN/cluster-mode driver logs, no multi-container multiplexing) and is byte-capped at 4 MiB; in mock mode a small synthetic line is written so the advertised URI still resolves. Executor pods receive the `fs.gs.*` connector config plus `spark.executorEnv.*` mirrored from the driver, and caller `properties` cannot strip the injected connector confs.
 
 ### Dataproc: `Reset` does not drain in-flight Spark job goroutines
 

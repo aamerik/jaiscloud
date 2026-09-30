@@ -170,7 +170,20 @@ type summary struct {
 	IngestRegionCounts map[string]int `json:"ingest_region_counts"`
 	CuratedObjects     []string       `json:"curated_objects"`
 	PublishedObjects   []string       `json:"published_objects"`
+	Cluster            string         `json:"cluster"`
+	MetastoreService   string         `json:"metastore_service"`
+	DriverOutputs      map[string]struct {
+		URI   string `json:"uri"`
+		Bytes int    `json:"bytes"`
+	} `json:"driver_outputs"`
 }
+
+// testProject/testRegion mirror the PROJECT/REGION env the pipeline manifest
+// renders (deploy/k8s/lakehouse/pipeline.yaml).
+const (
+	testProject = "jaiscloud-project"
+	testRegion  = "us-central1"
+)
 
 // parseSummary extracts the single {"PIPELINE_OK": ...} JSON object from logs.
 func parseSummary(t *testing.T, logs string) summary {
@@ -251,4 +264,22 @@ func getObject(t *testing.T, base, bucket, name string) []byte {
 		t.Fatalf("read %s/%s: %v", bucket, name, err)
 	}
 	return b
+}
+
+// getJSON fetches a JSON object from the emulator via the port-forward.
+func getJSON(t *testing.T, base, path string) map[string]any {
+	t.Helper()
+	resp, err := http.Get(base + path)
+	if err != nil {
+		t.Fatalf("get %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get %s: HTTP %d", path, resp.StatusCode)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return m
 }

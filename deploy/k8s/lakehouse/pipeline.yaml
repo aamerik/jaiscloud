@@ -45,6 +45,9 @@ data:
     PROJECT = os.environ.get("PROJECT", "jaiscloud-project")
     REGION = os.environ.get("REGION", "us-central1")
     CLUSTER = os.environ.get("CLUSTER", "lakehouse-cluster")
+    # Run-unique Dataproc Metastore service the cluster attaches through its
+    # virtualClusterConfig.auxiliaryServicesConfig (validated same-region).
+    HMS = os.environ.get("HMS_SERVICE", "lakehouse-hms")
     JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
     # Unique per run so a re-run never collides with an existing Dataproc job
     # id in the emulator's store (SubmitJob rejects a duplicate jobId with 409).
@@ -147,14 +150,111 @@ data:
             delete_object(name, obj)
 
 
+    def create_metastore_service():
+        """Ensure the Metastore service the cluster attaches exists (409 is
+        idempotent) and return its fully-qualified name."""
+        status, body = _req(
+            "POST",
+            f"/v1/projects/{PROJECT}/locations/{REGION}/services?serviceId={HMS}",
+            {"hiveMetastoreConfig": {"endpointProtocol": "THRIFT"}},
+        )
+        if status >= 300 and status != 409:
+            raise RuntimeError(f"create metastore service {HMS}: HTTP {status} {body}")
+        return f"projects/{PROJECT}/locations/{REGION}/services/{HMS}"
+
+    def poll_operation(op_name, what):
+        """Poll a Dataproc long-running operation (by resource name) to
+        completion; the emulator's cluster/job state machine advances lazily on
+        each read. Returns the packed response ({} for a delete)."""
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            status, body = _req("GET", "/v1/" + op_name)
+            if status >= 300:
+                raise RuntimeError(f"poll {what}: HTTP {status} {body}")
+            if body.get("done"):
+                return body.get("response") or {}
+            time.sleep(0.5)
+        raise RuntimeError(f"{what} operation did not complete within 120s")
+
+    def delete_cluster():
+        """Delete a prior run's cluster and wait for the async delete to settle,
+        so this run recreates it with a GKE virtualClusterConfig."""
+        status, body = _req(
+            "DELETE", f"/v1/projects/{PROJECT}/regions/{REGION}/clusters/{CLUSTER}"
+        )
+        if status == 404:
+            return
+        if status >= 300:
+            raise RuntimeError(f"delete cluster {CLUSTER}: HTTP {status} {body}")
+        if body.get("name"):
+            poll_operation(body["name"], f"delete cluster {CLUSTER}")
+
     def ensure_cluster():
+        """Recreate the cluster as a GKE-backed Dataproc-on-GKE cluster
+        (virtualClusterConfig) attached to a Metastore service, and poll the
+        asynchronous create operation to RUNNING. Both placements run the same
+        client-mode Spark pods; the GKE config is metadata only."""
+        ms_ref = create_metastore_service()
+        delete_cluster()
         status, body = _req(
             "POST",
             f"/v1/projects/{PROJECT}/regions/{REGION}/clusters",
-            {"clusterName": CLUSTER, "config": {}},
+            {
+                "clusterName": CLUSTER,
+                "virtualClusterConfig": {
+                    "kubernetesClusterConfig": {
+                        "gkeClusterConfig": {
+                            "gkeClusterTarget": f"projects/{PROJECT}/locations/{REGION}/clusters/lakehouse-gke"
+                        }
+                    },
+                    "auxiliaryServicesConfig": {
+                        "metastoreConfig": {"dataprocMetastoreService": ms_ref}
+                    },
+                },
+            },
         )
-        if status >= 300 and status != 409:
+        if status >= 300:
             raise RuntimeError(f"create cluster {CLUSTER}: HTTP {status} {body}")
+        if body.get("done"):
+            raise RuntimeError(f"cluster {CLUSTER} created inline; want an async LRO")
+        poll_operation(body["name"], f"create cluster {CLUSTER}")
+
+        status, cl = _req(
+            "GET", f"/v1/projects/{PROJECT}/regions/{REGION}/clusters/{CLUSTER}"
+        )
+        if status >= 300:
+            raise RuntimeError(f"get cluster {CLUSTER}: HTTP {status} {cl}")
+        if cl.get("status", {}).get("state") != "RUNNING":
+            raise RuntimeError(f"cluster {CLUSTER} state = {cl.get('status')}")
+        vcc = cl.get("virtualClusterConfig") or {}
+        if not vcc.get("kubernetesClusterConfig"):
+            raise RuntimeError(f"cluster {CLUSTER} lost virtualClusterConfig: {cl}")
+        got = (
+            (vcc.get("auxiliaryServicesConfig") or {}).get("metastoreConfig") or {}
+        ).get("dataprocMetastoreService")
+        if got != ms_ref:
+            raise RuntimeError(f"cluster {CLUSTER} metastore = {got!r}, want {ms_ref!r}")
+        log(f"cluster {CLUSTER} RUNNING (GKE virtualClusterConfig + metastore {ms_ref})")
+        return ms_ref
+
+    def fetch_driver_output(job_id):
+        """Resolve a terminal job's driverOutputResourceUri to the real GCS
+        object the emulator staged (<uri>.000000000) and return (uri, bytes)."""
+        status, body = _req(
+            "GET", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/{job_id}"
+        )
+        if status >= 300:
+            raise RuntimeError(f"get job {job_id}: HTTP {status} {body}")
+        uri = body.get("driverOutputResourceUri") or ""
+        if not uri.startswith("gs://"):
+            raise RuntimeError(f"job {job_id} driverOutputResourceUri = {uri!r}")
+        bucket, _, obj = uri[len("gs://"):].partition("/")
+        data = _raw_get(
+            "/storage/v1/b/" + bucket + "/o/"
+            + urllib.parse.quote(obj + ".000000000", safe="") + "?alt=media"
+        )
+        log(f"driver output {job_id} -> gs://{bucket}/{obj}.000000000 ({len(data)} bytes)")
+        return uri, len(data)
 
 
     def submit_job(job_id, script_uri):
@@ -265,17 +365,19 @@ data:
         upload(RAW, "jobs/derive.py", DERIVE_PY, "text/x-python")
         log(f"ingested {RECORDS} raw events in {shards} shard(s) -> gs://{RAW}/events/")
 
-        ensure_cluster()
+        metastore_ref = ensure_cluster()
 
         # ---- Transform (Spark) ----------------------------------------------
         transform_job = f"lakehouse-transform-{RUN_ID}"
         submit_job(transform_job, f"gs://{RAW}/jobs/transform.py")
         wait_job(transform_job)
+        transform_output = fetch_driver_output(transform_job)
 
         # ---- Derive (Spark) --------------------------------------------------
         derive_job = f"lakehouse-derive-{RUN_ID}"
         submit_job(derive_job, f"gs://{RAW}/jobs/derive.py")
         wait_job(derive_job)
+        derive_output = fetch_driver_output(derive_job)
 
         # ---- Publish ---------------------------------------------------------
         curated_parts = sorted(
@@ -297,6 +399,14 @@ data:
             "ingest_region_counts": ingest_counts,
             "curated_objects": curated_parts,
             "published_objects": sorted(published),
+            # GKE virtualClusterConfig + Metastore attachment, and the real GCS
+            # driver-output objects the emulator staged for each Spark job.
+            "cluster": CLUSTER,
+            "metastore_service": metastore_ref,
+            "driver_outputs": {
+                transform_job: {"uri": transform_output[0], "bytes": transform_output[1]},
+                derive_job: {"uri": derive_output[0], "bytes": derive_output[1]},
+            },
         }
         upload(PUBLISHED, "manifest.json",
                json.dumps(manifest, indent=2, sort_keys=True), "application/json")

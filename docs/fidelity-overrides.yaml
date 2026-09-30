@@ -42,7 +42,7 @@ operations:
     operation: Dataproc.SubmitJob
     state: ga
     allow_upgrade: true
-    reason: "covered by the k3d Lakehouse e2e (real Spark on Kubernetes)"
+    reason: "covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
 
   # Firestore Admin composite-index CRUD: verified end-to-end by the official
   # cloud.google.com/go/firestore/apiv1/admin client conformance suite.
