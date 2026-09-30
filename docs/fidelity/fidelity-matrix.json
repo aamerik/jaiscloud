@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 808,
+    "total": 814,
     "by_state": {
-      "ga": 573,
+      "ga": 579,
       "limited": 117,
       "preview": 14,
       "unsupported": 104
@@ -15,7 +15,7 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 297,
+        "ga": 303,
         "limited": 106,
         "preview": 14,
         "unsupported": 12
@@ -60,10 +60,10 @@
         "ga": 39
       },
       "iam": {
-        "ga": 18
+        "ga": 23
       },
       "iamcredentials": {
-        "ga": 6
+        "ga": 7
       },
       "iceberg": {
         "preview": 14
@@ -3477,6 +3477,28 @@
     },
     {
       "service": "iam",
+      "operation": "IAM.ServiceAccountDisable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.disable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "IAM.ServiceAccountEnable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.enable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
       "operation": "IAM.ServiceAccountGet",
       "transport": "rest",
       "state": "ga",
@@ -3513,6 +3535,28 @@
       "state": "ga",
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "IAM.ServiceAccountKeyDisable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.keys.disable",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
+      "operation": "IAM.ServiceAccountKeyEnable",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.keys.enable",
         "mutating",
         "postgres=yes"
       ]
@@ -3601,6 +3645,16 @@
     },
     {
       "service": "iam",
+      "operation": "IAM.ServiceAccountUndelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iam.projects.serviceAccounts.undelete",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iam",
       "operation": "IAM.ServiceAccountUpdate",
       "transport": "rest",
       "state": "ga",
@@ -3668,6 +3722,16 @@
       "state": "ga",
       "evidence": [
         "discovery=iamcredentials.projects.serviceAccounts.generateIdToken",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "IAMCredentials.GetAllowedLocations",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iamcredentials.projects.serviceAccounts.getAllowedLocations",
         "postgres=yes"
       ]
     },
