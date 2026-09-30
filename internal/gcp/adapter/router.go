@@ -180,9 +180,10 @@ func detectV1Service(path string) string {
 	}
 	// IAM Service Account Credentials shares the serviceAccounts resource path
 	// with IAM on a single emulator origin; its unique custom verbs
-	// (generateAccessToken/generateIdToken) discriminate it. signBlob/signJwt
-	// are ambiguous with iam and remain owned by iam.
-	if custom == "generateAccessToken" || custom == "generateIdToken" {
+	// (generateAccessToken/generateIdToken) discriminate it, as does
+	// getAllowedLocations (declared on serviceAccounts and workloadIdentityPools).
+	// signBlob/signJwt are ambiguous with iam and remain owned by iam.
+	if custom == "generateAccessToken" || custom == "generateIdToken" || custom == "getAllowedLocations" {
 		return "iamcredentials"
 	}
 	// Service Usage v1: /v1/projects/{project}/services[/{service}][:verb]. The

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/serviceaccount"
@@ -65,6 +66,10 @@ func keyToMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]a
 		"keyOrigin":      keyOrigin,
 		"keyType":        keyType,
 		"validAfterTime": m.ValidAfter,
+		"disabled":       m.Disabled,
+	}
+	if m.DisableTime != "" {
+		out["disableTime"] = m.DisableTime
 	}
 	if pub, ok := m.PublicKeyData(); ok {
 		out["publicKeyData"] = pub
@@ -174,6 +179,43 @@ func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.Normal
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// setKeyDisabled flips a service-account key's disabled flag
+// (projects.serviceAccounts.keys.disable/.enable) and persists it.
+func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedRequest, disabled bool) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	email, keyID := parseKeyName(name)
+	m, err := p.loadKey(ctx, nr.AccountID, email, keyID)
+	if err != nil {
+		return nil, err
+	}
+	m.Disabled = disabled
+	if disabled {
+		m.DisableTime = clock.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		m.DisableTime = ""
+	}
+	data, _ := json.Marshal(m)
+	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
+		Type: rtServiceAccountKey, ID: keyID, Data: data,
+	}); err != nil {
+		return nil, err
+	}
+	return provider.OK(keyToMap(nr, *m)), nil
+}
+
+// ServiceAccountKeyDisable implements projects.serviceAccounts.keys.disable.
+func (p *Provider) ServiceAccountKeyDisable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setKeyDisabled(ctx, nr, true)
+}
+
+// ServiceAccountKeyEnable implements projects.serviceAccounts.keys.enable.
+func (p *Provider) ServiceAccountKeyEnable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setKeyDisabled(ctx, nr, false)
 }
 
 // ServiceAccountSignBlob serves iam.projects.serviceAccounts.signBlob. The

@@ -79,13 +79,20 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:testIamPermissions", "ServiceAccountTestIamPermissions"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:signBlob", "ServiceAccountSignBlob"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:signJwt", "ServiceAccountSignJwt"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:disable", "ServiceAccountDisable"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:enable", "ServiceAccountEnable"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:undelete", "ServiceAccountUndelete"},
 		// IAM Credentials (iamcredentials) unique custom verbs.
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:generateAccessToken", "GenerateAccessToken"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:generateIdToken", "GenerateIdToken"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:getAllowedLocations", "GetAllowedLocations"},
+		{"POST", "/v1/projects/p/locations/us-central1/workloadIdentityPools/pool:getAllowedLocations", "GetAllowedLocations"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com/keys", "ServiceAccountKeyCreate"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys", "ServiceAccountKeyList"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1", "ServiceAccountKeyGet"},
 		{"DELETE", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1", "ServiceAccountKeyDelete"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1:disable", "ServiceAccountKeyDisable"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1:enable", "ServiceAccountKeyEnable"},
 		// Cloud Functions
 		{"POST", "/v1/projects/p/locations/us-central1/functions", "CreateFunction"},
 		{"GET", "/v1/projects/p/locations/us-central1/functions", "ListFunctions"},
@@ -196,10 +203,14 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/serviceAccounts/sa@x.com":                                  "iam",
 		// IAM Credentials owns the unique generate* verbs; signBlob/signJwt stay
 		// on iam (shared path, single origin).
-		"/v1/projects/p/serviceAccounts/sa@x.com:generateAccessToken": "iamcredentials",
-		"/v1/projects/p/serviceAccounts/sa@x.com:generateIdToken":     "iamcredentials",
-		"/v1/projects/p/serviceAccounts/sa@x.com:signBlob":            "iam",
-		"/v1/projects/p/locations/us-central1/functions/f":            "functions",
+		"/v1/projects/p/serviceAccounts/sa@x.com:generateAccessToken":                         "iamcredentials",
+		"/v1/projects/p/serviceAccounts/sa@x.com:generateIdToken":                             "iamcredentials",
+		"/v1/projects/p/serviceAccounts/sa@x.com:getAllowedLocations":                         "iamcredentials",
+		"/v1/projects/p/locations/us-central1/workloadIdentityPools/pool:getAllowedLocations": "iamcredentials",
+		"/v1/projects/p/serviceAccounts/sa@x.com:disable":                                     "iam",
+		"/v1/projects/p/serviceAccounts/sa@x.com:undelete":                                    "iam",
+		"/v1/projects/p/serviceAccounts/sa@x.com:signBlob":                                    "iam",
+		"/v1/projects/p/locations/us-central1/functions/f":                                    "functions",
 		// The v2 runtime catalog is not a v1 surface.
 		"/v1/projects/p/locations/us-central1/runtimes": "",
 		// Cloud Workflows management + executions share the path shape; the

@@ -251,6 +251,11 @@ func detectResourceType(segs []string) string {
 			// Eventarc providers (…/locations/{l}/providers[/{p}]) — read-only
 			// discovery.
 			return "providers"
+		case "workloadIdentityPools":
+			// IAM Credentials workload identity pools
+			// (…/locations/{l}/workloadIdentityPools[/{pool}]). Only
+			// custom-method discovery (getAllowedLocations) is modelled.
+			return "workloadIdentityPools"
 		}
 	}
 	if hasExecutions {
@@ -408,6 +413,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "ServiceAccountSignBlob"
 			case "signJwt":
 				return "ServiceAccountSignJwt"
+			case "disable":
+				return "ServiceAccountDisable"
+			case "enable":
+				return "ServiceAccountEnable"
+			case "undelete":
+				return "ServiceAccountUndelete"
 			// IAM Service Account Credentials (iamcredentials) custom verbs.
 			// detectV1Service routes these to the iamcredentials service, whose
 			// provider registers "IAMCredentials.<action>".
@@ -415,6 +426,23 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "GenerateAccessToken"
 			case "generateIdToken":
 				return "GenerateIdToken"
+			case "getAllowedLocations":
+				return "GetAllowedLocations"
+			}
+		case "workloadIdentityPools":
+			// iamcredentials projects.locations.workloadIdentityPools custom
+			// verbs (only getAllowedLocations is modelled).
+			switch custom {
+			case "getAllowedLocations":
+				return "GetAllowedLocations"
+			}
+		case "keys":
+			// Service-account key lifecycle (projects.serviceAccounts.keys).
+			switch custom {
+			case "disable":
+				return "ServiceAccountKeyDisable"
+			case "enable":
+				return "ServiceAccountKeyEnable"
 			}
 		case "documents":
 			// Custom methods POSTed to the "documents" collection marker:

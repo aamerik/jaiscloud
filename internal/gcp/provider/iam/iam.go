@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/model"
@@ -16,9 +18,21 @@ import (
 )
 
 const (
-	rtServiceAccount       = "gcp_service_account"
-	rtServiceAccountPolicy = "gcp_service_account_policy"
+	rtServiceAccount        = "gcp_service_account"
+	rtServiceAccountPolicy  = "gcp_service_account_policy"
+	rtServiceAccountDeleted = "gcp_service_account_deleted"
 )
+
+// deletedServiceAccount is the tombstone persisted by Delete so a later
+// projects.serviceAccounts.undelete can restore the account. Real GCP keeps a
+// deleted service account for 30 days; the emulator keeps it until cleared by a
+// restore (there is no background GC of tombstones).
+type deletedServiceAccount struct {
+	Account     string             `json:"account"`
+	Email       string             `json:"email"`
+	DeletedAt   string             `json:"deletedAt"`
+	ServiceAcct serviceAccountMeta `json:"serviceAccount"`
+}
 
 // Provider handles IAM service accounts and their IAM policies.
 type Provider struct {
@@ -37,6 +51,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"IAM.ServiceAccountPatch":              p.Update,
 		"IAM.ServiceAccountUpdate":             p.Update,
 		"IAM.ServiceAccountDelete":             p.Delete,
+		"IAM.ServiceAccountDisable":            p.Disable,
+		"IAM.ServiceAccountEnable":             p.Enable,
+		"IAM.ServiceAccountUndelete":           p.Undelete,
 		"IAM.ServiceAccountGetIamPolicy":       p.GetIamPolicy,
 		"IAM.ServiceAccountSetIamPolicy":       p.SetIamPolicy,
 		"IAM.ServiceAccountTestIamPermissions": p.TestIamPermissions,
@@ -44,6 +61,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"IAM.ServiceAccountKeyList":            p.ServiceAccountKeyList,
 		"IAM.ServiceAccountKeyGet":             p.ServiceAccountKeyGet,
 		"IAM.ServiceAccountKeyDelete":          p.ServiceAccountKeyDelete,
+		"IAM.ServiceAccountKeyDisable":         p.ServiceAccountKeyDisable,
+		"IAM.ServiceAccountKeyEnable":          p.ServiceAccountKeyEnable,
 		"IAM.ServiceAccountSignBlob":           p.ServiceAccountSignBlob,
 		"IAM.ServiceAccountSignJwt":            p.ServiceAccountSignJwt,
 	}
@@ -280,6 +299,27 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, err
 	}
 	email := emailFromName(name)
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+		}
+		return nil, err
+	}
+	// Persist a tombstone so projects.serviceAccounts.undelete can restore the
+	// account (real GCP keeps a deleted service account for 30 days).
+	var m serviceAccountMeta
+	if json.Unmarshal(e.Data, &m) == nil {
+		tomb, _ := json.Marshal(deletedServiceAccount{
+			Account:     nr.AccountID,
+			Email:       email,
+			DeletedAt:   clock.Now().UTC().Format(time.RFC3339Nano),
+			ServiceAcct: m,
+		})
+		_ = p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
+			Type: rtServiceAccountDeleted, ID: email, Data: tomb,
+		})
+	}
 	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccount, email); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "service account not found", 404)
@@ -287,6 +327,96 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// loadServiceAccountMeta loads a service account's stored metadata.
+func (p *Provider) loadServiceAccountMeta(ctx context.Context, account, email string) (serviceAccountMeta, error) {
+	e, err := p.resources.Get(ctx, account, store.GlobalRegion, rtServiceAccount, email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return serviceAccountMeta{}, model.NewProviderError("NotFound", "service account not found", 404)
+		}
+		return serviceAccountMeta{}, err
+	}
+	var m serviceAccountMeta
+	if err := json.Unmarshal(e.Data, &m); err != nil {
+		return serviceAccountMeta{}, err
+	}
+	return m, nil
+}
+
+// saveServiceAccountMeta persists an updated service account.
+func (p *Provider) saveServiceAccountMeta(ctx context.Context, account string, m serviceAccountMeta) error {
+	data, _ := json.Marshal(m)
+	return p.resources.Update(ctx, account, store.GlobalRegion, store.ResourceEntry{
+		Type: rtServiceAccount, ID: m.Email, Data: data,
+	})
+}
+
+// setDisabled flips a service account's disabled flag (projects.serviceAccounts
+// .disable/.enable).
+func (p *Provider) setDisabled(ctx context.Context, nr *model.NormalizedRequest, disabled bool) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	email := emailFromName(name)
+	m, err := p.loadServiceAccountMeta(ctx, nr.AccountID, email)
+	if err != nil {
+		return nil, err
+	}
+	m.Disabled = disabled
+	if err := p.saveServiceAccountMeta(ctx, nr.AccountID, m); err != nil {
+		return nil, err
+	}
+	return provider.OK(saToMap(m)), nil
+}
+
+func (p *Provider) Disable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setDisabled(ctx, nr, true)
+}
+
+func (p *Provider) Enable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.setDisabled(ctx, nr, false)
+}
+
+// Undelete restores a previously deleted service account from its tombstone
+// (projects.serviceAccounts.undelete). A live account is returned unchanged.
+func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	email := emailFromName(name)
+	if m, err := p.loadServiceAccountMeta(ctx, nr.AccountID, email); err == nil {
+		return provider.OK(saToMap(m)), nil
+	}
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, model.NewProviderError("NotFound", "service account not found", 404)
+		}
+		return nil, err
+	}
+	var tomb deletedServiceAccount
+	if err := json.Unmarshal(e.Data, &tomb); err != nil {
+		return nil, err
+	}
+	m := tomb.ServiceAcct
+	m.Disabled = false
+	if err := p.resources.Upsert(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
+		Type: rtServiceAccount, ID: m.Email, Data: mustJSON(m),
+	}); err != nil {
+		return nil, err
+	}
+	_ = p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
+	return provider.OK(saToMap(m)), nil
+}
+
+// mustJSON marshals a service account metadata value for the resource store.
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
