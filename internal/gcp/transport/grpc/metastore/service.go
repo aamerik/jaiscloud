@@ -7,7 +7,10 @@
 //
 // Create/Update/Delete return a done google.longrunning.Operation with the
 // typed response packed inline, so the generated client's Wait observes it
-// without polling. The five deferred control-plane RPCs (ExportMetadata,
+// without polling. In the opt-in async mode the operation is returned in flight
+// and the client's poll resolves it through ResolveOperation (registered with
+// the shared google.longrunning.Operations service in main.go). The five
+// deferred control-plane RPCs (ExportMetadata,
 // RestoreService, QueryMetadata, MoveTableToDatabase,
 // AlterMetadataResourceLocation) fail loud with codes.Unimplemented. The
 // separate google.cloud.metastore.v1.DataprocMetastoreFederation service is not
@@ -25,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	core "jaiscloud/internal/gcp/service/metastore"
 	"jaiscloud/internal/model"
 )
@@ -241,5 +245,47 @@ func (s *Service) AlterMetadataResourceLocation(_ context.Context, _ *metastorep
 	return nil, mapError(unimplemented("AlterMetadataResourceLocation"))
 }
 
-// compile-time assertion that Service implements the generated server.
-var _ metastorepb.DataprocMetastoreServer = (*Service)(nil)
+// ResolveOperation implements the google.longrunning.Operations resolver for
+// Dataproc Metastore. Names are location-scoped
+// (projects/{p}/locations/{l}/operations/{id}); a name outside that shape — or
+// an id the metastore store does not know, since a location-scoped name is
+// shared with other services — is not ours (handled=false) so the generic
+// terminal stub keeps serving it done=true.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	project, location, id, ok := parseOperationName(name)
+	if !ok {
+		return nil, false, nil
+	}
+	op, err := s.core.GetOperation(ctx, project, location, id)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProto(op, project, operationResponse(op))
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+// parseOperationName parses a Dataproc Metastore location operation name
+// projects/{project}/locations/{location}/operations/{id}.
+func parseOperationName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "locations" || parts[4] != "operations" {
+		return "", "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
+}
+
+// compile-time assertions that Service implements the generated server and the
+// operations resolver.
+var (
+	_ metastorepb.DataprocMetastoreServer = (*Service)(nil)
+	_ grpcoperations.Resolver             = (*Service)(nil)
+)

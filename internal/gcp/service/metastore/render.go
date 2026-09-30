@@ -25,6 +25,15 @@ const (
 	metadataImportTypeURL = "type.googleapis.com/google.cloud.metastore.v1.MetadataImport"
 )
 
+// Exported aliases of the Any type URLs above. The gRPC transport reads the
+// @type discriminator of a persisted operation response to reconstruct the
+// typed resource; exporting the URLs avoids duplicating the wire literals.
+const (
+	ServiceTypeURL        = serviceTypeURL
+	BackupTypeURL         = backupTypeURL
+	MetadataImportTypeURL = metadataImportTypeURL
+)
+
 // randomHex returns n random hexadecimal characters. It is used only for
 // operation ids (ephemeral), never for a resource's stable output-only uid.
 func randomHex(n int) string {
@@ -159,10 +168,12 @@ func OperationMetadataJSON(target, verb string, start time.Time) map[string]any 
 }
 
 // OperationJSON renders a stored Operation as a google.longrunning.Operation.
-// Metadata/Response are the canonical wire JSON persisted alongside it.
+// Metadata/Response are the canonical wire JSON persisted alongside it. An
+// in-flight operation omits both the response and metadata.endTime; a done
+// operation keeps the original shape exactly.
 func OperationJSON(op metastorestore.Operation, project string) map[string]any {
 	name := OperationName(project, op.Location, op.ID)
-	var metadata any = map[string]any{}
+	metadata := map[string]any{}
 	if op.Metadata != "" {
 		_ = json.Unmarshal([]byte(op.Metadata), &metadata)
 	}
@@ -171,37 +182,75 @@ func OperationJSON(op metastorestore.Operation, project string) map[string]any {
 		"metadata": metadata,
 		"done":     op.Done,
 	}
-	if op.Done && op.Response != "" {
-		var response any = map[string]any{}
-		if json.Unmarshal([]byte(op.Response), &response) == nil {
-			out["response"] = response
+	if op.Done {
+		// An async operation is persisted without an endTime; surface the
+		// settled endTime here. A synchronously completed operation already
+		// carries it, so it is left untouched and the output is unchanged.
+		if _, ok := metadata["endTime"]; !ok {
+			metadata["endTime"] = formatTimestamp(op.EndTime)
 		}
+		if op.Response != "" {
+			var response any = map[string]any{}
+			if json.Unmarshal([]byte(op.Response), &response) == nil {
+				out["response"] = response
+			}
+		}
+	} else {
+		// Real GCP does not publish endTime until the operation completes.
+		delete(metadata, "endTime")
 	}
 	return out
 }
 
-// storeOperation persists a done google.longrunning.Operation and returns it.
+// storeOperation persists a google.longrunning.Operation and returns it. In the
+// default synchronous mode it is stored done=true with EndTime=now, exactly as
+// before. In async mode it is stored done=false with a zero EndTime and no
+// metadata.endTime; the settle helper derives completion on read.
 // Marshalling metadata/response cannot fail for the plain maps this package
 // builds, so a marshal error is ignored and surfaces as an empty JSON object on
 // read-back.
 func (s *Service) storeOperation(ctx context.Context, project, location, verb, target string, response map[string]any) (metastorestore.Operation, error) {
 	now := clock.Now().UTC()
-	metaJSON, _ := json.Marshal(OperationMetadataJSON(target, verb, now))
+	meta := OperationMetadataJSON(target, verb, now)
 	respJSON, _ := json.Marshal(response)
 	op := metastorestore.Operation{
 		ID:         randomHex(12),
 		ProjectID:  project,
 		Location:   location,
-		Done:       true,
-		Metadata:   string(metaJSON),
 		Response:   string(respJSON),
 		Verb:       verb,
 		Target:     target,
 		CreateTime: now,
-		EndTime:    now,
 	}
+	if s.lroMode.Async() {
+		delete(meta, "endTime")
+	} else {
+		op.Done = true
+		op.EndTime = now
+	}
+	metaJSON, _ := json.Marshal(meta)
+	op.Metadata = string(metaJSON)
 	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
 		return metastorestore.Operation{}, err
 	}
 	return op, nil
+}
+
+// settle derives the rendered state of a persisted operation from its stored
+// done flag and the configured timing mode. An in-flight operation (done=false)
+// becomes done once the delay has elapsed, with a deterministic EndTime of
+// createTime+delay (a zero delay yields createTime).
+//
+// The flip is derived on read rather than written back: the metastore store has
+// no UpdateOperation (adding one would be a store migration for no behavioral
+// gain), and the persisted flag is an input while the settled state is a pure
+// function of it and the clock. A store that later needs the settled flag
+// visible to other readers can add the write without changing this contract.
+func (s *Service) settle(op metastorestore.Operation) metastorestore.Operation {
+	if op.Done || s.lroMode.Pending(op.CreateTime) {
+		return op
+	}
+	op.Done = true
+	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	return op
 }

@@ -79,24 +79,30 @@ func aclToProto(a mkstore.Acl, project string) *managedkafkapb.Acl {
 
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the already-rendered metadata and the
-// caller-supplied response message (a Cluster, or Empty for delete).
+// caller-supplied response message (a Cluster, or Empty for delete). The result
+// and metadata.endTime are only attached once the operation is done: real GCP
+// omits them while in flight, and a done operation keeps the original output
+// exactly.
 func operationToProto(op mkstore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
-	metadata, err := anypb.New(&managedkafkapb.OperationMetadata{
+	meta := &managedkafkapb.OperationMetadata{
 		CreateTime: timestamppb.New(op.CreateTime),
-		EndTime:    timestamppb.New(op.EndTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
-	})
+	}
+	if op.Done {
+		meta.EndTime = timestamppb.New(op.EndTime)
+	}
+	metadata, err := anypb.New(meta)
 	if err != nil {
 		return nil, err
 	}
 	out := &longrunningpb.Operation{
 		Name:     core.OperationName(project, op.Location, op.ID),
 		Metadata: metadata,
-		Done:     true,
+		Done:     op.Done,
 	}
-	if response != nil {
+	if op.Done && response != nil {
 		resp, err := anypb.New(response)
 		if err != nil {
 			return nil, err
@@ -104,6 +110,25 @@ func operationToProto(op mkstore.Operation, project string, response proto.Messa
 		out.Result = &longrunningpb.Operation_Response{Response: resp}
 	}
 	return out, nil
+}
+
+// operationResponse reconstructs the typed result message for a settled
+// operation from its stored Discovery-shape JSON: create/update carry a Cluster
+// and delete carries google.protobuf.Empty. Any other verb, an empty body, or a
+// body that cannot be decoded falls back to Empty so a poll never fails on a
+// malformed record.
+func operationResponse(op mkstore.Operation) proto.Message {
+	if op.Verb != "create" && op.Verb != "update" {
+		return emptyResponse()
+	}
+	if op.Response == "" {
+		return emptyResponse()
+	}
+	c := &managedkafkapb.Cluster{}
+	if err := protojsonOpts.Unmarshal([]byte(op.Response), c); err != nil {
+		return emptyResponse()
+	}
+	return c
 }
 
 // emptyResponse builds the google.protobuf.Empty result a delete operation
