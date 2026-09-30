@@ -450,9 +450,9 @@ func TestJobAndQueryEmptyResults(t *testing.T) {
 		t.Fatalf("get job state: %v", got.Data)
 	}
 
-	// jobs.query → empty result shape.
+	// jobs.query → executed result shape (SELECT 1 evaluates).
 	q, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
-		"query":        "SELECT * FROM t",
+		"query":        "SELECT 1",
 		"useLegacySql": false,
 	}}))
 	if err != nil {
@@ -461,8 +461,8 @@ func TestJobAndQueryEmptyResults(t *testing.T) {
 	if q.Data["jobComplete"] != true {
 		t.Fatalf("expected jobComplete=true, got %v", q.Data["jobComplete"])
 	}
-	if q.Data["totalRows"] != "0" {
-		t.Fatalf("expected totalRows 0, got %v", q.Data["totalRows"])
+	if q.Data["totalRows"] != "1" {
+		t.Fatalf("expected totalRows 1, got %v", q.Data["totalRows"])
 	}
 	qref, _ := q.Data["jobReference"].(map[string]any)
 	jobID, _ := qref["jobId"].(string)
@@ -470,11 +470,20 @@ func TestJobAndQueryEmptyResults(t *testing.T) {
 		t.Fatalf("expected generated jobId in query response")
 	}
 	rows, _ := q.Data["rows"].([]any)
-	if len(rows) != 0 {
-		t.Fatalf("expected empty rows, got %v", rows)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %v", rows)
+	}
+	row, _ := rows[0].(map[string]any)
+	cells, _ := row["f"].([]any)
+	if len(cells) != 1 {
+		t.Fatalf("expected 1 cell, got %v", cells)
+	}
+	cell, _ := cells[0].(map[string]any)
+	if cell["v"] != "1" {
+		t.Fatalf("expected cell value \"1\", got %v", cell["v"])
 	}
 
-	// The query job is stored: getJob + getQueryResults work.
+	// The query job is stored and re-executes: getJob + getQueryResults work.
 	if _, err := p.GetJob(ctx, newNR(map[string]any{"jobId": jobID})); err != nil {
 		t.Fatalf("get query job: %v", err)
 	}
@@ -484,6 +493,10 @@ func TestJobAndQueryEmptyResults(t *testing.T) {
 	}
 	if qr.Data["jobComplete"] != true {
 		t.Fatalf("getQueryResults jobComplete: %v", qr.Data)
+	}
+	qrRows, _ := qr.Data["rows"].([]any)
+	if len(qrRows) != 1 {
+		t.Fatalf("expected getQueryResults to re-execute, got %v", qr.Data)
 	}
 
 	// List jobs.
@@ -527,7 +540,7 @@ func TestQuery_RejectsUnencodableConfig(t *testing.T) {
 	p := New(bqstore.NewMemoryStore())
 
 	_, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
-		"query":        "SELECT * FROM t",
+		"query":        "SELECT 1",
 		"useLegacySql": false,
 		"unencodable":  math.Inf(1),
 	}}))
@@ -546,6 +559,121 @@ func TestQuery_RejectsUnencodableConfig(t *testing.T) {
 	}
 	if jobs, _ := list.Data["jobs"].([]any); len(jobs) != 0 {
 		t.Fatalf("expected no jobs stored, got %d: %+v", len(jobs), jobs)
+	}
+}
+
+// TestQueryExecutesOverStoredRows exercises the SQL engine end-to-end through
+// the provider: create a dataset + table + schema, stream rows, then SELECT.
+func TestQueryExecutesOverStoredRows(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
+
+	_, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "sales"},
+	}}))
+	must(err)
+	_, err = p.CreateTable(ctx, newNR(map[string]any{
+		"datasetId": "sales",
+		"body": map[string]any{
+			"tableReference": map[string]any{"projectId": "proj", "datasetId": "sales", "tableId": "orders"},
+			"schema": map[string]any{"fields": []any{
+				map[string]any{"name": "id", "type": "INT64", "mode": "REQUIRED"},
+				map[string]any{"name": "amount", "type": "FLOAT64"},
+				map[string]any{"name": "paid", "type": "BOOL"},
+			}},
+		},
+	}))
+	must(err)
+	_, err = p.InsertAll(ctx, newNR(map[string]any{
+		"datasetId": "sales", "tableId": "orders",
+		"body": map[string]any{"rows": []any{
+			map[string]any{"json": map[string]any{"id": 1, "amount": 10.5, "paid": true}},
+			map[string]any{"json": map[string]any{"id": 2, "amount": 4.25, "paid": false}},
+		}},
+	}))
+	must(err)
+
+	q, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query": "SELECT id, amount, paid, amount/2 AS half FROM `proj.sales.orders` ORDER BY id",
+	}}))
+	must(err)
+	if q.Data["totalRows"] != "2" {
+		t.Fatalf("totalRows: %v", q.Data["totalRows"])
+	}
+	schema, _ := q.Data["schema"].(map[string]any)
+	fields, _ := schema["fields"].([]any)
+	if len(fields) != 4 {
+		t.Fatalf("fields: %v", fields)
+	}
+	f0, _ := fields[0].(map[string]any)
+	if f0["name"] != "id" || f0["type"] != "INTEGER" || f0["mode"] != "REQUIRED" {
+		t.Fatalf("id field: %v", f0)
+	}
+	f3, _ := fields[3].(map[string]any)
+	if f3["name"] != "half" || f3["type"] != "FLOAT" {
+		t.Fatalf("half field: %v", f3)
+	}
+	rows, _ := q.Data["rows"].([]any)
+	first, _ := rows[0].(map[string]any)
+	cells, _ := first["f"].([]any)
+	cellVal := func(i int) any {
+		m, _ := cells[i].(map[string]any)
+		return m["v"]
+	}
+	if cellVal(0) != "1" || cellVal(1) != "10.5" || cellVal(2) != "true" || cellVal(3) != "5.25" {
+		t.Fatalf("row cells: %v", cells)
+	}
+
+	// Unqualified table resolved through defaultDataset.
+	q, err = p.Query(ctx, newNR(map[string]any{"body": map[string]any{
+		"query":          "SELECT COUNT(*) AS n FROM orders",
+		"defaultDataset": map[string]any{"projectId": "proj", "datasetId": "sales"},
+	}}))
+	must(err)
+	rows, _ = q.Data["rows"].([]any)
+	first, _ = rows[0].(map[string]any)
+	cells, _ = first["f"].([]any)
+	if m, _ := cells[0].(map[string]any); m["v"] != "2" {
+		t.Fatalf("count cells: %v", cells)
+	}
+}
+
+// TestQueryFailLoud locks in the never-silently-wrong contract: an unknown
+// table is a 404 and every construct outside the frozen subset is a 400
+// invalidQuery, never a successful empty result.
+func TestQueryFailLoud(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	_, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": "SELECT * FROM `proj.sales.nope`"}}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "NotFound" || perr.HTTPStatus != 404 {
+		t.Fatalf("missing table: expected NotFound/404, got %v", err)
+	}
+
+	for _, q := range []string{
+		"SELECT * FROM UNNEST([1,2])",
+		"CREATE TABLE x (a INT64)",
+		"SELECT FARM_FINGERPRINT('x')",
+		"SELECT 1 QUALIFY ROW_NUMBER() OVER (ORDER BY 1) = 1",
+	} {
+		_, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": q}}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidQuery" || perr.HTTPStatus != 400 {
+			t.Fatalf("query %q: expected InvalidQuery/400, got %v", q, err)
+		}
+	}
+
+	_, err = p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": "SELECT 1", "useLegacySql": true}}))
+	perr, ok = err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidQuery" {
+		t.Fatalf("legacy SQL: expected InvalidQuery, got %v", err)
 	}
 }
 

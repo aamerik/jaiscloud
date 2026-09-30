@@ -47,6 +47,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/queryengine"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -972,20 +973,20 @@ func (p *Provider) CancelJob(ctx context.Context, nr *model.NormalizedRequest) (
 	return provider.OK(map[string]any{"kind": kindPrefix + "jobCancelResponse", "job": p.jobMap(projectOf(nr), j)}), nil
 }
 
-// emptyTableSchema is the result schema for a query the emulator answers
-// without a SQL engine: a TableSchema with no fields. Discovery types
-// queryResponse/getQueryResultsResponse "schema" as a TableSchema object, so
-// returning JSON null is a wire-contract violation (surfaced by
-// tests/gcpconformance against the vendored BigQuery Discovery snapshot).
-func emptyTableSchema() map[string]any {
-	return map[string]any{"fields": []any{}}
-}
-
 func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyMap(nr)
 	query := strValue(body, "query")
 	if query == "" {
 		return nil, invalidArgument("query is required")
+	}
+	if boolValue(body, "useLegacySql") {
+		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
+	}
+	// Evaluate before persisting so a failing query never leaves a job that
+	// reports success. A query is synchronous here (accepted-risk LROs).
+	res, err := p.runQuery(ctx, projectOf(nr), body)
+	if err != nil {
+		return nil, err
 	}
 	jobID := newID()
 	now := clock.Now().UTC()
@@ -1007,18 +1008,7 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
 		return nil, mapErr(err)
 	}
-	ref := map[string]any{"projectId": projectOf(nr), "jobId": jobID}
-	if loc := strValue(body, "location"); loc != "" {
-		ref["location"] = loc
-	}
-	return provider.OK(map[string]any{
-		"kind":         kindPrefix + "queryResponse",
-		"jobComplete":  true,
-		"jobReference": ref,
-		"schema":       emptyTableSchema(),
-		"rows":         []any{},
-		"totalRows":    "0",
-	}), nil
+	return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res)), nil
 }
 
 func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1026,20 +1016,25 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if jobID == "" {
 		return nil, invalidArgument("jobId is required")
 	}
-	if _, err := p.store.GetJob(ctx, projectOf(nr), jobID); err != nil {
+	j, err := p.store.GetJob(ctx, projectOf(nr), jobID)
+	if err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(map[string]any{
-		"kind":        kindPrefix + "getQueryResultsResponse",
-		"jobComplete": true,
-		"jobReference": map[string]any{
-			"projectId": projectOf(nr),
-			"jobId":     jobID,
-		},
-		"schema":    emptyTableSchema(),
-		"rows":      []any{},
-		"totalRows": "0",
-	}), nil
+	// Re-execute the stored query (jobs.query persists the request body on the
+	// job). This keeps the store the single source of truth: no result cache,
+	// no schema change, and snapshots/--dsn stay untouched.
+	q := jobQueryBody(j)
+	if q == nil {
+		return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), queryengine.Result{})), nil
+	}
+	if boolValue(q, "useLegacySql") {
+		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
+	}
+	res, err := p.runQuery(ctx, projectOf(nr), q)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res)), nil
 }
 
 func (p *Provider) GetServiceAccount(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

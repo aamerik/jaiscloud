@@ -1,8 +1,8 @@
 // Package sdk_bigquery_test exercises the jaiscloud-gcp emulator's BigQuery
 // v2 REST surface through the official Google apiary client. This validates
-// wire-level parity with the real SDK: the emulator is metadata-not-engine, so
-// jobs.query returns jobComplete=true with empty results, and tabledata
-// insertAll/list round-trips streamed rows.
+// wire-level parity with the real SDK: jobs.query evaluates a bounded
+// Standard SQL subset and returns real rows, tabledata insertAll/list
+// round-trips streamed rows, and getQueryResults re-executes the stored query.
 //
 // Run with the GCP binary running and GCP_EMULATOR_ENDPOINT set:
 //
@@ -130,26 +130,43 @@ func TestSDKBigQuery(t *testing.T) {
 		require.Equal(t, "bob", data.Rows[1].F[1].V)
 	})
 
-	t.Run("JobsQueryEmptyResults", func(t *testing.T) {
+	t.Run("JobsQuery", func(t *testing.T) {
 		qr, err := svc.Jobs.Query(project, &bigquery.QueryRequest{
-			Query:        "SELECT * FROM somewhere",
+			Query:        fmt.Sprintf("SELECT id, name FROM `%s.%s.%s` ORDER BY id", project, datasetID, tableID),
 			UseLegacySql: googleapi.Bool(false),
 		}).Do()
 		require.NoError(t, err)
 		require.True(t, qr.JobComplete)
-		require.Empty(t, qr.Rows)
-		require.Equal(t, uint64(0), qr.TotalRows)
+		require.Len(t, qr.Rows, 2)
+		require.Equal(t, uint64(2), qr.TotalRows)
+		require.Equal(t, "1", qr.Rows[0].F[0].V)
+		require.Equal(t, "alice", qr.Rows[0].F[1].V)
+		require.Equal(t, "2", qr.Rows[1].F[0].V)
 		require.NotEmpty(t, qr.JobReference.JobId)
 
-		// The query job is stored: getQueryResults + get both work.
+		// getQueryResults re-executes the stored query.
 		gqr, err := svc.Jobs.GetQueryResults(project, qr.JobReference.JobId).Do()
 		require.NoError(t, err)
 		require.True(t, gqr.JobComplete)
-		require.Empty(t, gqr.Rows)
+		require.Len(t, gqr.Rows, 2)
+		require.Equal(t, "alice", gqr.Rows[0].F[1].V)
 
+		// The query job is stored and reported DONE.
 		got, err := svc.Jobs.Get(project, qr.JobReference.JobId).Do()
 		require.NoError(t, err)
 		require.Equal(t, "DONE", got.Status.State)
+	})
+
+	t.Run("JobsQueryInvalid", func(t *testing.T) {
+		// A table that does not exist is a real error, not an empty result.
+		_, err := svc.Jobs.Query(project, &bigquery.QueryRequest{
+			Query:        fmt.Sprintf("SELECT * FROM `%s.%s.missing`", project, datasetID),
+			UseLegacySql: googleapi.Bool(false),
+		}).Do()
+		require.Error(t, err)
+		var gerr *googleapi.Error
+		require.True(t, errors.As(err, &gerr))
+		require.Equal(t, 404, gerr.Code)
 	})
 
 	t.Run("JobsInsertAndCancel", func(t *testing.T) {
