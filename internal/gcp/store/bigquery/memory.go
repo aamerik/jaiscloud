@@ -293,6 +293,29 @@ func (s *MemoryStore) InsertRows(_ context.Context, projectID, datasetID, tableI
 	return dups, nil
 }
 
+func (s *MemoryStore) ReplaceRows(_ context.Context, projectID, datasetID, tableID string, rows []Row) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := tableScope(projectID, datasetID, tableID)
+	t, ok := s.tables[key]
+	if !ok {
+		return ErrNoSuchTable
+	}
+	stored := make([]Row, len(rows))
+	for i := range rows {
+		rows[i].ProjectID = projectID
+		rows[i].DatasetID = datasetID
+		rows[i].TableID = tableID
+		rows[i].Seq = int64(i + 1)
+		stored[i] = rows[i]
+	}
+	s.rows[key] = stored
+	t.NumRows = int64(len(stored))
+	s.tables[key] = t
+	s.dedup.forget(key)
+	return nil
+}
+
 func (s *MemoryStore) ListRows(_ context.Context, projectID, datasetID, tableID string) ([]Row, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

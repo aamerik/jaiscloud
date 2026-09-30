@@ -42,6 +42,57 @@ type Catalog interface {
 	Table(ctx context.Context, project, dataset, table string) (Table, error)
 }
 
+// Statement type values, matching the Discovery QueryResponse.statementType
+// enum for the subset the engine executes.
+const (
+	StatementSelect              = "SELECT"
+	StatementCreateTable         = "CREATE_TABLE"
+	StatementCreateTableAsSelect = "CREATE_TABLE_AS_SELECT"
+	StatementCreateSchema        = "CREATE_SCHEMA"
+	StatementDropTable           = "DROP_TABLE"
+	StatementDropSchema          = "DROP_SCHEMA"
+	StatementInsert              = "INSERT"
+	StatementUpdate              = "UPDATE"
+	StatementDelete              = "DELETE"
+	StatementTruncateTable       = "TRUNCATE_TABLE"
+)
+
+// Mutator is the write side of the catalog, used by DDL/DML statements. The
+// source of truth is the store behind it: SQLite remains disposable scratch,
+// and every mutation is written back through these methods so a subsequent
+// query, tables.get or tabledata.list observes it.
+type Mutator interface {
+	Catalog
+	// ListTables returns the table IDs in a dataset (used to enforce DROP
+	// SCHEMA RESTRICT unless CASCADE is given).
+	ListTables(ctx context.Context, project, dataset string) ([]string, error)
+	// CreateTable creates a table with the given schema and rows (rows may be
+	// empty for a schema-only CREATE TABLE). It returns ErrTableExists when the
+	// table already exists.
+	CreateTable(ctx context.Context, t Table) error
+	// DropTable removes a table. It returns ErrTableNotFound when missing.
+	DropTable(ctx context.Context, project, dataset, table string) error
+	// CreateDataset creates a dataset. It returns ErrDatasetExists when it
+	// already exists.
+	CreateDataset(ctx context.Context, project, dataset string) error
+	// DropDataset removes a dataset and everything in it. It returns
+	// ErrDatasetNotFound when missing.
+	DropDataset(ctx context.Context, project, dataset string) error
+	// ReplaceRows atomically replaces every row of a table with rows. It
+	// returns ErrTableNotFound when the table is missing.
+	ReplaceRows(ctx context.Context, project, dataset, table string, rows []map[string]any) error
+}
+
+// Sentinel errors the Mutator returns so the engine can map them to BigQuery
+// status codes (AlreadyExists -> 409, NotFound -> 404) instead of a generic
+// InvalidQuery. Other errors become ErrUnsupported. Missing tables reuse
+// ErrTableNotFound (already defined above for the Catalog).
+var (
+	ErrTableExists     = errors.New("table already exists")
+	ErrDatasetExists   = errors.New("dataset already exists")
+	ErrDatasetNotFound = errors.New("dataset not found")
+)
+
 // Request is one jobs.query/getQueryResults execution.
 type Request struct {
 	// Project is the project the query job runs in.
@@ -53,16 +104,25 @@ type Request struct {
 	// back to Project when empty.
 	DefaultProject string
 	DefaultDataset string
+	// DryRun validates the statement (and infers the result schema for a
+	// SELECT) but performs no DDL/DML mutation.
+	DryRun bool
 }
 
 // Result is the executed result set in output-column order.
 type Result struct {
-	Fields []Field
+	// StatementType is the executed statement kind (SELECT, CREATE_TABLE, ...),
+	// matching the Discovery QueryResponse.statementType enum.
+	StatementType string
+	Fields        []Field
 	// Rows holds one slice per output column, aligned with Fields. Scalar
 	// values are normalized to their BigQuery representation (BOOL is a Go
 	// bool, INT64 an int64, FLOAT64 a float64, BYTES a []byte, everything else
 	// a string) so the transport can render the wire TableCell shape.
 	Rows [][]any
+	// NumDMLAffectedRows is the row count affected by an INSERT/UPDATE/DELETE
+	// (Discovery QueryResponse.numDmlAffectedRows). Zero for other statements.
+	NumDMLAffectedRows int64
 }
 
 // ErrUnsupported marks a construct the v1 subset does not implement (or a
@@ -98,5 +158,19 @@ func (e *TableNotFoundError) Error() string {
 
 // Is lets errors.Is(err, ErrTableNotFound) match.
 func (e *TableNotFoundError) Is(target error) bool { return target == ErrTableNotFound }
+
+// DatasetNotFoundError is returned by DDL when a referenced dataset is missing
+// (for example DROP SCHEMA without IF EXISTS). It is errors.Is(ErrDatasetNotFound).
+type DatasetNotFoundError struct {
+	Project string
+	Dataset string
+}
+
+func (e *DatasetNotFoundError) Error() string {
+	return ErrDatasetNotFound.Error() + ": dataset " + e.Project + "." + e.Dataset
+}
+
+// Is lets errors.Is(err, ErrDatasetNotFound) match.
+func (e *DatasetNotFoundError) Is(target error) bool { return target == ErrDatasetNotFound }
 
 func unsupported(reason string) error { return &UnsupportedError{Reason: reason} }

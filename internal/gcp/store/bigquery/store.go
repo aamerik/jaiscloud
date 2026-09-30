@@ -108,6 +108,13 @@ type Store interface {
 	// to concurrent requests carrying the same InsertID.
 	InsertRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) (duplicateIndexes []int, err error)
 	ListRows(ctx context.Context, projectID, datasetID, tableID string) ([]Row, error)
+	// ReplaceRows atomically replaces every row of a table with rows, reassigning
+	// Seq to the new row order (1..n) and setting NumRows to len(rows). It backs
+	// SQL DML (UPDATE/DELETE/TRUNCATE and INSERT): the engine mutates a per-query
+	// SQLite scratch and writes the resulting row set back, so the store stays
+	// the single source of truth. InsertID dedup state for the table is cleared
+	// because the dedup window tracks streamed inserts, not SQL rewrites.
+	ReplaceRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) error
 
 	Reset(ctx context.Context)
 }

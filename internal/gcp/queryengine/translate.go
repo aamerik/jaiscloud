@@ -175,6 +175,14 @@ var rejectedKeywords = map[string]bool{
 	"RECURSIVE": true,
 }
 
+// dmlKeywords are reserved words the DML translator accepts (they are still
+// rejected for a SELECT, where they cannot appear). They must also be skipped
+// by the function allow-list check (for example "VALUES (").
+var dmlKeywords = map[string]bool{
+	"INSERT": true, "INTO": true, "UPDATE": true, "DELETE": true,
+	"SET": true, "VALUES": true,
+}
+
 // keywords are reserved words that are never function calls, so the function
 // allow-list check must skip them (for example "IN (...)").
 var keywords = map[string]bool{
@@ -215,7 +223,7 @@ var typeKeywords = map[string]bool{
 	"NUMERIC": true, "BIGNUMERIC": true, "BYTES": true,
 }
 
-func validate(toks []token) error {
+func validate(toks []token, dml bool) error {
 	for i, tk := range toks {
 		if tk.kind == tokOp && (tk.raw == "@" || tk.raw == "?") {
 			return unsupported("query parameters are not supported")
@@ -223,7 +231,7 @@ func validate(toks []token) error {
 		if tk.kind != tokIdent {
 			continue
 		}
-		if rejectedKeywords[tk.up] {
+		if rejectedKeywords[tk.up] && !(dml && dmlKeywords[tk.up]) {
 			return unsupported(fmt.Sprintf("%s is not supported", tk.up))
 		}
 		// Raw/bytes string prefixes (r'…', b'…', rb'…') are not supported.
@@ -235,7 +243,7 @@ func validate(toks []token) error {
 			return unsupported(fmt.Sprintf("%s literals are not supported", tk.up))
 		}
 		if i+1 < len(toks) && toks[i+1].kind == tokOp && toks[i+1].raw == "(" {
-			if !keywords[tk.up] && !allowedFunctions[tk.up] {
+			if !keywords[tk.up] && !allowedFunctions[tk.up] && !(dml && dmlKeywords[tk.up]) {
 				return unsupported(fmt.Sprintf("function %s is not supported", tk.raw))
 			}
 		}
@@ -347,24 +355,37 @@ type resolveFunc func(ref string) (string, error)
 //     quoted SQLite identifiers.
 //
 // It never rewrites string literals or comments (the tokenizer drops those).
+// translate rewrites a BigQuery-subset SELECT to SQLite SQL. It is the
+// SELECT-only entry point; DML statements use translateTokens with dml=true.
 func translate(query string, resolve resolveFunc) (string, error) {
 	toks, err := tokenize(query)
 	if err != nil {
 		return "", err
 	}
+	return translateTokens(toks, resolve, false)
+}
+
+// translateTokens rewrites a tokenized BigQuery-subset statement to SQLite SQL.
+// With dml=true the INSERT/UPDATE target positions (INTO/UPDATE) are resolved as
+// table references as well, and the DML keywords are accepted.
+func translateTokens(toks []token, resolve resolveFunc, dml bool) (string, error) {
+	var err error
 	// Rewrite CAST types before validation so a BigQuery cast type with
 	// parameters (NUMERIC(10,2)) is not mistaken for a function call.
 	toks, err = rewriteCastTypes(toks)
 	if err != nil {
 		return "", err
 	}
-	if err := validate(toks); err != nil {
+	if err := validate(toks, dml); err != nil {
 		return "", err
 	}
 
 	// CTE names look like table references in the main query but are not
 	// catalog tables; resolve() must leave them alone.
-	ctes := collectCTENames(toks)
+	var ctes map[string]bool
+	if !dml {
+		ctes = collectCTENames(toks)
+	}
 	resolveIfTable := func(ref string) (string, bool, error) {
 		if !strings.Contains(ref, ".") && ctes[strings.ToLower(ref)] {
 			return ref, true, nil
@@ -386,6 +407,10 @@ func translate(query string, resolve resolveFunc) (string, error) {
 				inFrom, fromDepth, expectTable, stateKeyword = true, parenDepth, true, true
 			case "JOIN":
 				expectTable, stateKeyword = true, true
+			case "INTO", "UPDATE":
+				if dml {
+					expectTable, stateKeyword = true, true
+				}
 			case "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "SELECT", "ON":
 				inFrom, expectTable, stateKeyword = false, false, true
 			}
