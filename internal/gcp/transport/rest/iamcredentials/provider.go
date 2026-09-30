@@ -31,6 +31,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"IAMCredentials.GenerateAccessToken": p.GenerateAccessToken,
 		"IAMCredentials.GenerateIdToken":     p.GenerateIdToken,
+		"IAMCredentials.GetAllowedLocations": p.GetAllowedLocations,
 	}
 }
 
@@ -93,6 +94,16 @@ func (p *Provider) GenerateIdToken(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	return provider.OK(map[string]any{"token": token}), nil
+}
+
+// GetAllowedLocations serves the Discovery getAllowedLocations methods for
+// projects.serviceAccounts and projects.locations.workloadIdentityPools.
+func (p *Provider) GetAllowedLocations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	locations, err := p.core.AllowedLocations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{"locations": locations}), nil
 }
 
 // stringSlice coerces a JSON array (or a single string) into a []string.

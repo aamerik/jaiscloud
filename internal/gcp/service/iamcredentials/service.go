@@ -184,6 +184,20 @@ func (s *Service) SignJWT(ctx context.Context, account, email, payload string) (
 	return k.KeyID, signed, nil
 }
 
+// allowedLocations is the static location list the emulator reports for the
+// iamcredentials getAllowedLocations discovery methods (serviceAccounts and
+// workloadIdentityPools). Real GCP derives the list from the organization's
+// resource-locations constraint; the emulator has no org-policy plane, so it
+// reports a single, always-valid location. This is a permissive answer, never a
+// wrong one for a valid request.
+var allowedLocations = []string{"global"}
+
+// AllowedLocations returns the locations a caller may use for the IAM
+// Credentials surface.
+func (s *Service) AllowedLocations(context.Context) ([]string, error) {
+	return append([]string(nil), allowedLocations...), nil
+}
+
 // projectFor returns the project id to embed in a minted token: the explicit
 // account when it is a real project, else the one in the service-account email.
 func projectFor(account, email string) string {

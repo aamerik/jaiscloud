@@ -39,6 +39,12 @@ type Key struct {
 	Algorithm  string `json:"algorithm"`
 	PrivateDER string `json:"privateDer"` // base64 PKCS8 private key DER
 	ValidAfter string `json:"validAfterTime"`
+	// Disabled marks a key turned off through
+	// projects.serviceAccounts.keys.disable; DisableTime is when it was
+	// disabled (empty while enabled). A disabled key still exists and is
+	// returned by list/get.
+	Disabled    bool   `json:"disabled,omitempty"`
+	DisableTime string `json:"disableTime,omitempty"`
 }
 
 // PrivDER decodes the stored private key DER.

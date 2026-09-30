@@ -51,6 +51,26 @@ func TestGenerateAccessTokenRoute(t *testing.T) {
 	}
 }
 
+// TestGetAllowedLocationsRoute covers J65: the iamcredentials Discovery
+// getAllowedLocations methods return a non-empty locations list for both the
+// serviceAccounts and workloadIdentityPools paths.
+func TestGetAllowedLocationsRoute(t *testing.T) {
+	p := newProvider()
+	for _, name := range []string{
+		"serviceAccounts/" + testEmail,
+		"projects/test-project/locations/us-central1/workloadIdentityPools/pool",
+	} {
+		resp, err := p.GetAllowedLocations(context.Background(), newNR(map[string]any{"name": name}))
+		if err != nil {
+			t.Fatalf("GetAllowedLocations(%q): %v", name, err)
+		}
+		locs, _ := resp.Data["locations"].([]string)
+		if len(locs) == 0 {
+			t.Fatalf("GetAllowedLocations(%q) returned no locations", name)
+		}
+	}
+}
+
 func TestGenerateAccessTokenBadLifetime(t *testing.T) {
 	for _, lifetime := range []any{"not-a-duration", "0s", float64(0), float64(-5)} {
 		p := newProvider()

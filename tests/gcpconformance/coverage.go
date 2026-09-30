@@ -33,6 +33,13 @@ var actionOverrides = map[string]string{
 	"IAM.ServiceAccountKeyGet":    "iam.projects.serviceAccounts.keys.get",
 	"IAM.ServiceAccountKeyList":   "iam.projects.serviceAccounts.keys.list",
 	"IAM.ServiceAccountKeyDelete": "iam.projects.serviceAccounts.keys.delete",
+	// keys.disable / keys.enable (J45) also nest under serviceAccounts.
+	"IAM.ServiceAccountKeyDisable": "iam.projects.serviceAccounts.keys.disable",
+	"IAM.ServiceAccountKeyEnable":  "iam.projects.serviceAccounts.keys.enable",
+	// GetAllowedLocations is served for both serviceAccounts and
+	// workloadIdentityPools (J65); pin the cell to the serviceAccounts method
+	// (the heuristic otherwise picks workforcePools alphabetically).
+	"IAMCredentials.GetAllowedLocations": "iamcredentials.projects.serviceAccounts.getAllowedLocations",
 	// serviceAccounts.patch (PATCH, updateMask) and serviceAccounts.update
 	// (PUT, full replace) share one handler.
 	"IAM.ServiceAccountPatch":  "iam.projects.serviceAccounts.patch",

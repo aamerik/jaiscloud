@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **808**
+Cells: **814**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 573 |
+| ga | 579 |
 | limited | 117 |
 | preview | 14 |
 | unsupported | 104 |
@@ -21,7 +21,7 @@ Cells: **808**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 297 | 106 | 14 | 12 |
+| rest | 303 | 106 | 14 | 12 |
 | grpc | 276 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -401,17 +401,21 @@ _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 
 ## iam
 
-_18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
+_23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | GetIamPolicy | grpc | ga | — |
 | IAM.ServiceAccountCreate | rest | ga | — |
 | IAM.ServiceAccountDelete | rest | ga | — |
+| IAM.ServiceAccountDisable | rest | ga | — |
+| IAM.ServiceAccountEnable | rest | ga | — |
 | IAM.ServiceAccountGet | rest | ga | — |
 | IAM.ServiceAccountGetIamPolicy | rest | ga | — |
 | IAM.ServiceAccountKeyCreate | rest | ga | — |
 | IAM.ServiceAccountKeyDelete | rest | ga | — |
+| IAM.ServiceAccountKeyDisable | rest | ga | — |
+| IAM.ServiceAccountKeyEnable | rest | ga | — |
 | IAM.ServiceAccountKeyGet | rest | ga | — |
 | IAM.ServiceAccountKeyList | rest | ga | — |
 | IAM.ServiceAccountList | rest | ga | — |
@@ -420,13 +424,14 @@ _18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountSignBlob | rest | ga | — |
 | IAM.ServiceAccountSignJwt | rest | ga | — |
 | IAM.ServiceAccountTestIamPermissions | rest | ga | — |
+| IAM.ServiceAccountUndelete | rest | ga | — |
 | IAM.ServiceAccountUpdate | rest | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
 
 ## iamcredentials
 
-_6 cell(s): ga=6 limited=0 preview=0 unsupported=0_
+_7 cell(s): ga=7 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -434,6 +439,7 @@ _6 cell(s): ga=6 limited=0 preview=0 unsupported=0_
 | GenerateIdToken | grpc | ga | — |
 | IAMCredentials.GenerateAccessToken | rest | ga | — |
 | IAMCredentials.GenerateIdToken | rest | ga | — |
+| IAMCredentials.GetAllowedLocations | rest | ga | — |
 | SignBlob | grpc | ga | — |
 | SignJwt | grpc | ga | — |
 
