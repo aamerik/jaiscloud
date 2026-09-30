@@ -47,3 +47,41 @@ entries:
     match: "FU2"
     pr: 212
     note: "resolved: v2 ListRuntimes shipped in #212"
+
+  # Combined grouped PRs: their per-item declared branches never existed, so the
+  # overlay is the link between the merged PR and each backlog ID. Evidence-gated
+  # like every entry here (a row only closes once the PR is actually merged).
+
+  # 260 — fix/gcp-storage-parity-sweep (one combined storage PR).
+  - match: "J31"
+    pr: 260
+    note: "resolved: GCS notification metadata/finalize events in #260"
+  - match: "J37"
+    pr: 260
+    note: "resolved: CSEK metadata hash withholding in #260"
+  - match: "J57"
+    pr: 260
+    note: "resolved: object metadata target-generation update in #260"
+  - match: "J61"
+    pr: 260
+    note: "resolved: XML API error documents in #260"
+  - match: "J62"
+    pr: 260
+    note: "resolved: gRPC CSEK request-param validation in #260"
+  - match: "J63"
+    pr: 260
+    note: "resolved: gRPC customer_encryption mapping in #260"
+  - match: "J69"
+    pr: 260
+    note: "resolved: XML media headers in #260"
+
+  # 261 — feat/gcp-iam-lifecycle (one combined IAM PR).
+  - match: "J45"
+    pr: 261
+    note: "resolved: service-account key disable/enable in #261"
+  - match: "J46"
+    pr: 261
+    note: "resolved: service-account disable/enable/undelete in #261"
+  - match: "J65"
+    pr: 261
+    note: "resolved: iamcredentials getAllowedLocations in #261"
