@@ -28,11 +28,34 @@ import (
 type Provider struct {
 	core        *core.Service
 	defaultProj string
+	// operationResolvers resolve top-level operations/{id} names owned by
+	// another service that shares the namespace with Cloud Functions v1 (Service
+	// Usage). The /v1/operations/{id} route is decoded as a Functions operation,
+	// so without them a Service Usage poll would 404. Empty (the default) leaves
+	// the surface unchanged; main wires them only in the opt-in async LRO mode.
+	operationResolvers []OperationResolver
+}
+
+// OperationResolver resolves a top-level google.longrunning operation name
+// (operations/{id}) owned by another service that shares the namespace with
+// Cloud Functions v1. ResolveOperation returns handled=false when the name is
+// not owned by the implementing service, so the caller can keep the canonical
+// Functions NotFound.
+type OperationResolver interface {
+	ResolveOperation(ctx context.Context, project, name string) (map[string]any, bool, error)
 }
 
 // NewProvider returns a Functions REST provider over the shared core.
 func NewProvider(c *core.Service, defaultProj string) *Provider {
 	return &Provider{core: c, defaultProj: defaultProj}
+}
+
+// SetOperationResolvers wires cross-service top-level operation resolution. It
+// is called only when the opt-in async LRO mode is enabled: in the default
+// synchronous mode the create response is already done and no client polls, so
+// the REST contract is left byte-for-byte unchanged.
+func (p *Provider) SetOperationResolvers(rs ...OperationResolver) {
+	p.operationResolvers = rs
 }
 
 // Routes maps "Function.<Action>" keys to their handlers.
@@ -383,6 +406,20 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 	}
 	op, err := p.core.GetOperationJSON(ctx, p.project(nr), name, p.version(nr))
 	if err != nil {
+		// A top-level operations/{id} that Functions does not own may belong to
+		// another service sharing the namespace (Service Usage). Ask their
+		// resolvers before surfacing the Functions NotFound.
+		if core.IsNotFound(err) {
+			for _, r := range p.operationResolvers {
+				resolved, handled, rerr := r.ResolveOperation(ctx, p.project(nr), name)
+				if rerr != nil {
+					return nil, rerr
+				}
+				if handled {
+					return provider.OK(resolved), nil
+				}
+			}
+		}
 		return nil, err
 	}
 	return provider.OK(op), nil

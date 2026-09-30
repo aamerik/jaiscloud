@@ -135,3 +135,31 @@ func typedResponse(typ string, fields map[string]any) map[string]any {
 	}
 	return out
 }
+
+// operationResponse renders the typed response envelope for a mutation from the
+// operation's persisted service snapshot, or nil while the operation is in
+// flight (real GCP omits an in-flight result). It is the read-time inverse of
+// the envelope the enable/disable/batchEnable handlers return inline, so a poll
+// and the original response cannot drift.
+func operationResponse(op core.Operation) map[string]any {
+	if !op.Done {
+		return nil
+	}
+	switch op.Verb {
+	case "enable":
+		if len(op.Services) == 1 {
+			return typedResponse(enableResponseType, map[string]any{"service": serviceToJSON(op.Services[0])})
+		}
+	case "disable":
+		if len(op.Services) == 1 {
+			return typedResponse(disableResponseType, map[string]any{"service": serviceToJSON(op.Services[0])})
+		}
+	case "batchEnable":
+		services := make([]any, 0, len(op.Services))
+		for _, a := range op.Services {
+			services = append(services, serviceToJSON(a))
+		}
+		return typedResponse(batchEnableRespType, map[string]any{"services": services})
+	}
+	return nil
+}

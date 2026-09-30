@@ -83,3 +83,30 @@ func operationToProto(op core.Operation, response proto.Message) (*longrunningpb
 	}
 	return out, nil
 }
+
+// operationResponseProto reconstructs the typed response for a polled operation
+// from its persisted service snapshot. It returns nil while the operation is in
+// flight, so operationToProto omits the response until the operation is done
+// (real GCP omits an in-flight result).
+func operationResponseProto(op core.Operation) proto.Message {
+	if !op.Done {
+		return nil
+	}
+	switch op.Verb {
+	case "enable":
+		if len(op.Services) == 1 {
+			return &serviceusagepb.EnableServiceResponse{Service: apiToProto(op.Services[0])}
+		}
+	case "disable":
+		if len(op.Services) == 1 {
+			return &serviceusagepb.DisableServiceResponse{Service: apiToProto(op.Services[0])}
+		}
+	case "batchEnable":
+		resp := &serviceusagepb.BatchEnableServicesResponse{}
+		for _, a := range op.Services {
+			resp.Services = append(resp.Services, apiToProto(a))
+		}
+		return resp
+	}
+	return nil
+}
