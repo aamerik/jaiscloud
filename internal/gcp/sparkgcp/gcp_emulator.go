@@ -40,9 +40,14 @@ func ProtectedSparkConf(key string) bool {
 }
 
 // GCPEmulatorConfig carries the GCP emulator endpoint wiring needed by Spark
-// driver pods so that gs:// paths, BigQuery, and the metadata service all hit
+// driver pods so that gs:// paths and the metadata (Hive Metastore) service hit
 // the local emulator with zero code changes. All fields are optional; a nil
 // config is a no-op.
+//
+// BigQuery is deliberately NOT wired here: the emulator ships no SQL engine and
+// no BigQuery Storage Read/Write API, and the spark-bigquery connector reads via
+// the Storage API, so pointing a Spark job at BigQuery would silently return no
+// data. See docs/gcp-bigquery-sql-engine.md (BQ0).
 type GCPEmulatorConfig struct {
 	ProjectID string
 	Region    string
