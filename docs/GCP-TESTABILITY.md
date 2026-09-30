@@ -35,7 +35,8 @@ target.
 
 - That a client behaves correctly against the *real backend*. The emulator is not
   real GCP: several services are metadata-only, some long-running operations finish
-  synchronously, authorization is not enforced, and there is no quota/throttling plane.
+  synchronously, identity authorization is not enforced (Cloud KMS crypto operations do
+  honor a default-permissive cryptoKey IAM policy), and there is no quota/throttling plane.
 - Anything behind a `preview` service (no engine ships locally), or the data plane of a
   metadata-only service.
 
@@ -93,7 +94,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | --- | --- | ---: | --- | --- | --- | --- |
 | `pubsub` | grpc, rest | 45/45 | 🟢 | Full | Yes | Topics, subscriptions, snapshots, seek, ordering, DLQ; subscription `retryPolicy` (`minimumBackoff`/`maximumBackoff`, 0–600s) is validated and round-tripped on `subscriptions.create`/`patch` over REST + gRPC, but has no effect on the emulator's fixed delivery backoff. |
 | `storage` | grpc, rest | 52/52 | 🟢 | Full | Yes | Bucket/object/IAM/resumable; server-streaming `ReadObject` + bidirectional `BidiReadObject`. |
-| `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. |
+| `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. Crypto operations honor the cryptoKey IAM policy **default-permissively** (a key with no policy allows; a policy that omits the required role returns `PERMISSION_DENIED`). |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
 | `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
 | `firestoreadmin` | grpc | 4/32 | 🟢 | Shape only | Shape only | Composite-index CRUD only; Databases/Backups/UserCreds/Schedules/Fields/Export/Import are `unsupported` stubs. |
@@ -175,8 +176,10 @@ them up front.)*
 The local emulator deliberately does not model the following. A local green run is **not**
 evidence for any of them.
 
-- [ ] **Authz / IAM enforcement.** Permissions are not checked; Cloud IAM is shape-only
-      across all services. Any permission-sensitive path must be smoke-tested on real GCP.
+- [ ] **Authz / IAM enforcement.** Identity permissions are not checked; Cloud IAM is
+      shape-only across all services. The single exception is Cloud KMS, whose crypto
+      operations honor a **default-permissive** cryptoKey resource policy. Any
+      permission-sensitive path must be smoke-tested on real GCP.
 - [ ] **Async long-running-operation (LRO) timing.** The emulator completes operations
       synchronously (`operations`, `workflows`, `workflowexecutions`, `functions`,
       `kms`, `cloudsql`, `compute`). Code that assumes immediate readiness will pass

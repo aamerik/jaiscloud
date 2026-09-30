@@ -16,7 +16,7 @@
 | Cloud Storage (GCS) | REST + gRPC v2 | Buckets, objects, resumable/multipart uploads, CMEK, CSEK |
 | Cloud Pub/Sub | REST + gRPC | Topics, subscriptions, snapshots, seek, push/pull delivery, ordering keys, DLQ, exactly-once delivery (pull) |
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
-| Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation |
+| Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation; crypto ops honor a default-permissive cryptoKey IAM policy |
 | Cloud IAM | REST + gRPC | Service accounts, service account keys; gRPC `IAMPolicy` for project/resource policies (authz not enforced) |
 | Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
@@ -62,9 +62,10 @@ compatibility, deploy artifacts, and the surfaces that are explicitly non-GA —
 [`docs/GCP-TESTABILITY.md`](docs/GCP-TESTABILITY.md) is the per-service local-testability
 contract: what a local run proves, and what must be verified on real GCP.
 
-The release decisions and explicitly **accepted risks** for v1.1.0 — authz not enforced, LROs
-complete synchronously, the metadata-only tier, and the real-GCP smoke requirement for Yellow/Red
-surfaces — are recorded in [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110).
+The release decisions and explicitly **accepted risks** for v1.1.0 — identity authz not enforced
+(Cloud KMS crypto ops honor a default-permissive cryptoKey policy), LROs complete synchronously,
+the metadata-only tier, and the real-GCP smoke requirement for Yellow/Red surfaces — are recorded
+in [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110).
 
 ---
 
@@ -305,6 +306,8 @@ The output-only `metric_descriptor.name`/`type`/`description` are synthesized fr
 The schedule **is** executed, lazily on read (the emulator has no background scheduler): when a due key is read (`GetCryptoKey`/`ListCryptoKeys`, and `Encrypt` before it resolves the primary), a new ENABLED `CryptoKeyVersion` is created, made the primary, and `nextRotationTime` advances to `now + rotationPeriod`. A key therefore rotates on its next read after the schedule comes due. Because the schedule advances to `now + rotationPeriod` rather than by one period per elapsed interval, a clock jump far past the due time is coalesced into a single rotation — a deliberate approximation. Cloud KMS **managed/external** rotation (imported key versions, external key managers, `rotate-master-key`) remains out of scope and is not implemented.
 
 The gRPC KMS surface also implements the delete side (`DeleteCryptoKeyVersion`, `DeleteCryptoKey`, plus the `RetiredResource` records that block name reuse), the raw AES-GCM primitives (`RawEncrypt`/`RawDecrypt`, purpose `RAW_ENCRYPT_DECRYPT`), and the `ImportJob` control plane (`CreateImportJob`/`GetImportJob`/`ListImportJobs`). `ImportCryptoKeyVersion` (wrapped-key import), the trusted-key-wrapped import/export pair, and `Decapsulate` (no KEM algorithm support) are not implemented and return `Unimplemented`.
+
+A cryptoKey's IAM policy is enforced on its crypto operations (`encrypt`/`decrypt`/`asymmetricSign`/`asymmetricDecrypt`/`macSign`/`macVerify`/`getPublicKey`), **default-permissively**: a key with no policy — or with no bindings — allows every operation, and only a policy scoped to roles that omit the required `cloudkms.cryptoKeyVersions.useTo*` permission returns `403 PERMISSION_DENIED`. Binding **members** and **conditions** are not evaluated (the emulator does not resolve the caller's identity), mirroring the AWS KMS emulator's key-policy check. Identity IAM remains shape-only (see [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110)).
 
 ### Secret Manager: scheduled rotation is stored, managed rotation is not implemented
 

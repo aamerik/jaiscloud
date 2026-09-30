@@ -95,6 +95,18 @@ func NewService(keys kmsstore.Store, resources store.ResourceStore, encryptor gc
 	return &Service{keys: keys, resources: resources, encryptor: encryptor, defaultProj: defaultProj}
 }
 
+// authorizeCryptoKey enforces the cryptoKey's IAM policy for one crypto-use
+// permission, mirroring the REST provider's Provider.authorizeCryptoKey. It is
+// default-permissive: a key with no policy (or no bindings) allows every
+// operation. The returned error is already mapped to a gRPC status.
+func (s *Service) authorizeCryptoKey(ctx context.Context, project, loc, kr, key, permission string) error {
+	if err := policy.AuthorizeKMS(ctx, s.resources, project, rtCryptoKeyPolicy,
+		loc+"/"+kr+"/"+key, permission, cryptoKeyName(project, loc, kr, key)); err != nil {
+		return mapError(err)
+	}
+	return nil
+}
+
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
 func keyRingErr(err error) error {
@@ -612,6 +624,9 @@ func (s *Service) Encrypt(ctx context.Context, req *kmspb.EncryptRequest) (*kmsp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToEncrypt); err != nil {
+		return nil, err
+	}
 	kmsstore.RotateIfDue(ctx, s.keys, project, loc, kr, key, clock.Now())
 	ck, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
@@ -652,6 +667,9 @@ func (s *Service) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmsp
 	project, loc, kr, key, ok := splitCryptoKeyName(req.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToDecrypt); err != nil {
+		return nil, err
 	}
 	ck, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
@@ -792,6 +810,9 @@ func (s *Service) AsymmetricSign(ctx context.Context, req *kmspb.AsymmetricSignR
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToSign); err != nil {
+		return nil, err
+	}
 	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
@@ -840,6 +861,9 @@ func (s *Service) AsymmetricDecrypt(ctx context.Context, req *kmspb.AsymmetricDe
 	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToDecrypt); err != nil {
+		return nil, err
 	}
 	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
@@ -895,6 +919,9 @@ func (s *Service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyViewPublicKey); err != nil {
+		return nil, err
+	}
 	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
 	if err != nil {
@@ -924,6 +951,9 @@ func (s *Service) MacSign(ctx context.Context, req *kmspb.MacSignRequest) (*kmsp
 	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToSign); err != nil {
+		return nil, err
 	}
 	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
@@ -960,6 +990,9 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 	project, loc, kr, key, version, ok := splitVersionName(req.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.authorizeCryptoKey(ctx, project, loc, kr, key, policy.PermCryptoKeyUseToVerify); err != nil {
+		return nil, err
 	}
 	s.promoteDestroyed(ctx, project, loc, kr, key)
 	v, err := s.keys.GetVersion(ctx, project, loc, kr, key, version)
