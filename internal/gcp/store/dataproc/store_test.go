@@ -66,6 +66,7 @@ func runStoreTests(t *testing.T, s Store) {
 	j := Job{
 		JobID:                "job-1",
 		PlacementClusterName: "my-cluster",
+		PlacementClusterUUID: "cuuid-1",
 		Type:                 "pysparkJob",
 		TypeJob:              []byte(`{"mainPythonFileUri":"gs://b/main.py"}`),
 		Status:               JobStatus{State: "DONE"},
@@ -83,9 +84,25 @@ func runStoreTests(t *testing.T, s Store) {
 	if gotJob.Status.State != "DONE" || gotJob.Type != "pysparkJob" {
 		t.Fatalf("job fields lost: %+v", gotJob)
 	}
+	if gotJob.PlacementClusterUUID != "cuuid-1" {
+		t.Fatalf("placement.clusterUuid lost: %+v", gotJob)
+	}
 	jlist, err := s.ListJobs(ctx, "proj", "us-central1")
 	if err != nil || len(jlist) != 1 {
 		t.Fatalf("list jobs: %v %d", err, len(jlist))
+	}
+	if jlist[0].PlacementClusterUUID != "cuuid-1" {
+		t.Fatalf("placement.clusterUuid lost in list: %+v", jlist[0])
+	}
+	// The UUID is preserved across the atomic update path (used at terminal).
+	if _, err := s.UpdateJobAtomic(ctx, "proj", "us-central1", "job-1", func(cur Job) (Job, error) {
+		cur.Status.State = "DONE"
+		return cur, nil
+	}); err != nil {
+		t.Fatalf("UpdateJobAtomic: %v", err)
+	}
+	if gotJob, err = s.GetJob(ctx, "proj", "us-central1", "job-1"); err != nil || gotJob.PlacementClusterUUID != "cuuid-1" {
+		t.Fatalf("placement.clusterUuid lost after atomic update: %+v, %v", gotJob, err)
 	}
 	if err := s.DeleteJob(ctx, "proj", "us-central1", "job-1"); err != nil {
 		t.Fatalf("delete job: %v", err)

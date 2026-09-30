@@ -1235,7 +1235,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=3/3 pass)"
       ]
     },
     {
@@ -1449,7 +1449,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -1502,7 +1502,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {

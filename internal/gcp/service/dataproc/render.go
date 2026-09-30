@@ -98,9 +98,15 @@ func jobStatusMap(s dpstore.JobStatus) map[string]any {
 
 // JobJSON renders a stored Job as a dataproc.v1.Job wire map.
 func JobJSON(j dpstore.Job) map[string]any {
+	placement := map[string]any{"clusterName": j.PlacementClusterName}
+	// clusterUuid is the output-only UUID of the cluster the job was submitted
+	// to (dataproc.v1.JobPlacement); render it only when it was captured.
+	if j.PlacementClusterUUID != "" {
+		placement["clusterUuid"] = j.PlacementClusterUUID
+	}
 	out := map[string]any{
 		"reference": map[string]any{"projectId": j.ProjectID, "jobId": j.JobID},
-		"placement": map[string]any{"clusterName": j.PlacementClusterName},
+		"placement": placement,
 		"status":    jobStatusMap(j.Status),
 		"done":      jobTerminal(j.Status.State),
 	}

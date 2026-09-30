@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	"google.golang.org/grpc/codes"
@@ -548,6 +549,97 @@ func TestUpdateCluster_VirtualClusterConfigSnakeMask(t *testing.T) {
 	}
 	if got := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-2" {
 		t.Fatalf("gkeClusterTarget = %q, want the updated target", got)
+	}
+}
+
+// TestSubmitJob_PlacementClusterUUID verifies the gRPC adapter surfaces the
+// output-only JobPlacement.clusterUuid captured from the cluster at submit.
+func TestSubmitJob_PlacementClusterUUID(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, createClusterReq("c1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "c1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if _, err := s.SubmitJob(ctx, submitReq("j1")); err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	got, err := s.GetJob(ctx, &dataprocpb.GetJobRequest{ProjectId: "proj", Region: "us-central1", JobId: "j1"})
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if cl.GetClusterUuid() == "" {
+		t.Fatal("cluster has no UUID")
+	}
+	if got.GetPlacement().GetClusterUuid() != cl.GetClusterUuid() {
+		t.Fatalf("job placement.clusterUuid = %q, want %q", got.GetPlacement().GetClusterUuid(), cl.GetClusterUuid())
+	}
+}
+
+// TestClusterOperation_TypedMetadataEveryStatus verifies an in-flight cluster
+// operation surfaces typed ClusterOperationMetadata with the operation-status
+// enum on every poll (RUNNING while the cluster provisions, DONE once packed),
+// so a generated client's Poll/Wait sees incremental status rather than only
+// the terminal envelope.
+func TestClusterOperation_TypedMetadataEveryStatus(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+	s := NewService(core.NewService(dpstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		core.WithClusterReadyDelay(30*time.Second)), "proj")
+	ctx := context.Background()
+
+	op, err := s.CreateCluster(ctx, createClusterReq("c1"))
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	var meta dataprocpb.ClusterOperationMetadata
+	if err := op.GetMetadata().UnmarshalTo(&meta); err != nil {
+		t.Fatalf("metadata UnmarshalTo: %v", err)
+	}
+	if meta.GetStatus().GetState() != dataprocpb.ClusterOperationStatus_RUNNING {
+		t.Fatalf("in-flight metadata state = %v, want RUNNING", meta.GetStatus().GetState())
+	}
+	if meta.GetOperationType() != "CREATE" || meta.GetClusterName() != "c1" {
+		t.Fatalf("metadata = %+v", &meta)
+	}
+	// Still in flight before the delay elapses: the poll returns a typed
+	// metadata envelope with done=false.
+	polled, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	if polled.GetDone() {
+		t.Fatal("operation settled before the cluster did")
+	}
+	// Past the delay the operation completes: metadata is DONE and the response
+	// is a typed Cluster.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(31 * time.Second)})
+	polled, handled, err = s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	if !polled.GetDone() {
+		t.Fatal("operation not done after the cluster settled")
+	}
+	if err := polled.GetMetadata().UnmarshalTo(&meta); err != nil {
+		t.Fatalf("terminal metadata UnmarshalTo: %v", err)
+	}
+	if meta.GetStatus().GetState() != dataprocpb.ClusterOperationStatus_DONE {
+		t.Fatalf("terminal metadata state = %v, want DONE", meta.GetStatus().GetState())
+	}
+	if len(meta.GetStatusHistory()) != 3 {
+		t.Fatalf("status history = %d entries, want PENDING,RUNNING,DONE", len(meta.GetStatusHistory()))
+	}
+	var cl dataprocpb.Cluster
+	if err := polled.GetResponse().UnmarshalTo(&cl); err != nil {
+		t.Fatalf("response UnmarshalTo: %v", err)
+	}
+	if cl.GetClusterName() != "c1" || cl.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
+		t.Fatalf("cluster = %+v", &cl)
 	}
 }
 

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 295,
-  "passed": 295,
+  "total": 299,
+  "passed": 299,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 20,
-    "checks": 295,
-    "passed": 295,
+    "checks": 299,
+    "passed": 299,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "dataproc",
-      "total": 15,
-      "passed": 15,
+      "total": 19,
+      "passed": 19,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2059,6 +2059,34 @@
       "method": "DeleteJob",
       "status": "pass",
       "key_field": "NotFound after delete"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "GKE virtualClusterConfig round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (metastore)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "auxiliaryServicesConfig.metastoreConfig echo"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "GetJob (placement)",
+      "method": "GetJob",
+      "status": "pass",
+      "key_field": "placement.clusterUuid"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "SubmitJob (driver output)",
+      "method": "SubmitJob",
+      "status": "pass",
+      "key_field": "driver output/control URIs present"
     },
     {
       "service": "functions",

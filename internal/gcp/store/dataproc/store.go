@@ -76,10 +76,14 @@ type JobStatus struct {
 // sparkSqlJob, sparkRJob, hadoopJob, hiveJob, pigJob) and TypeJob holds the
 // per-type job body verbatim.
 type Job struct {
-	ProjectID               string            `json:"projectId"`
-	Region                  string            `json:"region"`
-	JobID                   string            `json:"jobId"`
-	PlacementClusterName    string            `json:"placementClusterName"`
+	ProjectID            string `json:"projectId"`
+	Region               string `json:"region"`
+	JobID                string `json:"jobId"`
+	PlacementClusterName string `json:"placementClusterName"`
+	// PlacementClusterUUID is the UUID of the cluster the job was submitted to
+	// (dataproc.v1.JobPlacement.cluster_uuid, output-only). Captured at submit so
+	// it survives the cluster being deleted before the job is terminal.
+	PlacementClusterUUID    string            `json:"placementClusterUuid,omitempty"`
 	Type                    string            `json:"type"`
 	TypeJob                 json.RawMessage   `json:"typeJob,omitempty"`
 	Labels                  map[string]string `json:"labels,omitempty"`
