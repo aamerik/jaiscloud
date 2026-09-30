@@ -37,7 +37,7 @@ func TestServiceOperationStore(t *testing.T) {
 		t.Fatalf("create returned %+v / %+v", f, op)
 	}
 
-	name := OperationName("proj", op)
+	name := OperationName(V1, "proj", op)
 	got, err := s.GetOperationJSON(ctx, "proj", name, V1)
 	if err != nil {
 		t.Fatalf("get op: %v", err)
@@ -106,5 +106,46 @@ func TestServiceOperationStore(t *testing.T) {
 	// A malformed operation name is InvalidArgument, not NotFound.
 	if _, err := s.GetOperationJSON(ctx, "proj", "bogus", V2); err == nil {
 		t.Errorf("expected InvalidArgument for malformed operation name")
+	}
+}
+
+// TestOperationNameVersionShape covers J60: v1 operation names are top-level
+// (operations/{id}), v2 names are location-scoped.
+func TestOperationNameVersionShape(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	_, op, err := s.CreateFunction(ctx, "proj", "us-central1", "hello",
+		FunctionInputFromMap(map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}, V1), V1)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	v1name := OperationName(V1, "proj", op)
+	if v1name != "operations/"+op.ID {
+		t.Fatalf("v1 name = %q, want operations/%s", v1name, op.ID)
+	}
+	v2name := OperationName(V2, "proj", op)
+	if v2name != "projects/proj/locations/us-central1/operations/"+op.ID {
+		t.Fatalf("v2 name = %q", v2name)
+	}
+	// The v1 top-level name reads the persisted operation back.
+	if _, err := s.GetOperationJSON(ctx, "proj", v1name, V1); err != nil {
+		t.Fatalf("get by v1 name: %v", err)
+	}
+}
+
+// TestOperationV1LookupIsProjectIndependent covers the J60 follow-up: a v1
+// top-level name (operations/{id}) carries no project, so the persisted
+// operation is found regardless of the caller's project.
+func TestOperationV1LookupIsProjectIndependent(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	_, op, err := s.CreateFunction(ctx, "proj", "us-central1", "hello",
+		FunctionInputFromMap(map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}, V1), V1)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	name := OperationName(V1, "proj", op)
+	if _, err := s.GetOperationJSON(ctx, "another-project", name, V1); err != nil {
+		t.Fatalf("v1 lookup by id should not be project-scoped: %v", err)
 	}
 }

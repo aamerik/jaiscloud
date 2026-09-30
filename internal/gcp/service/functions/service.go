@@ -248,6 +248,13 @@ func mapErr(err error) error {
 	return err
 }
 
+// IsNotFound reports whether err is the canonical NotFound provider error (as
+// returned by LoadOperation/GetOperationJSON for an absent operation).
+func IsNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
+}
+
 // invalidArgument builds the canonical InvalidArgument provider error.
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
@@ -308,7 +315,9 @@ func ParseOperationName(name string) (location, id string, err error) {
 			id = parts[i+1]
 		}
 	}
-	if location == "" || id == "" {
+	// A v1 name is top-level (operations/{id}) and carries no location; the
+	// location is recovered from the stored record by the caller.
+	if id == "" {
 		return "", "", invalidArgument("malformed operation resource name " + name)
 	}
 	return location, id, nil

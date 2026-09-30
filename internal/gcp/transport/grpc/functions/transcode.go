@@ -94,7 +94,7 @@ func operationToProtoV1(project string, op core.Operation) (*longrunningpb.Opera
 	if err != nil {
 		return nil, err
 	}
-	out := &longrunningpb.Operation{Name: core.OperationName(project, op), Metadata: metaAny, Done: true}
+	out := &longrunningpb.Operation{Name: core.OperationName(core.V1, project, op), Metadata: metaAny, Done: true}
 	respAny, err := operationResponseProtoV1(project, op)
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func operationToProtoV2(project string, op core.Operation) (*longrunningpb.Opera
 	if err != nil {
 		return nil, err
 	}
-	out := &longrunningpb.Operation{Name: core.OperationName(project, op), Metadata: metaAny, Done: true}
+	out := &longrunningpb.Operation{Name: core.OperationName(core.V2, project, op), Metadata: metaAny, Done: true}
 	respAny, err := operationResponseProtoV2(project, op)
 	if err != nil {
 		return nil, err

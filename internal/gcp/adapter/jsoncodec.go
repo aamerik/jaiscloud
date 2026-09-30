@@ -27,6 +27,11 @@ func (c *JSONCodec) ServiceName() string { return c.Service }
 // action.
 func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, error) {
 	seg := splitEscaped(r.URL.EscapedPath())
+	// Cloud Functions v1 publishes its long-running operations top-level
+	// (operations/{id}), with no projects segment (J60).
+	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "operations" {
+		return c.decodeTopLevelOperations(r, body, seg)
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {
@@ -277,6 +282,30 @@ func detectResourceType(segs []string) string {
 		return "serviceAccounts"
 	}
 	return ""
+}
+
+// decodeTopLevelOperations decodes the Cloud Functions v1 top-level operations
+// surface: GET /v1/operations (list) and GET /v1/operations/{id} (get). The path
+// has no projects segment, so it is decoded directly instead of through the
+// generic /v1/projects/... parser. The location is recovered from the persisted
+// operation by the core (see functions.ParseOperationName).
+func (c *JSONCodec) decodeTopLevelOperations(r *http.Request, body []byte, seg []string) (*model.NormalizedRequest, error) {
+	nr := &model.NormalizedRequest{Service: c.Service, Params: map[string]any{}, Raw: r}
+	nr.Params["apiVersion"] = "v1"
+	nr.Params["resourceType"] = "operations"
+	nr.Params["name"] = strings.Join(seg[1:], "/") // "operations[/{id}]"
+	queryToParams(r, nr.Params)
+	if m, err := parseJSON(body); err != nil {
+		return nil, model.NewProviderError("InvalidRequest", "malformed JSON body", 400)
+	} else if m != nil {
+		nr.Params["body"] = m
+	}
+	if len(seg) == 2 {
+		nr.Action = "ListOperations"
+	} else {
+		nr.Action = "GetOperation"
+	}
+	return nr, nil
 }
 
 // deriveAction maps (resourceType, isCollection, name, method, custom method)
@@ -696,6 +725,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 		}
 	case "operations":
 		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListOperations"
 		case method == http.MethodGet:
 			return "GetOperation"
 		}

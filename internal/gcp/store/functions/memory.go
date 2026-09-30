@@ -235,6 +235,35 @@ func (s *MemoryStore) DeleteOperation(_ context.Context, projectID, location, id
 	return nil
 }
 
+// GetOperationByID finds an operation by its (globally unique) id. The v1 Cloud
+// Functions operations surface is top-level (operations/{id}) with no project or
+// location segment, so the lookup is not scoped to the caller's project: it
+// returns the operation wherever it lives, and the location/project are
+// recovered from the stored record. ErrNoSuchOperation when absent.
+func (s *MemoryStore) GetOperationByID(_ context.Context, _, id string) (Operation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, m := range s.operations {
+		if op, ok := m[id]; ok {
+			return op, nil
+		}
+	}
+	return Operation{}, ErrNoSuchOperation
+}
+
+// DeleteOperationByID removes an operation by its globally unique id.
+func (s *MemoryStore) DeleteOperationByID(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.operations {
+		if _, ok := m[id]; ok {
+			delete(m, id)
+			return nil
+		}
+	}
+	return ErrNoSuchOperation
+}
+
 func (s *MemoryStore) ListOperations(_ context.Context, projectID, location string) ([]Operation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

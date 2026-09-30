@@ -684,6 +684,11 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("dataproc") && dataprocCore != nil {
 					opsResolvers = append(opsResolvers, dataprocGRPC)
 				}
+				// Cloud Functions publishes typed operations (J58); v1 names are
+				// top-level (operations/{id}) and v2 names are location-scoped.
+				if transports.GRPCFor("functions") && functionsCore != nil {
+					opsResolvers = append(opsResolvers, functionsGRPC, functionsV2GRPC)
+				}
 				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New(opsResolvers...))
 			}
 

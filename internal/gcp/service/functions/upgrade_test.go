@@ -67,7 +67,7 @@ func TestUpgradeSetupRedirectRollback(t *testing.T) {
 		t.Fatal("redirect did not move traffic to Gen2")
 	}
 	// The operation is persisted and readable.
-	if _, err := s.GetOperationJSON(ctx, "proj", OperationName("proj", op), V2); err != nil {
+	if _, err := s.GetOperationJSON(ctx, "proj", OperationName(V2, "proj", op), V2); err != nil {
 		t.Fatalf("redirect op not persisted: %v", err)
 	}
 

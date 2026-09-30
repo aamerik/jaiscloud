@@ -240,7 +240,13 @@ func NewOperation(location, verb, target string, f *functionsstore.Function) Ope
 }
 
 // OperationName returns the full long-running-operation resource name for op.
-func OperationName(project string, op Operation) string {
+// v2 (and the other location-scoped services) use the standard
+// projects/{p}/locations/{l}/operations/{id}; v1 Cloud Functions publishes its
+// operations top-level as operations/{id} (Discovery pattern ^operations/[^/]+$).
+func OperationName(v Version, project string, op Operation) string {
+	if v == V1 {
+		return "operations/" + op.ID
+	}
 	return resourceID(project)("cloud-function-operation", op.Location+"/"+op.ID)
 }
 
@@ -254,7 +260,7 @@ func OperationJSON(v Version, project string, op Operation) map[string]any {
 		response = anyResponse(functionTypeFor(v), FunctionJSON(v, project, *op.Function))
 	}
 	return map[string]any{
-		"name":     OperationName(project, op),
+		"name":     OperationName(v, project, op),
 		"metadata": operationMetadataMap(v, op),
 		"done":     true,
 		"response": response,

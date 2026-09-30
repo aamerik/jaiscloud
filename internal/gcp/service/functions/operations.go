@@ -56,17 +56,31 @@ func (s *Service) WaitOperation(ctx context.Context, project, name string, v Ver
 	return s.GetOperationJSON(ctx, project, name, v)
 }
 
-// loadOperation parses an operation name and reads the persisted record.
+// loadOperation parses an operation name and reads the persisted record. A
+// top-level v1 name (operations/{id}) carries no location, so the location is
+// recovered from the stored record.
 func (s *Service) loadOperation(ctx context.Context, project, name string) (Operation, error) {
 	location, id, err := ParseOperationName(name)
 	if err != nil {
 		return Operation{}, err
 	}
-	stored, err := s.functions.GetOperation(ctx, project, location, id)
+	var stored functionsstore.Operation
+	if location == "" {
+		stored, err = s.functions.GetOperationByID(ctx, project, id)
+	} else {
+		stored, err = s.functions.GetOperation(ctx, project, location, id)
+	}
 	if err != nil {
 		return Operation{}, mapErr(err)
 	}
 	return operationFromStore(stored), nil
+}
+
+// LoadOperation parses and loads a persisted operation for the gRPC
+// google.longrunning.Operations resolver (which needs the typed core Operation
+// to build the Any metadata/response).
+func (s *Service) LoadOperation(ctx context.Context, project, name string) (Operation, error) {
+	return s.loadOperation(ctx, project, name)
 }
 
 // ListOperations returns a cursor page of the persisted operations for a
@@ -101,6 +115,10 @@ func (s *Service) DeleteOperation(ctx context.Context, project, name string) err
 	location, id, err := ParseOperationName(name)
 	if err != nil {
 		return err
+	}
+	if location == "" {
+		// v1 top-level name: the operation is not project/location scoped.
+		return mapErr(s.functions.DeleteOperationByID(ctx, id))
 	}
 	if err := s.functions.DeleteOperation(ctx, project, location, id); err != nil {
 		return mapErr(err)

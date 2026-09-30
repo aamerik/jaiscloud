@@ -138,6 +138,12 @@ func detectBigQueryService(path string) string {
 // inspecting the resource-type segment(s) after the project.
 func detectV1Service(path string) string {
 	seg := splitEscaped(path)
+	// v1 Cloud Functions operations are top-level (operations/{id}); the
+	// location-scoped .../locations/{l}/operations/{id} form belongs to the
+	// Workflows/Managed Kafka/etc. resource switch below.
+	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "operations" {
+		return "functions"
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {

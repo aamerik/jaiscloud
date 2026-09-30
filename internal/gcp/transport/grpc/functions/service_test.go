@@ -3,6 +3,7 @@ package functions
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
@@ -419,5 +420,74 @@ func TestListRuntimesV2(t *testing.T) {
 
 	if _, err := v2.ListRuntimes(ctx, &apiv2functionspb.ListRuntimesRequest{Parent: "projects/proj"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("malformed parent = %v, want InvalidArgument", err)
+	}
+}
+
+// TestResolveOperationV1 covers J58/J60: a v1 function operation is named
+// top-level (operations/{id}) and the shared Operations resolver returns the
+// typed CloudFunction response — not the empty terminal stub.
+func TestResolveOperationV1(t *testing.T) {
+	s := newTestV1()
+	ctx := context.Background()
+	op, err := s.CreateFunction(ctx, createV1Req("f1"))
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	if !strings.HasPrefix(op.GetName(), "operations/") {
+		t.Fatalf("v1 operation name = %q, want operations/{id}", op.GetName())
+	}
+
+	got, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	var fn functionspb.CloudFunction
+	if err := got.GetResponse().UnmarshalTo(&fn); err != nil {
+		t.Fatalf("response UnmarshalTo: %v", err)
+	}
+	if fn.GetName() != "projects/proj/locations/us-central1/functions/f1" {
+		t.Fatalf("resolved function = %+v", &fn)
+	}
+
+	// A top-level name for an unknown id is a NotFound handed back by the
+	// functions resolver.
+	if _, handled, err := s.ResolveOperation(ctx, "operations/missing"); !handled || status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown v1 op: handled=%v err=%v, want handled+NotFound", handled, err)
+	}
+	// A location-scoped name is not the v1 shape, so v1 declines to handle it.
+	if _, handled, _ := s.ResolveOperation(ctx, "projects/proj/locations/us-central1/operations/x"); handled {
+		t.Fatal("v1 resolver should not handle a location-scoped name")
+	}
+}
+
+// TestResolveOperationV2 covers J58: a v2 function operation is resolved by the
+// shared Operations service to its typed Function response.
+func TestResolveOperationV2(t *testing.T) {
+	s := newTestV2()
+	ctx := context.Background()
+	op, err := s.CreateFunction(ctx, &apiv2functionspb.CreateFunctionRequest{
+		Parent:     "projects/proj/locations/us-central1",
+		FunctionId: "f2",
+		Function: &apiv2functionspb.Function{
+			BuildConfig: &apiv2functionspb.BuildConfig{Runtime: "nodejs20", EntryPoint: "handler"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	got, handled, err := s.ResolveOperation(ctx, op.GetName())
+	if err != nil || !handled {
+		t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+	}
+	var fn apiv2functionspb.Function
+	if err := got.GetResponse().UnmarshalTo(&fn); err != nil {
+		t.Fatalf("response UnmarshalTo: %v", err)
+	}
+	if fn.GetName() != "projects/proj/locations/us-central1/functions/f2" {
+		t.Fatalf("resolved function = %+v", &fn)
+	}
+	// An unknown id under a location-scoped name is not claimed by functions.
+	if _, handled, _ := s.ResolveOperation(ctx, "projects/proj/locations/us-central1/operations/missing"); handled {
+		t.Fatal("v2 resolver should not claim an unknown operation id")
 	}
 }
