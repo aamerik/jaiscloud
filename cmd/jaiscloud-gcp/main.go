@@ -531,6 +531,16 @@ func startCmd() *cobra.Command {
 			}
 			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
 
+			// The REST locations/{location}/operations/{id} path is decoded as
+			// a Workflows operation, so in the opt-in async LRO mode wire the
+			// other regional services as fallback resolvers; without this a
+			// Metastore/Managed Kafka poll would 404. The default sync mode
+			// returns every operation done inline, so nothing is wired and the
+			// REST contract is unchanged.
+			if lroMode.Async() {
+				workflowsP.SetOperationResolvers(metastoreP, managedkafkaP)
+			}
+
 			// Register only services enabled on at least one transport, so a
 			// per-service `none` override removes both its REST and gRPC surface
 			// (an unregistered provider falls through to a 404/unknown-action).

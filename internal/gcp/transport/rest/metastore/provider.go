@@ -219,6 +219,26 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 	return provider.OK(core.OperationJSON(op, project)), nil
 }
 
+// ResolveOperation resolves a Dataproc Metastore operation by its location-scoped
+// name. handled reports whether Metastore owns the name; a name the store does
+// not know — including one belonging to another service that shares the
+// locations/{location}/operations/{id} path — returns handled=false so the
+// caller falls through. It satisfies the Workflows REST provider's
+// cross-service OperationResolver, mirroring the gRPC operations.Resolver.
+func (p *Provider) ResolveOperation(ctx context.Context, project, location, opID string) (map[string]any, bool, error) {
+	if location == "" || opID == "" {
+		return nil, false, nil
+	}
+	op, err := p.core.GetOperation(ctx, project, location, opID)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return core.OperationJSON(op, project), true, nil
+}
+
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))

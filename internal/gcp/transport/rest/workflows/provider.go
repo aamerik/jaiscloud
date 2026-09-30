@@ -35,11 +35,35 @@ import (
 type Provider struct {
 	core        *core.Service
 	defaultProj string
+	// operationResolvers resolves location-scoped operations owned by other
+	// services. The path /v1/projects/{p}/locations/{l}/operations/{id} is
+	// decoded as a Workflows operation, so without them a Metastore/Managed
+	// Kafka operation poll 404s. Empty (the default) leaves the surface
+	// unchanged; main wires them only in the opt-in async LRO mode.
+	operationResolvers []OperationResolver
+}
+
+// OperationResolver resolves a location-scoped operation name owned by another
+// service that shares the google.longrunning.Operations
+// projects/{p}/locations/{l}/operations/{id} namespace with Cloud Workflows.
+// ResolveOperation returns handled=false when the name is not owned by the
+// implementing service, so the caller can fall through to the canonical
+// NotFound. It mirrors the gRPC operations.Resolver contract.
+type OperationResolver interface {
+	ResolveOperation(ctx context.Context, project, location, opID string) (map[string]any, bool, error)
 }
 
 // NewProvider returns a Cloud Workflows REST provider over the shared core.
 func NewProvider(c *core.Service, defaultProj string) *Provider {
 	return &Provider{core: c, defaultProj: defaultProj}
+}
+
+// SetOperationResolvers wires cross-service operation resolution. It is called
+// only when the opt-in async LRO mode is enabled: in the default synchronous
+// mode the create response is already done and no client polls, so the REST
+// contract is left byte-for-byte unchanged.
+func (p *Provider) SetOperationResolvers(rs ...OperationResolver) {
+	p.operationResolvers = rs
 }
 
 // Routes maps "Workflow.<Action>" keys to their handlers.
@@ -166,8 +190,23 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 	if location == "" {
 		location = core.LocationFromName(name)
 	}
-	op, err := p.core.GetOperation(ctx, project, location, core.OperationIDFromName(name))
+	opID := core.OperationIDFromName(name)
+	op, err := p.core.GetOperation(ctx, project, location, opID)
 	if err != nil {
+		// A location-scoped operation name is shared with the other regional
+		// services (Dataproc Metastore, Managed Kafka). Ask their resolvers
+		// before surfacing the Workflows NotFound.
+		if core.IsNotFound(err) {
+			for _, r := range p.operationResolvers {
+				resolved, handled, rerr := r.ResolveOperation(ctx, project, location, opID)
+				if rerr != nil {
+					return nil, rerr
+				}
+				if handled {
+					return provider.OK(resolved), nil
+				}
+			}
+		}
 		return nil, err
 	}
 	return provider.OK(core.OperationJSON(op, project)), nil

@@ -109,7 +109,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub. |
 | `serviceusage` | grpc, rest | 10/11 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. `BatchGetServices` is an unsupported stub. |
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
-| `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously. `ListWorkflowRevisions` is an unsupported stub. |
+| `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously by default, with an opt-in async mode (`JAISCLOUD_LRO_MODE=async`) that settles on `operations.get`. `ListWorkflowRevisions` is an unsupported stub. |
 | `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
 | `functions` | grpc, rest | 38/38 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 runtime catalog (`/v2/.../runtimes`, gRPC `ListRuntimes`) served; common-API `GetLocation`/`CancelOperation`/`DeleteOperation`/`WaitOperation` served; function mutations persist a pollable `google.longrunning` operation store (memory + Postgres + snapshot), so `operations.get`/`list` and REST `:wait` return the typed response; GCS-referenced source archives (`sourceArchiveUrl` / `storageSource`) are fetched, persisted with a revision hash, and executed under Docker/K8s; v2 `generateUploadUrl` provisions a GCS-backed upload target so `gcloud functions deploy --gen2` runs end-to-end, and each deploy bumps a persisted revision counter so a deployed function renders `serviceConfig.revision` (the backing Cloud Run service revision) + `allTrafficOnLatestRevision` (no real container build); the v2 1st→2nd gen upgrade/traffic control plane (`setupFunctionUpgradeConfig`, `redirect`/`rollbackFunctionUpgradeTraffic`, `commitFunctionUpgrade`/`commitFunctionUpgradeAsGen2`, `abortFunctionUpgrade`, `detachFunction`) is served over REST with a persisted `upgradeInfo` state machine — REST-only in practice (documented as `FunctionService` RPCs, but absent from the public `googleapis` proto and all generated clients); the synthesized HTTPS trigger URL (`{location}-{project}.cloudfunctions.net/{id}`) is served (Host-scoped raw-body invocation, HTTP 500 on an executor error/timeout, 404 for an unknown or event-only function); event triggers deliver Pub/Sub publishes, GCS object finalize/delete, and matching Eventarc `cloudFunction` routes through the same executor, retry per `failurePolicy.retry`/`retryPolicy`, and persist a delivery record (`delivered`/`failed`/`dead_letter`); v2 `serviceConfig` instance/concurrency settings (`minInstanceCount`, `maxInstanceCount`, `maxInstanceRequestConcurrency`, `availableCpu`) are stored, range-validated against the real API (including the Cloud Run sub-1-vCPU → concurrency-1 rule), and surfaced; a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) and a project-wide account cap are enforced by an invocation admission gate that returns HTTP 429 `RESOURCE_EXHAUSTED` when the capacity is exceeded, while no separate project quota/account-settings API is modelled (FD11). A Pub/Sub or Cloud Storage event trigger materializes a backing Eventarc trigger (`eventTrigger.trigger`, output-only) whose platform-provisioned `transport.pubsub.subscription` is user-configurable with `deadLetterPolicy` over `subscriptions.patch` (a Cloud Storage trigger's transport topic is auto-provisioned by the platform, mirroring real Eventarc); exhausted deliveries are republished to the dead-letter topic with the `CloudPubSubDeadLetterSource*` attributes. The v2 `ListRuntimes` filter evaluates the AIP-160 subset `=`/`!=`/`:`(contains)/`<`/`<=`/`>`/`>=` with `AND`/`OR`/`NOT` and parentheses over `name`/`displayName`/`stage`/`environment` (AIP-160 function calls are rejected with `InvalidArgument`). |
 | `compute` | rest | 0/33 | 🟡 | Metadata only | Metadata only | No VM/disk/network data plane. |
@@ -158,7 +158,7 @@ behind a wire-conformant API.
 | IAM | **Cloud IAM** | 🟢 `ga` (16/16) | Shape only — authz not enforced. |
 | CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 31/54, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, sink routing is evaluated but not delivered, and the logging bucket/view/link/CMEK gRPC RPCs are `unsupported` stubs; `condition_threshold` + `condition_absent` evaluated. |
 | EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Trigger CRUD; Pub/Sub-sourced `cloudFunction` triggers deliver to their function with a backing subscription dead-letter surface. |
-| Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
+| Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously by default; opt-in async timing via `JAISCLOUD_LRO_MODE=async`. |
 | Athena / Redshift | **BigQuery** | 🟡 `limited` (0/23) | Shape only — a documented Standard SQL subset (`SELECT` + DDL/DML) executes locally; full GoogleSQL and real GCP semantics must be tested on real GCP. |
 | RDS | **Cloud SQL** | 🟡 `limited` (0/24) | Metadata only. |
 | EC2 | **Compute Engine** | 🟡 `limited` (0/33) | Metadata only. |
@@ -180,10 +180,13 @@ evidence for any of them.
       shape-only across all services. The single exception is Cloud KMS, whose crypto
       operations honor a **default-permissive** cryptoKey resource policy. Any
       permission-sensitive path must be smoke-tested on real GCP.
-- [ ] **Async long-running-operation (LRO) timing.** The emulator completes operations
-      synchronously (`operations`, `workflows`, `workflowexecutions`, `functions`,
-      `kms`, `cloudsql`, `compute`). Code that assumes immediate readiness will pass
-      locally and may fail against real, eventually-consistent GCP.
+- [ ] **Async long-running-operation (LRO) timing.** Operations complete synchronously by
+      default (`done: true` inline). An opt-in async mode (`JAISCLOUD_LRO_MODE=async`, in-flight
+      window via `JAISCLOUD_LRO_DELAY`, default `250ms`) makes `workflows`, `functions`,
+      `metastore`, `managedkafka` and `dataproc` return in-flight operations and settle them
+      lazily on `operations.get`; `make test-lro-async-gcp` exercises it end-to-end. It is a
+      **local-testing affordance, not real-GCP timing**: code that assumes immediate readiness
+      must still be tested on real, eventually-consistent GCP.
 - [ ] **Metadata-only services.** `compute`, `cloudsql`, `clouddns`, `memorystore` have
       no control/data plane locally — only resource records. Test the real data plane.
 - [ ] **BigQuery.** Only the documented Standard SQL subset executes locally — `SELECT`
