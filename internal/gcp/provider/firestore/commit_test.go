@@ -78,6 +78,60 @@ func TestTransactionMissingReadAbortsOnConcurrentCreate(t *testing.T) {
 	}
 }
 
+// TestTransactionExistencePreconditionAbortsBeforeConflict pins the store
+// ordering: a transaction's read-set is re-validated before per-write
+// preconditions, so a stale read (missing → concurrently created) yields the
+// retryable ABORTED rather than a terminal ALREADY_EXISTS even when the write
+// carries a currentDocument.exists=false precondition.
+func TestTransactionExistencePreconditionAbortsBeforeConflict(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	name := "projects/proj/databases/(default)/documents/cities/SF"
+
+	resp, err := p.BeginTransaction(ctx, testNR())
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	txnID, _ := resp.Data["transaction"].(string)
+
+	// Read the (missing) document inside the transaction → records Exists=false.
+	getNR := testNR()
+	getNR.Params["name"] = "databases/(default)/documents/cities/SF"
+	getNR.Params["transaction"] = txnID
+	if _, err := p.DocumentsGet(ctx, getNR); err == nil {
+		t.Fatal("expected NOT_FOUND for missing doc")
+	}
+
+	// Create it outside the transaction.
+	if err := p.store.CreateDocument(ctx, firestorestore.Document{
+		Name:   name,
+		Fields: map[string]*firestorestore.Value{"a": intField(1)},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Commit a create (exists=false, an existence precondition): the read-set
+	// conflict must win (ABORTED), not ALREADY_EXISTS.
+	commitNR := testNR()
+	commitNR.Params["body"] = map[string]any{
+		"transaction": txnID,
+		"writes": []any{
+			map[string]any{
+				"update": map[string]any{
+					"name":   name,
+					"fields": map[string]any{"b": map[string]any{"integerValue": "2"}},
+				},
+				"currentDocument": map[string]any{"exists": false},
+			},
+		},
+	}
+	if _, err := p.Commit(ctx, commitNR); err == nil {
+		t.Fatal("expected ABORTED for read-set conflict")
+	} else {
+		assertProviderError(t, err, 409, "ABORTED")
+	}
+}
+
 func TestCommitRejectsMalformedTransaction(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()

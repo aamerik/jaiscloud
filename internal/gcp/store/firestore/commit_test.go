@@ -98,8 +98,9 @@ func TestMemoryCommitReadSetAbort(t *testing.T) {
 
 // TestMemoryCommitCreatePrecondition asserts the exists:false (create) vs
 // exists:true precondition distinction: a create on an existing document returns
-// ErrDocumentExists (→ ALREADY_EXISTS), while an exists:true precondition on a
-// missing document returns ErrPreconditionFailed (→ FAILED_PRECONDITION).
+// *DocumentExistsError (errors.Is ErrDocumentExists → ALREADY_EXISTS), while an
+// exists:true precondition on a missing document returns *DocumentMissingError
+// (errors.Is ErrPreconditionFailed → NOT_FOUND at the provider).
 func TestMemoryCommitCreatePrecondition(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -119,8 +120,13 @@ func TestMemoryCommitCreatePrecondition(t *testing.T) {
 	if !errors.Is(err, ErrDocumentExists) {
 		t.Fatalf("expected ErrDocumentExists on create-over-existing, got %v", err)
 	}
+	var existsErr *DocumentExistsError
+	if !errors.As(err, &existsErr) || existsErr.Name != name {
+		t.Fatalf("expected *DocumentExistsError{Name:%q}, got %v", name, err)
+	}
 
-	// exists:true on a missing doc → ErrPreconditionFailed.
+	// exists:true on a missing doc → DocumentMissingError (errors.Is
+	// ErrPreconditionFailed).
 	s2 := NewMemoryStore()
 	err = s2.Commit(ctx, nil, []Write{{
 		Name:         name,
@@ -129,6 +135,10 @@ func TestMemoryCommitCreatePrecondition(t *testing.T) {
 	}})
 	if !errors.Is(err, ErrPreconditionFailed) {
 		t.Fatalf("expected ErrPreconditionFailed on exists:true-over-missing, got %v", err)
+	}
+	var missingErr *DocumentMissingError
+	if !errors.As(err, &missingErr) || missingErr.Name != name {
+		t.Fatalf("expected *DocumentMissingError{Name:%q}, got %v", name, err)
 	}
 
 	// create (exists:false) on a missing doc → succeeds.

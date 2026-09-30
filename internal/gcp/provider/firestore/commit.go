@@ -84,11 +84,24 @@ func newPreconditionErr(msg string) error {
 	return &model.ProviderError{Code: "FailedPrecondition", Message: msg, HTTPStatus: 400, Status: "FAILED_PRECONDITION"}
 }
 
-// newUpdateMissingErr returns the NOT_FOUND error real Firestore raises when an
-// update or transform carries a currentDocument.exists=true precondition but
-// the target document does not exist.
+// updateMissingMessage / alreadyExistsMessage are the canonical Firestore
+// messages for a failed currentDocument existence precondition. Shared by the
+// ProviderError constructors below and the BatchWrite per-write status mapping.
+func updateMissingMessage(name string) string { return "No document to update: " + name }
+func alreadyExistsMessage(name string) string { return "Document already exists: " + name }
+
+// newUpdateMissingErr returns the NOT_FOUND error real Firestore raises when a
+// write carries a currentDocument.exists=true precondition but the target
+// document does not exist (update, transform or delete alike).
 func newUpdateMissingErr(name string) error {
-	return model.NewProviderError("NotFound", "No document to update: "+name, 404)
+	return model.NewProviderError("NotFound", updateMissingMessage(name), 404)
+}
+
+// newAlreadyExistsErr returns the ALREADY_EXISTS error real Firestore raises
+// when a write carries a currentDocument.exists=false precondition but the
+// target document already exists.
+func newAlreadyExistsErr(name string) error {
+	return model.NewProviderError("AlreadyExists", alreadyExistsMessage(name), 409)
 }
 
 // newAbortedErr returns an ABORTED error at HTTP 409 (transaction contention).
@@ -96,8 +109,18 @@ func newAbortedErr(msg string) error {
 	return &model.ProviderError{Code: "Aborted", Message: msg, HTTPStatus: 409, Status: "ABORTED"}
 }
 
-// mapCommitError maps store commit sentinels to Firestore RPC statuses.
+// mapCommitError maps store commit errors to Firestore RPC statuses. Existence
+// preconditions carry the document name and get the canonical NOT_FOUND /
+// ALREADY_EXISTS errors; the store's sentinels remain the fallback.
 func mapCommitError(err error) error {
+	var missing *firestorestore.DocumentMissingError
+	if errors.As(err, &missing) {
+		return newUpdateMissingErr(missing.Name)
+	}
+	var exists *firestorestore.DocumentExistsError
+	if errors.As(err, &exists) {
+		return newAlreadyExistsErr(exists.Name)
+	}
 	switch {
 	case errors.Is(err, firestorestore.ErrAborted):
 		return newAbortedErr("transaction was aborted due to concurrent modification")
@@ -139,7 +162,16 @@ func statusWire(code int64, msg string) map[string]any {
 }
 
 // statusWireForError maps a commit error to a per-write batchWrite status.
+// Existence-precondition failures use the canonical google.rpc codes 5 / 6.
 func statusWireForError(err error) map[string]any {
+	var missing *firestorestore.DocumentMissingError
+	if errors.As(err, &missing) {
+		return statusWire(5, updateMissingMessage(missing.Name))
+	}
+	var exists *firestorestore.DocumentExistsError
+	if errors.As(err, &exists) {
+		return statusWire(6, alreadyExistsMessage(exists.Name))
+	}
 	switch {
 	case errors.Is(err, firestorestore.ErrAborted):
 		return statusWire(10, "transaction aborted")

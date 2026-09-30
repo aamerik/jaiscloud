@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const projectID = "proj"
@@ -207,6 +209,36 @@ func TestSDKFirestoreCursorsAndUpdateMissing(t *testing.T) {
 
 	// The failed update must not have created the document.
 	require.False(t, docRefIDs(t, ctx, col)["does-not-exist"])
+}
+
+// TestSDKFirestoreDeletePrecondition covers J40 through the official Go client:
+// deleting a missing document guarded by firestore.Exists is NOT_FOUND
+// ("No document to update"), and a create (currentDocument.exists=false) of an
+// already-present document is ALREADY_EXISTS.
+func TestSDKFirestoreDeletePrecondition(t *testing.T) {
+	ctx := context.Background()
+	client := newClient(t)
+	col := client.Collection(unique("deleteprecond"))
+
+	// Delete of a missing document guarded by Exists → NOT_FOUND.
+	_, err := col.Doc("missing").Delete(ctx, firestore.Exists)
+	require.Error(t, err)
+	require.Equal(t, codes.NotFound, status.Code(err))
+	require.ErrorContains(t, err, "No document to update")
+
+	// Create an existing document (exists=false precondition) → ALREADY_EXISTS.
+	doc := col.Doc("present")
+	_, err = doc.Create(ctx, map[string]any{"v": int64(1)})
+	require.NoError(t, err)
+	_, err = doc.Create(ctx, map[string]any{"v": int64(2)})
+	require.Error(t, err)
+	require.Equal(t, codes.AlreadyExists, status.Code(err))
+	require.ErrorContains(t, err, "already exists")
+
+	// The plain delete of a present document still succeeds.
+	_, err = doc.Delete(ctx)
+	require.NoError(t, err)
+	require.False(t, docRefIDs(t, ctx, col)["present"])
 }
 
 // TestSDKFirestoreSnapshots exercises the high-level Snapshots listener. It

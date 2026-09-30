@@ -161,7 +161,7 @@ func (s *PostgresStore) Commit(ctx context.Context, reads []ReadRef, writes []Wr
 			d := Document{Name: name, CollectionID: collectionID, ParentPath: parentPath, CreateTime: createTime, UpdateTime: updateTime}
 			cur = &d
 		}
-		if err := checkPreconditionDoc(cur, w.Precondition); err != nil {
+		if err := checkPreconditionDoc(w.Name, cur, w.Precondition); err != nil {
 			return err
 		}
 	}
@@ -192,8 +192,10 @@ func (s *PostgresStore) Commit(ctx context.Context, reads []ReadRef, writes []Wr
 }
 
 // checkPreconditionDoc validates a precondition against an optional current
-// document (nil when the document does not exist).
-func checkPreconditionDoc(cur *Document, pre *Precondition) error {
+// document (nil when the document does not exist). name is carried into the
+// DocumentMissingError/DocumentExistsError so the provider can render the
+// canonical Firestore message.
+func checkPreconditionDoc(name string, cur *Document, pre *Precondition) error {
 	if pre == nil {
 		return nil
 	}
@@ -201,10 +203,10 @@ func checkPreconditionDoc(cur *Document, pre *Precondition) error {
 	if pre.Exists != nil {
 		if *pre.Exists {
 			if !exists {
-				return ErrPreconditionFailed
+				return &DocumentMissingError{Name: name}
 			}
 		} else if exists {
-			return ErrDocumentExists
+			return &DocumentExistsError{Name: name}
 		}
 		return nil
 	}
