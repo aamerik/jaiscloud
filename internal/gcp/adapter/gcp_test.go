@@ -100,6 +100,28 @@ func TestGCPAdapter_XMLPutKeepsObjectEncoding(t *testing.T) {
 	}
 }
 
+// TestGCPAdapter_GzipJSONPutNotMistakenForRawMedia guards the raw-media gzip
+// exemption: a JSON API object PUT (/storage/v1/...) must still have its gzip
+// transport body decoded, even though the path shape resembles /{a}/{b}.
+func TestGCPAdapter_GzipJSONPutNotMistakenForRawMedia(t *testing.T) {
+	a := gcp.New()
+	payload := []byte(`{"contentType":"application/json"}`)
+	r := httptest.NewRequest("PUT", "/storage/v1/b/bkt/o/obj.txt", bytes.NewReader(payload))
+	r.Header.Set("Content-Encoding", "gzip")
+
+	nr, _, err := a.DetectAndDecode(r, gzipBytes(t, payload))
+	if err != nil {
+		t.Fatalf("DetectAndDecode: %v", err)
+	}
+	body, ok := nr.Params["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected decoded JSON body, got %#v", nr.Params["body"])
+	}
+	if body["contentType"] != "application/json" {
+		t.Errorf("contentType = %v, want application/json", body["contentType"])
+	}
+}
+
 func TestGCPAdapter_GzipStreamingMultipartWrapped(t *testing.T) {
 	a := gcp.New()
 	r := httptest.NewRequest("POST", "/upload/storage/v1/b/bkt/o?uploadType=multipart", bytes.NewReader(gzipBytes(t, []byte("x"))))

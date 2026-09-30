@@ -701,14 +701,16 @@ func isHeadRequest(nr *model.NormalizedRequest) bool {
 // reasons are capitalized (CustomerEncryptionKeyIsIncorrect, ...). Unknown codes
 // pass through unchanged (the signed-URL codes already are XML API names).
 func xmlAPIErrorCode(perr *model.ProviderError) string {
+	// An explicit xmlCode set by the provider wins (e.g. NoSuchBucket, which is
+	// otherwise indistinguishable from NoSuchKey by the canonical NotFound code).
+	if c, _ := perr.Data["xmlCode"].(string); c != "" {
+		return c
+	}
 	if r, _ := perr.Data["reason"].(string); strings.HasPrefix(r, "customerEncryption") {
 		return strings.ToUpper(r[:1]) + r[1:]
 	}
 	switch perr.Code {
 	case "NotFound":
-		if strings.Contains(strings.ToLower(perr.Message), "bucket") {
-			return "NoSuchBucket"
-		}
 		return "NoSuchKey"
 	case "InvalidRange":
 		return "InvalidRange"

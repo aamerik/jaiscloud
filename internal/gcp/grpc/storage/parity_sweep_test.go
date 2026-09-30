@@ -58,6 +58,48 @@ func readObjectErr(t *testing.T, client storagepb.StorageClient, req *storagepb.
 	}
 }
 
+// TestWriteObjectPreservesContentEncoding covers the gRPC streaming-write half
+// of J69: Object.content_encoding set on the write spec survives to the stored
+// object and is returned by GetObject.
+func TestWriteObjectPreservesContentEncoding(t *testing.T) {
+	client, _, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	stream, err := client.WriteObject(ctx)
+	if err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+	if err := stream.Send(&storagepb.WriteObjectRequest{
+		FirstMessage: &storagepb.WriteObjectRequest_WriteObjectSpec{
+			WriteObjectSpec: &storagepb.WriteObjectSpec{
+				Resource: &storagepb.Object{Name: "enc", Bucket: testBucket, ContentType: "text/plain", ContentEncoding: "gzip"},
+			},
+		},
+		WriteOffset: 0,
+		Data:        &storagepb.WriteObjectRequest_ChecksummedData{ChecksummedData: &storagepb.ChecksummedData{Content: []byte("data")}},
+		FinishWrite: true,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		t.Fatalf("CloseAndRecv: %v", err)
+	}
+	if resp.GetResource().GetContentEncoding() != "gzip" {
+		t.Fatalf("write response contentEncoding = %q, want gzip", resp.GetResource().GetContentEncoding())
+	}
+
+	got, err := client.GetObject(ctx, &storagepb.GetObjectRequest{Bucket: testBucket, Object: "enc"})
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	if got.GetContentEncoding() != "gzip" {
+		t.Fatalf("stored contentEncoding = %q, want gzip", got.GetContentEncoding())
+	}
+}
+
 // TestGetObjectExposesCustomerEncryption covers J63: a gRPC read of a CSEK
 // object surfaces customer_encryption (algorithm + key SHA-256) like the REST
 // customerEncryption field.

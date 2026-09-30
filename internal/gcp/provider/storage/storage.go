@@ -151,15 +151,16 @@ type completedSession struct {
 
 // uploadSession holds the state of an in-progress resumable upload.
 type uploadSession struct {
-	Bucket      string
-	Object      string
-	ContentType string
-	Metadata    map[string]string // custom object metadata captured at session start
-	buf         []byte            // in-memory bytes up to resumableSpillThreshold
-	tmpPath     string            // spill file path once threshold is exceeded
-	tmpFile     *os.File          // open handle for appending spilled bytes
-	length      int64             // total accumulated bytes across chunks
-	lastAccess  time.Time         // last chunk/status-query time, for the TTL sweep
+	Bucket          string
+	Object          string
+	ContentType     string
+	ContentEncoding string
+	Metadata        map[string]string // custom object metadata captured at session start
+	buf             []byte            // in-memory bytes up to resumableSpillThreshold
+	tmpPath         string            // spill file path once threshold is exceeded
+	tmpFile         *os.File          // open handle for appending spilled bytes
+	length          int64             // total accumulated bytes across chunks
+	lastAccess      time.Time         // last chunk/status-query time, for the TTL sweep
 }
 
 // New returns a GCS provider backed by the dedicated object store (buckets +
@@ -1909,6 +1910,16 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	if err := requireDownscope(nr, downscope.ReadObject, bucket, object); err != nil {
 		return nil, err
 	}
+	// Distinguish a missing bucket from a missing object so the XML API error
+	// mapper can pick NoSuchBucket vs NoSuchKey (the store folds both into
+	// ErrNoSuchObject for a bare object lookup).
+	if _, err := p.objects.GetBucket(ctx, bucket); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404).
+				WithData(map[string]any{"xmlCode": "NoSuchBucket"})
+		}
+		return nil, err
+	}
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
 	// (a tombstoned/deleted version whose data was dropped, not corruption).
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
@@ -2635,6 +2646,9 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	if dest != nil {
 		if ct, _ := dest["contentType"].(string); ct != "" {
 			o.ContentType = ct
+		}
+		if ce, _ := dest["contentEncoding"].(string); ce != "" {
+			o.ContentEncoding = ce
 		}
 		if md, ok := dest["metadata"].(map[string]any); ok {
 			o.Metadata = make(map[string]string, len(md))
@@ -3373,7 +3387,9 @@ func (p *Provider) lifecycleExpiration(ctx context.Context, bucket string, m gcs
 	if earliest.IsZero() {
 		return ""
 	}
-	return earliest.UTC().Format(time.RFC3339)
+	// The XML API documents x-goog-expiration as an HTTP date (RFC 1123 GMT),
+	// e.g. "Tue, 25 Jun 2013 00:00:00 GMT".
+	return earliest.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
 }
 
 // objectLifecycleExpired reports whether a Delete rule's condition.age matches
@@ -4026,6 +4042,14 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		return nil, err
 	}
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
+	// Object.contentEncoding may arrive on the initiation body (JSON) or as the
+	// request's Content-Encoding (raw XML); carry it through to finalize (J69).
+	ce, _ := nr.Params["contentEncoding"].(string)
+	if ce == "" {
+		if body, ok := nr.Params["body"].(map[string]any); ok {
+			ce, _ = body["contentEncoding"].(string)
+		}
+	}
 
 	id := p.nextGen() // atomic + monotonic, collision-free under concurrency
 	now := clock.RealNow()
@@ -4035,7 +4059,7 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		p.mu.Unlock()
 		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
 	}
-	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, Metadata: uploadMetadata(nr.Params), lastAccess: now}
+	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, ContentEncoding: ce, Metadata: uploadMetadata(nr.Params), lastAccess: now}
 	p.mu.Unlock()
 
 	// Sweep stale sessions from the durable store (may hold orphans from a
@@ -4128,6 +4152,7 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	bucket := sess.Bucket
 	object := sess.Object
 	contentType := sess.ContentType
+	contentEncoding := sess.ContentEncoding
 	metadata := sess.Metadata
 	length := sess.length
 	tmpPath := sess.tmpPath
@@ -4187,6 +4212,9 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	nr.Params["object"] = object
 	nr.Params[wire.StreamKey] = stream
 	nr.Params[wire.ContentTypeKey] = contentType
+	if contentEncoding != "" {
+		nr.Params["contentEncoding"] = contentEncoding
+	}
 	if metadata != nil {
 		nr.Params[wire.MetaHeadersKey] = metadata
 	}

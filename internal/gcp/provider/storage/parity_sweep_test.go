@@ -2,10 +2,13 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"jaiscloud/internal/gcp/wire"
+	"jaiscloud/internal/model"
 )
 
 // publishedEventType reports whether the fake publisher recorded an event whose
@@ -257,10 +260,84 @@ func TestXMLMediaExpirationHeader(t *testing.T) {
 	hdr, _ := media.Data[wire.HeadersKey].(map[string]string)
 	want := ""
 	if t0, perr := time.Parse(time.RFC3339Nano, created); perr == nil {
-		want = t0.Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		want = t0.Add(30 * 24 * time.Hour).UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
 	}
 	if hdr["x-goog-expiration"] != want || want == "" {
 		t.Errorf("x-goog-expiration = %q, want %q", hdr["x-goog-expiration"], want)
+	}
+}
+
+// TestXMLMediaMissingBucketError covers the J61 bucket/object distinction: a
+// raw media read of a missing bucket reports NoSuchBucket, not NoSuchKey.
+func TestXMLMediaMissingBucketError(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "nope"
+	nr.Params["object"] = "obj.txt"
+	nr.Params[wire.XMLAPIKey] = true
+	_, err := p.ObjectsGetMedia(ctx, nr)
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *model.ProviderError, got %v", err)
+	}
+	if pe.Code != "NotFound" || pe.Data["xmlCode"] != "NoSuchBucket" {
+		t.Fatalf("missing bucket error = %s / xmlCode %v, want NotFound/NoSuchBucket", pe.Code, pe.Data["xmlCode"])
+	}
+
+	// A missing object in an existing bucket maps to NoSuchKey (default NotFound).
+	createBucket(t, p, "bkt")
+	_, err = p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "missing.txt"))
+	if !errors.As(err, &pe) || pe.Code != "NotFound" {
+		t.Fatalf("missing object error = %v, want NotFound", err)
+	}
+	if xc, _ := pe.Data["xmlCode"].(string); xc != "" {
+		t.Fatalf("missing object xmlCode = %q, want empty (adapter defaults to NoSuchKey)", xc)
+	}
+}
+
+// TestResumableUploadPreservesContentEncoding covers the REST resumable half of
+// J69: contentEncoding set on the initiation body survives to the stored object.
+func TestResumableUploadPreservesContentEncoding(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createBucket(t, p, "bkt")
+
+	nr := bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["object"] = "r.txt"
+	nr.Params[wire.ContentTypeKey] = "text/plain"
+	nr.Params["body"] = map[string]any{"name": "r.txt", "contentEncoding": "gzip"}
+	start, err := p.ObjectsInsertStartResumable(ctx, nr)
+	if err != nil {
+		t.Fatalf("start resumable: %v", err)
+	}
+	loc, _ := start.Data[wire.LocationKey].(string)
+	uploadID := ""
+	for _, q := range strings.Split(strings.SplitN(loc, "?", 2)[1], "&") {
+		if k, v, ok := strings.Cut(q, "="); ok && k == "upload_id" {
+			uploadID = v
+		}
+	}
+	if uploadID == "" {
+		t.Fatalf("no upload_id in %q", loc)
+	}
+
+	nr = bucketParams()
+	nr.Params["upload_id"] = uploadID
+	nr.Params["contentRange"] = "bytes 0-2/3"
+	nr.Params[wire.MediaKey] = []byte("abc")
+	if _, err := p.ObjectsInsertResumable(ctx, nr); err != nil {
+		t.Fatalf("final chunk: %v", err)
+	}
+
+	get, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "r.txt"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if ce, _ := get.Data["contentEncoding"].(string); ce != "gzip" {
+		t.Fatalf("contentEncoding = %q, want gzip", ce)
 	}
 }
 

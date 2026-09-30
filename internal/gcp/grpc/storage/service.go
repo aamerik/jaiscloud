@@ -68,13 +68,14 @@ type Service struct {
 // tmpFile so a large upload never buffers fully in memory (mirroring the REST
 // provider's spill model).
 type uploadSession struct {
-	bucket       string
-	object       string
-	contentType  string
-	metadata     map[string]string
-	kmsKeyName   string
-	cseKey       []byte
-	cseKeySHA256 string
+	bucket          string
+	object          string
+	contentType     string
+	contentEncoding string
+	metadata        map[string]string
+	kmsKeyName      string
+	cseKey          []byte
+	cseKeySHA256    string
 	// temporaryHold/eventBasedHold mirror the write spec's Object hold fields.
 	// eventBasedHold is a *bool so an omitted field (nil) can inherit the
 	// bucket's defaultEventBasedHold while an explicit false overrides it.
@@ -1302,6 +1303,9 @@ func rewriteDestinationMeta(src gcs.ObjectMeta, dest *storagepb.Object, dstBucke
 		if ct := dest.GetContentType(); ct != "" {
 			meta.ContentType = ct
 		}
+		if ce := dest.GetContentEncoding(); ce != "" {
+			meta.ContentEncoding = ce
+		}
 		if dest.GetMetadata() != nil {
 			meta.Metadata = dest.GetMetadata()
 		}
@@ -1461,15 +1465,16 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 	}
 
 	sess := &uploadSession{
-		bucket:         bucket,
-		object:         object,
-		contentType:    resource.GetContentType(),
-		metadata:       resource.GetMetadata(),
-		kmsKeyName:     resource.GetKmsKey(),
-		temporaryHold:  resource.GetTemporaryHold(),
-		eventBasedHold: resource.EventBasedHold,
-		precondition:   pre,
-		lastAccess:     now,
+		bucket:          bucket,
+		object:          object,
+		contentType:     resource.GetContentType(),
+		contentEncoding: resource.GetContentEncoding(),
+		metadata:        resource.GetMetadata(),
+		kmsKeyName:      resource.GetKmsKey(),
+		temporaryHold:   resource.GetTemporaryHold(),
+		eventBasedHold:  resource.EventBasedHold,
+		precondition:    pre,
+		lastAccess:      now,
 	}
 	if sess.contentType == "" {
 		sess.contentType = "application/octet-stream"
@@ -1633,17 +1638,18 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 		}
 	}
 	meta := gcs.ObjectMeta{
-		Bucket:         sess.bucket,
-		Name:           sess.object,
-		Generation:     s.provider.NextGen(),
-		Metageneration: "1",
-		ContentType:    sess.contentType,
-		StorageClass:   "STANDARD",
-		Metadata:       sess.metadata,
-		KmsKeyName:     sess.kmsKeyName,
-		TemporaryHold:  sess.temporaryHold,
-		TimeCreated:    clock.Now(),
-		Updated:        clock.Now(),
+		Bucket:          sess.bucket,
+		Name:            sess.object,
+		Generation:      s.provider.NextGen(),
+		Metageneration:  "1",
+		ContentType:     sess.contentType,
+		ContentEncoding: sess.contentEncoding,
+		StorageClass:    "STANDARD",
+		Metadata:        sess.metadata,
+		KmsKeyName:      sess.kmsKeyName,
+		TemporaryHold:   sess.temporaryHold,
+		TimeCreated:     clock.Now(),
+		Updated:         clock.Now(),
 	}
 	if sess.eventBasedHold != nil {
 		meta.EventBasedHold = *sess.eventBasedHold
@@ -1696,14 +1702,15 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 			case *storagepb.WriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:         parseBucketName(res.GetBucket()),
-					object:         res.GetName(),
-					contentType:    res.GetContentType(),
-					metadata:       res.GetMetadata(),
-					kmsKeyName:     res.GetKmsKey(),
-					temporaryHold:  res.GetTemporaryHold(),
-					eventBasedHold: res.EventBasedHold,
-					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:          parseBucketName(res.GetBucket()),
+					object:          res.GetName(),
+					contentType:     res.GetContentType(),
+					contentEncoding: res.GetContentEncoding(),
+					metadata:        res.GetMetadata(),
+					kmsKeyName:      res.GetKmsKey(),
+					temporaryHold:   res.GetTemporaryHold(),
+					eventBasedHold:  res.EventBasedHold,
+					precondition:    grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				project = s.projectForBucket(ctx, sess.bucket)
 				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
@@ -1788,14 +1795,15 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 			case *storagepb.BidiWriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:         parseBucketName(res.GetBucket()),
-					object:         res.GetName(),
-					contentType:    res.GetContentType(),
-					metadata:       res.GetMetadata(),
-					kmsKeyName:     res.GetKmsKey(),
-					temporaryHold:  res.GetTemporaryHold(),
-					eventBasedHold: res.EventBasedHold,
-					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:          parseBucketName(res.GetBucket()),
+					object:          res.GetName(),
+					contentType:     res.GetContentType(),
+					contentEncoding: res.GetContentEncoding(),
+					metadata:        res.GetMetadata(),
+					kmsKeyName:      res.GetKmsKey(),
+					temporaryHold:   res.GetTemporaryHold(),
+					eventBasedHold:  res.EventBasedHold,
+					precondition:    grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				if sess.contentType == "" {
 					sess.contentType = "application/octet-stream"

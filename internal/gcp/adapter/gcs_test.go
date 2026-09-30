@@ -765,9 +765,10 @@ func TestGCSCodecEncodeErrorXMLAPI(t *testing.T) {
 		t.Fatalf("expected NoSuchKey, got %q", s)
 	}
 
-	// Missing bucket → NoSuchBucket.
+	// Missing bucket → NoSuchBucket (signalled by the provider's xmlCode).
 	_, _, body = c.EncodeError(xmlReq("GET"),
-		model.NewProviderError("NotFound", "bucket not found", 404))
+		model.NewProviderError("NotFound", "bucket not found", 404).
+			WithData(map[string]any{"xmlCode": "NoSuchBucket"}))
 	if s := string(body); !strings.Contains(s, "<Code>NoSuchBucket</Code>") {
 		t.Fatalf("expected NoSuchBucket, got %q", s)
 	}
